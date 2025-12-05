@@ -1,0 +1,320 @@
+/**
+ * Expandable Todo Manager with hierarchical task support.
+ * Ported from Python kshana GenericAgent.
+ */
+import type { ExpandableTodoItem, TodoManagerResult, TodoStatus } from './ExpandableTodoItem.js';
+import { createTodoItem } from './ExpandableTodoItem.js';
+
+export class ExpandableTodoManager {
+  private todos: ExpandableTodoItem[] = [];
+
+  /**
+   * Set the initial todo list from task descriptions.
+   * Should only be used once at the start; use updateTodo or addSubtasks after.
+   */
+  setTodos(tasks: string[]): TodoManagerResult {
+    if (this.todos.length > 0) {
+      return {
+        status: 'error',
+        message: 'Todo list already exists. Use updateTodo or addSubtasks.',
+        todos: this.todos,
+        error: 'Todo list already exists',
+      };
+    }
+
+    this.todos = tasks.map((task, i) =>
+      createTodoItem(task, {
+        status: i === 0 ? 'in_progress' : 'pending',
+        depth: 0,
+      })
+    );
+
+    return {
+      status: 'success',
+      message: `Created ${this.todos.length} todos`,
+      todos: this.todos,
+    };
+  }
+
+  /**
+   * Update the status of a todo by matching its content.
+   * Partial match is supported. Auto-starts next pending when completing.
+   */
+  updateTodo(task: string, status: TodoStatus): TodoManagerResult {
+    if (!['completed', 'in_progress', 'pending'].includes(status)) {
+      return {
+        status: 'error',
+        message: `Invalid status: ${status}`,
+        todos: this.todos,
+        error: `Invalid status: ${status}`,
+      };
+    }
+
+    // Find matching todo by content (partial match)
+    const taskLower = task.toLowerCase();
+    const matchIdx = this.todos.findIndex(
+      t => taskLower.includes(t.content.toLowerCase()) || t.content.toLowerCase().includes(taskLower)
+    );
+
+    if (matchIdx === -1) {
+      return {
+        status: 'error',
+        message: `No todo found matching '${task}'`,
+        todos: this.todos,
+        error: `No todo found matching '${task}'`,
+      };
+    }
+
+    const todo = this.todos[matchIdx];
+    if (!todo) {
+      return {
+        status: 'error',
+        message: 'Todo not found',
+        todos: this.todos,
+        error: 'Todo not found',
+      };
+    }
+
+    const oldStatus = todo.status;
+    todo.status = status;
+
+    // Auto-start next pending when completing
+    if (status === 'completed') {
+      const nextPending = this.todos.find(t => t.status === 'pending');
+      if (nextPending) {
+        nextPending.status = 'in_progress';
+      }
+    }
+
+    return {
+      status: 'success',
+      message: `Updated '${todo.content}' from ${oldStatus} to ${status}`,
+      todos: this.todos,
+    };
+  }
+
+  /**
+   * Add subtasks under a parent task.
+   * Parent becomes "expanded" and subtasks are inserted after it.
+   */
+  addSubtasks(parentTask: string, subtasks: string[]): TodoManagerResult {
+    if (subtasks.length === 0) {
+      return {
+        status: 'error',
+        message: 'No subtasks provided',
+        todos: this.todos,
+        error: 'No subtasks provided',
+      };
+    }
+
+    // Find matching parent todo
+    const taskLower = parentTask.toLowerCase();
+    const parentIdx = this.todos.findIndex(
+      t => taskLower.includes(t.content.toLowerCase()) || t.content.toLowerCase().includes(taskLower)
+    );
+
+    if (parentIdx === -1) {
+      return {
+        status: 'error',
+        message: `No todo found matching '${parentTask}'`,
+        todos: this.todos,
+        error: `No todo found matching '${parentTask}'`,
+      };
+    }
+
+    const parent = this.todos[parentIdx];
+    if (!parent) {
+      return {
+        status: 'error',
+        message: 'Parent not found',
+        todos: this.todos,
+        error: 'Parent not found',
+      };
+    }
+
+    parent.status = 'expanded';
+
+    const newItems: ExpandableTodoItem[] = subtasks.map((content, i) =>
+      createTodoItem(content, {
+        status: i === 0 ? 'in_progress' : 'pending',
+        depth: parent.depth + 1,
+      })
+    );
+
+    this.todos = [...this.todos.slice(0, parentIdx + 1), ...newItems, ...this.todos.slice(parentIdx + 1)];
+
+    return {
+      status: 'success',
+      message: `Added ${subtasks.length} subtasks under '${parent.content}'`,
+      todos: this.todos,
+    };
+  }
+
+  /**
+   * Legacy expand_todo support (index-based).
+   */
+  expandTodo(
+    todoIndex: number,
+    subTodos: Array<{ content: string; visible?: boolean }>
+  ): TodoManagerResult {
+    if (todoIndex < 0 || todoIndex >= this.todos.length) {
+      return {
+        status: 'error',
+        message: `Invalid todo index: ${todoIndex}`,
+        todos: this.todos,
+        error: `Invalid todo index: ${todoIndex}`,
+      };
+    }
+
+    const original = this.todos[todoIndex];
+    if (!original) {
+      return {
+        status: 'error',
+        message: 'Todo not found',
+        todos: this.todos,
+        error: 'Todo not found',
+      };
+    }
+
+    original.status = 'expanded';
+
+    const newItems: ExpandableTodoItem[] = subTodos.map((sub, i) =>
+      createTodoItem(sub.content, {
+        status: i === 0 ? 'in_progress' : 'pending',
+        visible: sub.visible ?? true,
+        depth: original.depth + 1,
+      })
+    );
+
+    this.todos = [
+      ...this.todos.slice(0, todoIndex + 1),
+      ...newItems,
+      ...this.todos.slice(todoIndex + 1),
+    ];
+
+    return {
+      status: 'success',
+      message: `Expanded '${original.content}' into ${newItems.length} sub-todos`,
+      todos: this.todos,
+    };
+  }
+
+  /**
+   * Direct todo list write - for backwards compatibility and testing.
+   */
+  writeTodos(todos: Array<Record<string, unknown>>): TodoManagerResult {
+    this.todos = todos.map(t =>
+      createTodoItem(t['content'] as string, {
+        status: (t['status'] as TodoStatus | undefined) ?? 'pending',
+        visible: (t['visible'] as boolean | undefined) ?? true,
+        depth: (t['depth'] as number | undefined) ?? 0,
+      })
+    );
+
+    return {
+      status: 'success',
+      message: `Todo list updated with ${this.todos.length} items`,
+      todos: this.todos,
+    };
+  }
+
+  /**
+   * Get the current todo list.
+   */
+  getTodos(visibleOnly = false): ExpandableTodoItem[] {
+    if (visibleOnly) {
+      return this.todos.filter(t => t.visible);
+    }
+    return [...this.todos];
+  }
+
+  /**
+   * Get the next actionable todo (first pending or in_progress).
+   */
+  getNextActionable(): { index: number; todo: ExpandableTodoItem } | null {
+    for (let i = 0; i < this.todos.length; i++) {
+      const todo = this.todos[i];
+      if (todo && (todo.status === 'in_progress' || todo.status === 'pending')) {
+        return { index: i, todo };
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Check for out-of-order todos and return warnings.
+   */
+  getOrderingWarnings(): string[] {
+    const warnings: string[] = [];
+    const seenPendingAtDepth: Map<number, string> = new Map();
+
+    for (const todo of this.todos) {
+      const depth = todo.depth;
+
+      if (todo.status === 'pending') {
+        if (!seenPendingAtDepth.has(depth)) {
+          seenPendingAtDepth.set(depth, todo.content);
+        }
+      } else if (todo.status === 'in_progress') {
+        const pendingContent = seenPendingAtDepth.get(depth);
+        if (pendingContent) {
+          warnings.push(
+            `WARNING: Working on '${todo.content}' while earlier task '${pendingContent}' is still pending`
+          );
+        }
+      }
+    }
+
+    return warnings;
+  }
+
+  /**
+   * Build the todo list as a system reminder with prominent next-todo guidance.
+   */
+  toReminderText(): string {
+    if (this.todos.length === 0) {
+      return '<system-reminder>\nYour todo list is empty. Create todos to plan your work.\n</system-reminder>';
+    }
+
+    const lines = ['<system-reminder>', '## Current Todo List', ''];
+
+    for (let i = 0; i < this.todos.length; i++) {
+      const todo = this.todos[i];
+      if (!todo?.visible) continue;
+      const indent = '  '.repeat(todo.depth);
+      lines.push(`${i + 1}. [${todo.status}]${indent} ${todo.content}`);
+    }
+
+    // Add ordering warnings
+    const warnings = this.getOrderingWarnings();
+    if (warnings.length > 0) {
+      lines.push('');
+      lines.push('🚨 ORDERING VIOLATION DETECTED 🚨');
+      for (const warning of warnings) {
+        lines.push(`⚠️ ${warning}`);
+      }
+      lines.push('FIX THIS: Complete earlier pending todos before continuing.');
+    }
+
+    // Add prominent next-todo guidance
+    const next = this.getNextActionable();
+    if (next) {
+      lines.push('');
+      lines.push(`>>> NEXT TODO (index ${next.index}): ${next.todo.content}`);
+      lines.push('>>> You MUST work on this task NOW. Do NOT skip to later todos.');
+    }
+
+    lines.push('');
+    lines.push('STRICT RULE: Complete todos IN ORDER from top to bottom. Never skip ahead.');
+    lines.push('</system-reminder>');
+
+    return lines.join('\n');
+  }
+
+  /**
+   * Clear all todos (for sub-agent isolation).
+   */
+  clear(): void {
+    this.todos = [];
+  }
+}

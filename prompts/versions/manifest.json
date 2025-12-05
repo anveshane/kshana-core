@@ -1,0 +1,10 @@
+{
+  "description": "Tracks all prompt versions and optimization history",
+  "current": {
+    "base": "1.0.0",
+    "orchestrator": "1.0.0",
+    "subAgent": "1.0.0",
+    "video": "1.0.0"
+  },
+  "history": []
+}
