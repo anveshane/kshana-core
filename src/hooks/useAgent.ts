@@ -27,6 +27,32 @@ export interface ToolCallHistoryItem {
   duration?: number;
 }
 
+/**
+ * A history entry representing something that already happened (permanent).
+ */
+export interface HistoryEntry {
+  id: string;
+  type: 'user_input' | 'agent_text' | 'tool_completed' | 'error';
+  content: string;
+  timestamp: number;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  toolResult?: unknown;
+  duration?: number;
+}
+
+/**
+ * Current action - the single thing the agent is doing right now (ephemeral).
+ * Disappears from UI once completed (moves to history).
+ */
+export interface CurrentAction {
+  type: 'thinking' | 'tool_executing';
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  toolCallId?: string;
+  startTime: number;
+}
+
 interface UseAgentReturn {
   status: AgentStatus;
   todos: ExpandableTodoItem[];
@@ -35,6 +61,9 @@ interface UseAgentReturn {
   isConfirmation: boolean;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
+  // Separated: permanent history vs ephemeral current action
+  history: HistoryEntry[];
+  currentAction: CurrentAction | null;
   run: (task: string) => Promise<GenericAgentResult>;
   respond: (userInput: string) => Promise<GenericAgentResult>;
   reset: () => void;
@@ -55,6 +84,10 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
   const [isConfirmation, setIsConfirmation] = React.useState(false);
   const [error, setError] = React.useState<string | undefined>();
   const [recentTools, setRecentTools] = React.useState<ToolCallHistoryItem[]>([]);
+
+  // New: history (permanent) and current action (ephemeral)
+  const [history, setHistory] = React.useState<HistoryEntry[]>([]);
+  const [currentAction, setCurrentAction] = React.useState<CurrentAction | null>(null);
 
   const agentRef = React.useRef<GenericAgent | null>(null);
   const llmRef = React.useRef<LLMClient | null>(null);
@@ -78,19 +111,25 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         case 'started':
         case 'thinking':
           setStatus('thinking');
+          // Set current action to thinking
+          setCurrentAction({ type: 'thinking', startTime: Date.now() });
           break;
         case 'waiting':
           setStatus('waiting');
+          setCurrentAction(null); // Clear ephemeral when waiting for user
           break;
         case 'completed':
           setStatus('completed');
+          setCurrentAction(null); // Clear ephemeral when done
           break;
         case 'error':
           setStatus('error');
+          setCurrentAction(null);
           break;
         case 'interrupted':
           // Keep status as idle so user can continue - context is preserved
           setStatus('idle');
+          setCurrentAction(null);
           break;
       }
       onEvent?.(event);
@@ -105,12 +144,24 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
       // Accumulate all messages - append interim messages, set final as complete output
       setOutput(prev => {
         if (event.isFinal) {
-          // Final message: if there's accumulated content, add it; otherwise just use final
           return prev ? `${prev}\n\n${event.text}` : event.text;
         }
-        // Interim message: append to existing output
         return prev ? `${prev}\n\n${event.text}` : event.text;
       });
+
+      // Add agent text to history (permanent)
+      if (event.text) {
+        setHistory(prev => [
+          ...prev,
+          {
+            id: `text-${Date.now()}`,
+            type: 'agent_text',
+            content: event.text,
+            timestamp: Date.now(),
+          },
+        ]);
+      }
+
       onEvent?.(event);
     });
 
@@ -121,16 +172,26 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('tool_call', event => {
-      // Use LLM-provided tool call ID for proper matching
+      const startTime = Date.now();
+
+      // Set current action to this tool (ephemeral)
+      setCurrentAction({
+        type: 'tool_executing',
+        toolName: event.toolName,
+        toolArgs: event.arguments,
+        toolCallId: event.toolCallId,
+        startTime,
+      });
+
+      // Also keep in recentTools for backwards compatibility
       setRecentTools(prev => {
         const newItem: ToolCallHistoryItem = {
           id: event.toolCallId,
           name: event.toolName,
           args: event.arguments,
           status: 'executing',
-          startTime: Date.now(),
+          startTime,
         };
-        // Keep last N tools for visibility
         return [...prev.slice(-(MAX_VISIBLE_TOOLS - 1)), newItem];
       });
       onEvent?.(event);
@@ -138,22 +199,47 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
 
     agent.on('tool_result', event => {
       const endTime = Date.now();
-      // Match by ID for proper association (not name!)
-      setRecentTools(prev =>
-        prev.map(tool => {
-          if (tool.id === event.toolCallId) {
-            const duration = endTime - tool.startTime;
+
+      // Move completed tool to history (permanent)
+      setRecentTools(prev => {
+        const tool = prev.find(t => t.id === event.toolCallId);
+        if (tool) {
+          const duration = endTime - tool.startTime;
+          // Add to history
+          setHistory(h => [
+            ...h,
+            {
+              id: `tool-${event.toolCallId}`,
+              type: 'tool_completed',
+              content: tool.name,
+              timestamp: endTime,
+              toolName: tool.name,
+              toolArgs: tool.args,
+              toolResult: event.result,
+              duration,
+            },
+          ]);
+        }
+
+        // Update recentTools for backwards compatibility
+        return prev.map(t => {
+          if (t.id === event.toolCallId) {
+            const duration = endTime - t.startTime;
             return {
-              ...tool,
+              ...t,
               status: event.isError ? 'error' : 'completed',
               result: event.result,
               endTime,
               duration,
             };
           }
-          return tool;
-        })
-      );
+          return t;
+        });
+      });
+
+      // Clear current action (tool is done)
+      setCurrentAction(null);
+
       onEvent?.(event);
     });
 
@@ -262,6 +348,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     setIsConfirmation(false);
     setError(undefined);
     setRecentTools([]);
+    setHistory([]);
+    setCurrentAction(null);
   }, []);
 
   // Stop agent execution (preserves context)
@@ -286,6 +374,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     isConfirmation,
     error,
     recentTools,
+    history,
+    currentAction,
     run,
     respond,
     reset,

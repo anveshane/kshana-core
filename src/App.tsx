@@ -58,6 +58,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     isConfirmation,
     error,
     recentTools,
+    history,
+    currentAction,
     run,
     respond,
     stop,
@@ -267,6 +269,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           isConfirmation={isConfirmation}
           showTodos
           conversationHistory={conversationHistory}
+          history={history}
+          currentAction={currentAction}
         />
       </Box>
 
