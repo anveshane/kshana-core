@@ -130,9 +130,10 @@ export class GenericAgent extends TypedEventEmitter {
             options: planResultObj['options'] as Array<{ label: string; description?: string }>,
           });
 
+          // Note: Plan is shown via ToolCallDisplay, don't duplicate in output
           return {
             status: 'waiting_for_user',
-            output: planResultObj['plan'] as string,
+            output: '',
             todos: this.todoManager.getTodos(),
             pendingQuestion: planResultObj['question'] as string,
             options: planResultObj['options'] as Array<{ label: string; description?: string }>,
@@ -252,9 +253,10 @@ export class GenericAgent extends TypedEventEmitter {
         // Check if tool is waiting for user input (dispatch_agent planning)
         if (resultObj['__awaiting_user_input']) {
           // Return waiting status - the planning loop will handle user response
+          // Note: Plan is shown via ToolCallDisplay, don't duplicate in output
           return {
             status: 'waiting_for_user',
-            output: resultObj['plan'] as string ?? '',
+            output: '',
             todos: this.todoManager.getTodos(),
             pendingQuestion: resultObj['question'] as string,
             options: resultObj['options'] as Array<{ label: string; description?: string }>,
@@ -622,12 +624,8 @@ export class GenericAgent extends TypedEventEmitter {
         content: this.planningState.currentPlan,
       });
 
-      // Emit the plan for display
-      this.emit({
-        type: 'agent_text',
-        text: `📋 Plan (iteration ${this.planningState.iterations}):\n\n${this.planningState.currentPlan}`,
-        isFinal: false,
-      });
+      // Note: Plan is displayed via ToolCallDisplay when the tool result is rendered
+      // No need to emit agent_text here as it would cause duplicate display
 
       // Return status indicating we need user verification
       // The main agent will pause and wait for user input
