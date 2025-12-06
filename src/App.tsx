@@ -51,6 +51,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     status,
     todos,
     output,
+    streamingText,
+    isStreaming,
     question,
     isConfirmation,
     questionOptions,
@@ -264,8 +266,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         status={status}
         statusMessage={error}
         todos={todos}
-        streamingText={output}
-        isStreaming={status === 'thinking'}
+        streamingText={streamingText || output}
+        isStreaming={isStreaming}
         recentTools={recentTools}
         question={question}
         isConfirmation={isConfirmation}

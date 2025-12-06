@@ -54,6 +54,17 @@ export interface AgentTextEvent {
 }
 
 /**
+ * Streaming text chunk event for real-time LLM output.
+ */
+export interface StreamingTextEvent {
+  type: 'streaming_text';
+  /** The text chunk to append */
+  chunk: string;
+  /** Whether this is the final chunk */
+  done: boolean;
+}
+
+/**
  * Notification event for user-facing messages.
  */
 export interface NotificationEvent {
@@ -109,6 +120,7 @@ export type AgentEvent =
   | ToolResultEvent
   | TodoUpdateEvent
   | AgentTextEvent
+  | StreamingTextEvent
   | NotificationEvent
   | QuestionEvent
   | AgentStatusEvent

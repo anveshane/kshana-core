@@ -66,6 +66,10 @@ interface AgentState {
   status: AgentStatus;
   todos: ExpandableTodoItem[];
   output: string;
+  /** Current streaming text being accumulated */
+  streamingText: string;
+  /** Whether streaming is in progress */
+  isStreaming: boolean;
   question: string | undefined;
   isConfirmation: boolean;
   questionOptions: QuestionOption[] | undefined;
@@ -85,6 +89,8 @@ type AgentAction =
   | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown> }
   | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean }
   | { type: 'ADD_AGENT_TEXT'; text: string }
+  | { type: 'STREAM_CHUNK'; chunk: string }
+  | { type: 'STREAM_DONE' }
   | { type: 'SET_THINKING' }
   | { type: 'CLEAR_CURRENT_ACTION' }
   | { type: 'RESET' }
@@ -97,6 +103,8 @@ const initialState: AgentState = {
   status: 'idle',
   todos: [],
   output: '',
+  streamingText: '',
+  isStreaming: false,
   question: undefined,
   isConfirmation: false,
   questionOptions: undefined,
@@ -213,6 +221,40 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         ],
       };
 
+    case 'STREAM_CHUNK':
+      return {
+        ...state,
+        streamingText: state.streamingText + action.chunk,
+        isStreaming: true,
+      };
+
+    case 'STREAM_DONE': {
+      // Move completed streaming text to history if there's content
+      const finalText = state.streamingText.trim();
+      if (!finalText) {
+        return {
+          ...state,
+          streamingText: '',
+          isStreaming: false,
+        };
+      }
+      return {
+        ...state,
+        streamingText: '',
+        isStreaming: false,
+        output: state.output ? `${state.output}\n\n${finalText}` : finalText,
+        history: [
+          ...state.history.slice(-MAX_HISTORY + 1),
+          {
+            id: `text-${Date.now()}`,
+            type: 'agent_text',
+            content: finalText,
+            timestamp: Date.now(),
+          },
+        ],
+      };
+    }
+
     case 'CLEAR_CURRENT_ACTION':
       return { ...state, currentAction: null };
 
@@ -224,6 +266,8 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         question: undefined,
         isConfirmation: false,
         output: '',
+        streamingText: '',
+        isStreaming: false,
         currentAction: { type: 'thinking', startTime: Date.now() },
       };
 
@@ -239,6 +283,8 @@ interface UseAgentReturn {
   status: AgentStatus;
   todos: ExpandableTodoItem[];
   output: string;
+  streamingText: string;
+  isStreaming: boolean;
   question: string | undefined;
   isConfirmation: boolean;
   questionOptions: QuestionOption[] | undefined;
@@ -307,6 +353,15 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     agent.on('agent_text', event => {
       if (event.text) {
         dispatch({ type: 'ADD_AGENT_TEXT', text: event.text });
+      }
+      onEvent?.(event);
+    });
+
+    agent.on('streaming_text', event => {
+      if (event.done) {
+        dispatch({ type: 'STREAM_DONE' });
+      } else if (event.chunk) {
+        dispatch({ type: 'STREAM_CHUNK', chunk: event.chunk });
       }
       onEvent?.(event);
     });
@@ -453,6 +508,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     status: state.status,
     todos: state.todos,
     output: state.output,
+    streamingText: state.streamingText,
+    isStreaming: state.isStreaming,
     question: state.question,
     isConfirmation: state.isConfirmation,
     questionOptions: state.questionOptions,

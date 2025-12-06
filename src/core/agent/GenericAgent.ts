@@ -9,7 +9,7 @@
  */
 import { nanoid } from 'nanoid';
 import { TypedEventEmitter } from '../../events/index.js';
-import type { LLMClient, Message, ToolCall, ToolDefinition } from '../llm/index.js';
+import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
 import { buildSystemMessage, buildPlanningPrompt } from '../prompts/index.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
@@ -96,6 +96,88 @@ export class GenericAgent extends TypedEventEmitter {
    */
   isRunning(): boolean {
     return !this.aborted && !this.waitingForUser && this.iteration > 0;
+  }
+
+  /**
+   * Generate LLM response with streaming, emitting chunks as they arrive.
+   * Accumulates content and tool calls, returning the complete response.
+   */
+  private async generateWithStreaming(
+    messages: Message[],
+    tools: ToolDefinition[]
+  ): Promise<LLMResponse> {
+    let content = '';
+    const toolCalls: ToolCall[] = [];
+    const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> = new Map();
+
+    try {
+      for await (const chunk of this.llm.generateStream({ messages, tools, temperature: 0.7 })) {
+        // Check for abort
+        if (this.aborted) {
+          this.emit({ type: 'streaming_text', chunk: '', done: true });
+          break;
+        }
+
+        // Handle content chunks
+        if (chunk.content) {
+          content += chunk.content;
+          this.emit({ type: 'streaming_text', chunk: chunk.content, done: false });
+        }
+
+        // Handle tool call deltas
+        if (chunk.toolCallDelta) {
+          const delta = chunk.toolCallDelta;
+          let accumulator = toolCallAccumulators.get(delta.index);
+
+          if (!accumulator) {
+            accumulator = { id: delta.id ?? '', name: delta.name ?? '', arguments: '' };
+            toolCallAccumulators.set(delta.index, accumulator);
+          }
+
+          if (delta.id) accumulator.id = delta.id;
+          if (delta.name) accumulator.name = delta.name;
+          if (delta.arguments) accumulator.arguments += delta.arguments;
+        }
+
+        // Handle stream completion
+        if (chunk.done) {
+          this.emit({ type: 'streaming_text', chunk: '', done: true });
+        }
+      }
+    } catch (error) {
+      // On error, emit done and re-throw
+      this.emit({ type: 'streaming_text', chunk: '', done: true });
+      throw error;
+    }
+
+    // Convert accumulated tool calls to final format
+    for (const [, acc] of toolCallAccumulators) {
+      if (acc.id && acc.name) {
+        try {
+          toolCalls.push({
+            id: acc.id,
+            name: acc.name,
+            arguments: acc.arguments ? JSON.parse(acc.arguments) : {},
+          });
+        } catch {
+          // If JSON parsing fails, use empty object
+          toolCalls.push({
+            id: acc.id,
+            name: acc.name,
+            arguments: {},
+          });
+        }
+      }
+    }
+
+    // Clean content (remove <think> tags)
+    const cleanedContent = content ? content.replace(/<think>.*?<\/think>/gs, '').trim() : null;
+
+    return {
+      content: cleanedContent,
+      toolCalls,
+      finishReason: 'stop',
+    };
   }
 
   /**
@@ -209,12 +291,11 @@ export class GenericAgent extends TypedEventEmitter {
       // Build messages with todo reminder injected
       const messagesWithReminder = this.injectTodoReminder();
 
-      // Get LLM response
-      const response = await this.llm.generate({
-        messages: messagesWithReminder,
-        tools: Array.from(this.tools.values()),
-        temperature: 0.7,
-      });
+      // Stream LLM response
+      const response = await this.generateWithStreaming(
+        messagesWithReminder,
+        Array.from(this.tools.values())
+      );
 
       // Add assistant message to history
       this.messages.push({
@@ -222,11 +303,6 @@ export class GenericAgent extends TypedEventEmitter {
         content: response.content,
         toolCalls: response.toolCalls,
       });
-
-      // Emit streaming text event
-      if (response.content) {
-        this.emit({ type: 'agent_text', text: response.content, isFinal: false });
-      }
 
       // If no tool calls, we're done
       if (response.toolCalls.length === 0) {
@@ -610,13 +686,23 @@ export class GenericAgent extends TypedEventEmitter {
     this.planningState.iterations++;
 
     try {
-      // Generate or refine the plan
-      const response = await this.llm.generate({
+      // Generate or refine the plan with streaming
+      let planContent = '';
+
+      for await (const chunk of this.llm.generateStream({
         messages: this.planningState.messages,
         temperature: 0.7,
-      });
+      })) {
+        if (chunk.content) {
+          planContent += chunk.content;
+          this.emit({ type: 'streaming_text', chunk: chunk.content, done: false });
+        }
+        if (chunk.done) {
+          this.emit({ type: 'streaming_text', chunk: '', done: true });
+        }
+      }
 
-      this.planningState.currentPlan = response.content || 'No plan generated';
+      this.planningState.currentPlan = planContent.trim() || 'No plan generated';
 
       // Add assistant response to history
       this.planningState.messages.push({
