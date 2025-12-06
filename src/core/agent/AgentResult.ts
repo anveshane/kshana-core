@@ -9,6 +9,14 @@ import type { ExpandableTodoItem } from '../todo/index.js';
 export type AgentStatus = 'completed' | 'error' | 'interrupted' | 'waiting_for_user';
 
 /**
+ * Option for multiple choice questions.
+ */
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+/**
  * Result from a GenericAgent run.
  */
 export interface GenericAgentResult {
@@ -18,6 +26,8 @@ export interface GenericAgentResult {
   error?: string;
   pendingQuestion?: string;
   isConfirmation?: boolean;
+  /** Options for multiple choice questions */
+  options?: QuestionOption[];
 }
 
 /**

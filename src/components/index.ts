@@ -6,5 +6,6 @@ export { ToolCallDisplay } from './ToolCallDisplay.js';
 export { UserInput, SimpleInput } from './UserInput.js';
 export { TextInput, SimpleTextInput } from './TextInput.js';
 export { ConfirmationPrompt } from './ConfirmationPrompt.js';
+export { QuestionPrompt } from './QuestionPrompt.js';
 export { AgentView } from './AgentView.js';
 export { Banner, KSHANA_ASCII } from './Banner.js';

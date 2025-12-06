@@ -63,12 +63,22 @@ export interface NotificationEvent {
 }
 
 /**
+ * Option for multiple choice questions.
+ */
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
+/**
  * Question event when agent asks user for input.
  */
 export interface QuestionEvent {
   type: 'question';
   question: string;
   isConfirmation: boolean;
+  /** Options for multiple choice questions (max 4, last should allow custom input) */
+  options?: QuestionOption[];
   data?: Record<string, unknown>;
 }
 

@@ -54,12 +54,21 @@ export interface CurrentAction {
   startTime: number;
 }
 
+/**
+ * Option for multiple choice questions.
+ */
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
 interface AgentState {
   status: AgentStatus;
   todos: ExpandableTodoItem[];
   output: string;
   question: string | undefined;
   isConfirmation: boolean;
+  questionOptions: QuestionOption[] | undefined;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
@@ -70,7 +79,7 @@ type AgentAction =
   | { type: 'SET_STATUS'; status: AgentStatus }
   | { type: 'SET_TODOS'; todos: ExpandableTodoItem[] }
   | { type: 'APPEND_OUTPUT'; text: string }
-  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean }
+  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[] }
   | { type: 'CLEAR_QUESTION' }
   | { type: 'SET_ERROR'; error: string }
   | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown> }
@@ -90,6 +99,7 @@ const initialState: AgentState = {
   output: '',
   question: undefined,
   isConfirmation: false,
+  questionOptions: undefined,
   error: undefined,
   recentTools: [],
   history: [],
@@ -115,12 +125,13 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         ...state,
         question: action.question,
         isConfirmation: action.isConfirmation,
+        questionOptions: action.options,
         status: 'waiting',
         currentAction: null,
       };
 
     case 'CLEAR_QUESTION':
-      return { ...state, question: undefined, isConfirmation: false };
+      return { ...state, question: undefined, isConfirmation: false, questionOptions: undefined };
 
     case 'SET_ERROR':
       return { ...state, error: action.error, status: 'error', currentAction: null };
@@ -230,6 +241,7 @@ interface UseAgentReturn {
   output: string;
   question: string | undefined;
   isConfirmation: boolean;
+  questionOptions: QuestionOption[] | undefined;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
@@ -300,7 +312,12 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('question', event => {
-      dispatch({ type: 'SET_QUESTION', question: event.question, isConfirmation: event.isConfirmation });
+      dispatch({
+        type: 'SET_QUESTION',
+        question: event.question,
+        isConfirmation: event.isConfirmation,
+        options: event.options,
+      });
       onEvent?.(event);
     });
 
@@ -438,6 +455,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     output: state.output,
     question: state.question,
     isConfirmation: state.isConfirmation,
+    questionOptions: state.questionOptions,
     error: state.error,
     recentTools: state.recentTools,
     history: state.history,

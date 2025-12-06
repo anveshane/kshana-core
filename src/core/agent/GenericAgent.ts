@@ -440,6 +440,7 @@ export class GenericAgent extends TypedEventEmitter {
 
   /**
    * Handle dispatch_agent tool - spawns a sub-agent for planning.
+   * Returns plan that requires user verification before execution.
    */
   private async handleDispatchAgent(toolCall: ToolCall): Promise<unknown> {
     const args = toolCall.arguments;
@@ -480,10 +481,24 @@ Be specific and actionable. Your plan will be used to create a todo list for exe
 
       const plan = response.content || 'No plan generated';
 
+      // Return plan with verification required status
+      // The agent should then call ask_user with options to verify
       return {
-        status: 'success',
+        status: 'plan_ready',
         plan,
         task,
+        requires_verification: true,
+        verification_instructions: `IMPORTANT: You must now verify this plan with the user before proceeding.
+Call ask_user with:
+- question: A summary of the plan asking if they want to proceed
+- options: Provide these 4 options:
+  1. "Proceed with plan" - Execute the plan as-is
+  2. "Simplify plan" - Make the plan simpler with fewer steps
+  3. "Add more detail" - Expand the plan with more detailed steps
+  4. "Custom feedback" - Let user provide their own instructions
+- is_confirmation: false (this is a choice, not yes/no)
+
+Wait for user selection before creating todos or executing any steps.`,
       };
     } catch (error) {
       return {
@@ -495,11 +510,13 @@ Be specific and actionable. Your plan will be used to create a todo list for exe
 
   /**
    * Handle ask_user tool - pauses execution.
+   * Supports confirmation, free-form, and multiple choice questions.
    */
   private handleAskUser(toolCall: ToolCall): GenericAgentResult | null {
     const args = toolCall.arguments;
     const question = args['question'] as string;
     const isConfirmation = (args['is_confirmation'] as boolean | undefined) ?? false;
+    const options = args['options'] as Array<{ label: string; description?: string }> | undefined;
 
     this.waitingForUser = true;
     this.pendingQuestion = question;
@@ -508,6 +525,7 @@ Be specific and actionable. Your plan will be used to create a todo list for exe
       status: 'waiting_for_user',
       question,
       is_confirmation: isConfirmation,
+      options: options ?? null,
     };
 
     this.messages.push({
@@ -517,11 +535,12 @@ Be specific and actionable. Your plan will be used to create a todo list for exe
       name: toolCall.name,
     });
 
-    // Emit question event
+    // Emit question event with options
     this.emit({
       type: 'question',
       question,
       isConfirmation,
+      options,
       data: args['data'] as Record<string, unknown> | undefined,
     });
 
@@ -531,6 +550,7 @@ Be specific and actionable. Your plan will be used to create a todo list for exe
       todos: this.todoManager.getTodos(),
       pendingQuestion: question,
       isConfirmation,
+      options,
     };
   }
 

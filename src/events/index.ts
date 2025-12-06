@@ -9,5 +9,6 @@ export type {
   AgentTextEvent,
   NotificationEvent,
   QuestionEvent,
+  QuestionOption,
   AgentStatusEvent,
 } from './events.js';

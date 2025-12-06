@@ -10,6 +10,7 @@ import { StreamingText } from './StreamingText.js';
 import { ToolCallDisplay } from './ToolCallDisplay.js';
 import { ScrollableHistory } from './ScrollableHistory.js';
 import { UserInput } from './UserInput.js';
+import { QuestionPrompt } from './QuestionPrompt.js';
 import { Spinner } from './Spinner.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { HistoryEntry, CurrentAction } from '../hooks/useAgent.js';
@@ -34,6 +35,14 @@ export interface ConversationMessage {
   timestamp: number;
 }
 
+/**
+ * Option for multiple choice questions.
+ */
+export interface QuestionOption {
+  label: string;
+  description?: string;
+}
+
 interface AgentViewProps {
   agentName?: string;
   status: AgentStatus;
@@ -44,6 +53,7 @@ interface AgentViewProps {
   recentTools?: ToolHistoryItem[];
   question?: string;
   isConfirmation?: boolean;
+  questionOptions?: QuestionOption[];
   onUserInput?: (input: string) => void;
   showTodos?: boolean;
   conversationHistory?: ConversationMessage[];
@@ -91,6 +101,7 @@ export function AgentView({
   recentTools = [],
   question,
   isConfirmation = false,
+  questionOptions,
   onUserInput,
   showTodos = true,
   conversationHistory = [],
@@ -159,21 +170,34 @@ export function AgentView({
         </Box>
       )}
 
-      {/* Question */}
-      {question && status === 'waiting' && (
-        <Box flexDirection="column" marginY={1}>
-          <Box marginBottom={1}>
-            <Text color="cyan" bold>{isConfirmation ? '?' : '>'}</Text>
-            <Text> {question}</Text>
-          </Box>
-          {onUserInput && (
+      {/* Question - with options or free-form */}
+      {question && status === 'waiting' && onUserInput && (
+        questionOptions && questionOptions.length > 0 ? (
+          <QuestionPrompt
+            question={question}
+            options={questionOptions}
+            isConfirmation={isConfirmation}
+            onSelect={onUserInput}
+          />
+        ) : isConfirmation ? (
+          <QuestionPrompt
+            question={question}
+            isConfirmation={true}
+            onSelect={onUserInput}
+          />
+        ) : (
+          <Box flexDirection="column" marginY={1}>
+            <Box marginBottom={1}>
+              <Text color="cyan" bold>?</Text>
+              <Text> {question}</Text>
+            </Box>
             <UserInput
-              prompt={isConfirmation ? 'Confirm' : '>'}
+              prompt=">"
               onSubmit={onUserInput}
-              isConfirmation={isConfirmation}
+              isConfirmation={false}
             />
-          )}
-        </Box>
+          </Box>
+        )
       )}
 
       {/* Completed */}
