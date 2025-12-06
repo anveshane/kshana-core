@@ -38,6 +38,8 @@ interface UseAgentReturn {
   run: (task: string) => Promise<GenericAgentResult>;
   respond: (userInput: string) => Promise<GenericAgentResult>;
   reset: () => void;
+  stop: () => void;
+  injectInput: (input: string) => void;
 }
 
 // Configuration for tool display
@@ -85,6 +87,10 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
           break;
         case 'error':
           setStatus('error');
+          break;
+        case 'interrupted':
+          // Keep status as idle so user can continue - context is preserved
+          setStatus('idle');
           break;
       }
       onEvent?.(event);
@@ -258,6 +264,20 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     setRecentTools([]);
   }, []);
 
+  // Stop agent execution (preserves context)
+  const stop = React.useCallback(() => {
+    if (agentRef.current) {
+      agentRef.current.stop();
+    }
+  }, []);
+
+  // Inject user input during execution
+  const injectInput = React.useCallback((input: string) => {
+    if (agentRef.current) {
+      agentRef.current.injectInput(input);
+    }
+  }, []);
+
   return {
     status,
     todos,
@@ -269,5 +289,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     run,
     respond,
     reset,
+    stop,
+    injectInput,
   };
 }

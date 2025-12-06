@@ -77,7 +77,16 @@ export interface QuestionEvent {
  */
 export interface AgentStatusEvent {
   type: 'agent_status';
-  status: 'started' | 'thinking' | 'waiting' | 'completed' | 'error';
+  status: 'started' | 'thinking' | 'waiting' | 'completed' | 'error' | 'interrupted';
+  agentName?: string;
+}
+
+/**
+ * User input injected event when user provides input during execution.
+ */
+export interface UserInputInjectedEvent {
+  type: 'user_input_injected';
+  input: string;
   agentName?: string;
 }
 
@@ -92,7 +101,8 @@ export type AgentEvent =
   | AgentTextEvent
   | NotificationEvent
   | QuestionEvent
-  | AgentStatusEvent;
+  | AgentStatusEvent
+  | UserInputInjectedEvent;
 
 /**
  * Event type names for type-safe event handling.

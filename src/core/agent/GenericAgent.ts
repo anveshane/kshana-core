@@ -51,6 +51,10 @@ export class GenericAgent extends TypedEventEmitter {
   private pendingQuestion?: string;
   private pendingConfirmations = new Map<string, Record<string, unknown>>();
 
+  // Interruption state
+  private aborted = false;
+  private pendingUserInput: string | null = null;
+
   constructor(
     tools: Map<string, ToolDefinition>,
     llm: LLMClient,
@@ -66,10 +70,37 @@ export class GenericAgent extends TypedEventEmitter {
   }
 
   /**
+   * Stop the agent's current execution.
+   */
+  stop(): void {
+    this.aborted = true;
+    this.emit({ type: 'agent_status', status: 'interrupted', agentName: this.name });
+  }
+
+  /**
+   * Inject new user input during execution.
+   * The agent will process this input on the next iteration.
+   */
+  injectInput(input: string): void {
+    this.pendingUserInput = input;
+    this.emit({ type: 'user_input_injected', input, agentName: this.name });
+  }
+
+  /**
+   * Check if agent is currently running.
+   */
+  isRunning(): boolean {
+    return !this.aborted && !this.waitingForUser && this.iteration > 0;
+  }
+
+  /**
    * Run the agent on a task.
    * Returns when completed, errored, or waiting for user input.
    */
   async run(task: string, userResponse?: string): Promise<GenericAgentResult> {
+    // Reset abort state for new run
+    this.aborted = false;
+
     // Emit started status
     this.emit({ type: 'agent_status', status: 'started', agentName: this.name });
 
@@ -91,6 +122,31 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Main while(tool_use) loop
     while (this.iteration < this.maxIterations) {
+      // Check for abort
+      if (this.aborted) {
+        return {
+          status: 'interrupted',
+          output: 'Execution stopped by user.',
+          todos: this.todoManager.getTodos(),
+          error: 'user_stopped',
+        };
+      }
+
+      // Check for injected user input - add it to messages
+      if (this.pendingUserInput) {
+        const userInput = this.pendingUserInput;
+        this.pendingUserInput = null;
+
+        // Add user input as a new message
+        this.messages.push({
+          role: 'user',
+          content: `[User interjection during execution]: ${userInput}`,
+        });
+
+        // Emit event
+        this.emit({ type: 'agent_text', text: `User: ${userInput}`, isFinal: false });
+      }
+
       this.iteration++;
 
       // Emit thinking status

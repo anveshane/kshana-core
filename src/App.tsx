@@ -2,7 +2,7 @@
  * Main application component.
  */
 import React from 'react';
-import { Text, Box, useApp } from 'ink';
+import { Text, Box, useApp, useInput, useStdout } from 'ink';
 import { AgentView, type ConversationMessage } from './components/AgentView.js';
 import { SimpleInput } from './components/UserInput.js';
 import { Banner } from './components/Banner.js';
@@ -23,9 +23,13 @@ interface AppProps {
 
 export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' }: AppProps) {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const [started, setStarted] = React.useState(false);
   const [inputTask, setInputTask] = React.useState('');
   const [conversationHistory, setConversationHistory] = React.useState<ConversationMessage[]>([]);
+
+  // Get terminal dimensions for full-height layout
+  const terminalHeight = stdout?.rows ?? 24;
 
   // Create tool registry based on task type
   const tools = React.useMemo(() => {
@@ -56,6 +60,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     recentTools,
     run,
     respond,
+    stop,
+    injectInput,
   } = useAgent({
     tools,
     llmConfig,
@@ -64,6 +70,13 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       name: agentName,
       customPrompt,
     },
+  });
+
+  // Handle Escape key to stop execution
+  useInput((input, key) => {
+    if (key.escape && status === 'thinking') {
+      stop();
+    }
   });
 
   // Run initial task if provided
@@ -98,7 +111,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     [run, exit]
   );
 
-  // Handle user response
+  // Handle user response (when agent is waiting for input)
   const handleUserInput = React.useCallback(
     (input: string) => {
       // Add user response to conversation history
@@ -114,6 +127,41 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       void respond(input);
     },
     [respond]
+  );
+
+  // Handle user input during execution (inject into running agent)
+  const handleInjectedInput = React.useCallback(
+    (input: string) => {
+      if (input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
+        exit();
+        return;
+      }
+      // Add to conversation history
+      setConversationHistory(prev => [
+        ...prev,
+        {
+          id: `user-${Date.now()}`,
+          type: 'user',
+          content: input,
+          timestamp: Date.now(),
+        },
+      ]);
+      // Inject into running agent
+      injectInput(input);
+    },
+    [injectInput, exit]
+  );
+
+  // Handle new task after completion or idle
+  const handleNewTask = React.useCallback(
+    (input: string) => {
+      if (input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
+        exit();
+        return;
+      }
+      handleTaskSubmit(input);
+    },
+    [handleTaskSubmit, exit]
   );
 
   // Show welcome screen if not started
@@ -174,30 +222,65 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     );
   }
 
-  return (
-    <Box flexDirection="column">
-      <AgentView
-        agentName={agentName}
-        status={status}
-        statusMessage={error}
-        todos={todos}
-        streamingText={output}
-        isStreaming={status === 'thinking'}
-        recentTools={recentTools}
-        question={question}
-        isConfirmation={isConfirmation}
-        onUserInput={status === 'waiting' ? handleUserInput : undefined}
-        showTodos
-        conversationHistory={conversationHistory}
-      />
+  // Determine the appropriate input handler and placeholder based on status
+  const getInputConfig = () => {
+    switch (status) {
+      case 'thinking':
+        return {
+          handler: handleInjectedInput,
+          prefix: '>',
+          placeholder: 'Type to add context or press Esc to stop...',
+        };
+      case 'waiting':
+        return {
+          handler: handleUserInput,
+          prefix: '?',
+          placeholder: 'Your response...',
+        };
+      case 'completed':
+      case 'idle':
+      case 'error':
+      default:
+        return {
+          handler: handleNewTask,
+          prefix: '>',
+          placeholder: 'Enter a task or type "exit"...',
+        };
+    }
+  };
 
-      {/* Show new task input when completed */}
-      {status === 'completed' && (
-        <Box marginTop={1} paddingX={1}>
-          <Text dimColor>Enter another task or type "exit":</Text>
-          <SimpleInput onSubmit={handleTaskSubmit} />
-        </Box>
-      )}
+  const inputConfig = getInputConfig();
+
+  return (
+    <Box flexDirection="column" height={terminalHeight}>
+      {/* Main content area - takes all available space */}
+      <Box flexDirection="column" flexGrow={1} overflow="hidden">
+        <AgentView
+          agentName={agentName}
+          status={status}
+          statusMessage={error}
+          todos={todos}
+          streamingText={output}
+          isStreaming={status === 'thinking'}
+          recentTools={recentTools}
+          question={question}
+          isConfirmation={isConfirmation}
+          showTodos
+          conversationHistory={conversationHistory}
+        />
+      </Box>
+
+      {/* Input prompt - fixed at bottom */}
+      <Box paddingX={1} flexDirection="column" borderStyle="single" borderColor="gray" borderTop borderBottom={false} borderLeft={false} borderRight={false}>
+        {status === 'thinking' && (
+          <Text dimColor>Press Esc to stop. Type to add context:</Text>
+        )}
+        <SimpleInput
+          onSubmit={inputConfig.handler}
+          prefix={inputConfig.prefix}
+          placeholder={inputConfig.placeholder}
+        />
+      </Box>
     </Box>
   );
 }

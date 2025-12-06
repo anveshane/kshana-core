@@ -214,6 +214,10 @@ if (server) {
     }
   });
 } else {
-  // CLI mode - render the React Ink app
+  // CLI mode - clear screen and render the React Ink app
+  // Clear the screen
+  process.stdout.write('\x1B[2J\x1B[0f');
+
+  // Render with fullscreen mode enabled
   render(<App llmConfig={llmConfig} initialTask={task} taskType={taskType} />);
 }
