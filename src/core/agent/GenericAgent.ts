@@ -11,7 +11,7 @@ import { nanoid } from 'nanoid';
 import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
-import { buildSystemMessage } from '../prompts/index.js';
+import { buildSystemMessage, buildPlanningPrompt } from '../prompts/index.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
 
 /**
@@ -565,20 +565,8 @@ export class GenericAgent extends TypedEventEmitter {
       return { error: 'Planning already in progress' };
     }
 
-    // Initialize planning state
-    const contextSection = context ? `\n\nContext/Background:\n${context}\n` : '';
-
-    const planningSystemPrompt = `You are a planning assistant. Your job is to create and refine plans based on user feedback.
-
-Task: ${task}
-${contextSection}
-
-When creating a plan, include:
-1. Clear numbered steps to accomplish the task
-2. Any prerequisites or dependencies
-3. Expected outcomes for each step
-
-Be specific and actionable. The plan will be used to create a todo list for execution.`;
+    // Initialize planning state with imported prompt
+    const planningSystemPrompt = buildPlanningPrompt(task, context);
 
     this.planningState = {
       active: true,

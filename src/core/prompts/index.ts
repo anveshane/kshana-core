@@ -40,11 +40,13 @@ function loadPrompt(name: string): PromptJson {
 const basePrompt = loadPrompt('base');
 const orchestratorPrompt = loadPrompt('orchestrator');
 const subAgentPrompt = loadPrompt('subAgent');
+const planningPrompt = loadPrompt('planning');
 
 // Export prompt content for backwards compatibility
 export const GENERIC_AGENT_BASE_PROMPT = basePrompt.content;
 export const GENERIC_AGENT_ORCHESTRATOR_SECTION = orchestratorPrompt.content;
 export const GENERIC_AGENT_SUB_AGENT_SECTION = subAgentPrompt.content;
+export const PLANNING_AGENT_PROMPT = planningPrompt.content;
 
 // Combined prompt for main agent (base + orchestrator)
 export const GENERIC_AGENT_SYSTEM_PROMPT =
@@ -105,6 +107,20 @@ export function buildSystemMessage(
 /**
  * Get prompt metadata (version, sections, etc.)
  */
-export function getPromptMetadata(name: 'base' | 'orchestrator' | 'subAgent'): PromptJson {
+export function getPromptMetadata(name: 'base' | 'orchestrator' | 'subAgent' | 'planning'): PromptJson {
   return loadPrompt(name);
+}
+
+/**
+ * Build the planning sub-agent system prompt with task and context substitution.
+ *
+ * @param task - The task description for the planning agent
+ * @param context - Optional context/background information
+ * @returns The complete planning system prompt
+ */
+export function buildPlanningPrompt(task: string, context?: string): string {
+  const contextSection = context ? `\nContext/Background:\n${context}` : '';
+  return PLANNING_AGENT_PROMPT
+    .replace('{{task}}', task)
+    .replace('{{context}}', contextSection);
 }
