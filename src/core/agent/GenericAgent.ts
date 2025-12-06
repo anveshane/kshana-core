@@ -55,6 +55,11 @@ export class GenericAgent extends TypedEventEmitter {
   private aborted = false;
   private pendingUserInput: string | null = null;
 
+  // Loop detection state
+  private recentToolCalls: string[] = [];
+  private static readonly LOOP_DETECTION_WINDOW = 6;
+  private static readonly LOOP_THRESHOLD = 3; // Same tool called 3+ times in window
+
   constructor(
     tools: Map<string, ToolDefinition>,
     llm: LLMClient,
@@ -116,6 +121,7 @@ export class GenericAgent extends TypedEventEmitter {
         { role: 'user', content: task },
       ];
       this.iteration = 0;
+      this.recentToolCalls = []; // Reset loop detection
     }
 
     let finalOutput = '';
@@ -249,6 +255,45 @@ export class GenericAgent extends TypedEventEmitter {
   }
 
   /**
+   * Detect if the agent is in a loop calling the same tool repeatedly.
+   * Returns a warning message if looping detected, null otherwise.
+   */
+  private detectLoop(toolName: string, args: Record<string, unknown>): string | null {
+    // Create a signature for this tool call (tool + key args)
+    const argSignature = JSON.stringify(args).slice(0, 100); // Limit to prevent huge signatures
+    const signature = `${toolName}:${argSignature}`;
+
+    // Add to recent calls
+    this.recentToolCalls.push(signature);
+
+    // Keep only the detection window
+    if (this.recentToolCalls.length > GenericAgent.LOOP_DETECTION_WINDOW) {
+      this.recentToolCalls.shift();
+    }
+
+    // Count occurrences of this exact call in the window
+    const count = this.recentToolCalls.filter(s => s === signature).length;
+
+    if (count >= GenericAgent.LOOP_THRESHOLD) {
+      return `LOOP DETECTED: You've called ${toolName} with similar arguments ${count} times recently. ` +
+        `This suggests you're stuck in a loop. Please either:\n` +
+        `1. Complete the current task and stop (no more tool calls)\n` +
+        `2. Use ask_user to get clarification\n` +
+        `3. Try a different approach`;
+    }
+
+    // Also check for rapid tool repetition (same tool called consecutively)
+    const lastFew = this.recentToolCalls.slice(-4);
+    const sameToolCount = lastFew.filter(s => s.startsWith(toolName + ':')).length;
+    if (sameToolCount >= 4) {
+      return `WARNING: You've called ${toolName} 4 times in a row. ` +
+        `If you're done with the task, stop calling tools and provide a final response.`;
+    }
+
+    return null;
+  }
+
+  /**
    * Execute a tool call with framework-enforced confirmation for complex tools.
    */
   private async executeTool(toolCall: ToolCall): Promise<unknown> {
@@ -260,6 +305,27 @@ export class GenericAgent extends TypedEventEmitter {
       arguments: toolCall.arguments,
       agentName: this.name,
     });
+
+    // Check for looping (skip for think tool - it's normal to think often)
+    if (toolCall.name !== 'think' && toolCall.name !== 'todo_write') {
+      const loopWarning = this.detectLoop(toolCall.name, toolCall.arguments);
+      if (loopWarning) {
+        const warningResult = {
+          status: 'loop_warning',
+          warning: loopWarning,
+          tool: toolCall.name,
+        };
+        this.emit({
+          type: 'tool_result',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          result: warningResult,
+          isError: false,
+          agentName: this.name,
+        });
+        return warningResult;
+      }
+    }
 
     // Handle built-in todo tools specially (no handler required)
     if (isBuiltinTodoTool(toolCall.name)) {
