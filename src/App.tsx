@@ -121,6 +121,11 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Handle user response (when agent is waiting for input)
   const handleUserInput = React.useCallback(
     (input: string) => {
+      // Always allow exit
+      if (input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
+        exit();
+        return;
+      }
       // Add user response to conversation history
       setConversationHistory(prev => [
         ...prev,
@@ -133,7 +138,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       ]);
       void respond(input);
     },
-    [respond]
+    [respond, exit]
   );
 
   // Handle user input during execution (inject into running agent)
