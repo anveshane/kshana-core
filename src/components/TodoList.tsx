@@ -18,7 +18,7 @@ const STATUS_ICONS: Record<TodoStatus, { icon: string; color: string }> = {
   expanded: { icon: '↳', color: 'blue' },
 };
 
-function TodoItem({
+const TodoItem = React.memo(function TodoItem({
   todo,
   index,
   compact,
@@ -50,9 +50,13 @@ function TodoItem({
       </Text>
     </Box>
   );
-}
+});
 
-export function TodoList({ todos, showHidden = false, compact = false }: TodoListProps) {
+export const TodoList = React.memo(function TodoList({
+  todos,
+  showHidden = false,
+  compact = false,
+}: TodoListProps) {
   const visibleTodos = showHidden ? todos : todos.filter(t => t.visible);
 
   if (visibleTodos.length === 0) {
@@ -88,4 +92,4 @@ export function TodoList({ todos, showHidden = false, compact = false }: TodoLis
       ))}
     </Box>
   );
-}
+});

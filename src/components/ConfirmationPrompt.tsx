@@ -52,14 +52,10 @@ export function ConfirmationPrompt({
       {details && Object.keys(details).length > 0 && (
         <Box flexDirection="column" marginBottom={1} marginLeft={2}>
           {Object.entries(details).map(([key, value]) => (
-            <Box key={key}>
+            <Box key={key} flexDirection="column">
               <Text dimColor>{key}: </Text>
-              <Text>
-                {typeof value === 'string'
-                  ? value.length > 60
-                    ? value.slice(0, 60) + '...'
-                    : value
-                  : JSON.stringify(value)}
+              <Text wrap="wrap">
+                {typeof value === 'string' ? value : JSON.stringify(value)}
               </Text>
             </Box>
           ))}

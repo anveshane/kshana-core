@@ -1,5 +1,6 @@
 /**
  * Hook for managing agent lifecycle.
+ * Optimized to reduce re-renders and flickering.
  */
 import React from 'react';
 import { GenericAgent, type AgentConfig, type GenericAgentResult } from '../core/agent/index.js';
@@ -53,6 +54,176 @@ export interface CurrentAction {
   startTime: number;
 }
 
+interface AgentState {
+  status: AgentStatus;
+  todos: ExpandableTodoItem[];
+  output: string;
+  question: string | undefined;
+  isConfirmation: boolean;
+  error: string | undefined;
+  recentTools: ToolCallHistoryItem[];
+  history: HistoryEntry[];
+  currentAction: CurrentAction | null;
+}
+
+type AgentAction =
+  | { type: 'SET_STATUS'; status: AgentStatus }
+  | { type: 'SET_TODOS'; todos: ExpandableTodoItem[] }
+  | { type: 'APPEND_OUTPUT'; text: string }
+  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean }
+  | { type: 'CLEAR_QUESTION' }
+  | { type: 'SET_ERROR'; error: string }
+  | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown> }
+  | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean }
+  | { type: 'ADD_AGENT_TEXT'; text: string }
+  | { type: 'SET_THINKING' }
+  | { type: 'CLEAR_CURRENT_ACTION' }
+  | { type: 'RESET' }
+  | { type: 'START_TASK' };
+
+const MAX_VISIBLE_TOOLS = 15;
+const MAX_HISTORY = 50; // Limit history to prevent memory issues
+
+const initialState: AgentState = {
+  status: 'idle',
+  todos: [],
+  output: '',
+  question: undefined,
+  isConfirmation: false,
+  error: undefined,
+  recentTools: [],
+  history: [],
+  currentAction: null,
+};
+
+function agentReducer(state: AgentState, action: AgentAction): AgentState {
+  switch (action.type) {
+    case 'SET_STATUS':
+      return { ...state, status: action.status };
+
+    case 'SET_TODOS':
+      return { ...state, todos: action.todos };
+
+    case 'APPEND_OUTPUT':
+      return {
+        ...state,
+        output: state.output ? `${state.output}\n\n${action.text}` : action.text,
+      };
+
+    case 'SET_QUESTION':
+      return {
+        ...state,
+        question: action.question,
+        isConfirmation: action.isConfirmation,
+        status: 'waiting',
+        currentAction: null,
+      };
+
+    case 'CLEAR_QUESTION':
+      return { ...state, question: undefined, isConfirmation: false };
+
+    case 'SET_ERROR':
+      return { ...state, error: action.error, status: 'error', currentAction: null };
+
+    case 'SET_THINKING':
+      return {
+        ...state,
+        status: 'thinking',
+        currentAction: { type: 'thinking', startTime: Date.now() },
+      };
+
+    case 'TOOL_START': {
+      const startTime = Date.now();
+      const newTool: ToolCallHistoryItem = {
+        id: action.toolCallId,
+        name: action.toolName,
+        args: action.args,
+        status: 'executing',
+        startTime,
+      };
+      return {
+        ...state,
+        currentAction: {
+          type: 'tool_executing',
+          toolName: action.toolName,
+          toolArgs: action.args,
+          toolCallId: action.toolCallId,
+          startTime,
+        },
+        recentTools: [...state.recentTools.slice(-(MAX_VISIBLE_TOOLS - 1)), newTool],
+      };
+    }
+
+    case 'TOOL_COMPLETE': {
+      const endTime = Date.now();
+      const tool = state.recentTools.find(t => t.id === action.toolCallId);
+      const duration = tool ? endTime - tool.startTime : 0;
+
+      // Create history entry
+      const historyEntry: HistoryEntry | null = tool
+        ? {
+            id: `tool-${action.toolCallId}`,
+            type: 'tool_completed',
+            content: tool.name,
+            timestamp: endTime,
+            toolName: tool.name,
+            toolArgs: tool.args,
+            toolResult: action.result,
+            duration,
+          }
+        : null;
+
+      return {
+        ...state,
+        currentAction: null,
+        recentTools: state.recentTools.map(t =>
+          t.id === action.toolCallId
+            ? { ...t, status: action.isError ? 'error' : 'completed', result: action.result, endTime, duration }
+            : t
+        ),
+        history: historyEntry
+          ? [...state.history.slice(-MAX_HISTORY + 1), historyEntry]
+          : state.history,
+      };
+    }
+
+    case 'ADD_AGENT_TEXT':
+      return {
+        ...state,
+        output: state.output ? `${state.output}\n\n${action.text}` : action.text,
+        history: [
+          ...state.history.slice(-MAX_HISTORY + 1),
+          {
+            id: `text-${Date.now()}`,
+            type: 'agent_text',
+            content: action.text,
+            timestamp: Date.now(),
+          },
+        ],
+      };
+
+    case 'CLEAR_CURRENT_ACTION':
+      return { ...state, currentAction: null };
+
+    case 'START_TASK':
+      return {
+        ...state,
+        status: 'thinking',
+        error: undefined,
+        question: undefined,
+        isConfirmation: false,
+        output: '',
+        currentAction: { type: 'thinking', startTime: Date.now() },
+      };
+
+    case 'RESET':
+      return initialState;
+
+    default:
+      return state;
+  }
+}
+
 interface UseAgentReturn {
   status: AgentStatus;
   todos: ExpandableTodoItem[];
@@ -61,7 +232,6 @@ interface UseAgentReturn {
   isConfirmation: boolean;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
-  // Separated: permanent history vs ephemeral current action
   history: HistoryEntry[];
   currentAction: CurrentAction | null;
   run: (task: string) => Promise<GenericAgentResult>;
@@ -71,24 +241,10 @@ interface UseAgentReturn {
   injectInput: (input: string) => void;
 }
 
-// Configuration for tool display
-const MAX_VISIBLE_TOOLS = 15;
-
 export function useAgent(options: UseAgentOptions): UseAgentReturn {
   const { tools, llmConfig, agentConfig, onEvent } = options;
 
-  const [status, setStatus] = React.useState<AgentStatus>('idle');
-  const [todos, setTodos] = React.useState<ExpandableTodoItem[]>([]);
-  const [output, setOutput] = React.useState('');
-  const [question, setQuestion] = React.useState<string | undefined>();
-  const [isConfirmation, setIsConfirmation] = React.useState(false);
-  const [error, setError] = React.useState<string | undefined>();
-  const [recentTools, setRecentTools] = React.useState<ToolCallHistoryItem[]>([]);
-
-  // New: history (permanent) and current action (ephemeral)
-  const [history, setHistory] = React.useState<HistoryEntry[]>([]);
-  const [currentAction, setCurrentAction] = React.useState<CurrentAction | null>(null);
-
+  const [state, dispatch] = React.useReducer(agentReducer, initialState);
   const agentRef = React.useRef<GenericAgent | null>(null);
   const llmRef = React.useRef<LLMClient | null>(null);
 
@@ -110,136 +266,61 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
       switch (event.status) {
         case 'started':
         case 'thinking':
-          setStatus('thinking');
-          // Set current action to thinking
-          setCurrentAction({ type: 'thinking', startTime: Date.now() });
+          dispatch({ type: 'SET_THINKING' });
           break;
         case 'waiting':
-          setStatus('waiting');
-          setCurrentAction(null); // Clear ephemeral when waiting for user
+          // Question event will handle this
           break;
         case 'completed':
-          setStatus('completed');
-          setCurrentAction(null); // Clear ephemeral when done
+          dispatch({ type: 'SET_STATUS', status: 'completed' });
+          dispatch({ type: 'CLEAR_CURRENT_ACTION' });
           break;
         case 'error':
-          setStatus('error');
-          setCurrentAction(null);
+          dispatch({ type: 'SET_STATUS', status: 'error' });
+          dispatch({ type: 'CLEAR_CURRENT_ACTION' });
           break;
         case 'interrupted':
-          // Keep status as idle so user can continue - context is preserved
-          setStatus('idle');
-          setCurrentAction(null);
+          dispatch({ type: 'SET_STATUS', status: 'idle' });
+          dispatch({ type: 'CLEAR_CURRENT_ACTION' });
           break;
       }
       onEvent?.(event);
     });
 
     agent.on('todo_update', event => {
-      setTodos(event.todos);
+      dispatch({ type: 'SET_TODOS', todos: event.todos });
       onEvent?.(event);
     });
 
     agent.on('agent_text', event => {
-      // Accumulate all messages - append interim messages, set final as complete output
-      setOutput(prev => {
-        if (event.isFinal) {
-          return prev ? `${prev}\n\n${event.text}` : event.text;
-        }
-        return prev ? `${prev}\n\n${event.text}` : event.text;
-      });
-
-      // Add agent text to history (permanent)
       if (event.text) {
-        setHistory(prev => [
-          ...prev,
-          {
-            id: `text-${Date.now()}`,
-            type: 'agent_text',
-            content: event.text,
-            timestamp: Date.now(),
-          },
-        ]);
+        dispatch({ type: 'ADD_AGENT_TEXT', text: event.text });
       }
-
       onEvent?.(event);
     });
 
     agent.on('question', event => {
-      setQuestion(event.question);
-      setIsConfirmation(event.isConfirmation);
+      dispatch({ type: 'SET_QUESTION', question: event.question, isConfirmation: event.isConfirmation });
       onEvent?.(event);
     });
 
     agent.on('tool_call', event => {
-      const startTime = Date.now();
-
-      // Set current action to this tool (ephemeral)
-      setCurrentAction({
-        type: 'tool_executing',
-        toolName: event.toolName,
-        toolArgs: event.arguments,
+      dispatch({
+        type: 'TOOL_START',
         toolCallId: event.toolCallId,
-        startTime,
-      });
-
-      // Also keep in recentTools for backwards compatibility
-      setRecentTools(prev => {
-        const newItem: ToolCallHistoryItem = {
-          id: event.toolCallId,
-          name: event.toolName,
-          args: event.arguments,
-          status: 'executing',
-          startTime,
-        };
-        return [...prev.slice(-(MAX_VISIBLE_TOOLS - 1)), newItem];
+        toolName: event.toolName,
+        args: event.arguments,
       });
       onEvent?.(event);
     });
 
     agent.on('tool_result', event => {
-      const endTime = Date.now();
-
-      // Move completed tool to history (permanent)
-      setRecentTools(prev => {
-        const tool = prev.find(t => t.id === event.toolCallId);
-        if (tool) {
-          const duration = endTime - tool.startTime;
-          // Add to history
-          setHistory(h => [
-            ...h,
-            {
-              id: `tool-${event.toolCallId}`,
-              type: 'tool_completed',
-              content: tool.name,
-              timestamp: endTime,
-              toolName: tool.name,
-              toolArgs: tool.args,
-              toolResult: event.result,
-              duration,
-            },
-          ]);
-        }
-
-        // Update recentTools for backwards compatibility
-        return prev.map(t => {
-          if (t.id === event.toolCallId) {
-            const duration = endTime - t.startTime;
-            return {
-              ...t,
-              status: event.isError ? 'error' : 'completed',
-              result: event.result,
-              endTime,
-              duration,
-            };
-          }
-          return t;
-        });
+      dispatch({
+        type: 'TOOL_COMPLETE',
+        toolCallId: event.toolCallId,
+        result: event.result,
+        isError: event.isError ?? false,
       });
-
-      // Clear current action (tool is done)
-      setCurrentAction(null);
-
       onEvent?.(event);
     });
 
@@ -250,35 +331,30 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
   // Run agent on a task
   const run = React.useCallback(
     async (task: string): Promise<GenericAgentResult> => {
-      setStatus('thinking');
-      setError(undefined);
-      setQuestion(undefined);
-      setIsConfirmation(false);
-      setOutput(''); // Clear previous output when starting a new task
+      dispatch({ type: 'START_TASK' });
 
       const agent = createAgent();
 
       try {
         const result = await agent.run(task);
 
-        setTodos(result.todos);
-        // Output is accumulated via agent_text events, don't overwrite here
+        dispatch({ type: 'SET_TODOS', todos: result.todos });
 
         if (result.status === 'waiting_for_user') {
-          setStatus('waiting');
-          setQuestion(result.pendingQuestion);
-          setIsConfirmation(result.isConfirmation ?? false);
+          dispatch({
+            type: 'SET_QUESTION',
+            question: result.pendingQuestion ?? '',
+            isConfirmation: result.isConfirmation ?? false,
+          });
         } else if (result.status === 'completed') {
-          setStatus('completed');
+          dispatch({ type: 'SET_STATUS', status: 'completed' });
         } else if (result.status === 'error' || result.status === 'interrupted') {
-          setStatus('error');
-          setError(result.error);
+          dispatch({ type: 'SET_ERROR', error: result.error ?? 'Unknown error' });
         }
 
         return result;
       } catch (err) {
-        setStatus('error');
-        setError(String(err));
+        dispatch({ type: 'SET_ERROR', error: String(err) });
         return {
           status: 'error',
           output: '',
@@ -302,31 +378,29 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         };
       }
 
-      setStatus('thinking');
-      setQuestion(undefined);
-      setIsConfirmation(false);
+      dispatch({ type: 'SET_THINKING' });
+      dispatch({ type: 'CLEAR_QUESTION' });
 
       try {
         const result = await agentRef.current.run('', userInput);
 
-        setTodos(result.todos);
-        // Output is accumulated via agent_text events, don't overwrite here
+        dispatch({ type: 'SET_TODOS', todos: result.todos });
 
         if (result.status === 'waiting_for_user') {
-          setStatus('waiting');
-          setQuestion(result.pendingQuestion);
-          setIsConfirmation(result.isConfirmation ?? false);
+          dispatch({
+            type: 'SET_QUESTION',
+            question: result.pendingQuestion ?? '',
+            isConfirmation: result.isConfirmation ?? false,
+          });
         } else if (result.status === 'completed') {
-          setStatus('completed');
+          dispatch({ type: 'SET_STATUS', status: 'completed' });
         } else if (result.status === 'error' || result.status === 'interrupted') {
-          setStatus('error');
-          setError(result.error);
+          dispatch({ type: 'SET_ERROR', error: result.error ?? 'Unknown error' });
         }
 
         return result;
       } catch (err) {
-        setStatus('error');
-        setError(String(err));
+        dispatch({ type: 'SET_ERROR', error: String(err) });
         return {
           status: 'error',
           output: '',
@@ -341,15 +415,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
   // Reset agent state
   const reset = React.useCallback(() => {
     agentRef.current = null;
-    setStatus('idle');
-    setTodos([]);
-    setOutput('');
-    setQuestion(undefined);
-    setIsConfirmation(false);
-    setError(undefined);
-    setRecentTools([]);
-    setHistory([]);
-    setCurrentAction(null);
+    dispatch({ type: 'RESET' });
   }, []);
 
   // Stop agent execution (preserves context)
@@ -367,15 +433,15 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
   }, []);
 
   return {
-    status,
-    todos,
-    output,
-    question,
-    isConfirmation,
-    error,
-    recentTools,
-    history,
-    currentAction,
+    status: state.status,
+    todos: state.todos,
+    output: state.output,
+    question: state.question,
+    isConfirmation: state.isConfirmation,
+    error: state.error,
+    recentTools: state.recentTools,
+    history: state.history,
+    currentAction: state.currentAction,
     run,
     respond,
     reset,

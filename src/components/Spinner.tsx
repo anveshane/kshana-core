@@ -1,10 +1,11 @@
 /**
  * Spinner component for loading states.
+ * Uses slower animation (200ms) to reduce flickering.
  */
 import React from 'react';
 import { Text, Box } from 'ink';
 
-const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPINNER_FRAMES = ['◐', '◓', '◑', '◒'];
 
 interface SpinnerProps {
   label?: string;
@@ -17,7 +18,7 @@ export function Spinner({ label, color = 'cyan' }: SpinnerProps) {
   React.useEffect(() => {
     const timer = setInterval(() => {
       setFrameIndex(prev => (prev + 1) % SPINNER_FRAMES.length);
-    }, 80);
+    }, 200); // Slower animation to reduce flickering
 
     return () => {
       clearInterval(timer);

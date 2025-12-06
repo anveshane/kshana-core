@@ -1,0 +1,1 @@
+- Never truncate any text when displaying it in the CLI

@@ -4,6 +4,16 @@
 import React from 'react';
 import { Text, Box, useInput, useApp } from 'ink';
 
+/**
+ * Format input value for display:
+ * - Collapse newlines to single space (for single-line display)
+ * - No truncation - show full content
+ */
+function formatForDisplay(value: string): string {
+  // Replace all whitespace sequences (newlines, tabs, multiple spaces) with single space
+  return value.replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 interface UserInputProps {
   prompt?: string;
   placeholder?: string;
@@ -41,9 +51,14 @@ export function UserInput({
     } else if (key.escape) {
       exit();
     } else if (input && !key.ctrl && !key.meta) {
-      setValue(prev => prev + input);
+      // Filter out newlines and normalize whitespace when adding input
+      const sanitized = input.replace(/[\r\n]/g, ' ');
+      setValue(prev => prev + sanitized);
     }
   });
+
+  // Format for display (collapse newlines)
+  const displayValue = formatForDisplay(value);
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -51,7 +66,7 @@ export function UserInput({
         <Box>
           <Text color="cyan">{prompt} </Text>
           <Text dimColor>(y/n) </Text>
-          <Text>{value}</Text>
+          <Text>{displayValue}</Text>
           <Text color="cyan">▌</Text>
         </Box>
       ) : (
@@ -59,7 +74,7 @@ export function UserInput({
           <Text color="cyan">{prompt} </Text>
           {value ? (
             <>
-              <Text>{value}</Text>
+              <Text>{displayValue}</Text>
               <Text color="cyan">▌</Text>
             </>
           ) : (
@@ -80,9 +95,11 @@ export function UserInput({
 export function SimpleInput({
   onSubmit,
   prefix = '>',
+  placeholder,
 }: {
   onSubmit: (value: string) => void;
   prefix?: string;
+  placeholder?: string;
 }) {
   const [value, setValue] = React.useState('');
 
@@ -93,15 +110,31 @@ export function SimpleInput({
     } else if (key.backspace || key.delete) {
       setValue(prev => prev.slice(0, -1));
     } else if (input && !key.ctrl && !key.meta) {
-      setValue(prev => prev + input);
+      // Filter out newlines and normalize whitespace when adding input
+      const sanitized = input.replace(/[\r\n]/g, ' ');
+      setValue(prev => prev + sanitized);
     }
   });
+
+  // Format for display (collapse newlines)
+  const displayValue = formatForDisplay(value);
 
   return (
     <Box>
       <Text color="cyan">{prefix} </Text>
-      <Text>{value}</Text>
-      <Text color="cyan">▌</Text>
+      {value ? (
+        <>
+          <Text>{displayValue}</Text>
+          <Text color="cyan">▌</Text>
+        </>
+      ) : placeholder ? (
+        <Text dimColor>
+          {placeholder}
+          <Text color="cyan">▌</Text>
+        </Text>
+      ) : (
+        <Text color="cyan">▌</Text>
+      )}
     </Box>
   );
 }

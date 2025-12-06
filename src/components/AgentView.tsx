@@ -1,12 +1,14 @@
 /**
  * Main agent interaction view component.
+ * Simplified layout with scrollable history and reduced re-renders.
  */
 import React from 'react';
 import { Text, Box } from 'ink';
 import { StatusBar } from './StatusBar.js';
 import { TodoList } from './TodoList.js';
 import { StreamingText } from './StreamingText.js';
-import { ToolCallDisplay, HIDDEN_TOOLS } from './ToolCallDisplay.js';
+import { ToolCallDisplay } from './ToolCallDisplay.js';
+import { ScrollableHistory } from './ScrollableHistory.js';
 import { UserInput } from './UserInput.js';
 import { Spinner } from './Spinner.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -45,10 +47,39 @@ interface AgentViewProps {
   onUserInput?: (input: string) => void;
   showTodos?: boolean;
   conversationHistory?: ConversationMessage[];
-  // New: separated history and current action
   history?: HistoryEntry[];
   currentAction?: CurrentAction | null;
+  maxHeight?: number;
+  expanded?: boolean;
 }
+
+// Maximum visible history items to prevent overflow
+const MAX_VISIBLE_HISTORY = 10;
+
+// Memoized conversation message to reduce re-renders
+const MemoizedConversationMessage = React.memo(function ConversationMessage({
+  msg,
+}: {
+  msg: ConversationMessage;
+}) {
+  if (msg.type === 'task') {
+    return (
+      <Box borderStyle="round" borderColor="green" paddingX={1} flexDirection="column">
+        <Text color="green" bold>📌 Task: </Text>
+        <Text wrap="wrap">{msg.content}</Text>
+      </Box>
+    );
+  }
+  if (msg.type === 'user') {
+    return (
+      <Box borderStyle="round" borderColor="green" paddingX={1} flexDirection="column">
+        <Text color="green" bold>👤 You: </Text>
+        <Text wrap="wrap">{msg.content}</Text>
+      </Box>
+    );
+  }
+  return null;
+});
 
 export function AgentView({
   agentName = 'Agent',
@@ -65,49 +96,19 @@ export function AgentView({
   conversationHistory = [],
   history = [],
   currentAction = null,
+  maxHeight,
+  expanded = false,
 }: AgentViewProps) {
-  // Filter history to only show completed tools (not hidden ones)
-  const visibleHistory = history.filter(entry => {
-    if (entry.type === 'tool_completed' && entry.toolName) {
-      return !HIDDEN_TOOLS.has(entry.toolName);
-    }
-    return true;
-  });
+  // Determine if scroll is enabled (when agent is idle, completed, or waiting)
+  const scrollEnabled = status === 'idle' || status === 'completed' || status === 'waiting';
+
+  // Only show the most recent conversation message
+  const recentConversation = conversationHistory.slice(-1);
 
   return (
-    <Box flexDirection="column" padding={1}>
+    <Box flexDirection="column" paddingX={1}>
       {/* Status Bar */}
       <StatusBar agentName={agentName} status={status} message={statusMessage} />
-
-      {/* Conversation History - show user inputs (from conversationHistory) */}
-      {conversationHistory.length > 0 && (
-        <Box flexDirection="column" marginBottom={1}>
-          {conversationHistory.map((msg) => (
-            <Box key={msg.id} marginBottom={1}>
-              {msg.type === 'task' && (
-                <Box
-                  borderStyle="round"
-                  borderColor="green"
-                  paddingX={1}
-                >
-                  <Text color="green" bold>📌 Task: </Text>
-                  <Text>{msg.content}</Text>
-                </Box>
-              )}
-              {msg.type === 'user' && (
-                <Box
-                  borderStyle="round"
-                  borderColor="green"
-                  paddingX={1}
-                >
-                  <Text color="green" bold>👤 You: </Text>
-                  <Text>{msg.content}</Text>
-                </Box>
-              )}
-            </Box>
-          ))}
-        </Box>
-      )}
 
       {/* Todo List */}
       {showTodos && todos.length > 0 && (
@@ -116,36 +117,22 @@ export function AgentView({
         </Box>
       )}
 
-      {/* HISTORY: Completed actions (permanent) */}
-      {visibleHistory.length > 0 && (
-        <Box flexDirection="column" marginBottom={1}>
-          {visibleHistory.map((entry) => {
-            if (entry.type === 'tool_completed' && entry.toolName) {
-              return (
-                <ToolCallDisplay
-                  key={entry.id}
-                  toolName={entry.toolName}
-                  args={entry.toolArgs}
-                  status="completed"
-                  result={entry.toolResult}
-                  duration={entry.duration}
-                  compact
-                />
-              );
-            }
-            if (entry.type === 'agent_text') {
-              return (
-                <Box key={entry.id} marginBottom={1}>
-                  <Text dimColor>{entry.content}</Text>
-                </Box>
-              );
-            }
-            return null;
-          })}
+      {/* Recent Task/User Message */}
+      {recentConversation.map((msg) => (
+        <Box key={msg.id} marginBottom={1}>
+          <MemoizedConversationMessage msg={msg} />
         </Box>
-      )}
+      ))}
 
-      {/* CURRENT ACTION: What agent is doing now (ephemeral) */}
+      {/* Scrollable History */}
+      <ScrollableHistory
+        history={history}
+        maxVisible={MAX_VISIBLE_HISTORY}
+        expanded={expanded}
+        scrollEnabled={scrollEnabled}
+      />
+
+      {/* Current Action */}
       {currentAction && (
         <Box flexDirection="column" marginBottom={1}>
           {currentAction.type === 'thinking' && (
@@ -159,25 +146,24 @@ export function AgentView({
               args={currentAction.toolArgs}
               status="executing"
               compact
+              expanded={expanded}
             />
           )}
         </Box>
       )}
 
-      {/* Streaming Text Output */}
+      {/* Streaming Text */}
       {(streamingText ?? isStreaming) && (
         <Box marginY={1}>
           <StreamingText text={streamingText ?? ''} isStreaming={isStreaming} />
         </Box>
       )}
 
-      {/* Question/Prompt */}
+      {/* Question */}
       {question && status === 'waiting' && (
         <Box flexDirection="column" marginY={1}>
           <Box marginBottom={1}>
-            <Text color="cyan" bold>
-              {isConfirmation ? '?' : '>'}
-            </Text>
+            <Text color="cyan" bold>{isConfirmation ? '?' : '>'}</Text>
             <Text> {question}</Text>
           </Box>
           {onUserInput && (
@@ -190,27 +176,18 @@ export function AgentView({
         </Box>
       )}
 
-      {/* Completed Message */}
+      {/* Completed */}
       {status === 'completed' && !question && (
         <Box marginTop={1}>
-          <Text color="green" bold>
-            ✓ Task completed
-          </Text>
+          <Text color="green" bold>✓ Task completed</Text>
         </Box>
       )}
 
-      {/* Error State */}
+      {/* Error */}
       {status === 'error' && (
         <Box marginTop={1}>
-          <Text color="red" bold>
-            ✗ Error occurred
-          </Text>
-          {statusMessage && (
-            <Text color="red" dimColor>
-              {' '}
-              - {statusMessage}
-            </Text>
-          )}
+          <Text color="red" bold>✗ Error occurred</Text>
+          {statusMessage && <Text color="red" dimColor> - {statusMessage}</Text>}
         </Box>
       )}
     </Box>

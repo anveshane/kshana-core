@@ -21,7 +21,11 @@ const STATUS_CONFIG: Record<StatusType, { color: string; icon: string; label: st
   error: { color: 'red', icon: '✗', label: 'Error' },
 };
 
-export function StatusBar({ agentName = 'Agent', status, message }: StatusBarProps) {
+export const StatusBar = React.memo(function StatusBar({
+  agentName = 'Agent',
+  status,
+  message,
+}: StatusBarProps) {
   const config = STATUS_CONFIG[status];
 
   return (
@@ -51,4 +55,4 @@ export function StatusBar({ agentName = 'Agent', status, message }: StatusBarPro
       )}
     </Box>
   );
-}
+});

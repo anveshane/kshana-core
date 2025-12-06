@@ -12,6 +12,8 @@ interface ToolCallDisplayProps {
   result?: unknown;
   duration?: number;
   compact?: boolean;
+  /** Expanded view mode (kept for API compatibility but no longer used) */
+  expanded?: boolean;
 }
 
 // Tools that should be hidden (rendered elsewhere in UI)
@@ -58,15 +60,14 @@ function formatToolCall(name: string, args?: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(args)) {
     if (typeof value === 'string') {
-      // Truncate long strings for display
-      const displayVal = value.length > 50 ? value.slice(0, 50) + '...' : value;
-      parts.push(`${key}="${displayVal}"`);
+      // Show full string - no truncation
+      parts.push(`${key}="${value}"`);
     } else if (typeof value === 'number' || typeof value === 'boolean') {
       parts.push(`${key}=${String(value)}`);
     } else if (Array.isArray(value)) {
-      parts.push(`${key}=[...]`);
+      parts.push(`${key}=${JSON.stringify(value)}`);
     } else if (value !== null && typeof value === 'object') {
-      parts.push(`${key}={...}`);
+      parts.push(`${key}=${JSON.stringify(value)}`);
     }
   }
 
@@ -246,20 +247,20 @@ function renderDispatchAgentTool(
         )}
       </Box>
       <Box flexDirection="column" marginLeft={2} marginTop={1}>
-        <Box>
+        <Box flexDirection="column">
           <Text bold color="yellow">Task: </Text>
-          <Text>{task || 'No task specified'}</Text>
+          <Text wrap="wrap">{task || 'No task specified'}</Text>
         </Box>
         {context && (
-          <Box marginTop={1}>
+          <Box flexDirection="column" marginTop={1}>
             <Text bold color="yellow">Context: </Text>
-            <Text dimColor>{context}</Text>
+            <Text dimColor wrap="wrap">{context}</Text>
           </Box>
         )}
         {plan && !isExecuting && (
           <Box flexDirection="column" marginTop={1}>
             <Text bold color="green">Plan:</Text>
-            <Box marginTop={1} marginLeft={1}>
+            <Box marginTop={1} marginLeft={1} flexDirection="column">
               <Text wrap="wrap">{plan}</Text>
             </Box>
           </Box>
@@ -328,13 +329,14 @@ function renderProjectStateTool(
   );
 }
 
-export function ToolCallDisplay({
+export const ToolCallDisplay = React.memo(function ToolCallDisplay({
   toolName,
   args,
   status = 'executing',
   result,
   duration,
   compact = false,
+  expanded = false,
 }: ToolCallDisplayProps) {
   // Special rendering for think tool
   if (toolName === 'think') {
@@ -437,4 +439,4 @@ export function ToolCallDisplay({
       )}
     </Box>
   );
-}
+});

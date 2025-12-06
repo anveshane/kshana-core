@@ -2,9 +2,9 @@
  * Main application component.
  */
 import React from 'react';
-import { Text, Box, useApp, useInput, useStdout } from 'ink';
+import { Text, Box, useApp, useInput } from 'ink';
 import { AgentView, type ConversationMessage } from './components/AgentView.js';
-import { SimpleInput } from './components/UserInput.js';
+import { SimpleTextInput } from './components/TextInput.js';
 import { Banner } from './components/Banner.js';
 import { useAgent } from './hooks/useAgent.js';
 import { createDefaultToolRegistry } from './core/tools/index.js';
@@ -23,13 +23,10 @@ interface AppProps {
 
 export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' }: AppProps) {
   const { exit } = useApp();
-  const { stdout } = useStdout();
   const [started, setStarted] = React.useState(false);
   const [inputTask, setInputTask] = React.useState('');
   const [conversationHistory, setConversationHistory] = React.useState<ConversationMessage[]>([]);
-
-  // Get terminal dimensions for full-height layout
-  const terminalHeight = stdout?.rows ?? 24;
+  const [expandedView, setExpandedView] = React.useState(false);
 
   // Create tool registry based on task type
   const tools = React.useMemo(() => {
@@ -74,10 +71,15 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     },
   });
 
-  // Handle Escape key to stop execution
+  // Handle global keyboard shortcuts
   useInput((input, key) => {
+    // Escape: Stop execution
     if (key.escape && status === 'thinking') {
       stop();
+    }
+    // Ctrl+O: Toggle expanded view
+    if (input === 'o' && key.ctrl) {
+      setExpandedView(prev => !prev);
     }
   });
 
@@ -204,7 +206,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           </Box>
 
           <Box marginTop={1} paddingX={2}>
-            <SimpleInput onSubmit={handleTaskSubmit} prefix="Story:" />
+            <SimpleTextInput onSubmit={handleTaskSubmit} prompt="Story:" />
           </Box>
         </Box>
       );
@@ -218,7 +220,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           <Text dimColor>Type your task and press Enter. Type "exit" to quit.</Text>
         </Box>
         <Box paddingX={2}>
-          <SimpleInput onSubmit={handleTaskSubmit} prefix="Task:" />
+          <SimpleTextInput onSubmit={handleTaskSubmit} prompt="Task:" />
         </Box>
       </Box>
     );
@@ -254,34 +256,37 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   const inputConfig = getInputConfig();
 
   return (
-    <Box flexDirection="column" height={terminalHeight}>
-      {/* Main content area - takes all available space */}
-      <Box flexDirection="column" flexGrow={1} overflow="hidden">
-        <AgentView
-          agentName={agentName}
-          status={status}
-          statusMessage={error}
-          todos={todos}
-          streamingText={output}
-          isStreaming={status === 'thinking'}
-          recentTools={recentTools}
-          question={question}
-          isConfirmation={isConfirmation}
-          showTodos
-          conversationHistory={conversationHistory}
-          history={history}
-          currentAction={currentAction}
-        />
-      </Box>
+    <Box flexDirection="column">
+      {/* Main content area */}
+      <AgentView
+        agentName={agentName}
+        status={status}
+        statusMessage={error}
+        todos={todos}
+        streamingText={output}
+        isStreaming={status === 'thinking'}
+        recentTools={recentTools}
+        question={question}
+        isConfirmation={isConfirmation}
+        showTodos
+        conversationHistory={conversationHistory}
+        history={history}
+        currentAction={currentAction}
+        expanded={expandedView}
+      />
 
-      {/* Input prompt - fixed at bottom */}
-      <Box paddingX={1} flexDirection="column" borderStyle="single" borderColor="gray" borderTop borderBottom={false} borderLeft={false} borderRight={false}>
-        {status === 'thinking' && (
-          <Text dimColor>Press Esc to stop. Type to add context:</Text>
+      {/* Input prompt - always visible at bottom */}
+      <Box paddingX={1} paddingY={1} flexDirection="column" borderStyle="round" borderColor="cyan">
+        {status === 'thinking' ? (
+          <Text dimColor>Press Esc to stop. Ctrl+O to {expandedView ? 'collapse' : 'expand'}.</Text>
+        ) : status === 'waiting' ? (
+          <Text dimColor>Answer the question above:</Text>
+        ) : (
+          <Text dimColor>Enter your input:</Text>
         )}
-        <SimpleInput
+        <SimpleTextInput
           onSubmit={inputConfig.handler}
-          prefix={inputConfig.prefix}
+          prompt={inputConfig.prefix}
           placeholder={inputConfig.placeholder}
         />
       </Box>

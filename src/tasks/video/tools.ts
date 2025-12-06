@@ -132,7 +132,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
 
     // TODO: Integrate with actual image generation backend (ComfyUI, etc.)
     // For now, simulate the job submission
-    console.log(`[generate_image] Job ${jobId} submitted:`, params);
+    // Note: Avoid console.log during CLI operation as it interferes with Ink rendering
 
     // Simulate async processing (in real implementation, this would call ComfyUI API)
     setTimeout(() => {
@@ -154,7 +154,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       params: {
         scene_number: params.scene_number,
         image_type: params.image_type ?? 'scene',
-        prompt_preview: params.prompt.slice(0, 100) + '...',
+        prompt: params.prompt,
       },
     };
   }
@@ -216,7 +216,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
     jobs.set(jobId, job);
 
     // TODO: Integrate with actual video generation backend
-    console.log(`[generate_video] Job ${jobId} submitted:`, params);
+    // Note: Avoid console.log during CLI operation as it interferes with Ink rendering
 
     // Simulate async processing
     setTimeout(() => {
@@ -300,7 +300,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
     jobs.set(jobId, job);
 
     // TODO: Integrate with actual image editing backend
-    console.log(`[edit_image] Job ${jobId} submitted:`, params);
+    // Note: Avoid console.log during CLI operation as it interferes with Ink rendering
 
     // Simulate async processing
     setTimeout(() => {
@@ -322,7 +322,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       params: {
         scene_number: params.scene_number,
         base_image: params.base_image_path,
-        edit_preview: params.edit_prompt.slice(0, 100) + '...',
+        edit_prompt: params.edit_prompt,
       },
     };
   }
