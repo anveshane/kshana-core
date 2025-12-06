@@ -6,7 +6,7 @@ import React from 'react';
 import { Text, Box } from 'ink';
 import { StatusBar } from './StatusBar.js';
 import { TodoList } from './TodoList.js';
-import { StreamingText } from './StreamingText.js';
+import { MarkdownText } from './MarkdownText.js';
 import { ToolCallDisplay } from './ToolCallDisplay.js';
 import { ScrollableHistory } from './ScrollableHistory.js';
 import { UserInput } from './UserInput.js';
@@ -163,10 +163,10 @@ export function AgentView({
         </Box>
       )}
 
-      {/* Streaming Text */}
+      {/* Streaming Text with Markdown rendering */}
       {(streamingText ?? isStreaming) && (
         <Box marginY={1}>
-          <StreamingText text={streamingText ?? ''} isStreaming={isStreaming} />
+          <MarkdownText text={streamingText ?? ''} isStreaming={isStreaming} />
         </Box>
       )}
 

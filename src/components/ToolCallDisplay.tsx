@@ -4,6 +4,7 @@
 import React from 'react';
 import { Text, Box } from 'ink';
 import { Spinner } from './Spinner.js';
+import { MarkdownText } from './MarkdownText.js';
 
 interface ToolCallDisplayProps {
   toolName: string;
@@ -261,7 +262,7 @@ function renderDispatchAgentTool(
           <Box flexDirection="column" marginTop={1}>
             <Text bold color="green">Plan:</Text>
             <Box marginTop={1} marginLeft={1} flexDirection="column">
-              <Text wrap="wrap">{plan}</Text>
+              <MarkdownText text={plan} />
             </Box>
           </Box>
         )}

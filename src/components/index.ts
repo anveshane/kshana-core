@@ -2,6 +2,7 @@ export { Spinner } from './Spinner.js';
 export { StatusBar } from './StatusBar.js';
 export { TodoList } from './TodoList.js';
 export { StreamingText, useStreamingText } from './StreamingText.js';
+export { MarkdownText } from './MarkdownText.js';
 export { ToolCallDisplay } from './ToolCallDisplay.js';
 export { UserInput, SimpleInput } from './UserInput.js';
 export { TextInput, SimpleTextInput } from './TextInput.js';
