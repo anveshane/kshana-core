@@ -18,7 +18,7 @@ interface ToolCallDisplayProps {
 export const HIDDEN_TOOLS = new Set(['todo_write']);
 
 // Tools with special rendering (not standard tool call format)
-const SPECIAL_RENDER_TOOLS = new Set(['think', 'write_project_state', 'read_project_state']);
+const SPECIAL_RENDER_TOOLS = new Set(['think', 'write_project_state', 'read_project_state', 'dispatch_agent']);
 
 // User-friendly display names with gerund (ongoing) and past tense (completed)
 const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
@@ -212,6 +212,40 @@ function renderThinkTool(
   );
 }
 
+// Render dispatch_agent (planning) tool specially
+function renderDispatchAgentTool(
+  args: Record<string, unknown> | undefined,
+  status: ToolCallDisplayProps['status']
+): React.ReactNode {
+  const task = args?.['task'] as string | undefined;
+  const isExecuting = status === 'executing';
+
+  return (
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="blue"
+      paddingX={1}
+      marginY={1}
+    >
+      <Box>
+        {isExecuting ? (
+          <>
+            <Text color="blue">📝 </Text>
+            <Spinner color="blue" />
+            <Text color="blue"> Planning...</Text>
+          </>
+        ) : (
+          <Text color="blue" bold>📝 Plan</Text>
+        )}
+      </Box>
+      <Box flexDirection="column" marginLeft={2} marginTop={1}>
+        <Text>{task || 'No task specified'}</Text>
+      </Box>
+    </Box>
+  );
+}
+
 // Render project state tool specially
 function renderProjectStateTool(
   toolName: string,
@@ -269,6 +303,11 @@ export function ToolCallDisplay({
   // Special rendering for think tool
   if (toolName === 'think') {
     return renderThinkTool(args, status, duration);
+  }
+
+  // Special rendering for dispatch_agent (planning) tool
+  if (toolName === 'dispatch_agent') {
+    return renderDispatchAgentTool(args, status);
   }
 
   // Special rendering for project state tools

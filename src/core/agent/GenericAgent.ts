@@ -219,6 +219,20 @@ export class GenericAgent extends TypedEventEmitter {
       return result;
     }
 
+    // Handle dispatch_agent specially - spawn a sub-agent for planning
+    if (toolCall.name === 'dispatch_agent') {
+      const result = await this.handleDispatchAgent(toolCall);
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.name,
+      });
+      return result;
+    }
+
     const tool = this.tools.get(toolCall.name);
     if (!tool?.handler) {
       const errorResult = { error: `Unknown tool: ${toolCall.name}` };
@@ -300,6 +314,53 @@ export class GenericAgent extends TypedEventEmitter {
     });
 
     return result;
+  }
+
+  /**
+   * Handle dispatch_agent tool - spawns a sub-agent for planning.
+   */
+  private async handleDispatchAgent(toolCall: ToolCall): Promise<unknown> {
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+
+    if (!task) {
+      return { error: 'No task provided for dispatch_agent' };
+    }
+
+    // Create a sub-agent for planning
+    // For now, we'll use the same LLM but with a planning-focused prompt
+    const planningPrompt = `You are a planning assistant. Analyze the following task and create a detailed, actionable plan.
+
+Task: ${task}
+
+Provide a structured plan with:
+1. Clear steps to accomplish the task
+2. Any prerequisites or dependencies
+3. Potential challenges and solutions
+4. Expected outcomes for each step
+
+Be specific and actionable. Your plan will be used to create a todo list for execution.`;
+
+    try {
+      // Make a single LLM call for planning
+      const response = await this.llm.generate([
+        { role: 'system', content: planningPrompt },
+        { role: 'user', content: task },
+      ]);
+
+      const plan = response.content || 'No plan generated';
+
+      return {
+        status: 'success',
+        plan,
+        task,
+      };
+    } catch (error) {
+      return {
+        error: `Planning failed: ${String(error)}`,
+        task,
+      };
+    }
   }
 
   /**

@@ -3,7 +3,7 @@
  */
 import React from 'react';
 import { Text, Box, useApp } from 'ink';
-import { AgentView } from './components/AgentView.js';
+import { AgentView, type ConversationMessage } from './components/AgentView.js';
 import { SimpleInput } from './components/UserInput.js';
 import { Banner } from './components/Banner.js';
 import { useAgent } from './hooks/useAgent.js';
@@ -25,6 +25,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   const { exit } = useApp();
   const [started, setStarted] = React.useState(false);
   const [inputTask, setInputTask] = React.useState('');
+  const [conversationHistory, setConversationHistory] = React.useState<ConversationMessage[]>([]);
 
   // Create tool registry based on task type
   const tools = React.useMemo(() => {
@@ -82,6 +83,16 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       }
       setInputTask(task);
       setStarted(true);
+      // Add task to conversation history
+      setConversationHistory(prev => [
+        ...prev,
+        {
+          id: `task-${Date.now()}`,
+          type: 'task',
+          content: task,
+          timestamp: Date.now(),
+        },
+      ]);
       void run(task);
     },
     [run, exit]
@@ -90,6 +101,16 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Handle user response
   const handleUserInput = React.useCallback(
     (input: string) => {
+      // Add user response to conversation history
+      setConversationHistory(prev => [
+        ...prev,
+        {
+          id: `user-${Date.now()}`,
+          type: 'user',
+          content: input,
+          timestamp: Date.now(),
+        },
+      ]);
       void respond(input);
     },
     [respond]
@@ -158,7 +179,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       <AgentView
         agentName={agentName}
         status={status}
-        statusMessage={error ?? (inputTask ? `Task: ${inputTask.slice(0, 50)}...` : undefined)}
+        statusMessage={error}
         todos={todos}
         streamingText={output}
         isStreaming={status === 'thinking'}
@@ -167,6 +188,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         isConfirmation={isConfirmation}
         onUserInput={status === 'waiting' ? handleUserInput : undefined}
         showTodos
+        conversationHistory={conversationHistory}
       />
 
       {/* Show new task input when completed */}

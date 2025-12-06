@@ -12,6 +12,7 @@ export {
 export {
   thinkTool,
   askUserTool,
+  dispatchAgentTool,
   setTodosTool,
   updateTodoTool,
   addSubtasksTool,
@@ -24,6 +25,7 @@ import { ToolRegistry } from './ToolRegistry.js';
 import {
   thinkTool,
   askUserTool,
+  dispatchAgentTool,
   todoWriteTool,
 } from './builtin/index.js';
 
@@ -36,6 +38,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   // Register built-in tools
   registry.register(thinkTool);
   registry.register(askUserTool);
+  registry.register(dispatchAgentTool);
   registry.register(todoWriteTool);
 
   return registry;

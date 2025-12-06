@@ -23,6 +23,13 @@ interface ToolHistoryItem {
   duration?: number;
 }
 
+export interface ConversationMessage {
+  id: string;
+  type: 'user' | 'agent' | 'task';
+  content: string;
+  timestamp: number;
+}
+
 interface AgentViewProps {
   agentName?: string;
   status: AgentStatus;
@@ -35,6 +42,7 @@ interface AgentViewProps {
   isConfirmation?: boolean;
   onUserInput?: (input: string) => void;
   showTodos?: boolean;
+  conversationHistory?: ConversationMessage[];
 }
 
 export function AgentView({
@@ -49,11 +57,42 @@ export function AgentView({
   isConfirmation = false,
   onUserInput,
   showTodos = true,
+  conversationHistory = [],
 }: AgentViewProps) {
   return (
     <Box flexDirection="column" padding={1}>
       {/* Status Bar */}
       <StatusBar agentName={agentName} status={status} message={statusMessage} />
+
+      {/* Conversation History - show user inputs and agent responses */}
+      {conversationHistory.length > 0 && (
+        <Box flexDirection="column" marginBottom={1}>
+          {conversationHistory.map((msg) => (
+            <Box key={msg.id} marginBottom={1}>
+              {msg.type === 'task' && (
+                <Box
+                  borderStyle="round"
+                  borderColor="green"
+                  paddingX={1}
+                >
+                  <Text color="green" bold>📌 Task: </Text>
+                  <Text>{msg.content}</Text>
+                </Box>
+              )}
+              {msg.type === 'user' && (
+                <Box
+                  borderStyle="round"
+                  borderColor="green"
+                  paddingX={1}
+                >
+                  <Text color="green" bold>👤 You: </Text>
+                  <Text>{msg.content}</Text>
+                </Box>
+              )}
+            </Box>
+          ))}
+        </Box>
+      )}
 
       {/* Todo List */}
       {showTodos && todos.length > 0 && (
