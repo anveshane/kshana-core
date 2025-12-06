@@ -215,11 +215,16 @@ function renderThinkTool(
 // Render dispatch_agent (planning) tool specially
 function renderDispatchAgentTool(
   args: Record<string, unknown> | undefined,
-  status: ToolCallDisplayProps['status']
+  status: ToolCallDisplayProps['status'],
+  result?: unknown
 ): React.ReactNode {
   const task = args?.['task'] as string | undefined;
   const context = args?.['context'] as string | undefined;
   const isExecuting = status === 'executing';
+
+  // Extract plan from result
+  const resultObj = result as Record<string, unknown> | undefined;
+  const plan = resultObj?.['plan'] as string | undefined;
 
   return (
     <Box
@@ -237,16 +242,26 @@ function renderDispatchAgentTool(
             <Text color="blue"> Planning...</Text>
           </>
         ) : (
-          <Text color="blue" bold>📝 Plan</Text>
+          <Text color="blue" bold>📝 Plan Complete</Text>
         )}
       </Box>
       <Box flexDirection="column" marginLeft={2} marginTop={1}>
-        <Text bold color="yellow">Task: </Text>
-        <Text>{task || 'No task specified'}</Text>
+        <Box>
+          <Text bold color="yellow">Task: </Text>
+          <Text>{task || 'No task specified'}</Text>
+        </Box>
         {context && (
-          <Box flexDirection="column" marginTop={1}>
+          <Box marginTop={1}>
             <Text bold color="yellow">Context: </Text>
             <Text dimColor>{context}</Text>
+          </Box>
+        )}
+        {plan && !isExecuting && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold color="green">Plan:</Text>
+            <Box marginTop={1} marginLeft={1}>
+              <Text wrap="wrap">{plan}</Text>
+            </Box>
           </Box>
         )}
       </Box>
@@ -262,9 +277,22 @@ function renderProjectStateTool(
   duration?: number
 ): React.ReactNode {
   const dataType = args?.['data_type'] as string | undefined;
-  const data = args?.['data'] as Record<string, unknown> | undefined;
+  const rawData = args?.['data'];
   const isExecuting = status === 'executing';
   const isRead = toolName === 'read_project_state';
+
+  // Parse data if it's a JSON string, otherwise use as-is
+  let data: Record<string, unknown> | undefined;
+  if (typeof rawData === 'string') {
+    try {
+      data = JSON.parse(rawData) as Record<string, unknown>;
+    } catch {
+      // If it's not valid JSON, wrap it
+      data = { value: rawData };
+    }
+  } else if (typeof rawData === 'object' && rawData !== null) {
+    data = rawData as Record<string, unknown>;
+  }
 
   const capitalizedDataType = capitalize(dataType || 'unknown');
 
@@ -315,7 +343,7 @@ export function ToolCallDisplay({
 
   // Special rendering for dispatch_agent (planning) tool
   if (toolName === 'dispatch_agent') {
-    return renderDispatchAgentTool(args, status);
+    return renderDispatchAgentTool(args, status, result);
   }
 
   // Special rendering for project state tools
