@@ -90,7 +90,7 @@ type AgentAction =
   | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean }
   | { type: 'ADD_AGENT_TEXT'; text: string }
   | { type: 'STREAM_CHUNK'; chunk: string }
-  | { type: 'STREAM_DONE' }
+  | { type: 'STREAM_DONE'; skipHistory?: boolean }
   | { type: 'SET_THINKING' }
   | { type: 'CLEAR_CURRENT_ACTION' }
   | { type: 'RESET' }
@@ -231,7 +231,8 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
     case 'STREAM_DONE': {
       // Move completed streaming text to history if there's content
       const finalText = state.streamingText.trim();
-      if (!finalText) {
+      if (!finalText || action.skipHistory) {
+        // Either no content or skipHistory flag set (e.g., plan shown via ToolCallDisplay)
         return {
           ...state,
           streamingText: '',
@@ -359,7 +360,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
 
     agent.on('streaming_text', event => {
       if (event.done) {
-        dispatch({ type: 'STREAM_DONE' });
+        dispatch({ type: 'STREAM_DONE', skipHistory: event.skipHistory });
       } else if (event.chunk) {
         dispatch({ type: 'STREAM_CHUNK', chunk: event.chunk });
       }

@@ -62,6 +62,8 @@ export interface StreamingTextEvent {
   chunk: string;
   /** Whether this is the final chunk */
   done: boolean;
+  /** If true, don't add to history when done (e.g., for plans shown elsewhere) */
+  skipHistory?: boolean;
 }
 
 /**

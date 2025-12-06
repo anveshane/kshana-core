@@ -687,6 +687,7 @@ export class GenericAgent extends TypedEventEmitter {
 
     try {
       // Generate or refine the plan with streaming
+      // Note: skipHistory=true because plan is shown via ToolCallDisplay
       let planContent = '';
 
       for await (const chunk of this.llm.generateStream({
@@ -695,10 +696,10 @@ export class GenericAgent extends TypedEventEmitter {
       })) {
         if (chunk.content) {
           planContent += chunk.content;
-          this.emit({ type: 'streaming_text', chunk: chunk.content, done: false });
+          this.emit({ type: 'streaming_text', chunk: chunk.content, done: false, skipHistory: true });
         }
         if (chunk.done) {
-          this.emit({ type: 'streaming_text', chunk: '', done: true });
+          this.emit({ type: 'streaming_text', chunk: '', done: true, skipHistory: true });
         }
       }
 
