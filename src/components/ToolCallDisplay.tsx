@@ -218,6 +218,7 @@ function renderDispatchAgentTool(
   status: ToolCallDisplayProps['status']
 ): React.ReactNode {
   const task = args?.['task'] as string | undefined;
+  const context = args?.['context'] as string | undefined;
   const isExecuting = status === 'executing';
 
   return (
@@ -240,7 +241,14 @@ function renderDispatchAgentTool(
         )}
       </Box>
       <Box flexDirection="column" marginLeft={2} marginTop={1}>
+        <Text bold color="yellow">Task: </Text>
         <Text>{task || 'No task specified'}</Text>
+        {context && (
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold color="yellow">Context: </Text>
+            <Text dimColor>{context}</Text>
+          </Box>
+        )}
       </Box>
     </Box>
   );

@@ -322,15 +322,20 @@ export class GenericAgent extends TypedEventEmitter {
   private async handleDispatchAgent(toolCall: ToolCall): Promise<unknown> {
     const args = toolCall.arguments;
     const task = args['task'] as string;
+    const context = args['context'] as string | undefined;
 
     if (!task) {
       return { error: 'No task provided for dispatch_agent' };
     }
 
-    // Create a sub-agent for planning
-    // For now, we'll use the same LLM but with a planning-focused prompt
-    const planningPrompt = `You are a planning assistant. Analyze the following task and create a detailed, actionable plan.
+    // Build context section if provided
+    const contextSection = context
+      ? `\n\nContext/Background:\n${context}\n`
+      : '';
 
+    // Create a sub-agent for planning
+    const planningPrompt = `You are a planning assistant. Analyze the following task and create a detailed, actionable plan.
+${contextSection}
 Task: ${task}
 
 Provide a structured plan with:
@@ -343,10 +348,13 @@ Be specific and actionable. Your plan will be used to create a todo list for exe
 
     try {
       // Make a single LLM call for planning
-      const response = await this.llm.generate([
-        { role: 'system', content: planningPrompt },
-        { role: 'user', content: task },
-      ]);
+      const response = await this.llm.generate({
+        messages: [
+          { role: 'system', content: planningPrompt },
+          { role: 'user', content: task },
+        ],
+        temperature: 0.7,
+      });
 
       const plan = response.content || 'No plan generated';
 
