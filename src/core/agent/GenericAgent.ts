@@ -110,10 +110,57 @@ export class GenericAgent extends TypedEventEmitter {
     this.emit({ type: 'agent_status', status: 'started', agentName: this.name });
 
     // Resume from user question or start fresh
-    if (userResponse && this.waitingForUser && this.messages.length > 0) {
-      this.handleUserResponse(userResponse);
-      this.waitingForUser = false;
-      this.pendingQuestion = undefined;
+    if (userResponse && this.waitingForUser) {
+      // Check if there's an active planning session (from dispatch_agent)
+      if (this.planningState?.active) {
+        // Handle the planning response
+        const planResult = await this.handlePlanningResponse(userResponse);
+        const planResultObj = planResult as Record<string, unknown>;
+
+        // Check if planning needs more input or is complete
+        if (planResultObj['status'] === 'awaiting_verification') {
+          // Still waiting for user - emit question and return
+          this.waitingForUser = true;
+          this.pendingQuestion = planResultObj['question'] as string;
+
+          this.emit({
+            type: 'question',
+            question: planResultObj['question'] as string,
+            isConfirmation: false,
+            options: planResultObj['options'] as Array<{ label: string; description?: string }>,
+          });
+
+          return {
+            status: 'waiting_for_user',
+            output: planResultObj['plan'] as string,
+            todos: this.todoManager.getTodos(),
+            pendingQuestion: planResultObj['question'] as string,
+            options: planResultObj['options'] as Array<{ label: string; description?: string }>,
+          };
+        }
+
+        // Planning is complete (approved, cancelled, or max_iterations)
+        // Add the result to messages and continue
+        this.waitingForUser = false;
+        this.pendingQuestion = undefined;
+
+        // Find the dispatch_agent tool call and add its result
+        // The main agent will continue processing
+        this.messages.push({
+          role: 'tool',
+          content: JSON.stringify(planResult),
+          toolCallId: 'planning-result',
+          name: 'dispatch_agent',
+        });
+
+        // Emit status change back to thinking
+        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+      } else {
+        // Regular ask_user response
+        this.handleUserResponse(userResponse);
+        this.waitingForUser = false;
+        this.pendingQuestion = undefined;
+      }
     } else if (!this.waitingForUser) {
       // Start fresh
       this.messages = [
@@ -200,6 +247,19 @@ export class GenericAgent extends TypedEventEmitter {
 
         // Execute the tool
         const result = await this.executeTool(toolCall);
+        const resultObj = result as Record<string, unknown>;
+
+        // Check if tool is waiting for user input (dispatch_agent planning)
+        if (resultObj['__awaiting_user_input']) {
+          // Return waiting status - the planning loop will handle user response
+          return {
+            status: 'waiting_for_user',
+            output: resultObj['plan'] as string ?? '',
+            todos: this.todoManager.getTodos(),
+            pendingQuestion: resultObj['question'] as string,
+            options: resultObj['options'] as Array<{ label: string; description?: string }>,
+          };
+        }
 
         // Add tool result to messages
         this.messages.push({
@@ -344,6 +404,43 @@ export class GenericAgent extends TypedEventEmitter {
     // Handle dispatch_agent specially - spawn a sub-agent for planning
     if (toolCall.name === 'dispatch_agent') {
       const result = await this.handleDispatchAgent(toolCall);
+      const resultObj = result as Record<string, unknown>;
+
+      // Check if planning needs user verification
+      if (resultObj['status'] === 'awaiting_verification') {
+        // Emit tool result first
+        this.emit({
+          type: 'tool_result',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          result,
+          isError: false,
+          agentName: this.name,
+        });
+
+        // Set up waiting state for user input
+        this.waitingForUser = true;
+        this.pendingQuestion = resultObj['question'] as string;
+
+        // Emit question event with options
+        this.emit({
+          type: 'question',
+          question: resultObj['question'] as string,
+          isConfirmation: false,
+          options: resultObj['options'] as Array<{ label: string; description?: string }>,
+        });
+
+        // Emit status change
+        this.emit({
+          type: 'agent_status',
+          status: 'waiting',
+          agentName: this.name,
+        });
+
+        // Return special marker to indicate we're pausing for user input
+        return { __awaiting_user_input: true, ...result };
+      }
+
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -438,9 +535,20 @@ export class GenericAgent extends TypedEventEmitter {
     return result;
   }
 
+  // State for dispatch_agent sub-agent planning loop
+  private planningState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentPlan: string;
+    iterations: number;
+  } | null = null;
+
   /**
    * Handle dispatch_agent tool - spawns a sub-agent for planning.
-   * Returns plan that requires user verification before execution.
+   * The sub-agent handles the full plan verification loop with the user.
+   * It keeps iterating until the user approves the plan.
    */
   private async handleDispatchAgent(toolCall: ToolCall): Promise<unknown> {
     const args = toolCall.arguments;
@@ -451,61 +559,168 @@ export class GenericAgent extends TypedEventEmitter {
       return { error: 'No task provided for dispatch_agent' };
     }
 
-    // Build context section if provided
-    const contextSection = context
-      ? `\n\nContext/Background:\n${context}\n`
-      : '';
+    // Check if we're resuming an existing planning session
+    if (this.planningState?.active) {
+      // This shouldn't happen - dispatch_agent shouldn't be called while planning is active
+      return { error: 'Planning already in progress' };
+    }
 
-    // Create a sub-agent for planning
-    const planningPrompt = `You are a planning assistant. Analyze the following task and create a detailed, actionable plan.
-${contextSection}
+    // Initialize planning state
+    const contextSection = context ? `\n\nContext/Background:\n${context}\n` : '';
+
+    const planningSystemPrompt = `You are a planning assistant. Your job is to create and refine plans based on user feedback.
+
 Task: ${task}
+${contextSection}
 
-Provide a structured plan with:
-1. Clear steps to accomplish the task
+When creating a plan, include:
+1. Clear numbered steps to accomplish the task
 2. Any prerequisites or dependencies
-3. Potential challenges and solutions
-4. Expected outcomes for each step
+3. Expected outcomes for each step
 
-Be specific and actionable. Your plan will be used to create a todo list for execution.`;
+Be specific and actionable. The plan will be used to create a todo list for execution.`;
+
+    this.planningState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: planningSystemPrompt },
+        { role: 'user', content: 'Create an initial plan for this task.' },
+      ],
+      currentPlan: '',
+      iterations: 0,
+    };
+
+    // Generate the initial plan
+    return this.continuePlanningLoop();
+  }
+
+  /**
+   * Continue the planning loop - generates plan and asks for user verification.
+   */
+  private async continuePlanningLoop(): Promise<unknown> {
+    if (!this.planningState) {
+      return { error: 'No active planning session' };
+    }
+
+    const maxIterations = 10;
+
+    if (this.planningState.iterations >= maxIterations) {
+      const result = {
+        status: 'max_iterations',
+        plan: this.planningState.currentPlan,
+        task: this.planningState.task,
+        message: 'Reached maximum iterations for plan refinement. Using the last version.',
+      };
+      this.planningState = null;
+      return result;
+    }
+
+    this.planningState.iterations++;
 
     try {
-      // Make a single LLM call for planning
+      // Generate or refine the plan
       const response = await this.llm.generate({
-        messages: [
-          { role: 'system', content: planningPrompt },
-          { role: 'user', content: task },
-        ],
+        messages: this.planningState.messages,
         temperature: 0.7,
       });
 
-      const plan = response.content || 'No plan generated';
+      this.planningState.currentPlan = response.content || 'No plan generated';
 
-      // Return plan with verification required status
-      // The agent should then call ask_user with options to verify
+      // Add assistant response to history
+      this.planningState.messages.push({
+        role: 'assistant',
+        content: this.planningState.currentPlan,
+      });
+
+      // Emit the plan for display
+      this.emit({
+        type: 'agent_text',
+        text: `📋 Plan (iteration ${this.planningState.iterations}):\n\n${this.planningState.currentPlan}`,
+        isFinal: false,
+      });
+
+      // Return status indicating we need user verification
+      // The main agent will pause and wait for user input
+      const verificationQuestion = this.planningState.iterations === 1
+        ? 'I\'ve created a plan for this task. How would you like to proceed?'
+        : 'I\'ve updated the plan based on your feedback. How would you like to proceed?';
+
       return {
-        status: 'plan_ready',
-        plan,
-        task,
-        requires_verification: true,
-        verification_instructions: `IMPORTANT: You must now verify this plan with the user before proceeding.
-Call ask_user with:
-- question: A summary of the plan asking if they want to proceed
-- options: Provide these 4 options:
-  1. "Proceed with plan" - Execute the plan as-is
-  2. "Simplify plan" - Make the plan simpler with fewer steps
-  3. "Add more detail" - Expand the plan with more detailed steps
-  4. "Custom feedback" - Let user provide their own instructions
-- is_confirmation: false (this is a choice, not yes/no)
-
-Wait for user selection before creating todos or executing any steps.`,
+        status: 'awaiting_verification',
+        plan: this.planningState.currentPlan,
+        task: this.planningState.task,
+        iterations: this.planningState.iterations,
+        question: verificationQuestion,
+        options: [
+          { label: 'Proceed with plan', description: 'Accept this plan and start execution' },
+          { label: 'Simplify plan', description: 'Make the plan simpler with fewer steps' },
+          { label: 'Add more detail', description: 'Expand the plan with more detailed steps' },
+          { label: 'Custom feedback', description: 'Provide your own specific feedback' },
+        ],
       };
     } catch (error) {
+      this.planningState = null;
       return {
         error: `Planning failed: ${String(error)}`,
-        task,
+        task: this.planningState?.task,
       };
     }
+  }
+
+  /**
+   * Handle user response to planning verification.
+   * Called when user responds to the plan verification question.
+   */
+  handlePlanningResponse(userResponse: string): Promise<unknown> {
+    if (!this.planningState) {
+      return Promise.resolve({ error: 'No active planning session' });
+    }
+
+    const responseLower = userResponse.toLowerCase();
+
+    // Check if user approved
+    if (responseLower.includes('proceed') || responseLower === 'yes' || responseLower === '1') {
+      const result = {
+        status: 'approved',
+        plan: this.planningState.currentPlan,
+        task: this.planningState.task,
+        iterations: this.planningState.iterations,
+        message: 'Plan approved by user. Ready for execution.',
+      };
+      this.planningState = null;
+      return Promise.resolve(result);
+    }
+
+    // User wants changes - add feedback to messages
+    if (responseLower.includes('simplify') || responseLower === '2') {
+      this.planningState.messages.push({
+        role: 'user',
+        content: 'Please simplify this plan. Reduce the number of steps and make it more concise while keeping the essential actions.',
+      });
+    } else if (responseLower.includes('detail') || responseLower === '3') {
+      this.planningState.messages.push({
+        role: 'user',
+        content: 'Please add more detail to this plan. Break down the steps further and include more specific instructions.',
+      });
+    } else {
+      // Custom feedback - use the user's input directly
+      this.planningState.messages.push({
+        role: 'user',
+        content: `Please revise the plan based on this feedback: ${userResponse}`,
+      });
+    }
+
+    // Continue the planning loop
+    return this.continuePlanningLoop();
+  }
+
+  /**
+   * Check if there's an active planning session awaiting user input.
+   */
+  isPlanningActive(): boolean {
+    return this.planningState?.active ?? false;
   }
 
   /**
