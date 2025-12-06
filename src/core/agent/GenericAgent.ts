@@ -632,8 +632,8 @@ export class GenericAgent extends TypedEventEmitter {
       // Return status indicating we need user verification
       // The main agent will pause and wait for user input
       const verificationQuestion = this.planningState.iterations === 1
-        ? 'I\'ve created a plan for this task. How would you like to proceed?'
-        : 'I\'ve updated the plan based on your feedback. How would you like to proceed?';
+        ? 'I\'ve created a plan for this task. Would you like to proceed or provide feedback?'
+        : 'I\'ve updated the plan based on your feedback. Would you like to proceed or provide more feedback?';
 
       return {
         status: 'awaiting_verification',
@@ -642,10 +642,8 @@ export class GenericAgent extends TypedEventEmitter {
         iterations: this.planningState.iterations,
         question: verificationQuestion,
         options: [
-          { label: 'Proceed with plan', description: 'Accept this plan and start execution' },
-          { label: 'Simplify plan', description: 'Make the plan simpler with fewer steps' },
-          { label: 'Add more detail', description: 'Expand the plan with more detailed steps' },
-          { label: 'Custom feedback', description: 'Provide your own specific feedback' },
+          { label: 'Accept plan', description: 'Proceed with this plan and start execution' },
+          { label: 'Provide feedback', description: 'Modify the plan with your input' },
         ],
       };
     } catch (error) {
@@ -668,8 +666,13 @@ export class GenericAgent extends TypedEventEmitter {
 
     const responseLower = userResponse.toLowerCase();
 
-    // Check if user approved
-    if (responseLower.includes('proceed') || responseLower === 'yes' || responseLower === '1') {
+    // Check if user approved (option 1 or explicit acceptance)
+    if (
+      responseLower.includes('accept') ||
+      responseLower.includes('proceed') ||
+      responseLower === 'yes' ||
+      responseLower === '1'
+    ) {
       const result = {
         status: 'approved',
         plan: this.planningState.currentPlan,
@@ -681,24 +684,11 @@ export class GenericAgent extends TypedEventEmitter {
       return Promise.resolve(result);
     }
 
-    // User wants changes - add feedback to messages
-    if (responseLower.includes('simplify') || responseLower === '2') {
-      this.planningState.messages.push({
-        role: 'user',
-        content: 'Please simplify this plan. Reduce the number of steps and make it more concise while keeping the essential actions.',
-      });
-    } else if (responseLower.includes('detail') || responseLower === '3') {
-      this.planningState.messages.push({
-        role: 'user',
-        content: 'Please add more detail to this plan. Break down the steps further and include more specific instructions.',
-      });
-    } else {
-      // Custom feedback - use the user's input directly
-      this.planningState.messages.push({
-        role: 'user',
-        content: `Please revise the plan based on this feedback: ${userResponse}`,
-      });
-    }
+    // User wants to provide feedback - use their input directly
+    this.planningState.messages.push({
+      role: 'user',
+      content: `Please revise the plan based on this feedback: ${userResponse}`,
+    });
 
     // Continue the planning loop
     return this.continuePlanningLoop();

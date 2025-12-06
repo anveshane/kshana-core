@@ -53,6 +53,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     output,
     question,
     isConfirmation,
+    questionOptions,
     error,
     recentTools,
     history,
@@ -268,11 +269,13 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         recentTools={recentTools}
         question={question}
         isConfirmation={isConfirmation}
+        questionOptions={questionOptions}
         showTodos
         conversationHistory={conversationHistory}
         history={history}
         currentAction={currentAction}
         expanded={expandedView}
+        onUserInput={handleUserInput}
       />
 
       {/* Input prompt - always visible at bottom */}
