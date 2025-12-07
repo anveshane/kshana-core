@@ -1,6 +1,8 @@
 /**
  * LLM Call Logger - Logs all LLM requests and responses to file.
- * The actual prompts already contain XML tags for interpolations.
+ * Creates two log files:
+ * 1. Full log with complete content
+ * 2. Truncated log with text limited to 200 characters
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -9,24 +11,29 @@ import type { Message, ToolDefinition, LLMResponse } from './types.js';
 export interface LLMLoggerConfig {
   logPath?: string;
   enabled?: boolean;
+  truncateLength?: number;
 }
 
 /**
  * Logger for LLM calls - captures requests and responses.
- * XML tags in prompts are already present from prompt builders.
+ * Writes to two files: full and truncated versions.
  */
 export class LLMLogger {
   private logPath: string;
+  private truncatedLogPath: string;
   private enabled: boolean;
+  private truncateLength: number;
   private streamBuffer: string = '';
 
   constructor(config: LLMLoggerConfig = {}) {
     this.logPath = config.logPath ?? './logs/llm-calls.log';
+    this.truncatedLogPath = this.logPath.replace('.log', '-truncated.log');
     this.enabled = config.enabled ?? true;
+    this.truncateLength = config.truncateLength ?? 200;
   }
 
   /**
-   * Reset the log file (called on CLI start).
+   * Reset both log files (called on CLI start).
    */
   reset(): void {
     if (!this.enabled) return;
@@ -38,11 +45,22 @@ export class LLMLogger {
         fs.mkdirSync(dir, { recursive: true });
       }
 
-      // Truncate/create the log file
-      fs.writeFileSync(this.logPath, `=== LLM Call Log Started [${new Date().toISOString()}] ===\n\n`);
+      const header = `=== LLM Call Log Started [${new Date().toISOString()}] ===\n\n`;
+
+      // Truncate/create both log files
+      fs.writeFileSync(this.logPath, header);
+      fs.writeFileSync(this.truncatedLogPath, `${header}(Text truncated to ${this.truncateLength} characters)\n\n`);
     } catch {
       // Silently fail if unable to write logs
     }
+  }
+
+  /**
+   * Truncate text to specified length with ellipsis.
+   */
+  private truncateText(text: string, maxLength: number = this.truncateLength): string {
+    if (text.length <= maxLength) return text;
+    return text.slice(0, maxLength) + '... [truncated]';
   }
 
   /**
@@ -52,30 +70,33 @@ export class LLMLogger {
     if (!this.enabled) return;
 
     const timestamp = new Date().toISOString();
-    let log = `\n${'='.repeat(60)}\n`;
-    log += `=== LLM Request [${timestamp}] ===\n`;
-    log += `${'='.repeat(60)}\n\n`;
+    const header = `\n${'='.repeat(60)}\n=== LLM Request [${timestamp}] ===\n${'='.repeat(60)}\n\n`;
 
+    let temperatureLog = '';
     if (options?.temperature !== undefined) {
-      log += `Temperature: ${options.temperature}\n\n`;
+      temperatureLog = `Temperature: ${options.temperature}\n\n`;
     }
+
+    // Build full log
+    let fullLog = header + temperatureLog;
+    let truncatedLog = header + temperatureLog;
 
     // Log each message
     for (const msg of messages) {
-      log += this.formatMessage(msg);
-      log += '\n\n';
+      fullLog += this.formatMessage(msg, false) + '\n\n';
+      truncatedLog += this.formatMessage(msg, true) + '\n\n';
     }
 
-    // Log tools if present (tools are already tagged in system message)
+    // Log tools if present
     if (tools && tools.length > 0) {
-      log += `--- Available Tools (${tools.length}) ---\n`;
-      for (const tool of tools) {
-        log += `  - ${tool.name}: ${tool.description.slice(0, 100)}${tool.description.length > 100 ? '...' : ''}\n`;
-      }
-      log += '\n';
+      const toolsLog = `--- Available Tools (${tools.length}) ---\n` +
+        tools.map(tool => `  - ${tool.name}: ${tool.description.slice(0, 100)}${tool.description.length > 100 ? '...' : ''}`).join('\n') +
+        '\n\n';
+      fullLog += toolsLog;
+      truncatedLog += toolsLog;
     }
 
-    this.appendLog(log);
+    this.appendLog(fullLog, truncatedLog);
   }
 
   /**
@@ -85,39 +106,51 @@ export class LLMLogger {
     if (!this.enabled) return;
 
     const timestamp = new Date().toISOString();
-    let log = `\n${'='.repeat(60)}\n`;
-    log += `=== LLM Response [${timestamp}] ===\n`;
-    log += `${'='.repeat(60)}\n\n`;
+    const header = `\n${'='.repeat(60)}\n=== LLM Response [${timestamp}] ===\n${'='.repeat(60)}\n\n`;
+
+    let fullLog = header;
+    let truncatedLog = header;
 
     if (response.content) {
-      log += '<assistant_response>\n';
-      log += response.content;
-      log += '\n</assistant_response>\n';
+      fullLog += '<assistant_response>\n' + response.content + '\n</assistant_response>\n';
+      truncatedLog += '<assistant_response>\n' + this.truncateText(response.content) + '\n</assistant_response>\n';
     }
 
     if (response.toolCalls && response.toolCalls.length > 0) {
-      log += '\n<tool_calls>\n';
-      for (const tc of response.toolCalls) {
-        log += `  - ${tc.name}:\n`;
-        log += `    ${JSON.stringify(tc.arguments, null, 2).split('\n').join('\n    ')}\n`;
-      }
-      log += '</tool_calls>\n';
+      const fullToolCalls = '\n<tool_calls>\n' +
+        response.toolCalls.map(tc => `  - ${tc.name}:\n    ${JSON.stringify(tc.arguments, null, 2).split('\n').join('\n    ')}`).join('\n') +
+        '\n</tool_calls>\n';
+
+      const truncatedToolCalls = '\n<tool_calls>\n' +
+        response.toolCalls.map(tc => {
+          const argsStr = JSON.stringify(tc.arguments);
+          return `  - ${tc.name}: ${this.truncateText(argsStr)}`;
+        }).join('\n') +
+        '\n</tool_calls>\n';
+
+      fullLog += fullToolCalls;
+      truncatedLog += truncatedToolCalls;
     }
 
     if (response.usage) {
-      log += '\n<token_usage>\n';
-      log += `  prompt_tokens: ${response.usage.promptTokens}\n`;
-      log += `  completion_tokens: ${response.usage.completionTokens}\n`;
-      log += `  total_tokens: ${response.usage.totalTokens}\n`;
-      log += '</token_usage>\n';
+      const usageLog = '\n<token_usage>\n' +
+        `  prompt_tokens: ${response.usage.promptTokens}\n` +
+        `  completion_tokens: ${response.usage.completionTokens}\n` +
+        `  total_tokens: ${response.usage.totalTokens}\n` +
+        '</token_usage>\n';
+      fullLog += usageLog;
+      truncatedLog += usageLog;
     }
 
     if (response.finishReason) {
-      log += `\nFinish reason: ${response.finishReason}\n`;
+      const finishLog = `\nFinish reason: ${response.finishReason}\n`;
+      fullLog += finishLog;
+      truncatedLog += finishLog;
     }
 
-    log += '\n';
-    this.appendLog(log);
+    fullLog += '\n';
+    truncatedLog += '\n';
+    this.appendLog(fullLog, truncatedLog);
   }
 
   /**
@@ -135,27 +168,36 @@ export class LLMLogger {
     if (!this.enabled) return;
 
     const timestamp = new Date().toISOString();
-    let log = `\n${'='.repeat(60)}\n`;
-    log += `=== LLM Streamed Response [${timestamp}] ===\n`;
-    log += `${'='.repeat(60)}\n\n`;
+    const header = `\n${'='.repeat(60)}\n=== LLM Streamed Response [${timestamp}] ===\n${'='.repeat(60)}\n\n`;
 
-    if (this.streamBuffer || response.content) {
-      log += '<assistant_response>\n';
-      log += this.streamBuffer || response.content || '';
-      log += '\n</assistant_response>\n';
+    let fullLog = header;
+    let truncatedLog = header;
+
+    const content = this.streamBuffer || response.content || '';
+    if (content) {
+      fullLog += '<assistant_response>\n' + content + '\n</assistant_response>\n';
+      truncatedLog += '<assistant_response>\n' + this.truncateText(content) + '\n</assistant_response>\n';
     }
 
     if (response.toolCalls && response.toolCalls.length > 0) {
-      log += '\n<tool_calls>\n';
-      for (const tc of response.toolCalls) {
-        log += `  - ${tc.name}:\n`;
-        log += `    ${JSON.stringify(tc.arguments, null, 2).split('\n').join('\n    ')}\n`;
-      }
-      log += '</tool_calls>\n';
+      const fullToolCalls = '\n<tool_calls>\n' +
+        response.toolCalls.map(tc => `  - ${tc.name}:\n    ${JSON.stringify(tc.arguments, null, 2).split('\n').join('\n    ')}`).join('\n') +
+        '\n</tool_calls>\n';
+
+      const truncatedToolCalls = '\n<tool_calls>\n' +
+        response.toolCalls.map(tc => {
+          const argsStr = JSON.stringify(tc.arguments);
+          return `  - ${tc.name}: ${this.truncateText(argsStr)}`;
+        }).join('\n') +
+        '\n</tool_calls>\n';
+
+      fullLog += fullToolCalls;
+      truncatedLog += truncatedToolCalls;
     }
 
-    log += '\n';
-    this.appendLog(log);
+    fullLog += '\n';
+    truncatedLog += '\n';
+    this.appendLog(fullLog, truncatedLog);
 
     // Reset stream buffer
     this.streamBuffer = '';
@@ -165,21 +207,24 @@ export class LLMLogger {
    * Format a message for logging.
    * Content already contains XML tags from prompt builders.
    */
-  private formatMessage(msg: Message): string {
+  private formatMessage(msg: Message, truncate: boolean = false): string {
     let log = '';
     const roleUpper = msg.role.toUpperCase();
 
     log += `--- ${roleUpper} MESSAGE ---\n`;
 
     if (msg.content) {
-      log += msg.content;
+      log += truncate ? this.truncateText(msg.content) : msg.content;
     }
 
     // For assistant messages with tool calls
     if (msg.role === 'assistant' && msg.toolCalls && msg.toolCalls.length > 0) {
       log += '\n\n<tool_calls>\n';
       for (const tc of msg.toolCalls) {
-        log += `  - ${tc.name}: ${JSON.stringify(tc.arguments)}\n`;
+        const argsStr = JSON.stringify(tc.arguments);
+        log += truncate
+          ? `  - ${tc.name}: ${this.truncateText(argsStr)}\n`
+          : `  - ${tc.name}: ${argsStr}\n`;
       }
       log += '</tool_calls>';
     }
@@ -193,11 +238,12 @@ export class LLMLogger {
   }
 
   /**
-   * Append to log file.
+   * Append to both log files.
    */
-  private appendLog(content: string): void {
+  private appendLog(fullContent: string, truncatedContent?: string): void {
     try {
-      fs.appendFileSync(this.logPath, content);
+      fs.appendFileSync(this.logPath, fullContent);
+      fs.appendFileSync(this.truncatedLogPath, truncatedContent ?? fullContent);
     } catch {
       // Silently fail if unable to write logs
     }
