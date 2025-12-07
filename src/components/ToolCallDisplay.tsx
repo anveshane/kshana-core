@@ -57,6 +57,18 @@ function formatDuration(ms: number): string {
   return `${String(Math.floor(ms / 60000))}m ${String(Math.floor((ms % 60000) / 1000))}s`;
 }
 
+/** Maximum characters for string arguments before truncation */
+const MAX_ARG_LENGTH = 80;
+
+/** Arguments that contain long content and should be truncated */
+const CONTENT_ARGS = new Set(['content', 'data', 'text', 'body', 'message']);
+
+// Truncate a string with ellipsis
+function truncateString(str: string, maxLength: number): string {
+  if (str.length <= maxLength) return str;
+  return str.slice(0, maxLength) + '...';
+}
+
 // Format tool call in Claude Code style: toolName(arg1="val", arg2=...)
 function formatToolCall(name: string, args?: Record<string, unknown>): string {
   if (!args || Object.keys(args).length === 0) {
@@ -66,14 +78,18 @@ function formatToolCall(name: string, args?: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(args)) {
     if (typeof value === 'string') {
-      // Show full string - no truncation
-      parts.push(`${key}="${value}"`);
+      // Truncate content-type arguments more aggressively
+      const maxLen = CONTENT_ARGS.has(key) ? MAX_ARG_LENGTH : MAX_ARG_LENGTH * 2;
+      const displayValue = truncateString(value.replace(/\n/g, '\\n'), maxLen);
+      parts.push(`${key}="${displayValue}"`);
     } else if (typeof value === 'number' || typeof value === 'boolean') {
       parts.push(`${key}=${String(value)}`);
     } else if (Array.isArray(value)) {
-      parts.push(`${key}=${JSON.stringify(value)}`);
+      const jsonStr = JSON.stringify(value);
+      parts.push(`${key}=${truncateString(jsonStr, MAX_ARG_LENGTH)}`);
     } else if (value !== null && typeof value === 'object') {
-      parts.push(`${key}=${JSON.stringify(value)}`);
+      const jsonStr = JSON.stringify(value);
+      parts.push(`${key}=${truncateString(jsonStr, MAX_ARG_LENGTH)}`);
     }
   }
 
