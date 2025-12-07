@@ -106,11 +106,16 @@ export function TextInput({
 
       // Regular character input - filter out control characters and newlines
       if (input && !key.ctrl && !key.meta) {
-        // Replace newlines with spaces for single-line input
-        const sanitized = input.replace(/[\r\n]/g, ' ');
-        const newValue = value.slice(0, cursorPos) + sanitized + value.slice(cursorPos);
-        onChange(newValue);
-        setCursorPos(prev => prev + sanitized.length);
+        // Replace newlines and all control characters with spaces for single-line input
+        // Also collapse multiple spaces into one
+        const sanitized = input
+          .replace(/[\r\n\t\x00-\x1F\x7F]/g, ' ')  // Replace control chars with space
+          .replace(/\s+/g, ' ');  // Collapse multiple spaces
+        if (sanitized) {
+          const newValue = value.slice(0, cursorPos) + sanitized + value.slice(cursorPos);
+          onChange(newValue);
+          setCursorPos(prev => prev + sanitized.length);
+        }
       }
     },
     { isActive: focus }

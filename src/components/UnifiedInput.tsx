@@ -187,10 +187,15 @@ export function UnifiedInput({
 
     // Regular character input
     if (input && !key.ctrl && !key.meta && !key.upArrow && !key.downArrow) {
-      const sanitized = input.replace(/[\r\n]/g, ' ');
-      const newValue = textValue.slice(0, cursorPos) + sanitized + textValue.slice(cursorPos);
-      setTextValue(newValue);
-      setCursorPos(prev => prev + sanitized.length);
+      // Replace newlines and all control characters with spaces, collapse multiple spaces
+      const sanitized = input
+        .replace(/[\r\n\t\x00-\x1F\x7F]/g, ' ')
+        .replace(/\s+/g, ' ');
+      if (sanitized) {
+        const newValue = textValue.slice(0, cursorPos) + sanitized + textValue.slice(cursorPos);
+        setTextValue(newValue);
+        setCursorPos(prev => prev + sanitized.length);
+      }
     }
   });
 
