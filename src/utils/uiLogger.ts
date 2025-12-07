@@ -1,6 +1,6 @@
 /**
- * UI Logger - Captures all screen output to a log file.
- * Logs user inputs, agent responses, tool calls, questions, and status changes.
+ * UI Logger - Captures screen output to a log file.
+ * Mirrors exactly what appears in the UI, in the same order.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -18,13 +18,6 @@ try {
 }
 
 /**
- * Format timestamp for log entries.
- */
-function formatTimestamp(): string {
-  return new Date().toISOString();
-}
-
-/**
  * Write a line to the UI log file.
  */
 function writeLog(line: string): void {
@@ -36,21 +29,13 @@ function writeLog(line: string): void {
 }
 
 /**
- * Log a separator line.
- */
-function logSeparator(char = '─', length = 80): void {
-  writeLog(char.repeat(length));
-}
-
-/**
  * Initialize the log file for a new session.
  */
 export function initUILog(): void {
   try {
-    const header = `
-${'═'.repeat(80)}
- UI SESSION LOG - Started ${formatTimestamp()}
-${'═'.repeat(80)}
+    const header = `════════════════════════════════════════════════════════════════════════════════
+ KSHANA SESSION LOG
+════════════════════════════════════════════════════════════════════════════════
 `;
     fs.writeFileSync(UI_LOG_PATH, header);
   } catch {
@@ -59,68 +44,74 @@ ${'═'.repeat(80)}
 }
 
 /**
- * Log user input (task or response).
+ * Log user input - matches the green bordered box in ScrollableHistory.
+ * Format: "👤 You: [content]"
  */
-export function logUserInput(input: string, type: 'task' | 'response' | 'feedback' = 'response'): void {
-  const label = type === 'task' ? '📝 NEW TASK' : type === 'feedback' ? '💬 USER FEEDBACK' : '👤 USER';
-  writeLog(`\n[${formatTimestamp()}] ${label}`);
-  logSeparator();
-  writeLog(input);
-  logSeparator();
+export function logUserInput(content: string): void {
+  writeLog('');
+  writeLog('┌──────────────────────────────────────────────────────────────────────────────┐');
+  writeLog('│ 👤 You:');
+  // Write content with proper indentation
+  const lines = content.split('\n');
+  for (const line of lines) {
+    writeLog(`│ ${line}`);
+  }
+  writeLog('└──────────────────────────────────────────────────────────────────────────────┘');
 }
 
 /**
- * Log agent text output.
+ * Log agent text - matches dimColor text in ScrollableHistory.
  */
 export function logAgentText(text: string): void {
   if (!text.trim()) return;
-  writeLog(`\n[${formatTimestamp()}] 🤖 AGENT`);
-  logSeparator();
-  writeLog(text);
-  logSeparator();
+  writeLog('');
+  const lines = text.split('\n');
+  for (const line of lines) {
+    writeLog(line);
+  }
 }
 
 /**
- * Log streaming text completion.
- */
-export function logStreamingComplete(text: string): void {
-  if (!text.trim()) return;
-  writeLog(`\n[${formatTimestamp()}] 📝 AGENT OUTPUT (streamed)`);
-  logSeparator();
-  writeLog(text);
-  logSeparator();
-}
-
-/**
- * Log tool call start.
+ * Log tool call start - matches ToolCallDisplay executing state.
+ * Format: "◉ [Spinner] Running toolname"
  */
 export function logToolStart(toolName: string, args?: Record<string, unknown>): void {
-  writeLog(`\n[${formatTimestamp()}] 🔧 TOOL CALL: ${toolName}`);
+  writeLog('');
+  writeLog(`┌─ 🔧 ${getToolDisplayName(toolName, true)} ─────────────────────────────────────`);
   if (args && Object.keys(args).length > 0) {
-    writeLog(`Arguments: ${JSON.stringify(args, null, 2)}`);
+    writeLog(`│ ${formatToolCall(toolName, args)}`);
   }
 }
 
 /**
- * Log tool call completion.
+ * Log tool call completion - matches ToolCallDisplay completed state.
+ * Format: "✓ Ran toolname (duration)"
  */
-export function logToolComplete(toolName: string, result: unknown, duration?: number, isError = false): void {
-  const status = isError ? '❌ ERROR' : '✅ COMPLETE';
-  const durationStr = duration ? ` (${duration}ms)` : '';
-  writeLog(`[${formatTimestamp()}] 🔧 TOOL ${status}: ${toolName}${durationStr}`);
+export function logToolComplete(
+  toolName: string,
+  result: unknown,
+  duration?: number,
+  isError = false
+): void {
+  const icon = isError ? '✗' : '✓';
+  const durationStr = duration ? ` (${formatDuration(duration)})` : '';
+  writeLog(`│ ${icon} ${getToolDisplayName(toolName, false)}${durationStr}`);
 
-  // Log result (truncated if too long)
-  const resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-  const maxLength = 2000;
-  if (resultStr.length > maxLength) {
-    writeLog(`Result (truncated): ${resultStr.slice(0, maxLength)}...`);
-  } else {
-    writeLog(`Result: ${resultStr}`);
+  // Log result for non-hidden tools
+  if (!isHiddenTool(toolName)) {
+    const resultStr = formatResult(result, isError);
+    if (resultStr) {
+      const lines = resultStr.split('\n');
+      for (const line of lines) {
+        writeLog(`│ ${line}`);
+      }
+    }
   }
+  writeLog('└──────────────────────────────────────────────────────────────────────────────');
 }
 
 /**
- * Log question display.
+ * Log question prompt - matches QuestionPrompt component.
  */
 export function logQuestion(
   question: string,
@@ -128,73 +119,96 @@ export function logQuestion(
   isConfirmation = false,
   autoApproveTimeoutMs?: number
 ): void {
-  writeLog(`\n[${formatTimestamp()}] ❓ QUESTION${isConfirmation ? ' (confirmation)' : ''}`);
-  if (autoApproveTimeoutMs) {
-    writeLog(`Auto-approve in: ${autoApproveTimeoutMs / 1000}s`);
-  }
-  logSeparator();
-  writeLog(question);
+  writeLog('');
+  writeLog('┌─ ❓ Question ────────────────────────────────────────────────────────────────┐');
+  writeLog(`│ ${question}`);
+
   if (options && options.length > 0) {
-    writeLog('\nOptions:');
+    writeLog('│');
     options.forEach((opt, i) => {
-      writeLog(`  ${i + 1}. ${opt.label}${opt.description ? ` - ${opt.description}` : ''}`);
+      const selected = i === 0 ? '>' : ' ';
+      const desc = opt.description ? ` - ${opt.description}` : '';
+      writeLog(`│ ${selected} ${i + 1}. ${opt.label}${desc}`);
     });
+  } else if (isConfirmation) {
+    writeLog('│');
+    writeLog('│   Press y for Yes, n for No');
   }
-  logSeparator();
+
+  if (autoApproveTimeoutMs) {
+    writeLog('│');
+    writeLog(`│ Auto-approve in ${Math.ceil(autoApproveTimeoutMs / 1000)}s`);
+  }
+  writeLog('└──────────────────────────────────────────────────────────────────────────────┘');
 }
 
 /**
- * Log status change.
+ * Log status bar change - matches StatusBar component.
  */
-export function logStatusChange(status: string, message?: string): void {
-  const statusEmoji: Record<string, string> = {
-    idle: '💤',
-    thinking: '💭',
-    waiting: '⏳',
-    completed: '✅',
-    error: '❌',
+export function logStatusChange(status: string, agentName?: string): void {
+  const statusDisplay: Record<string, string> = {
+    idle: '○ Idle',
+    thinking: '● Thinking...',
+    waiting: '? Waiting for input',
+    completed: '✓ Completed',
+    error: '✗ Error',
+    started: '● Started',
   };
-  const emoji = statusEmoji[status] || '📌';
-  writeLog(`[${formatTimestamp()}] ${emoji} STATUS: ${status}${message ? ` - ${message}` : ''}`);
+  const display = statusDisplay[status] || status;
+  const name = agentName || 'Agent';
+  writeLog(`[${name}] ${display}`);
 }
 
 /**
- * Log todo list update.
+ * Log todo list - matches TodoList component.
+ * Shows all todos with status icons.
  */
 export function logTodoUpdate(todos: Array<{ content: string; status: string }>): void {
   if (todos.length === 0) return;
 
-  writeLog(`\n[${formatTimestamp()}] 📋 TODO LIST`);
+  const completed = todos.filter(t => t.status === 'completed').length;
+
+  writeLog('');
+  writeLog(`┌─ 📋 Todos (${completed}/${todos.length}) ─────────────────────────────────────────────────`);
   todos.forEach(todo => {
-    const statusEmoji = todo.status === 'completed' ? '✅' : todo.status === 'in_progress' ? '🔄' : '⏳';
-    writeLog(`  ${statusEmoji} [${todo.status}] ${todo.content}`);
+    const icon = todo.status === 'completed' ? '✓' : todo.status === 'in_progress' ? '●' : '○';
+    writeLog(`│ ${icon} ${todo.content}`);
   });
+  writeLog('└──────────────────────────────────────────────────────────────────────────────');
 }
 
 /**
  * Log auto-approve event.
  */
 export function logAutoApprove(selectedOption: string): void {
-  writeLog(`\n[${formatTimestamp()}] ⏰ AUTO-APPROVED: ${selectedOption}`);
+  writeLog('');
+  writeLog(`⏰ Auto-approved: ${selectedOption}`);
 }
 
 /**
- * Log error.
+ * Log error display - matches error state in AgentView.
  */
 export function logError(error: string): void {
-  writeLog(`\n[${formatTimestamp()}] ❌ ERROR`);
-  logSeparator();
-  writeLog(error);
-  logSeparator();
+  writeLog('');
+  writeLog(`✗ Error: ${error}`);
+}
+
+/**
+ * Log streaming text when it completes.
+ */
+export function logStreamingComplete(text: string): void {
+  // Streaming text becomes agent_text in history, so just log as agent text
+  logAgentText(text);
 }
 
 /**
  * Log session end.
  */
 export function logSessionEnd(): void {
-  writeLog(`\n${'═'.repeat(80)}`);
-  writeLog(` UI SESSION LOG - Ended ${formatTimestamp()}`);
-  writeLog(`${'═'.repeat(80)}\n`);
+  writeLog('');
+  writeLog('════════════════════════════════════════════════════════════════════════════════');
+  writeLog(' SESSION ENDED');
+  writeLog('════════════════════════════════════════════════════════════════════════════════');
 }
 
 /**
@@ -202,4 +216,106 @@ export function logSessionEnd(): void {
  */
 export function getUILogPath(): string {
   return UI_LOG_PATH;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper functions (matching ToolCallDisplay.tsx logic)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
+  think: { gerund: 'Thinking', past: 'Thought' },
+  ask_user: { gerund: 'Asking user', past: 'Asked user' },
+  dispatch_agent: { gerund: 'Dispatching agent', past: 'Dispatched agent' },
+  generate_image: { gerund: 'Generating image', past: 'Generated image' },
+  generate_video: { gerund: 'Generating video', past: 'Generated video' },
+  edit_image: { gerund: 'Editing image', past: 'Edited image' },
+  wait_for_job: { gerund: 'Waiting for job', past: 'Job completed' },
+  read_project_state: { gerund: 'Reading project state', past: 'Read project state' },
+  write_project_state: { gerund: 'Saving project state', past: 'Saved project state' },
+  read_project: { gerund: 'Reading project', past: 'Read project' },
+  update_project: { gerund: 'Updating project', past: 'Updated project' },
+  read_file: { gerund: 'Reading file', past: 'Read file' },
+  write_file: { gerund: 'Writing file', past: 'Wrote file' },
+  todo_write: { gerund: 'Updating todos', past: 'Updated todos' },
+};
+
+const HIDDEN_TOOLS = new Set(['todo_write']);
+
+function isHiddenTool(toolName: string): boolean {
+  return HIDDEN_TOOLS.has(toolName);
+}
+
+function getToolDisplayName(toolName: string, isExecuting: boolean): string {
+  const names = TOOL_DISPLAY_NAMES[toolName];
+  if (!names) {
+    return isExecuting ? `Running ${toolName}` : `Ran ${toolName}`;
+  }
+  return isExecuting ? names.gerund : names.past;
+}
+
+function formatToolCall(name: string, args?: Record<string, unknown>): string {
+  if (!args || Object.keys(args).length === 0) {
+    return `${name}()`;
+  }
+
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value === 'string') {
+      // Truncate long strings
+      const displayValue = value.length > 100 ? value.slice(0, 100) + '...' : value;
+      parts.push(`${key}="${displayValue}"`);
+    } else if (typeof value === 'number' || typeof value === 'boolean') {
+      parts.push(`${key}=${String(value)}`);
+    } else if (Array.isArray(value)) {
+      parts.push(`${key}=[${value.length} items]`);
+    } else if (value !== null && typeof value === 'object') {
+      parts.push(`${key}={...}`);
+    }
+  }
+
+  return `${name}(${parts.join(', ')})`;
+}
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
+}
+
+function formatResult(result: unknown, isError: boolean): string {
+  if (result === undefined || result === null) return '';
+
+  const resultObj = result as Record<string, unknown>;
+
+  // For dispatch_agent with plan, show the plan
+  if (resultObj['plan']) {
+    const plan = String(resultObj['plan']);
+    // Truncate very long plans
+    if (plan.length > 500) {
+      return `Plan: ${plan.slice(0, 500)}...`;
+    }
+    return `Plan: ${plan}`;
+  }
+
+  // For errors, show the error
+  if (isError || resultObj['status'] === 'error') {
+    return `Error: ${resultObj['error'] || resultObj['warning'] || JSON.stringify(result)}`;
+  }
+
+  // For loop warnings
+  if (resultObj['status'] === 'loop_warning' || resultObj['status'] === 'loop_blocked') {
+    return String(resultObj['warning']);
+  }
+
+  // For simple status results
+  if (resultObj['status'] === 'success' && resultObj['message']) {
+    return String(resultObj['message']);
+  }
+
+  // Default: JSON with truncation
+  const jsonStr = JSON.stringify(result, null, 2);
+  if (jsonStr.length > 300) {
+    return jsonStr.slice(0, 300) + '...';
+  }
+  return jsonStr;
 }

@@ -135,7 +135,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   React.useEffect(() => {
     if (initialTask && !started) {
       setStarted(true);
-      uiLogger.logUserInput(initialTask, 'task');
+      uiLogger.logUserInput(initialTask);
       void run(initialTask);
     }
   }, [initialTask, started, run]);
@@ -148,7 +148,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         return;
       }
       setStarted(true);
-      uiLogger.logUserInput(task, 'task');
+      uiLogger.logUserInput(task);
       // Task is added to history by useAgent
       void run(task);
     },
@@ -170,7 +170,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         return;
       }
 
-      uiLogger.logUserInput(input, 'response');
+      uiLogger.logUserInput(input);
       // User response is added to history by useAgent
       void respond(input);
     },
@@ -188,7 +188,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
 
       // Clear feedback mode and send the feedback
       setAwaitingFeedbackText(false);
-      uiLogger.logUserInput(feedbackText, 'feedback');
+      uiLogger.logUserInput(feedbackText);
       // Send the actual feedback text to the agent
       void respond(feedbackText);
     },
