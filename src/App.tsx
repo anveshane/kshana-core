@@ -9,7 +9,14 @@ import { UnifiedInput, type InputMode } from './components/UnifiedInput.js';
 import { Banner } from './components/Banner.js';
 import { useAgent } from './hooks/useAgent.js';
 import { createDefaultToolRegistry } from './core/tools/index.js';
-import { createWorkflowToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT } from './tasks/video/index.js';
+import {
+  createWorkflowToolRegistry,
+  VIDEO_CREATION_SYSTEM_PROMPT,
+  projectExists,
+  loadProject,
+  deleteProject,
+  getProjectSummary,
+} from './tasks/video/index.js';
 import type { LLMClientConfig } from './core/llm/index.js';
 import type { AgentConfig } from './core/agent/index.js';
 import * as uiLogger from './utils/uiLogger.js';
@@ -23,6 +30,9 @@ interface AppProps {
   taskType?: TaskType;
 }
 
+// Startup mode for video task type
+type StartupMode = 'checking' | 'select_action' | 'new_story' | 'ready';
+
 export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' }: AppProps) {
   const { exit } = useApp();
   const [started, setStarted] = React.useState(false);
@@ -31,6 +41,11 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Track when user selected "Provide feedback" and needs to enter actual feedback
   const [awaitingFeedbackText, setAwaitingFeedbackText] = React.useState(false);
 
+  // Startup flow state for video mode
+  const [startupMode, setStartupMode] = React.useState<StartupMode>('checking');
+  const [existingProject, setExistingProject] = React.useState<ReturnType<typeof loadProject>>(null);
+  const [startupSelectedIndex, setStartupSelectedIndex] = React.useState(0);
+
   // Initialize UI logger on mount
   React.useEffect(() => {
     uiLogger.initUILog();
@@ -38,6 +53,19 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       uiLogger.logSessionEnd();
     };
   }, []);
+
+  // Check for existing project on mount (video mode only)
+  React.useEffect(() => {
+    if (taskType === 'video' && !started) {
+      if (projectExists()) {
+        const project = loadProject();
+        setExistingProject(project);
+        setStartupMode('select_action');
+      } else {
+        setStartupMode('new_story');
+      }
+    }
+  }, [taskType, started]);
 
   // Create tool registry based on task type
   const tools = React.useMemo(() => {
@@ -307,6 +335,42 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     }
   }, [status, questionOptions, isConfirmation, awaitingFeedbackText, handleInjectedInput, handleUserInput, handleFeedbackSubmit, handleNewTask]);
 
+  // Handle startup action selection for video mode
+  const handleStartupSelect = React.useCallback((index: number) => {
+    if (startupMode === 'select_action') {
+      if (index === 0) {
+        // Continue existing project
+        setStarted(true);
+        uiLogger.logUserInput('Continue existing project');
+        void run('Continue working on the existing project. Call read_project to see current state.');
+      } else if (index === 1) {
+        // Start new project - show warning and switch to new_story mode
+        if (existingProject) {
+          deleteProject();
+          setExistingProject(null);
+        }
+        setStartupMode('new_story');
+      }
+    }
+  }, [startupMode, existingProject, run]);
+
+  // Handle keyboard for startup selection
+  useInput((input, key) => {
+    if (!started && taskType === 'video' && startupMode === 'select_action') {
+      if (key.upArrow) {
+        setStartupSelectedIndex(prev => Math.max(0, prev - 1));
+      } else if (key.downArrow) {
+        setStartupSelectedIndex(prev => Math.min(1, prev + 1));
+      } else if (key.return) {
+        handleStartupSelect(startupSelectedIndex);
+      } else if (input === '1') {
+        handleStartupSelect(0);
+      } else if (input === '2') {
+        handleStartupSelect(1);
+      }
+    }
+  }, { isActive: !started && taskType === 'video' && startupMode === 'select_action' });
+
   // Show welcome screen if not started
   if (!started) {
     const subtitle = taskType === 'video'
@@ -314,6 +378,56 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       : 'Generic CLI Agent Framework';
 
     if (taskType === 'video') {
+      // Still checking for project
+      if (startupMode === 'checking') {
+        return (
+          <Box flexDirection="column" padding={1}>
+            <Banner subtitle={subtitle} />
+            <Box paddingX={2}>
+              <Text dimColor>Checking for existing project...</Text>
+            </Box>
+          </Box>
+        );
+      }
+
+      // Existing project found - show selection
+      if (startupMode === 'select_action' && existingProject) {
+        return (
+          <Box flexDirection="column" padding={1}>
+            <Banner subtitle={subtitle} />
+
+            <Box flexDirection="column" marginBottom={1} paddingX={2}>
+              <Text bold color="cyan">Existing Project Found!</Text>
+              <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} paddingY={1}>
+                <Text bold color="yellow">📁 {existingProject.title || 'Untitled Project'}</Text>
+                <Text dimColor>ID: {existingProject.id}</Text>
+                <Text dimColor>Phase: {existingProject.currentPhase}</Text>
+                <Text dimColor>Characters: {existingProject.characters.length}</Text>
+                <Text dimColor>Scenes: {existingProject.scenes.length}</Text>
+              </Box>
+            </Box>
+
+            <Box flexDirection="column" marginBottom={1} paddingX={2}>
+              <Text bold>What would you like to do?</Text>
+              <Box marginTop={1} flexDirection="column">
+                <Text color={startupSelectedIndex === 0 ? 'cyan' : undefined}>
+                  {startupSelectedIndex === 0 ? '>' : ' '} 1. Continue existing project
+                </Text>
+                <Text color={startupSelectedIndex === 1 ? 'red' : undefined}>
+                  {startupSelectedIndex === 1 ? '>' : ' '} 2. Start new project
+                  <Text dimColor> (will delete current project)</Text>
+                </Text>
+              </Box>
+            </Box>
+
+            <Box paddingX={2}>
+              <Text dimColor>Use ↑↓ or 1-2 to select, Enter to confirm. Type "exit" to quit.</Text>
+            </Box>
+          </Box>
+        );
+      }
+
+      // New story mode - show text input
       return (
         <Box flexDirection="column" padding={1}>
           <Banner subtitle={subtitle} />
@@ -321,14 +435,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           <Box flexDirection="column" marginBottom={1} paddingX={2}>
             <Text bold color="cyan">Welcome to Kshana!</Text>
             <Text dimColor>
-              I can help you create videos from your story ideas. Here's how it works:
+              Describe your story idea and I'll help you create a video.
             </Text>
-            <Box marginTop={1} flexDirection="column">
-              <Text>  1. Describe your story idea or concept</Text>
-              <Text>  2. I'll help develop characters, settings, and plot</Text>
-              <Text>  3. We'll create a storyboard together</Text>
-              <Text>  4. Generate images and videos for each scene</Text>
-            </Box>
           </Box>
 
           <Box marginBottom={1} paddingX={2}>

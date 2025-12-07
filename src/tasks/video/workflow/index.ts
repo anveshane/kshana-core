@@ -30,6 +30,7 @@ export {
   getProjectDir,
   getProjectFilePath,
   projectExists,
+  deleteProject,
   createProjectStructure,
   createProject,
   loadProject,

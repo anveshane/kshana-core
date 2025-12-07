@@ -3,7 +3,7 @@
  * Manages the .kshana directory structure and project.json index file.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import {
   type ProjectFile,
@@ -43,12 +43,32 @@ export function projectExists(basePath: string = process.cwd()): boolean {
 }
 
 /**
+ * Delete an existing project and all its files.
+ * Use with caution - this permanently removes all project data.
+ */
+export function deleteProject(basePath: string = process.cwd()): boolean {
+  const projectDir = getProjectDir(basePath);
+
+  if (!existsSync(projectDir)) {
+    return false;
+  }
+
+  try {
+    rmSync(projectDir, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Create the initial project directory structure.
+ * Only creates directories - plan files are created on first write.
  */
 export function createProjectStructure(basePath: string = process.cwd()): void {
   const projectDir = getProjectDir(basePath);
 
-  // Create main directories
+  // Create main directories only - no empty files
   const dirs = [
     projectDir,
     join(projectDir, 'plans'),
@@ -63,27 +83,14 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
     }
   }
 
-  // Create empty plan files for each phase
-  const planFiles = [
-    'plans/plot.md',
-    'plans/story.md',
-    'plans/scenes.md',
-    'plans/images.md',
-    'plans/video.md',
-  ];
-
-  for (const file of planFiles) {
-    const filePath = join(projectDir, file);
-    if (!existsSync(filePath)) {
-      writeFileSync(filePath, '', 'utf-8');
-    }
-  }
-
-  // Create empty assets manifest
+  // Create empty assets manifest (needed for asset tracking)
   const manifestPath = join(projectDir, 'assets', 'manifest.json');
   if (!existsSync(manifestPath)) {
     writeFileSync(manifestPath, JSON.stringify({ assets: [] }, null, 2), 'utf-8');
   }
+
+  // NOTE: Plan files (plot.md, story.md, etc.) are created on first write
+  // via writeProjectFile(), not here. This avoids empty files cluttering the project.
 }
 
 /**
