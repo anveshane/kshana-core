@@ -11,8 +11,12 @@ import { ToolCallDisplay } from './ToolCallDisplay.js';
 import { ScrollableHistory } from './ScrollableHistory.js';
 import { QuestionPrompt } from './QuestionPrompt.js';
 import { Spinner } from './Spinner.js';
+import { TruncatedText } from './TruncatedText.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { HistoryEntry, CurrentAction } from '../hooks/useAgent.js';
+
+/** Maximum lines to show before truncation */
+const MAX_LINES_TRUNCATED = 3;
 
 type AgentStatus = 'idle' | 'thinking' | 'waiting' | 'completed' | 'error';
 
@@ -55,6 +59,10 @@ interface AgentViewProps {
   questionOptions?: QuestionOption[];
   /** Currently selected option index for display */
   selectedOptionIndex?: number;
+  /** Auto-approve timeout in milliseconds */
+  autoApproveTimeoutMs?: number;
+  /** Callback when auto-approve timeout expires */
+  onAutoApproveTimeout?: () => void;
   showTodos?: boolean;
   history?: HistoryEntry[];
   currentAction?: CurrentAction | null;
@@ -76,6 +84,8 @@ export function AgentView({
   isConfirmation = false,
   questionOptions,
   selectedOptionIndex = 0,
+  autoApproveTimeoutMs,
+  onAutoApproveTimeout,
   showTodos = true,
   history = [],
   currentAction = null,
@@ -120,7 +130,11 @@ export function AgentView({
       {/* Streaming Text with Markdown rendering */}
       {(streamingText ?? isStreaming) && (
         <Box marginY={1}>
-          <MarkdownText text={streamingText ?? ''} isStreaming={isStreaming} />
+          {expanded ? (
+            <MarkdownText text={streamingText ?? ''} isStreaming={isStreaming} />
+          ) : (
+            <TruncatedText text={streamingText ?? ''} maxLines={MAX_LINES_TRUNCATED} expanded={false} />
+          )}
         </Box>
       )}
 
@@ -131,6 +145,8 @@ export function AgentView({
           options={questionOptions}
           isConfirmation={isConfirmation}
           selectedIndex={selectedOptionIndex}
+          autoApproveTimeoutMs={autoApproveTimeoutMs}
+          onTimeout={onAutoApproveTimeout}
         />
       )}
 
@@ -151,8 +167,8 @@ export function AgentView({
 
       {/* Todo List - at bottom, just above input */}
       {showTodos && todos.length > 0 && (
-        <Box marginTop={1}>
-          <TodoList todos={todos} compact />
+        <Box marginTop={1} borderStyle="single" borderColor="cyan" paddingX={1}>
+          <TodoList todos={todos} />
         </Box>
       )}
     </Box>

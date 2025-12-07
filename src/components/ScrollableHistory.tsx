@@ -1,11 +1,16 @@
 /**
  * Scrollable history component with keyboard navigation.
  * Allows users to scroll through history with arrow keys.
+ * Supports text truncation with Ctrl+O toggle.
  */
 import React from 'react';
 import { Text, Box, useInput } from 'ink';
 import { ToolCallDisplay, HIDDEN_TOOLS } from './ToolCallDisplay.js';
+import { TruncatedText } from './TruncatedText.js';
 import type { HistoryEntry } from '../hooks/useAgent.js';
+
+/** Maximum lines to show before truncation */
+const MAX_LINES_TRUNCATED = 3;
 
 interface ScrollableHistoryProps {
   history: HistoryEntry[];
@@ -113,7 +118,7 @@ export function ScrollableHistory({
           return (
             <Box key={entry.id} marginBottom={1} borderStyle="round" borderColor="green" paddingX={1} flexDirection="column">
               <Text color="green" bold>👤 You: </Text>
-              <Text wrap="wrap">{entry.content}</Text>
+              <TruncatedText text={entry.content} maxLines={MAX_LINES_TRUNCATED} expanded={expanded} />
             </Box>
           );
         }
@@ -134,7 +139,7 @@ export function ScrollableHistory({
         if (entry.type === 'agent_text') {
           return (
             <Box key={entry.id} marginBottom={1}>
-              <Text dimColor wrap="wrap">{entry.content}</Text>
+              <TruncatedText text={entry.content} maxLines={MAX_LINES_TRUNCATED} expanded={expanded} dimColor />
             </Box>
           );
         }

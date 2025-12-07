@@ -57,6 +57,7 @@ export const TodoList = React.memo(function TodoList({
   showHidden = false,
   compact = false,
 }: TodoListProps) {
+  // Always show ALL todos - never truncate per CLAUDE.md instructions
   const visibleTodos = showHidden ? todos : todos.filter(t => t.visible);
 
   if (visibleTodos.length === 0) {
@@ -72,21 +73,33 @@ export const TodoList = React.memo(function TodoList({
   // Find current task for highlighting
   const currentTask = visibleTodos.find(t => t.status === 'in_progress');
 
+  // Count stats for display
+  const completedCount = visibleTodos.filter(t => t.status === 'completed').length;
+  const pendingCount = visibleTodos.filter(t => t.status === 'pending').length;
+  const inProgressCount = visibleTodos.filter(t => t.status === 'in_progress').length;
+
   return (
     <Box flexDirection="column">
-      {!compact && (
+      {/* Header with count */}
+      <Box marginBottom={compact ? 0 : 1}>
+        <Text bold color="cyan">
+          📋 Todos ({completedCount}/{visibleTodos.length})
+        </Text>
+        {inProgressCount > 0 && (
+          <Text color="yellow"> • {inProgressCount} in progress</Text>
+        )}
+        {pendingCount > 0 && (
+          <Text dimColor> • {pendingCount} pending</Text>
+        )}
+      </Box>
+      {!compact && currentTask && (
         <Box marginBottom={1}>
-          <Text bold color="cyan">
-            Todo List
+          <Text dimColor>
+            Working on: {currentTask.content}
           </Text>
-          {currentTask && (
-            <Text dimColor>
-              {' '}
-              - Working on: {currentTask.content}
-            </Text>
-          )}
         </Box>
       )}
+      {/* Render ALL todos - no limit */}
       {visibleTodos.map((todo, i) => (
         <TodoItem key={todo.id} todo={todo} index={i} compact={compact} />
       ))}

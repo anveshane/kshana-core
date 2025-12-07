@@ -3,10 +3,24 @@
  * Optimized to reduce re-renders and flickering.
  */
 import React from 'react';
+import * as fs from 'fs';
+import * as path from 'path';
 import { GenericAgent, type AgentConfig, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig, type ToolDefinition } from '../core/llm/index.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { AgentEvent } from '../events/index.js';
+
+// Debug logging to file
+const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+function debugLog(message: string) {
+  try {
+    const timestamp = new Date().toISOString();
+    const logLine = `[${timestamp}] ${message}\n`;
+    fs.appendFileSync(DEBUG_LOG_PATH, logLine);
+  } catch {
+    // Ignore logging errors
+  }
+}
 
 type AgentStatus = 'idle' | 'thinking' | 'waiting' | 'completed' | 'error';
 
@@ -73,6 +87,8 @@ interface AgentState {
   question: string | undefined;
   isConfirmation: boolean;
   questionOptions: QuestionOption[] | undefined;
+  /** Auto-approve timeout in milliseconds (for countdown display) */
+  autoApproveTimeoutMs: number | undefined;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
@@ -83,7 +99,7 @@ type AgentAction =
   | { type: 'SET_STATUS'; status: AgentStatus }
   | { type: 'SET_TODOS'; todos: ExpandableTodoItem[] }
   | { type: 'APPEND_OUTPUT'; text: string }
-  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[] }
+  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[]; autoApproveTimeoutMs?: number }
   | { type: 'CLEAR_QUESTION' }
   | { type: 'SET_ERROR'; error: string }
   | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown> }
@@ -109,6 +125,7 @@ const initialState: AgentState = {
   question: undefined,
   isConfirmation: false,
   questionOptions: undefined,
+  autoApproveTimeoutMs: undefined,
   error: undefined,
   recentTools: [],
   history: [],
@@ -135,12 +152,13 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         question: action.question,
         isConfirmation: action.isConfirmation,
         questionOptions: action.options,
+        autoApproveTimeoutMs: action.autoApproveTimeoutMs,
         status: 'waiting',
         currentAction: null,
       };
 
     case 'CLEAR_QUESTION':
-      return { ...state, question: undefined, isConfirmation: false, questionOptions: undefined };
+      return { ...state, question: undefined, isConfirmation: false, questionOptions: undefined, autoApproveTimeoutMs: undefined };
 
     case 'SET_ERROR':
       return { ...state, error: action.error, status: 'error', currentAction: null };
@@ -314,6 +332,7 @@ interface UseAgentReturn {
   question: string | undefined;
   isConfirmation: boolean;
   questionOptions: QuestionOption[] | undefined;
+  autoApproveTimeoutMs: number | undefined;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
@@ -393,11 +412,19 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('question', event => {
+      debugLog(`[useAgent] Question event received: ${JSON.stringify({
+        question: event.question?.slice(0, 50),
+        optionsCount: event.options?.length,
+        options: event.options,
+        isConfirmation: event.isConfirmation,
+        autoApproveTimeoutMs: event.autoApproveTimeoutMs,
+      }, null, 2)}`);
       dispatch({
         type: 'SET_QUESTION',
         question: event.question,
         isConfirmation: event.isConfirmation,
         options: event.options,
+        autoApproveTimeoutMs: event.autoApproveTimeoutMs,
       });
       onEvent?.(event);
     });
@@ -443,6 +470,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
             type: 'SET_QUESTION',
             question: result.pendingQuestion ?? '',
             isConfirmation: result.isConfirmation ?? false,
+            options: result.options,
+            autoApproveTimeoutMs: result.autoApproveTimeoutMs,
           });
         } else if (result.status === 'completed') {
           dispatch({ type: 'SET_STATUS', status: 'completed' });
@@ -491,6 +520,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
             type: 'SET_QUESTION',
             question: result.pendingQuestion ?? '',
             isConfirmation: result.isConfirmation ?? false,
+            options: result.options,
+            autoApproveTimeoutMs: result.autoApproveTimeoutMs,
           });
         } else if (result.status === 'completed') {
           dispatch({ type: 'SET_STATUS', status: 'completed' });
@@ -541,6 +572,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     question: state.question,
     isConfirmation: state.isConfirmation,
     questionOptions: state.questionOptions,
+    autoApproveTimeoutMs: state.autoApproveTimeoutMs,
     error: state.error,
     recentTools: state.recentTools,
     history: state.history,

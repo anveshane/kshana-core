@@ -1,6 +1,7 @@
 /**
  * Question display component - shows question and options (display only).
  * Input is handled by the global UnifiedInput component.
+ * Supports countdown timer for auto-approve timeout.
  */
 import React from 'react';
 import { Text, Box } from 'ink';
@@ -16,18 +17,66 @@ interface QuestionPromptProps {
   isConfirmation?: boolean;
   /** Currently selected index (controlled by parent) */
   selectedIndex?: number;
+  /** Auto-approve timeout in milliseconds */
+  autoApproveTimeoutMs?: number;
+  /** Callback when timeout expires */
+  onTimeout?: () => void;
 }
 
 /**
  * Display-only component for showing questions and options.
  * Does not handle any input - that's done by UnifiedInput.
+ * Shows countdown timer if autoApproveTimeoutMs is set.
  */
 export function QuestionPrompt({
   question,
   options,
   isConfirmation = false,
   selectedIndex = 0,
+  autoApproveTimeoutMs,
+  onTimeout,
 }: QuestionPromptProps) {
+  const [remainingSeconds, setRemainingSeconds] = React.useState<number | null>(
+    autoApproveTimeoutMs ? Math.ceil(autoApproveTimeoutMs / 1000) : null
+  );
+
+  // Countdown timer effect
+  React.useEffect(() => {
+    if (!autoApproveTimeoutMs || autoApproveTimeoutMs <= 0) {
+      setRemainingSeconds(null);
+      return;
+    }
+
+    setRemainingSeconds(Math.ceil(autoApproveTimeoutMs / 1000));
+
+    const interval = setInterval(() => {
+      setRemainingSeconds(prev => {
+        if (prev === null || prev <= 1) {
+          clearInterval(interval);
+          onTimeout?.();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [autoApproveTimeoutMs, onTimeout]);
+
+  // Countdown display component
+  const CountdownDisplay = () => {
+    if (remainingSeconds === null || remainingSeconds <= 0) return null;
+
+    const color = remainingSeconds <= 5 ? 'red' : remainingSeconds <= 10 ? 'yellow' : 'green';
+
+    return (
+      <Box marginTop={1}>
+        <Text dimColor>Auto-approve in </Text>
+        <Text color={color} bold>{remainingSeconds}s</Text>
+        <Text dimColor> (press any key to respond)</Text>
+      </Box>
+    );
+  };
   // Render multiple choice options
   if (options && options.length > 0) {
     return (
@@ -56,6 +105,7 @@ export function QuestionPrompt({
             );
           })}
         </Box>
+        <CountdownDisplay />
       </Box>
     );
   }
@@ -75,6 +125,7 @@ export function QuestionPrompt({
           <Text color="red" bold>n</Text>
           <Text dimColor> for No</Text>
         </Box>
+        <CountdownDisplay />
       </Box>
     );
   }
@@ -86,6 +137,7 @@ export function QuestionPrompt({
         <Text color="cyan" bold>?</Text>
         <Text bold> {question}</Text>
       </Box>
+      <CountdownDisplay />
     </Box>
   );
 }

@@ -1,9 +1,10 @@
 /**
  * Text input component with cursor support and multi-line display.
  * Supports arrow keys for cursor movement and full text editing.
+ * Uses useStdin for raw input to properly handle paste events.
  */
 import React from 'react';
-import { Text, Box, useInput } from 'ink';
+import { Text, Box, useStdin } from 'ink';
 
 interface TextInputProps {
   /** Current value */
@@ -33,6 +34,7 @@ export function TextInput({
 }: TextInputProps) {
   const [cursorPos, setCursorPos] = React.useState(value.length);
   const [lastEscapeTime, setLastEscapeTime] = React.useState(0);
+  const { stdin, setRawMode } = useStdin();
 
   // Keep cursor in bounds when value changes externally
   React.useEffect(() => {
@@ -41,15 +43,26 @@ export function TextInput({
     }
   }, [value, cursorPos]);
 
-  useInput(
-    (input, key) => {
-      if (!focus) return;
+  // Set raw mode when focused
+  React.useEffect(() => {
+    if (focus) {
+      setRawMode(true);
+      return () => setRawMode(false);
+    }
+  }, [focus, setRawMode]);
 
-      // Double Escape to clear input
-      if (key.escape) {
+  // Handle raw stdin data - receives full paste as single chunk
+  React.useEffect(() => {
+    if (!focus || !stdin) return;
+
+    const handleData = (data: Buffer) => {
+      const input = data.toString();
+
+      // Check for special keys by their escape sequences
+      // Escape key
+      if (input === '\x1b' || input === '\u001b') {
         const now = Date.now();
         if (now - lastEscapeTime < 500) {
-          // Double escape within 500ms - clear input
           onChange('');
           setCursorPos(0);
           setLastEscapeTime(0);
@@ -59,34 +72,38 @@ export function TextInput({
         return;
       }
 
-      if (key.return) {
+      // Enter/Return
+      if (input === '\r' || input === '\n') {
         onSubmit?.(value);
         return;
       }
 
-      if (key.leftArrow) {
+      // Left arrow
+      if (input === '\x1b[D') {
         setCursorPos(prev => Math.max(0, prev - 1));
         return;
       }
 
-      if (key.rightArrow) {
+      // Right arrow
+      if (input === '\x1b[C') {
         setCursorPos(prev => Math.min(value.length, prev + 1));
         return;
       }
 
-      // Home - go to start
-      if (key.ctrl && input === 'a') {
+      // Ctrl+A - go to start
+      if (input === '\x01') {
         setCursorPos(0);
         return;
       }
 
-      // End - go to end
-      if (key.ctrl && input === 'e') {
+      // Ctrl+E - go to end
+      if (input === '\x05') {
         setCursorPos(value.length);
         return;
       }
 
-      if (key.backspace || key.delete) {
+      // Backspace (0x7f or 0x08)
+      if (input === '\x7f' || input === '\x08') {
         if (cursorPos > 0) {
           const newValue = value.slice(0, cursorPos - 1) + value.slice(cursorPos);
           onChange(newValue);
@@ -95,8 +112,8 @@ export function TextInput({
         return;
       }
 
-      // Delete key (forward delete)
-      if (key.ctrl && input === 'd') {
+      // Ctrl+D - forward delete
+      if (input === '\x04') {
         if (cursorPos < value.length) {
           const newValue = value.slice(0, cursorPos) + value.slice(cursorPos + 1);
           onChange(newValue);
@@ -104,30 +121,40 @@ export function TextInput({
         return;
       }
 
-      // Regular character input - filter out control characters and newlines
-      if (input && !key.ctrl && !key.meta) {
-        // Skip if input is only control characters (like bare newline)
-        if (/^[\r\n\t\x00-\x1F\x7F]+$/.test(input)) {
-          return;
-        }
-        // Replace newlines and all control characters with spaces for single-line input
-        // Also collapse multiple spaces into one
-        const sanitized = input
-          .replace(/[\r\n\t\x00-\x1F\x7F]/g, ' ')  // Replace control chars with space
-          .replace(/\s+/g, ' ')  // Collapse multiple spaces
-          .trim();  // Remove leading/trailing spaces from this chunk
-        if (sanitized) {
-          // Add space before if cursor is not at start and value doesn't end with space
-          const needsSpaceBefore = cursorPos > 0 && value[cursorPos - 1] !== ' ' && sanitized[0] !== ' ';
-          const toInsert = needsSpaceBefore ? ' ' + sanitized : sanitized;
-          const newValue = value.slice(0, cursorPos) + toInsert + value.slice(cursorPos);
-          onChange(newValue);
-          setCursorPos(prev => prev + toInsert.length);
-        }
+      // Ctrl+C - exit (let Ink handle this)
+      if (input === '\x03') {
+        return;
       }
-    },
-    { isActive: focus }
-  );
+
+      // Skip other escape sequences (arrows, function keys, etc.)
+      if (input.startsWith('\x1b')) {
+        return;
+      }
+
+      // Regular text input (including paste) - sanitize for single line
+      // Replace newlines and control chars with spaces, collapse multiple spaces
+      let sanitized = input
+        .replace(/[\r\n\t\x00-\x1F\x7F]/g, ' ')  // Replace control chars with space
+        .replace(/\s+/g, ' ');  // Collapse multiple spaces
+
+      // Only trim if it's a multi-character paste (preserve single space keystrokes)
+      if (sanitized.length > 1) {
+        sanitized = sanitized.trim();
+      }
+
+      if (sanitized) {
+        // Just insert the text directly
+        const newValue = value.slice(0, cursorPos) + sanitized + value.slice(cursorPos);
+        onChange(newValue);
+        setCursorPos(prev => prev + sanitized.length);
+      }
+    };
+
+    stdin.on('data', handleData);
+    return () => {
+      stdin.off('data', handleData);
+    };
+  }, [focus, stdin, value, cursorPos, onChange, onSubmit, lastEscapeTime]);
 
   // Sanitize value for display - remove any control characters that might have snuck through
   const sanitizeForDisplay = (text: string): string => {

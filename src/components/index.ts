@@ -11,3 +11,4 @@ export { QuestionPrompt, type QuestionOption } from './QuestionPrompt.js';
 export { UnifiedInput, type InputMode } from './UnifiedInput.js';
 export { AgentView } from './AgentView.js';
 export { Banner, KSHANA_ASCII } from './Banner.js';
+export { TruncatedText, getLineCount, wouldTruncate } from './TruncatedText.js';

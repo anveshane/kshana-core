@@ -1,10 +1,15 @@
 /**
  * Tool call display component - Claude Code style.
+ * Supports text truncation with Ctrl+O toggle.
  */
 import React from 'react';
 import { Text, Box } from 'ink';
 import { Spinner } from './Spinner.js';
 import { MarkdownText } from './MarkdownText.js';
+import { TruncatedText } from './TruncatedText.js';
+
+/** Maximum lines to show before truncation */
+const MAX_LINES_TRUNCATED = 3;
 
 interface ToolCallDisplayProps {
   toolName: string;
@@ -218,7 +223,8 @@ function renderThinkTool(
 function renderDispatchAgentTool(
   args: Record<string, unknown> | undefined,
   status: ToolCallDisplayProps['status'],
-  result?: unknown
+  result?: unknown,
+  expanded?: boolean
 ): React.ReactNode {
   const task = args?.['task'] as string | undefined;
   const context = args?.['context'] as string | undefined;
@@ -250,19 +256,23 @@ function renderDispatchAgentTool(
       <Box flexDirection="column" marginLeft={2} marginTop={1}>
         <Box flexDirection="column">
           <Text bold color="yellow">Task: </Text>
-          <Text wrap="wrap">{task || 'No task specified'}</Text>
+          <TruncatedText text={task || 'No task specified'} maxLines={MAX_LINES_TRUNCATED} expanded={expanded} />
         </Box>
         {context && (
           <Box flexDirection="column" marginTop={1}>
             <Text bold color="yellow">Context: </Text>
-            <Text dimColor wrap="wrap">{context}</Text>
+            <TruncatedText text={context} maxLines={MAX_LINES_TRUNCATED} expanded={expanded} dimColor />
           </Box>
         )}
         {plan && !isExecuting && (
           <Box flexDirection="column" marginTop={1}>
             <Text bold color="green">Plan:</Text>
             <Box marginTop={1} marginLeft={1} flexDirection="column">
-              <MarkdownText text={plan} />
+              {expanded ? (
+                <MarkdownText text={plan} />
+              ) : (
+                <TruncatedText text={plan} maxLines={MAX_LINES_TRUNCATED} expanded={false} />
+              )}
             </Box>
           </Box>
         )}
@@ -346,7 +356,7 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
 
   // Special rendering for dispatch_agent (planning) tool
   if (toolName === 'dispatch_agent') {
-    return renderDispatchAgentTool(args, status, result);
+    return renderDispatchAgentTool(args, status, result, expanded);
   }
 
   // Special rendering for project state tools

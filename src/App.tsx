@@ -12,6 +12,7 @@ import { createDefaultToolRegistry } from './core/tools/index.js';
 import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT } from './tasks/video/index.js';
 import type { LLMClientConfig } from './core/llm/index.js';
 import type { AgentConfig } from './core/agent/index.js';
+import * as uiLogger from './utils/uiLogger.js';
 
 type TaskType = 'generic' | 'video';
 
@@ -27,6 +28,16 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   const [started, setStarted] = React.useState(false);
   const [expandedView, setExpandedView] = React.useState(false);
   const [selectedOptionIndex, setSelectedOptionIndex] = React.useState(0);
+  // Track when user selected "Provide feedback" and needs to enter actual feedback
+  const [awaitingFeedbackText, setAwaitingFeedbackText] = React.useState(false);
+
+  // Initialize UI logger on mount
+  React.useEffect(() => {
+    uiLogger.initUILog();
+    return () => {
+      uiLogger.logSessionEnd();
+    };
+  }, []);
 
   // Create tool registry based on task type
   const tools = React.useMemo(() => {
@@ -47,6 +58,37 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Compute effective agent name based on task type
   const agentName = agentConfig?.name ?? (taskType === 'video' ? 'kshana-video' : 'kshana-ink');
 
+  // Event handler for UI logging
+  const handleAgentEvent = React.useCallback((event: import('./events/index.js').AgentEvent) => {
+    switch (event.type) {
+      case 'agent_status':
+        uiLogger.logStatusChange(event.status, event.agentName);
+        break;
+      case 'agent_text':
+        if (event.text) {
+          uiLogger.logAgentText(event.text);
+        }
+        break;
+      case 'streaming_text':
+        if (event.done && event.chunk !== undefined) {
+          // Log completed streaming text - but we'll handle this via state change instead
+        }
+        break;
+      case 'tool_call':
+        uiLogger.logToolStart(event.toolName, event.arguments);
+        break;
+      case 'tool_result':
+        uiLogger.logToolComplete(event.toolName, event.result, undefined, event.isError);
+        break;
+      case 'question':
+        uiLogger.logQuestion(event.question, event.options, event.isConfirmation, event.autoApproveTimeoutMs);
+        break;
+      case 'todo_update':
+        uiLogger.logTodoUpdate(event.todos.map(t => ({ content: t.content, status: t.status })));
+        break;
+    }
+  }, []);
+
   const {
     status,
     todos,
@@ -56,6 +98,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     question,
     isConfirmation,
     questionOptions,
+    autoApproveTimeoutMs,
     error,
     recentTools,
     history,
@@ -72,6 +115,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       name: agentName,
       customPrompt,
     },
+    onEvent: handleAgentEvent,
   });
 
   // Handle global keyboard shortcuts
@@ -90,6 +134,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   React.useEffect(() => {
     if (initialTask && !started) {
       setStarted(true);
+      uiLogger.logUserInput(initialTask, 'task');
       void run(initialTask);
     }
   }, [initialTask, started, run]);
@@ -102,6 +147,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         return;
       }
       setStarted(true);
+      uiLogger.logUserInput(task, 'task');
       // Task is added to history by useAgent
       void run(task);
     },
@@ -116,11 +162,50 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         exit();
         return;
       }
+
+      // Check if user selected "Provide feedback" option - switch to text mode
+      if (input.toLowerCase() === 'provide feedback') {
+        setAwaitingFeedbackText(true);
+        return;
+      }
+
+      uiLogger.logUserInput(input, 'response');
       // User response is added to history by useAgent
       void respond(input);
     },
     [respond, exit]
   );
+
+  // Handle feedback text submission (after user selected "Provide feedback")
+  const handleFeedbackSubmit = React.useCallback(
+    (feedbackText: string) => {
+      // Always allow exit
+      if (feedbackText.toLowerCase() === 'exit' || feedbackText.toLowerCase() === 'quit') {
+        exit();
+        return;
+      }
+
+      // Clear feedback mode and send the feedback
+      setAwaitingFeedbackText(false);
+      uiLogger.logUserInput(feedbackText, 'feedback');
+      // Send the actual feedback text to the agent
+      void respond(feedbackText);
+    },
+    [respond, exit]
+  );
+
+  // Handle auto-approve timeout
+  const handleAutoApproveTimeout = React.useCallback(() => {
+    // Auto-approve by responding with "yes" or the first option
+    let selectedOption = 'yes';
+    if (isConfirmation) {
+      selectedOption = 'yes';
+    } else if (questionOptions && questionOptions.length > 0) {
+      selectedOption = questionOptions[0]?.label ?? 'yes';
+    }
+    uiLogger.logAutoApprove(selectedOption);
+    void respond(selectedOption);
+  }, [respond, isConfirmation, questionOptions]);
 
   // Handle user input during execution (inject into running agent)
   const handleInjectedInput = React.useCallback(
@@ -147,13 +232,40 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     [handleTaskSubmit, exit]
   );
 
-  // Reset selection when options change - MUST be before any conditional returns
+  // Reset selection and feedback mode when options change - MUST be before any conditional returns
   React.useEffect(() => {
     setSelectedOptionIndex(0);
+    setAwaitingFeedbackText(false);
   }, [questionOptions]);
+
+  // Track previous streaming state to log when streaming completes
+  const prevIsStreamingRef = React.useRef(false);
+  React.useEffect(() => {
+    // Log streaming text when it completes (was streaming, now not)
+    if (prevIsStreamingRef.current && !isStreaming && streamingText) {
+      uiLogger.logStreamingComplete(streamingText);
+    }
+    prevIsStreamingRef.current = isStreaming;
+  }, [isStreaming, streamingText]);
+
+  // Log errors when they occur
+  React.useEffect(() => {
+    if (error) {
+      uiLogger.logError(error);
+    }
+  }, [error]);
 
   // Determine input mode and handler based on status
   const inputConfig = React.useMemo((): { mode: InputMode; handler: (value: string) => void; hint?: string } => {
+    // If awaiting feedback text, always use text mode
+    if (awaitingFeedbackText) {
+      return {
+        mode: 'text',
+        handler: handleFeedbackSubmit,
+        hint: 'Enter your feedback and press Enter',
+      };
+    }
+
     switch (status) {
       case 'thinking':
         return {
@@ -192,7 +304,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           hint: 'Enter a task or type "exit" to quit',
         };
     }
-  }, [status, questionOptions, isConfirmation, handleInjectedInput, handleUserInput, handleNewTask]);
+  }, [status, questionOptions, isConfirmation, awaitingFeedbackText, handleInjectedInput, handleUserInput, handleFeedbackSubmit, handleNewTask]);
 
   // Show welcome screen if not started
   if (!started) {
@@ -261,12 +373,14 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         status={status}
         statusMessage={error}
         todos={todos}
-        streamingText={streamingText || output}
+        streamingText={streamingText}
         isStreaming={isStreaming}
-        question={question}
+        question={awaitingFeedbackText ? 'Please enter your feedback:' : question}
         isConfirmation={isConfirmation}
-        questionOptions={questionOptions}
+        questionOptions={awaitingFeedbackText ? undefined : questionOptions}
         selectedOptionIndex={selectedOptionIndex}
+        autoApproveTimeoutMs={awaitingFeedbackText ? undefined : autoApproveTimeoutMs}
+        onAutoApproveTimeout={handleAutoApproveTimeout}
         showTodos
         history={history}
         currentAction={currentAction}
@@ -278,8 +392,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         <UnifiedInput
           mode={inputConfig.mode}
           onSubmit={inputConfig.handler}
-          options={questionOptions}
-          prompt={status === 'waiting' ? '?' : '>'}
+          options={awaitingFeedbackText ? undefined : questionOptions}
+          prompt={status === 'waiting' || awaitingFeedbackText ? '?' : '>'}
           hint={inputConfig.hint}
           onSelectionChange={setSelectedOptionIndex}
         />

@@ -8,11 +8,25 @@
  * - Sub-agent dispatch with isolated state
  */
 import { nanoid } from 'nanoid';
+import * as fs from 'fs';
+import * as path from 'path';
 import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
 import { buildSystemMessage, buildPlanningPrompt, buildImageGenerationPrompt, wrapUserTask } from '../prompts/index.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
+
+// Debug logging to file
+const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+function debugLog(message: string) {
+  try {
+    const timestamp = new Date().toISOString();
+    const logLine = `[${timestamp}] ${message}\n`;
+    fs.appendFileSync(DEBUG_LOG_PATH, logLine);
+  } catch {
+    // Ignore logging errors
+  }
+}
 
 /**
  * Tool categories - simple tools execute immediately, complex require confirmation.
@@ -211,6 +225,7 @@ export class GenericAgent extends TypedEventEmitter {
             question: planResultObj['question'] as string,
             isConfirmation: false,
             options: planResultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: planResultObj['autoApproveTimeoutMs'] as number | undefined,
           });
 
           // Note: Plan is shown via ToolCallDisplay, don't duplicate in output
@@ -220,6 +235,7 @@ export class GenericAgent extends TypedEventEmitter {
             todos: this.todoManager.getTodos(),
             pendingQuestion: planResultObj['question'] as string,
             options: planResultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: planResultObj['autoApproveTimeoutMs'] as number | undefined,
           };
         }
 
@@ -255,6 +271,7 @@ export class GenericAgent extends TypedEventEmitter {
             question: imageResultObj['question'] as string,
             isConfirmation: false,
             options: imageResultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: imageResultObj['autoApproveTimeoutMs'] as number | undefined,
           });
 
           // Prompt is shown via ToolCallDisplay
@@ -264,6 +281,7 @@ export class GenericAgent extends TypedEventEmitter {
             todos: this.todoManager.getTodos(),
             pendingQuestion: imageResultObj['question'] as string,
             options: imageResultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: imageResultObj['autoApproveTimeoutMs'] as number | undefined,
           };
         }
 
@@ -380,6 +398,7 @@ export class GenericAgent extends TypedEventEmitter {
             todos: this.todoManager.getTodos(),
             pendingQuestion: resultObj['question'] as string,
             options: resultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
           };
         }
 
@@ -544,12 +563,23 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = true;
         this.pendingQuestion = resultObj['question'] as string;
 
-        // Emit question event with options
+        // Emit question event with options and auto-approve timeout
+        const questionOptions = resultObj['options'] as Array<{ label: string; description?: string }>;
+        const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
+        debugLog(`[GenericAgent] dispatch_agent result: ${JSON.stringify({
+          status: resultObj['status'],
+          question: (resultObj['question'] as string)?.slice(0, 50),
+          optionsCount: questionOptions?.length,
+          options: questionOptions,
+          autoApproveTimeoutMs: questionTimeout,
+        }, null, 2)}`);
+        debugLog(`[GenericAgent] dispatch_agent emitting question event with options: ${JSON.stringify(questionOptions)}`);
         this.emit({
           type: 'question',
           question: resultObj['question'] as string,
           isConfirmation: false,
-          options: resultObj['options'] as Array<{ label: string; description?: string }>,
+          options: questionOptions,
+          autoApproveTimeoutMs: questionTimeout,
         });
 
         // Emit status change
@@ -595,12 +625,13 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = true;
         this.pendingQuestion = resultObj['question'] as string;
 
-        // Emit question event with options
+        // Emit question event with options and auto-approve timeout
         this.emit({
           type: 'question',
           question: resultObj['question'] as string,
           isConfirmation: false,
           options: resultObj['options'] as Array<{ label: string; description?: string }>,
+          autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
         });
 
         // Emit status change
@@ -842,7 +873,7 @@ export class GenericAgent extends TypedEventEmitter {
         ? 'I\'ve created a plan for this task. Would you like to proceed or provide feedback?'
         : 'I\'ve updated the plan based on your feedback. Would you like to proceed or provide more feedback?';
 
-      return {
+      const verificationResult = {
         status: 'awaiting_verification',
         plan: this.planningState.currentPlan,
         task: this.planningState.task,
@@ -852,7 +883,16 @@ export class GenericAgent extends TypedEventEmitter {
           { label: 'Accept plan', description: 'Proceed with this plan and start execution' },
           { label: 'Provide feedback', description: 'Modify the plan with your input' },
         ],
+        autoApproveTimeoutMs: 15000, // 15 seconds countdown for plan approval
       };
+      debugLog(`[GenericAgent] continuePlanningLoop returning: ${JSON.stringify({
+        status: verificationResult.status,
+        question: verificationResult.question?.slice(0, 50),
+        optionsCount: verificationResult.options.length,
+        options: verificationResult.options,
+        autoApproveTimeoutMs: verificationResult.autoApproveTimeoutMs,
+      }, null, 2)}`);
+      return verificationResult;
     } catch (error) {
       this.planningState = null;
       return {
@@ -1104,6 +1144,7 @@ Your classification:`;
           { label: 'Generate image', description: 'Proceed with this prompt and generate the image' },
           { label: 'Provide feedback', description: 'Modify the prompt with your input' },
         ],
+        autoApproveTimeoutMs: 15000, // 15 seconds countdown for image prompt approval
       };
     } catch (error) {
       this.imageGenState = null;
@@ -1330,12 +1371,27 @@ Your classification:`;
   /**
    * Handle ask_user tool - pauses execution.
    * Supports confirmation, free-form, and multiple choice questions.
+   * Supports auto_approve_timeout_ms for automatic approval after timeout.
+   *
+   * Default behavior: All non-confirmation questions get default options and 15s auto-approve.
    */
   private handleAskUser(toolCall: ToolCall): GenericAgentResult | null {
     const args = toolCall.arguments;
     const question = args['question'] as string;
     const isConfirmation = (args['is_confirmation'] as boolean | undefined) ?? false;
-    const options = args['options'] as Array<{ label: string; description?: string }> | undefined;
+    const providedOptions = args['options'] as Array<{ label: string; description?: string }> | undefined;
+    const providedTimeout = args['auto_approve_timeout_ms'] as number | undefined;
+
+    // Default options for non-confirmation questions without explicit options
+    const DEFAULT_OPTIONS: Array<{ label: string; description?: string }> = [
+      { label: 'Proceed', description: 'Continue with the suggested approach' },
+      { label: 'Provide feedback', description: 'Enter your own response or modifications' },
+    ];
+    const DEFAULT_AUTO_APPROVE_TIMEOUT_MS = 15000; // 15 seconds
+
+    // Use provided options or defaults (only for non-confirmation questions)
+    const options = isConfirmation ? undefined : (providedOptions ?? DEFAULT_OPTIONS);
+    const autoApproveTimeoutMs = isConfirmation ? undefined : (providedTimeout ?? DEFAULT_AUTO_APPROVE_TIMEOUT_MS);
 
     this.waitingForUser = true;
     this.pendingQuestion = question;
@@ -1345,6 +1401,7 @@ Your classification:`;
       question,
       is_confirmation: isConfirmation,
       options: options ?? null,
+      auto_approve_timeout_ms: autoApproveTimeoutMs ?? null,
     };
 
     this.messages.push({
@@ -1354,13 +1411,21 @@ Your classification:`;
       name: toolCall.name,
     });
 
-    // Emit question event with options
+    // Emit question event with options and timeout
+    debugLog(`[GenericAgent] ask_user emitting question: ${JSON.stringify({
+      question: question?.slice(0, 50),
+      optionsCount: options?.length,
+      options,
+      isConfirmation,
+      autoApproveTimeoutMs,
+    }, null, 2)}`);
     this.emit({
       type: 'question',
       question,
       isConfirmation,
       options,
       data: args['data'] as Record<string, unknown> | undefined,
+      autoApproveTimeoutMs,
     });
 
     return {
@@ -1370,6 +1435,7 @@ Your classification:`;
       pendingQuestion: question,
       isConfirmation,
       options,
+      autoApproveTimeoutMs,
     };
   }
 

@@ -93,6 +93,8 @@ export interface QuestionEvent {
   /** Options for multiple choice questions (max 4, last should allow custom input) */
   options?: QuestionOption[];
   data?: Record<string, unknown>;
+  /** Auto-approve timeout in milliseconds (for countdown display) */
+  autoApproveTimeoutMs?: number;
 }
 
 /**
