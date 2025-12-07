@@ -106,24 +106,39 @@ export function TextInput({
 
       // Regular character input - filter out control characters and newlines
       if (input && !key.ctrl && !key.meta) {
+        // Skip if input is only control characters (like bare newline)
+        if (/^[\r\n\t\x00-\x1F\x7F]+$/.test(input)) {
+          return;
+        }
         // Replace newlines and all control characters with spaces for single-line input
         // Also collapse multiple spaces into one
         const sanitized = input
           .replace(/[\r\n\t\x00-\x1F\x7F]/g, ' ')  // Replace control chars with space
-          .replace(/\s+/g, ' ');  // Collapse multiple spaces
+          .replace(/\s+/g, ' ')  // Collapse multiple spaces
+          .trim();  // Remove leading/trailing spaces from this chunk
         if (sanitized) {
-          const newValue = value.slice(0, cursorPos) + sanitized + value.slice(cursorPos);
+          // Add space before if cursor is not at start and value doesn't end with space
+          const needsSpaceBefore = cursorPos > 0 && value[cursorPos - 1] !== ' ' && sanitized[0] !== ' ';
+          const toInsert = needsSpaceBefore ? ' ' + sanitized : sanitized;
+          const newValue = value.slice(0, cursorPos) + toInsert + value.slice(cursorPos);
           onChange(newValue);
-          setCursorPos(prev => prev + sanitized.length);
+          setCursorPos(prev => prev + toInsert.length);
         }
       }
     },
     { isActive: focus }
   );
 
+  // Sanitize value for display - remove any control characters that might have snuck through
+  const sanitizeForDisplay = (text: string): string => {
+    return text.replace(/[\x00-\x1F\x7F]/g, '');
+  };
+
   // Render the text with cursor
   const renderWithCursor = () => {
-    if (!value && placeholder) {
+    const displayValue = sanitizeForDisplay(value);
+
+    if (!displayValue && placeholder) {
       return (
         <Text dimColor>
           {showCursor && <Text backgroundColor="cyan"> </Text>}
@@ -132,9 +147,10 @@ export function TextInput({
       );
     }
 
-    const beforeCursor = value.slice(0, cursorPos);
-    const atCursor = value[cursorPos] || ' ';
-    const afterCursor = value.slice(cursorPos + 1);
+    const displayCursorPos = Math.min(cursorPos, displayValue.length);
+    const beforeCursor = displayValue.slice(0, displayCursorPos);
+    const atCursor = displayValue[displayCursorPos] || ' ';
+    const afterCursor = displayValue.slice(displayCursorPos + 1);
 
     return (
       <Text>
