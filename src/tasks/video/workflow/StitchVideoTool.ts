@@ -192,13 +192,11 @@ async function processStitchingJob(jobId: string): Promise<void> {
     },
   });
 
-  // Update project's final video reference
+  // Update project's video phase to mark stitching complete
   const project = loadProject();
   if (project) {
-    // Mark video stitching as complete
-    project.phases.video_stitching.status = 'completed';
-    project.phases.video_stitching.completedAt = Date.now();
-    saveProject(project);
+    // Note: The video phase handles stitching - no separate phase needed
+    // The caller should update the video phase status when all stitching is done
   }
 }
 

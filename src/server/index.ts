@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyCors from '@fastify/cors';
 import { registerRoutes, type RouteOptions } from './routes.js';
+import { resetLLMLogger } from '../core/llm/index.js';
 import type { ConversationManager } from './ConversationManager.js';
 import type { WebSocketHandler } from './WebSocketHandler.js';
 
@@ -38,6 +39,9 @@ export async function createServer(
     port = 3000,
     cors = { origin: true, methods: ['GET', 'POST', 'DELETE'] },
   } = serverConfig;
+
+  // Reset LLM logger (creates fresh log file for this session)
+  resetLLMLogger();
 
   // Create Fastify instance
   const app = Fastify({

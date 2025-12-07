@@ -16,3 +16,9 @@ export {
   validateLLMConfig,
   type LLMProvider,
 } from './config.js';
+export {
+  LLMLogger,
+  getLLMLogger,
+  resetLLMLogger,
+  type LLMLoggerConfig,
+} from './LLMLogger.js';

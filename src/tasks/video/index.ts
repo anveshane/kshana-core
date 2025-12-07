@@ -222,6 +222,7 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
 
 /**
  * Build the custom prompt for the workflow agent based on current phase.
+ * Uses simplified phases: plot → story → scenes → images → video
  */
 function buildWorkflowAgentPrompt(
   project: ReturnType<typeof loadProject>,
@@ -242,6 +243,21 @@ You are a video generation orchestrator using a state-based workflow approach.
 ## Project Location
 All project files are stored in the \`.kshana/\` directory in the current working directory.
 
+## Workflow Phases
+plot → story → scenes → images → video
+
+## How to Proceed
+1. Call \`read_project\` to get the current project state and next action instructions
+2. The \`next_action\` field will tell you exactly what to do
+3. Follow the planner stage cycle: planning → verify → refining → complete
+
+## Planner Stage Cycle
+Each phase goes through these stages:
+- **PLANNING**: Create the initial plan, write to plan file
+- **VERIFY**: Present plan to user for approval (auto-approve after 15s if no response)
+- **REFINING**: Apply user feedback if provided, update plan
+- **COMPLETE**: Plan approved, mark phase complete and transition
+
 ## Your Current Task
 You are in the **${phaseConfig.displayName}** phase.
 
@@ -249,110 +265,81 @@ You are in the **${phaseConfig.displayName}** phase.
 
   // Add phase-specific instructions
   switch (currentPhase) {
-    case WorkflowPhase.PROJECT_INIT:
+    case WorkflowPhase.PLOT:
       prompt += `
-### Project Initialization
-1. Read the user's input to understand their story idea
-2. Create the project structure if not already created
-3. Move to Story Discovery phase
+### Plot Development Phase
+1. Read the user's original input from \`read_project\`
+2. Create a plot outline with main story beats
+3. Write the plot to \`plans/plot.md\` using \`write_file\`
+4. Update planner stage to 'verify' using \`update_project\`
+5. Present plot to user with \`ask_user\`
+6. After approval, update planner stage to 'complete' and mark phase completed
 `;
       break;
 
-    case WorkflowPhase.STORY_DISCOVERY:
+    case WorkflowPhase.STORY:
       prompt += `
-### Story Discovery Phase
-1. Check if \`plans/story-discovery.md\` has content using \`read_file\`
-2. If empty, use \`dispatch_agent\` with:
-   - task: "Discover and develop the story based on user input"
-   - context: The user's original story idea and any clarifications
-3. The planner will write to \`plans/story-discovery.md\`
-4. Once plan is written, present it to user for approval
-5. After approval, update phase status to 'completed'
+### Story Development Phase
+1. Read \`plans/plot.md\` for context
+2. Expand the plot into a full story with:
+   - Character introductions and descriptions
+   - Setting descriptions
+   - Detailed narrative
+3. Write to \`plans/story.md\`
+4. Save characters using \`update_project\` action: 'add_character'
+5. Save settings using \`update_project\` action: 'add_setting'
+6. Follow the verify → complete cycle
 `;
       break;
 
-    case WorkflowPhase.CHARACTER_DESCRIPTIONS:
+    case WorkflowPhase.SCENES:
       prompt += `
-### Character Descriptions Phase
-1. Read \`plans/story-discovery.md\` for context
-2. Check if \`plans/characters.md\` has content
-3. If empty, use \`dispatch_agent\` with:
-   - task: "Create detailed visual descriptions for all characters"
-   - context: Story discovery content
-4. After plan approval, generate reference images for each character
-5. Use \`dispatch_image_agent\` with image_type: 'character_ref'
-6. Save character data using \`update_project\` action: 'add_character'
+### Scene Breakdown Phase
+1. Read \`plans/story.md\` for context
+2. Break the story into individual visual scenes
+3. Each scene should have:
+   - Scene number
+   - Description
+   - Characters involved
+   - Setting
+   - Action/movement
+4. Write to \`plans/scenes.md\`
+5. Register each scene using \`update_project\` action: 'add_scene'
+6. Follow the verify → complete cycle
 `;
       break;
 
-    case WorkflowPhase.THREE_ACTS:
+    case WorkflowPhase.IMAGES:
       prompt += `
-### 3-Act Structure Phase
-1. Read story and character plans for context
-2. Check if \`plans/three-acts.md\` has content
-3. If empty, use \`dispatch_agent\` for 3-act planning
-4. After approval, create scene breakdowns for each act:
-   - Dispatch planner for Act 1 → \`plans/act-1-scenes.md\`
-   - Dispatch planner for Act 2 → \`plans/act-2-scenes.md\`
-   - Dispatch planner for Act 3 → \`plans/act-3-scenes.md\`
-5. Register scenes using \`update_project\` action: 'add_scene'
+### Image Generation Phase
+1. Read \`plans/scenes.md\` and character/setting data
+2. Create image prompts for each scene
+3. Write image plan to \`plans/images.md\`
+4. After approval, generate images using \`generate_image\` or \`dispatch_image_agent\`
+5. Update scenes with imageArtifactId using \`update_project\` action: 'update_scene'
+6. Mark phase complete when all images are generated
 `;
       break;
 
-    case WorkflowPhase.STORYBOARD_IMAGES:
-      prompt += `
-### Storyboard Images Phase
-1. Read scene plans and character data
-2. Get character reference image IDs from \`read_project\`
-3. Check if \`plans/storyboard.md\` has content
-4. If empty, use \`dispatch_agent\` for storyboard planning
-5. After approval, generate images for each scene
-6. Use \`dispatch_image_agent\` with:
-   - image_type: 'scene'
-   - reference_images: character reference IDs
-7. Update scenes with imageArtifactId
-`;
-      break;
-
-    case WorkflowPhase.VIDEO_GENERATION:
+    case WorkflowPhase.VIDEO:
       prompt += `
 ### Video Generation Phase
-1. Read storyboard plan and get image artifact IDs
-2. Check if \`plans/video-generation.md\` has content
-3. If empty, use \`dispatch_agent\` for video planning
-4. After approval, generate videos for each scene
-5. Use \`generate_video\` with scene image artifacts
-6. Update scenes with videoArtifactId
-`;
-      break;
-
-    case WorkflowPhase.VIDEO_STITCHING:
-      prompt += `
-### Video Stitching Phase
-1. Get all video artifact IDs from project scenes
-2. Use \`stitch_videos\` tool with ordered video IDs
-3. The stitching follows: full = scene1 + scene2; full = full + scene3; ...
-4. Wait for stitching job to complete
-5. Mark phase complete when done
-`;
-      break;
-
-    case WorkflowPhase.FINAL_SIGNOFF:
-      prompt += `
-### Final Signoff Phase
-1. Read project summary
-2. Present final video to user
-3. Ask for approval
-4. If approved, mark workflow complete
-5. If changes needed, guide user to appropriate phase
+1. Read project to get all scene image artifact IDs
+2. Create video generation plan in \`plans/video.md\`
+3. After approval, generate videos for each scene using \`generate_video\`
+4. Update scenes with videoArtifactId
+5. Use \`stitch_videos\` to combine all scene videos
+6. Wait for stitching job to complete
+7. Mark phase complete
 `;
       break;
 
     case WorkflowPhase.COMPLETED:
       prompt += `
 ### Workflow Complete
-The video has been generated and approved.
-Offer to help with any final adjustments or start a new project.
+The video has been generated successfully.
+Present the final video location to the user.
+Offer to help with any adjustments or start a new project.
 `;
       break;
   }
@@ -363,7 +350,7 @@ Offer to help with any final adjustments or start a new project.
 ## Important: Checkpoint Required
 This phase involves expensive operations (${phaseConfig.displayName}).
 You MUST get user approval before starting generation.
-Use \`ask_user\` with is_confirmation: true before proceeding.
+Use \`ask_user\` to confirm before proceeding with generation.
 `;
   }
 

@@ -1,9 +1,9 @@
 /**
- * Question prompt component with support for multiple choice options.
- * Displays options as selectable buttons with keyboard navigation.
+ * Question display component - shows question and options (display only).
+ * Input is handled by the global UnifiedInput component.
  */
 import React from 'react';
-import { Text, Box, useInput } from 'ink';
+import { Text, Box } from 'ink';
 
 export interface QuestionOption {
   label: string;
@@ -14,106 +14,21 @@ interface QuestionPromptProps {
   question: string;
   options?: QuestionOption[];
   isConfirmation?: boolean;
-  onSelect: (response: string) => void;
+  /** Currently selected index (controlled by parent) */
+  selectedIndex?: number;
 }
 
+/**
+ * Display-only component for showing questions and options.
+ * Does not handle any input - that's done by UnifiedInput.
+ */
 export function QuestionPrompt({
   question,
   options,
   isConfirmation = false,
-  onSelect,
+  selectedIndex = 0,
 }: QuestionPromptProps) {
-  const [selectedIndex, setSelectedIndex] = React.useState(0);
-  const [customInput, setCustomInput] = React.useState('');
-  const [showCustomInput, setShowCustomInput] = React.useState(false);
-
-  // Handle keyboard input
-  useInput((input, key) => {
-    if (showCustomInput) {
-      // Custom input mode
-      if (key.return) {
-        if (customInput.trim()) {
-          onSelect(customInput.trim());
-        }
-      } else if (key.escape) {
-        setShowCustomInput(false);
-        setCustomInput('');
-      } else if (key.backspace || key.delete) {
-        setCustomInput(prev => prev.slice(0, -1));
-      } else if (input && !key.ctrl && !key.meta) {
-        setCustomInput(prev => prev + input);
-      }
-      return;
-    }
-
-    if (options && options.length > 0) {
-      // Multiple choice mode
-      if (key.upArrow || input === 'k') {
-        setSelectedIndex(prev => (prev > 0 ? prev - 1 : options.length - 1));
-      } else if (key.downArrow || input === 'j') {
-        setSelectedIndex(prev => (prev < options.length - 1 ? prev + 1 : 0));
-      } else if (key.return) {
-        const selected = options[selectedIndex];
-        if (selected) {
-          // Check if this is the custom input option (usually the last one)
-          const isCustomOption = selected.label.toLowerCase().includes('feedback') ||
-            selected.label.toLowerCase().includes('custom') ||
-            selected.label.toLowerCase().includes('other');
-
-          if (isCustomOption) {
-            setShowCustomInput(true);
-          } else {
-            onSelect(selected.label);
-          }
-        }
-      } else if (input >= '1' && input <= '4') {
-        const idx = parseInt(input, 10) - 1;
-        if (idx < options.length) {
-          setSelectedIndex(idx);
-          const selected = options[idx];
-          if (selected) {
-            const isCustomOption = selected.label.toLowerCase().includes('feedback') ||
-              selected.label.toLowerCase().includes('custom') ||
-              selected.label.toLowerCase().includes('other');
-
-            if (isCustomOption) {
-              setShowCustomInput(true);
-            } else {
-              onSelect(selected.label);
-            }
-          }
-        }
-      }
-    } else if (isConfirmation) {
-      // Confirmation mode (yes/no)
-      if (input === 'y' || input === 'Y') {
-        onSelect('yes');
-      } else if (input === 'n' || input === 'N') {
-        onSelect('no');
-      }
-    }
-  });
-
-  // Render custom input mode
-  if (showCustomInput) {
-    return (
-      <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginY={1}>
-        <Box marginBottom={1}>
-          <Text color="cyan" bold>Your feedback:</Text>
-        </Box>
-        <Box>
-          <Text color="green">&gt; </Text>
-          <Text>{customInput}</Text>
-          <Text color="cyan">|</Text>
-        </Box>
-        <Box marginTop={1}>
-          <Text dimColor>Press Enter to submit, Esc to go back</Text>
-        </Box>
-      </Box>
-    );
-  }
-
-  // Render multiple choice
+  // Render multiple choice options
   if (options && options.length > 0) {
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginY={1}>
@@ -141,15 +56,11 @@ export function QuestionPrompt({
             );
           })}
         </Box>
-
-        <Box marginTop={1}>
-          <Text dimColor>Use ↑↓ or 1-4 to select, Enter to confirm</Text>
-        </Box>
       </Box>
     );
   }
 
-  // Render confirmation (yes/no)
+  // Render confirmation (yes/no) question
   if (isConfirmation) {
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} marginY={1}>
@@ -168,12 +79,12 @@ export function QuestionPrompt({
     );
   }
 
-  // Fallback - shouldn't normally render this way
+  // Render free-form question
   return (
     <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginY={1}>
       <Box>
         <Text color="cyan" bold>?</Text>
-        <Text> {question}</Text>
+        <Text bold> {question}</Text>
       </Box>
     </Box>
   );

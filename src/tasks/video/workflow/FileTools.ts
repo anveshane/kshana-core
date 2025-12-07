@@ -11,14 +11,19 @@ import {
   readProjectFile,
   writeProjectFile,
   getProjectSummary,
+  getStateTransitionPrompt,
   projectExists,
   createProject,
   saveCharacter,
   saveSetting,
   addAsset,
+  addScene,
   updatePhaseStatus,
+  updatePlannerStage,
+  transitionToNextPhase,
 } from './ProjectManager.js';
-import type { ProjectFile, CharacterData, SettingData, AssetInfo, PhaseStatus } from './types.js';
+import type { ProjectFile, CharacterData, SettingData, SceneData, AssetInfo, PhaseStatus } from './types.js';
+import { PlannerStage } from './types.js';
 
 /**
  * Read file tool - reads content from a project file.
@@ -28,7 +33,7 @@ export const readFileTool: ToolDefinition = createTool(
   `Read content from a project file within the .kshana directory.
 
 Use this to read:
-- Plan files: plans/story-discovery.md, plans/characters.md, plans/three-acts.md, etc.
+- Plan files: plans/plot.md, plans/story.md, plans/scenes.md, plans/images.md, plans/video.md
 - Character files: characters/[name].json
 - Setting files: settings/[name].json
 - Asset manifest: assets/manifest.json
@@ -39,7 +44,7 @@ Returns the file content as a string, or an error if file doesn't exist.`,
     properties: {
       file_path: {
         type: 'string',
-        description: 'Relative path within .kshana directory (e.g., "plans/story-discovery.md")',
+        description: 'Relative path within .kshana directory (e.g., "plans/plot.md")',
       },
     },
     required: ['file_path'],
@@ -81,16 +86,16 @@ export const writeFileTool: ToolDefinition = createTool(
   `Write content to a project file within the .kshana directory.
 
 Use this to write:
-- Plan files: plans/story-discovery.md, plans/characters.md, etc.
+- Plan files: plans/plot.md, plans/story.md, plans/scenes.md, etc.
 - Any other text files within the project
 
-For structured data (characters, settings, assets), prefer using update_project instead.`,
+For structured data (characters, settings, assets, scenes), prefer using update_project instead.`,
   {
     type: 'object',
     properties: {
       file_path: {
         type: 'string',
-        description: 'Relative path within .kshana directory (e.g., "plans/story-discovery.md")',
+        description: 'Relative path within .kshana directory (e.g., "plans/plot.md")',
       },
       content: {
         type: 'string',
@@ -133,28 +138,34 @@ For structured data (characters, settings, assets), prefer using update_project 
  */
 export const readProjectTool: ToolDefinition = createTool(
   'read_project',
-  `Read the project.json index file to check phase statuses and project metadata.
+  `Read the project.json index file to check phase statuses, planner stages, and project metadata.
 
 Returns:
 - Project ID and title
 - Original user input
+- Current phase and planner stage
 - Phase statuses (pending, in_progress, completed)
-- List of characters, settings, and assets
-- Current workflow phase
+- List of characters, settings, scenes, and assets
+- State transition instructions (what to do next)
 
-Use this at the start of each turn to understand the project state.`,
+Use this at the start of each turn to understand the project state and what action to take.`,
   {
     type: 'object',
     properties: {
       include_summary: {
         type: 'boolean',
-        description: 'If true, include a human-readable summary (default: false)',
+        description: 'If true, include a human-readable summary (default: true)',
+      },
+      include_transition_prompt: {
+        type: 'boolean',
+        description: 'If true, include instructions for what to do next (default: true)',
       },
     },
     required: [],
   },
   async (args) => {
-    const includeSummary = args['include_summary'] as boolean;
+    const includeSummary = args['include_summary'] !== false;
+    const includeTransitionPrompt = args['include_transition_prompt'] !== false;
 
     if (!projectExists()) {
       return {
@@ -181,6 +192,10 @@ Use this at the start of each turn to understand the project state.`,
       result['summary'] = getProjectSummary();
     }
 
+    if (includeTransitionPrompt) {
+      result['next_action'] = getStateTransitionPrompt();
+    }
+
     return result;
   }
 );
@@ -196,11 +211,13 @@ Actions:
 - "create": Create a new project with the given original_input
 - "set_title": Set the project title
 - "update_phase": Update a phase status (pending, in_progress, completed)
+- "update_planner_stage": Update planner stage (planning, verify, refining, complete)
+- "transition_phase": Automatically transition to next phase if current is complete
 - "add_character": Add a character to the project
 - "add_setting": Add a setting to the project
+- "add_scene": Add a scene to the project
 - "add_asset": Register a generated asset
-- "add_scene": Add a storyboard scene
-- "update_scene": Update an existing storyboard scene`,
+- "update_scene": Update an existing scene`,
   {
     type: 'object',
     properties: {
@@ -210,10 +227,12 @@ Actions:
           'create',
           'set_title',
           'update_phase',
+          'update_planner_stage',
+          'transition_phase',
           'add_character',
           'add_setting',
-          'add_asset',
           'add_scene',
+          'add_asset',
           'update_scene',
         ],
         description: 'The action to perform',
@@ -241,6 +260,7 @@ Actions:
             status: 'success',
             message: 'Project created',
             project_id: project.id,
+            current_phase: project.currentPhase,
           };
         }
 
@@ -268,13 +288,43 @@ Actions:
           return { status: 'success', message: `Phase ${phase} updated to ${status}` };
         }
 
+        case 'update_planner_stage': {
+          const project = loadProject();
+          if (!project) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const phase = data['phase'] as keyof ProjectFile['phases'];
+          const stage = data['stage'] as PlannerStage;
+          if (!phase || !stage) {
+            return { status: 'error', error: 'phase and stage are required' };
+          }
+          const validStages = ['planning', 'verify', 'refining', 'complete'];
+          if (!validStages.includes(stage)) {
+            return { status: 'error', error: `Invalid stage. Must be one of: ${validStages.join(', ')}` };
+          }
+          updatePlannerStage(project, phase, stage);
+          return { status: 'success', message: `Planner stage for ${phase} updated to ${stage}` };
+        }
+
+        case 'transition_phase': {
+          const project = loadProject();
+          if (!project) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const result = transitionToNextPhase(project);
+          return {
+            status: 'success',
+            transitioned: result.transitioned,
+            reason: result.reason,
+            current_phase: result.project.currentPhase,
+          };
+        }
+
         case 'add_character': {
           const character: CharacterData = {
             name: data['name'] as string,
             description: data['description'] as string,
             visualDescription: data['visual_description'] as string,
-            personality: data['personality'] as string | undefined,
-            backstory: data['backstory'] as string | undefined,
             referenceImageId: data['reference_image_id'] as string | undefined,
             referenceImagePath: data['reference_image_path'] as string | undefined,
           };
@@ -290,7 +340,6 @@ Actions:
             name: data['name'] as string,
             description: data['description'] as string,
             visualDescription: data['visual_description'] as string,
-            mood: data['mood'] as string | undefined,
             referenceImageId: data['reference_image_id'] as string | undefined,
             referenceImagePath: data['reference_image_path'] as string | undefined,
           };
@@ -299,6 +348,25 @@ Actions:
           }
           saveSetting(setting);
           return { status: 'success', message: `Setting "${setting.name}" added` };
+        }
+
+        case 'add_scene': {
+          const scene: SceneData = {
+            sceneNumber: data['scene_number'] as number,
+            description: data['description'] as string,
+            characters: data['characters'] as string[],
+            setting: data['setting'] as string,
+            action: data['action'] as string,
+            imagePrompt: data['image_prompt'] as string | undefined,
+            imageArtifactId: data['image_artifact_id'] as string | undefined,
+            videoArtifactId: data['video_artifact_id'] as string | undefined,
+            duration: data['duration'] as number | undefined,
+          };
+          if (scene.sceneNumber === undefined) {
+            return { status: 'error', error: 'scene_number is required for add_scene' };
+          }
+          addScene(scene);
+          return { status: 'success', message: `Scene ${scene.sceneNumber} added` };
         }
 
         case 'add_asset': {
@@ -316,43 +384,19 @@ Actions:
           return { status: 'success', message: `Asset "${asset.id}" added` };
         }
 
-        case 'add_scene': {
-          const project = loadProject();
-          if (!project) {
-            return { status: 'error', error: 'No project found' };
-          }
-          const scene = {
-            sceneNumber: data['scene_number'] as number,
-            act: data['act'] as 'intro' | 'middle' | 'climax',
-            description: data['description'] as string,
-            characters: data['characters'] as string[],
-            setting: data['setting'] as string,
-            action: data['action'] as string,
-            dialogue: data['dialogue'] as string | undefined,
-            imagePrompt: data['image_prompt'] as string | undefined,
-            imageArtifactId: data['image_artifact_id'] as string | undefined,
-            videoArtifactId: data['video_artifact_id'] as string | undefined,
-            duration: data['duration'] as number | undefined,
-          };
-          project.storyboard.push(scene);
-          project.storyboard.sort((a, b) => a.sceneNumber - b.sceneNumber);
-          saveProject(project);
-          return { status: 'success', message: `Scene ${scene.sceneNumber} added` };
-        }
-
         case 'update_scene': {
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
           const sceneNumber = data['scene_number'] as number;
-          const sceneIndex = project.storyboard.findIndex((s) => s.sceneNumber === sceneNumber);
+          const sceneIndex = project.scenes.findIndex((s) => s.sceneNumber === sceneNumber);
           if (sceneIndex === -1) {
             return { status: 'error', error: `Scene ${sceneNumber} not found` };
           }
           // Update only provided fields
           const updates = data['updates'] as Record<string, unknown>;
-          const scene = project.storyboard[sceneIndex];
+          const scene = project.scenes[sceneIndex];
           if (scene) {
             for (const [key, value] of Object.entries(updates)) {
               (scene as unknown as Record<string, unknown>)[key] = value;

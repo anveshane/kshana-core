@@ -6,19 +6,23 @@
 // Types
 export {
   WorkflowPhase,
+  PlannerStage,
   type PhaseStatus,
   type PhaseInfo,
-  type ThreeActsPhaseInfo,
   type CharacterData,
   type SettingData,
-  type StoryboardScene,
+  type SceneData,
   type AssetInfo,
   type ProjectFile,
   type PhaseConfig,
+  type StateTransitionResult,
   PHASE_CONFIGS,
   PHASE_ORDER,
   PROJECT_DIR,
   PROJECT_FILE,
+  AUTO_APPROVE_TIMEOUT_MS,
+  determineNextPhase,
+  canTransitionToNextPhase,
 } from './types.js';
 
 // Project Manager
@@ -31,8 +35,10 @@ export {
   loadProject,
   saveProject,
   getOrCreateProject,
-  updatePhaseStatus,
   getCurrentPhase,
+  updatePhaseStatus,
+  updatePlannerStage,
+  transitionToNextPhase,
   planFileHasContent,
   readProjectFile,
   writeProjectFile,
@@ -40,9 +46,11 @@ export {
   loadCharacter,
   saveSetting,
   loadSetting,
+  addScene,
   addAsset,
   getAssets,
   getProjectSummary,
+  getStateTransitionPrompt,
 } from './ProjectManager.js';
 
 // File Tools

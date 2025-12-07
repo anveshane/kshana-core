@@ -11,6 +11,7 @@ import type {
   GenerateOptions,
   LLMClientConfig,
 } from './types.js';
+import { getLLMLogger } from './LLMLogger.js';
 
 export class LLMClient {
   private client: OpenAI;
@@ -29,6 +30,10 @@ export class LLMClient {
    */
   async generate(options: GenerateOptions): Promise<LLMResponse> {
     const { messages, tools, temperature = 0.7, maxTokens } = options;
+    const logger = getLLMLogger();
+
+    // Log request
+    logger.logRequest(messages, tools, { temperature });
 
     const request: OpenAI.ChatCompletionCreateParamsNonStreaming = {
       model: this.model,
@@ -43,7 +48,12 @@ export class LLMClient {
     }
 
     const response = await this.client.chat.completions.create(request);
-    return this.parseResponse(response);
+    const result = this.parseResponse(response);
+
+    // Log response
+    logger.logResponse(result);
+
+    return result;
   }
 
   /**
@@ -53,6 +63,10 @@ export class LLMClient {
     options: Omit<GenerateOptions, 'stream'>
   ): AsyncGenerator<StreamChunk, void, unknown> {
     const { messages, tools, temperature = 0.7 } = options;
+    const logger = getLLMLogger();
+
+    // Log request
+    logger.logRequest(messages, tools, { temperature });
 
     const stream = await this.client.chat.completions.create({
       model: this.model,
@@ -62,15 +76,31 @@ export class LLMClient {
       stream: true,
     });
 
+    // Accumulate for final logging
+    let fullContent = '';
+    const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> = new Map();
+
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
+        fullContent += delta.content;
+        logger.logStreamChunk(delta.content);
         yield { content: delta.content, done: false };
       }
 
       if (delta?.tool_calls) {
         for (const tc of delta.tool_calls) {
+          // Accumulate tool calls for logging
+          let acc = toolCallAccumulators.get(tc.index);
+          if (!acc) {
+            acc = { id: tc.id ?? '', name: tc.function?.name ?? '', arguments: '' };
+            toolCallAccumulators.set(tc.index, acc);
+          }
+          if (tc.id) acc.id = tc.id;
+          if (tc.function?.name) acc.name = tc.function.name;
+          if (tc.function?.arguments) acc.arguments += tc.function.arguments;
+
           yield {
             toolCallDelta: {
               index: tc.index,
@@ -84,6 +114,33 @@ export class LLMClient {
       }
 
       if (chunk.choices[0]?.finish_reason) {
+        // Build final tool calls for logging
+        const toolCalls: ToolCall[] = [];
+        for (const [, acc] of toolCallAccumulators) {
+          if (acc.id && acc.name) {
+            try {
+              toolCalls.push({
+                id: acc.id,
+                name: acc.name,
+                arguments: acc.arguments ? JSON.parse(acc.arguments) : {},
+              });
+            } catch {
+              toolCalls.push({
+                id: acc.id,
+                name: acc.name,
+                arguments: {},
+              });
+            }
+          }
+        }
+
+        // Log complete response
+        logger.logStreamComplete({
+          content: fullContent || null,
+          toolCalls,
+          finishReason: chunk.choices[0].finish_reason,
+        });
+
         yield { done: true };
       }
     }

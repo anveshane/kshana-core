@@ -6,7 +6,7 @@ import 'dotenv/config';
 import React from 'react';
 import { render } from 'ink';
 import { App } from './App.js';
-import { getLLMConfig, getLLMProvider, validateLLMConfig, type LLMClientConfig } from './core/llm/index.js';
+import { getLLMConfig, getLLMProvider, validateLLMConfig, resetLLMLogger, type LLMClientConfig } from './core/llm/index.js';
 
 // Task type for agent specialization
 type TaskType = 'generic' | 'video';
@@ -217,6 +217,9 @@ if (server) {
   // CLI mode - clear screen and render the React Ink app
   // Clear the screen
   process.stdout.write('\x1B[2J\x1B[0f');
+
+  // Reset LLM logger (creates fresh log file for this session)
+  resetLLMLogger();
 
   // Render with fullscreen mode enabled
   render(<App llmConfig={llmConfig} initialTask={task} taskType={taskType} />);

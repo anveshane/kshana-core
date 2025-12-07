@@ -89,12 +89,13 @@ type AgentAction =
   | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown> }
   | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean }
   | { type: 'ADD_AGENT_TEXT'; text: string }
+  | { type: 'ADD_USER_INPUT'; text: string; isTask?: boolean }
   | { type: 'STREAM_CHUNK'; chunk: string }
   | { type: 'STREAM_DONE'; skipHistory?: boolean }
   | { type: 'SET_THINKING' }
   | { type: 'CLEAR_CURRENT_ACTION' }
   | { type: 'RESET' }
-  | { type: 'START_TASK' };
+  | { type: 'START_TASK'; task: string };
 
 const MAX_VISIBLE_TOOLS = 15;
 const MAX_HISTORY = 50; // Limit history to prevent memory issues
@@ -221,6 +222,20 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         ],
       };
 
+    case 'ADD_USER_INPUT':
+      return {
+        ...state,
+        history: [
+          ...state.history.slice(-MAX_HISTORY + 1),
+          {
+            id: `user-${Date.now()}`,
+            type: 'user_input',
+            content: action.text,
+            timestamp: Date.now(),
+          },
+        ],
+      };
+
     case 'STREAM_CHUNK':
       return {
         ...state,
@@ -270,6 +285,16 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         streamingText: '',
         isStreaming: false,
         currentAction: { type: 'thinking', startTime: Date.now() },
+        // Add the task to history
+        history: [
+          ...state.history.slice(-MAX_HISTORY + 1),
+          {
+            id: `task-${Date.now()}`,
+            type: 'user_input',
+            content: action.task,
+            timestamp: Date.now(),
+          },
+        ],
       };
 
     case 'RESET':
@@ -404,7 +429,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
   // Run agent on a task
   const run = React.useCallback(
     async (task: string): Promise<GenericAgentResult> => {
-      dispatch({ type: 'START_TASK' });
+      dispatch({ type: 'START_TASK', task });
 
       const agent = createAgent();
 
@@ -451,6 +476,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         };
       }
 
+      // Add user response to history
+      dispatch({ type: 'ADD_USER_INPUT', text: userInput });
       dispatch({ type: 'SET_THINKING' });
       dispatch({ type: 'CLEAR_QUESTION' });
 

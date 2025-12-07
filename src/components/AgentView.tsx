@@ -9,7 +9,6 @@ import { TodoList } from './TodoList.js';
 import { MarkdownText } from './MarkdownText.js';
 import { ToolCallDisplay } from './ToolCallDisplay.js';
 import { ScrollableHistory } from './ScrollableHistory.js';
-import { UserInput } from './UserInput.js';
 import { QuestionPrompt } from './QuestionPrompt.js';
 import { Spinner } from './Spinner.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -54,9 +53,9 @@ interface AgentViewProps {
   question?: string;
   isConfirmation?: boolean;
   questionOptions?: QuestionOption[];
-  onUserInput?: (input: string) => void;
+  /** Currently selected option index for display */
+  selectedOptionIndex?: number;
   showTodos?: boolean;
-  conversationHistory?: ConversationMessage[];
   history?: HistoryEntry[];
   currentAction?: CurrentAction | null;
   maxHeight?: number;
@@ -66,31 +65,6 @@ interface AgentViewProps {
 // Maximum visible history items to prevent overflow
 const MAX_VISIBLE_HISTORY = 10;
 
-// Memoized conversation message to reduce re-renders
-const MemoizedConversationMessage = React.memo(function ConversationMessage({
-  msg,
-}: {
-  msg: ConversationMessage;
-}) {
-  if (msg.type === 'task') {
-    return (
-      <Box borderStyle="round" borderColor="green" paddingX={1} flexDirection="column">
-        <Text color="green" bold>📌 Task: </Text>
-        <Text wrap="wrap">{msg.content}</Text>
-      </Box>
-    );
-  }
-  if (msg.type === 'user') {
-    return (
-      <Box borderStyle="round" borderColor="green" paddingX={1} flexDirection="column">
-        <Text color="green" bold>👤 You: </Text>
-        <Text wrap="wrap">{msg.content}</Text>
-      </Box>
-    );
-  }
-  return null;
-});
-
 export function AgentView({
   agentName = 'Agent',
   status,
@@ -98,44 +72,24 @@ export function AgentView({
   todos,
   streamingText,
   isStreaming = false,
-  recentTools = [],
   question,
   isConfirmation = false,
   questionOptions,
-  onUserInput,
+  selectedOptionIndex = 0,
   showTodos = true,
-  conversationHistory = [],
   history = [],
   currentAction = null,
-  maxHeight,
   expanded = false,
 }: AgentViewProps) {
   // Determine if scroll is enabled (when agent is idle, completed, or waiting)
   const scrollEnabled = status === 'idle' || status === 'completed' || status === 'waiting';
-
-  // Only show the most recent conversation message
-  const recentConversation = conversationHistory.slice(-1);
 
   return (
     <Box flexDirection="column" paddingX={1}>
       {/* Status Bar */}
       <StatusBar agentName={agentName} status={status} message={statusMessage} />
 
-      {/* Todo List */}
-      {showTodos && todos.length > 0 && (
-        <Box marginBottom={1}>
-          <TodoList todos={todos} compact />
-        </Box>
-      )}
-
-      {/* Recent Task/User Message */}
-      {recentConversation.map((msg) => (
-        <Box key={msg.id} marginBottom={1}>
-          <MemoizedConversationMessage msg={msg} />
-        </Box>
-      ))}
-
-      {/* Scrollable History */}
+      {/* Scrollable History (includes user messages, tool calls, agent text) */}
       <ScrollableHistory
         history={history}
         maxVisible={MAX_VISIBLE_HISTORY}
@@ -170,34 +124,14 @@ export function AgentView({
         </Box>
       )}
 
-      {/* Question - with options or free-form */}
-      {question && status === 'waiting' && onUserInput && (
-        questionOptions && questionOptions.length > 0 ? (
-          <QuestionPrompt
-            question={question}
-            options={questionOptions}
-            isConfirmation={isConfirmation}
-            onSelect={onUserInput}
-          />
-        ) : isConfirmation ? (
-          <QuestionPrompt
-            question={question}
-            isConfirmation={true}
-            onSelect={onUserInput}
-          />
-        ) : (
-          <Box flexDirection="column" marginY={1}>
-            <Box marginBottom={1}>
-              <Text color="cyan" bold>?</Text>
-              <Text> {question}</Text>
-            </Box>
-            <UserInput
-              prompt=">"
-              onSubmit={onUserInput}
-              isConfirmation={false}
-            />
-          </Box>
-        )
+      {/* Question Display - input is handled by UnifiedInput in App.tsx */}
+      {question && status === 'waiting' && (
+        <QuestionPrompt
+          question={question}
+          options={questionOptions}
+          isConfirmation={isConfirmation}
+          selectedIndex={selectedOptionIndex}
+        />
       )}
 
       {/* Completed */}
@@ -212,6 +146,13 @@ export function AgentView({
         <Box marginTop={1}>
           <Text color="red" bold>✗ Error occurred</Text>
           {statusMessage && <Text color="red" dimColor> - {statusMessage}</Text>}
+        </Box>
+      )}
+
+      {/* Todo List - at bottom, just above input */}
+      {showTodos && todos.length > 0 && (
+        <Box marginTop={1}>
+          <TodoList todos={todos} compact />
         </Box>
       )}
     </Box>

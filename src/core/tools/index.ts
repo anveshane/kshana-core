@@ -13,6 +13,7 @@ export {
   thinkTool,
   askUserTool,
   dispatchAgentTool,
+  dispatchImageAgentTool,
   setTodosTool,
   updateTodoTool,
   addSubtasksTool,
@@ -26,6 +27,7 @@ import {
   thinkTool,
   askUserTool,
   dispatchAgentTool,
+  dispatchImageAgentTool,
   todoWriteTool,
 } from './builtin/index.js';
 

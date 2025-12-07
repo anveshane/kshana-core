@@ -109,6 +109,14 @@ export function ScrollableHistory({
 
       {/* Visible history items */}
       {visibleHistory.map((entry) => {
+        if (entry.type === 'user_input') {
+          return (
+            <Box key={entry.id} marginBottom={1} borderStyle="round" borderColor="green" paddingX={1} flexDirection="column">
+              <Text color="green" bold>👤 You: </Text>
+              <Text wrap="wrap">{entry.content}</Text>
+            </Box>
+          );
+        }
         if (entry.type === 'tool_completed' && entry.toolName) {
           return (
             <ToolCallDisplay

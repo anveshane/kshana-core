@@ -1,38 +1,45 @@
 /**
  * Type definitions for the state-based video generation workflow.
- * Defines phases, project structure, and configuration types.
+ * Simplified workflow: plot → story → scenes → images → video
  */
 
 /**
  * Video workflow phases in execution order.
+ * Simplified to focus only on: plot → story → scenes → images → video
  */
 export enum WorkflowPhase {
   /** Initial phase - analyze input and create project structure */
-  PROJECT_INIT = 'project_init',
+  PLOT = 'plot',
 
-  /** Gather story details - characters, scenes, story arc */
-  STORY_DISCOVERY = 'story_discovery',
+  /** Expand plot into full story with characters and settings */
+  STORY = 'story',
 
-  /** Create visual descriptions, generate reference images */
-  CHARACTER_DESCRIPTIONS = 'character_descriptions',
+  /** Break story into individual scenes */
+  SCENES = 'scenes',
 
-  /** Break story into Intro, Middle, Climax acts */
-  THREE_ACTS = 'three_acts',
+  /** Generate images for each scene */
+  IMAGES = 'images',
 
-  /** Generate storyboard images using character references */
-  STORYBOARD_IMAGES = 'storyboard_images',
-
-  /** Generate videos from storyboard */
-  VIDEO_GENERATION = 'video_generation',
-
-  /** Stitch videos sequentially */
-  VIDEO_STITCHING = 'video_stitching',
-
-  /** Final user review */
-  FINAL_SIGNOFF = 'final_signoff',
+  /** Generate and stitch videos */
+  VIDEO = 'video',
 
   /** Workflow complete */
   COMPLETED = 'completed',
+}
+
+/**
+ * Planner stage within a phase.
+ * Each planning agent goes through these stages.
+ */
+export enum PlannerStage {
+  /** Initial planning - creating the first draft */
+  PLANNING = 'planning',
+  /** Presenting plan to user for verification */
+  VERIFY = 'verify',
+  /** Refining based on user feedback */
+  REFINING = 'refining',
+  /** Plan approved, ready to execute */
+  COMPLETE = 'complete',
 }
 
 /**
@@ -46,22 +53,14 @@ export type PhaseStatus = 'pending' | 'in_progress' | 'completed';
 export interface PhaseInfo {
   /** Current status of the phase */
   status: PhaseStatus;
+  /** Current planner stage (if in_progress) */
+  plannerStage?: PlannerStage;
   /** Path to the plan file (relative to .kshana/) */
   planFile?: string;
   /** Timestamp when phase was completed */
   completedAt: number | null;
-}
-
-/**
- * Extended phase info for 3 Acts phase with sub-plan files.
- */
-export interface ThreeActsPhaseInfo extends PhaseInfo {
-  /** Plan files for each act's scene breakdown */
-  actPlanFiles: {
-    intro: string;
-    middle: string;
-    climax: string;
-  };
+  /** Number of refinement iterations */
+  refinementCount?: number;
 }
 
 /**
@@ -71,8 +70,6 @@ export interface CharacterData {
   name: string;
   description: string;
   visualDescription: string;
-  personality?: string;
-  backstory?: string;
   referenceImageId?: string;
   referenceImagePath?: string;
 }
@@ -84,22 +81,19 @@ export interface SettingData {
   name: string;
   description: string;
   visualDescription: string;
-  mood?: string;
   referenceImageId?: string;
   referenceImagePath?: string;
 }
 
 /**
- * Storyboard scene data.
+ * Scene data for video generation.
  */
-export interface StoryboardScene {
+export interface SceneData {
   sceneNumber: number;
-  act: 'intro' | 'middle' | 'climax';
   description: string;
   characters: string[];
   setting: string;
   action: string;
-  dialogue?: string;
   imagePrompt?: string;
   imageArtifactId?: string;
   videoArtifactId?: string;
@@ -111,7 +105,7 @@ export interface StoryboardScene {
  */
 export interface AssetInfo {
   id: string;
-  type: 'character_ref' | 'setting_ref' | 'storyboard' | 'video' | 'final_video';
+  type: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'final_video';
   path: string;
   createdAt: number;
   metadata?: Record<string, unknown>;
@@ -123,7 +117,7 @@ export interface AssetInfo {
 export interface ProjectFile {
   /** Unique project identifier */
   id: string;
-  /** Project title (set during story discovery) */
+  /** Project title */
   title: string;
   /** User's original input/prompt */
   originalInput: string;
@@ -132,24 +126,25 @@ export interface ProjectFile {
   /** Last update timestamp */
   updatedAt: number;
 
+  /** Current workflow phase */
+  currentPhase: WorkflowPhase;
+
   /** Phase status tracking */
   phases: {
-    story_discovery: PhaseInfo;
-    character_descriptions: PhaseInfo;
-    three_acts: ThreeActsPhaseInfo;
-    storyboard_images: PhaseInfo;
-    video_generation: PhaseInfo;
-    video_stitching: PhaseInfo;
-    final_signoff: PhaseInfo;
+    plot: PhaseInfo;
+    story: PhaseInfo;
+    scenes: PhaseInfo;
+    images: PhaseInfo;
+    video: PhaseInfo;
   };
 
   /** Character names (full data in characters/*.json) */
   characters: string[];
   /** Setting names (full data in settings/*.json) */
   settings: string[];
-  /** Storyboard scenes */
-  storyboard: StoryboardScene[];
-  /** Asset manifest (detailed info in assets/manifest.json) */
+  /** Scene data */
+  scenes: SceneData[];
+  /** Asset IDs (detailed info in assets/manifest.json) */
   assets: string[];
 }
 
@@ -163,8 +158,6 @@ export interface PhaseConfig {
   displayName: string;
   /** Next phase after completion */
   nextPhase: WorkflowPhase | null;
-  /** Does this phase require user approval before proceeding? */
-  requiresCheckpoint: boolean;
   /** Prompt file name (without .json) for planner agent */
   promptFile: string;
   /** Path to plan output file (relative to .kshana/) */
@@ -173,129 +166,92 @@ export interface PhaseConfig {
   allowedTools: string[];
   /** Is this an expensive phase (image/video generation)? */
   isExpensive: boolean;
+  /** Description of what this phase does */
+  description: string;
 }
 
 /**
  * Phase configurations map.
  */
 export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
-  [WorkflowPhase.PROJECT_INIT]: {
-    phase: WorkflowPhase.PROJECT_INIT,
-    displayName: 'Project Initialization',
-    nextPhase: WorkflowPhase.STORY_DISCOVERY,
-    requiresCheckpoint: false,
-    promptFile: 'project-init',
-    allowedTools: ['think', 'read_project', 'update_project', 'write_file'],
+  [WorkflowPhase.PLOT]: {
+    phase: WorkflowPhase.PLOT,
+    displayName: 'Plot Development',
+    nextPhase: WorkflowPhase.STORY,
+    promptFile: 'plot',
+    planOutputFile: 'plans/plot.md',
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project'],
     isExpensive: false,
+    description: 'Develop the basic plot outline from user input',
   },
-  [WorkflowPhase.STORY_DISCOVERY]: {
-    phase: WorkflowPhase.STORY_DISCOVERY,
-    displayName: 'Story Discovery',
-    nextPhase: WorkflowPhase.CHARACTER_DESCRIPTIONS,
-    requiresCheckpoint: true,
-    promptFile: 'story-discovery',
-    planOutputFile: 'plans/story-discovery.md',
-    allowedTools: ['think', 'ask_user', 'dispatch_agent', 'read_file', 'write_file', 'read_project', 'update_project'],
+  [WorkflowPhase.STORY]: {
+    phase: WorkflowPhase.STORY,
+    displayName: 'Story Development',
+    nextPhase: WorkflowPhase.SCENES,
+    promptFile: 'story',
+    planOutputFile: 'plans/story.md',
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project'],
     isExpensive: false,
+    description: 'Expand plot into full story with characters and settings',
   },
-  [WorkflowPhase.CHARACTER_DESCRIPTIONS]: {
-    phase: WorkflowPhase.CHARACTER_DESCRIPTIONS,
-    displayName: 'Character Descriptions',
-    nextPhase: WorkflowPhase.THREE_ACTS,
-    requiresCheckpoint: true,
-    promptFile: 'character-descriptions',
-    planOutputFile: 'plans/characters.md',
+  [WorkflowPhase.SCENES]: {
+    phase: WorkflowPhase.SCENES,
+    displayName: 'Scene Breakdown',
+    nextPhase: WorkflowPhase.IMAGES,
+    promptFile: 'scenes',
+    planOutputFile: 'plans/scenes.md',
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project'],
+    isExpensive: false,
+    description: 'Break story into individual visual scenes',
+  },
+  [WorkflowPhase.IMAGES]: {
+    phase: WorkflowPhase.IMAGES,
+    displayName: 'Image Generation',
+    nextPhase: WorkflowPhase.VIDEO,
+    promptFile: 'images',
+    planOutputFile: 'plans/images.md',
     allowedTools: [
       'think',
       'ask_user',
-      'dispatch_agent',
-      'dispatch_image_agent',
       'read_file',
       'write_file',
       'read_project',
       'update_project',
-      'generate_image',
-      'wait_for_job',
-    ],
-    isExpensive: true,
-  },
-  [WorkflowPhase.THREE_ACTS]: {
-    phase: WorkflowPhase.THREE_ACTS,
-    displayName: '3-Act Structure',
-    nextPhase: WorkflowPhase.STORYBOARD_IMAGES,
-    requiresCheckpoint: true,
-    promptFile: 'three-acts',
-    planOutputFile: 'plans/three-acts.md',
-    allowedTools: ['think', 'ask_user', 'dispatch_agent', 'read_file', 'write_file', 'read_project', 'update_project'],
-    isExpensive: false,
-  },
-  [WorkflowPhase.STORYBOARD_IMAGES]: {
-    phase: WorkflowPhase.STORYBOARD_IMAGES,
-    displayName: 'Storyboard Images',
-    nextPhase: WorkflowPhase.VIDEO_GENERATION,
-    requiresCheckpoint: true,
-    promptFile: 'storyboard-images',
-    planOutputFile: 'plans/storyboard.md',
-    allowedTools: [
-      'think',
-      'ask_user',
-      'dispatch_agent',
       'dispatch_image_agent',
-      'read_file',
-      'write_file',
-      'read_project',
-      'update_project',
       'generate_image',
       'wait_for_job',
     ],
     isExpensive: true,
+    description: 'Generate reference images and scene images',
   },
-  [WorkflowPhase.VIDEO_GENERATION]: {
-    phase: WorkflowPhase.VIDEO_GENERATION,
+  [WorkflowPhase.VIDEO]: {
+    phase: WorkflowPhase.VIDEO,
     displayName: 'Video Generation',
-    nextPhase: WorkflowPhase.VIDEO_STITCHING,
-    requiresCheckpoint: true,
-    promptFile: 'video-generation',
-    planOutputFile: 'plans/video-generation.md',
+    nextPhase: WorkflowPhase.COMPLETED,
+    promptFile: 'video',
+    planOutputFile: 'plans/video.md',
     allowedTools: [
       'think',
       'ask_user',
-      'dispatch_agent',
       'read_file',
       'write_file',
       'read_project',
       'update_project',
       'generate_video',
+      'stitch_videos',
       'wait_for_job',
     ],
     isExpensive: true,
-  },
-  [WorkflowPhase.VIDEO_STITCHING]: {
-    phase: WorkflowPhase.VIDEO_STITCHING,
-    displayName: 'Video Stitching',
-    nextPhase: WorkflowPhase.FINAL_SIGNOFF,
-    requiresCheckpoint: false,
-    promptFile: 'video-stitching',
-    allowedTools: ['think', 'read_file', 'read_project', 'update_project', 'stitch_videos'],
-    isExpensive: false,
-  },
-  [WorkflowPhase.FINAL_SIGNOFF]: {
-    phase: WorkflowPhase.FINAL_SIGNOFF,
-    displayName: 'Final Review',
-    nextPhase: WorkflowPhase.COMPLETED,
-    requiresCheckpoint: true,
-    promptFile: 'final-signoff',
-    allowedTools: ['think', 'ask_user', 'read_file', 'read_project'],
-    isExpensive: false,
+    description: 'Generate videos from images and stitch into final video',
   },
   [WorkflowPhase.COMPLETED]: {
     phase: WorkflowPhase.COMPLETED,
     displayName: 'Completed',
     nextPhase: null,
-    requiresCheckpoint: false,
     promptFile: 'completed',
-    allowedTools: [],
+    allowedTools: ['think', 'read_file', 'read_project'],
     isExpensive: false,
+    description: 'Workflow complete',
   },
 };
 
@@ -303,14 +259,11 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
  * Order of phases for iteration.
  */
 export const PHASE_ORDER: WorkflowPhase[] = [
-  WorkflowPhase.PROJECT_INIT,
-  WorkflowPhase.STORY_DISCOVERY,
-  WorkflowPhase.CHARACTER_DESCRIPTIONS,
-  WorkflowPhase.THREE_ACTS,
-  WorkflowPhase.STORYBOARD_IMAGES,
-  WorkflowPhase.VIDEO_GENERATION,
-  WorkflowPhase.VIDEO_STITCHING,
-  WorkflowPhase.FINAL_SIGNOFF,
+  WorkflowPhase.PLOT,
+  WorkflowPhase.STORY,
+  WorkflowPhase.SCENES,
+  WorkflowPhase.IMAGES,
+  WorkflowPhase.VIDEO,
   WorkflowPhase.COMPLETED,
 ];
 
@@ -323,3 +276,86 @@ export const PROJECT_DIR = '.kshana';
  * Project file name within PROJECT_DIR.
  */
 export const PROJECT_FILE = 'project.json';
+
+/**
+ * Auto-approve timeout in milliseconds (15 seconds).
+ * If user doesn't respond to ask_user within this time, assume approval.
+ */
+export const AUTO_APPROVE_TIMEOUT_MS = 15000;
+
+/**
+ * State transition rules - determines what phase to go to next.
+ */
+export interface StateTransitionResult {
+  /** Next phase to transition to */
+  nextPhase: WorkflowPhase;
+  /** Reason for the transition */
+  reason: string;
+  /** Whether this is an automatic transition (no user input needed) */
+  isAutomatic: boolean;
+}
+
+/**
+ * Determine the next state based on current project state.
+ */
+export function determineNextPhase(project: ProjectFile): StateTransitionResult {
+  const currentPhase = project.currentPhase;
+  const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+
+  // If current phase is completed, move to next
+  if (phaseInfo?.status === 'completed') {
+    const config = PHASE_CONFIGS[currentPhase];
+    if (config.nextPhase) {
+      return {
+        nextPhase: config.nextPhase,
+        reason: `${config.displayName} completed, moving to ${PHASE_CONFIGS[config.nextPhase].displayName}`,
+        isAutomatic: true,
+      };
+    }
+  }
+
+  // If current phase is in progress, stay in it
+  if (phaseInfo?.status === 'in_progress') {
+    return {
+      nextPhase: currentPhase,
+      reason: `${PHASE_CONFIGS[currentPhase].displayName} is in progress`,
+      isAutomatic: false,
+    };
+  }
+
+  // If current phase is pending, start it
+  if (phaseInfo?.status === 'pending') {
+    return {
+      nextPhase: currentPhase,
+      reason: `Starting ${PHASE_CONFIGS[currentPhase].displayName}`,
+      isAutomatic: true,
+    };
+  }
+
+  // Default: stay in current phase
+  return {
+    nextPhase: currentPhase,
+    reason: 'No transition needed',
+    isAutomatic: false,
+  };
+}
+
+/**
+ * Check if a phase can transition to the next phase.
+ */
+export function canTransitionToNextPhase(project: ProjectFile, phase: WorkflowPhase): boolean {
+  const phaseKey = phase as keyof typeof project.phases;
+  const phaseInfo = project.phases[phaseKey];
+
+  if (!phaseInfo) return false;
+
+  // Phase must be completed to transition
+  if (phaseInfo.status !== 'completed') return false;
+
+  // Planner stage must be complete
+  if (phaseInfo.plannerStage && phaseInfo.plannerStage !== PlannerStage.COMPLETE) {
+    return false;
+  }
+
+  return true;
+}

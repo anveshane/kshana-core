@@ -3,8 +3,9 @@
  */
 import React from 'react';
 import { Text, Box, useApp, useInput } from 'ink';
-import { AgentView, type ConversationMessage } from './components/AgentView.js';
+import { AgentView } from './components/AgentView.js';
 import { SimpleTextInput } from './components/TextInput.js';
+import { UnifiedInput, type InputMode } from './components/UnifiedInput.js';
 import { Banner } from './components/Banner.js';
 import { useAgent } from './hooks/useAgent.js';
 import { createDefaultToolRegistry } from './core/tools/index.js';
@@ -24,9 +25,8 @@ interface AppProps {
 export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' }: AppProps) {
   const { exit } = useApp();
   const [started, setStarted] = React.useState(false);
-  const [inputTask, setInputTask] = React.useState('');
-  const [conversationHistory, setConversationHistory] = React.useState<ConversationMessage[]>([]);
   const [expandedView, setExpandedView] = React.useState(false);
+  const [selectedOptionIndex, setSelectedOptionIndex] = React.useState(0);
 
   // Create tool registry based on task type
   const tools = React.useMemo(() => {
@@ -101,18 +101,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         exit();
         return;
       }
-      setInputTask(task);
       setStarted(true);
-      // Add task to conversation history
-      setConversationHistory(prev => [
-        ...prev,
-        {
-          id: `task-${Date.now()}`,
-          type: 'task',
-          content: task,
-          timestamp: Date.now(),
-        },
-      ]);
+      // Task is added to history by useAgent
       void run(task);
     },
     [run, exit]
@@ -126,16 +116,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         exit();
         return;
       }
-      // Add user response to conversation history
-      setConversationHistory(prev => [
-        ...prev,
-        {
-          id: `user-${Date.now()}`,
-          type: 'user',
-          content: input,
-          timestamp: Date.now(),
-        },
-      ]);
+      // User response is added to history by useAgent
       void respond(input);
     },
     [respond, exit]
@@ -148,17 +129,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         exit();
         return;
       }
-      // Add to conversation history
-      setConversationHistory(prev => [
-        ...prev,
-        {
-          id: `user-${Date.now()}`,
-          type: 'user',
-          content: input,
-          timestamp: Date.now(),
-        },
-      ]);
-      // Inject into running agent
+      // Inject into running agent (TODO: add to history if needed)
       injectInput(input);
     },
     [injectInput, exit]
@@ -175,6 +146,53 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     },
     [handleTaskSubmit, exit]
   );
+
+  // Reset selection when options change - MUST be before any conditional returns
+  React.useEffect(() => {
+    setSelectedOptionIndex(0);
+  }, [questionOptions]);
+
+  // Determine input mode and handler based on status
+  const inputConfig = React.useMemo((): { mode: InputMode; handler: (value: string) => void; hint?: string } => {
+    switch (status) {
+      case 'thinking':
+        return {
+          mode: 'text',
+          handler: handleInjectedInput,
+          hint: 'Type to add context or press Esc to stop. Ctrl+O to toggle view.',
+        };
+      case 'waiting':
+        // Determine mode based on question type
+        if (questionOptions && questionOptions.length > 0) {
+          return {
+            mode: 'selection',
+            handler: handleUserInput,
+            hint: 'Use ↑↓ to navigate, 1-9 to quick select, Enter to confirm, or type custom response',
+          };
+        }
+        if (isConfirmation) {
+          return {
+            mode: 'confirmation',
+            handler: handleUserInput,
+            hint: 'Press y for Yes, n for No',
+          };
+        }
+        return {
+          mode: 'text',
+          handler: handleUserInput,
+          hint: 'Type your response and press Enter',
+        };
+      case 'completed':
+      case 'idle':
+      case 'error':
+      default:
+        return {
+          mode: 'text',
+          handler: handleNewTask,
+          hint: 'Enter a task or type "exit" to quit',
+        };
+    }
+  }, [status, questionOptions, isConfirmation, handleInjectedInput, handleUserInput, handleNewTask]);
 
   // Show welcome screen if not started
   if (!started) {
@@ -234,35 +252,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     );
   }
 
-  // Determine the appropriate input handler and placeholder based on status
-  const getInputConfig = () => {
-    switch (status) {
-      case 'thinking':
-        return {
-          handler: handleInjectedInput,
-          prefix: '>',
-          placeholder: 'Type to add context or press Esc to stop...',
-        };
-      case 'waiting':
-        return {
-          handler: handleUserInput,
-          prefix: '?',
-          placeholder: 'Your response...',
-        };
-      case 'completed':
-      case 'idle':
-      case 'error':
-      default:
-        return {
-          handler: handleNewTask,
-          prefix: '>',
-          placeholder: 'Enter a task or type "exit"...',
-        };
-    }
-  };
-
-  const inputConfig = getInputConfig();
-
+  // Main agent view
   return (
     <Box flexDirection="column">
       {/* Main content area */}
@@ -273,31 +263,25 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         todos={todos}
         streamingText={streamingText || output}
         isStreaming={isStreaming}
-        recentTools={recentTools}
         question={question}
         isConfirmation={isConfirmation}
         questionOptions={questionOptions}
+        selectedOptionIndex={selectedOptionIndex}
         showTodos
-        conversationHistory={conversationHistory}
         history={history}
         currentAction={currentAction}
         expanded={expandedView}
-        onUserInput={handleUserInput}
       />
 
-      {/* Input prompt - always visible at bottom */}
-      <Box paddingX={1} paddingY={1} flexDirection="column" borderStyle="round" borderColor="cyan">
-        {status === 'thinking' ? (
-          <Text dimColor>Press Esc to stop. Ctrl+O to {expandedView ? 'collapse' : 'expand'}.</Text>
-        ) : status === 'waiting' ? (
-          <Text dimColor>Answer the question above:</Text>
-        ) : (
-          <Text dimColor>Enter your input:</Text>
-        )}
-        <SimpleTextInput
+      {/* Unified Input - always visible at bottom */}
+      <Box paddingX={1} paddingY={1} borderStyle="round" borderColor="cyan">
+        <UnifiedInput
+          mode={inputConfig.mode}
           onSubmit={inputConfig.handler}
-          prompt={inputConfig.prefix}
-          placeholder={inputConfig.placeholder}
+          options={questionOptions}
+          prompt={status === 'waiting' ? '?' : '>'}
+          hint={inputConfig.hint}
+          onSelectionChange={setSelectedOptionIndex}
         />
       </Box>
     </Box>

@@ -8,15 +8,17 @@ import { join } from 'path';
 import {
   type ProjectFile,
   type PhaseInfo,
-  type ThreeActsPhaseInfo,
   type PhaseStatus,
   type CharacterData,
   type SettingData,
+  type SceneData,
   type AssetInfo,
   WorkflowPhase,
-  PHASE_ORDER,
+  PlannerStage,
+  PHASE_CONFIGS,
   PROJECT_DIR,
   PROJECT_FILE,
+  determineNextPhase,
 } from './types.js';
 
 /**
@@ -61,16 +63,13 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
     }
   }
 
-  // Create empty plan files
+  // Create empty plan files for each phase
   const planFiles = [
-    'plans/story-discovery.md',
-    'plans/characters.md',
-    'plans/three-acts.md',
-    'plans/act-1-scenes.md',
-    'plans/act-2-scenes.md',
-    'plans/act-3-scenes.md',
-    'plans/storyboard.md',
-    'plans/video-generation.md',
+    'plans/plot.md',
+    'plans/story.md',
+    'plans/scenes.md',
+    'plans/images.md',
+    'plans/video.md',
   ];
 
   for (const file of planFiles) {
@@ -103,49 +102,37 @@ export function createProject(originalInput: string, basePath: string = process.
     originalInput,
     createdAt: now,
     updatedAt: now,
+    currentPhase: WorkflowPhase.PLOT,
     phases: {
-      story_discovery: {
+      plot: {
         status: 'pending',
-        planFile: 'plans/story-discovery.md',
+        planFile: 'plans/plot.md',
         completedAt: null,
       },
-      character_descriptions: {
+      story: {
         status: 'pending',
-        planFile: 'plans/characters.md',
+        planFile: 'plans/story.md',
         completedAt: null,
       },
-      three_acts: {
+      scenes: {
         status: 'pending',
-        planFile: 'plans/three-acts.md',
-        actPlanFiles: {
-          intro: 'plans/act-1-scenes.md',
-          middle: 'plans/act-2-scenes.md',
-          climax: 'plans/act-3-scenes.md',
-        },
+        planFile: 'plans/scenes.md',
         completedAt: null,
       },
-      storyboard_images: {
+      images: {
         status: 'pending',
-        planFile: 'plans/storyboard.md',
+        planFile: 'plans/images.md',
         completedAt: null,
       },
-      video_generation: {
+      video: {
         status: 'pending',
-        planFile: 'plans/video-generation.md',
-        completedAt: null,
-      },
-      video_stitching: {
-        status: 'pending',
-        completedAt: null,
-      },
-      final_signoff: {
-        status: 'pending',
+        planFile: 'plans/video.md',
         completedAt: null,
       },
     },
     characters: [],
     settings: [],
-    storyboard: [],
+    scenes: [],
     assets: [],
   };
 
@@ -194,6 +181,13 @@ export function getOrCreateProject(originalInput: string, basePath: string = pro
 }
 
 /**
+ * Get the current workflow phase from the project.
+ */
+export function getCurrentPhase(project: ProjectFile): WorkflowPhase {
+  return project.currentPhase;
+}
+
+/**
  * Update a phase's status.
  */
 export function updatePhaseStatus(
@@ -207,6 +201,9 @@ export function updatePhaseStatus(
 
   if (status === 'completed') {
     phaseInfo.completedAt = Date.now();
+    phaseInfo.plannerStage = PlannerStage.COMPLETE;
+  } else if (status === 'in_progress' && !phaseInfo.plannerStage) {
+    phaseInfo.plannerStage = PlannerStage.PLANNING;
   }
 
   saveProject(project, basePath);
@@ -214,46 +211,49 @@ export function updatePhaseStatus(
 }
 
 /**
- * Get the current workflow phase based on project state.
+ * Update a phase's planner stage.
  */
-export function getCurrentPhase(project: ProjectFile): WorkflowPhase {
-  // Map phase keys to WorkflowPhase enum
-  const phaseKeyToEnum: Record<keyof ProjectFile['phases'], WorkflowPhase> = {
-    story_discovery: WorkflowPhase.STORY_DISCOVERY,
-    character_descriptions: WorkflowPhase.CHARACTER_DESCRIPTIONS,
-    three_acts: WorkflowPhase.THREE_ACTS,
-    storyboard_images: WorkflowPhase.STORYBOARD_IMAGES,
-    video_generation: WorkflowPhase.VIDEO_GENERATION,
-    video_stitching: WorkflowPhase.VIDEO_STITCHING,
-    final_signoff: WorkflowPhase.FINAL_SIGNOFF,
-  };
+export function updatePlannerStage(
+  project: ProjectFile,
+  phase: keyof ProjectFile['phases'],
+  stage: PlannerStage,
+  basePath: string = process.cwd()
+): ProjectFile {
+  const phaseInfo = project.phases[phase];
+  phaseInfo.plannerStage = stage;
 
-  // Check for in_progress phases first
-  for (const [key, phase] of Object.entries(project.phases)) {
-    if (phase.status === 'in_progress') {
-      return phaseKeyToEnum[key as keyof ProjectFile['phases']];
-    }
+  if (stage === PlannerStage.REFINING) {
+    phaseInfo.refinementCount = (phaseInfo.refinementCount ?? 0) + 1;
   }
 
-  // Find first pending phase
-  const phaseOrder: (keyof ProjectFile['phases'])[] = [
-    'story_discovery',
-    'character_descriptions',
-    'three_acts',
-    'storyboard_images',
-    'video_generation',
-    'video_stitching',
-    'final_signoff',
-  ];
+  saveProject(project, basePath);
+  return project;
+}
 
-  for (const key of phaseOrder) {
-    if (project.phases[key].status === 'pending') {
-      return phaseKeyToEnum[key];
+/**
+ * Transition to the next phase based on current state.
+ */
+export function transitionToNextPhase(
+  project: ProjectFile,
+  basePath: string = process.cwd()
+): { project: ProjectFile; transitioned: boolean; reason: string } {
+  const result = determineNextPhase(project);
+
+  if (result.nextPhase !== project.currentPhase) {
+    project.currentPhase = result.nextPhase;
+
+    // Mark new phase as in_progress with planning stage
+    const phaseKey = result.nextPhase as keyof typeof project.phases;
+    if (project.phases[phaseKey]) {
+      project.phases[phaseKey].status = 'in_progress';
+      project.phases[phaseKey].plannerStage = PlannerStage.PLANNING;
     }
+
+    saveProject(project, basePath);
+    return { project, transitioned: true, reason: result.reason };
   }
 
-  // All phases complete
-  return WorkflowPhase.COMPLETED;
+  return { project, transitioned: false, reason: result.reason };
 }
 
 /**
@@ -375,6 +375,25 @@ export function loadSetting(name: string, basePath: string = process.cwd()): Set
 }
 
 /**
+ * Add a scene to the project.
+ */
+export function addScene(scene: SceneData, basePath: string = process.cwd()): void {
+  const project = loadProject(basePath);
+  if (!project) return;
+
+  // Check if scene already exists
+  const existingIndex = project.scenes.findIndex((s) => s.sceneNumber === scene.sceneNumber);
+  if (existingIndex >= 0) {
+    project.scenes[existingIndex] = scene;
+  } else {
+    project.scenes.push(scene);
+    project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
+  }
+
+  saveProject(project, basePath);
+}
+
+/**
  * Add an asset to the manifest.
  */
 export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): void {
@@ -435,7 +454,10 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
     return 'No project found. A new project will be created.';
   }
 
-  const currentPhase = getCurrentPhase(project);
+  const currentPhase = project.currentPhase;
+  const phaseConfig = PHASE_CONFIGS[currentPhase];
+  const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+
   const completedPhases = Object.entries(project.phases)
     .filter(([, info]) => info.status === 'completed')
     .map(([key]) => key);
@@ -443,11 +465,80 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   return `
 Project: ${project.title || '(untitled)'}
 ID: ${project.id}
-Current Phase: ${currentPhase}
+Current Phase: ${phaseConfig.displayName} (${currentPhase})
+Planner Stage: ${phaseInfo?.plannerStage ?? 'not started'}
 Completed Phases: ${completedPhases.length > 0 ? completedPhases.join(', ') : 'none'}
 Characters: ${project.characters.length > 0 ? project.characters.join(', ') : 'none defined'}
 Settings: ${project.settings.length > 0 ? project.settings.join(', ') : 'none defined'}
-Scenes: ${project.storyboard.length}
+Scenes: ${project.scenes.length}
 Assets: ${project.assets.length}
 `.trim();
+}
+
+/**
+ * Get the state transition prompt for the main agent.
+ * This tells the agent what phase it's in and what to do next.
+ */
+export function getStateTransitionPrompt(basePath: string = process.cwd()): string {
+  const project = loadProject(basePath);
+
+  if (!project) {
+    return 'No project exists. Create a new project first.';
+  }
+
+  const currentPhase = project.currentPhase;
+  const phaseConfig = PHASE_CONFIGS[currentPhase];
+  const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+  const plannerStage = phaseInfo?.plannerStage ?? PlannerStage.PLANNING;
+
+  let instruction = `
+## Current State
+- **Phase**: ${phaseConfig.displayName}
+- **Stage**: ${plannerStage}
+- **Plan File**: ${phaseConfig.planOutputFile ?? 'N/A'}
+
+## What to Do Next
+`;
+
+  switch (plannerStage) {
+    case PlannerStage.PLANNING:
+      instruction += `
+You are in the PLANNING stage. Create a plan for ${phaseConfig.displayName}.
+1. Analyze the project context
+2. Create a detailed plan
+3. Write the plan to ${phaseConfig.planOutputFile}
+4. Move to VERIFY stage by updating the planner stage
+`;
+      break;
+
+    case PlannerStage.VERIFY:
+      instruction += `
+You are in the VERIFY stage. Present the plan to the user for approval.
+1. Read the plan from ${phaseConfig.planOutputFile}
+2. Present a summary to the user using ask_user
+3. If user approves (or 15 seconds pass with no response), move to COMPLETE
+4. If user provides feedback, move to REFINING stage
+`;
+      break;
+
+    case PlannerStage.REFINING:
+      instruction += `
+You are in the REFINING stage. Update the plan based on user feedback.
+1. Read the current plan
+2. Apply user feedback
+3. Update the plan in ${phaseConfig.planOutputFile}
+4. Move back to VERIFY stage
+`;
+      break;
+
+    case PlannerStage.COMPLETE:
+      instruction += `
+The ${phaseConfig.displayName} phase is complete.
+1. Mark the phase as completed
+2. Transition to the next phase: ${phaseConfig.nextPhase ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+`;
+      break;
+  }
+
+  return instruction.trim();
 }

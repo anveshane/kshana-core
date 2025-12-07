@@ -24,6 +24,18 @@ export interface GenerationJob {
 }
 
 /**
+ * Reference image for consistency in scene generation.
+ */
+export interface ReferenceImage {
+  /** Artifact ID or path to the reference image */
+  image_id: string;
+  /** Type of reference: character or setting */
+  type: 'character' | 'setting';
+  /** Name of the character or setting this references */
+  name: string;
+}
+
+/**
  * Image generation parameters.
  */
 export interface ImageGenerationParams {
@@ -35,6 +47,10 @@ export interface ImageGenerationParams {
   image_type?: 'scene' | 'character_ref' | 'setting_ref';
   character_name?: string;
   setting_name?: string;
+  /** Reference images for consistency (used for scene generation) */
+  reference_images?: ReferenceImage[];
+  /** Generation mode: text-to-image or image+text-to-image */
+  generation_mode?: 'text_to_image' | 'image_text_to_image';
 }
 
 /**
@@ -65,15 +81,24 @@ const jobs = new Map<string, GenerationJob>();
 /**
  * Generate image tool.
  * This is a COMPLEX tool - requires user confirmation.
+ *
+ * Supports two modes:
+ * 1. text_to_image: Pure text-to-image generation (for reference images)
+ * 2. image_text_to_image: Image+text-to-image with reference images for consistency (for scenes)
  */
 export const generateImageTool: ToolDefinition = createTool(
   'generate_image',
-  `Generate an image from a text prompt. This tool requires user confirmation before execution.
+  `Generate an image. Supports two modes:
 
-Use this for:
-- Scene images for the storyboard
-- Character reference images
-- Setting/environment reference images
+1. **Text-to-Image** (generation_mode: "text_to_image"):
+   - For character reference images
+   - For setting reference images
+   - No reference_images needed
+
+2. **Image+Text-to-Image** (generation_mode: "image_text_to_image"):
+   - For scene images that need character/setting consistency
+   - Requires reference_images array with character and setting refs
+   - Uses reference images to maintain visual consistency
 
 The tool will return a job ID. Use wait_for_job to check completion.`,
   {
@@ -113,11 +138,54 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         type: 'string',
         description: 'Setting name (required for setting_ref type)',
       },
+      generation_mode: {
+        type: 'string',
+        description: 'Generation mode: text_to_image for refs, image_text_to_image for scenes with refs',
+        enum: ['text_to_image', 'image_text_to_image'],
+      },
+      reference_images: {
+        type: 'array',
+        description: 'Reference images for consistency (required for image_text_to_image mode)',
+        items: {
+          type: 'object',
+          properties: {
+            image_id: {
+              type: 'string',
+              description: 'Artifact ID or path to the reference image',
+            },
+            type: {
+              type: 'string',
+              enum: ['character', 'setting'],
+              description: 'Type of reference',
+            },
+            name: {
+              type: 'string',
+              description: 'Name of the character or setting',
+            },
+          },
+          required: ['image_id', 'type', 'name'],
+        },
+      },
     },
     required: ['scene_number', 'prompt'],
   },
   async (args) => {
     const params = args as unknown as ImageGenerationParams;
+
+    // Determine generation mode based on image_type and reference_images
+    const generationMode = params.generation_mode ??
+      (params.image_type === 'scene' && params.reference_images?.length
+        ? 'image_text_to_image'
+        : 'text_to_image');
+
+    // Validate reference images for image_text_to_image mode
+    if (generationMode === 'image_text_to_image' && (!params.reference_images || params.reference_images.length === 0)) {
+      return {
+        status: 'error',
+        error: 'Reference images are required for image_text_to_image mode. Please generate character and setting reference images first.',
+        suggestion: 'Use dispatch_image_agent with image_type "character_ref" or "setting_ref" to create reference images first.',
+      };
+    }
 
     // Create a job for tracking
     const jobId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -131,7 +199,8 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
     jobs.set(jobId, job);
 
     // TODO: Integrate with actual image generation backend (ComfyUI, etc.)
-    // For now, simulate the job submission
+    // For text_to_image: Use standard text-to-image pipeline
+    // For image_text_to_image: Use IP-Adapter, ControlNet, or similar for character/setting consistency
     // Note: Avoid console.log during CLI operation as it interferes with Ink rendering
 
     // Simulate async processing (in real implementation, this would call ComfyUI API)
@@ -150,11 +219,17 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
     return {
       status: 'submitted',
       job_id: jobId,
-      message: `Image generation job submitted. Use wait_for_job("${jobId}") to check status.`,
+      generation_mode: generationMode,
+      message: generationMode === 'text_to_image'
+        ? `Text-to-image generation job submitted. Use wait_for_job("${jobId}") to check status.`
+        : `Image+text-to-image generation job submitted with ${params.reference_images?.length ?? 0} reference images. Use wait_for_job("${jobId}") to check status.`,
       params: {
         scene_number: params.scene_number,
         image_type: params.image_type ?? 'scene',
         prompt: params.prompt,
+        generation_mode: generationMode,
+        reference_count: params.reference_images?.length ?? 0,
+        references: params.reference_images?.map(r => `${r.type}:${r.name}`) ?? [],
       },
     };
   }
