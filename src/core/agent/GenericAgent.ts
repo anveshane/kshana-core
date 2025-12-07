@@ -72,8 +72,10 @@ export class GenericAgent extends TypedEventEmitter {
 
   // Loop detection state
   private recentToolCalls: string[] = [];
+  private consecutiveLoopWarnings = 0;
   private static readonly LOOP_DETECTION_WINDOW = 6;
   private static readonly LOOP_THRESHOLD = 3; // Same tool called 3+ times in window
+  private static readonly MAX_CONSECUTIVE_LOOP_WARNINGS = 3; // Force stop after this many warnings
 
   constructor(
     tools: Map<string, ToolDefinition>,
@@ -457,9 +459,9 @@ export class GenericAgent extends TypedEventEmitter {
 
   /**
    * Detect if the agent is in a loop calling the same tool repeatedly.
-   * Returns a warning message if looping detected, null otherwise.
+   * Returns an object with warning message and severity if looping detected, null otherwise.
    */
-  private detectLoop(toolName: string, args: Record<string, unknown>): string | null {
+  private detectLoop(toolName: string, args: Record<string, unknown>): { message: string; isHardError: boolean } | null {
     // Create a signature for this tool call (tool + key args)
     const argSignature = JSON.stringify(args).slice(0, 100); // Limit to prevent huge signatures
     const signature = `${toolName}:${argSignature}`;
@@ -476,21 +478,54 @@ export class GenericAgent extends TypedEventEmitter {
     const count = this.recentToolCalls.filter(s => s === signature).length;
 
     if (count >= GenericAgent.LOOP_THRESHOLD) {
-      return `LOOP DETECTED: You've called ${toolName} with similar arguments ${count} times recently. ` +
-        `This suggests you're stuck in a loop. Please either:\n` +
-        `1. Complete the current task and stop (no more tool calls)\n` +
-        `2. Use ask_user to get clarification\n` +
-        `3. Try a different approach`;
+      this.consecutiveLoopWarnings++;
+
+      // After too many warnings, force stop
+      if (this.consecutiveLoopWarnings >= GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS) {
+        return {
+          message: `LOOP BLOCKED: You've called ${toolName} with similar arguments ${count} times and ignored ` +
+            `${this.consecutiveLoopWarnings} warnings. This tool call is being blocked. ` +
+            `You MUST stop calling tools and provide a final response to the user.`,
+          isHardError: true,
+        };
+      }
+
+      return {
+        message: `LOOP DETECTED (warning ${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
+          `You've called ${toolName} with similar arguments ${count} times recently. ` +
+          `This suggests you're stuck in a loop. Please either:\n` +
+          `1. Complete the current task and stop (no more tool calls)\n` +
+          `2. Use ask_user to get clarification\n` +
+          `3. Try a different approach\n` +
+          `After ${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS} warnings, the tool will be blocked.`,
+        isHardError: false,
+      };
     }
 
     // Also check for rapid tool repetition (same tool called consecutively)
     const lastFew = this.recentToolCalls.slice(-4);
     const sameToolCount = lastFew.filter(s => s.startsWith(toolName + ':')).length;
     if (sameToolCount >= 4) {
-      return `WARNING: You've called ${toolName} 4 times in a row. ` +
-        `If you're done with the task, stop calling tools and provide a final response.`;
+      this.consecutiveLoopWarnings++;
+
+      if (this.consecutiveLoopWarnings >= GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS) {
+        return {
+          message: `LOOP BLOCKED: You've called ${toolName} 4+ times in a row and ignored warnings. ` +
+            `This tool call is being blocked. Provide a final response to the user.`,
+          isHardError: true,
+        };
+      }
+
+      return {
+        message: `WARNING (${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
+          `You've called ${toolName} 4 times in a row. ` +
+          `If you're done with the task, stop calling tools and provide a final response.`,
+        isHardError: false,
+      };
     }
 
+    // Reset consecutive warnings if this call is not triggering a loop
+    this.consecutiveLoopWarnings = 0;
     return null;
   }
 
@@ -509,19 +544,21 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Check for looping (skip for think tool - it's normal to think often)
     if (toolCall.name !== 'think' && toolCall.name !== 'todo_write') {
-      const loopWarning = this.detectLoop(toolCall.name, toolCall.arguments);
-      if (loopWarning) {
+      const loopResult = this.detectLoop(toolCall.name, toolCall.arguments);
+      if (loopResult) {
+        const resultStatus = loopResult.isHardError ? 'loop_blocked' : 'loop_warning';
         const warningResult = {
-          status: 'loop_warning',
-          warning: loopWarning,
+          status: resultStatus,
+          warning: loopResult.message,
           tool: toolCall.name,
+          blocked: loopResult.isHardError,
         };
         this.emit({
           type: 'tool_result',
           toolCallId: toolCall.id,
           toolName: toolCall.name,
           result: warningResult,
-          isError: false,
+          isError: loopResult.isHardError,
           agentName: this.name,
         });
         return warningResult;

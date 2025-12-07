@@ -9,7 +9,7 @@ import { UnifiedInput, type InputMode } from './components/UnifiedInput.js';
 import { Banner } from './components/Banner.js';
 import { useAgent } from './hooks/useAgent.js';
 import { createDefaultToolRegistry } from './core/tools/index.js';
-import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT } from './tasks/video/index.js';
+import { createWorkflowToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT } from './tasks/video/index.js';
 import type { LLMClientConfig } from './core/llm/index.js';
 import type { AgentConfig } from './core/agent/index.js';
 import * as uiLogger from './utils/uiLogger.js';
@@ -42,7 +42,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Create tool registry based on task type
   const tools = React.useMemo(() => {
     if (taskType === 'video') {
-      return createVideoToolRegistry().getAll();
+      // Use workflow tool registry for state-based video creation
+      return createWorkflowToolRegistry().getAll();
     }
     return createDefaultToolRegistry().getAll();
   }, [taskType]);
