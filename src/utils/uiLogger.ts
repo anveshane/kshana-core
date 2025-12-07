@@ -261,15 +261,16 @@ function formatToolCall(name: string, args?: Record<string, unknown>): string {
   const parts: string[] = [];
   for (const [key, value] of Object.entries(args)) {
     if (typeof value === 'string') {
-      // Truncate long strings
-      const displayValue = value.length > 100 ? value.slice(0, 100) + '...' : value;
-      parts.push(`${key}="${displayValue}"`);
+      // No truncation - show full string
+      parts.push(`${key}="${value}"`);
     } else if (typeof value === 'number' || typeof value === 'boolean') {
       parts.push(`${key}=${String(value)}`);
     } else if (Array.isArray(value)) {
-      parts.push(`${key}=[${value.length} items]`);
+      // Show full array as JSON
+      parts.push(`${key}=${JSON.stringify(value)}`);
     } else if (value !== null && typeof value === 'object') {
-      parts.push(`${key}={...}`);
+      // Show full object as JSON
+      parts.push(`${key}=${JSON.stringify(value)}`);
     }
   }
 
@@ -287,19 +288,15 @@ function formatResult(result: unknown, isError: boolean): string {
 
   const resultObj = result as Record<string, unknown>;
 
-  // For dispatch_agent with plan, show the plan
+  // For dispatch_agent with plan, show the full plan
   if (resultObj['plan']) {
     const plan = String(resultObj['plan']);
-    // Truncate very long plans
-    if (plan.length > 500) {
-      return `Plan: ${plan.slice(0, 500)}...`;
-    }
     return `Plan: ${plan}`;
   }
 
   // For errors, show the error
   if (isError || resultObj['status'] === 'error') {
-    return `Error: ${resultObj['error'] || resultObj['warning'] || JSON.stringify(result)}`;
+    return `Error: ${resultObj['error'] || resultObj['warning'] || JSON.stringify(result, null, 2)}`;
   }
 
   // For loop warnings
@@ -312,10 +309,6 @@ function formatResult(result: unknown, isError: boolean): string {
     return String(resultObj['message']);
   }
 
-  // Default: JSON with truncation
-  const jsonStr = JSON.stringify(result, null, 2);
-  if (jsonStr.length > 300) {
-    return jsonStr.slice(0, 300) + '...';
-  }
-  return jsonStr;
+  // Default: full JSON output (no truncation)
+  return JSON.stringify(result, null, 2);
 }
