@@ -4,7 +4,6 @@
 import React from 'react';
 import { Text, Box, useApp, useInput } from 'ink';
 import { AgentView } from './components/AgentView.js';
-import { SimpleTextInput } from './components/TextInput.js';
 import { UnifiedInput, type InputMode } from './components/UnifiedInput.js';
 import { Banner } from './components/Banner.js';
 import { useAgent } from './hooks/useAgent.js';
@@ -427,47 +426,57 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         );
       }
 
-      // New story mode - show text input
+      // New story mode - show text input with same style as main agent view
       return (
-        <Box flexDirection="column" padding={1}>
-          <Banner subtitle={subtitle} />
+        <Box flexDirection="column">
+          <Box flexDirection="column" padding={1}>
+            <Banner subtitle={subtitle} />
 
-          <Box flexDirection="column" marginBottom={1} paddingX={2}>
-            <Text bold color="cyan">Welcome to Kshana!</Text>
-            <Text dimColor>
-              Describe your story idea and I'll help you create a video.
-            </Text>
+            <Box flexDirection="column" marginBottom={1} paddingX={2}>
+              <Text bold color="cyan">Welcome to Kshana!</Text>
+              <Text dimColor>
+                Describe your story idea and I'll help you create a video.
+              </Text>
+            </Box>
+
+            <Box marginBottom={1} paddingX={2}>
+              <Text bold color="yellow">Example prompts:</Text>
+            </Box>
+            <Box flexDirection="column" paddingX={4} marginBottom={1}>
+              <Text dimColor>"A story about a robot learning to dance"</Text>
+              <Text dimColor>"Create a video about a magical forest adventure"</Text>
+              <Text dimColor>"An epic tale of a knight and a dragon"</Text>
+            </Box>
           </Box>
 
-          <Box marginBottom={1} paddingX={2}>
-            <Text bold color="yellow">Example prompts:</Text>
-          </Box>
-          <Box flexDirection="column" paddingX={4} marginBottom={1}>
-            <Text dimColor>"A story about a robot learning to dance"</Text>
-            <Text dimColor>"Create a video about a magical forest adventure"</Text>
-            <Text dimColor>"An epic tale of a knight and a dragon"</Text>
-          </Box>
-
-          <Box paddingX={2}>
-            <Text dimColor>Type "exit" to quit.</Text>
-          </Box>
-
-          <Box marginTop={1} paddingX={2}>
-            <SimpleTextInput onSubmit={handleTaskSubmit} prompt="Story:" />
+          {/* Input at bottom with same style as main agent view */}
+          <Box paddingX={1} paddingY={1} borderStyle="round" borderColor="cyan">
+            <UnifiedInput
+              mode="text"
+              onSubmit={handleTaskSubmit}
+              prompt=">"
+              hint={'Enter your story idea and press Enter. Type "exit" to quit.'}
+            />
           </Box>
         </Box>
       );
     }
 
-    // Generic mode welcome
+    // Generic mode welcome - same input style as main agent view
     return (
-      <Box flexDirection="column" padding={1}>
-        <Banner subtitle={subtitle} />
-        <Box marginBottom={1} paddingX={2}>
-          <Text dimColor>Type your task and press Enter. Type "exit" to quit.</Text>
+      <Box flexDirection="column">
+        <Box flexDirection="column" padding={1}>
+          <Banner subtitle={subtitle} />
         </Box>
-        <Box paddingX={2}>
-          <SimpleTextInput onSubmit={handleTaskSubmit} prompt="Task:" />
+
+        {/* Input at bottom with same style as main agent view */}
+        <Box paddingX={1} paddingY={1} borderStyle="round" borderColor="cyan">
+          <UnifiedInput
+            mode="text"
+            onSubmit={handleTaskSubmit}
+            prompt=">"
+            hint={'Enter a task and press Enter. Type "exit" to quit.'}
+          />
         </Box>
       </Box>
     );
