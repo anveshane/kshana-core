@@ -627,7 +627,10 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...result };
+        const markedResult = typeof result === 'object' && result !== null
+          ? { __awaiting_user_input: true, ...result }
+          : { __awaiting_user_input: true, result };
+        return markedResult;
       }
 
       this.emit({
@@ -679,7 +682,10 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...result };
+        const markedResult = typeof result === 'object' && result !== null
+          ? { __awaiting_user_input: true, ...result }
+          : { __awaiting_user_input: true, result };
+        return markedResult;
       }
 
       this.emit({
@@ -931,10 +937,11 @@ export class GenericAgent extends TypedEventEmitter {
       }, null, 2)}`);
       return verificationResult;
     } catch (error) {
+      const taskBackup = this.planningState?.task;
       this.planningState = null;
       return {
         error: `Planning failed: ${String(error)}`,
-        task: this.planningState?.task,
+        task: taskBackup,
       };
     }
   }
@@ -1184,10 +1191,11 @@ Your classification:`;
         autoApproveTimeoutMs: 15000, // 15 seconds countdown for image prompt approval
       };
     } catch (error) {
+      const taskBackup = this.imageGenState?.task;
       this.imageGenState = null;
       return {
         error: `Image prompt generation failed: ${String(error)}`,
-        task: this.imageGenState?.task,
+        task: taskBackup,
       };
     }
   }
@@ -1206,19 +1214,19 @@ Your classification:`;
 
     // Try to extract Image Prompt section
     const promptMatch = response.match(/\*\*Image Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i);
-    if (promptMatch) {
+    if (promptMatch && promptMatch[1]) {
       prompt = promptMatch[1].trim();
     }
 
     // Try to extract Negative Prompt section
     const negativeMatch = response.match(/\*\*Negative Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i);
-    if (negativeMatch) {
+    if (negativeMatch && negativeMatch[1]) {
       negativePrompt = negativeMatch[1].trim();
     }
 
     // Try to extract Aspect Ratio section
     const aspectMatch = response.match(/\*\*Aspect Ratio:\*\*\s*\n?\s*([^\n]+)/i);
-    if (aspectMatch) {
+    if (aspectMatch && aspectMatch[1]) {
       const ratio = aspectMatch[1].trim();
       // Validate aspect ratio format
       if (/^\d+:\d+$/.test(ratio)) {

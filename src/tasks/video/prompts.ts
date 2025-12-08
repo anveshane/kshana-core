@@ -2,13 +2,31 @@
  * Video creation task-specific prompts.
  * Reads prompts from JSON files in /prompts/ directory.
  */
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// Get project root (4 levels up from src/tasks/video/)
+// Get prompts directory - try multiple locations for flexibility
+// When running from dist/tasks/video/prompts.js: __dirname = dist/tasks/video/ -> dist/prompts/
+// When running from source: src/tasks/video/prompts.ts -> prompts/
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPTS_DIR = join(__dirname, '..', '..', '..', 'prompts');
+
+// Try dist/prompts first (for compiled/installed packages)
+// From dist/tasks/video/: go up 2 levels to dist/, then into prompts/
+let PROMPTS_DIR = join(__dirname, '..', '..', 'prompts');
+
+// If not found, try going up one more level (for different dist structure)
+if (!existsSync(join(PROMPTS_DIR, 'video.json'))) {
+  PROMPTS_DIR = join(__dirname, '..', '..', '..', 'prompts');
+}
+
+// If still not found, try source location (for development)
+if (!existsSync(join(PROMPTS_DIR, 'video.json'))) {
+  const sourcePromptsDir = join(__dirname, '..', '..', '..', 'prompts');
+  if (existsSync(join(sourcePromptsDir, 'video.json'))) {
+    PROMPTS_DIR = sourcePromptsDir;
+  }
+}
 
 /**
  * Video prompt JSON schema
@@ -34,12 +52,26 @@ interface VideoPromptJson {
  */
 function loadVideoPrompt(): VideoPromptJson {
   const filePath = join(PROMPTS_DIR, 'video.json');
+  
+  if (!existsSync(filePath)) {
+    throw new Error(
+      `Video prompt file not found: ${filePath}. PROMPTS_DIR=${PROMPTS_DIR}. ` +
+      `Please ensure prompts are copied to dist/prompts/ during build.`
+    );
+  }
+  
   const content = readFileSync(filePath, 'utf-8');
   return JSON.parse(content) as VideoPromptJson;
 }
 
-// Load video prompt from JSON
-const videoPrompt = loadVideoPrompt();
+// Load video prompt from JSON (with error handling)
+let videoPrompt: VideoPromptJson;
+try {
+  videoPrompt = loadVideoPrompt();
+} catch (error) {
+  console.error(`Failed to load video prompt from ${PROMPTS_DIR}:`, error);
+  throw error;
+}
 
 /**
  * System prompt for video creation tasks.

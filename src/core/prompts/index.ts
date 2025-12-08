@@ -7,10 +7,32 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ToolDefinition } from '../llm/index.js';
 
-// Get project root (3 levels up from src/core/prompts/)
+// Get prompts directory - try multiple locations for flexibility
+// When running from dist/core/index.js: __dirname = dist/core/ -> dist/prompts/
+// When running from dist/core/prompts/index.js: __dirname = dist/core/prompts/ -> dist/prompts/
+// When running from source: src/core/prompts/index.ts -> prompts/
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPTS_DIR = join(__dirname, '..', '..', '..', 'prompts');
-const WORKFLOW_PROMPTS_DIR = join(PROMPTS_DIR, 'workflow');
+
+// Try dist/prompts first (for compiled/installed packages)
+// From dist/core/: go up 1 level to dist/, then into prompts/
+// From dist/core/prompts/: go up 2 levels to dist/, then into prompts/
+let PROMPTS_DIR = join(__dirname, '..', 'prompts');
+let WORKFLOW_PROMPTS_DIR = join(PROMPTS_DIR, 'workflow');
+
+// If not found, try going up one more level (for dist/core/prompts/ case)
+if (!existsSync(join(PROMPTS_DIR, 'base.json'))) {
+  PROMPTS_DIR = join(__dirname, '..', '..', 'prompts');
+  WORKFLOW_PROMPTS_DIR = join(PROMPTS_DIR, 'workflow');
+}
+
+// If still not found, try source location (for development)
+if (!existsSync(join(PROMPTS_DIR, 'base.json'))) {
+  const sourcePromptsDir = join(__dirname, '..', '..', '..', 'prompts');
+  if (existsSync(join(sourcePromptsDir, 'base.json'))) {
+    PROMPTS_DIR = sourcePromptsDir;
+    WORKFLOW_PROMPTS_DIR = join(PROMPTS_DIR, 'workflow');
+  }
+}
 
 /**
  * Prompt JSON schema
@@ -33,16 +55,35 @@ interface PromptJson {
  */
 function loadPrompt(name: string): PromptJson {
   const filePath = join(PROMPTS_DIR, `${name}.json`);
+  
+  if (!existsSync(filePath)) {
+    throw new Error(
+      `Prompt file not found: ${filePath}. PROMPTS_DIR=${PROMPTS_DIR}. ` +
+      `Please ensure prompts are copied to dist/prompts/ during build.`
+    );
+  }
+  
   const content = readFileSync(filePath, 'utf-8');
   return JSON.parse(content) as PromptJson;
 }
 
-// Load prompts from JSON files
-const basePrompt = loadPrompt('base');
-const orchestratorPrompt = loadPrompt('orchestrator');
-const subAgentPrompt = loadPrompt('subAgent');
-const planningPrompt = loadPrompt('planning');
-const imageGenerationPrompt = loadPrompt('imageGeneration');
+// Load prompts from JSON files (with error handling)
+let basePrompt: PromptJson;
+let orchestratorPrompt: PromptJson;
+let subAgentPrompt: PromptJson;
+let planningPrompt: PromptJson;
+let imageGenerationPrompt: PromptJson;
+
+try {
+  basePrompt = loadPrompt('base');
+  orchestratorPrompt = loadPrompt('orchestrator');
+  subAgentPrompt = loadPrompt('subAgent');
+  planningPrompt = loadPrompt('planning');
+  imageGenerationPrompt = loadPrompt('imageGeneration');
+} catch (error) {
+  console.error(`Failed to load prompts from ${PROMPTS_DIR}:`, error);
+  throw error;
+}
 
 // Export prompt content for backwards compatibility
 export const GENERIC_AGENT_BASE_PROMPT = basePrompt.content;

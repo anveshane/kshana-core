@@ -1,9 +1,9 @@
 {
-  "id": "proj-1765114451319-ep1xo2",
+  "id": "proj-1765181706096-mxv2ky",
   "title": "",
   "originalInput": "A story about a robot learning to dance",
-  "createdAt": 1765114451319,
-  "updatedAt": 1765114819716,
+  "createdAt": 1765181706096,
+  "updatedAt": 1765181706096,
   "currentPhase": "plot",
   "phases": {
     "plot": {
@@ -32,12 +32,8 @@
       "completedAt": null
     }
   },
-  "characters": [
-    "Zara-7"
-  ],
-  "settings": [
-    "NeuroNova"
-  ],
+  "characters": [],
+  "settings": [],
   "scenes": [],
   "assets": []
 }

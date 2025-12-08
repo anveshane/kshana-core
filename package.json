@@ -4,8 +4,26 @@
   "description": "Generic CLI agent framework with React Ink",
   "type": "module",
   "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server/index.d.ts",
+      "import": "./dist/server/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    },
+    "./core/llm": {
+      "types": "./dist/core/llm/index.d.ts",
+      "import": "./dist/core/llm/index.js"
+    }
+  },
   "bin": {
-    "kshana-ink": "./dist/index.js",
+    "kshana-ink": "./dist/cli.js",
     "kshana-ink-server": "./dist/server/cli.js"
   },
   "scripts": {
@@ -14,7 +32,8 @@
     "server": "tsx src/server/cli.ts",
     "server:dev": "tsx watch src/server/cli.ts",
     "test:client": "tsx src/server/testClient.ts",
-    "build": "tsup",
+    "build": "tsup && npm run copy-prompts",
+    "copy-prompts": "node -e \"require('fs').cpSync('prompts', 'dist/prompts', {recursive: true, force: true})\"",
     "test": "vitest",
     "test:ci": "vitest run",
     "test:coverage": "vitest run --coverage",
