@@ -42,6 +42,7 @@ const basePrompt = loadPrompt('base');
 const orchestratorPrompt = loadPrompt('orchestrator');
 const subAgentPrompt = loadPrompt('subAgent');
 const planningPrompt = loadPrompt('planning');
+const contentPrompt = loadPrompt('content');
 const imageGenerationPrompt = loadPrompt('imageGeneration');
 
 // Export prompt content for backwards compatibility
@@ -49,6 +50,7 @@ export const GENERIC_AGENT_BASE_PROMPT = basePrompt.content;
 export const GENERIC_AGENT_ORCHESTRATOR_SECTION = orchestratorPrompt.content;
 export const GENERIC_AGENT_SUB_AGENT_SECTION = subAgentPrompt.content;
 export const PLANNING_AGENT_PROMPT = planningPrompt.content;
+export const CONTENT_AGENT_PROMPT = contentPrompt.content;
 export const IMAGE_GENERATION_AGENT_PROMPT = imageGenerationPrompt.content;
 
 // Combined prompt for main agent (base + orchestrator)
@@ -71,6 +73,63 @@ function buildToolDescriptions(tools: Map<string, ToolDefinition>): string {
     const category = isComplexTool(name) ? 'complex' : 'simple';
     lines.push(`- \`${name}\` (${category}): ${tool.description}`);
   }
+  return lines.join('\n');
+}
+
+/**
+ * Context variable info for the system prompt (with ID for dispatch tools).
+ */
+export interface ContextVariable {
+  id: string;           // The context_ref to pass to dispatch tools
+  variableName: string; // Display name like $chapter_1
+  label: string;        // Description
+  charCount: number;    // Size
+}
+
+/**
+ * Build context variables section for the system prompt.
+ * These are large content blocks stored by reference that the agent can access.
+ * Provides clear guidance on what each variable contains and how to use it.
+ */
+export function buildContextVariablesSection(variables: ContextVariable[]): string {
+  if (variables.length === 0) {
+    return '';
+  }
+
+  const lines = [
+    '## Stored Context Variables',
+    '',
+    'The following content has been stored for use with sub-agents. **Use these when dispatching tasks that need this content.**',
+    '',
+  ];
+
+  for (const v of variables) {
+    lines.push(`### ${v.variableName}`);
+    lines.push(`- **context_ref**: \`"${v.id}"\``);
+    lines.push(`- **Content**: ${v.label}`);
+    lines.push(`- **Size**: ${v.charCount.toLocaleString()} characters`);
+    lines.push('');
+  }
+
+  lines.push('---');
+  lines.push('');
+  lines.push('**How to use stored context:**');
+  lines.push('');
+  lines.push('When dispatching a sub-agent that needs content from a stored variable:');
+  lines.push('1. Identify which variable contains the relevant content');
+  lines.push('2. Pass its `context_ref` to the dispatch tool');
+  lines.push('3. Do NOT summarize the content inline - the full content will be provided');
+  lines.push('');
+
+  if (variables.length > 0) {
+    const ex = variables[0];
+    lines.push('**Example:**');
+    lines.push('```');
+    lines.push(`// For tasks needing content from ${ex?.variableName}:`);
+    lines.push(`dispatch_content_agent(task="...", context_ref="${ex?.id}", content_type="...")`);
+    lines.push('```');
+  }
+
   return lines.join('\n');
 }
 
@@ -128,6 +187,33 @@ export function buildPlanningPrompt(task: string, context?: string): string {
   const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
   return PLANNING_AGENT_PROMPT
     .replace('{{task}}', taskSection)
+    .replace('{{context}}', contextSection);
+}
+
+/**
+ * Content types supported by the content agent.
+ */
+export type ContentType = 'plot' | 'story' | 'character' | 'setting' | 'scene' | 'narration';
+
+/**
+ * Build the content creation sub-agent system prompt.
+ * Used for creative writing tasks like stories, characters, and scene descriptions.
+ *
+ * @param task - The content creation task description
+ * @param contentType - Type of content to generate (plot, story, character, etc.)
+ * @param context - Optional background context (existing story elements, etc.)
+ * @returns The complete content agent system prompt
+ */
+export function buildContentPrompt(
+  task: string,
+  contentType: ContentType,
+  context?: string
+): string {
+  const taskSection = `<task>\n${task}\n</task>`;
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  return CONTENT_AGENT_PROMPT
+    .replace('{{task}}', taskSection)
+    .replace('{{content_type}}', contentType)
     .replace('{{context}}', contextSection);
 }
 

@@ -74,6 +74,7 @@ export class LLMClient {
       tools: tools ? this.convertTools(tools) : undefined,
       temperature,
       stream: true,
+      stream_options: { include_usage: true },
     });
 
     // Accumulate for final logging
@@ -141,7 +142,16 @@ export class LLMClient {
           finishReason: chunk.choices[0].finish_reason,
         });
 
-        yield { done: true };
+        // Include usage if available (requires stream_options: { include_usage: true })
+        const usage = chunk.usage
+          ? {
+              promptTokens: chunk.usage.prompt_tokens,
+              completionTokens: chunk.usage.completion_tokens,
+              totalTokens: chunk.usage.total_tokens,
+            }
+          : undefined;
+
+        yield { done: true, usage };
       }
     }
   }
