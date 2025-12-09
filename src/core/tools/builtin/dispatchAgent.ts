@@ -6,7 +6,7 @@ import { createTool } from '../ToolRegistry.js';
 
 export const dispatchAgentTool = createTool(
   'dispatch_agent',
-  'Dispatch a task to a planning sub-agent. Use this to create detailed plans before breaking them into todos. The sub-agent will analyze the task and return a comprehensive plan. Always include relevant context (story background, user preferences, etc.) to help the sub-agent understand the full picture.',
+  'Dispatch a task to a planning sub-agent. Use this to create detailed plans before breaking them into todos. The sub-agent will analyze the task and return a comprehensive plan. For long context (>500 chars), use store_context first and pass context_ref to preserve the original content.',
   {
     type: 'object',
     properties: {
@@ -16,7 +16,11 @@ export const dispatchAgentTool = createTool(
       },
       context: {
         type: 'string',
-        description: 'Background context for the task (e.g., story premise, user input, character details). This helps the sub-agent understand the full picture without needing the entire conversation history.',
+        description: 'Short context only (<500 chars). For longer content (narratives, chapters), use store_context first and pass context_ref instead.',
+      },
+      context_ref: {
+        type: 'string',
+        description: 'Reference ID from store_context for long content. PREFERRED over inline context for narratives, chapters, user stories, etc. to prevent summarization drift.',
       },
     },
     required: ['task'],

@@ -13,8 +13,10 @@ import * as path from 'path';
 import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
-import { buildSystemMessage, buildPlanningPrompt, buildImageGenerationPrompt, wrapUserTask } from '../prompts/index.js';
+import { buildSystemMessage, buildPlanningPrompt, buildContentPrompt, buildImageGenerationPrompt, wrapUserTask, type ContentType } from '../prompts/index.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
+import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, LONG_CONTENT_THRESHOLD } from '../context/index.js';
+import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 
 // Debug logging to file
 const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
@@ -35,6 +37,7 @@ const SIMPLE_TOOLS = new Set([
   'think',
   'ask_user',
   'dispatch_agent',
+  'dispatch_content_agent',
   'dispatch_image_agent',
   'wait_for_job',
   'todo_write',
@@ -70,12 +73,23 @@ export class GenericAgent extends TypedEventEmitter {
   private aborted = false;
   private pendingUserInput: string | null = null;
 
+  // Active context variables for this session
+  private activeContextVariables: ContextVariable[] = [];
+
   // Loop detection state
   private recentToolCalls: string[] = [];
   private consecutiveLoopWarnings = 0;
   private static readonly LOOP_DETECTION_WINDOW = 6;
   private static readonly LOOP_THRESHOLD = 3; // Same tool called 3+ times in window
   private static readonly MAX_CONSECUTIVE_LOOP_WARNINGS = 3; // Force stop after this many warnings
+
+  // Context window tracking
+  private tokenUsage = {
+    lastPromptTokens: 0,
+    lastCompletionTokens: 0,
+  };
+  private static readonly CONTEXT_THRESHOLD = 0.80; // 80% of max context
+  private static readonly MAX_CONTEXT_TOKENS = 128000; // Claude's typical context window
 
   constructor(
     tools: Map<string, ToolDefinition>,
@@ -126,6 +140,7 @@ export class GenericAgent extends TypedEventEmitter {
     let content = '';
     const toolCalls: ToolCall[] = [];
     const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> = new Map();
+    let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
 
     try {
       for await (const chunk of this.llm.generateStream({ messages, tools, temperature: 0.7 })) {
@@ -156,9 +171,12 @@ export class GenericAgent extends TypedEventEmitter {
           if (delta.arguments) accumulator.arguments += delta.arguments;
         }
 
-        // Handle stream completion
+        // Handle stream completion and capture usage
         if (chunk.done) {
           this.emit({ type: 'streaming_text', chunk: '', done: true });
+          if (chunk.usage) {
+            usage = chunk.usage;
+          }
         }
       }
     } catch (error) {
@@ -194,6 +212,7 @@ export class GenericAgent extends TypedEventEmitter {
       content: cleanedContent,
       toolCalls,
       finishReason: 'stop',
+      usage,
     };
   }
 
@@ -257,6 +276,51 @@ export class GenericAgent extends TypedEventEmitter {
 
         // Emit status change back to thinking
         this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+      } else if (this.contentState?.active) {
+        // Handle the content creation response
+        const contentResult = await this.handleContentResponse(userResponse);
+        const contentResultObj = contentResult as Record<string, unknown>;
+
+        // Check if content needs more input or is complete
+        if (contentResultObj['status'] === 'awaiting_verification') {
+          // Still waiting for user - emit question and return
+          this.waitingForUser = true;
+          this.pendingQuestion = contentResultObj['question'] as string;
+
+          this.emit({
+            type: 'question',
+            question: contentResultObj['question'] as string,
+            isConfirmation: false,
+            options: contentResultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: contentResultObj['autoApproveTimeoutMs'] as number | undefined,
+          });
+
+          // Content is shown via ToolCallDisplay
+          return {
+            status: 'waiting_for_user',
+            output: '',
+            todos: this.todoManager.getTodos(),
+            pendingQuestion: contentResultObj['question'] as string,
+            options: contentResultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: contentResultObj['autoApproveTimeoutMs'] as number | undefined,
+          };
+        }
+
+        // Content creation is complete (approved, cancelled, or max_iterations)
+        // Add the result to messages and continue
+        this.waitingForUser = false;
+        this.pendingQuestion = undefined;
+
+        // Add the dispatch_content_agent result to messages
+        this.messages.push({
+          role: 'tool',
+          content: JSON.stringify(contentResult),
+          toolCallId: 'content-result',
+          name: 'dispatch_content_agent',
+        });
+
+        // Emit status change back to thinking
+        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
       } else if (this.imageGenState?.active) {
         // Handle the image generation response
         const imageResult = await this.handleImageGenResponse(userResponse);
@@ -309,10 +373,28 @@ export class GenericAgent extends TypedEventEmitter {
         this.pendingQuestion = undefined;
       }
     } else if (!this.waitingForUser) {
+      // Start fresh - check if task is long and should be condensed
+      let taskContent = task;
+      if (shouldCondense(task)) {
+        const label = generateContentLabel(task);
+        const result = condenseUserInput(task);
+        if (result.wasCondensed && result.variableName && result.contextId) {
+          // Add to active context variables
+          this.activeContextVariables.push({
+            id: result.contextId,
+            variableName: result.variableName,
+            label,
+            charCount: task.length,
+          });
+          taskContent = result.condensed;
+          debugLog(`[GenericAgent] Condensed long user input (${task.length} chars) to ${result.variableName} (${result.contextId})`);
+        }
+      }
+
       // Start fresh - wrap user task in XML tags for structured prompts
       this.messages = [
         { role: 'system', content: this.buildSystemMessage() },
-        { role: 'user', content: wrapUserTask(task) },
+        { role: 'user', content: wrapUserTask(taskContent) },
       ];
       this.iteration = 0;
       this.recentToolCalls = []; // Reset loop detection
@@ -334,8 +416,24 @@ export class GenericAgent extends TypedEventEmitter {
 
       // Check for injected user input - add it to messages
       if (this.pendingUserInput) {
-        const userInput = this.pendingUserInput;
+        let userInput = this.pendingUserInput;
         this.pendingUserInput = null;
+
+        // Condense if long
+        if (shouldCondense(userInput)) {
+          const label = generateContentLabel(userInput);
+          const result = condenseUserInput(userInput);
+          if (result.wasCondensed && result.variableName && result.contextId) {
+            this.activeContextVariables.push({
+              id: result.contextId,
+              variableName: result.variableName,
+              label,
+              charCount: userInput.length,
+            });
+            userInput = result.condensed;
+            debugLog(`[GenericAgent] Condensed injected user input to ${result.variableName} (${result.contextId})`);
+          }
+        }
 
         // Add user input as a new message with XML tags
         this.messages.push({
@@ -344,13 +442,18 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit event
-        this.emit({ type: 'agent_text', text: `User: ${userInput}`, isFinal: false });
+        this.emit({ type: 'agent_text', text: `User: ${userInput.slice(0, 200)}${userInput.length > 200 ? '...' : ''}`, isFinal: false });
       }
 
       this.iteration++;
 
       // Emit thinking status
       this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+
+      // Check if we need to compress context before making LLM call
+      if (this.shouldCompressContext()) {
+        await this.compressConversationHistory();
+      }
 
       // Build messages with todo reminder injected
       const messagesWithReminder = this.injectTodoReminder();
@@ -360,6 +463,13 @@ export class GenericAgent extends TypedEventEmitter {
         messagesWithReminder,
         Array.from(this.tools.values())
       );
+
+      // Track token usage for context window management
+      if (response.usage) {
+        this.tokenUsage.lastPromptTokens = response.usage.promptTokens;
+        this.tokenUsage.lastCompletionTokens = response.usage.completionTokens;
+        debugLog(`[GenericAgent] Token usage: prompt=${response.usage.promptTokens}, completion=${response.usage.completionTokens}, total=${response.usage.totalTokens}`);
+      }
 
       // Add assistant message to history
       this.messages.push({
@@ -644,6 +754,61 @@ export class GenericAgent extends TypedEventEmitter {
       return result;
     }
 
+    // Handle dispatch_content_agent specially - spawn a sub-agent for creative content
+    if (toolCall.name === 'dispatch_content_agent') {
+      const result = await this.handleDispatchContentAgent(toolCall);
+      const resultObj = result as Record<string, unknown>;
+
+      // Check if content needs user verification
+      if (resultObj['status'] === 'awaiting_verification') {
+        // Emit tool result first
+        this.emit({
+          type: 'tool_result',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          result,
+          isError: false,
+          agentName: this.name,
+        });
+
+        // Set up waiting state for user input
+        this.waitingForUser = true;
+        this.pendingQuestion = resultObj['question'] as string;
+
+        // Emit question event with options and auto-approve timeout
+        const questionOptions = resultObj['options'] as Array<{ label: string; description?: string }>;
+        const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
+        debugLog(`[GenericAgent] dispatch_content_agent emitting question event with options: ${JSON.stringify(questionOptions)}`);
+        this.emit({
+          type: 'question',
+          question: resultObj['question'] as string,
+          isConfirmation: false,
+          options: questionOptions,
+          autoApproveTimeoutMs: questionTimeout,
+        });
+
+        // Emit status change
+        this.emit({
+          type: 'agent_status',
+          status: 'waiting',
+          agentName: this.name,
+        });
+
+        // Return special marker to indicate we're pausing for user input
+        return { __awaiting_user_input: true, ...result };
+      }
+
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.name,
+      });
+      return result;
+    }
+
     // Handle dispatch_image_agent specially - sub-agent for image prompt crafting + generation
     if (toolCall.name === 'dispatch_image_agent') {
       const result = await this.handleDispatchImageAgent(toolCall);
@@ -770,7 +935,17 @@ export class GenericAgent extends TypedEventEmitter {
    */
   private handleTodoTool(toolCall: ToolCall): unknown {
     const args = toolCall.arguments;
-    const result = this.todoManager.writeTodos(args['todos'] as Array<Record<string, unknown>>);
+    const todos = args['todos'] as Array<Record<string, unknown>>;
+
+    // Enforce minimum 2 todos to prevent single-item lists
+    if (todos.length < 2) {
+      return {
+        error: 'Todo list must have at least 2 items. If you only have one task, execute it directly without using todo_write.',
+        suggestion: 'Either add more tasks to track, or just do the single task without tracking it.',
+      };
+    }
+
+    const result = this.todoManager.writeTodos(todos);
 
     // Emit todo update event
     this.emit({
@@ -789,6 +964,18 @@ export class GenericAgent extends TypedEventEmitter {
     context?: string;
     messages: Message[];
     currentPlan: string;
+    iterations: number;
+  } | null = null;
+
+  // State for dispatch_content_agent sub-agent (creative content generation)
+  private contentState: {
+    active: boolean;
+    task: string;
+    contentType: ContentType;
+    context?: string;
+    outputFile?: string;
+    messages: Message[];
+    currentContent: string;
     iterations: number;
   } | null = null;
 
@@ -827,10 +1014,27 @@ export class GenericAgent extends TypedEventEmitter {
   private async handleDispatchAgent(toolCall: ToolCall): Promise<unknown> {
     const args = toolCall.arguments;
     const task = args['task'] as string;
-    const context = args['context'] as string | undefined;
+    let context = args['context'] as string | undefined;
+    const contextRef = args['context_ref'] as string | undefined;
 
     if (!task) {
       return { error: 'No task provided for dispatch_agent' };
+    }
+
+    // Resolve context_ref if provided (takes precedence over inline context)
+    if (contextRef) {
+      const stored = contextStore.get(contextRef);
+      if (stored) {
+        context = stored.content;
+        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} (${stored.label}, ${stored.content.length} chars)`);
+      } else {
+        return { error: `Context reference not found: ${contextRef}` };
+      }
+    }
+
+    // Warn about long inline context that should use context_ref
+    if (context && context.length > 500 && !contextRef) {
+      debugLog(`[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_agent without context_ref. Consider using store_context.`);
     }
 
     // Check if we're resuming an existing planning session
@@ -1027,6 +1231,197 @@ Your classification:`;
   }
 
   /**
+   * Check if there's an active content creation session awaiting user input.
+   */
+  isContentActive(): boolean {
+    return this.contentState?.active ?? false;
+  }
+
+  /**
+   * Handle dispatch_content_agent tool - spawns a sub-agent for creative content generation.
+   * Unlike dispatch_agent (for technical planning), this creates actual creative content
+   * like stories, character descriptions, and scene narratives.
+   */
+  private async handleDispatchContentAgent(toolCall: ToolCall): Promise<unknown> {
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contentType = args['content_type'] as ContentType;
+    let context = args['context'] as string | undefined;
+    const contextRef = args['context_ref'] as string | undefined;
+    const outputFile = args['output_file'] as string | undefined;
+
+    if (!task) {
+      return { error: 'No task provided for dispatch_content_agent' };
+    }
+
+    if (!contentType) {
+      return { error: 'No content_type provided for dispatch_content_agent' };
+    }
+
+    // Resolve context_ref if provided (takes precedence over inline context)
+    if (contextRef) {
+      const stored = contextStore.get(contextRef);
+      if (stored) {
+        context = stored.content;
+        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} for content agent (${stored.label}, ${stored.content.length} chars)`);
+      } else {
+        return { error: `Context reference not found: ${contextRef}` };
+      }
+    }
+
+    // Warn about long inline context that should use context_ref
+    if (context && context.length > 500 && !contextRef) {
+      debugLog(`[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_content_agent without context_ref. Consider using store_context.`);
+    }
+
+    // Check if we're resuming an existing content session
+    if (this.contentState?.active) {
+      return { error: 'Content creation already in progress' };
+    }
+
+    // Initialize content state with content prompt
+    const contentSystemPrompt = buildContentPrompt(task, contentType, context);
+
+    this.contentState = {
+      active: true,
+      task,
+      contentType,
+      context,
+      outputFile,
+      messages: [
+        { role: 'system', content: contentSystemPrompt },
+        { role: 'user', content: `<request>\nCreate the ${contentType} content for this task.\n</request>` },
+      ],
+      currentContent: '',
+      iterations: 0,
+    };
+
+    // Generate the initial content
+    return this.continueContentLoop();
+  }
+
+  /**
+   * Continue the content creation loop - generates content and asks for user verification.
+   */
+  private async continueContentLoop(): Promise<unknown> {
+    if (!this.contentState) {
+      return { error: 'No active content session' };
+    }
+
+    const maxIterations = 10;
+
+    if (this.contentState.iterations >= maxIterations) {
+      const result = {
+        status: 'max_iterations',
+        content: this.contentState.currentContent,
+        content_type: this.contentState.contentType,
+        task: this.contentState.task,
+        output_file: this.contentState.outputFile,
+        message: 'Reached maximum iterations for content refinement. Using the last version.',
+      };
+      this.contentState = null;
+      return result;
+    }
+
+    this.contentState.iterations++;
+
+    try {
+      // Generate or refine the content with streaming
+      let content = '';
+
+      for await (const chunk of this.llm.generateStream({
+        messages: this.contentState.messages,
+        temperature: 0.8, // Slightly higher temperature for creative content
+      })) {
+        if (chunk.content) {
+          content += chunk.content;
+          this.emit({ type: 'streaming_text', chunk: chunk.content, done: false, skipHistory: true });
+        }
+        if (chunk.done) {
+          this.emit({ type: 'streaming_text', chunk: '', done: true, skipHistory: true });
+        }
+      }
+
+      this.contentState.currentContent = content.trim() || 'No content generated';
+
+      // Add assistant response to history
+      this.contentState.messages.push({
+        role: 'assistant',
+        content: this.contentState.currentContent,
+      });
+
+      // Return status indicating we need user verification
+      const verificationQuestion = this.contentState.iterations === 1
+        ? `I've created the ${this.contentState.contentType} content. Would you like to accept it or provide feedback?`
+        : `I've updated the ${this.contentState.contentType} content based on your feedback. Would you like to accept it or provide more feedback?`;
+
+      const verificationResult = {
+        status: 'awaiting_verification',
+        content: this.contentState.currentContent,
+        content_type: this.contentState.contentType,
+        task: this.contentState.task,
+        output_file: this.contentState.outputFile,
+        iterations: this.contentState.iterations,
+        question: verificationQuestion,
+        options: [
+          { label: 'Accept content', description: 'Approve this content and proceed' },
+          { label: 'Provide feedback', description: 'Request changes to the content' },
+        ],
+        autoApproveTimeoutMs: 15000, // 15 seconds countdown for content approval
+      };
+      debugLog(`[GenericAgent] continueContentLoop returning: ${JSON.stringify({
+        status: verificationResult.status,
+        contentType: verificationResult.content_type,
+        question: verificationResult.question?.slice(0, 50),
+        optionsCount: verificationResult.options.length,
+      }, null, 2)}`);
+      return verificationResult;
+    } catch (error) {
+      this.contentState = null;
+      return {
+        error: `Content creation failed: ${String(error)}`,
+        task: this.contentState?.task,
+      };
+    }
+  }
+
+  /**
+   * Handle user response to content verification.
+   * Uses LLM to classify whether the response is approval or feedback.
+   */
+  async handleContentResponse(userResponse: string): Promise<unknown> {
+    if (!this.contentState) {
+      return { error: 'No active content session' };
+    }
+
+    // Use LLM to classify the user's intent (reuse same classification logic as planning)
+    const isApproval = await this.classifyPlanResponse(userResponse);
+
+    if (isApproval) {
+      const result = {
+        status: 'approved',
+        content: this.contentState.currentContent,
+        content_type: this.contentState.contentType,
+        task: this.contentState.task,
+        output_file: this.contentState.outputFile,
+        iterations: this.contentState.iterations,
+        message: 'Content approved by user. Ready to save.',
+      };
+      this.contentState = null;
+      return result;
+    }
+
+    // User wants to provide feedback - use their input directly with XML tags
+    this.contentState.messages.push({
+      role: 'user',
+      content: `<user_feedback>\n${userResponse}\n</user_feedback>\n\n<request>\nPlease revise the ${this.contentState.contentType} content based on the feedback above.\n</request>`,
+    });
+
+    // Continue the content loop
+    return this.continueContentLoop();
+  }
+
+  /**
    * Check if there's an active image generation session awaiting user input.
    */
   isImageGenActive(): boolean {
@@ -1044,7 +1439,8 @@ Your classification:`;
   private async handleDispatchImageAgent(toolCall: ToolCall): Promise<unknown> {
     const args = toolCall.arguments;
     const task = args['task'] as string;
-    const context = args['context'] as string | undefined;
+    let context = args['context'] as string | undefined;
+    const contextRef = args['context_ref'] as string | undefined;
     const sceneNumber = (args['scene_number'] as number) ?? 1;
     const imageType = args['image_type'] as 'scene' | 'character_ref' | 'setting_ref' | undefined;
     const characterName = args['character_name'] as string | undefined;
@@ -1057,6 +1453,22 @@ Your classification:`;
 
     if (!task) {
       return { error: 'No task provided for dispatch_image_agent' };
+    }
+
+    // Resolve context_ref if provided (takes precedence over inline context)
+    if (contextRef) {
+      const stored = contextStore.get(contextRef);
+      if (stored) {
+        context = stored.content;
+        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} for image agent (${stored.label}, ${stored.content.length} chars)`);
+      } else {
+        return { error: `Context reference not found: ${contextRef}` };
+      }
+    }
+
+    // Warn about long inline context that should use context_ref
+    if (context && context.length > 500 && !contextRef) {
+      debugLog(`[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_image_agent without context_ref. Consider using store_context.`);
     }
 
     // Check if we're resuming an existing session
@@ -1550,16 +1962,30 @@ Your classification:`;
   }
 
   /**
-   * Inject todo reminder after the first system message.
+   * Inject todo reminder and context variables after the first system message.
    */
   private injectTodoReminder(): Message[] {
-    if (this.todoManager.getTodos().length === 0) {
+    const hasTodos = this.todoManager.getTodos().length > 0;
+    const hasContextVars = this.activeContextVariables.length > 0;
+
+    if (!hasTodos && !hasContextVars) {
       return [...this.messages];
+    }
+
+    // Build reminder content
+    const parts: string[] = [];
+
+    if (hasTodos) {
+      parts.push(this.todoManager.toReminderText());
+    }
+
+    if (hasContextVars) {
+      parts.push(buildContextVariablesSection(this.activeContextVariables));
     }
 
     const reminder: Message = {
       role: 'system',
-      content: this.todoManager.toReminderText(),
+      content: parts.join('\n\n'),
     };
 
     // Insert after the first system message
@@ -1568,6 +1994,67 @@ Your classification:`;
       return [firstMsg, reminder, ...this.messages.slice(1)];
     }
     return [reminder, ...this.messages];
+  }
+
+  /**
+   * Get active context variables.
+   */
+  getContextVariables(): ContextVariable[] {
+    return [...this.activeContextVariables];
+  }
+
+  /**
+   * Check if context window is approaching capacity.
+   * Returns true if we should compress old messages.
+   */
+  private shouldCompressContext(): boolean {
+    // Only check if we have usage data
+    if (this.tokenUsage.lastPromptTokens === 0) {
+      return false;
+    }
+
+    const threshold = GenericAgent.MAX_CONTEXT_TOKENS * GenericAgent.CONTEXT_THRESHOLD;
+    const shouldCompress = this.tokenUsage.lastPromptTokens > threshold;
+
+    if (shouldCompress) {
+      debugLog(`[GenericAgent] Context at ${Math.round((this.tokenUsage.lastPromptTokens / GenericAgent.MAX_CONTEXT_TOKENS) * 100)}% - compression needed`);
+    }
+
+    return shouldCompress;
+  }
+
+  /**
+   * Compress conversation history when context approaches limit.
+   * Uses LLM to summarize old messages while preserving system + recent.
+   */
+  private async compressConversationHistory(): Promise<void> {
+    const { compressMessages, SUMMARIZER_SYSTEM_PROMPT } = await import('../context/MessageCompressor.js');
+
+    debugLog(`[GenericAgent] Starting context compression. Current messages: ${this.messages.length}`);
+
+    const result = await compressMessages(this.messages, async (content) => {
+      // Use LLM to summarize the conversation
+      const summaryResponse = await this.llm.generate({
+        messages: [
+          { role: 'system', content: SUMMARIZER_SYSTEM_PROMPT },
+          { role: 'user', content },
+        ],
+        maxTokens: 1000,
+      });
+      return summaryResponse.content ?? 'Conversation history compressed.';
+    });
+
+    if (result.wasCompressed) {
+      this.messages = result.messages;
+      debugLog(`[GenericAgent] Compressed ${result.removedCount} messages. New count: ${this.messages.length}`);
+
+      // Emit event so UI can show compression occurred
+      this.emit({
+        type: 'system_message',
+        message: `Context compressed: ${result.removedCount} messages summarized to stay within limits`,
+        agentName: this.name,
+      });
+    }
   }
 }
 

@@ -13,12 +13,17 @@ export {
   thinkTool,
   askUserTool,
   dispatchAgentTool,
+  dispatchContentAgentTool,
   dispatchImageAgentTool,
   setTodosTool,
   updateTodoTool,
   addSubtasksTool,
   todoWriteTool,
   expandTodoTool,
+  storeContextTool,
+  fetchContextTool,
+  listContextsTool,
+  deleteContextTool,
 } from './builtin/index.js';
 
 // Re-export for convenience
@@ -27,8 +32,11 @@ import {
   thinkTool,
   askUserTool,
   dispatchAgentTool,
+  dispatchContentAgentTool,
   dispatchImageAgentTool,
   todoWriteTool,
+  storeContextTool,
+  fetchContextTool,
 } from './builtin/index.js';
 
 /**
@@ -42,6 +50,8 @@ export function createDefaultToolRegistry(): ToolRegistry {
   registry.register(askUserTool);
   registry.register(dispatchAgentTool);
   registry.register(todoWriteTool);
+  registry.register(storeContextTool);
+  registry.register(fetchContextTool);
 
   return registry;
 }

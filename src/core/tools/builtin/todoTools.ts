@@ -6,7 +6,7 @@ import { createTool } from '../ToolRegistry.js';
 // todo_write - Primary todo management tool (matches prompt)
 export const todoWriteTool = createTool(
   'todo_write',
-  'Manage your todo list. Create, update, and track progress on tasks. Each todo has content (task description), status (pending/in_progress/completed), and optional visible flag.',
+  'Manage your todo list. Create, update, and track progress on tasks. Each todo has content (task description), status (pending/in_progress/completed), and optional visible flag. IMPORTANT: Always provide at least 2 items - if you only have one task, do not use this tool and just execute the task directly.',
   {
     type: 'object',
     properties: {

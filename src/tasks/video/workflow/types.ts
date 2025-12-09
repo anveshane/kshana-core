@@ -112,6 +112,45 @@ export interface AssetInfo {
 }
 
 /**
+ * Content type supported by the content registry.
+ */
+export type ContentTypeName = 'plot' | 'story' | 'characters' | 'settings' | 'scenes' | 'images' | 'videos';
+
+/**
+ * Status of content availability.
+ */
+export type ContentStatus = 'available' | 'partial' | 'missing';
+
+/**
+ * Content entry in the registry.
+ * Tracks what content exists and where to find it.
+ */
+export interface ContentEntry {
+  /** Current status of this content */
+  status: ContentStatus;
+  /** Path to the main file for this content (relative to .kshana/) */
+  file: string;
+  /** For itemized content (characters/settings), list of item names */
+  items?: string[];
+  /** For itemized content, paths to individual item files */
+  itemFiles?: Record<string, string>;
+}
+
+/**
+ * Content Registry - tracks what creative content is available.
+ * This is the single source of truth for both readers and writers.
+ */
+export interface ContentRegistry {
+  plot: ContentEntry;
+  story: ContentEntry;
+  characters: ContentEntry;
+  settings: ContentEntry;
+  scenes: ContentEntry;
+  images: ContentEntry;
+  videos: ContentEntry;
+}
+
+/**
  * Main project file structure (project.json).
  */
 export interface ProjectFile {
@@ -137,6 +176,9 @@ export interface ProjectFile {
     images: PhaseInfo;
     video: PhaseInfo;
   };
+
+  /** Content registry - tracks what creative content is available */
+  content: ContentRegistry;
 
   /** Character names (full data in characters/*.json) */
   characters: string[];

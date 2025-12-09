@@ -34,5 +34,5 @@ pnpm-debug.log*
 # Subprojects
 prompt-optimizer/
 
-# Project state files
+# Project data
 .kshana/

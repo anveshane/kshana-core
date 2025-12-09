@@ -36,7 +36,11 @@ Always use this tool for image generation to ensure high-quality, user-approved 
       },
       context: {
         type: 'string',
-        description: 'Background context (e.g., character descriptions, scene details, story mood). Helps the sub-agent craft a cohesive prompt.',
+        description: 'Short context only (<500 chars). For longer content (character descriptions, scene details), use store_context first and pass context_ref instead.',
+      },
+      context_ref: {
+        type: 'string',
+        description: 'Reference ID from store_context for long content. PREFERRED over inline context to preserve original character/scene descriptions.',
       },
       scene_number: {
         type: 'number',

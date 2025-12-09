@@ -13,6 +13,10 @@ import {
   type SettingData,
   type SceneData,
   type AssetInfo,
+  type ContentRegistry,
+  type ContentEntry,
+  type ContentTypeName,
+  type ContentStatus,
   WorkflowPhase,
   PlannerStage,
   PHASE_CONFIGS,
@@ -20,6 +24,7 @@ import {
   PROJECT_FILE,
   determineNextPhase,
 } from './types.js';
+import { generateProjectTitle } from '../../../core/context/index.js';
 
 /**
  * Get the project directory path for the current working directory.
@@ -94,19 +99,52 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
 }
 
 /**
+ * Create the default content registry with all content marked as missing.
+ */
+export function createDefaultContentRegistry(): ContentRegistry {
+  return {
+    plot: { status: 'missing', file: 'plans/plot.md' },
+    story: { status: 'missing', file: 'plans/story.md' },
+    characters: { status: 'missing', file: 'plans/characters.md', items: [], itemFiles: {} },
+    settings: { status: 'missing', file: 'plans/settings.md', items: [], itemFiles: {} },
+    scenes: { status: 'missing', file: 'plans/scenes.md', items: [] },
+    images: { status: 'missing', file: 'plans/images.md', items: [] },
+    videos: { status: 'missing', file: 'plans/video.md', items: [] },
+  };
+}
+
+/**
+ * Strip XML-like tags from content (e.g., <user_task>, [STORED CONTENT:], etc.)
+ */
+function stripWrapperTags(content: string): string {
+  return content
+    // Remove <user_task>...</user_task> tags
+    .replace(/<user_task>\s*/gi, '')
+    .replace(/\s*<\/user_task>/gi, '')
+    // Remove [user_task]... prefix
+    .replace(/^\[user_task\]\s*/i, '')
+    // Remove [STORED CONTENT: ...] blocks
+    .replace(/\[STORED CONTENT:[^\]]*\]\s*context_ref:[^\n]*\n[^\n]*\n\nPreview:[^\n]*\n\n[^\n]*\n[^\n]*/gi, '')
+    .trim();
+}
+
+/**
  * Create a new project file with the given input.
  */
 export function createProject(originalInput: string, basePath: string = process.cwd()): ProjectFile {
   // Ensure directory structure exists
   createProjectStructure(basePath);
 
+  // Clean the input - remove any XML tags or wrapper formats
+  const cleanInput = stripWrapperTags(originalInput);
+
   const now = Date.now();
   const projectId = `proj-${now}-${Math.random().toString(36).slice(2, 8)}`;
 
   const project: ProjectFile = {
     id: projectId,
-    title: '',
-    originalInput,
+    title: generateProjectTitle(cleanInput),
+    originalInput: cleanInput,
     createdAt: now,
     updatedAt: now,
     currentPhase: WorkflowPhase.PLOT,
@@ -137,6 +175,7 @@ export function createProject(originalInput: string, basePath: string = process.
         completedAt: null,
       },
     },
+    content: createDefaultContentRegistry(),
     characters: [],
     settings: [],
     scenes: [],
@@ -548,4 +587,209 @@ The ${phaseConfig.displayName} phase is complete.
   }
 
   return instruction.trim();
+}
+
+// ============================================================================
+// Content Registry Functions
+// ============================================================================
+
+/**
+ * Update the status of a content type in the registry.
+ */
+export function updateContentStatus(
+  project: ProjectFile,
+  contentType: ContentTypeName,
+  status: ContentStatus,
+  basePath: string = process.cwd()
+): ProjectFile {
+  // Ensure content registry exists (for backwards compatibility)
+  if (!project.content) {
+    project.content = createDefaultContentRegistry();
+  }
+
+  project.content[contentType].status = status;
+  saveProject(project, basePath);
+  return project;
+}
+
+/**
+ * Add an item to an itemized content type (characters, settings, scenes, images, videos).
+ */
+export function addContentItem(
+  project: ProjectFile,
+  contentType: ContentTypeName,
+  itemName: string,
+  itemFile?: string,
+  basePath: string = process.cwd()
+): ProjectFile {
+  // Ensure content registry exists
+  if (!project.content) {
+    project.content = createDefaultContentRegistry();
+  }
+
+  const entry = project.content[contentType];
+
+  // Initialize items array if needed
+  if (!entry.items) {
+    entry.items = [];
+  }
+
+  // Add item if not already present
+  if (!entry.items.includes(itemName)) {
+    entry.items.push(itemName);
+  }
+
+  // Add item file path if provided
+  if (itemFile) {
+    if (!entry.itemFiles) {
+      entry.itemFiles = {};
+    }
+    entry.itemFiles[itemName] = itemFile;
+  }
+
+  // Update status: at least partial if we have items
+  if (entry.status === 'missing' && entry.items.length > 0) {
+    entry.status = 'partial';
+  }
+
+  saveProject(project, basePath);
+  return project;
+}
+
+/**
+ * Get the content context string for use in prompts.
+ * This generates a summary of what content is available/missing.
+ */
+export function getContentContext(project: ProjectFile): string {
+  // Ensure content registry exists
+  if (!project.content) {
+    return `
+Content Status:
+- All content types are missing (no content registry initialized)
+
+You should start from the beginning and create all content.
+`.trim();
+  }
+
+  const available: string[] = [];
+  const partial: string[] = [];
+  const missing: string[] = [];
+
+  for (const [type, entry] of Object.entries(project.content)) {
+    const info = entry as ContentEntry;
+    if (info.status === 'available') {
+      available.push(type);
+    } else if (info.status === 'partial') {
+      const itemCount = info.items?.length ?? 0;
+      partial.push(`${type} (${itemCount} items)`);
+    } else {
+      missing.push(type);
+    }
+  }
+
+  let context = `
+## Content Registry Status
+
+**Available**: ${available.length > 0 ? available.join(', ') : 'none'}
+**Partial**: ${partial.length > 0 ? partial.join(', ') : 'none'}
+**Missing**: ${missing.length > 0 ? missing.join(', ') : 'none'}
+
+## Content Files
+
+`;
+
+  // Add file paths for available/partial content
+  for (const [type, entry] of Object.entries(project.content)) {
+    const info = entry as ContentEntry;
+    if (info.status !== 'missing') {
+      context += `- **${type}**: \`${info.file}\`\n`;
+      if (info.items && info.items.length > 0) {
+        context += `  - Items: ${info.items.join(', ')}\n`;
+      }
+    }
+  }
+
+  context += `
+## Reading Content
+
+You can read available content using read_file with the paths listed above.
+All paths are relative to the .kshana/ directory.
+`;
+
+  return context.trim();
+}
+
+/**
+ * Get the content registry JSON for embedding in prompts.
+ */
+export function getContentRegistryJson(project: ProjectFile): string {
+  if (!project.content) {
+    return JSON.stringify(createDefaultContentRegistry(), null, 2);
+  }
+  return JSON.stringify(project.content, null, 2);
+}
+
+/**
+ * Check if all required content for a phase is available.
+ */
+export function hasRequiredContent(
+  project: ProjectFile,
+  requiredTypes: ContentTypeName[]
+): { complete: boolean; missing: ContentTypeName[] } {
+  const missing: ContentTypeName[] = [];
+
+  for (const type of requiredTypes) {
+    const entry = project.content?.[type];
+    if (!entry || entry.status === 'missing') {
+      missing.push(type);
+    }
+  }
+
+  return {
+    complete: missing.length === 0,
+    missing,
+  };
+}
+
+/**
+ * Mark content as available after successful creation.
+ * This also syncs item lists for itemized content types.
+ */
+export function markContentAvailable(
+  project: ProjectFile,
+  contentType: ContentTypeName,
+  basePath: string = process.cwd()
+): ProjectFile {
+  // Ensure content registry exists
+  if (!project.content) {
+    project.content = createDefaultContentRegistry();
+  }
+
+  const entry = project.content[contentType];
+
+  // For itemized content, check if we have items
+  if (['characters', 'settings', 'scenes', 'images', 'videos'].includes(contentType)) {
+    // Sync with project arrays
+    if (contentType === 'characters' && project.characters.length > 0) {
+      entry.items = [...project.characters];
+      entry.status = 'available';
+    } else if (contentType === 'settings' && project.settings.length > 0) {
+      entry.items = [...project.settings];
+      entry.status = 'available';
+    } else if (contentType === 'scenes' && project.scenes.length > 0) {
+      entry.items = project.scenes.map(s => `Scene ${s.sceneNumber}`);
+      entry.status = 'available';
+    } else if (entry.items && entry.items.length > 0) {
+      entry.status = 'available';
+    } else {
+      // No items yet, mark as partial
+      entry.status = 'partial';
+    }
+  } else {
+    // Non-itemized content (plot, story)
+    entry.status = 'available';
+  }
+
+  saveProject(project, basePath);
+  return project;
 }
