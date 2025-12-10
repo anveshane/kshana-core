@@ -92,6 +92,9 @@ export class GenericAgent extends TypedEventEmitter {
   private static readonly CONTEXT_THRESHOLD = 0.80; // 80% of max context
   private static readonly MAX_CONTEXT_TOKENS = 128000; // Claude's typical context window
 
+  // Current mode for more descriptive agent names in UI
+  private currentMode: 'orchestrator' | 'content' | 'image' | 'video' | 'planning' = 'orchestrator';
+
   constructor(
     tools: Map<string, ToolDefinition>,
     llm: LLMClient,
@@ -107,11 +110,29 @@ export class GenericAgent extends TypedEventEmitter {
   }
 
   /**
+   * Get the effective agent name based on current mode.
+   */
+  private getEffectiveAgentName(): string {
+    switch (this.currentMode) {
+      case 'content':
+        return 'Content Agent';
+      case 'image':
+        return 'Image Agent';
+      case 'video':
+        return 'Video Agent';
+      case 'planning':
+        return 'Planning Agent';
+      default:
+        return this.name;
+    }
+  }
+
+  /**
    * Stop the agent's current execution.
    */
   stop(): void {
     this.aborted = true;
-    this.emit({ type: 'agent_status', status: 'interrupted', agentName: this.name });
+    this.emit({ type: 'agent_status', status: 'interrupted', agentName: this.getEffectiveAgentName() });
   }
 
   /**
@@ -120,7 +141,7 @@ export class GenericAgent extends TypedEventEmitter {
    */
   injectInput(input: string): void {
     this.pendingUserInput = input;
-    this.emit({ type: 'user_input_injected', input, agentName: this.name });
+    this.emit({ type: 'user_input_injected', input, agentName: this.getEffectiveAgentName() });
   }
 
   /**
@@ -226,7 +247,7 @@ export class GenericAgent extends TypedEventEmitter {
     this.aborted = false;
 
     // Emit started status
-    this.emit({ type: 'agent_status', status: 'started', agentName: this.name });
+    this.emit({ type: 'agent_status', status: 'started', agentName: this.getEffectiveAgentName() });
 
     // Resume from user question or start fresh
     if (userResponse && this.waitingForUser) {
@@ -276,7 +297,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit status change back to thinking
-        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
       } else if (this.contentState?.active) {
         // Handle the content creation response
         const contentResult = await this.handleContentResponse(userResponse);
@@ -321,7 +342,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit status change back to thinking
-        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
       } else if (this.imageGenState?.active) {
         // Handle the image generation response
         const imageResult = await this.handleImageGenResponse(userResponse);
@@ -366,7 +387,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit status change back to thinking
-        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
       } else {
         // Regular ask_user response
         this.handleUserResponse(userResponse);
@@ -447,7 +468,7 @@ export class GenericAgent extends TypedEventEmitter {
       this.iteration++;
 
       // Emit thinking status
-      this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+      this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
 
       // Check if we need to compress context before making LLM call
       if (this.shouldCompressContext()) {
@@ -489,7 +510,7 @@ export class GenericAgent extends TypedEventEmitter {
         if (toolCall.name === 'ask_user') {
           const result = this.handleAskUser(toolCall);
           if (result) {
-            this.emit({ type: 'agent_status', status: 'waiting', agentName: this.name });
+            this.emit({ type: 'agent_status', status: 'waiting', agentName: this.getEffectiveAgentName() });
             return result;
           }
           continue;
@@ -525,7 +546,7 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Check if max iterations reached
     if (this.iteration >= this.maxIterations) {
-      this.emit({ type: 'agent_status', status: 'error', agentName: this.name });
+      this.emit({ type: 'agent_status', status: 'error', agentName: this.getEffectiveAgentName() });
       return {
         status: 'interrupted',
         output: 'Agent reached maximum iterations without completing.',
@@ -535,7 +556,7 @@ export class GenericAgent extends TypedEventEmitter {
     }
 
     // Emit completed status
-    this.emit({ type: 'agent_status', status: 'completed', agentName: this.name });
+    this.emit({ type: 'agent_status', status: 'completed', agentName: this.getEffectiveAgentName() });
     this.emit({ type: 'agent_text', text: finalOutput, isFinal: true });
 
     return {
@@ -648,7 +669,7 @@ export class GenericAgent extends TypedEventEmitter {
       toolCallId: toolCall.id,
       toolName: toolCall.name,
       arguments: toolCall.arguments,
-      agentName: this.name,
+      agentName: this.getEffectiveAgentName(),
     });
 
     // Check for looping (skip for think tool - it's normal to think often)
@@ -668,7 +689,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result: warningResult,
           isError: loopResult.isHardError,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
         return warningResult;
       }
@@ -683,7 +704,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     }
@@ -702,7 +723,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result,
           isError: false,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Set up waiting state for user input
@@ -732,7 +753,7 @@ export class GenericAgent extends TypedEventEmitter {
         this.emit({
           type: 'agent_status',
           status: 'waiting',
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Return special marker to indicate we're pausing for user input
@@ -745,7 +766,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     }
@@ -764,7 +785,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result,
           isError: false,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Set up waiting state for user input
@@ -787,7 +808,7 @@ export class GenericAgent extends TypedEventEmitter {
         this.emit({
           type: 'agent_status',
           status: 'waiting',
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Return special marker to indicate we're pausing for user input
@@ -800,7 +821,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     }
@@ -819,7 +840,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result,
           isError: false,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Set up waiting state for user input
@@ -839,7 +860,7 @@ export class GenericAgent extends TypedEventEmitter {
         this.emit({
           type: 'agent_status',
           status: 'waiting',
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Return special marker to indicate we're pausing for user input
@@ -852,7 +873,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     }
@@ -871,7 +892,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result,
           isError: false,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Set up waiting state for user input
@@ -891,7 +912,7 @@ export class GenericAgent extends TypedEventEmitter {
         this.emit({
           type: 'agent_status',
           status: 'waiting',
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Return special marker to indicate we're pausing for user input
@@ -904,7 +925,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     }
@@ -918,7 +939,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result: errorResult,
         isError: true,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return errorResult;
     }
@@ -940,7 +961,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result: confirmResult,
           isError: false,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
         return confirmResult;
       } else {
@@ -958,7 +979,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     } catch (error) {
@@ -969,7 +990,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result: errorResult,
         isError: true,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return errorResult;
     }
@@ -996,7 +1017,7 @@ export class GenericAgent extends TypedEventEmitter {
     this.emit({
       type: 'todo_update',
       todos: this.todoManager.getTodos(),
-      agentName: this.name,
+      agentName: this.getEffectiveAgentName(),
     });
 
     return result;
@@ -1074,11 +1095,15 @@ export class GenericAgent extends TypedEventEmitter {
    * It keeps iterating until the user approves the plan.
    */
   private async handleDispatchAgent(toolCall: ToolCall): Promise<unknown> {
+    // Set mode for UI display
+    this.currentMode = 'planning';
+
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const contextRefs = args['context_refs'] as string[] | undefined;
 
     if (!task) {
+      this.currentMode = 'orchestrator';
       return { error: 'No task provided for dispatch_agent' };
     }
 
@@ -1153,6 +1178,7 @@ export class GenericAgent extends TypedEventEmitter {
         message: 'Reached maximum iterations for plan refinement. Using the last version.',
       };
       this.planningState = null;
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -1215,6 +1241,7 @@ export class GenericAgent extends TypedEventEmitter {
       return verificationResult;
     } catch (error) {
       this.planningState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: `Planning failed: ${String(error)}`,
         task: this.planningState?.task,
@@ -1259,6 +1286,7 @@ export class GenericAgent extends TypedEventEmitter {
         next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
       this.planningState = null;
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -1436,6 +1464,9 @@ Respond in JSON format:
    * like stories, character descriptions, and scene narratives.
    */
   private async handleDispatchContentAgent(toolCall: ToolCall): Promise<unknown> {
+    // Set mode for UI display
+    this.currentMode = 'content';
+
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const contentType = args['content_type'] as ContentType;
@@ -1443,10 +1474,12 @@ Respond in JSON format:
     const outputFile = args['output_file'] as string | undefined;
 
     if (!task) {
+      this.currentMode = 'orchestrator';
       return { error: 'No task provided for dispatch_content_agent' };
     }
 
     if (!contentType) {
+      this.currentMode = 'orchestrator';
       return { error: 'No content_type provided for dispatch_content_agent' };
     }
 
@@ -1544,6 +1577,7 @@ Respond in JSON format:
         message: 'Reached maximum iterations for content refinement. Using the last version.',
       };
       this.contentState = null;
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -1602,6 +1636,7 @@ Respond in JSON format:
       return verificationResult;
     } catch (error) {
       this.contentState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: `Content creation failed: ${String(error)}`,
         task: this.contentState?.task,
@@ -1657,6 +1692,8 @@ Respond in JSON format:
         next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
       this.contentState = null;
+      // Reset mode back to orchestrator
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -1686,6 +1723,9 @@ Respond in JSON format:
    * 2. Image+Text-to-Image: For scenes (requires reference images for consistency)
    */
   private async handleDispatchImageAgent(toolCall: ToolCall): Promise<unknown> {
+    // Set mode for UI display
+    this.currentMode = 'image';
+
     const args = toolCall.arguments;
     const task = args['task'] as string;
     let context = args['context'] as string | undefined;
@@ -1701,6 +1741,7 @@ Respond in JSON format:
     }> | undefined;
 
     if (!task) {
+      this.currentMode = 'orchestrator';
       return { error: 'No task provided for dispatch_image_agent' };
     }
 
@@ -1798,6 +1839,7 @@ Respond in JSON format:
         message: 'Reached maximum iterations for prompt refinement. Using the last version.',
       };
       this.imageGenState = null;
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -1853,6 +1895,7 @@ Respond in JSON format:
       };
     } catch (error) {
       this.imageGenState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: `Image prompt generation failed: ${String(error)}`,
         task: this.imageGenState?.task,
@@ -1995,6 +2038,7 @@ Your classification:`;
     const generateImageTool = this.tools.get('generate_image');
     if (!generateImageTool?.handler) {
       this.imageGenState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: 'generate_image tool not available',
         prompt: currentPrompt,
@@ -2032,7 +2076,7 @@ Your classification:`;
       toolCallId: `img-gen-${Date.now()}`,
       toolName: 'generate_image',
       arguments: generateArgs,
-      agentName: this.name,
+      agentName: this.getEffectiveAgentName(),
     });
 
     try {
@@ -2042,6 +2086,7 @@ Your classification:`;
       // Clear the state
       const finalState = { ...this.imageGenState };
       this.imageGenState = null;
+      this.currentMode = 'orchestrator';
 
       // Emit tool result
       this.emit({
@@ -2050,7 +2095,7 @@ Your classification:`;
         toolName: 'generate_image',
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
 
       return {
@@ -2065,6 +2110,7 @@ Your classification:`;
       };
     } catch (error) {
       this.imageGenState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: `Image generation failed: ${String(error)}`,
         prompt: currentPrompt,
@@ -2078,6 +2124,9 @@ Your classification:`;
    * Presents video parameters to user for approval before generating.
    */
   private async handleDispatchVideoAgent(toolCall: ToolCall): Promise<unknown> {
+    // Set mode for UI display
+    this.currentMode = 'video';
+
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const sceneImageArtifactId = args['scene_image_artifact_id'] as string;
@@ -2087,10 +2136,12 @@ Your classification:`;
     const duration = (args['duration'] as number) ?? 4;
 
     if (!task) {
+      this.currentMode = 'orchestrator';
       return { error: 'No task provided for dispatch_video_agent' };
     }
 
     if (!sceneImageArtifactId) {
+      this.currentMode = 'orchestrator';
       return { error: 'No scene_image_artifact_id provided for dispatch_video_agent' };
     }
 
@@ -2181,6 +2232,7 @@ Your classification:`;
         message: 'Reached maximum iterations for parameter refinement. Using the last version.',
       };
       this.videoGenState = null;
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -2230,6 +2282,7 @@ Your classification:`;
     const generateVideoTool = this.tools.get('generate_video');
     if (!generateVideoTool?.handler) {
       this.videoGenState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: 'generate_video tool not available',
         task,
@@ -2251,7 +2304,7 @@ Your classification:`;
       toolCallId: `vid-gen-${Date.now()}`,
       toolName: 'generate_video',
       arguments: generateArgs,
-      agentName: this.name,
+      agentName: this.getEffectiveAgentName(),
     });
 
     try {
@@ -2261,6 +2314,7 @@ Your classification:`;
       // Clear the state
       const finalState = { ...this.videoGenState };
       this.videoGenState = null;
+      this.currentMode = 'orchestrator';
 
       // Emit tool result
       this.emit({
@@ -2269,7 +2323,7 @@ Your classification:`;
         toolName: 'generate_video',
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
 
       return {
@@ -2284,6 +2338,7 @@ Your classification:`;
       };
     } catch (error) {
       this.videoGenState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: `Video generation failed: ${String(error)}`,
         task,
@@ -2518,7 +2573,7 @@ Your classification:`;
       this.emit({
         type: 'system_message',
         message: `Context compressed: ${result.removedCount} messages summarized to stay within limits`,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
     }
   }
