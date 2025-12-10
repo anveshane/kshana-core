@@ -77,11 +77,11 @@ function buildToolDescriptions(tools: Map<string, ToolDefinition>): string {
 }
 
 /**
- * Context variable info for the system prompt (with ID for dispatch tools).
+ * Context variable info for the system prompt.
+ * variableName is used as the primary reference (e.g., "$plan", "$chapter_1")
  */
 export interface ContextVariable {
-  id: string;           // The context_ref to pass to dispatch tools
-  variableName: string; // Display name like $chapter_1
+  variableName: string; // Primary key like $chapter_1 (used as context_ref)
   label: string;        // Description
   charCount: number;    // Size
 }
@@ -105,7 +105,7 @@ export function buildContextVariablesSection(variables: ContextVariable[]): stri
 
   for (const v of variables) {
     lines.push(`### ${v.variableName}`);
-    lines.push(`- **context_ref**: \`"${v.id}"\``);
+    lines.push(`- **context_ref**: \`"${v.variableName}"\``);
     lines.push(`- **Content**: ${v.label}`);
     lines.push(`- **Size**: ${v.charCount.toLocaleString()} characters`);
     lines.push('');
@@ -122,11 +122,11 @@ export function buildContextVariablesSection(variables: ContextVariable[]): stri
   lines.push('');
 
   if (variables.length > 0) {
-    const ex = variables[0];
+    const varNames = variables.map(v => `"${v.variableName}"`).join(', ');
     lines.push('**Example:**');
     lines.push('```');
-    lines.push(`// For tasks needing content from ${ex?.variableName}:`);
-    lines.push(`dispatch_content_agent(task="...", context_ref="${ex?.id}", content_type="...")`);
+    lines.push(`// Pass ALL relevant contexts to content agents:`);
+    lines.push(`dispatch_content_agent(task="...", content_type="...", context_refs=[${varNames}])`);
     lines.push('```');
   }
 

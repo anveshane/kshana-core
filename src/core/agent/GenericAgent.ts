@@ -378,16 +378,15 @@ export class GenericAgent extends TypedEventEmitter {
       if (shouldCondense(task)) {
         const label = generateContentLabel(task);
         const result = condenseUserInput(task);
-        if (result.wasCondensed && result.variableName && result.contextId) {
+        if (result.wasCondensed && result.variableName) {
           // Add to active context variables
           this.activeContextVariables.push({
-            id: result.contextId,
             variableName: result.variableName,
             label,
             charCount: task.length,
           });
           taskContent = result.condensed;
-          debugLog(`[GenericAgent] Condensed long user input (${task.length} chars) to ${result.variableName} (${result.contextId})`);
+          debugLog(`[GenericAgent] Condensed long user input (${task.length} chars) to ${result.variableName}`);
         }
       }
 
@@ -423,15 +422,14 @@ export class GenericAgent extends TypedEventEmitter {
         if (shouldCondense(userInput)) {
           const label = generateContentLabel(userInput);
           const result = condenseUserInput(userInput);
-          if (result.wasCondensed && result.variableName && result.contextId) {
+          if (result.wasCondensed && result.variableName) {
             this.activeContextVariables.push({
-              id: result.contextId,
               variableName: result.variableName,
               label,
               charCount: userInput.length,
             });
             userInput = result.condensed;
-            debugLog(`[GenericAgent] Condensed injected user input to ${result.variableName} (${result.contextId})`);
+            debugLog(`[GenericAgent] Condensed injected user input to ${result.variableName}`);
           }
         }
 
@@ -1008,27 +1006,38 @@ export class GenericAgent extends TypedEventEmitter {
   private async handleDispatchAgent(toolCall: ToolCall): Promise<unknown> {
     const args = toolCall.arguments;
     const task = args['task'] as string;
-    let context = args['context'] as string | undefined;
-    const contextRef = args['context_ref'] as string | undefined;
+    const contextRefs = args['context_refs'] as string[] | undefined;
 
     if (!task) {
       return { error: 'No task provided for dispatch_agent' };
     }
 
-    // Resolve context_ref if provided (takes precedence over inline context)
-    if (contextRef) {
-      const stored = contextStore.get(contextRef);
-      if (stored) {
-        context = stored.content;
-        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} (${stored.label}, ${stored.content.length} chars)`);
-      } else {
-        return { error: `Context reference not found: ${contextRef}` };
+    // Resolve all context_refs into a combined context
+    const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
+
+    if (contextRefs && contextRefs.length > 0) {
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push({
+            variableName: ref,
+            label: stored.label,
+            content: stored.content,
+          });
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} for planning agent (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
+        }
       }
     }
 
-    // Warn about long inline context that should use context_ref
-    if (context && context.length > 500 && !contextRef) {
-      debugLog(`[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_agent without context_ref. Consider using store_context.`);
+    // Build combined context with clear sections
+    let context: string | undefined;
+    if (contextParts.length > 0) {
+      context = contextParts.map(part =>
+        `## ${part.variableName} (${part.label})\n\n${part.content}`
+      ).join('\n\n---\n\n');
+      debugLog(`[GenericAgent] Combined ${contextParts.length} contexts for planning agent (${context.length} chars total)`);
     }
 
     // Check if we're resuming an existing planning session
@@ -1156,12 +1165,28 @@ export class GenericAgent extends TypedEventEmitter {
     const isApproval = await this.classifyPlanResponse(userResponse);
 
     if (isApproval) {
+      // Generate plan name and summary using LLM
+      const { name, summary } = await this.generatePlanMetadata(
+        this.planningState.task,
+        this.planningState.currentPlan
+      );
+
+      // Store full plan in external context file
+      const { variableName } = contextStore.store(
+        this.planningState.currentPlan,
+        name,
+        { source: 'tool', variableBaseName: 'plan' }
+      );
+
       const result = {
         status: 'approved',
-        plan: this.planningState.currentPlan,
+        name,
+        summary,
+        plan_ref: variableName,
         task: this.planningState.task,
         iterations: this.planningState.iterations,
-        message: 'Plan approved by user. Ready for execution.',
+        message: `Plan "${name}" approved. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`,
+        next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
       this.planningState = null;
       return result;
@@ -1217,6 +1242,41 @@ Your classification:`;
   }
 
   /**
+   * Generate a name and summary for an approved plan.
+   * The summary is injected into message history; full plan is stored externally.
+   */
+  private async generatePlanMetadata(
+    task: string,
+    plan: string
+  ): Promise<{ name: string; summary: string }> {
+    const prompt = `Given this planning task and the resulting plan, generate:
+1. A short descriptive name (3-5 words, no quotes)
+2. A 1-2 sentence summary that captures the key steps and can be used to remember what the plan contains
+
+<task>${task}</task>
+
+<plan>${plan}</plan>
+
+Respond in JSON format:
+{"name": "...", "summary": "..."}`;
+
+    try {
+      const response = await this.llm.generate({
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        maxTokens: 200,
+      });
+
+      return JSON.parse(response.content ?? '{}');
+    } catch {
+      return {
+        name: task.slice(0, 50),
+        summary: `Plan for: ${task}`,
+      };
+    }
+  }
+
+  /**
    * Check if there's an active planning session awaiting user input.
    */
   isPlanningActive(): boolean {
@@ -1231,6 +1291,76 @@ Your classification:`;
   }
 
   /**
+   * Try to resolve a context reference from project files.
+   * This is a fallback when the context isn't found in the context store.
+   * Supports both variable names ($plan) and direct file paths (plans/story.md).
+   */
+  private tryResolveFromProjectFiles(ref: string): { label: string; content: string; file: string } | null {
+    // Map of context ref patterns to project file paths
+    const projectFileMap: Record<string, { file: string; label: string }> = {
+      '$plan': { file: 'plans/story.md', label: 'Story Plan' },
+      '$plot': { file: 'plans/plot.md', label: 'Plot' },
+      '$story': { file: 'plans/story.md', label: 'Story' },
+      '$scenes': { file: 'plans/scenes.md', label: 'Scenes' },
+      '$images': { file: 'plans/images.md', label: 'Images Plan' },
+      '$video': { file: 'plans/video.md', label: 'Video Plan' },
+      '$original_input': { file: 'original_input.md', label: 'Original Input' },
+    };
+
+    const projectDir = path.join(process.cwd(), '.kshana');
+
+    // Check if ref is a direct file path (e.g., "plans/story.md")
+    if (ref.includes('/') || ref.endsWith('.md')) {
+      const filePath = path.join(projectDir, ref);
+      try {
+        if (fs.existsSync(filePath)) {
+          const content = fs.readFileSync(filePath, 'utf-8');
+          if (content.trim().length > 0) {
+            // Generate label from filename
+            const filename = path.basename(ref, '.md');
+            const label = filename.charAt(0).toUpperCase() + filename.slice(1);
+            return {
+              label: label,
+              content: content,
+              file: ref,
+            };
+          }
+        }
+      } catch {
+        // File read failed, continue to variable name lookup
+      }
+    }
+
+    // Try to match the ref as a variable name (ignore numeric suffixes like $plan_2)
+    const baseRef = ref.replace(/_\d+$/, '');
+    const mapping = projectFileMap[baseRef] || projectFileMap[ref];
+
+    if (!mapping) {
+      return null;
+    }
+
+    // Try to read from project directory
+    const filePath = path.join(projectDir, mapping.file);
+
+    try {
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        if (content.trim().length > 0) {
+          return {
+            label: mapping.label,
+            content: content,
+            file: mapping.file,
+          };
+        }
+      }
+    } catch {
+      // File read failed, return null
+    }
+
+    return null;
+  }
+
+  /**
    * Handle dispatch_content_agent tool - spawns a sub-agent for creative content generation.
    * Unlike dispatch_agent (for technical planning), this creates actual creative content
    * like stories, character descriptions, and scene narratives.
@@ -1239,8 +1369,7 @@ Your classification:`;
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const contentType = args['content_type'] as ContentType;
-    let context = args['context'] as string | undefined;
-    const contextRef = args['context_ref'] as string | undefined;
+    const contextRefs = args['context_refs'] as string[] | undefined;
     const outputFile = args['output_file'] as string | undefined;
 
     if (!task) {
@@ -1251,20 +1380,52 @@ Your classification:`;
       return { error: 'No content_type provided for dispatch_content_agent' };
     }
 
-    // Resolve context_ref if provided (takes precedence over inline context)
-    if (contextRef) {
-      const stored = contextStore.get(contextRef);
-      if (stored) {
-        context = stored.content;
-        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} for content agent (${stored.label}, ${stored.content.length} chars)`);
-      } else {
-        return { error: `Context reference not found: ${contextRef}` };
+    // Resolve all context_refs into a combined context
+    const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
+    const missingRefs: string[] = [];
+
+    if (contextRefs && contextRefs.length > 0) {
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push({
+            variableName: ref,
+            label: stored.label,
+            content: stored.content,
+          });
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} for content agent (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          // Try to resolve from project files if this looks like a plan reference
+          // e.g., $plan -> plans/plot.md or plans/story.md
+          const projectFileContent = this.tryResolveFromProjectFiles(ref);
+          if (projectFileContent) {
+            contextParts.push({
+              variableName: ref,
+              label: projectFileContent.label,
+              content: projectFileContent.content,
+            });
+            debugLog(`[GenericAgent] Resolved context_ref ${ref} from project file: ${projectFileContent.file}`);
+          } else {
+            debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
+            missingRefs.push(ref);
+          }
+        }
       }
     }
 
-    // Warn about long inline context that should use context_ref
-    if (context && context.length > 500 && !contextRef) {
-      debugLog(`[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_content_agent without context_ref. Consider using store_context.`);
+    // Log error for missing refs to help debug
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] ERROR: Could not resolve context_refs: ${missingRefs.join(', ')}`);
+      debugLog(`[GenericAgent] Available context variables: ${contextStore.list().map(c => c.variableName).join(', ') || 'none'}`);
+    }
+
+    // Build combined context with clear sections
+    let context: string | undefined;
+    if (contextParts.length > 0) {
+      context = contextParts.map(part =>
+        `## ${part.variableName} (${part.label})\n\n${part.content}`
+      ).join('\n\n---\n\n');
+      debugLog(`[GenericAgent] Combined ${contextParts.length} contexts for content agent (${context.length} chars total)`);
     }
 
     // Check if we're resuming an existing content session
@@ -1391,14 +1552,39 @@ Your classification:`;
     const isApproval = await this.classifyPlanResponse(userResponse);
 
     if (isApproval) {
+      // Write content to output file if specified
+      let fileSaved = false;
+      if (this.contentState.outputFile) {
+        try {
+          const projectDir = path.join(process.cwd(), '.kshana');
+          const filePath = path.join(projectDir, this.contentState.outputFile);
+
+          // Ensure parent directory exists
+          const parentDir = path.dirname(filePath);
+          if (!fs.existsSync(parentDir)) {
+            fs.mkdirSync(parentDir, { recursive: true });
+          }
+
+          fs.writeFileSync(filePath, this.contentState.currentContent, 'utf-8');
+          fileSaved = true;
+          debugLog(`[GenericAgent] Saved content to ${this.contentState.outputFile}`);
+        } catch (err) {
+          debugLog(`[GenericAgent] ERROR: Failed to save content to ${this.contentState.outputFile}: ${err}`);
+        }
+      }
+
       const result = {
         status: 'approved',
         content: this.contentState.currentContent,
         content_type: this.contentState.contentType,
         task: this.contentState.task,
         output_file: this.contentState.outputFile,
+        file_saved: fileSaved,
         iterations: this.contentState.iterations,
-        message: 'Content approved by user. Ready to save.',
+        message: fileSaved
+          ? `Content approved and saved to ${this.contentState.outputFile}.`
+          : 'Content approved by user. Ready to save.',
+        next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
       this.contentState = null;
       return result;

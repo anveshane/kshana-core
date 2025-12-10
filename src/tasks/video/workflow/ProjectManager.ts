@@ -11,7 +11,7 @@ import {
   type PhaseStatus,
   type CharacterData,
   type SettingData,
-  type SceneData,
+  type SceneRef,
   type AssetInfo,
   type ContentRegistry,
   type ContentEntry,
@@ -130,6 +130,7 @@ function stripWrapperTags(content: string): string {
 
 /**
  * Create a new project file with the given input.
+ * Stores originalInput in a separate file, only reference in project.json.
  */
 export function createProject(originalInput: string, basePath: string = process.cwd()): ProjectFile {
   // Ensure directory structure exists
@@ -141,10 +142,15 @@ export function createProject(originalInput: string, basePath: string = process.
   const now = Date.now();
   const projectId = `proj-${now}-${Math.random().toString(36).slice(2, 8)}`;
 
+  // Save original input to a separate file
+  const inputFilePath = 'original_input.md';
+  const fullInputPath = join(getProjectDir(basePath), inputFilePath);
+  writeFileSync(fullInputPath, cleanInput, 'utf-8');
+
   const project: ProjectFile = {
     id: projectId,
     title: generateProjectTitle(cleanInput),
-    originalInput: cleanInput,
+    originalInputFile: inputFilePath,
     createdAt: now,
     updatedAt: now,
     currentPhase: WorkflowPhase.PLOT,
@@ -213,6 +219,17 @@ export function saveProject(project: ProjectFile, basePath: string = process.cwd
   const filePath = getProjectFilePath(basePath);
   project.updatedAt = Date.now();
   writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
+}
+
+/**
+ * Read the original user input from its file.
+ */
+export function getOriginalInput(project: ProjectFile, basePath: string = process.cwd()): string {
+  const inputPath = join(getProjectDir(basePath), project.originalInputFile);
+  if (existsSync(inputPath)) {
+    return readFileSync(inputPath, 'utf-8');
+  }
+  return '';
 }
 
 /**
@@ -350,15 +367,31 @@ export function writeProjectFile(
 }
 
 /**
- * Save character data to characters/[name].json.
+ * Format character data as markdown.
+ */
+function formatCharacterMarkdown(character: CharacterData): string {
+  let md = `# ${character.name}\n\n`;
+  md += `## Description\n\n${character.description}\n\n`;
+  md += `## Visual Description\n\n${character.visualDescription}\n`;
+  if (character.referenceImageId) {
+    md += `\n## Reference Image\n\n- Image ID: ${character.referenceImageId}\n`;
+    if (character.referenceImagePath) {
+      md += `- Path: ${character.referenceImagePath}\n`;
+    }
+  }
+  return md;
+}
+
+/**
+ * Save character data to characters/[name].md.
  */
 export function saveCharacter(
   character: CharacterData,
   basePath: string = process.cwd()
 ): void {
   const safeName = character.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const filePath = `characters/${safeName}.json`;
-  writeProjectFile(filePath, JSON.stringify(character, null, 2), basePath);
+  const filePath = `characters/${safeName}.md`;
+  writeProjectFile(filePath, formatCharacterMarkdown(character), basePath);
 
   // Update project file's character list
   const project = loadProject(basePath);
@@ -369,30 +402,37 @@ export function saveCharacter(
 }
 
 /**
- * Load character data from characters/[name].json.
+ * Load character markdown from characters/[name].md.
+ * Returns the raw markdown content (parsing not needed for index-only approach).
  */
-export function loadCharacter(name: string, basePath: string = process.cwd()): CharacterData | null {
+export function loadCharacterMarkdown(name: string, basePath: string = process.cwd()): string | null {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const content = readProjectFile(`characters/${safeName}.json`, basePath);
-
-  if (!content) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(content) as CharacterData;
-  } catch {
-    return null;
-  }
+  return readProjectFile(`characters/${safeName}.md`, basePath);
 }
 
 /**
- * Save setting data to settings/[name].json.
+ * Format setting data as markdown.
+ */
+function formatSettingMarkdown(setting: SettingData): string {
+  let md = `# ${setting.name}\n\n`;
+  md += `## Description\n\n${setting.description}\n\n`;
+  md += `## Visual Description\n\n${setting.visualDescription}\n`;
+  if (setting.referenceImageId) {
+    md += `\n## Reference Image\n\n- Image ID: ${setting.referenceImageId}\n`;
+    if (setting.referenceImagePath) {
+      md += `- Path: ${setting.referenceImagePath}\n`;
+    }
+  }
+  return md;
+}
+
+/**
+ * Save setting data to settings/[name].md.
  */
 export function saveSetting(setting: SettingData, basePath: string = process.cwd()): void {
   const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const filePath = `settings/${safeName}.json`;
-  writeProjectFile(filePath, JSON.stringify(setting, null, 2), basePath);
+  const filePath = `settings/${safeName}.md`;
+  writeProjectFile(filePath, formatSettingMarkdown(setting), basePath);
 
   // Update project file's setting list
   const project = loadProject(basePath);
@@ -403,36 +443,28 @@ export function saveSetting(setting: SettingData, basePath: string = process.cwd
 }
 
 /**
- * Load setting data from settings/[name].json.
+ * Load setting markdown from settings/[name].md.
+ * Returns the raw markdown content.
  */
-export function loadSetting(name: string, basePath: string = process.cwd()): SettingData | null {
+export function loadSettingMarkdown(name: string, basePath: string = process.cwd()): string | null {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const content = readProjectFile(`settings/${safeName}.json`, basePath);
-
-  if (!content) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(content) as SettingData;
-  } catch {
-    return null;
-  }
+  return readProjectFile(`settings/${safeName}.md`, basePath);
 }
 
 /**
- * Add a scene to the project.
+ * Add a scene reference to the project.
+ * Scene content is stored in plans/scenes.md or individual scene files.
  */
-export function addScene(scene: SceneData, basePath: string = process.cwd()): void {
+export function addScene(sceneRef: SceneRef, basePath: string = process.cwd()): void {
   const project = loadProject(basePath);
   if (!project) return;
 
   // Check if scene already exists
-  const existingIndex = project.scenes.findIndex((s) => s.sceneNumber === scene.sceneNumber);
+  const existingIndex = project.scenes.findIndex((s) => s.sceneNumber === sceneRef.sceneNumber);
   if (existingIndex >= 0) {
-    project.scenes[existingIndex] = scene;
+    project.scenes[existingIndex] = sceneRef;
   } else {
-    project.scenes.push(scene);
+    project.scenes.push(sceneRef);
     project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
   }
 
@@ -537,34 +569,66 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
   const plannerStage = phaseInfo?.plannerStage ?? PlannerStage.PLANNING;
 
+  // Check if plan file already has content
+  const planFileExists = phaseConfig.planOutputFile
+    ? planFileHasContent(phaseConfig.planOutputFile, basePath)
+    : false;
+
   let instruction = `
 ## Current State
 - **Phase**: ${phaseConfig.displayName}
 - **Stage**: ${plannerStage}
 - **Plan File**: ${phaseConfig.planOutputFile ?? 'N/A'}
+- **Plan File Has Content**: ${planFileExists ? 'YES' : 'NO'}
 
 ## What to Do Next
 `;
 
   switch (plannerStage) {
     case PlannerStage.PLANNING:
-      instruction += `
+      if (planFileExists) {
+        // Plan already exists - it was already approved, skip to COMPLETE
+        instruction += `
+You are in the PLANNING stage BUT a plan already exists at ${phaseConfig.planOutputFile}.
+
+**IMPORTANT**: An existing plan means it was ALREADY APPROVED previously. Do NOT ask for approval again.
+
+1. Mark this phase as COMPLETE immediately (update_project with action "update_planner_stage", stage "complete")
+2. Then mark the phase as completed and transition to the next phase
+
+DO NOT create a new plan. DO NOT ask for approval - it's already approved.
+`;
+      } else {
+        instruction += `
 You are in the PLANNING stage. Create a plan for ${phaseConfig.displayName}.
 1. Analyze the project context
 2. Create a detailed plan
 3. Write the plan to ${phaseConfig.planOutputFile}
 4. Move to VERIFY stage by updating the planner stage
 `;
+      }
       break;
 
     case PlannerStage.VERIFY:
-      instruction += `
+      if (planFileExists) {
+        // Plan exists and we're in verify - it was already approved, skip to COMPLETE
+        instruction += `
+You are in the VERIFY stage and a plan already exists at ${phaseConfig.planOutputFile}.
+
+**IMPORTANT**: An existing plan means it was ALREADY APPROVED previously. Do NOT ask for approval again.
+
+1. Mark this phase as COMPLETE immediately (update_project with action "update_planner_stage", stage "complete")
+2. Then mark the phase as completed and transition to the next phase
+`;
+      } else {
+        instruction += `
 You are in the VERIFY stage. Present the plan to the user for approval.
 1. Read the plan from ${phaseConfig.planOutputFile}
 2. Present a summary to the user using ask_user
 3. If user approves (or 15 seconds pass with no response), move to COMPLETE
 4. If user provides feedback, move to REFINING stage
 `;
+      }
       break;
 
     case PlannerStage.REFINING:

@@ -13,6 +13,7 @@ import {
   writeProjectFile,
   readProjectFile,
   getProjectDir,
+  getOriginalInput,
   PROJECT_DIR,
 } from '../../src/tasks/video/workflow/index.js';
 
@@ -51,7 +52,9 @@ describe('ProjectManager', () => {
       const project = createProject('A robot learning to dance', TEST_BASE_PATH);
 
       expect(project.id).toMatch(/^proj-/);
-      expect(project.originalInput).toBe('A robot learning to dance');
+      // Original input is now stored in a separate file
+      expect(project.originalInputFile).toBe('original_input.md');
+      expect(getOriginalInput(project, TEST_BASE_PATH)).toBe('A robot learning to dance');
       expect(project.currentPhase).toBe('plot');
       expect(project.characters).toEqual([]);
       expect(project.scenes).toEqual([]);
@@ -87,7 +90,8 @@ describe('ProjectManager', () => {
       const project = loadProject(TEST_BASE_PATH);
 
       expect(project).not.toBeNull();
-      expect(project?.originalInput).toBe('Test story');
+      expect(project?.originalInputFile).toBe('original_input.md');
+      expect(getOriginalInput(project!, TEST_BASE_PATH)).toBe('Test story');
     });
   });
 
@@ -189,7 +193,7 @@ describe('Project Continuation Flow', () => {
 
     const loadedProject = loadProject(TEST_BASE_PATH);
     expect(loadedProject?.id).toBe(projectId);
-    expect(loadedProject?.originalInput).toBe('A robot story');
+    expect(getOriginalInput(loadedProject!, TEST_BASE_PATH)).toBe('A robot story');
   });
 
   it('can continue existing project with its state', () => {
@@ -199,7 +203,7 @@ describe('Project Continuation Flow', () => {
 
     // New session - load and continue
     const continued = loadProject(TEST_BASE_PATH);
-    expect(continued?.originalInput).toBe('A robot story');
+    expect(getOriginalInput(continued!, TEST_BASE_PATH)).toBe('A robot story');
 
     const plotContent = readProjectFile('plans/plot.md', TEST_BASE_PATH);
     expect(plotContent).toContain('Robot Dance Plot');
@@ -215,7 +219,7 @@ describe('Project Continuation Flow', () => {
     expect(projectExists(TEST_BASE_PATH)).toBe(false);
 
     const newProject = createProject('Second story', TEST_BASE_PATH);
-    expect(newProject.originalInput).toBe('Second story');
+    expect(getOriginalInput(newProject, TEST_BASE_PATH)).toBe('Second story');
 
     // Old content should be gone
     expect(readProjectFile('plans/plot.md', TEST_BASE_PATH)).toBeNull();
@@ -233,7 +237,7 @@ describe('Project Continuation Flow', () => {
 
     // Session 3: Verify all content persists
     const loaded2 = loadProject(TEST_BASE_PATH);
-    expect(loaded2?.originalInput).toBe('Epic tale');
+    expect(getOriginalInput(loaded2!, TEST_BASE_PATH)).toBe('Epic tale');
     expect(readProjectFile('plans/plot.md', TEST_BASE_PATH)).toContain('Act 1');
     expect(readProjectFile('plans/story.md', TEST_BASE_PATH)).toContain('Once upon a time');
   });

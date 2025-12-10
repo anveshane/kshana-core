@@ -22,7 +22,7 @@ import {
   updatePlannerStage,
   transitionToNextPhase,
 } from './ProjectManager.js';
-import type { ProjectFile, CharacterData, SettingData, SceneData, AssetInfo, PhaseStatus } from './types.js';
+import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus } from './types.js';
 import { PlannerStage } from './types.js';
 
 /**
@@ -34,8 +34,9 @@ export const readFileTool: ToolDefinition = createTool(
 
 Use this to read:
 - Plan files: plans/plot.md, plans/story.md, plans/scenes.md, plans/images.md, plans/video.md
-- Character files: characters/[name].json
-- Setting files: settings/[name].json
+- Character files: characters/[name].md
+- Setting files: settings/[name].md
+- Original input: original_input.md
 - Asset manifest: assets/manifest.json
 
 Returns the file content as a string, or an error if file doesn't exist.`,
@@ -207,17 +208,22 @@ export const updateProjectTool: ToolDefinition = createTool(
   'update_project',
   `Update the project.json file with new data.
 
+Note: project.json is an INDEX file. Content should be in .md files:
+- Characters: Write full content to characters/[name].md, then use add_character to register
+- Settings: Write full content to settings/[name].md, then use add_setting to register
+- Scenes: Write full content to plans/scenes.md, then use add_scene to register scene references
+
 Actions:
 - "create": Create a new project with the given original_input
 - "set_title": Set the project title
 - "update_phase": Update a phase status (pending, in_progress, completed)
 - "update_planner_stage": Update planner stage (planning, verify, refining, complete)
 - "transition_phase": Automatically transition to next phase if current is complete
-- "add_character": Add a character to the project
-- "add_setting": Add a setting to the project
-- "add_scene": Add a scene to the project
+- "add_character": Register a character (content should already be in characters/[name].md)
+- "add_setting": Register a setting (content should already be in settings/[name].md)
+- "add_scene": Register a scene reference (content should be in plans/scenes.md)
 - "add_asset": Register a generated asset
-- "update_scene": Update an existing scene`,
+- "update_scene": Update scene reference (e.g., add image/video artifact IDs)`,
   {
     type: 'object',
     properties: {
@@ -351,22 +357,19 @@ Actions:
         }
 
         case 'add_scene': {
-          const scene: SceneData = {
+          // SceneRef is index-only: just scene number and optional artifact IDs
+          // Scene content should be in plans/scenes.md or individual scene files
+          const sceneRef: SceneRef = {
             sceneNumber: data['scene_number'] as number,
-            description: data['description'] as string,
-            characters: data['characters'] as string[],
-            setting: data['setting'] as string,
-            action: data['action'] as string,
-            imagePrompt: data['image_prompt'] as string | undefined,
+            file: data['file'] as string | undefined,
             imageArtifactId: data['image_artifact_id'] as string | undefined,
             videoArtifactId: data['video_artifact_id'] as string | undefined,
-            duration: data['duration'] as number | undefined,
           };
-          if (scene.sceneNumber === undefined) {
+          if (sceneRef.sceneNumber === undefined) {
             return { status: 'error', error: 'scene_number is required for add_scene' };
           }
-          addScene(scene);
-          return { status: 'success', message: `Scene ${scene.sceneNumber} added` };
+          addScene(sceneRef);
+          return { status: 'success', message: `Scene ${sceneRef.sceneNumber} reference added` };
         }
 
         case 'add_asset': {

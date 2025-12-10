@@ -64,7 +64,8 @@ export interface PhaseInfo {
 }
 
 /**
- * Character data stored in characters/[name].json.
+ * Character data stored in characters/[name].md.
+ * The .md file contains markdown-formatted character description.
  */
 export interface CharacterData {
   name: string;
@@ -75,7 +76,8 @@ export interface CharacterData {
 }
 
 /**
- * Setting data stored in settings/[name].json.
+ * Setting data stored in settings/[name].md.
+ * The .md file contains markdown-formatted setting description.
  */
 export interface SettingData {
   name: string;
@@ -86,18 +88,18 @@ export interface SettingData {
 }
 
 /**
- * Scene data for video generation.
+ * Scene reference in project.json index.
+ * Full scene content is stored in plans/scenes.md or scenes/*.md files.
  */
-export interface SceneData {
+export interface SceneRef {
+  /** Scene number/identifier */
   sceneNumber: number;
-  description: string;
-  characters: string[];
-  setting: string;
-  action: string;
-  imagePrompt?: string;
+  /** Reference to scene file (relative to .kshana/) */
+  file?: string;
+  /** Generated image artifact ID */
   imageArtifactId?: string;
+  /** Generated video artifact ID */
   videoArtifactId?: string;
-  duration?: number;
 }
 
 /**
@@ -152,14 +154,15 @@ export interface ContentRegistry {
 
 /**
  * Main project file structure (project.json).
+ * This is an INDEX file - content lives in .md files, this just tracks references.
  */
 export interface ProjectFile {
   /** Unique project identifier */
   id: string;
   /** Project title */
   title: string;
-  /** User's original input/prompt */
-  originalInput: string;
+  /** Path to original input file (relative to .kshana/) */
+  originalInputFile: string;
   /** Creation timestamp */
   createdAt: number;
   /** Last update timestamp */
@@ -184,8 +187,8 @@ export interface ProjectFile {
   characters: string[];
   /** Setting names (full data in settings/*.json) */
   settings: string[];
-  /** Scene data */
-  scenes: SceneData[];
+  /** Scene references (full data in plans/scenes.md or scenes/*.md) */
+  scenes: SceneRef[];
   /** Asset IDs (detailed info in assets/manifest.json) */
   assets: string[];
 }

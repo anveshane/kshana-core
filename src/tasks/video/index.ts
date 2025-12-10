@@ -3,10 +3,13 @@
  * Provides video-specific tools, prompts, and agent factory.
  * Supports both legacy mode and new state-based workflow mode.
  */
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 import { GenericAgent } from '../../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry, dispatchImageAgentTool } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
+import { contextStore } from '../../core/context/index.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
@@ -19,6 +22,7 @@ import {
   getCurrentPhase,
   WorkflowPhase,
   PHASE_CONFIGS,
+  getProjectDir,
 } from './workflow/index.js';
 
 // Re-export prompts
@@ -185,6 +189,46 @@ export function createWorkflowToolRegistry(): ToolRegistry {
 }
 
 /**
+ * Load existing project plan files into context store.
+ * Returns array of context variable names that were loaded.
+ */
+function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
+  const projectDir = getProjectDir(basePath);
+  const plansDir = join(projectDir, 'plans');
+  const loadedContexts: string[] = [];
+
+  // Plan files to load with their context labels
+  const planFiles = [
+    { file: 'plot.md', label: 'Plot Outline', varName: 'plot' },
+    { file: 'story.md', label: 'Story', varName: 'story' },
+    { file: 'scenes.md', label: 'Scenes', varName: 'scenes' },
+    { file: 'characters.md', label: 'Characters', varName: 'characters' },
+    { file: 'settings.md', label: 'Settings', varName: 'settings' },
+    { file: 'images.md', label: 'Image Plan', varName: 'images' },
+  ];
+
+  for (const { file, label, varName } of planFiles) {
+    const filePath = join(plansDir, file);
+    if (existsSync(filePath)) {
+      try {
+        const content = readFileSync(filePath, 'utf-8');
+        if (content.trim().length > 0) {
+          const { variableName } = contextStore.store(content, label, {
+            source: 'tool',
+            variableBaseName: varName,
+          });
+          loadedContexts.push(variableName);
+        }
+      } catch {
+        // Skip files that can't be read
+      }
+    }
+  }
+
+  return loadedContexts;
+}
+
+/**
  * Create a GenericAgent configured for workflow-based video creation.
  * Uses state-based approach with project files in .kshana/ directory.
  */
@@ -201,14 +245,18 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
   const currentPhase = getCurrentPhase(project);
   const phaseConfig = PHASE_CONFIGS[currentPhase];
 
+  // Load existing project files into context store
+  // This makes them available to dispatch_agent and dispatch_content_agent
+  const loadedContexts = loadProjectFilesAsContexts(basePath);
+
   // Create tool registry with workflow tools
   const registry = createWorkflowToolRegistry();
 
   // Create LLM client
   const llm = new LLMClient(llmConfig);
 
-  // Build custom prompt with workflow context
-  const customPrompt = buildWorkflowAgentPrompt(project, currentPhase);
+  // Build custom prompt with workflow context (include loaded contexts info)
+  const customPrompt = buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
 
   // Create the generic agent with workflow customization
   const agent = new GenericAgent(registry.getAll(), llm, {
@@ -226,7 +274,8 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
  */
 function buildWorkflowAgentPrompt(
   project: ReturnType<typeof loadProject>,
-  currentPhase: WorkflowPhase
+  currentPhase: WorkflowPhase,
+  loadedContexts: string[] = []
 ): string {
   const phaseConfig = PHASE_CONFIGS[currentPhase];
 
@@ -243,13 +292,26 @@ You are a video generation orchestrator using a state-based workflow approach.
 ## Project Location
 All project files are stored in the \`.kshana/\` directory in the current working directory.
 
+## Loaded Project Contexts
+${loadedContexts.length > 0
+  ? `The following project files have been loaded as contexts. **ALWAYS pass these to dispatch_agent and dispatch_content_agent**:
+${loadedContexts.map(c => `- ${c}`).join('\n')}
+
+Example:
+\`\`\`
+dispatch_agent(task="Plan story development", context_refs=[${loadedContexts.map(c => `"${c}"`).join(', ')}])
+dispatch_content_agent(task="Create character", content_type="character", context_refs=[${loadedContexts.map(c => `"${c}"`).join(', ')}])
+\`\`\``
+  : 'No existing project files loaded yet.'}
+
 ## Workflow Phases
 plot → story → scenes → images → video
 
 ## How to Proceed
 1. Call \`read_project\` to get the current project state and next action instructions
-2. The \`next_action\` field will tell you exactly what to do
-3. Follow the planner stage cycle: planning → verify → refining → complete
+2. When using \`dispatch_agent\` or \`dispatch_content_agent\`, ALWAYS pass all loaded context_refs
+3. The \`next_action\` field will tell you exactly what to do
+4. Follow the planner stage cycle: planning → verify → refining → complete
 
 ## Planner Stage Cycle
 Each phase goes through these stages:
