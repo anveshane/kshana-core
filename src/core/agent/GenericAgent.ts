@@ -39,6 +39,7 @@ const SIMPLE_TOOLS = new Set([
   'dispatch_agent',
   'dispatch_content_agent',
   'dispatch_image_agent',
+  'dispatch_video_agent',
   'wait_for_job',
   'todo_write',
 ]);
@@ -856,6 +857,58 @@ export class GenericAgent extends TypedEventEmitter {
       return result;
     }
 
+    // Handle dispatch_video_agent specially - sub-agent for video generation
+    if (toolCall.name === 'dispatch_video_agent') {
+      const result = await this.handleDispatchVideoAgent(toolCall);
+      const resultObj = result as Record<string, unknown>;
+
+      // Check if video gen needs user verification
+      if (resultObj['status'] === 'awaiting_approval') {
+        // Emit tool result first
+        this.emit({
+          type: 'tool_result',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          result,
+          isError: false,
+          agentName: this.name,
+        });
+
+        // Set up waiting state for user input
+        this.waitingForUser = true;
+        this.pendingQuestion = resultObj['question'] as string;
+
+        // Emit question event with options and auto-approve timeout
+        this.emit({
+          type: 'question',
+          question: resultObj['question'] as string,
+          isConfirmation: false,
+          options: resultObj['options'] as Array<{ label: string; description?: string }>,
+          autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
+        });
+
+        // Emit status change
+        this.emit({
+          type: 'agent_status',
+          status: 'waiting',
+          agentName: this.name,
+        });
+
+        // Return special marker to indicate we're pausing for user input
+        return { __awaiting_user_input: true, ...result };
+      }
+
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.name,
+      });
+      return result;
+    }
+
     const tool = this.tools.get(toolCall.name);
     if (!tool?.handler) {
       const errorResult = { error: `Unknown tool: ${toolCall.name}` };
@@ -996,6 +1049,23 @@ export class GenericAgent extends TypedEventEmitter {
     }>;
     /** Generation mode determined by image_type and reference availability */
     generationMode: 'text_to_image' | 'image_text_to_image';
+  } | null = null;
+
+  // State for dispatch_video_agent sub-agent (video generation)
+  private videoGenState: {
+    active: boolean;
+    task: string;
+    sceneNumber: number;
+    sceneImageArtifactId: string;
+    motionDescription?: string;
+    context?: string;
+    messages: Message[];
+    currentParams: {
+      duration: number;
+      fps: number;
+      motionStrength: number;
+    };
+    iterations: number;
   } | null = null;
 
   /**
@@ -1998,6 +2068,224 @@ Your classification:`;
       return {
         error: `Image generation failed: ${String(error)}`,
         prompt: currentPrompt,
+        task,
+      };
+    }
+  }
+
+  /**
+   * Handle dispatch_video_agent tool - spawns a sub-agent for video generation.
+   * Presents video parameters to user for approval before generating.
+   */
+  private async handleDispatchVideoAgent(toolCall: ToolCall): Promise<unknown> {
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const sceneImageArtifactId = args['scene_image_artifact_id'] as string;
+    const sceneNumber = (args['scene_number'] as number) ?? 1;
+    const motionDescription = args['motion_description'] as string | undefined;
+    const contextRef = args['context_ref'] as string | undefined;
+    const duration = (args['duration'] as number) ?? 4;
+
+    if (!task) {
+      return { error: 'No task provided for dispatch_video_agent' };
+    }
+
+    if (!sceneImageArtifactId) {
+      return { error: 'No scene_image_artifact_id provided for dispatch_video_agent' };
+    }
+
+    // Resolve context_ref if provided
+    let context = '';
+    if (contextRef) {
+      const stored = contextStore.get(contextRef);
+      if (stored) {
+        context = stored.content;
+        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} for video agent (${stored.label}, ${stored.content.length} chars)`);
+      } else {
+        return { error: `Context reference not found: ${contextRef}` };
+      }
+    }
+
+    // Check if we're already in a video generation session
+    if (this.videoGenState?.active) {
+      return { error: 'Video generation already in progress' };
+    }
+
+    // Initialize video gen state
+    this.videoGenState = {
+      active: true,
+      task,
+      sceneNumber,
+      sceneImageArtifactId,
+      motionDescription,
+      context,
+      messages: [],
+      currentParams: {
+        duration,
+        fps: 24,
+        motionStrength: 0.7,
+      },
+      iterations: 0,
+    };
+
+    // Build a summary for user approval
+    const paramSummary = `**Video Generation Parameters:**
+- Scene: #${sceneNumber}
+- Source Image: ${sceneImageArtifactId}
+- Duration: ${duration} seconds
+- Motion: ${motionDescription ?? 'Auto-determined based on scene'}
+- Task: ${task}`;
+
+    // Return status indicating we need user approval
+    return {
+      status: 'awaiting_approval',
+      params: this.videoGenState.currentParams,
+      scene_number: sceneNumber,
+      image_artifact_id: sceneImageArtifactId,
+      motion_description: motionDescription,
+      task,
+      question: `I'm ready to generate video for scene ${sceneNumber}. Here are the parameters:\n\n${paramSummary}\n\nWould you like to proceed or adjust the parameters?`,
+      options: [
+        { label: 'Generate video', description: 'Proceed with these parameters' },
+        { label: 'Provide feedback', description: 'Modify the parameters' },
+      ],
+      autoApproveTimeoutMs: 15000, // 15 seconds countdown
+    };
+  }
+
+  /**
+   * Handle user response to video generation approval.
+   */
+  async handleVideoGenResponse(userResponse: string): Promise<unknown> {
+    if (!this.videoGenState) {
+      return { error: 'No active video generation session' };
+    }
+
+    // Use simple pattern matching to classify response
+    const lower = userResponse.toLowerCase().trim();
+    const approvalPatterns = ['yes', 'ok', 'okay', 'generate', 'go', 'proceed', 'create', 'make', 'lgtm', 'y', '1'];
+    const isApproval = approvalPatterns.some(p => lower === p || lower.startsWith(p));
+
+    if (isApproval) {
+      // User approved - execute video generation
+      return this.executeVideoGeneration();
+    }
+
+    // User wants to provide feedback
+    this.videoGenState.iterations++;
+    if (this.videoGenState.iterations >= 5) {
+      const result = {
+        status: 'max_iterations',
+        params: this.videoGenState.currentParams,
+        task: this.videoGenState.task,
+        message: 'Reached maximum iterations for parameter refinement. Using the last version.',
+      };
+      this.videoGenState = null;
+      return result;
+    }
+
+    // Parse feedback for parameter changes (simple parsing)
+    if (lower.includes('duration') && /\d+/.test(lower)) {
+      const match = lower.match(/(\d+)\s*(?:s|sec|seconds?)?/);
+      if (match) {
+        this.videoGenState.currentParams.duration = parseInt(match[1], 10);
+      }
+    }
+
+    // Return updated parameters for approval
+    return {
+      status: 'awaiting_approval',
+      params: this.videoGenState.currentParams,
+      scene_number: this.videoGenState.sceneNumber,
+      image_artifact_id: this.videoGenState.sceneImageArtifactId,
+      motion_description: this.videoGenState.motionDescription,
+      task: this.videoGenState.task,
+      iterations: this.videoGenState.iterations,
+      question: `I've updated the parameters based on your feedback. Would you like to proceed or make more adjustments?`,
+      options: [
+        { label: 'Generate video', description: 'Proceed with these parameters' },
+        { label: 'Provide feedback', description: 'Make more changes' },
+      ],
+      autoApproveTimeoutMs: 15000,
+    };
+  }
+
+  /**
+   * Execute the actual video generation after user approval.
+   */
+  private async executeVideoGeneration(): Promise<unknown> {
+    if (!this.videoGenState) {
+      return { error: 'No active video generation session' };
+    }
+
+    const {
+      task,
+      sceneNumber,
+      sceneImageArtifactId,
+      motionDescription,
+      currentParams,
+    } = this.videoGenState;
+
+    // Get the generate_video tool
+    const generateVideoTool = this.tools.get('generate_video');
+    if (!generateVideoTool?.handler) {
+      this.videoGenState = null;
+      return {
+        error: 'generate_video tool not available',
+        task,
+      };
+    }
+
+    // Build arguments for generate_video
+    const generateArgs: Record<string, unknown> = {
+      scene_number: sceneNumber,
+      scene_image_artifact_id: sceneImageArtifactId,
+      motion_description: motionDescription,
+      duration: currentParams.duration,
+      fps: currentParams.fps,
+    };
+
+    // Emit that we're generating the video
+    this.emit({
+      type: 'tool_call',
+      toolCallId: `vid-gen-${Date.now()}`,
+      toolName: 'generate_video',
+      arguments: generateArgs,
+      agentName: this.name,
+    });
+
+    try {
+      // Execute the video generation
+      const result = await Promise.resolve(generateVideoTool.handler(generateArgs));
+
+      // Clear the state
+      const finalState = { ...this.videoGenState };
+      this.videoGenState = null;
+
+      // Emit tool result
+      this.emit({
+        type: 'tool_result',
+        toolCallId: `vid-gen-${Date.now()}`,
+        toolName: 'generate_video',
+        result,
+        isError: false,
+        agentName: this.name,
+      });
+
+      return {
+        status: 'completed',
+        scene_number: finalState.sceneNumber,
+        image_artifact_id: finalState.sceneImageArtifactId,
+        params: finalState.currentParams,
+        task: finalState.task,
+        iterations: finalState.iterations,
+        generation_result: result,
+        message: 'Video generated successfully.',
+      };
+    } catch (error) {
+      this.videoGenState = null;
+      return {
+        error: `Video generation failed: ${String(error)}`,
         task,
       };
     }

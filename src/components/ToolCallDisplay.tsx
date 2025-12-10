@@ -20,6 +20,8 @@ interface ToolCallDisplayProps {
   compact?: boolean;
   /** Expanded view mode (kept for API compatibility but no longer used) */
   expanded?: boolean;
+  /** Name of the agent that invoked this tool */
+  agentName?: string;
 }
 
 // Tools that should be hidden (rendered elsewhere in UI)
@@ -364,6 +366,7 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
   duration,
   compact = false,
   expanded = false,
+  agentName,
 }: ToolCallDisplayProps) {
   // Special rendering for think tool
   if (toolName === 'think') {
@@ -401,11 +404,13 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
               <Text color="yellow">◉ </Text>
               <Spinner />
               <Text> {displayName}</Text>
+              {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
             </>
           ) : (
             <>
               <Text color={statusIcon.color}>{statusIcon.icon} </Text>
               <Text>{displayName}</Text>
+              {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
               {duration !== undefined && (
                 <Text dimColor> ({formatDuration(duration)})</Text>
               )}
@@ -441,11 +446,13 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
             <Text color="yellow">◉ </Text>
             <Spinner />
             <Text bold> {displayName}</Text>
+            {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
           </>
         ) : (
           <>
             <Text color={statusIcon.color}>{statusIcon.icon} </Text>
             <Text bold>{displayName}</Text>
+            {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
             {duration !== undefined && (
               <Text dimColor> ({formatDuration(duration)})</Text>
             )}

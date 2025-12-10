@@ -133,12 +133,16 @@ export function ScrollableHistory({
               duration={entry.duration}
               compact
               expanded={expanded}
+              agentName={entry.agentName}
             />
           );
         }
         if (entry.type === 'agent_text') {
           return (
-            <Box key={entry.id} marginBottom={1}>
+            <Box key={entry.id} marginBottom={1} flexDirection="column">
+              {entry.agentName && (
+                <Text color="cyan" dimColor>[{entry.agentName}]</Text>
+              )}
               <TruncatedText text={entry.content} maxLines={MAX_LINES_TRUNCATED} expanded={expanded} dimColor />
             </Box>
           );

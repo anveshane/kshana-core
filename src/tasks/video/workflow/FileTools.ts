@@ -5,6 +5,7 @@
 
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
+import { getWorkflowLogger } from './WorkflowLogger.js';
 import {
   loadProject,
   saveProject,
@@ -18,12 +19,19 @@ import {
   saveSetting,
   addAsset,
   addScene,
+  addNewScene,
   updatePhaseStatus,
   updatePlannerStage,
   transitionToNextPhase,
+  updateCharacter,
+  updateSetting,
+  updateCharacterApproval,
+  updateSettingApproval,
+  updateSceneApproval,
+  updateScene,
 } from './ProjectManager.js';
-import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus } from './types.js';
-import { PlannerStage } from './types.js';
+import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus } from './types.js';
+import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef } from './types.js';
 
 /**
  * Read file tool - reads content from a project file.
@@ -216,14 +224,20 @@ Note: project.json is an INDEX file. Content should be in .md files:
 Actions:
 - "create": Create a new project with the given original_input
 - "set_title": Set the project title
-- "update_phase": Update a phase status (pending, in_progress, completed)
-- "update_planner_stage": Update planner stage (planning, verify, refining, complete)
+- "update_phase": Update a phase status. Data: { phase: string, status: 'pending'|'in_progress'|'completed' }
+- "update_planner_stage": Update planner stage. Data: { phase: string, stage: 'planning'|'verify'|'refining'|'complete' }
 - "transition_phase": Automatically transition to next phase if current is complete
-- "add_character": Register a character (content should already be in characters/[name].md)
-- "add_setting": Register a setting (content should already be in settings/[name].md)
-- "add_scene": Register a scene reference (content should be in plans/scenes.md)
-- "add_asset": Register a generated asset
-- "update_scene": Update scene reference (e.g., add image/video artifact IDs)`,
+- "add_character": Register a character. Data: { name, description?, visual_description?, approval_status? }
+- "update_character": Update an existing character. Data: { name, updates: { ... } }
+- "update_character_approval": Update character approval. Data: { name, status, contentArtifactId?, referenceImageId? }
+- "add_setting": Register a setting. Data: { name, description?, visual_description?, approval_status? }
+- "update_setting": Update an existing setting. Data: { name, updates: { ... } }
+- "update_setting_approval": Update setting approval. Data: { name, status, contentArtifactId?, referenceImageId? }
+- "add_scene": Register a scene reference. Data: { scene_number, title?, description? }
+- "update_scene": Update scene reference. Data: { scene_number, updates: { ... } }
+- "update_scene_approval": Update scene approval. Data: { scene_number, approval_type: 'content'|'image'|'video', status, artifactId? }
+- "add_asset": Register a generated asset. Data: { id, type, path, metadata? }
+- "set_final_video": Set the final video info. Data: { artifactId, path, duration }`,
   {
     type: 'object',
     properties: {
@@ -236,10 +250,16 @@ Actions:
           'update_planner_stage',
           'transition_phase',
           'add_character',
+          'update_character',
+          'update_character_approval',
           'add_setting',
+          'update_setting',
+          'update_setting_approval',
           'add_scene',
-          'add_asset',
           'update_scene',
+          'update_scene_approval',
+          'add_asset',
+          'set_final_video',
         ],
         description: 'The action to perform',
       },
@@ -285,91 +305,223 @@ Actions:
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
-          const phase = data['phase'] as keyof ProjectFile['phases'];
+          // Accept both 'phase' and 'phase_name' for compatibility
+          const phase = (data['phase'] || data['phase_name']) as keyof ProjectFile['phases'];
           const status = data['status'] as PhaseStatus;
           if (!phase || !status) {
-            return { status: 'error', error: 'phase and status are required' };
+            return { status: 'error', error: 'phase (or phase_name) and status are required' };
           }
           updatePhaseStatus(project, phase, status);
-          return { status: 'success', message: `Phase ${phase} updated to ${status}` };
+          return { status: 'success', message: `Phase ${phase} updated to ${status}`, current_phase: project.currentPhase };
         }
 
         case 'update_planner_stage': {
+          const logger = getWorkflowLogger();
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
-          const phase = data['phase'] as keyof ProjectFile['phases'];
+          // Accept both 'phase' and 'phase_name' for compatibility
+          const phase = (data['phase'] || data['phase_name']) as keyof ProjectFile['phases'];
           const stage = data['stage'] as PlannerStage;
           if (!phase || !stage) {
-            return { status: 'error', error: 'phase and stage are required' };
+            return { status: 'error', error: 'phase (or phase_name) and stage are required' };
           }
           const validStages = ['planning', 'verify', 'refining', 'complete'];
           if (!validStages.includes(stage)) {
             return { status: 'error', error: `Invalid stage. Must be one of: ${validStages.join(', ')}` };
           }
           updatePlannerStage(project, phase, stage);
-          return { status: 'success', message: `Planner stage for ${phase} updated to ${stage}` };
+          // When stage is 'complete', the phase is also marked as completed automatically
+          const phaseCompleted = stage === 'complete';
+          logger.logPlannerStage(phase, stage, phaseCompleted);
+          return {
+            status: 'success',
+            message: phaseCompleted
+              ? `Planner stage for ${phase} updated to ${stage}. Phase ${phase} is now completed. Use transition_phase to move to the next phase.`
+              : `Planner stage for ${phase} updated to ${stage}`,
+            current_phase: project.currentPhase,
+            phase_status: project.phases[phase]?.status,
+            phase_completed: phaseCompleted,
+          };
         }
 
         case 'transition_phase': {
+          const logger = getWorkflowLogger();
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
+          const beforePhase = project.currentPhase;
+          const beforeStatus = project.phases[beforePhase as keyof typeof project.phases]?.status;
+
           const result = transitionToNextPhase(project);
+          logger.logPhaseTransition(
+            beforePhase,
+            result.project.currentPhase,
+            result.reason,
+            result.transitioned
+          );
           return {
             status: 'success',
             transitioned: result.transitioned,
             reason: result.reason,
             current_phase: result.project.currentPhase,
+            debug: {
+              before_phase: beforePhase,
+              before_status: beforeStatus,
+              after_phase: result.project.currentPhase,
+            },
           };
         }
 
         case 'add_character': {
+          const name = data['name'] as string;
+          if (!name) {
+            return { status: 'error', error: 'name is required for add_character' };
+          }
+          // Create character with defaults and provided data
           const character: CharacterData = {
-            name: data['name'] as string,
-            description: data['description'] as string,
-            visualDescription: data['visual_description'] as string,
+            ...createDefaultCharacterData(name),
+            description: (data['description'] as string) || '',
+            visualDescription: (data['visual_description'] as string) || '',
+            approvalStatus: (data['approval_status'] as ItemApprovalStatus) || 'pending',
             referenceImageId: data['reference_image_id'] as string | undefined,
             referenceImagePath: data['reference_image_path'] as string | undefined,
           };
-          if (!character.name) {
-            return { status: 'error', error: 'name is required for add_character' };
-          }
           saveCharacter(character);
           return { status: 'success', message: `Character "${character.name}" added` };
         }
 
+        case 'update_character': {
+          const name = data['name'] as string;
+          const updates = data['updates'] as Partial<CharacterData>;
+          if (!name) {
+            return { status: 'error', error: 'name is required for update_character' };
+          }
+          const project = loadProject();
+          if (!project) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const success = updateCharacter(project, name, updates);
+          if (!success) {
+            return { status: 'error', error: `Character "${name}" not found` };
+          }
+          return { status: 'success', message: `Character "${name}" updated` };
+        }
+
+        case 'update_character_approval': {
+          const name = data['name'] as string;
+          const approvalStatus = data['status'] as ItemApprovalStatus;
+          if (!name || !approvalStatus) {
+            return { status: 'error', error: 'name and status are required for update_character_approval' };
+          }
+          const project = loadProject();
+          if (!project) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const success = updateCharacterApproval(project, name, approvalStatus, {
+            contentArtifactId: data['contentArtifactId'] as string | undefined,
+            referenceImageId: data['referenceImageId'] as string | undefined,
+            referenceImagePath: data['referenceImagePath'] as string | undefined,
+          });
+          if (!success) {
+            return { status: 'error', error: `Character "${name}" not found` };
+          }
+          return { status: 'success', message: `Character "${name}" approval updated to ${approvalStatus}` };
+        }
+
         case 'add_setting': {
+          const name = data['name'] as string;
+          if (!name) {
+            return { status: 'error', error: 'name is required for add_setting' };
+          }
+          // Create setting with defaults and provided data
           const setting: SettingData = {
-            name: data['name'] as string,
-            description: data['description'] as string,
-            visualDescription: data['visual_description'] as string,
+            ...createDefaultSettingData(name),
+            description: (data['description'] as string) || '',
+            visualDescription: (data['visual_description'] as string) || '',
+            approvalStatus: (data['approval_status'] as ItemApprovalStatus) || 'pending',
             referenceImageId: data['reference_image_id'] as string | undefined,
             referenceImagePath: data['reference_image_path'] as string | undefined,
           };
-          if (!setting.name) {
-            return { status: 'error', error: 'name is required for add_setting' };
-          }
           saveSetting(setting);
           return { status: 'success', message: `Setting "${setting.name}" added` };
         }
 
+        case 'update_setting': {
+          const name = data['name'] as string;
+          const updates = data['updates'] as Partial<SettingData>;
+          if (!name) {
+            return { status: 'error', error: 'name is required for update_setting' };
+          }
+          const project = loadProject();
+          if (!project) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const success = updateSetting(project, name, updates);
+          if (!success) {
+            return { status: 'error', error: `Setting "${name}" not found` };
+          }
+          return { status: 'success', message: `Setting "${name}" updated` };
+        }
+
+        case 'update_setting_approval': {
+          const name = data['name'] as string;
+          const approvalStatus = data['status'] as ItemApprovalStatus;
+          if (!name || !approvalStatus) {
+            return { status: 'error', error: 'name and status are required for update_setting_approval' };
+          }
+          const project = loadProject();
+          if (!project) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const success = updateSettingApproval(project, name, approvalStatus, {
+            contentArtifactId: data['contentArtifactId'] as string | undefined,
+            referenceImageId: data['referenceImageId'] as string | undefined,
+            referenceImagePath: data['referenceImagePath'] as string | undefined,
+          });
+          if (!success) {
+            return { status: 'error', error: `Setting "${name}" not found` };
+          }
+          return { status: 'success', message: `Setting "${name}" approval updated to ${approvalStatus}` };
+        }
+
         case 'add_scene': {
-          // SceneRef is index-only: just scene number and optional artifact IDs
-          // Scene content should be in plans/scenes.md or individual scene files
-          const sceneRef: SceneRef = {
-            sceneNumber: data['scene_number'] as number,
-            file: data['file'] as string | undefined,
-            imageArtifactId: data['image_artifact_id'] as string | undefined,
-            videoArtifactId: data['video_artifact_id'] as string | undefined,
-          };
-          if (sceneRef.sceneNumber === undefined) {
+          const sceneNumber = data['scene_number'] as number;
+          if (sceneNumber === undefined) {
             return { status: 'error', error: 'scene_number is required for add_scene' };
           }
-          addScene(sceneRef);
+          // Create scene with defaults and provided data
+          const sceneRef: SceneRef = {
+            ...createDefaultSceneRef(sceneNumber),
+            file: data['file'] as string | undefined,
+            title: data['title'] as string | undefined,
+            description: data['description'] as string | undefined,
+          };
+          addNewScene(sceneRef);
           return { status: 'success', message: `Scene ${sceneRef.sceneNumber} reference added` };
+        }
+
+        case 'update_scene_approval': {
+          const sceneNumber = data['scene_number'] as number;
+          const approvalType = data['approval_type'] as 'content' | 'image' | 'video';
+          const approvalStatus = data['status'] as ItemApprovalStatus;
+          if (sceneNumber === undefined || !approvalType || !approvalStatus) {
+            return { status: 'error', error: 'scene_number, approval_type, and status are required for update_scene_approval' };
+          }
+          const project = loadProject();
+          if (!project) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const success = updateSceneApproval(project, sceneNumber, approvalType, approvalStatus, {
+            artifactId: data['artifactId'] as string | undefined,
+            prompt: data['prompt'] as string | undefined,
+          });
+          if (!success) {
+            return { status: 'error', error: `Scene ${sceneNumber} not found` };
+          }
+          return { status: 'success', message: `Scene ${sceneNumber} ${approvalType} approval updated to ${approvalStatus}` };
         }
 
         case 'add_asset': {
@@ -388,25 +540,41 @@ Actions:
         }
 
         case 'update_scene': {
+          const sceneNumber = data['scene_number'] as number;
+          const updates = data['updates'] as Partial<SceneRef>;
+          if (sceneNumber === undefined) {
+            return { status: 'error', error: 'scene_number is required for update_scene' };
+          }
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
-          const sceneNumber = data['scene_number'] as number;
-          const sceneIndex = project.scenes.findIndex((s) => s.sceneNumber === sceneNumber);
-          if (sceneIndex === -1) {
+          const success = updateScene(project, sceneNumber, updates);
+          if (!success) {
             return { status: 'error', error: `Scene ${sceneNumber} not found` };
           }
-          // Update only provided fields
-          const updates = data['updates'] as Record<string, unknown>;
-          const scene = project.scenes[sceneIndex];
-          if (scene) {
-            for (const [key, value] of Object.entries(updates)) {
-              (scene as unknown as Record<string, unknown>)[key] = value;
-            }
-          }
-          saveProject(project);
           return { status: 'success', message: `Scene ${sceneNumber} updated` };
+        }
+
+        case 'set_final_video': {
+          const project = loadProject();
+          if (!project) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const artifactId = data['artifactId'] as string;
+          const path = data['path'] as string;
+          const duration = data['duration'] as number;
+          if (!artifactId || !path) {
+            return { status: 'error', error: 'artifactId and path are required for set_final_video' };
+          }
+          project.finalVideo = {
+            artifactId,
+            path,
+            duration: duration || 0,
+            createdAt: Date.now(),
+          };
+          saveProject(project);
+          return { status: 'success', message: 'Final video set', path };
         }
 
         default:

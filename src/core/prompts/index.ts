@@ -44,6 +44,7 @@ const subAgentPrompt = loadPrompt('subAgent');
 const planningPrompt = loadPrompt('planning');
 const contentPrompt = loadPrompt('content');
 const imageGenerationPrompt = loadPrompt('imageGeneration');
+const videoGenerationPrompt = loadPrompt('videoGeneration');
 
 // Export prompt content for backwards compatibility
 export const GENERIC_AGENT_BASE_PROMPT = basePrompt.content;
@@ -52,6 +53,7 @@ export const GENERIC_AGENT_SUB_AGENT_SECTION = subAgentPrompt.content;
 export const PLANNING_AGENT_PROMPT = planningPrompt.content;
 export const CONTENT_AGENT_PROMPT = contentPrompt.content;
 export const IMAGE_GENERATION_AGENT_PROMPT = imageGenerationPrompt.content;
+export const VIDEO_GENERATION_AGENT_PROMPT = videoGenerationPrompt.content;
 
 // Combined prompt for main agent (base + orchestrator)
 export const GENERIC_AGENT_SYSTEM_PROMPT =
@@ -247,6 +249,40 @@ export function buildImageGenerationPrompt(task: string, context?: string): stri
     .replace('{{context}}', contextSection);
 }
 
+/**
+ * Video generation prompt options.
+ */
+export interface VideoGenerationPromptOptions {
+  task: string;
+  sceneNumber: number;
+  sceneImageArtifactId: string;
+  motionDescription?: string;
+  context?: string;
+}
+
+/**
+ * Build the video generation sub-agent system prompt with task and context substitution.
+ * Used for animating scene images into video clips.
+ *
+ * @param options - Video generation options including task, scene info, and motion description
+ * @returns The complete video generation system prompt
+ */
+export function buildVideoGenerationPrompt(options: VideoGenerationPromptOptions): string {
+  const { task, sceneNumber, sceneImageArtifactId, motionDescription, context } = options;
+
+  const taskSection = `<task>\n${task}\n</task>`;
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const sceneNumberStr = String(sceneNumber);
+  const motionStr = motionDescription || 'subtle camera movement, natural motion';
+
+  return VIDEO_GENERATION_AGENT_PROMPT
+    .replace('{{task}}', taskSection)
+    .replace('{{context}}', contextSection)
+    .replace('{{scene_number}}', sceneNumberStr)
+    .replace('{{scene_image_artifact_id}}', sceneImageArtifactId)
+    .replace('{{motion_description}}', motionStr);
+}
+
 // ============================================================================
 // Workflow Prompt Functions
 // ============================================================================
@@ -255,14 +291,24 @@ export function buildImageGenerationPrompt(task: string, context?: string): stri
  * Workflow prompt names that can be loaded.
  */
 export type WorkflowPromptName =
+  // Legacy prompts
   | 'story-discovery'
   | 'character-descriptions'
   | 'three-acts'
   | 'act-scenes'
   | 'storyboard-images'
   | 'video-generation'
+  | 'final-signoff'
+  // 8-phase workflow prompts
   | 'orchestrator'
-  | 'final-signoff';
+  | 'plot'
+  | 'story'
+  | 'characters-settings'
+  | 'scenes'
+  | 'character-setting-images'
+  | 'scene-images'
+  | 'video'
+  | 'video-combine';
 
 /**
  * Load a workflow prompt from the workflow prompts directory.
@@ -357,13 +403,23 @@ export function getWorkflowOrchestratorPrompt(): string | null {
  */
 export function listWorkflowPrompts(): WorkflowPromptName[] {
   return [
+    // Legacy prompts
     'story-discovery',
     'character-descriptions',
     'three-acts',
     'act-scenes',
     'storyboard-images',
     'video-generation',
-    'orchestrator',
     'final-signoff',
+    // 8-phase workflow prompts
+    'orchestrator',
+    'plot',
+    'story',
+    'characters-settings',
+    'scenes',
+    'character-setting-images',
+    'scene-images',
+    'video',
+    'video-combine',
   ];
 }

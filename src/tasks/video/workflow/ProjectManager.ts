@@ -17,12 +17,22 @@ import {
   type ContentEntry,
   type ContentTypeName,
   type ContentStatus,
+  type ItemApprovalStatus,
+  type ItemApprovalEntry,
   WorkflowPhase,
   PlannerStage,
   PHASE_CONFIGS,
   PROJECT_DIR,
   PROJECT_FILE,
+  PROJECT_VERSION,
   determineNextPhase,
+  getPhaseItems,
+  getNextUnapprovedItem,
+  areAllItemsApproved,
+  countApprovedItems,
+  createDefaultCharacterData,
+  createDefaultSettingData,
+  createDefaultSceneRef,
 } from './types.js';
 import { generateProjectTitle } from '../../../core/context/index.js';
 
@@ -148,6 +158,7 @@ export function createProject(originalInput: string, basePath: string = process.
   writeFileSync(fullInputPath, cleanInput, 'utf-8');
 
   const project: ProjectFile = {
+    version: '2.0',
     id: projectId,
     title: generateProjectTitle(cleanInput),
     originalInputFile: inputFilePath,
@@ -165,19 +176,34 @@ export function createProject(originalInput: string, basePath: string = process.
         planFile: 'plans/story.md',
         completedAt: null,
       },
+      characters_settings: {
+        status: 'pending',
+        planFile: 'plans/characters-settings.md',
+        completedAt: null,
+      },
       scenes: {
         status: 'pending',
         planFile: 'plans/scenes.md',
         completedAt: null,
       },
-      images: {
+      character_setting_images: {
         status: 'pending',
-        planFile: 'plans/images.md',
+        planFile: 'plans/ref-images.md',
+        completedAt: null,
+      },
+      scene_images: {
+        status: 'pending',
+        planFile: 'plans/scene-images.md',
         completedAt: null,
       },
       video: {
         status: 'pending',
         planFile: 'plans/video.md',
+        completedAt: null,
+      },
+      video_combine: {
+        status: 'pending',
+        planFile: 'plans/final-video.md',
         completedAt: null,
       },
     },
@@ -196,6 +222,7 @@ export function createProject(originalInput: string, basePath: string = process.
 
 /**
  * Load an existing project file.
+ * Returns null if project doesn't exist or is incompatible (old version).
  */
 export function loadProject(basePath: string = process.cwd()): ProjectFile | null {
   const filePath = getProjectFilePath(basePath);
@@ -206,9 +233,46 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
 
   try {
     const content = readFileSync(filePath, 'utf-8');
-    return JSON.parse(content) as ProjectFile;
+    const project = JSON.parse(content);
+
+    // Check version - must be 2.0 for 8-phase workflow
+    if (!project.version || project.version !== '2.0') {
+      console.warn(`[ProjectManager] Incompatible project version: ${project.version ?? 'unknown'}. Expected: 2.0`);
+      console.warn('[ProjectManager] Please delete the .kshana directory and start a new project.');
+      return null;
+    }
+
+    return project as ProjectFile;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Check if an existing project is compatible with the current workflow.
+ */
+export function isProjectCompatible(basePath: string = process.cwd()): { compatible: boolean; version?: string; reason?: string } {
+  const filePath = getProjectFilePath(basePath);
+
+  if (!existsSync(filePath)) {
+    return { compatible: true, reason: 'No existing project' };
+  }
+
+  try {
+    const content = readFileSync(filePath, 'utf-8');
+    const project = JSON.parse(content);
+
+    if (!project.version) {
+      return { compatible: false, version: 'unknown', reason: 'Old project without version (pre-2.0). Delete .kshana directory to start fresh.' };
+    }
+
+    if (project.version !== '2.0') {
+      return { compatible: false, version: project.version, reason: `Incompatible version ${project.version}. Expected 2.0. Delete .kshana directory to start fresh.` };
+    }
+
+    return { compatible: true, version: project.version };
+  } catch {
+    return { compatible: false, reason: 'Failed to parse project file' };
   }
 }
 
@@ -287,6 +351,12 @@ export function updatePlannerStage(
 
   if (stage === PlannerStage.REFINING) {
     phaseInfo.refinementCount = (phaseInfo.refinementCount ?? 0) + 1;
+  }
+
+  // When planner stage reaches COMPLETE, also mark the phase as completed
+  if (stage === PlannerStage.COMPLETE) {
+    phaseInfo.status = 'completed';
+    phaseInfo.completedAt = Date.now();
   }
 
   saveProject(project, basePath);
@@ -383,7 +453,7 @@ function formatCharacterMarkdown(character: CharacterData): string {
 }
 
 /**
- * Save character data to characters/[name].md.
+ * Save character data to characters/[name].md and update project.
  */
 export function saveCharacter(
   character: CharacterData,
@@ -393,12 +463,94 @@ export function saveCharacter(
   const filePath = `characters/${safeName}.md`;
   writeProjectFile(filePath, formatCharacterMarkdown(character), basePath);
 
-  // Update project file's character list
+  // Update project file's character list (now CharacterData[])
   const project = loadProject(basePath);
-  if (project && !project.characters.includes(character.name)) {
-    project.characters.push(character.name);
+  if (project) {
+    const existingIndex = project.characters.findIndex(c => c.name === character.name);
+    if (existingIndex >= 0) {
+      project.characters[existingIndex] = character;
+    } else {
+      project.characters.push(character);
+    }
     saveProject(project, basePath);
   }
+}
+
+/**
+ * Add a character to the project (creates default entry if only name provided).
+ */
+export function addCharacter(
+  name: string,
+  basePath: string = process.cwd()
+): CharacterData {
+  const project = loadProject(basePath);
+  if (!project) {
+    throw new Error('No project found');
+  }
+
+  // Check if character already exists
+  const existing = project.characters.find(c => c.name === name);
+  if (existing) {
+    return existing;
+  }
+
+  // Create new character with default values
+  const character = createDefaultCharacterData(name);
+  project.characters.push(character);
+  saveProject(project, basePath);
+
+  return character;
+}
+
+/**
+ * Update a character's data.
+ */
+export function updateCharacter(
+  name: string,
+  updates: Partial<CharacterData>,
+  basePath: string = process.cwd()
+): CharacterData | null {
+  const project = loadProject(basePath);
+  if (!project) return null;
+
+  const index = project.characters.findIndex(c => c.name === name);
+  if (index < 0) return null;
+
+  project.characters[index] = { ...project.characters[index], ...updates };
+  saveProject(project, basePath);
+
+  // Also save to markdown file if description changed
+  if (updates.description || updates.visualDescription) {
+    saveCharacter(project.characters[index], basePath);
+  }
+
+  return project.characters[index];
+}
+
+/**
+ * Update a character's approval status.
+ */
+export function updateCharacterApproval(
+  name: string,
+  status: ItemApprovalStatus,
+  feedback?: string,
+  basePath: string = process.cwd()
+): CharacterData | null {
+  const project = loadProject(basePath);
+  if (!project) return null;
+
+  const index = project.characters.findIndex(c => c.name === name);
+  if (index < 0) return null;
+
+  project.characters[index].approvalStatus = status;
+  if (status === 'approved') {
+    project.characters[index].approvedAt = Date.now();
+  } else if (status === 'regenerating') {
+    project.characters[index].regenerationCount++;
+  }
+
+  saveProject(project, basePath);
+  return project.characters[index];
 }
 
 /**
@@ -427,19 +579,101 @@ function formatSettingMarkdown(setting: SettingData): string {
 }
 
 /**
- * Save setting data to settings/[name].md.
+ * Save setting data to settings/[name].md and update project.
  */
 export function saveSetting(setting: SettingData, basePath: string = process.cwd()): void {
   const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   const filePath = `settings/${safeName}.md`;
   writeProjectFile(filePath, formatSettingMarkdown(setting), basePath);
 
-  // Update project file's setting list
+  // Update project file's setting list (now SettingData[])
   const project = loadProject(basePath);
-  if (project && !project.settings.includes(setting.name)) {
-    project.settings.push(setting.name);
+  if (project) {
+    const existingIndex = project.settings.findIndex(s => s.name === setting.name);
+    if (existingIndex >= 0) {
+      project.settings[existingIndex] = setting;
+    } else {
+      project.settings.push(setting);
+    }
     saveProject(project, basePath);
   }
+}
+
+/**
+ * Add a setting to the project (creates default entry if only name provided).
+ */
+export function addSetting(
+  name: string,
+  basePath: string = process.cwd()
+): SettingData {
+  const project = loadProject(basePath);
+  if (!project) {
+    throw new Error('No project found');
+  }
+
+  // Check if setting already exists
+  const existing = project.settings.find(s => s.name === name);
+  if (existing) {
+    return existing;
+  }
+
+  // Create new setting with default values
+  const setting = createDefaultSettingData(name);
+  project.settings.push(setting);
+  saveProject(project, basePath);
+
+  return setting;
+}
+
+/**
+ * Update a setting's data.
+ */
+export function updateSetting(
+  name: string,
+  updates: Partial<SettingData>,
+  basePath: string = process.cwd()
+): SettingData | null {
+  const project = loadProject(basePath);
+  if (!project) return null;
+
+  const index = project.settings.findIndex(s => s.name === name);
+  if (index < 0) return null;
+
+  project.settings[index] = { ...project.settings[index], ...updates };
+  saveProject(project, basePath);
+
+  // Also save to markdown file if description changed
+  if (updates.description || updates.visualDescription) {
+    saveSetting(project.settings[index], basePath);
+  }
+
+  return project.settings[index];
+}
+
+/**
+ * Update a setting's approval status.
+ */
+export function updateSettingApproval(
+  name: string,
+  status: ItemApprovalStatus,
+  feedback?: string,
+  basePath: string = process.cwd()
+): SettingData | null {
+  const project = loadProject(basePath);
+  if (!project) return null;
+
+  const index = project.settings.findIndex(s => s.name === name);
+  if (index < 0) return null;
+
+  project.settings[index].approvalStatus = status;
+  if (status === 'approved') {
+    project.settings[index].approvedAt = Date.now();
+  } else if (status === 'regenerating') {
+    project.settings[index].regenerationCount++;
+  }
+
+  saveProject(project, basePath);
+  return project.settings[index];
 }
 
 /**
@@ -469,6 +703,104 @@ export function addScene(sceneRef: SceneRef, basePath: string = process.cwd()): 
   }
 
   saveProject(project, basePath);
+}
+
+/**
+ * Add a new scene to the project (creates default entry).
+ */
+export function addNewScene(
+  sceneNumber: number,
+  title?: string,
+  basePath: string = process.cwd()
+): SceneRef {
+  const project = loadProject(basePath);
+  if (!project) {
+    throw new Error('No project found');
+  }
+
+  // Check if scene already exists
+  const existing = project.scenes.find(s => s.sceneNumber === sceneNumber);
+  if (existing) {
+    return existing;
+  }
+
+  // Create new scene with default values
+  const scene = createDefaultSceneRef(sceneNumber, title);
+  project.scenes.push(scene);
+  project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
+  saveProject(project, basePath);
+
+  return scene;
+}
+
+/**
+ * Update a scene's data.
+ */
+export function updateScene(
+  sceneNumber: number,
+  updates: Partial<SceneRef>,
+  basePath: string = process.cwd()
+): SceneRef | null {
+  const project = loadProject(basePath);
+  if (!project) return null;
+
+  const index = project.scenes.findIndex(s => s.sceneNumber === sceneNumber);
+  if (index < 0) return null;
+
+  project.scenes[index] = { ...project.scenes[index], ...updates };
+  saveProject(project, basePath);
+
+  return project.scenes[index];
+}
+
+/**
+ * Update a scene's approval status for a specific phase.
+ */
+export function updateSceneApproval(
+  sceneNumber: number,
+  phase: 'content' | 'image' | 'video',
+  status: ItemApprovalStatus,
+  feedback?: string,
+  basePath: string = process.cwd()
+): SceneRef | null {
+  const project = loadProject(basePath);
+  if (!project) return null;
+
+  const index = project.scenes.findIndex(s => s.sceneNumber === sceneNumber);
+  if (index < 0) return null;
+
+  const scene = project.scenes[index];
+
+  switch (phase) {
+    case 'content':
+      scene.contentApprovalStatus = status;
+      if (status === 'approved') {
+        scene.contentApprovedAt = Date.now();
+      }
+      break;
+    case 'image':
+      scene.imageApprovalStatus = status;
+      if (status === 'approved') {
+        scene.imageApprovedAt = Date.now();
+      }
+      break;
+    case 'video':
+      scene.videoApprovalStatus = status;
+      if (status === 'approved') {
+        scene.videoApprovedAt = Date.now();
+      }
+      break;
+  }
+
+  if (status === 'regenerating') {
+    scene.regenerationCount++;
+  }
+  if (feedback) {
+    scene.feedback = feedback;
+  }
+
+  saveProject(project, basePath);
+  return scene;
 }
 
 /**
@@ -540,16 +872,29 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
     .filter(([, info]) => info.status === 'completed')
     .map(([key]) => key);
 
+  // Get character and setting names from the data arrays
+  const characterNames = project.characters.map(c => c.name);
+  const settingNames = project.settings.map(s => s.name);
+
+  // Get per-item approval status for current phase if applicable
+  const phaseConfig2 = PHASE_CONFIGS[currentPhase];
+  let itemProgress = '';
+  if (phaseConfig2.requiresPerItemApproval) {
+    const { approved, total } = countApprovedItems(project, currentPhase);
+    itemProgress = `\nItem Progress: ${approved}/${total} approved`;
+  }
+
   return `
 Project: ${project.title || '(untitled)'}
 ID: ${project.id}
+Version: ${project.version}
 Current Phase: ${phaseConfig.displayName} (${currentPhase})
 Planner Stage: ${phaseInfo?.plannerStage ?? 'not started'}
 Completed Phases: ${completedPhases.length > 0 ? completedPhases.join(', ') : 'none'}
-Characters: ${project.characters.length > 0 ? project.characters.join(', ') : 'none defined'}
-Settings: ${project.settings.length > 0 ? project.settings.join(', ') : 'none defined'}
+Characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'none defined'}
+Settings: ${settingNames.length > 0 ? settingNames.join(', ') : 'none defined'}
 Scenes: ${project.scenes.length}
-Assets: ${project.assets.length}
+Assets: ${project.assets.length}${itemProgress}
 `.trim();
 }
 
@@ -580,77 +925,169 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
 - **Stage**: ${plannerStage}
 - **Plan File**: ${phaseConfig.planOutputFile ?? 'N/A'}
 - **Plan File Has Content**: ${planFileExists ? 'YES' : 'NO'}
+- **Per-Item Approval Required**: ${phaseConfig.requiresPerItemApproval ? 'YES' : 'NO'}
 
 ## What to Do Next
 `;
 
-  switch (plannerStage) {
-    case PlannerStage.PLANNING:
-      if (planFileExists) {
-        // Plan already exists - it was already approved, skip to COMPLETE
-        instruction += `
+  // For phases requiring per-item approval, provide specific instructions
+  if (phaseConfig.requiresPerItemApproval) {
+    instruction += getPerItemPhaseInstructions(project, phaseConfig, basePath);
+  } else {
+    // Standard single-approval phase flow
+    switch (plannerStage) {
+      case PlannerStage.PLANNING:
+        if (planFileExists) {
+          instruction += `
 You are in the PLANNING stage BUT a plan already exists at ${phaseConfig.planOutputFile}.
 
 **IMPORTANT**: An existing plan means it was ALREADY APPROVED previously. Do NOT ask for approval again.
 
 1. Mark this phase as COMPLETE immediately (update_project with action "update_planner_stage", stage "complete")
-2. Then mark the phase as completed and transition to the next phase
+2. Then transition to the next phase using transition_phase
 
 DO NOT create a new plan. DO NOT ask for approval - it's already approved.
 `;
-      } else {
-        instruction += `
+        } else {
+          instruction += `
 You are in the PLANNING stage. Create a plan for ${phaseConfig.displayName}.
 1. Analyze the project context
 2. Create a detailed plan
 3. Write the plan to ${phaseConfig.planOutputFile}
 4. Move to VERIFY stage by updating the planner stage
 `;
-      }
-      break;
+        }
+        break;
 
-    case PlannerStage.VERIFY:
-      if (planFileExists) {
-        // Plan exists and we're in verify - it was already approved, skip to COMPLETE
-        instruction += `
+      case PlannerStage.VERIFY:
+        if (planFileExists) {
+          instruction += `
 You are in the VERIFY stage and a plan already exists at ${phaseConfig.planOutputFile}.
 
 **IMPORTANT**: An existing plan means it was ALREADY APPROVED previously. Do NOT ask for approval again.
 
 1. Mark this phase as COMPLETE immediately (update_project with action "update_planner_stage", stage "complete")
-2. Then mark the phase as completed and transition to the next phase
+2. Then transition to the next phase using transition_phase
 `;
-      } else {
-        instruction += `
+        } else {
+          instruction += `
 You are in the VERIFY stage. Present the plan to the user for approval.
 1. Read the plan from ${phaseConfig.planOutputFile}
 2. Present a summary to the user using ask_user
 3. If user approves (or 15 seconds pass with no response), move to COMPLETE
 4. If user provides feedback, move to REFINING stage
 `;
-      }
-      break;
+        }
+        break;
 
-    case PlannerStage.REFINING:
-      instruction += `
+      case PlannerStage.REFINING:
+        instruction += `
 You are in the REFINING stage. Update the plan based on user feedback.
 1. Read the current plan
 2. Apply user feedback
 3. Update the plan in ${phaseConfig.planOutputFile}
 4. Move back to VERIFY stage
 `;
-      break;
+        break;
 
-    case PlannerStage.COMPLETE:
-      instruction += `
+      case PlannerStage.COMPLETE:
+        instruction += `
 The ${phaseConfig.displayName} phase is complete.
-1. Mark the phase as completed
-2. Transition to the next phase: ${phaseConfig.nextPhase ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
 `;
-      break;
+        break;
+    }
   }
 
   return instruction.trim();
+}
+
+/**
+ * Get per-item phase instructions for phases that require individual item approval.
+ */
+function getPerItemPhaseInstructions(
+  project: ProjectFile,
+  phaseConfig: PhaseConfig,
+  _basePath: string
+): string {
+  const items = getPhaseItems(project, phaseConfig.phase);
+  const nextItem = getNextUnapprovedItem(project, phaseConfig.phase);
+  const approvedCount = countApprovedItems(project, phaseConfig.phase);
+  const totalItems = items.length;
+
+  let instruction = `
+**IMPORTANT: This phase requires PER-ITEM approval.**
+
+## Progress
+- Total items: ${totalItems}
+- Approved: ${approvedCount}
+- Remaining: ${totalItems - approvedCount}
+`;
+
+  if (totalItems === 0) {
+    instruction += `
+## No Items Found
+No items to process yet. You need to identify the items first:
+`;
+    switch (phaseConfig.phase) {
+      case WorkflowPhase.CHARACTERS_SETTINGS:
+        instruction += `
+1. Read the story from plans/story.md
+2. Identify all characters and settings mentioned
+3. Add each character using update_project(action: "add_character", data: {name: "..."})
+4. Add each setting using update_project(action: "add_setting", data: {name: "..."})
+5. Then start processing each item one by one
+`;
+        break;
+      case WorkflowPhase.SCENES:
+        instruction += `
+1. Read the story and character/setting profiles
+2. Break the story into individual scenes
+3. Add each scene using update_project(action: "add_scene", data: {scene_number: N, title: "..."})
+4. Then start processing each scene one by one
+`;
+        break;
+      default:
+        instruction += `
+Identify the items to process for this phase, register them in the project, then process each one.
+`;
+    }
+  } else if (nextItem) {
+    instruction += `
+## Next Item to Process
+- **Type**: ${nextItem.type}
+- **Name**: ${nextItem.name}
+- **Status**: ${nextItem.status}
+
+## Per-Item Workflow
+
+**CRITICAL: Create a todo for THIS SPECIFIC ITEM before processing it!**
+
+1. Use todo_write to create a todo: "Create ${nextItem.type} profile: ${nextItem.name}"
+2. Mark the todo as in_progress
+3. Use dispatch_content_agent to generate content for "${nextItem.name}"
+4. Present the result to user for approval
+5. If approved:
+   - Use update_project to update the item's approval status
+   - Mark the todo as completed
+   - Move to the next item
+6. If rejected, regenerate with feedback
+
+**DO NOT** create a single todo for "all characters" or "all settings".
+**DO** create individual todos like "Create character profile: Alice", "Create setting profile: Forest".
+`;
+  } else if (areAllItemsApproved(project, phaseConfig.phase)) {
+    instruction += `
+## All Items Approved!
+
+All ${totalItems} items have been approved.
+
+1. Mark this phase as complete using update_planner_stage(phase: "${phaseConfig.phase}", stage: "complete")
+2. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+`;
+  }
+
+  return instruction;
 }
 
 // ============================================================================

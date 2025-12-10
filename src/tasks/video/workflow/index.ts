@@ -20,13 +20,27 @@ export {
   type ContentStatus,
   type ContentEntry,
   type ContentRegistry,
+  type ItemApprovalStatus,
+  type ItemApprovalEntry,
+  type AgentType,
+  type ItemProcessMode,
+  type ContentType,
+  type FinalVideoInfo,
   PHASE_CONFIGS,
   PHASE_ORDER,
   PROJECT_DIR,
   PROJECT_FILE,
+  PROJECT_VERSION,
   AUTO_APPROVE_TIMEOUT_MS,
   determineNextPhase,
   canTransitionToNextPhase,
+  getPhaseItems,
+  getNextUnapprovedItem,
+  areAllItemsApproved,
+  countApprovedItems,
+  createDefaultCharacterData,
+  createDefaultSettingData,
+  createDefaultSceneRef,
 } from './types.js';
 
 // Project Manager
@@ -48,15 +62,30 @@ export {
   planFileHasContent,
   readProjectFile,
   writeProjectFile,
+  // Character functions
   saveCharacter,
   loadCharacterMarkdown,
+  addCharacter,
+  updateCharacter,
+  updateCharacterApproval,
+  // Setting functions
   saveSetting,
   loadSettingMarkdown,
+  addSetting,
+  updateSetting,
+  updateSettingApproval,
+  // Scene functions
   addScene,
+  addNewScene,
+  updateScene,
+  updateSceneApproval,
+  // Asset functions
   addAsset,
   getAssets,
+  // Utility functions
   getProjectSummary,
   getStateTransitionPrompt,
+  isProjectCompatible,
   // Content Registry functions
   createDefaultContentRegistry,
   updateContentStatus,
@@ -75,6 +104,13 @@ export {
   updateProjectTool,
   getWorkflowFileTools,
 } from './FileTools.js';
+
+// Workflow Logger
+export {
+  getWorkflowLogger,
+  resetWorkflowLogger,
+  type WorkflowLoggerConfig,
+} from './WorkflowLogger.js';
 
 // Stitch Video Tool
 export {
