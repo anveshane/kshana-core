@@ -19,6 +19,7 @@ import {
   type ContentStatus,
   type ItemApprovalStatus,
   type ItemApprovalEntry,
+  type PhaseConfig,
   WorkflowPhase,
   PlannerStage,
   PHASE_CONFIGS,
@@ -353,10 +354,20 @@ export function updatePlannerStage(
     phaseInfo.refinementCount = (phaseInfo.refinementCount ?? 0) + 1;
   }
 
-  // When planner stage reaches COMPLETE, also mark the phase as completed
+  // When planner stage reaches COMPLETE:
+  // - For per-item phases: Only the PLAN is complete, not the phase itself
+  //   The phase is only complete when all items are approved
+  // - For planning-only phases: The phase is complete
   if (stage === PlannerStage.COMPLETE) {
-    phaseInfo.status = 'completed';
-    phaseInfo.completedAt = Date.now();
+    const phaseConfig = PHASE_CONFIGS[phase as WorkflowPhase];
+    const isPerItemPhase = phaseConfig?.requiresPerItemApproval ?? false;
+
+    if (!isPerItemPhase) {
+      // Planning-only phases (plot, story, video_combine) are complete when plan is approved
+      phaseInfo.status = 'completed';
+      phaseInfo.completedAt = Date.now();
+    }
+    // For per-item phases, status remains 'in_progress' until all items are approved
   }
 
   saveProject(project, basePath);
@@ -516,15 +527,19 @@ export function updateCharacter(
   const index = project.characters.findIndex(c => c.name === name);
   if (index < 0) return null;
 
-  project.characters[index] = { ...project.characters[index], ...updates };
+  const existing = project.characters[index];
+  if (!existing) return null;
+
+  const updated: CharacterData = { ...existing, ...updates };
+  project.characters[index] = updated;
   saveProject(project, basePath);
 
   // Also save to markdown file if description changed
   if (updates.description || updates.visualDescription) {
-    saveCharacter(project.characters[index], basePath);
+    saveCharacter(updated, basePath);
   }
 
-  return project.characters[index];
+  return updated;
 }
 
 /**
@@ -542,15 +557,18 @@ export function updateCharacterApproval(
   const index = project.characters.findIndex(c => c.name === name);
   if (index < 0) return null;
 
-  project.characters[index].approvalStatus = status;
+  const character = project.characters[index];
+  if (!character) return null;
+
+  character.approvalStatus = status;
   if (status === 'approved') {
-    project.characters[index].approvedAt = Date.now();
+    character.approvedAt = Date.now();
   } else if (status === 'regenerating') {
-    project.characters[index].regenerationCount++;
+    character.regenerationCount++;
   }
 
   saveProject(project, basePath);
-  return project.characters[index];
+  return character;
 }
 
 /**
@@ -639,15 +657,19 @@ export function updateSetting(
   const index = project.settings.findIndex(s => s.name === name);
   if (index < 0) return null;
 
-  project.settings[index] = { ...project.settings[index], ...updates };
+  const existing = project.settings[index];
+  if (!existing) return null;
+
+  const updated: SettingData = { ...existing, ...updates };
+  project.settings[index] = updated;
   saveProject(project, basePath);
 
   // Also save to markdown file if description changed
   if (updates.description || updates.visualDescription) {
-    saveSetting(project.settings[index], basePath);
+    saveSetting(updated, basePath);
   }
 
-  return project.settings[index];
+  return updated;
 }
 
 /**
@@ -665,15 +687,18 @@ export function updateSettingApproval(
   const index = project.settings.findIndex(s => s.name === name);
   if (index < 0) return null;
 
-  project.settings[index].approvalStatus = status;
+  const setting = project.settings[index];
+  if (!setting) return null;
+
+  setting.approvalStatus = status;
   if (status === 'approved') {
-    project.settings[index].approvedAt = Date.now();
+    setting.approvedAt = Date.now();
   } else if (status === 'regenerating') {
-    project.settings[index].regenerationCount++;
+    setting.regenerationCount++;
   }
 
   saveProject(project, basePath);
-  return project.settings[index];
+  return setting;
 }
 
 /**
@@ -747,10 +772,14 @@ export function updateScene(
   const index = project.scenes.findIndex(s => s.sceneNumber === sceneNumber);
   if (index < 0) return null;
 
-  project.scenes[index] = { ...project.scenes[index], ...updates };
+  const existing = project.scenes[index];
+  if (!existing) return null;
+
+  const updated: SceneRef = { ...existing, ...updates };
+  project.scenes[index] = updated;
   saveProject(project, basePath);
 
-  return project.scenes[index];
+  return updated;
 }
 
 /**
@@ -770,6 +799,7 @@ export function updateSceneApproval(
   if (index < 0) return null;
 
   const scene = project.scenes[index];
+  if (!scene) return null;
 
   switch (phase) {
     case 'content':
@@ -993,7 +1023,7 @@ You are in the REFINING stage. Update the plan based on user feedback.
       case PlannerStage.COMPLETE:
         instruction += `
 The ${phaseConfig.displayName} phase is complete.
-1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
 `;
         break;
     }
@@ -1010,10 +1040,8 @@ function getPerItemPhaseInstructions(
   phaseConfig: PhaseConfig,
   _basePath: string
 ): string {
-  const items = getPhaseItems(project, phaseConfig.phase);
   const nextItem = getNextUnapprovedItem(project, phaseConfig.phase);
-  const approvedCount = countApprovedItems(project, phaseConfig.phase);
-  const totalItems = items.length;
+  const { approved: approvedCount, total: totalItems } = countApprovedItems(project, phaseConfig.phase);
 
   let instruction = `
 **IMPORTANT: This phase requires PER-ITEM approval.**
@@ -1083,7 +1111,7 @@ Identify the items to process for this phase, register them in the project, then
 All ${totalItems} items have been approved.
 
 1. Mark this phase as complete using update_planner_stage(phase: "${phaseConfig.phase}", stage: "complete")
-2. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+2. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
 `;
   }
 
@@ -1272,10 +1300,10 @@ export function markContentAvailable(
   if (['characters', 'settings', 'scenes', 'images', 'videos'].includes(contentType)) {
     // Sync with project arrays
     if (contentType === 'characters' && project.characters.length > 0) {
-      entry.items = [...project.characters];
+      entry.items = project.characters.map(c => c.name);
       entry.status = 'available';
     } else if (contentType === 'settings' && project.settings.length > 0) {
-      entry.items = [...project.settings];
+      entry.items = project.settings.map(s => s.name);
       entry.status = 'available';
     } else if (contentType === 'scenes' && project.scenes.length > 0) {
       entry.items = project.scenes.map(s => `Scene ${s.sceneNumber}`);

@@ -757,7 +757,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...result };
+        return { __awaiting_user_input: true, ...resultObj };
       }
 
       this.emit({
@@ -812,7 +812,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...result };
+        return { __awaiting_user_input: true, ...resultObj };
       }
 
       this.emit({
@@ -864,7 +864,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...result };
+        return { __awaiting_user_input: true, ...resultObj };
       }
 
       this.emit({
@@ -916,7 +916,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...result };
+        return { __awaiting_user_input: true, ...resultObj };
       }
 
       this.emit({
@@ -1240,11 +1240,12 @@ export class GenericAgent extends TypedEventEmitter {
       }, null, 2)}`);
       return verificationResult;
     } catch (error) {
+      const failedTask = this.planningState?.task;
       this.planningState = null;
       this.currentMode = 'orchestrator';
       return {
         error: `Planning failed: ${String(error)}`,
-        task: this.planningState?.task,
+        task: failedTask,
       };
     }
   }
@@ -1635,11 +1636,12 @@ Respond in JSON format:
       }, null, 2)}`);
       return verificationResult;
     } catch (error) {
+      const failedTask = this.contentState?.task;
       this.contentState = null;
       this.currentMode = 'orchestrator';
       return {
         error: `Content creation failed: ${String(error)}`,
-        task: this.contentState?.task,
+        task: failedTask,
       };
     }
   }
@@ -1894,11 +1896,12 @@ Respond in JSON format:
         autoApproveTimeoutMs: 15000, // 15 seconds countdown for image prompt approval
       };
     } catch (error) {
+      const failedTask = this.imageGenState?.task;
       this.imageGenState = null;
       this.currentMode = 'orchestrator';
       return {
         error: `Image prompt generation failed: ${String(error)}`,
-        task: this.imageGenState?.task,
+        task: failedTask,
       };
     }
   }
@@ -1917,19 +1920,19 @@ Respond in JSON format:
 
     // Try to extract Image Prompt section
     const promptMatch = response.match(/\*\*Image Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i);
-    if (promptMatch) {
+    if (promptMatch?.[1]) {
       prompt = promptMatch[1].trim();
     }
 
     // Try to extract Negative Prompt section
     const negativeMatch = response.match(/\*\*Negative Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i);
-    if (negativeMatch) {
+    if (negativeMatch?.[1]) {
       negativePrompt = negativeMatch[1].trim();
     }
 
     // Try to extract Aspect Ratio section
     const aspectMatch = response.match(/\*\*Aspect Ratio:\*\*\s*\n?\s*([^\n]+)/i);
-    if (aspectMatch) {
+    if (aspectMatch?.[1]) {
       const ratio = aspectMatch[1].trim();
       // Validate aspect ratio format
       if (/^\d+:\d+$/.test(ratio)) {
@@ -2046,6 +2049,18 @@ Your classification:`;
       };
     }
 
+    // Get the wait_for_job tool
+    const waitForJobTool = this.tools.get('wait_for_job');
+    if (!waitForJobTool?.handler) {
+      this.imageGenState = null;
+      this.currentMode = 'orchestrator';
+      return {
+        error: 'wait_for_job tool not available',
+        prompt: currentPrompt,
+        task,
+      };
+    }
+
     // Build arguments for generate_image
     const generateArgs: Record<string, unknown> = {
       prompt: currentPrompt,
@@ -2070,33 +2085,89 @@ Your classification:`;
       generateArgs['reference_images'] = referenceImages;
     }
 
+    const toolCallId = `img-gen-${Date.now()}`;
+
     // Emit that we're generating the image
     this.emit({
       type: 'tool_call',
-      toolCallId: `img-gen-${Date.now()}`,
+      toolCallId,
       toolName: 'generate_image',
       arguments: generateArgs,
       agentName: this.getEffectiveAgentName(),
     });
 
     try {
-      // Execute the image generation
-      const result = await Promise.resolve(generateImageTool.handler(generateArgs));
+      // Step 1: Submit the image generation job
+      const submitResult = await Promise.resolve(generateImageTool.handler(generateArgs));
+      const submitResultObj = submitResult as Record<string, unknown>;
+
+      // Check if submission failed
+      if (submitResultObj['status'] === 'error') {
+        const finalState = { ...this.imageGenState };
+        this.imageGenState = null;
+        this.currentMode = 'orchestrator';
+
+        this.emit({
+          type: 'tool_result',
+          toolCallId,
+          toolName: 'generate_image',
+          result: submitResult,
+          isError: true,
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        return {
+          status: 'error',
+          error: submitResultObj['error'] as string,
+          prompt: finalState.currentPrompt,
+          task: finalState.task,
+        };
+      }
+
+      const jobId = submitResultObj['job_id'] as string;
+      if (!jobId) {
+        throw new Error('No job_id returned from generate_image');
+      }
+
+      // Emit that we're waiting for the job
+      const waitToolCallId = `wait-job-${Date.now()}`;
+      this.emit({
+        type: 'tool_call',
+        toolCallId: waitToolCallId,
+        toolName: 'wait_for_job',
+        arguments: { job_id: jobId },
+        agentName: this.getEffectiveAgentName(),
+      });
+
+      // Step 2: Wait for the job to complete
+      const waitResult = await Promise.resolve(waitForJobTool.handler({ job_id: jobId }));
+      const waitResultObj = waitResult as Record<string, unknown>;
 
       // Clear the state
       const finalState = { ...this.imageGenState };
       this.imageGenState = null;
       this.currentMode = 'orchestrator';
 
-      // Emit tool result
+      // Emit tool result for wait_for_job
       this.emit({
         type: 'tool_result',
-        toolCallId: `img-gen-${Date.now()}`,
-        toolName: 'generate_image',
-        result,
-        isError: false,
+        toolCallId: waitToolCallId,
+        toolName: 'wait_for_job',
+        result: waitResult,
+        isError: waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed',
         agentName: this.getEffectiveAgentName(),
       });
+
+      // Check if job failed
+      if (waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed') {
+        return {
+          status: 'error',
+          error: waitResultObj['error'] as string || 'Job failed',
+          prompt: finalState.currentPrompt,
+          task: finalState.task,
+          job_id: jobId,
+        };
+      }
 
       return {
         status: 'completed',
@@ -2105,7 +2176,9 @@ Your classification:`;
         aspect_ratio: finalState.aspectRatio,
         task: finalState.task,
         iterations: finalState.iterations,
-        generation_result: result,
+        job_id: jobId,
+        artifact_id: waitResultObj['artifact_id'],
+        file_path: waitResultObj['file_path'],
         message: 'Image generated successfully.',
       };
     } catch (error) {
@@ -2239,7 +2312,7 @@ Your classification:`;
     // Parse feedback for parameter changes (simple parsing)
     if (lower.includes('duration') && /\d+/.test(lower)) {
       const match = lower.match(/(\d+)\s*(?:s|sec|seconds?)?/);
-      if (match) {
+      if (match?.[1]) {
         this.videoGenState.currentParams.duration = parseInt(match[1], 10);
       }
     }
@@ -2571,9 +2644,9 @@ Your classification:`;
 
       // Emit event so UI can show compression occurred
       this.emit({
-        type: 'system_message',
+        type: 'notification',
+        level: 'info',
         message: `Context compressed: ${result.removedCount} messages summarized to stay within limits`,
-        agentName: this.getEffectiveAgentName(),
       });
     }
   }

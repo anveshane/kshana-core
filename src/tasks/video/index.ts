@@ -371,9 +371,9 @@ You are in the **${phaseConfig.displayName}** phase.
 `;
       break;
 
-    case WorkflowPhase.IMAGES:
+    case WorkflowPhase.SCENE_IMAGES:
       prompt += `
-### Image Generation Phase
+### Scene Image Generation Phase
 1. Read \`plans/scenes.md\` and character/setting data
 2. Create image prompts for each scene
 3. Write image plan to \`plans/images.md\`

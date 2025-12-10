@@ -129,7 +129,7 @@ export function generateVariableBaseName(content: string): string {
       contentLower.slice(0, 200).includes('city') || contentLower.slice(0, 200).includes('forest')) {
     // Try to extract location name
     const villageMatch = content.match(/(?:village|town|city)\s+(?:of\s+)?(\w+)/i);
-    if (villageMatch) {
+    if (villageMatch?.[1]) {
       return `setting_${villageMatch[1].toLowerCase()}`;
     }
     return 'setting';
