@@ -486,6 +486,9 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
       const agent = createAgent();
 
       try {
+        // Initialize agent (queries model context length, validates requirements)
+        await agent.initialize();
+
         const result = await agent.run(task);
 
         dispatch({ type: 'SET_TODOS', todos: result.todos });

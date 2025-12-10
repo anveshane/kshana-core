@@ -90,7 +90,7 @@ export class GenericAgent extends TypedEventEmitter {
     lastCompletionTokens: 0,
   };
   private static readonly CONTEXT_THRESHOLD = 0.80; // 80% of max context
-  private static readonly MAX_CONTEXT_TOKENS = 128000; // Claude's typical context window
+  private maxContextTokens: number = 16000; // Will be updated from LLM client
 
   // Current mode for more descriptive agent names in UI
   private currentMode: 'orchestrator' | 'content' | 'image' | 'video' | 'planning' = 'orchestrator';
@@ -107,6 +107,17 @@ export class GenericAgent extends TypedEventEmitter {
     this.maxIterations = config.maxIterations ?? 100;
     this.name = config.name ?? `agent-${nanoid(6)}`;
     this.customPrompt = config.customPrompt;
+  }
+
+  /**
+   * Initialize the agent by querying model capabilities.
+   * Must be called before running the agent.
+   * Throws if the model's context length is too small.
+   */
+  async initialize(): Promise<void> {
+    // Query context length from LLM provider (validates minimum requirements)
+    this.maxContextTokens = await this.llm.getContextLength();
+    debugLog(`[GenericAgent] Initialized with context length: ${this.maxContextTokens} tokens`);
   }
 
   /**
@@ -384,6 +395,50 @@ export class GenericAgent extends TypedEventEmitter {
           content: JSON.stringify(imageResult),
           toolCallId: 'image-gen-result',
           name: 'dispatch_image_agent',
+        });
+
+        // Emit status change back to thinking
+        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
+      } else if (this.videoGenState?.active) {
+        // Handle the video generation response
+        const videoResult = await this.handleVideoGenResponse(userResponse);
+        const videoResultObj = videoResult as Record<string, unknown>;
+
+        // Check if video gen needs more input or is complete
+        if (videoResultObj['status'] === 'awaiting_approval') {
+          // Still waiting for user - emit question and return
+          this.waitingForUser = true;
+          this.pendingQuestion = videoResultObj['question'] as string;
+
+          this.emit({
+            type: 'question',
+            question: videoResultObj['question'] as string,
+            isConfirmation: false,
+            options: videoResultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: videoResultObj['autoApproveTimeoutMs'] as number | undefined,
+          });
+
+          return {
+            status: 'waiting_for_user',
+            output: '',
+            todos: this.todoManager.getTodos(),
+            pendingQuestion: videoResultObj['question'] as string,
+            options: videoResultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: videoResultObj['autoApproveTimeoutMs'] as number | undefined,
+          };
+        }
+
+        // Video generation is complete (generated, cancelled, or max_iterations)
+        // Add the result to messages and continue
+        this.waitingForUser = false;
+        this.pendingQuestion = undefined;
+
+        // Add the dispatch_video_agent result to messages
+        this.messages.push({
+          role: 'tool',
+          content: JSON.stringify(videoResult),
+          toolCallId: 'video-gen-result',
+          name: 'dispatch_video_agent',
         });
 
         // Emit status change back to thinking
@@ -2362,42 +2417,108 @@ Your classification:`;
       };
     }
 
+    // Get the wait_for_job tool
+    const waitForJobTool = this.tools.get('wait_for_job');
+    if (!waitForJobTool?.handler) {
+      this.videoGenState = null;
+      this.currentMode = 'orchestrator';
+      return {
+        error: 'wait_for_job tool not available',
+        task,
+      };
+    }
+
     // Build arguments for generate_video
     const generateArgs: Record<string, unknown> = {
       scene_number: sceneNumber,
       scene_image_artifact_id: sceneImageArtifactId,
-      motion_description: motionDescription,
-      duration: currentParams.duration,
-      fps: currentParams.fps,
+      prompt: motionDescription, // generate_video uses 'prompt' for motion description
+      // duration and fps may be handled by the workflow
     };
+
+    const toolCallId = `vid-gen-${Date.now()}`;
 
     // Emit that we're generating the video
     this.emit({
       type: 'tool_call',
-      toolCallId: `vid-gen-${Date.now()}`,
+      toolCallId,
       toolName: 'generate_video',
       arguments: generateArgs,
       agentName: this.getEffectiveAgentName(),
     });
 
     try {
-      // Execute the video generation
-      const result = await Promise.resolve(generateVideoTool.handler(generateArgs));
+      // Step 1: Submit the video generation job
+      const submitResult = await Promise.resolve(generateVideoTool.handler(generateArgs));
+      const submitResultObj = submitResult as Record<string, unknown>;
+
+      // Check if submission failed
+      if (submitResultObj['status'] === 'error') {
+        const finalState = { ...this.videoGenState };
+        this.videoGenState = null;
+        this.currentMode = 'orchestrator';
+
+        this.emit({
+          type: 'tool_result',
+          toolCallId,
+          toolName: 'generate_video',
+          result: submitResult,
+          isError: true,
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        return {
+          status: 'error',
+          error: submitResultObj['error'] as string,
+          scene_number: finalState.sceneNumber,
+          task: finalState.task,
+        };
+      }
+
+      const jobId = submitResultObj['job_id'] as string;
+      if (!jobId) {
+        throw new Error('No job_id returned from generate_video');
+      }
+
+      // Emit that we're waiting for the job
+      const waitToolCallId = `wait-job-${Date.now()}`;
+      this.emit({
+        type: 'tool_call',
+        toolCallId: waitToolCallId,
+        toolName: 'wait_for_job',
+        arguments: { job_id: jobId },
+        agentName: this.getEffectiveAgentName(),
+      });
+
+      // Step 2: Wait for the job to complete
+      const waitResult = await Promise.resolve(waitForJobTool.handler({ job_id: jobId }));
+      const waitResultObj = waitResult as Record<string, unknown>;
 
       // Clear the state
       const finalState = { ...this.videoGenState };
       this.videoGenState = null;
       this.currentMode = 'orchestrator';
 
-      // Emit tool result
+      // Emit tool result for wait_for_job
       this.emit({
         type: 'tool_result',
-        toolCallId: `vid-gen-${Date.now()}`,
-        toolName: 'generate_video',
-        result,
-        isError: false,
+        toolCallId: waitToolCallId,
+        toolName: 'wait_for_job',
+        result: waitResult,
+        isError: waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed',
         agentName: this.getEffectiveAgentName(),
       });
+
+      // Check if job failed
+      if (waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed') {
+        return {
+          status: 'error',
+          error: waitResultObj['error'] as string || 'Job failed',
+          scene_number: finalState.sceneNumber,
+          task: finalState.task,
+          job_id: jobId,
+        };
+      }
 
       return {
         status: 'completed',
@@ -2406,7 +2527,9 @@ Your classification:`;
         params: finalState.currentParams,
         task: finalState.task,
         iterations: finalState.iterations,
-        generation_result: result,
+        job_id: jobId,
+        artifact_id: waitResultObj['artifact_id'],
+        file_path: waitResultObj['file_path'],
         message: 'Video generated successfully.',
       };
     } catch (error) {
@@ -2602,19 +2725,40 @@ Your classification:`;
    * Returns true if we should compress old messages.
    */
   private shouldCompressContext(): boolean {
-    // Only check if we have usage data
-    if (this.tokenUsage.lastPromptTokens === 0) {
-      return false;
+    const threshold = this.maxContextTokens * GenericAgent.CONTEXT_THRESHOLD;
+
+    // Method 1: Check based on actual token usage from last call
+    if (this.tokenUsage.lastPromptTokens > 0) {
+      const shouldCompress = this.tokenUsage.lastPromptTokens > threshold;
+      if (shouldCompress) {
+        debugLog(`[GenericAgent] Context at ${Math.round((this.tokenUsage.lastPromptTokens / this.maxContextTokens) * 100)}% (${this.tokenUsage.lastPromptTokens}/${this.maxContextTokens} tokens) - compression needed`);
+        return true;
+      }
     }
 
-    const threshold = GenericAgent.MAX_CONTEXT_TOKENS * GenericAgent.CONTEXT_THRESHOLD;
-    const shouldCompress = this.tokenUsage.lastPromptTokens > threshold;
+    // Method 2: Estimate based on message count and content length
+    // This helps catch cases where we haven't had a successful LLM call yet
+    // Rough estimate: ~4 chars per token, plus overhead for tool definitions (~2000 tokens)
+    const estimatedContentTokens = this.messages.reduce((sum, msg) => {
+      return sum + Math.ceil((msg.content?.length ?? 0) / 4);
+    }, 0);
+    const estimatedToolTokens = this.tools.size * 200; // ~200 tokens per tool definition
+    const estimatedTotal = estimatedContentTokens + estimatedToolTokens;
 
-    if (shouldCompress) {
-      debugLog(`[GenericAgent] Context at ${Math.round((this.tokenUsage.lastPromptTokens / GenericAgent.MAX_CONTEXT_TOKENS) * 100)}% - compression needed`);
+    if (estimatedTotal > threshold) {
+      debugLog(`[GenericAgent] Estimated context at ${Math.round((estimatedTotal / this.maxContextTokens) * 100)}% (~${estimatedTotal}/${this.maxContextTokens} tokens) - compression needed`);
+      return true;
     }
 
-    return shouldCompress;
+    // Method 3: Trigger compression if we have many messages regardless
+    // This is a safety net for long conversations
+    const MESSAGE_COUNT_THRESHOLD = 30;
+    if (this.messages.length > MESSAGE_COUNT_THRESHOLD) {
+      debugLog(`[GenericAgent] Message count (${this.messages.length}) exceeds threshold (${MESSAGE_COUNT_THRESHOLD}) - compression needed`);
+      return true;
+    }
+
+    return false;
   }
 
   /**
