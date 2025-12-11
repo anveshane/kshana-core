@@ -92,6 +92,7 @@ export const GENERIC_AGENT_SUB_AGENT_SECTION = subAgentPrompt.content;
 export const PLANNING_AGENT_PROMPT = planningPrompt.content;
 export const CONTENT_AGENT_PROMPT = contentPrompt.content;
 export const IMAGE_GENERATION_AGENT_PROMPT = imageGenerationPrompt.content;
+export const VIDEO_GENERATION_AGENT_PROMPT = videoGenerationPrompt.content;
 
 // Combined prompt for main agent (base + orchestrator)
 export const GENERIC_AGENT_SYSTEM_PROMPT =
@@ -117,11 +118,11 @@ function buildToolDescriptions(tools: Map<string, ToolDefinition>): string {
 }
 
 /**
- * Context variable info for the system prompt (with ID for dispatch tools).
+ * Context variable info for the system prompt.
+ * variableName is used as the primary reference (e.g., "$plan", "$chapter_1")
  */
 export interface ContextVariable {
-  id: string;           // The context_ref to pass to dispatch tools
-  variableName: string; // Display name like $chapter_1
+  variableName: string; // Primary key like $chapter_1 (used as context_ref)
   label: string;        // Description
   charCount: number;    // Size
 }
@@ -145,7 +146,7 @@ export function buildContextVariablesSection(variables: ContextVariable[]): stri
 
   for (const v of variables) {
     lines.push(`### ${v.variableName}`);
-    lines.push(`- **context_ref**: \`"${v.id}"\``);
+    lines.push(`- **context_ref**: \`"${v.variableName}"\``);
     lines.push(`- **Content**: ${v.label}`);
     lines.push(`- **Size**: ${v.charCount.toLocaleString()} characters`);
     lines.push('');
@@ -162,11 +163,11 @@ export function buildContextVariablesSection(variables: ContextVariable[]): stri
   lines.push('');
 
   if (variables.length > 0) {
-    const ex = variables[0];
+    const varNames = variables.map(v => `"${v.variableName}"`).join(', ');
     lines.push('**Example:**');
     lines.push('```');
-    lines.push(`// For tasks needing content from ${ex?.variableName}:`);
-    lines.push(`dispatch_content_agent(task="...", context_ref="${ex?.id}", content_type="...")`);
+    lines.push(`// Pass ALL relevant contexts to content agents:`);
+    lines.push(`dispatch_content_agent(task="...", content_type="...", context_refs=[${varNames}])`);
     lines.push('```');
   }
 
@@ -287,6 +288,40 @@ export function buildImageGenerationPrompt(task: string, context?: string): stri
     .replace('{{context}}', contextSection);
 }
 
+/**
+ * Video generation prompt options.
+ */
+export interface VideoGenerationPromptOptions {
+  task: string;
+  sceneNumber: number;
+  sceneImageArtifactId: string;
+  motionDescription?: string;
+  context?: string;
+}
+
+/**
+ * Build the video generation sub-agent system prompt with task and context substitution.
+ * Used for animating scene images into video clips.
+ *
+ * @param options - Video generation options including task, scene info, and motion description
+ * @returns The complete video generation system prompt
+ */
+export function buildVideoGenerationPrompt(options: VideoGenerationPromptOptions): string {
+  const { task, sceneNumber, sceneImageArtifactId, motionDescription, context } = options;
+
+  const taskSection = `<task>\n${task}\n</task>`;
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const sceneNumberStr = String(sceneNumber);
+  const motionStr = motionDescription || 'subtle camera movement, natural motion';
+
+  return VIDEO_GENERATION_AGENT_PROMPT
+    .replace('{{task}}', taskSection)
+    .replace('{{context}}', contextSection)
+    .replace('{{scene_number}}', sceneNumberStr)
+    .replace('{{scene_image_artifact_id}}', sceneImageArtifactId)
+    .replace('{{motion_description}}', motionStr);
+}
+
 // ============================================================================
 // Workflow Prompt Functions
 // ============================================================================
@@ -295,14 +330,24 @@ export function buildImageGenerationPrompt(task: string, context?: string): stri
  * Workflow prompt names that can be loaded.
  */
 export type WorkflowPromptName =
+  // Legacy prompts
   | 'story-discovery'
   | 'character-descriptions'
   | 'three-acts'
   | 'act-scenes'
   | 'storyboard-images'
   | 'video-generation'
+  | 'final-signoff'
+  // 8-phase workflow prompts
   | 'orchestrator'
-  | 'final-signoff';
+  | 'plot'
+  | 'story'
+  | 'characters-settings'
+  | 'scenes'
+  | 'character-setting-images'
+  | 'scene-images'
+  | 'video'
+  | 'video-combine';
 
 /**
  * Load a workflow prompt from the workflow prompts directory.
@@ -397,13 +442,23 @@ export function getWorkflowOrchestratorPrompt(): string | null {
  */
 export function listWorkflowPrompts(): WorkflowPromptName[] {
   return [
+    // Legacy prompts
     'story-discovery',
     'character-descriptions',
     'three-acts',
     'act-scenes',
     'storyboard-images',
     'video-generation',
-    'orchestrator',
     'final-signoff',
+    // 8-phase workflow prompts
+    'orchestrator',
+    'plot',
+    'story',
+    'characters-settings',
+    'scenes',
+    'character-setting-images',
+    'scene-images',
+    'video',
+    'video-combine',
   ];
 }

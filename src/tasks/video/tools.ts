@@ -1,9 +1,42 @@
 /**
  * Video generation tools for the video creation task.
- * These tools integrate with external services (ComfyUI, etc.) for actual generation.
+ * These tools integrate with ComfyUI for actual image/video generation.
  */
+import * as fs from 'fs';
+import * as path from 'path';
+import { nanoid } from 'nanoid';
 import { createTool } from '../../core/tools/index.js';
 import type { ToolDefinition } from '../../core/llm/index.js';
+import {
+  ComfyUIClient,
+  loadWorkflowTemplate,
+  parameterizeWorkflowByName,
+  getRegistry,
+} from '../../services/comfyui/index.js';
+import {
+  PROJECT_DIR,
+  addAsset,
+  loadProject,
+  updateCharacter,
+  updateSetting,
+  updateScene,
+} from './workflow/index.js';
+
+/**
+ * Context for linking artifacts to project entities.
+ */
+export interface ArtifactContext {
+  /** Type of entity this artifact belongs to */
+  entityType: 'scene' | 'character' | 'setting';
+  /** Scene number (for scene images/videos) */
+  sceneNumber?: number;
+  /** Character name (for character reference images) */
+  characterName?: string;
+  /** Setting name (for setting reference images) */
+  settingName?: string;
+  /** Whether this is an image or video artifact */
+  artifactType: 'image' | 'video';
+}
 
 /**
  * Job status for async generation tasks.
@@ -21,6 +54,9 @@ export interface GenerationJob {
   error?: string;
   createdAt: number;
   updatedAt: number;
+  promptId?: string; // ComfyUI prompt ID
+  /** Context for linking artifact to project */
+  context?: ArtifactContext;
 }
 
 /**
@@ -78,6 +114,276 @@ export interface ImageEditParams {
 // Job storage (in-memory for now, could be Redis/DB in production)
 const jobs = new Map<string, GenerationJob>();
 
+// Get the project assets directory
+function getAssetsDir(): string {
+  const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'images');
+  if (!fs.existsSync(assetsDir)) {
+    fs.mkdirSync(assetsDir, { recursive: true });
+  }
+  return assetsDir;
+}
+
+/**
+ * Submit an image generation job to ComfyUI.
+ */
+async function submitImageGeneration(params: ImageGenerationParams): Promise<{
+  jobId: string;
+  status: string;
+  error?: string;
+}> {
+  const {
+    scene_number,
+    prompt,
+    negative_prompt = '',
+    aspect_ratio = '16:9',
+    seed,
+    image_type = 'scene',
+    character_name,
+    setting_name,
+  } = params;
+
+  // Determine filename prefix based on image type
+  let filenamePrefix: string;
+  let logDesc: string;
+
+  if (image_type === 'character_ref' && character_name) {
+    const cleanName = character_name.replace(/[^a-zA-Z0-9]/g, '');
+    filenamePrefix = `CharRef_${cleanName}`;
+    logDesc = `character reference for ${character_name}`;
+  } else if (image_type === 'setting_ref' && setting_name) {
+    const cleanName = setting_name.replace(/[^a-zA-Z0-9]/g, '');
+    filenamePrefix = `SettingRef_${cleanName}`;
+    logDesc = `setting reference for ${setting_name}`;
+  } else {
+    filenamePrefix = `Scene${scene_number}`;
+    logDesc = `scene ${scene_number}`;
+  }
+
+  // Determine context for linking artifact to project
+  let context: ArtifactContext;
+  if (image_type === 'character_ref' && character_name) {
+    context = { entityType: 'character', characterName: character_name, artifactType: 'image' };
+  } else if (image_type === 'setting_ref' && setting_name) {
+    context = { entityType: 'setting', settingName: setting_name, artifactType: 'image' };
+  } else {
+    context = { entityType: 'scene', sceneNumber: scene_number, artifactType: 'image' };
+  }
+
+  // Create job for tracking
+  const jobId = `img-${Date.now()}-${nanoid(6)}`;
+  const job: GenerationJob = {
+    id: jobId,
+    type: 'image',
+    status: 'pending',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    context,
+  };
+  jobs.set(jobId, job);
+
+  try {
+    const registry = getRegistry();
+    const workflowMetadata = registry.get('zimage');
+
+    if (!workflowMetadata) {
+      throw new Error("Workflow 'zimage' not found");
+    }
+
+    const template = loadWorkflowTemplate(workflowMetadata.filename);
+    const workflow = parameterizeWorkflowByName('zimage', template, {
+      sceneNumber: scene_number,
+      prompt,
+      negativePrompt: negative_prompt,
+      aspectRatio: aspect_ratio,
+      style: 'cinematic',
+      seed,
+      filenamePrefix,
+    });
+
+    // Queue workflow to ComfyUI
+    const client = new ComfyUIClient({
+      outputDir: getAssetsDir(),
+    });
+
+    const promptId = await client.queueWorkflow(workflow as Record<string, unknown>);
+
+    // Update job with prompt ID
+    job.promptId = promptId;
+    job.status = 'processing';
+    job.updatedAt = Date.now();
+
+    return {
+      jobId,
+      status: 'submitted',
+    };
+  } catch (error) {
+    job.status = 'failed';
+    job.error = String(error);
+    job.updatedAt = Date.now();
+
+    return {
+      jobId,
+      status: 'error',
+      error: String(error),
+    };
+  }
+}
+
+/**
+ * Wait for a ComfyUI job to complete and download the result.
+ */
+async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<{
+  status: string;
+  artifactId?: string;
+  filePath?: string;
+  error?: string;
+}> {
+  const job = jobs.get(jobId);
+  if (!job) {
+    return { status: 'error', error: `Job not found: ${jobId}` };
+  }
+
+  if (!job.promptId) {
+    return { status: 'error', error: 'Job has no ComfyUI prompt ID' };
+  }
+
+  try {
+    const assetsDir = getAssetsDir();
+    const client = new ComfyUIClient({
+      outputDir: assetsDir,
+      timeout,
+    });
+
+    // Wait for completion
+    const completionResult = await client.waitForCompletion(job.promptId, (pct, msg) => {
+      job.progress = pct;
+      job.updatedAt = Date.now();
+    });
+
+    if (completionResult.status !== 'completed' && completionResult.status !== 'completed_with_timeout') {
+      job.status = 'failed';
+      job.error = 'Job did not complete';
+      job.updatedAt = Date.now();
+      return { status: 'failed', error: 'Job did not complete' };
+    }
+
+    // Get output images
+    const images = await client.getOutputImages(job.promptId);
+    if (!images.length) {
+      job.status = 'failed';
+      job.error = 'No output images found';
+      job.updatedAt = Date.now();
+      return { status: 'failed', error: 'No output images found' };
+    }
+
+    // Download first image
+    const firstImage = images[0]!;
+    const outputFilename = `${nanoid(8)}_${firstImage.filename}`;
+    const savedPath = await client.downloadImage(
+      firstImage.filename,
+      firstImage.subfolder,
+      firstImage.type,
+      outputFilename
+    );
+
+    // Create artifact ID
+    const artifactId = `img_${nanoid(8)}`;
+
+    // Get relative path for storage
+    const projectDir = path.join(process.cwd(), PROJECT_DIR);
+    let relativePath: string;
+    try {
+      relativePath = path.relative(projectDir, savedPath);
+    } catch {
+      relativePath = savedPath;
+    }
+
+    // Determine asset type based on context
+    let assetType: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' = 'scene_image';
+    if (job.context) {
+      if (job.context.entityType === 'character') {
+        assetType = 'character_ref';
+      } else if (job.context.entityType === 'setting') {
+        assetType = 'setting_ref';
+      } else if (job.context.artifactType === 'video') {
+        assetType = 'scene_video';
+      }
+    } else if (job.type === 'video') {
+      assetType = 'scene_video';
+    }
+
+    // Store artifact in project manifest
+    try {
+      addAsset({
+        id: artifactId,
+        type: assetType,
+        path: relativePath,
+        createdAt: Date.now(),
+        metadata: { jobId: job.id, promptId: job.promptId },
+      });
+    } catch {
+      // Project may not exist yet, that's OK
+    }
+
+    // Link artifact to project entity (character, setting, or scene)
+    if (job.context) {
+      try {
+        if (job.context.entityType === 'character' && job.context.characterName) {
+          updateCharacter(job.context.characterName, {
+            referenceImageId: artifactId,
+            referenceImagePath: relativePath,
+          });
+          console.log(`Linked artifact ${artifactId} to character: ${job.context.characterName}`);
+        } else if (job.context.entityType === 'setting' && job.context.settingName) {
+          updateSetting(job.context.settingName, {
+            referenceImageId: artifactId,
+            referenceImagePath: relativePath,
+          });
+          console.log(`Linked artifact ${artifactId} to setting: ${job.context.settingName}`);
+        } else if (job.context.entityType === 'scene' && job.context.sceneNumber !== undefined) {
+          if (job.context.artifactType === 'video') {
+            updateScene(job.context.sceneNumber, {
+              videoArtifactId: artifactId,
+            });
+            console.log(`Linked video artifact ${artifactId} to scene: ${job.context.sceneNumber}`);
+          } else {
+            updateScene(job.context.sceneNumber, {
+              imageArtifactId: artifactId,
+            });
+            console.log(`Linked image artifact ${artifactId} to scene: ${job.context.sceneNumber}`);
+          }
+        }
+      } catch (e) {
+        console.warn(`Failed to link artifact to project entity: ${e}`);
+      }
+    }
+
+    // Update job
+    job.status = 'completed';
+    job.progress = 100;
+    job.result = {
+      artifactId,
+      path: relativePath,
+    };
+    job.updatedAt = Date.now();
+
+    return {
+      status: 'completed',
+      artifactId,
+      filePath: relativePath,
+    };
+  } catch (error) {
+    job.status = 'failed';
+    job.error = String(error);
+    job.updatedAt = Date.now();
+
+    return {
+      status: 'error',
+      error: String(error),
+    };
+  }
+}
+
 /**
  * Generate image tool.
  * This is a COMPLEX tool - requires user confirmation.
@@ -88,7 +394,7 @@ const jobs = new Map<string, GenerationJob>();
  */
 export const generateImageTool: ToolDefinition = createTool(
   'generate_image',
-  `Generate an image. Supports two modes:
+  `Generate an image using ComfyUI. Supports two modes:
 
 1. **Text-to-Image** (generation_mode: "text_to_image"):
    - For character reference images
@@ -187,42 +493,24 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       };
     }
 
-    // Create a job for tracking
-    const jobId = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const job: GenerationJob = {
-      id: jobId,
-      type: 'image',
-      status: 'pending',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    jobs.set(jobId, job);
+    // Submit to ComfyUI
+    const result = await submitImageGeneration(params);
 
-    // TODO: Integrate with actual image generation backend (ComfyUI, etc.)
-    // For text_to_image: Use standard text-to-image pipeline
-    // For image_text_to_image: Use IP-Adapter, ControlNet, or similar for character/setting consistency
-    // Note: Avoid console.log during CLI operation as it interferes with Ink rendering
-
-    // Simulate async processing (in real implementation, this would call ComfyUI API)
-    setTimeout(() => {
-      const j = jobs.get(jobId);
-      if (j) {
-        j.status = 'completed';
-        j.updatedAt = Date.now();
-        j.result = {
-          artifactId: `artifact-${jobId}`,
-          path: `/generated/images/${jobId}.png`,
-        };
-      }
-    }, 2000);
+    if (result.status === 'error') {
+      return {
+        status: 'error',
+        error: result.error,
+        job_id: result.jobId,
+      };
+    }
 
     return {
       status: 'submitted',
-      job_id: jobId,
+      job_id: result.jobId,
       generation_mode: generationMode,
       message: generationMode === 'text_to_image'
-        ? `Text-to-image generation job submitted. Use wait_for_job("${jobId}") to check status.`
-        : `Image+text-to-image generation job submitted with ${params.reference_images?.length ?? 0} reference images. Use wait_for_job("${jobId}") to check status.`,
+        ? `Text-to-image generation job submitted. Use wait_for_job("${result.jobId}") to check status.`
+        : `Image+text-to-image generation job submitted with ${params.reference_images?.length ?? 0} reference images. Use wait_for_job("${result.jobId}") to check status.`,
       params: {
         scene_number: params.scene_number,
         image_type: params.image_type ?? 'scene',
@@ -241,81 +529,143 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
  */
 export const generateVideoTool: ToolDefinition = createTool(
   'generate_video',
-  `Generate a video from scene images. This tool requires user confirmation before execution.
+  `Generate a video from a scene image using ComfyUI's Wan Lightning workflow.
 
-Compiles multiple scene images into a video clip with transitions.
+Takes a scene image artifact and creates a short video clip with motion.
 The tool will return a job ID. Use wait_for_job to check completion.`,
   {
     type: 'object',
     properties: {
-      scene_artifacts: {
-        type: 'array',
-        items: { type: 'string' },
-        description: 'List of artifact IDs (from generated images) to compile into video',
-      },
-      duration: {
-        type: 'number',
-        description: 'Duration per scene in seconds (default: 3)',
-      },
-      fps: {
-        type: 'number',
-        description: 'Frames per second (default: 24)',
-      },
-      transition: {
+      scene_image_artifact_id: {
         type: 'string',
-        description: 'Transition type between scenes',
-        enum: ['fade', 'crossfade', 'cut', 'dissolve'],
+        description: 'Artifact ID of the scene image to animate',
+      },
+      scene_number: {
+        type: 'number',
+        description: 'Scene number',
+      },
+      prompt: {
+        type: 'string',
+        description: 'Optional motion description for the video',
+      },
+      seed: {
+        type: 'number',
+        description: 'Random seed for reproducibility (optional)',
       },
     },
-    required: ['scene_artifacts'],
+    required: ['scene_image_artifact_id', 'scene_number'],
   },
   async (args) => {
-    const params = args as unknown as VideoGenerationParams;
+    const sceneImageArtifactId = args['scene_image_artifact_id'] as string;
+    const sceneNumber = args['scene_number'] as number;
+    const prompt = (args['prompt'] as string) || '';
+    const seed = args['seed'] as number | undefined;
 
-    if (!params.scene_artifacts || params.scene_artifacts.length === 0) {
-      return {
-        status: 'error',
-        error: 'No scene artifacts provided. Generate scene images first.',
-      };
-    }
-
-    // Create a job for tracking
-    const jobId = `vid-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Create job for tracking with context for linking
+    const jobId = `vid-${Date.now()}-${nanoid(6)}`;
     const job: GenerationJob = {
       id: jobId,
       type: 'video',
       status: 'pending',
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      context: {
+        entityType: 'scene',
+        sceneNumber,
+        artifactType: 'video',
+      },
     };
     jobs.set(jobId, job);
 
-    // TODO: Integrate with actual video generation backend
-    // Note: Avoid console.log during CLI operation as it interferes with Ink rendering
-
-    // Simulate async processing
-    setTimeout(() => {
-      const j = jobs.get(jobId);
-      if (j) {
-        j.status = 'completed';
-        j.updatedAt = Date.now();
-        j.result = {
-          artifactId: `artifact-${jobId}`,
-          path: `/generated/videos/${jobId}.mp4`,
-        };
+    try {
+      // Find the image file from the artifact ID
+      const project = loadProject();
+      if (!project) {
+        throw new Error('No project found');
       }
-    }, 5000);
 
-    return {
-      status: 'submitted',
-      job_id: jobId,
-      message: `Video generation job submitted. Use wait_for_job("${jobId}") to check status.`,
-      params: {
-        scene_count: params.scene_artifacts.length,
-        duration: params.duration ?? 3,
-        transition: params.transition ?? 'crossfade',
-      },
-    };
+      // Look for the artifact in project assets or scenes
+      let imagePath: string | undefined;
+
+      // Check scenes for the image artifact
+      for (const scene of project.scenes) {
+        if (scene.imageArtifactId === sceneImageArtifactId) {
+          // Look up the asset path from the manifest
+          const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets');
+          const manifestPath = path.join(assetsDir, 'manifest.json');
+          if (fs.existsSync(manifestPath)) {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+            const asset = manifest.assets?.find((a: { id: string }) => a.id === sceneImageArtifactId);
+            if (asset) {
+              imagePath = path.join(process.cwd(), PROJECT_DIR, asset.path);
+            }
+          }
+          break;
+        }
+      }
+
+      if (!imagePath || !fs.existsSync(imagePath)) {
+        throw new Error(`Image not found for artifact: ${sceneImageArtifactId}`);
+      }
+
+      const registry = getRegistry();
+      const workflowMetadata = registry.get('wan_lightning');
+
+      if (!workflowMetadata) {
+        throw new Error("Workflow 'wan_lightning' not found");
+      }
+
+      const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'videos');
+      if (!fs.existsSync(assetsDir)) {
+        fs.mkdirSync(assetsDir, { recursive: true });
+      }
+
+      const client = new ComfyUIClient({
+        outputDir: assetsDir,
+      });
+
+      // Upload the image to ComfyUI
+      const uploadResult = await client.uploadImage(imagePath, 'input', true);
+
+      // Load and parameterize the workflow
+      const template = loadWorkflowTemplate(workflowMetadata.filename);
+      const workflow = parameterizeWorkflowByName('wan_lightning', template, {
+        sceneNumber,
+        prompt,
+        seed,
+        inputImageFilename: uploadResult.name,
+        filenamePrefix: `Scene${sceneNumber}_video`,
+      });
+
+      // Queue workflow
+      const promptId = await client.queueWorkflow(workflow as Record<string, unknown>);
+
+      // Update job
+      job.promptId = promptId;
+      job.status = 'processing';
+      job.updatedAt = Date.now();
+
+      return {
+        status: 'submitted',
+        job_id: jobId,
+        message: `Video generation job submitted. Use wait_for_job("${jobId}") to check status.`,
+        params: {
+          scene_number: sceneNumber,
+          image_artifact: sceneImageArtifactId,
+          prompt,
+        },
+      };
+    } catch (error) {
+      job.status = 'failed';
+      job.error = String(error);
+      job.updatedAt = Date.now();
+
+      return {
+        status: 'error',
+        job_id: jobId,
+        error: String(error),
+      };
+    }
   }
 );
 
@@ -325,9 +675,9 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
  */
 export const editImageTool: ToolDefinition = createTool(
   'edit_image',
-  `Edit an existing image based on a text prompt. This tool requires user confirmation before execution.
+  `Edit an existing image based on a text prompt using ComfyUI's Qwen Edit workflow.
 
-Uses inpainting/outpainting to modify specific parts of an image.
+Uses intelligent editing to modify specific parts of an image.
 The tool will return a job ID. Use wait_for_job to check completion.`,
   {
     type: 'object',
@@ -363,55 +713,103 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
   async (args) => {
     const params = args as unknown as ImageEditParams;
 
-    // Create a job for tracking
-    const jobId = `edit-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // Create job for tracking with context for linking
+    const jobId = `edit-${Date.now()}-${nanoid(6)}`;
     const job: GenerationJob = {
       id: jobId,
       type: 'image',
       status: 'pending',
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      context: {
+        entityType: 'scene',
+        sceneNumber: params.scene_number,
+        artifactType: 'image',
+      },
     };
     jobs.set(jobId, job);
 
-    // TODO: Integrate with actual image editing backend
-    // Note: Avoid console.log during CLI operation as it interferes with Ink rendering
+    try {
+      const registry = getRegistry();
+      const workflowMetadata = registry.get('qwen_edit');
 
-    // Simulate async processing
-    setTimeout(() => {
-      const j = jobs.get(jobId);
-      if (j) {
-        j.status = 'completed';
-        j.updatedAt = Date.now();
-        j.result = {
-          artifactId: `artifact-${jobId}`,
-          path: `/generated/images/${jobId}.png`,
-        };
+      if (!workflowMetadata) {
+        throw new Error("Workflow 'qwen_edit' not found");
       }
-    }, 3000);
 
-    return {
-      status: 'submitted',
-      job_id: jobId,
-      message: `Image edit job submitted. Use wait_for_job("${jobId}") to check status.`,
-      params: {
-        scene_number: params.scene_number,
-        base_image: params.base_image_path,
-        edit_prompt: params.edit_prompt,
-      },
-    };
+      // Resolve the image path
+      let imagePath = params.base_image_path;
+      if (!path.isAbsolute(imagePath) && !imagePath.startsWith('.')) {
+        // Assume it's relative to project
+        imagePath = path.join(process.cwd(), PROJECT_DIR, imagePath);
+      }
+
+      if (!fs.existsSync(imagePath)) {
+        throw new Error(`Base image not found: ${params.base_image_path}`);
+      }
+
+      const assetsDir = getAssetsDir();
+      const client = new ComfyUIClient({
+        outputDir: assetsDir,
+      });
+
+      // Upload the base image
+      const uploadResult = await client.uploadImage(imagePath, 'input', true);
+
+      // Load and parameterize workflow
+      const template = loadWorkflowTemplate(workflowMetadata.filename);
+      const workflow = parameterizeWorkflowByName('qwen_edit', template, {
+        sceneNumber: params.scene_number,
+        prompt: params.edit_prompt,
+        negativePrompt: params.negative_prompt,
+        aspectRatio: params.aspect_ratio,
+        seed: params.seed,
+        inputImageFilename: uploadResult.name,
+        filenamePrefix: `Scene${params.scene_number}_edit`,
+      });
+
+      // Queue workflow
+      const promptId = await client.queueWorkflow(workflow as Record<string, unknown>);
+
+      // Update job
+      job.promptId = promptId;
+      job.status = 'processing';
+      job.updatedAt = Date.now();
+
+      return {
+        status: 'submitted',
+        job_id: jobId,
+        message: `Image edit job submitted. Use wait_for_job("${jobId}") to check status.`,
+        params: {
+          scene_number: params.scene_number,
+          base_image: params.base_image_path,
+          edit_prompt: params.edit_prompt,
+        },
+      };
+    } catch (error) {
+      job.status = 'failed';
+      job.error = String(error);
+      job.updatedAt = Date.now();
+
+      return {
+        status: 'error',
+        job_id: jobId,
+        error: String(error),
+      };
+    }
   }
 );
 
 /**
  * Wait for job tool.
- * Used to check the status of async generation jobs.
+ * Used to check the status of async generation jobs and download results.
  */
 export const waitForJobTool: ToolDefinition = createTool(
   'wait_for_job',
   `Wait for a generation job to complete and get the result.
 
-Use this after submitting generate_image, generate_video, or edit_image to check status.`,
+Use this after submitting generate_image, generate_video, or edit_image to check status.
+When job completes, returns the artifact ID and file path.`,
   {
     type: 'object',
     properties: {
@@ -419,11 +817,16 @@ Use this after submitting generate_image, generate_video, or edit_image to check
         type: 'string',
         description: 'The job ID returned from a generation tool',
       },
+      timeout: {
+        type: 'number',
+        description: 'Timeout in seconds (default: 300)',
+      },
     },
     required: ['job_id'],
   },
   async (args) => {
     const jobId = args['job_id'] as string;
+    const timeout = (args['timeout'] as number) || 300;
     const job = jobs.get(jobId);
 
     if (!job) {
@@ -433,12 +836,29 @@ Use this after submitting generate_image, generate_video, or edit_image to check
       };
     }
 
+    // If job is still pending/processing, wait for ComfyUI
+    if (job.status === 'pending' || job.status === 'processing') {
+      if (job.promptId) {
+        const result = await waitForComfyUIJob(jobId, timeout);
+        return {
+          job_id: job.id,
+          type: job.type,
+          status: result.status,
+          artifact_id: result.artifactId,
+          file_path: result.filePath,
+          error: result.error,
+        };
+      }
+    }
+
+    // Return current job status
     return {
       job_id: job.id,
       type: job.type,
       status: job.status,
       progress: job.progress,
-      result: job.result,
+      artifact_id: job.result?.artifactId,
+      file_path: job.result?.path,
       error: job.error,
       created_at: job.createdAt,
       updated_at: job.updatedAt,

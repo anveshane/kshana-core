@@ -1,2 +1,3 @@
 - Never truncate any text when displaying it in the CLI
 - When creating prompts for agents, create the prompt in a different file and import the prompt
+- Always check logs when debugging an issue

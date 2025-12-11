@@ -1,0 +1,22 @@
+{
+  "name": "shared-patterns",
+  "description": "Shared prompt patterns for all workflow phases - todo management, approval loops, agent dispatch",
+  "version": "1.0.0",
+  "sections": {
+    "todo_management": "## Todo Management\n\nFor phases with multiple items to process:\n\n### Creating Todos\n- Create a **separate todo for EACH item** (character, setting, scene)\n- Format: \"[Action]: [Item Name]\" (e.g., \"Create character profile: Alice\")\n- **NEVER** create a single todo for \"all characters\" or \"all items\"\n\n### Todo States\n- `pending` - Not started yet\n- `in_progress` - Currently working on this item (only ONE at a time)\n- `completed` - Item approved and saved\n\n### Workflow\n1. Create all todos upfront for known items\n2. Mark ONE todo as `in_progress` before working on it\n3. Complete that item (generate, get approval, save)\n4. Mark todo as `completed`\n5. Move to next todo",
+
+    "approval_loop": "## Approval Loop\n\nFor each item requiring approval:\n\n### Standard Flow\n1. Generate content using appropriate agent (dispatch_content_agent, dispatch_image_agent, dispatch_video_agent)\n2. Present result to user using ask_user\n3. Handle response:\n   - **Approved**: Update item status, save artifact ID, mark todo completed\n   - **Rejected with feedback**: Store feedback, regenerate with feedback\n   - **No response (15s)**: Auto-approve and proceed\n\n### Project Updates After Approval\n```\n// For characters:\nupdate_project(action: \"update_character_approval\", data: {\n  name: \"[Name]\",\n  status: \"approved\",\n  contentArtifactId: \"[artifact-id]\"\n})\n\n// For settings:\nupdate_project(action: \"update_setting_approval\", data: {\n  name: \"[Name]\",\n  status: \"approved\",\n  contentArtifactId: \"[artifact-id]\"\n})\n\n// For scenes:\nupdate_project(action: \"update_scene_approval\", data: {\n  scene_number: N,\n  approval_type: \"content\" | \"image\" | \"video\",\n  status: \"approved\",\n  artifactId: \"[artifact-id]\"\n})\n```",
+
+    "agent_dispatch": "## Agent Dispatch\n\n### Content Agent (for descriptions)\n```\ndispatch_content_agent(\n  task: \"Create [type] description for [name]\",\n  content_type: \"character\" | \"setting\" | \"scene\",\n  context_ref: \"[stored-context-id]\"  // Use for large content\n)\n```\n\n### Image Agent (for image generation)\n```\ndispatch_image_agent(\n  task: \"Generate [type] image for [name]\",\n  prompt: \"[detailed visual description]\",\n  style: \"[style notes]\",\n  reference_image_ids: [\"[ref-id-1]\", \"[ref-id-2]\"]  // For consistency\n)\n```\n\n### Video Agent (for video generation)\n```\ndispatch_video_agent(\n  task: \"Generate video for scene [N]\",\n  scene_image_artifact_id: \"[image-artifact-id]\",\n  scene_number: N,\n  motion_description: \"[motion/camera description]\"\n)\n```",
+
+    "phase_completion": "## Phase Completion\n\nWhen all items in a per-item phase are approved:\n\n1. Verify: Check that `areAllItemsApproved` returns true (shown in next_action)\n2. Mark phase complete:\n   ```\n   update_project(action: \"update_planner_stage\", data: {\n     phase: \"[current_phase]\",\n     stage: \"complete\"\n   })\n   ```\n   This automatically marks the phase status as \"completed\"\n3. Transition to next phase:\n   ```\n   update_project(action: \"transition_phase\", data: {})\n   ```",
+
+    "error_handling": "## Error Handling\n\n### Generation Failures\n- Log the error\n- Increment regeneration count for the item\n- Offer to retry with adjusted parameters\n- DO NOT mark item as approved if generation failed\n\n### Max Regenerations\n- If an item has been regenerated 3+ times, ask user for guidance\n- Consider simplifying the request or skipping the item",
+
+    "context_management": "## Context Management\n\nFor large content that needs to be passed to sub-agents:\n\n### Storing Context\n```\nstore_context(\n  variable_name: \"$chapter_1\",\n  label: \"Chapter 1 content\",\n  content: \"[large text content]\"\n)\n```\n\n### Using Stored Context\nWhen dispatching agents, use `context_ref` instead of inline content:\n```\ndispatch_content_agent(\n  task: \"...\",\n  content_type: \"...\",\n  context_ref: \"$chapter_1\"  // References stored content\n)\n```\n\nThis preserves full content without summarization."
+  },
+  "metadata": {
+    "created_at": "2025-12-10",
+    "description": "These patterns are common across all workflow phases and should be referenced in phase-specific prompts"
+  }
+}

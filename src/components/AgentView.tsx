@@ -113,6 +113,7 @@ export function AgentView({
           {currentAction.type === 'thinking' && (
             <Box>
               <Spinner color="yellow" label="💭 Thinking..." />
+              {currentAction.agentName && <Text color="cyan" dimColor> [{currentAction.agentName}]</Text>}
             </Box>
           )}
           {currentAction.type === 'tool_executing' && currentAction.toolName && (
@@ -122,6 +123,7 @@ export function AgentView({
               status="executing"
               compact
               expanded={expanded}
+              agentName={currentAction.agentName}
             />
           )}
         </Box>

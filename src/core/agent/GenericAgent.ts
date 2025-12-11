@@ -39,6 +39,7 @@ const SIMPLE_TOOLS = new Set([
   'dispatch_agent',
   'dispatch_content_agent',
   'dispatch_image_agent',
+  'dispatch_video_agent',
   'wait_for_job',
   'todo_write',
 ]);
@@ -89,7 +90,10 @@ export class GenericAgent extends TypedEventEmitter {
     lastCompletionTokens: 0,
   };
   private static readonly CONTEXT_THRESHOLD = 0.80; // 80% of max context
-  private static readonly MAX_CONTEXT_TOKENS = 128000; // Claude's typical context window
+  private maxContextTokens: number = 16000; // Will be updated from LLM client
+
+  // Current mode for more descriptive agent names in UI
+  private currentMode: 'orchestrator' | 'content' | 'image' | 'video' | 'planning' = 'orchestrator';
 
   constructor(
     tools: Map<string, ToolDefinition>,
@@ -106,11 +110,40 @@ export class GenericAgent extends TypedEventEmitter {
   }
 
   /**
+   * Initialize the agent by querying model capabilities.
+   * Must be called before running the agent.
+   * Throws if the model's context length is too small.
+   */
+  async initialize(): Promise<void> {
+    // Query context length from LLM provider (validates minimum requirements)
+    this.maxContextTokens = await this.llm.getContextLength();
+    debugLog(`[GenericAgent] Initialized with context length: ${this.maxContextTokens} tokens`);
+  }
+
+  /**
+   * Get the effective agent name based on current mode.
+   */
+  private getEffectiveAgentName(): string {
+    switch (this.currentMode) {
+      case 'content':
+        return 'Content Agent';
+      case 'image':
+        return 'Image Agent';
+      case 'video':
+        return 'Video Agent';
+      case 'planning':
+        return 'Planning Agent';
+      default:
+        return this.name;
+    }
+  }
+
+  /**
    * Stop the agent's current execution.
    */
   stop(): void {
     this.aborted = true;
-    this.emit({ type: 'agent_status', status: 'interrupted', agentName: this.name });
+    this.emit({ type: 'agent_status', status: 'interrupted', agentName: this.getEffectiveAgentName() });
   }
 
   /**
@@ -119,7 +152,7 @@ export class GenericAgent extends TypedEventEmitter {
    */
   injectInput(input: string): void {
     this.pendingUserInput = input;
-    this.emit({ type: 'user_input_injected', input, agentName: this.name });
+    this.emit({ type: 'user_input_injected', input, agentName: this.getEffectiveAgentName() });
   }
 
   /**
@@ -225,7 +258,7 @@ export class GenericAgent extends TypedEventEmitter {
     this.aborted = false;
 
     // Emit started status
-    this.emit({ type: 'agent_status', status: 'started', agentName: this.name });
+    this.emit({ type: 'agent_status', status: 'started', agentName: this.getEffectiveAgentName() });
 
     // Resume from user question or start fresh
     if (userResponse && this.waitingForUser) {
@@ -275,7 +308,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit status change back to thinking
-        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
       } else if (this.contentState?.active) {
         // Handle the content creation response
         const contentResult = await this.handleContentResponse(userResponse);
@@ -320,7 +353,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit status change back to thinking
-        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
       } else if (this.imageGenState?.active) {
         // Handle the image generation response
         const imageResult = await this.handleImageGenResponse(userResponse);
@@ -365,7 +398,51 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit status change back to thinking
-        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
+      } else if (this.videoGenState?.active) {
+        // Handle the video generation response
+        const videoResult = await this.handleVideoGenResponse(userResponse);
+        const videoResultObj = videoResult as Record<string, unknown>;
+
+        // Check if video gen needs more input or is complete
+        if (videoResultObj['status'] === 'awaiting_approval') {
+          // Still waiting for user - emit question and return
+          this.waitingForUser = true;
+          this.pendingQuestion = videoResultObj['question'] as string;
+
+          this.emit({
+            type: 'question',
+            question: videoResultObj['question'] as string,
+            isConfirmation: false,
+            options: videoResultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: videoResultObj['autoApproveTimeoutMs'] as number | undefined,
+          });
+
+          return {
+            status: 'waiting_for_user',
+            output: '',
+            todos: this.todoManager.getTodos(),
+            pendingQuestion: videoResultObj['question'] as string,
+            options: videoResultObj['options'] as Array<{ label: string; description?: string }>,
+            autoApproveTimeoutMs: videoResultObj['autoApproveTimeoutMs'] as number | undefined,
+          };
+        }
+
+        // Video generation is complete (generated, cancelled, or max_iterations)
+        // Add the result to messages and continue
+        this.waitingForUser = false;
+        this.pendingQuestion = undefined;
+
+        // Add the dispatch_video_agent result to messages
+        this.messages.push({
+          role: 'tool',
+          content: JSON.stringify(videoResult),
+          toolCallId: 'video-gen-result',
+          name: 'dispatch_video_agent',
+        });
+
+        // Emit status change back to thinking
+        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
       } else {
         // Regular ask_user response
         this.handleUserResponse(userResponse);
@@ -378,16 +455,15 @@ export class GenericAgent extends TypedEventEmitter {
       if (shouldCondense(task)) {
         const label = generateContentLabel(task);
         const result = condenseUserInput(task);
-        if (result.wasCondensed && result.variableName && result.contextId) {
+        if (result.wasCondensed && result.variableName) {
           // Add to active context variables
           this.activeContextVariables.push({
-            id: result.contextId,
             variableName: result.variableName,
             label,
             charCount: task.length,
           });
           taskContent = result.condensed;
-          debugLog(`[GenericAgent] Condensed long user input (${task.length} chars) to ${result.variableName} (${result.contextId})`);
+          debugLog(`[GenericAgent] Condensed long user input (${task.length} chars) to ${result.variableName}`);
         }
       }
 
@@ -423,15 +499,14 @@ export class GenericAgent extends TypedEventEmitter {
         if (shouldCondense(userInput)) {
           const label = generateContentLabel(userInput);
           const result = condenseUserInput(userInput);
-          if (result.wasCondensed && result.variableName && result.contextId) {
+          if (result.wasCondensed && result.variableName) {
             this.activeContextVariables.push({
-              id: result.contextId,
               variableName: result.variableName,
               label,
               charCount: userInput.length,
             });
             userInput = result.condensed;
-            debugLog(`[GenericAgent] Condensed injected user input to ${result.variableName} (${result.contextId})`);
+            debugLog(`[GenericAgent] Condensed injected user input to ${result.variableName}`);
           }
         }
 
@@ -448,7 +523,7 @@ export class GenericAgent extends TypedEventEmitter {
       this.iteration++;
 
       // Emit thinking status
-      this.emit({ type: 'agent_status', status: 'thinking', agentName: this.name });
+      this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
 
       // Check if we need to compress context before making LLM call
       if (this.shouldCompressContext()) {
@@ -490,7 +565,7 @@ export class GenericAgent extends TypedEventEmitter {
         if (toolCall.name === 'ask_user') {
           const result = this.handleAskUser(toolCall);
           if (result) {
-            this.emit({ type: 'agent_status', status: 'waiting', agentName: this.name });
+            this.emit({ type: 'agent_status', status: 'waiting', agentName: this.getEffectiveAgentName() });
             return result;
           }
           continue;
@@ -526,7 +601,7 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Check if max iterations reached
     if (this.iteration >= this.maxIterations) {
-      this.emit({ type: 'agent_status', status: 'error', agentName: this.name });
+      this.emit({ type: 'agent_status', status: 'error', agentName: this.getEffectiveAgentName() });
       return {
         status: 'interrupted',
         output: 'Agent reached maximum iterations without completing.',
@@ -536,7 +611,7 @@ export class GenericAgent extends TypedEventEmitter {
     }
 
     // Emit completed status
-    this.emit({ type: 'agent_status', status: 'completed', agentName: this.name });
+    this.emit({ type: 'agent_status', status: 'completed', agentName: this.getEffectiveAgentName() });
     this.emit({ type: 'agent_text', text: finalOutput, isFinal: true });
 
     return {
@@ -649,7 +724,7 @@ export class GenericAgent extends TypedEventEmitter {
       toolCallId: toolCall.id,
       toolName: toolCall.name,
       arguments: toolCall.arguments,
-      agentName: this.name,
+      agentName: this.getEffectiveAgentName(),
     });
 
     // Check for looping (skip for think tool - it's normal to think often)
@@ -669,7 +744,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result: warningResult,
           isError: loopResult.isHardError,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
         return warningResult;
       }
@@ -684,7 +759,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     }
@@ -703,7 +778,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result,
           isError: false,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Set up waiting state for user input
@@ -733,7 +808,7 @@ export class GenericAgent extends TypedEventEmitter {
         this.emit({
           type: 'agent_status',
           status: 'waiting',
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Return special marker to indicate we're pausing for user input
@@ -749,7 +824,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     }
@@ -768,7 +843,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result,
           isError: false,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Set up waiting state for user input
@@ -791,11 +866,11 @@ export class GenericAgent extends TypedEventEmitter {
         this.emit({
           type: 'agent_status',
           status: 'waiting',
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...result };
+        return { __awaiting_user_input: true, ...resultObj };
       }
 
       this.emit({
@@ -804,7 +879,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     }
@@ -823,7 +898,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result,
           isError: false,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Set up waiting state for user input
@@ -843,7 +918,7 @@ export class GenericAgent extends TypedEventEmitter {
         this.emit({
           type: 'agent_status',
           status: 'waiting',
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
 
         // Return special marker to indicate we're pausing for user input
@@ -859,7 +934,59 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
+      });
+      return result;
+    }
+
+    // Handle dispatch_video_agent specially - sub-agent for video generation
+    if (toolCall.name === 'dispatch_video_agent') {
+      const result = await this.handleDispatchVideoAgent(toolCall);
+      const resultObj = result as Record<string, unknown>;
+
+      // Check if video gen needs user verification
+      if (resultObj['status'] === 'awaiting_approval') {
+        // Emit tool result first
+        this.emit({
+          type: 'tool_result',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          result,
+          isError: false,
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        // Set up waiting state for user input
+        this.waitingForUser = true;
+        this.pendingQuestion = resultObj['question'] as string;
+
+        // Emit question event with options and auto-approve timeout
+        this.emit({
+          type: 'question',
+          question: resultObj['question'] as string,
+          isConfirmation: false,
+          options: resultObj['options'] as Array<{ label: string; description?: string }>,
+          autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
+        });
+
+        // Emit status change
+        this.emit({
+          type: 'agent_status',
+          status: 'waiting',
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        // Return special marker to indicate we're pausing for user input
+        return { __awaiting_user_input: true, ...resultObj };
+      }
+
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     }
@@ -873,7 +1000,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result: errorResult,
         isError: true,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return errorResult;
     }
@@ -895,7 +1022,7 @@ export class GenericAgent extends TypedEventEmitter {
           toolName: toolCall.name,
           result: confirmResult,
           isError: false,
-          agentName: this.name,
+          agentName: this.getEffectiveAgentName(),
         });
         return confirmResult;
       } else {
@@ -913,7 +1040,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result,
         isError: false,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return result;
     } catch (error) {
@@ -924,7 +1051,7 @@ export class GenericAgent extends TypedEventEmitter {
         toolName: toolCall.name,
         result: errorResult,
         isError: true,
-        agentName: this.name,
+        agentName: this.getEffectiveAgentName(),
       });
       return errorResult;
     }
@@ -951,7 +1078,7 @@ export class GenericAgent extends TypedEventEmitter {
     this.emit({
       type: 'todo_update',
       todos: this.todoManager.getTodos(),
-      agentName: this.name,
+      agentName: this.getEffectiveAgentName(),
     });
 
     return result;
@@ -1006,35 +1133,67 @@ export class GenericAgent extends TypedEventEmitter {
     generationMode: 'text_to_image' | 'image_text_to_image';
   } | null = null;
 
+  // State for dispatch_video_agent sub-agent (video generation)
+  private videoGenState: {
+    active: boolean;
+    task: string;
+    sceneNumber: number;
+    sceneImageArtifactId: string;
+    motionDescription?: string;
+    context?: string;
+    messages: Message[];
+    currentParams: {
+      duration: number;
+      fps: number;
+      motionStrength: number;
+    };
+    iterations: number;
+  } | null = null;
+
   /**
    * Handle dispatch_agent tool - spawns a sub-agent for planning.
    * The sub-agent handles the full plan verification loop with the user.
    * It keeps iterating until the user approves the plan.
    */
   private async handleDispatchAgent(toolCall: ToolCall): Promise<unknown> {
+    // Set mode for UI display
+    this.currentMode = 'planning';
+
     const args = toolCall.arguments;
     const task = args['task'] as string;
-    let context = args['context'] as string | undefined;
-    const contextRef = args['context_ref'] as string | undefined;
+    const contextRefs = args['context_refs'] as string[] | undefined;
 
     if (!task) {
+      this.currentMode = 'orchestrator';
       return { error: 'No task provided for dispatch_agent' };
     }
 
-    // Resolve context_ref if provided (takes precedence over inline context)
-    if (contextRef) {
-      const stored = contextStore.get(contextRef);
-      if (stored) {
-        context = stored.content;
-        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} (${stored.label}, ${stored.content.length} chars)`);
-      } else {
-        return { error: `Context reference not found: ${contextRef}` };
+    // Resolve all context_refs into a combined context
+    const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
+
+    if (contextRefs && contextRefs.length > 0) {
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push({
+            variableName: ref,
+            label: stored.label,
+            content: stored.content,
+          });
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} for planning agent (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
+        }
       }
     }
 
-    // Warn about long inline context that should use context_ref
-    if (context && context.length > 500 && !contextRef) {
-      debugLog(`[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_agent without context_ref. Consider using store_context.`);
+    // Build combined context with clear sections
+    let context: string | undefined;
+    if (contextParts.length > 0) {
+      context = contextParts.map(part =>
+        `## ${part.variableName} (${part.label})\n\n${part.content}`
+      ).join('\n\n---\n\n');
+      debugLog(`[GenericAgent] Combined ${contextParts.length} contexts for planning agent (${context.length} chars total)`);
     }
 
     // Check if we're resuming an existing planning session
@@ -1080,6 +1239,7 @@ export class GenericAgent extends TypedEventEmitter {
         message: 'Reached maximum iterations for plan refinement. Using the last version.',
       };
       this.planningState = null;
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -1141,11 +1301,12 @@ export class GenericAgent extends TypedEventEmitter {
       }, null, 2)}`);
       return verificationResult;
     } catch (error) {
-      const taskBackup = this.planningState?.task;
+      const failedTask = this.planningState?.task;
       this.planningState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: `Planning failed: ${String(error)}`,
-        task: taskBackup,
+        task: failedTask,
       };
     }
   }
@@ -1163,14 +1324,31 @@ export class GenericAgent extends TypedEventEmitter {
     const isApproval = await this.classifyPlanResponse(userResponse);
 
     if (isApproval) {
+      // Generate plan name and summary using LLM
+      const { name, summary } = await this.generatePlanMetadata(
+        this.planningState.task,
+        this.planningState.currentPlan
+      );
+
+      // Store full plan in external context file
+      const { variableName } = contextStore.store(
+        this.planningState.currentPlan,
+        name,
+        { source: 'tool', variableBaseName: 'plan' }
+      );
+
       const result = {
         status: 'approved',
-        plan: this.planningState.currentPlan,
+        name,
+        summary,
+        plan_ref: variableName,
         task: this.planningState.task,
         iterations: this.planningState.iterations,
-        message: 'Plan approved by user. Ready for execution.',
+        message: `Plan "${name}" approved. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`,
+        next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
       this.planningState = null;
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -1224,6 +1402,41 @@ Your classification:`;
   }
 
   /**
+   * Generate a name and summary for an approved plan.
+   * The summary is injected into message history; full plan is stored externally.
+   */
+  private async generatePlanMetadata(
+    task: string,
+    plan: string
+  ): Promise<{ name: string; summary: string }> {
+    const prompt = `Given this planning task and the resulting plan, generate:
+1. A short descriptive name (3-5 words, no quotes)
+2. A 1-2 sentence summary that captures the key steps and can be used to remember what the plan contains
+
+<task>${task}</task>
+
+<plan>${plan}</plan>
+
+Respond in JSON format:
+{"name": "...", "summary": "..."}`;
+
+    try {
+      const response = await this.llm.generate({
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        maxTokens: 200,
+      });
+
+      return JSON.parse(response.content ?? '{}');
+    } catch {
+      return {
+        name: task.slice(0, 50),
+        summary: `Plan for: ${task}`,
+      };
+    }
+  }
+
+  /**
    * Check if there's an active planning session awaiting user input.
    */
   isPlanningActive(): boolean {
@@ -1238,40 +1451,146 @@ Your classification:`;
   }
 
   /**
+   * Try to resolve a context reference from project files.
+   * This is a fallback when the context isn't found in the context store.
+   * Supports both variable names ($plan) and direct file paths (plans/story.md).
+   */
+  private tryResolveFromProjectFiles(ref: string): { label: string; content: string; file: string } | null {
+    // Map of context ref patterns to project file paths
+    const projectFileMap: Record<string, { file: string; label: string }> = {
+      '$plan': { file: 'plans/story.md', label: 'Story Plan' },
+      '$plot': { file: 'plans/plot.md', label: 'Plot' },
+      '$story': { file: 'plans/story.md', label: 'Story' },
+      '$scenes': { file: 'plans/scenes.md', label: 'Scenes' },
+      '$images': { file: 'plans/images.md', label: 'Images Plan' },
+      '$video': { file: 'plans/video.md', label: 'Video Plan' },
+      '$original_input': { file: 'original_input.md', label: 'Original Input' },
+    };
+
+    const projectDir = path.join(process.cwd(), '.kshana');
+
+    // Check if ref is a direct file path (e.g., "plans/story.md")
+    if (ref.includes('/') || ref.endsWith('.md')) {
+      const filePath = path.join(projectDir, ref);
+      try {
+        if (fs.existsSync(filePath)) {
+          const content = fs.readFileSync(filePath, 'utf-8');
+          if (content.trim().length > 0) {
+            // Generate label from filename
+            const filename = path.basename(ref, '.md');
+            const label = filename.charAt(0).toUpperCase() + filename.slice(1);
+            return {
+              label: label,
+              content: content,
+              file: ref,
+            };
+          }
+        }
+      } catch {
+        // File read failed, continue to variable name lookup
+      }
+    }
+
+    // Try to match the ref as a variable name (ignore numeric suffixes like $plan_2)
+    const baseRef = ref.replace(/_\d+$/, '');
+    const mapping = projectFileMap[baseRef] || projectFileMap[ref];
+
+    if (!mapping) {
+      return null;
+    }
+
+    // Try to read from project directory
+    const filePath = path.join(projectDir, mapping.file);
+
+    try {
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        if (content.trim().length > 0) {
+          return {
+            label: mapping.label,
+            content: content,
+            file: mapping.file,
+          };
+        }
+      }
+    } catch {
+      // File read failed, return null
+    }
+
+    return null;
+  }
+
+  /**
    * Handle dispatch_content_agent tool - spawns a sub-agent for creative content generation.
    * Unlike dispatch_agent (for technical planning), this creates actual creative content
    * like stories, character descriptions, and scene narratives.
    */
   private async handleDispatchContentAgent(toolCall: ToolCall): Promise<unknown> {
+    // Set mode for UI display
+    this.currentMode = 'content';
+
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const contentType = args['content_type'] as ContentType;
-    let context = args['context'] as string | undefined;
-    const contextRef = args['context_ref'] as string | undefined;
+    const contextRefs = args['context_refs'] as string[] | undefined;
     const outputFile = args['output_file'] as string | undefined;
 
     if (!task) {
+      this.currentMode = 'orchestrator';
       return { error: 'No task provided for dispatch_content_agent' };
     }
 
     if (!contentType) {
+      this.currentMode = 'orchestrator';
       return { error: 'No content_type provided for dispatch_content_agent' };
     }
 
-    // Resolve context_ref if provided (takes precedence over inline context)
-    if (contextRef) {
-      const stored = contextStore.get(contextRef);
-      if (stored) {
-        context = stored.content;
-        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} for content agent (${stored.label}, ${stored.content.length} chars)`);
-      } else {
-        return { error: `Context reference not found: ${contextRef}` };
+    // Resolve all context_refs into a combined context
+    const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
+    const missingRefs: string[] = [];
+
+    if (contextRefs && contextRefs.length > 0) {
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push({
+            variableName: ref,
+            label: stored.label,
+            content: stored.content,
+          });
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} for content agent (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          // Try to resolve from project files if this looks like a plan reference
+          // e.g., $plan -> plans/plot.md or plans/story.md
+          const projectFileContent = this.tryResolveFromProjectFiles(ref);
+          if (projectFileContent) {
+            contextParts.push({
+              variableName: ref,
+              label: projectFileContent.label,
+              content: projectFileContent.content,
+            });
+            debugLog(`[GenericAgent] Resolved context_ref ${ref} from project file: ${projectFileContent.file}`);
+          } else {
+            debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
+            missingRefs.push(ref);
+          }
+        }
       }
     }
 
-    // Warn about long inline context that should use context_ref
-    if (context && context.length > 500 && !contextRef) {
-      debugLog(`[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_content_agent without context_ref. Consider using store_context.`);
+    // Log error for missing refs to help debug
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] ERROR: Could not resolve context_refs: ${missingRefs.join(', ')}`);
+      debugLog(`[GenericAgent] Available context variables: ${contextStore.list().map(c => c.variableName).join(', ') || 'none'}`);
+    }
+
+    // Build combined context with clear sections
+    let context: string | undefined;
+    if (contextParts.length > 0) {
+      context = contextParts.map(part =>
+        `## ${part.variableName} (${part.label})\n\n${part.content}`
+      ).join('\n\n---\n\n');
+      debugLog(`[GenericAgent] Combined ${contextParts.length} contexts for content agent (${context.length} chars total)`);
     }
 
     // Check if we're resuming an existing content session
@@ -1320,6 +1639,7 @@ Your classification:`;
         message: 'Reached maximum iterations for content refinement. Using the last version.',
       };
       this.contentState = null;
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -1377,10 +1697,12 @@ Your classification:`;
       }, null, 2)}`);
       return verificationResult;
     } catch (error) {
+      const failedTask = this.contentState?.task;
       this.contentState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: `Content creation failed: ${String(error)}`,
-        task: this.contentState?.task,
+        task: failedTask,
       };
     }
   }
@@ -1398,16 +1720,43 @@ Your classification:`;
     const isApproval = await this.classifyPlanResponse(userResponse);
 
     if (isApproval) {
+      // Write content to output file if specified
+      let fileSaved = false;
+      if (this.contentState.outputFile) {
+        try {
+          const projectDir = path.join(process.cwd(), '.kshana');
+          const filePath = path.join(projectDir, this.contentState.outputFile);
+
+          // Ensure parent directory exists
+          const parentDir = path.dirname(filePath);
+          if (!fs.existsSync(parentDir)) {
+            fs.mkdirSync(parentDir, { recursive: true });
+          }
+
+          fs.writeFileSync(filePath, this.contentState.currentContent, 'utf-8');
+          fileSaved = true;
+          debugLog(`[GenericAgent] Saved content to ${this.contentState.outputFile}`);
+        } catch (err) {
+          debugLog(`[GenericAgent] ERROR: Failed to save content to ${this.contentState.outputFile}: ${err}`);
+        }
+      }
+
       const result = {
         status: 'approved',
         content: this.contentState.currentContent,
         content_type: this.contentState.contentType,
         task: this.contentState.task,
         output_file: this.contentState.outputFile,
+        file_saved: fileSaved,
         iterations: this.contentState.iterations,
-        message: 'Content approved by user. Ready to save.',
+        message: fileSaved
+          ? `Content approved and saved to ${this.contentState.outputFile}.`
+          : 'Content approved by user. Ready to save.',
+        next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
       this.contentState = null;
+      // Reset mode back to orchestrator
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -1437,6 +1786,9 @@ Your classification:`;
    * 2. Image+Text-to-Image: For scenes (requires reference images for consistency)
    */
   private async handleDispatchImageAgent(toolCall: ToolCall): Promise<unknown> {
+    // Set mode for UI display
+    this.currentMode = 'image';
+
     const args = toolCall.arguments;
     const task = args['task'] as string;
     let context = args['context'] as string | undefined;
@@ -1452,6 +1804,7 @@ Your classification:`;
     }> | undefined;
 
     if (!task) {
+      this.currentMode = 'orchestrator';
       return { error: 'No task provided for dispatch_image_agent' };
     }
 
@@ -1549,6 +1902,7 @@ Your classification:`;
         message: 'Reached maximum iterations for prompt refinement. Using the last version.',
       };
       this.imageGenState = null;
+      this.currentMode = 'orchestrator';
       return result;
     }
 
@@ -1603,11 +1957,12 @@ Your classification:`;
         autoApproveTimeoutMs: 15000, // 15 seconds countdown for image prompt approval
       };
     } catch (error) {
-      const taskBackup = this.imageGenState?.task;
+      const failedTask = this.imageGenState?.task;
       this.imageGenState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: `Image prompt generation failed: ${String(error)}`,
-        task: taskBackup,
+        task: failedTask,
       };
     }
   }
@@ -1626,19 +1981,19 @@ Your classification:`;
 
     // Try to extract Image Prompt section
     const promptMatch = response.match(/\*\*Image Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i);
-    if (promptMatch && promptMatch[1]) {
+    if (promptMatch?.[1]) {
       prompt = promptMatch[1].trim();
     }
 
     // Try to extract Negative Prompt section
     const negativeMatch = response.match(/\*\*Negative Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i);
-    if (negativeMatch && negativeMatch[1]) {
+    if (negativeMatch?.[1]) {
       negativePrompt = negativeMatch[1].trim();
     }
 
     // Try to extract Aspect Ratio section
     const aspectMatch = response.match(/\*\*Aspect Ratio:\*\*\s*\n?\s*([^\n]+)/i);
-    if (aspectMatch && aspectMatch[1]) {
+    if (aspectMatch?.[1]) {
       const ratio = aspectMatch[1].trim();
       // Validate aspect ratio format
       if (/^\d+:\d+$/.test(ratio)) {
@@ -1747,8 +2102,21 @@ Your classification:`;
     const generateImageTool = this.tools.get('generate_image');
     if (!generateImageTool?.handler) {
       this.imageGenState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: 'generate_image tool not available',
+        prompt: currentPrompt,
+        task,
+      };
+    }
+
+    // Get the wait_for_job tool
+    const waitForJobTool = this.tools.get('wait_for_job');
+    if (!waitForJobTool?.handler) {
+      this.imageGenState = null;
+      this.currentMode = 'orchestrator';
+      return {
+        error: 'wait_for_job tool not available',
         prompt: currentPrompt,
         task,
       };
@@ -1778,32 +2146,89 @@ Your classification:`;
       generateArgs['reference_images'] = referenceImages;
     }
 
+    const toolCallId = `img-gen-${Date.now()}`;
+
     // Emit that we're generating the image
     this.emit({
       type: 'tool_call',
-      toolCallId: `img-gen-${Date.now()}`,
+      toolCallId,
       toolName: 'generate_image',
       arguments: generateArgs,
-      agentName: this.name,
+      agentName: this.getEffectiveAgentName(),
     });
 
     try {
-      // Execute the image generation
-      const result = await Promise.resolve(generateImageTool.handler(generateArgs));
+      // Step 1: Submit the image generation job
+      const submitResult = await Promise.resolve(generateImageTool.handler(generateArgs));
+      const submitResultObj = submitResult as Record<string, unknown>;
+
+      // Check if submission failed
+      if (submitResultObj['status'] === 'error') {
+        const finalState = { ...this.imageGenState };
+        this.imageGenState = null;
+        this.currentMode = 'orchestrator';
+
+        this.emit({
+          type: 'tool_result',
+          toolCallId,
+          toolName: 'generate_image',
+          result: submitResult,
+          isError: true,
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        return {
+          status: 'error',
+          error: submitResultObj['error'] as string,
+          prompt: finalState.currentPrompt,
+          task: finalState.task,
+        };
+      }
+
+      const jobId = submitResultObj['job_id'] as string;
+      if (!jobId) {
+        throw new Error('No job_id returned from generate_image');
+      }
+
+      // Emit that we're waiting for the job
+      const waitToolCallId = `wait-job-${Date.now()}`;
+      this.emit({
+        type: 'tool_call',
+        toolCallId: waitToolCallId,
+        toolName: 'wait_for_job',
+        arguments: { job_id: jobId },
+        agentName: this.getEffectiveAgentName(),
+      });
+
+      // Step 2: Wait for the job to complete
+      const waitResult = await Promise.resolve(waitForJobTool.handler({ job_id: jobId }));
+      const waitResultObj = waitResult as Record<string, unknown>;
 
       // Clear the state
       const finalState = { ...this.imageGenState };
       this.imageGenState = null;
+      this.currentMode = 'orchestrator';
 
-      // Emit tool result
+      // Emit tool result for wait_for_job
       this.emit({
         type: 'tool_result',
-        toolCallId: `img-gen-${Date.now()}`,
-        toolName: 'generate_image',
-        result,
-        isError: false,
-        agentName: this.name,
+        toolCallId: waitToolCallId,
+        toolName: 'wait_for_job',
+        result: waitResult,
+        isError: waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed',
+        agentName: this.getEffectiveAgentName(),
       });
+
+      // Check if job failed
+      if (waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed') {
+        return {
+          status: 'error',
+          error: waitResultObj['error'] as string || 'Job failed',
+          prompt: finalState.currentPrompt,
+          task: finalState.task,
+          job_id: jobId,
+        };
+      }
 
       return {
         status: 'completed',
@@ -1812,14 +2237,312 @@ Your classification:`;
         aspect_ratio: finalState.aspectRatio,
         task: finalState.task,
         iterations: finalState.iterations,
-        generation_result: result,
+        job_id: jobId,
+        artifact_id: waitResultObj['artifact_id'],
+        file_path: waitResultObj['file_path'],
         message: 'Image generated successfully.',
       };
     } catch (error) {
       this.imageGenState = null;
+      this.currentMode = 'orchestrator';
       return {
         error: `Image generation failed: ${String(error)}`,
         prompt: currentPrompt,
+        task,
+      };
+    }
+  }
+
+  /**
+   * Handle dispatch_video_agent tool - spawns a sub-agent for video generation.
+   * Presents video parameters to user for approval before generating.
+   */
+  private async handleDispatchVideoAgent(toolCall: ToolCall): Promise<unknown> {
+    // Set mode for UI display
+    this.currentMode = 'video';
+
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const sceneImageArtifactId = args['scene_image_artifact_id'] as string;
+    const sceneNumber = (args['scene_number'] as number) ?? 1;
+    const motionDescription = args['motion_description'] as string | undefined;
+    const contextRef = args['context_ref'] as string | undefined;
+    const duration = (args['duration'] as number) ?? 4;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_video_agent' };
+    }
+
+    if (!sceneImageArtifactId) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No scene_image_artifact_id provided for dispatch_video_agent' };
+    }
+
+    // Resolve context_ref if provided
+    let context = '';
+    if (contextRef) {
+      const stored = contextStore.get(contextRef);
+      if (stored) {
+        context = stored.content;
+        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} for video agent (${stored.label}, ${stored.content.length} chars)`);
+      } else {
+        return { error: `Context reference not found: ${contextRef}` };
+      }
+    }
+
+    // Check if we're already in a video generation session
+    if (this.videoGenState?.active) {
+      return { error: 'Video generation already in progress' };
+    }
+
+    // Initialize video gen state
+    this.videoGenState = {
+      active: true,
+      task,
+      sceneNumber,
+      sceneImageArtifactId,
+      motionDescription,
+      context,
+      messages: [],
+      currentParams: {
+        duration,
+        fps: 24,
+        motionStrength: 0.7,
+      },
+      iterations: 0,
+    };
+
+    // Build a summary for user approval
+    const paramSummary = `**Video Generation Parameters:**
+- Scene: #${sceneNumber}
+- Source Image: ${sceneImageArtifactId}
+- Duration: ${duration} seconds
+- Motion: ${motionDescription ?? 'Auto-determined based on scene'}
+- Task: ${task}`;
+
+    // Return status indicating we need user approval
+    return {
+      status: 'awaiting_approval',
+      params: this.videoGenState.currentParams,
+      scene_number: sceneNumber,
+      image_artifact_id: sceneImageArtifactId,
+      motion_description: motionDescription,
+      task,
+      question: `I'm ready to generate video for scene ${sceneNumber}. Here are the parameters:\n\n${paramSummary}\n\nWould you like to proceed or adjust the parameters?`,
+      options: [
+        { label: 'Generate video', description: 'Proceed with these parameters' },
+        { label: 'Provide feedback', description: 'Modify the parameters' },
+      ],
+      autoApproveTimeoutMs: 15000, // 15 seconds countdown
+    };
+  }
+
+  /**
+   * Handle user response to video generation approval.
+   */
+  async handleVideoGenResponse(userResponse: string): Promise<unknown> {
+    if (!this.videoGenState) {
+      return { error: 'No active video generation session' };
+    }
+
+    // Use simple pattern matching to classify response
+    const lower = userResponse.toLowerCase().trim();
+    const approvalPatterns = ['yes', 'ok', 'okay', 'generate', 'go', 'proceed', 'create', 'make', 'lgtm', 'y', '1'];
+    const isApproval = approvalPatterns.some(p => lower === p || lower.startsWith(p));
+
+    if (isApproval) {
+      // User approved - execute video generation
+      return this.executeVideoGeneration();
+    }
+
+    // User wants to provide feedback
+    this.videoGenState.iterations++;
+    if (this.videoGenState.iterations >= 5) {
+      const result = {
+        status: 'max_iterations',
+        params: this.videoGenState.currentParams,
+        task: this.videoGenState.task,
+        message: 'Reached maximum iterations for parameter refinement. Using the last version.',
+      };
+      this.videoGenState = null;
+      this.currentMode = 'orchestrator';
+      return result;
+    }
+
+    // Parse feedback for parameter changes (simple parsing)
+    if (lower.includes('duration') && /\d+/.test(lower)) {
+      const match = lower.match(/(\d+)\s*(?:s|sec|seconds?)?/);
+      if (match?.[1]) {
+        this.videoGenState.currentParams.duration = parseInt(match[1], 10);
+      }
+    }
+
+    // Return updated parameters for approval
+    return {
+      status: 'awaiting_approval',
+      params: this.videoGenState.currentParams,
+      scene_number: this.videoGenState.sceneNumber,
+      image_artifact_id: this.videoGenState.sceneImageArtifactId,
+      motion_description: this.videoGenState.motionDescription,
+      task: this.videoGenState.task,
+      iterations: this.videoGenState.iterations,
+      question: `I've updated the parameters based on your feedback. Would you like to proceed or make more adjustments?`,
+      options: [
+        { label: 'Generate video', description: 'Proceed with these parameters' },
+        { label: 'Provide feedback', description: 'Make more changes' },
+      ],
+      autoApproveTimeoutMs: 15000,
+    };
+  }
+
+  /**
+   * Execute the actual video generation after user approval.
+   */
+  private async executeVideoGeneration(): Promise<unknown> {
+    if (!this.videoGenState) {
+      return { error: 'No active video generation session' };
+    }
+
+    const {
+      task,
+      sceneNumber,
+      sceneImageArtifactId,
+      motionDescription,
+      currentParams,
+    } = this.videoGenState;
+
+    // Get the generate_video tool
+    const generateVideoTool = this.tools.get('generate_video');
+    if (!generateVideoTool?.handler) {
+      this.videoGenState = null;
+      this.currentMode = 'orchestrator';
+      return {
+        error: 'generate_video tool not available',
+        task,
+      };
+    }
+
+    // Get the wait_for_job tool
+    const waitForJobTool = this.tools.get('wait_for_job');
+    if (!waitForJobTool?.handler) {
+      this.videoGenState = null;
+      this.currentMode = 'orchestrator';
+      return {
+        error: 'wait_for_job tool not available',
+        task,
+      };
+    }
+
+    // Build arguments for generate_video
+    const generateArgs: Record<string, unknown> = {
+      scene_number: sceneNumber,
+      scene_image_artifact_id: sceneImageArtifactId,
+      prompt: motionDescription, // generate_video uses 'prompt' for motion description
+      // duration and fps may be handled by the workflow
+    };
+
+    const toolCallId = `vid-gen-${Date.now()}`;
+
+    // Emit that we're generating the video
+    this.emit({
+      type: 'tool_call',
+      toolCallId,
+      toolName: 'generate_video',
+      arguments: generateArgs,
+      agentName: this.getEffectiveAgentName(),
+    });
+
+    try {
+      // Step 1: Submit the video generation job
+      const submitResult = await Promise.resolve(generateVideoTool.handler(generateArgs));
+      const submitResultObj = submitResult as Record<string, unknown>;
+
+      // Check if submission failed
+      if (submitResultObj['status'] === 'error') {
+        const finalState = { ...this.videoGenState };
+        this.videoGenState = null;
+        this.currentMode = 'orchestrator';
+
+        this.emit({
+          type: 'tool_result',
+          toolCallId,
+          toolName: 'generate_video',
+          result: submitResult,
+          isError: true,
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        return {
+          status: 'error',
+          error: submitResultObj['error'] as string,
+          scene_number: finalState.sceneNumber,
+          task: finalState.task,
+        };
+      }
+
+      const jobId = submitResultObj['job_id'] as string;
+      if (!jobId) {
+        throw new Error('No job_id returned from generate_video');
+      }
+
+      // Emit that we're waiting for the job
+      const waitToolCallId = `wait-job-${Date.now()}`;
+      this.emit({
+        type: 'tool_call',
+        toolCallId: waitToolCallId,
+        toolName: 'wait_for_job',
+        arguments: { job_id: jobId },
+        agentName: this.getEffectiveAgentName(),
+      });
+
+      // Step 2: Wait for the job to complete
+      const waitResult = await Promise.resolve(waitForJobTool.handler({ job_id: jobId }));
+      const waitResultObj = waitResult as Record<string, unknown>;
+
+      // Clear the state
+      const finalState = { ...this.videoGenState };
+      this.videoGenState = null;
+      this.currentMode = 'orchestrator';
+
+      // Emit tool result for wait_for_job
+      this.emit({
+        type: 'tool_result',
+        toolCallId: waitToolCallId,
+        toolName: 'wait_for_job',
+        result: waitResult,
+        isError: waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed',
+        agentName: this.getEffectiveAgentName(),
+      });
+
+      // Check if job failed
+      if (waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed') {
+        return {
+          status: 'error',
+          error: waitResultObj['error'] as string || 'Job failed',
+          scene_number: finalState.sceneNumber,
+          task: finalState.task,
+          job_id: jobId,
+        };
+      }
+
+      return {
+        status: 'completed',
+        scene_number: finalState.sceneNumber,
+        image_artifact_id: finalState.sceneImageArtifactId,
+        params: finalState.currentParams,
+        task: finalState.task,
+        iterations: finalState.iterations,
+        job_id: jobId,
+        artifact_id: waitResultObj['artifact_id'],
+        file_path: waitResultObj['file_path'],
+        message: 'Video generated successfully.',
+      };
+    } catch (error) {
+      this.videoGenState = null;
+      this.currentMode = 'orchestrator';
+      return {
+        error: `Video generation failed: ${String(error)}`,
         task,
       };
     }
@@ -2008,19 +2731,40 @@ Your classification:`;
    * Returns true if we should compress old messages.
    */
   private shouldCompressContext(): boolean {
-    // Only check if we have usage data
-    if (this.tokenUsage.lastPromptTokens === 0) {
-      return false;
+    const threshold = this.maxContextTokens * GenericAgent.CONTEXT_THRESHOLD;
+
+    // Method 1: Check based on actual token usage from last call
+    if (this.tokenUsage.lastPromptTokens > 0) {
+      const shouldCompress = this.tokenUsage.lastPromptTokens > threshold;
+      if (shouldCompress) {
+        debugLog(`[GenericAgent] Context at ${Math.round((this.tokenUsage.lastPromptTokens / this.maxContextTokens) * 100)}% (${this.tokenUsage.lastPromptTokens}/${this.maxContextTokens} tokens) - compression needed`);
+        return true;
+      }
     }
 
-    const threshold = GenericAgent.MAX_CONTEXT_TOKENS * GenericAgent.CONTEXT_THRESHOLD;
-    const shouldCompress = this.tokenUsage.lastPromptTokens > threshold;
+    // Method 2: Estimate based on message count and content length
+    // This helps catch cases where we haven't had a successful LLM call yet
+    // Rough estimate: ~4 chars per token, plus overhead for tool definitions (~2000 tokens)
+    const estimatedContentTokens = this.messages.reduce((sum, msg) => {
+      return sum + Math.ceil((msg.content?.length ?? 0) / 4);
+    }, 0);
+    const estimatedToolTokens = this.tools.size * 200; // ~200 tokens per tool definition
+    const estimatedTotal = estimatedContentTokens + estimatedToolTokens;
 
-    if (shouldCompress) {
-      debugLog(`[GenericAgent] Context at ${Math.round((this.tokenUsage.lastPromptTokens / GenericAgent.MAX_CONTEXT_TOKENS) * 100)}% - compression needed`);
+    if (estimatedTotal > threshold) {
+      debugLog(`[GenericAgent] Estimated context at ${Math.round((estimatedTotal / this.maxContextTokens) * 100)}% (~${estimatedTotal}/${this.maxContextTokens} tokens) - compression needed`);
+      return true;
     }
 
-    return shouldCompress;
+    // Method 3: Trigger compression if we have many messages regardless
+    // This is a safety net for long conversations
+    const MESSAGE_COUNT_THRESHOLD = 30;
+    if (this.messages.length > MESSAGE_COUNT_THRESHOLD) {
+      debugLog(`[GenericAgent] Message count (${this.messages.length}) exceeds threshold (${MESSAGE_COUNT_THRESHOLD}) - compression needed`);
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -2050,9 +2794,9 @@ Your classification:`;
 
       // Emit event so UI can show compression occurred
       this.emit({
-        type: 'system_message',
+        type: 'notification',
+        level: 'info',
         message: `Context compressed: ${result.removedCount} messages summarized to stay within limits`,
-        agentName: this.name,
       });
     }
   }

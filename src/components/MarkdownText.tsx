@@ -49,7 +49,8 @@ function parseLine(line: string, index: number): React.ReactNode {
 
   // Bullet lists
   if (line.match(/^[\s]*[-*+]\s/)) {
-    const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
+    const indentMatch = line.match(/^(\s*)/);
+    const indent = indentMatch?.[1]?.length ?? 0;
     const content = line.replace(/^[\s]*[-*+]\s/, '');
     return (
       <Box key={index} marginLeft={indent}>
@@ -61,10 +62,12 @@ function parseLine(line: string, index: number): React.ReactNode {
 
   // Numbered lists
   if (line.match(/^[\s]*\d+\.\s/)) {
-    const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
+    const indentMatch = line.match(/^(\s*)/);
+    const indent = indentMatch?.[1]?.length ?? 0;
     const match = line.match(/^[\s]*(\d+)\.\s(.*)$/);
     if (match) {
-      const [, num, content] = match;
+      const num = match[1] ?? '';
+      const content = match[2] ?? '';
       return (
         <Box key={index} marginLeft={indent}>
           <Text color="yellow">{num}. </Text>
@@ -93,7 +96,9 @@ function parseInlineFormatting(text: string): React.ReactNode {
       match = remaining.match(/^(.*?)__(.+?)__(.*)/s);
     }
     if (match) {
-      const [, before, bold, after] = match;
+      const before = match[1] ?? '';
+      const bold = match[2] ?? '';
+      const after = match[3] ?? '';
       if (before) {
         elements.push(<Text key={key++}>{before}</Text>);
       }
@@ -112,7 +117,9 @@ function parseInlineFormatting(text: string): React.ReactNode {
       match = remaining.match(/^(.*?)_([^_]+)_(.*)/s);
     }
     if (match) {
-      const [, before, italic, after] = match;
+      const before = match[1] ?? '';
+      const italic = match[2] ?? '';
+      const after = match[3] ?? '';
       if (before) {
         elements.push(<Text key={key++}>{before}</Text>);
       }
@@ -128,7 +135,9 @@ function parseInlineFormatting(text: string): React.ReactNode {
     // Inline code: `code`
     match = remaining.match(/^(.*?)`([^`]+)`(.*)/s);
     if (match) {
-      const [, before, code, after] = match;
+      const before = match[1] ?? '';
+      const code = match[2] ?? '';
+      const after = match[3] ?? '';
       if (before) {
         elements.push(<Text key={key++}>{before}</Text>);
       }
@@ -164,7 +173,7 @@ export function MarkdownText({ text, isStreaming = false }: MarkdownTextProps) {
   const elements: React.ReactNode[] = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i] ?? '';
 
     // Code block start/end
     if (line.startsWith('```')) {
@@ -204,7 +213,7 @@ export function MarkdownText({ text, isStreaming = false }: MarkdownTextProps) {
     }
 
     if (inCodeBlock) {
-      codeBlockContent.push(line);
+      codeBlockContent.push(line ?? '');
       continue;
     }
 

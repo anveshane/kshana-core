@@ -5,6 +5,7 @@
 
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
+import { getWorkflowLogger } from './WorkflowLogger.js';
 import {
   loadProject,
   saveProject,
@@ -18,12 +19,164 @@ import {
   saveSetting,
   addAsset,
   addScene,
+  addNewScene,
   updatePhaseStatus,
   updatePlannerStage,
   transitionToNextPhase,
+  updateCharacter,
+  updateSetting,
+  updateCharacterApproval,
+  updateSettingApproval,
+  updateSceneApproval,
+  updateScene,
 } from './ProjectManager.js';
-import type { ProjectFile, CharacterData, SettingData, SceneData, AssetInfo, PhaseStatus } from './types.js';
-import { PlannerStage } from './types.js';
+import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus } from './types.js';
+import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase } from './types.js';
+import { LLMClient } from '../../../core/llm/index.js';
+import { contextStore } from '../../../core/context/index.js';
+
+/**
+ * Expand context references (e.g., $wakes) to their actual stored content.
+ * Returns the original string if it's not a context reference.
+ */
+function expandContextRef(value: string): string {
+  if (value.startsWith('$') && value.length > 1) {
+    const stored = contextStore.get(value);
+    if (stored) {
+      return stored.content;
+    }
+  }
+  return value;
+}
+
+/**
+ * Validates if the input is a valid story idea using an LLM call.
+ * Returns { valid: true } if valid, or { valid: false, reason: string } if invalid.
+ */
+async function validateStoryInput(input: string): Promise<{ valid: boolean; reason?: string }> {
+  const trimmed = input.trim();
+
+  // Too short to be a meaningful story idea
+  if (trimmed.length < 10) {
+    return { valid: false, reason: 'Input is too short to be a story idea' };
+  }
+
+  // Quick heuristic checks for obvious garbage
+  const looksLikeGarbage = detectGarbageInput(trimmed);
+  if (looksLikeGarbage) {
+    return { valid: false, reason: looksLikeGarbage };
+  }
+
+  try {
+    const client = new LLMClient();
+
+    const validationPrompt = `You are a strict input validator for a video generation tool. Your job is to determine if the user's input is a valid STORY IDEA that can be turned into a video.
+
+VALID inputs (respond with "VALID"):
+- Story concepts or narratives (e.g., "A detective solves a mystery in space")
+- Theme/genre requests (e.g., "Make a horror story about a haunted house")
+- Scripts, outlines, or synopses
+- Descriptions of events, characters, or plots
+- Existing stories to adapt
+
+INVALID inputs (respond with "INVALID: [reason]"):
+- Philosophical statements or manifestos
+- Rhetorical questions that don't describe a story
+- Technical discussions or explanations
+- Promotional content or calls to action
+- Random pasted text, articles, or essays
+- Questions asking for information (not story requests)
+- Meta-commentary about storytelling itself (unless it's a story ABOUT storytelling)
+- Gibberish, random characters, or nonsensical text
+- Single words or very short phrases that don't describe a story
+- Keyboard mashing or test input (e.g., "asdfasdf", "test123")
+
+Be STRICT. The input must describe or request an actual story/narrative that can be visualized.
+When in doubt, respond with INVALID.
+
+User input:
+"""
+${trimmed}
+"""
+
+Respond with ONLY "VALID" or "INVALID: [brief reason]"`;
+
+    const response = await client.generate({
+      messages: [{ role: 'user', content: validationPrompt }],
+      temperature: 0.1,
+      maxTokens: 100,
+    });
+
+    const result = response.content?.trim() || '';
+
+    if (result.toUpperCase().startsWith('VALID')) {
+      return { valid: true };
+    } else if (result.toUpperCase().startsWith('INVALID')) {
+      const reason = result.replace(/^INVALID:\s*/i, '').trim() || 'This does not appear to be a story idea';
+      return { valid: false, reason };
+    }
+
+    // If we can't parse the response clearly, reject to be safe
+    console.warn('Could not parse LLM validation response, rejecting input:', result);
+    return { valid: false, reason: 'Unable to validate - please provide a clearer story idea' };
+  } catch (error) {
+    // If LLM validation fails, reject to be safe rather than allowing garbage through
+    console.warn('Story input validation failed:', error);
+    return { valid: false, reason: 'Validation service unavailable - please try again' };
+  }
+}
+
+/**
+ * Quick heuristic checks to detect obvious garbage input before calling the LLM.
+ * Returns a reason string if garbage is detected, or null if input passes basic checks.
+ */
+function detectGarbageInput(input: string): string | null {
+  const trimmed = input.trim();
+
+  // Check for keyboard mashing patterns (repeated characters, random letters)
+  const keyboardMashPattern = /^[a-z]{10,}$/i;
+  if (keyboardMashPattern.test(trimmed.replace(/\s/g, ''))) {
+    const uniqueChars = new Set(trimmed.toLowerCase().replace(/\s/g, ''));
+    if (uniqueChars.size < 5 && trimmed.length > 15) {
+      return 'Random repeated characters - not a story idea';
+    }
+  }
+
+  // Check for test/placeholder input
+  const testPatterns = [
+    /^test\s*\d*$/i,
+    /^hello\s*world$/i,
+    /^asdf/i,
+    /^qwerty/i,
+    /^[0-9\s]+$/,
+    /^\.+$/,
+    /^-+$/,
+    /^_+$/,
+  ];
+  for (const pattern of testPatterns) {
+    if (pattern.test(trimmed)) {
+      return 'Test or placeholder input - not a story idea';
+    }
+  }
+
+  // Check for mostly non-alphabetic content (likely gibberish)
+  const alphabeticRatio = (trimmed.match(/[a-zA-Z]/g) || []).length / trimmed.length;
+  if (trimmed.length > 20 && alphabeticRatio < 0.3) {
+    return 'Input appears to be mostly symbols or numbers - not a story idea';
+  }
+
+  // Check for extremely repetitive content
+  const words = trimmed.toLowerCase().split(/\s+/);
+  if (words.length > 5) {
+    const uniqueWords = new Set(words);
+    if (uniqueWords.size < words.length * 0.3) {
+      return 'Input is too repetitive - please provide a story idea';
+    }
+  }
+
+  // Passed basic checks
+  return null;
+}
 
 /**
  * Read file tool - reads content from a project file.
@@ -34,8 +187,9 @@ export const readFileTool: ToolDefinition = createTool(
 
 Use this to read:
 - Plan files: plans/plot.md, plans/story.md, plans/scenes.md, plans/images.md, plans/video.md
-- Character files: characters/[name].json
-- Setting files: settings/[name].json
+- Character files: characters/[name].md
+- Setting files: settings/[name].md
+- Original input: original_input.md
 - Asset manifest: assets/manifest.json
 
 Returns the file content as a string, or an error if file doesn't exist.`,
@@ -207,17 +361,28 @@ export const updateProjectTool: ToolDefinition = createTool(
   'update_project',
   `Update the project.json file with new data.
 
+Note: project.json is an INDEX file. Content should be in .md files:
+- Characters: Write full content to characters/[name].md, then use add_character to register
+- Settings: Write full content to settings/[name].md, then use add_setting to register
+- Scenes: Write full content to plans/scenes.md, then use add_scene to register scene references
+
 Actions:
 - "create": Create a new project with the given original_input
 - "set_title": Set the project title
-- "update_phase": Update a phase status (pending, in_progress, completed)
-- "update_planner_stage": Update planner stage (planning, verify, refining, complete)
+- "update_phase": Update a phase status. Data: { phase: string, status: 'pending'|'in_progress'|'completed' }
+- "update_planner_stage": Update planner stage. Data: { phase: string, stage: 'planning'|'verify'|'refining'|'complete' }
 - "transition_phase": Automatically transition to next phase if current is complete
-- "add_character": Add a character to the project
-- "add_setting": Add a setting to the project
-- "add_scene": Add a scene to the project
-- "add_asset": Register a generated asset
-- "update_scene": Update an existing scene`,
+- "add_character": Register a character. Data: { name, description?, visual_description?, approval_status? }
+- "update_character": Update an existing character. Data: { name, updates: { ... } }
+- "update_character_approval": Update character approval. Data: { name, status, contentArtifactId?, referenceImageId? }
+- "add_setting": Register a setting. Data: { name, description?, visual_description?, approval_status? }
+- "update_setting": Update an existing setting. Data: { name, updates: { ... } }
+- "update_setting_approval": Update setting approval. Data: { name, status, contentArtifactId?, referenceImageId? }
+- "add_scene": Register a scene reference. Data: { scene_number, title?, description? }
+- "update_scene": Update scene reference. Data: { scene_number, updates: { ... } }
+- "update_scene_approval": Update scene approval. Data: { scene_number, approval_type: 'content'|'image'|'video', status, artifactId? }
+- "add_asset": Register a generated asset. Data: { id, type, path, metadata? }
+- "set_final_video": Set the final video info. Data: { artifactId, path, duration }`,
   {
     type: 'object',
     properties: {
@@ -230,10 +395,16 @@ Actions:
           'update_planner_stage',
           'transition_phase',
           'add_character',
+          'update_character',
+          'update_character_approval',
           'add_setting',
+          'update_setting',
+          'update_setting_approval',
           'add_scene',
-          'add_asset',
           'update_scene',
+          'update_scene_approval',
+          'add_asset',
+          'set_final_video',
         ],
         description: 'The action to perform',
       },
@@ -251,10 +422,35 @@ Actions:
     try {
       switch (action) {
         case 'create': {
-          const originalInput = data['original_input'] as string;
+          let originalInput = data['original_input'] as string;
           if (!originalInput) {
             return { status: 'error', error: 'original_input is required for create action' };
           }
+
+          // Expand context references (e.g., $wakes -> actual content)
+          originalInput = expandContextRef(originalInput);
+
+          // Validate that the input is actually a story idea
+          const validation = await validateStoryInput(originalInput);
+          if (!validation.valid) {
+            return {
+              status: 'invalid_input',
+              rejected: true,
+              error: validation.reason,
+              action_required: 'STOP - Do not proceed with the workflow. Display the message below to the user and wait for them to provide a valid story idea.',
+              message: `I'd love to help you create a video, but I need a story to work with.
+
+What you shared appears to be: ${validation.reason}
+
+Please share:
+- A story concept or narrative (e.g., "A detective solves a mystery in space")
+- A theme/genre you'd like to explore (e.g., "Make a horror story about a haunted house")
+- A script or outline to adapt
+
+What story would you like to turn into a video?`,
+            };
+          }
+
           const project = createProject(originalInput);
           return {
             status: 'success',
@@ -279,94 +475,274 @@ Actions:
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
-          const phase = data['phase'] as keyof ProjectFile['phases'];
+          // Accept both 'phase' and 'phase_name' for compatibility
+          const phase = (data['phase'] || data['phase_name']) as keyof ProjectFile['phases'];
           const status = data['status'] as PhaseStatus;
           if (!phase || !status) {
-            return { status: 'error', error: 'phase and status are required' };
+            return { status: 'error', error: 'phase (or phase_name) and status are required' };
           }
           updatePhaseStatus(project, phase, status);
-          return { status: 'success', message: `Phase ${phase} updated to ${status}` };
+          return { status: 'success', message: `Phase ${phase} updated to ${status}`, current_phase: project.currentPhase };
         }
 
         case 'update_planner_stage': {
+          const logger = getWorkflowLogger();
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
-          const phase = data['phase'] as keyof ProjectFile['phases'];
+          // Accept both 'phase' and 'phase_name' for compatibility
+          const phase = (data['phase'] || data['phase_name']) as keyof ProjectFile['phases'];
           const stage = data['stage'] as PlannerStage;
           if (!phase || !stage) {
-            return { status: 'error', error: 'phase and stage are required' };
+            return { status: 'error', error: 'phase (or phase_name) and stage are required' };
           }
           const validStages = ['planning', 'verify', 'refining', 'complete'];
           if (!validStages.includes(stage)) {
             return { status: 'error', error: `Invalid stage. Must be one of: ${validStages.join(', ')}` };
           }
           updatePlannerStage(project, phase, stage);
-          return { status: 'success', message: `Planner stage for ${phase} updated to ${stage}` };
+
+          // Check if this is a per-item phase
+          const phaseConfig = PHASE_CONFIGS[phase as WorkflowPhase];
+          const isPerItemPhase = phaseConfig?.requiresPerItemApproval ?? false;
+
+          // For per-item phases, phase is NOT complete when planner stage is complete
+          // The phase is only complete when all items are approved
+          const phaseCompleted = stage === 'complete' && !isPerItemPhase;
+          logger.logPlannerStage(phase, stage, phaseCompleted);
+
+          if (stage === 'complete' && isPerItemPhase) {
+            return {
+              status: 'success',
+              message: `Planning for ${phase} is complete. Now you must process each item individually. Generate content/images/videos for each item, get approval, then mark the phase complete when ALL items are approved.`,
+              current_phase: project.currentPhase,
+              phase_status: project.phases[phase]?.status,
+              phase_completed: false,
+              requires_per_item_processing: true,
+              next_action: 'Process each item one by one, get individual approvals, then transition when all items are approved.',
+            };
+          }
+
+          return {
+            status: 'success',
+            message: phaseCompleted
+              ? `Planner stage for ${phase} updated to ${stage}. Phase ${phase} is now completed. Use transition_phase to move to the next phase.`
+              : `Planner stage for ${phase} updated to ${stage}`,
+            current_phase: project.currentPhase,
+            phase_status: project.phases[phase]?.status,
+            phase_completed: phaseCompleted,
+          };
         }
 
         case 'transition_phase': {
+          const logger = getWorkflowLogger();
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
+          const beforePhase = project.currentPhase;
+          const beforeStatus = project.phases[beforePhase as keyof typeof project.phases]?.status;
+
           const result = transitionToNextPhase(project);
+          logger.logPhaseTransition(
+            beforePhase,
+            result.project.currentPhase,
+            result.reason,
+            result.transitioned
+          );
           return {
             status: 'success',
             transitioned: result.transitioned,
             reason: result.reason,
             current_phase: result.project.currentPhase,
+            debug: {
+              before_phase: beforePhase,
+              before_status: beforeStatus,
+              after_phase: result.project.currentPhase,
+            },
           };
         }
 
         case 'add_character': {
+          const name = data['name'] as string;
+          if (!name) {
+            return { status: 'error', error: 'name is required for add_character' };
+          }
+          // Create character with defaults and provided data
           const character: CharacterData = {
-            name: data['name'] as string,
-            description: data['description'] as string,
-            visualDescription: data['visual_description'] as string,
+            ...createDefaultCharacterData(name),
+            description: (data['description'] as string) || '',
+            visualDescription: (data['visual_description'] as string) || '',
+            approvalStatus: (data['approval_status'] as ItemApprovalStatus) || 'pending',
             referenceImageId: data['reference_image_id'] as string | undefined,
             referenceImagePath: data['reference_image_path'] as string | undefined,
           };
-          if (!character.name) {
-            return { status: 'error', error: 'name is required for add_character' };
-          }
           saveCharacter(character);
           return { status: 'success', message: `Character "${character.name}" added` };
         }
 
+        case 'update_character': {
+          const name = data['name'] as string;
+          const updates = data['updates'] as Partial<CharacterData>;
+          if (!name) {
+            return { status: 'error', error: 'name is required for update_character' };
+          }
+          if (!projectExists()) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const success = updateCharacter(name, updates);
+          if (!success) {
+            return { status: 'error', error: `Character "${name}" not found` };
+          }
+          return { status: 'success', message: `Character "${name}" updated` };
+        }
+
+        case 'update_character_approval': {
+          const name = data['name'] as string;
+          const approvalStatus = data['status'] as ItemApprovalStatus;
+          if (!name || !approvalStatus) {
+            return { status: 'error', error: 'name and status are required for update_character_approval' };
+          }
+          if (!projectExists()) {
+            return { status: 'error', error: 'No project found' };
+          }
+          // Also update character with artifact IDs if provided
+          const artifactUpdates: Partial<CharacterData> = {};
+          if (data['contentArtifactId']) {
+            artifactUpdates.contentArtifactId = data['contentArtifactId'] as string;
+          }
+          if (data['referenceImageId']) {
+            artifactUpdates.referenceImageId = data['referenceImageId'] as string;
+          }
+          if (data['referenceImagePath']) {
+            artifactUpdates.referenceImagePath = data['referenceImagePath'] as string;
+          }
+          if (Object.keys(artifactUpdates).length > 0) {
+            updateCharacter(name, artifactUpdates);
+          }
+          const success = updateCharacterApproval(name, approvalStatus);
+          if (!success) {
+            return { status: 'error', error: `Character "${name}" not found` };
+          }
+          return { status: 'success', message: `Character "${name}" approval updated to ${approvalStatus}` };
+        }
+
         case 'add_setting': {
+          const name = data['name'] as string;
+          if (!name) {
+            return { status: 'error', error: 'name is required for add_setting' };
+          }
+          // Create setting with defaults and provided data
           const setting: SettingData = {
-            name: data['name'] as string,
-            description: data['description'] as string,
-            visualDescription: data['visual_description'] as string,
+            ...createDefaultSettingData(name),
+            description: (data['description'] as string) || '',
+            visualDescription: (data['visual_description'] as string) || '',
+            approvalStatus: (data['approval_status'] as ItemApprovalStatus) || 'pending',
             referenceImageId: data['reference_image_id'] as string | undefined,
             referenceImagePath: data['reference_image_path'] as string | undefined,
           };
-          if (!setting.name) {
-            return { status: 'error', error: 'name is required for add_setting' };
-          }
           saveSetting(setting);
           return { status: 'success', message: `Setting "${setting.name}" added` };
         }
 
+        case 'update_setting': {
+          const name = data['name'] as string;
+          const updates = data['updates'] as Partial<SettingData>;
+          if (!name) {
+            return { status: 'error', error: 'name is required for update_setting' };
+          }
+          if (!projectExists()) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const success = updateSetting(name, updates);
+          if (!success) {
+            return { status: 'error', error: `Setting "${name}" not found` };
+          }
+          return { status: 'success', message: `Setting "${name}" updated` };
+        }
+
+        case 'update_setting_approval': {
+          const name = data['name'] as string;
+          const approvalStatus = data['status'] as ItemApprovalStatus;
+          if (!name || !approvalStatus) {
+            return { status: 'error', error: 'name and status are required for update_setting_approval' };
+          }
+          if (!projectExists()) {
+            return { status: 'error', error: 'No project found' };
+          }
+          // Also update setting with artifact IDs if provided
+          const artifactUpdates: Partial<SettingData> = {};
+          if (data['contentArtifactId']) {
+            artifactUpdates.contentArtifactId = data['contentArtifactId'] as string;
+          }
+          if (data['referenceImageId']) {
+            artifactUpdates.referenceImageId = data['referenceImageId'] as string;
+          }
+          if (data['referenceImagePath']) {
+            artifactUpdates.referenceImagePath = data['referenceImagePath'] as string;
+          }
+          if (Object.keys(artifactUpdates).length > 0) {
+            updateSetting(name, artifactUpdates);
+          }
+          const success = updateSettingApproval(name, approvalStatus);
+          if (!success) {
+            return { status: 'error', error: `Setting "${name}" not found` };
+          }
+          return { status: 'success', message: `Setting "${name}" approval updated to ${approvalStatus}` };
+        }
+
         case 'add_scene': {
-          const scene: SceneData = {
-            sceneNumber: data['scene_number'] as number,
-            description: data['description'] as string,
-            characters: data['characters'] as string[],
-            setting: data['setting'] as string,
-            action: data['action'] as string,
-            imagePrompt: data['image_prompt'] as string | undefined,
-            imageArtifactId: data['image_artifact_id'] as string | undefined,
-            videoArtifactId: data['video_artifact_id'] as string | undefined,
-            duration: data['duration'] as number | undefined,
-          };
-          if (scene.sceneNumber === undefined) {
+          const sceneNumber = data['scene_number'] as number;
+          if (sceneNumber === undefined) {
             return { status: 'error', error: 'scene_number is required for add_scene' };
           }
-          addScene(scene);
-          return { status: 'success', message: `Scene ${scene.sceneNumber} added` };
+          const title = data['title'] as string | undefined;
+          const sceneRef = addNewScene(sceneNumber, title);
+          // Also update with any additional data if provided
+          const additionalUpdates: Partial<SceneRef> = {};
+          if (data['file']) {
+            additionalUpdates.file = data['file'] as string;
+          }
+          if (data['description']) {
+            additionalUpdates.description = data['description'] as string;
+          }
+          if (Object.keys(additionalUpdates).length > 0) {
+            updateScene(sceneNumber, additionalUpdates);
+          }
+          return { status: 'success', message: `Scene ${sceneRef.sceneNumber} reference added` };
+        }
+
+        case 'update_scene_approval': {
+          const sceneNumber = data['scene_number'] as number;
+          const approvalType = data['approval_type'] as 'content' | 'image' | 'video';
+          const approvalStatus = data['status'] as ItemApprovalStatus;
+          if (sceneNumber === undefined || !approvalType || !approvalStatus) {
+            return { status: 'error', error: 'scene_number, approval_type, and status are required for update_scene_approval' };
+          }
+          if (!projectExists()) {
+            return { status: 'error', error: 'No project found' };
+          }
+          // Update scene with artifact/prompt info if provided
+          const sceneUpdates: Partial<SceneRef> = {};
+          if (data['artifactId']) {
+            if (approvalType === 'image') {
+              sceneUpdates.imageArtifactId = data['artifactId'] as string;
+            } else if (approvalType === 'video') {
+              sceneUpdates.videoArtifactId = data['artifactId'] as string;
+            }
+          }
+          if (data['prompt']) {
+            sceneUpdates.imagePrompt = data['prompt'] as string;
+          }
+          if (Object.keys(sceneUpdates).length > 0) {
+            updateScene(sceneNumber, sceneUpdates);
+          }
+          const success = updateSceneApproval(sceneNumber, approvalType, approvalStatus);
+          if (!success) {
+            return { status: 'error', error: `Scene ${sceneNumber} not found` };
+          }
+          return { status: 'success', message: `Scene ${sceneNumber} ${approvalType} approval updated to ${approvalStatus}` };
         }
 
         case 'add_asset': {
@@ -385,25 +761,40 @@ Actions:
         }
 
         case 'update_scene': {
+          const sceneNumber = data['scene_number'] as number;
+          const updates = data['updates'] as Partial<SceneRef>;
+          if (sceneNumber === undefined) {
+            return { status: 'error', error: 'scene_number is required for update_scene' };
+          }
+          if (!projectExists()) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const success = updateScene(sceneNumber, updates);
+          if (!success) {
+            return { status: 'error', error: `Scene ${sceneNumber} not found` };
+          }
+          return { status: 'success', message: `Scene ${sceneNumber} updated` };
+        }
+
+        case 'set_final_video': {
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
-          const sceneNumber = data['scene_number'] as number;
-          const sceneIndex = project.scenes.findIndex((s) => s.sceneNumber === sceneNumber);
-          if (sceneIndex === -1) {
-            return { status: 'error', error: `Scene ${sceneNumber} not found` };
+          const artifactId = data['artifactId'] as string;
+          const path = data['path'] as string;
+          const duration = data['duration'] as number;
+          if (!artifactId || !path) {
+            return { status: 'error', error: 'artifactId and path are required for set_final_video' };
           }
-          // Update only provided fields
-          const updates = data['updates'] as Record<string, unknown>;
-          const scene = project.scenes[sceneIndex];
-          if (scene) {
-            for (const [key, value] of Object.entries(updates)) {
-              (scene as unknown as Record<string, unknown>)[key] = value;
-            }
-          }
+          project.finalVideo = {
+            artifactId,
+            path,
+            duration: duration || 0,
+            createdAt: Date.now(),
+          };
           saveProject(project);
-          return { status: 'success', message: `Scene ${sceneNumber} updated` };
+          return { status: 'success', message: 'Final video set', path };
         }
 
         default:

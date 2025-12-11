@@ -7,18 +7,17 @@
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { nanoid } from 'nanoid';
 
 /**
  * Metadata for stored context (stored in index.json)
+ * Key is the variable name (e.g., "$plan", "$chapter_1")
  */
 interface StoredContextMeta {
-  id: string;
+  variableName: string;  // e.g., $user_story, $chapter_1 (also used as key and filename)
   label: string;
-  variableName: string;  // Descriptive variable name like $user_story, $chapter_1
   createdAt: string;
   charCount: number;
-  source: 'user_input' | 'tool' | 'manual';  // Where the context came from
+  source: 'user_input' | 'tool' | 'manual';
 }
 
 /**
@@ -32,12 +31,20 @@ const CONTEXT_DIR = join(process.cwd(), '.kshana', 'context');
 const CONTEXT_INDEX_FILE = join(CONTEXT_DIR, 'index.json');
 
 /**
+ * Convert variable name to safe filename.
+ * e.g., "$plan_2" -> "plan_2.md"
+ */
+function variableToFilename(variableName: string): string {
+  return variableName.replace(/^\$/, '') + '.md';
+}
+
+/**
  * Persistent context store for large content.
- * Stores content to disk in separate files with metadata index.
+ * Uses variable names as the primary key for both index and file storage.
  */
 export class ContextStore {
   private index: Map<string, StoredContextMeta> = new Map();
-  private variableCounter: Map<string, number> = new Map();  // Track counts for unique naming
+  private variableCounter: Map<string, number> = new Map();
 
   constructor() {
     this.loadIndex();
@@ -50,7 +57,6 @@ export class ContextStore {
   private rebuildVariableCounter(): void {
     this.variableCounter.clear();
     for (const meta of this.index.values()) {
-      // Extract base name from variable (e.g., "$user_input_1" -> "user_input")
       const match = meta.variableName.match(/^\$([a-z_]+)(?:_(\d+))?$/);
       if (match) {
         const baseName = match[1] as string;
@@ -65,7 +71,6 @@ export class ContextStore {
    * Generate a unique variable name based on a base name.
    */
   private generateVariableName(baseName: string): string {
-    // Normalize to lowercase snake_case
     const normalized = baseName.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
     const base = normalized || 'context';
 
@@ -84,7 +89,6 @@ export class ContextStore {
         const data = JSON.parse(readFileSync(CONTEXT_INDEX_FILE, 'utf-8')) as Record<string, StoredContextMeta>;
         this.index = new Map(Object.entries(data));
       } catch {
-        // If index is corrupted, start fresh
         this.index = new Map();
       }
     }
@@ -104,97 +108,73 @@ export class ContextStore {
   }
 
   /**
-   * Store content and return a reference ID.
+   * Store content and return the variable name.
    *
    * @param content - The full content to store
    * @param label - A descriptive label for this context
    * @param options - Additional options
-   * @returns Object with context reference ID and variable name
+   * @returns The variable name (e.g., "$plan")
    */
   store(
     content: string,
     label: string,
     options: {
       source?: 'user_input' | 'tool' | 'manual';
-      variableBaseName?: string;  // Base name for variable (e.g., "user_story" -> "$user_story")
+      variableBaseName?: string;
     } = {}
-  ): { id: string; variableName: string } {
-    const id = `ctx_${nanoid(10)}`;
+  ): { variableName: string } {
     const source = options.source ?? 'manual';
     const variableName = this.generateVariableName(options.variableBaseName ?? label);
 
     const meta: StoredContextMeta = {
-      id,
-      label,
       variableName,
+      label,
       createdAt: new Date().toISOString(),
       charCount: content.length,
       source,
     };
 
-    // Ensure directory exists
     if (!existsSync(CONTEXT_DIR)) {
       mkdirSync(CONTEXT_DIR, { recursive: true });
     }
 
-    // Write content to separate file
-    const contentFile = join(CONTEXT_DIR, `${id}.txt`);
+    // Use variable name for filename (e.g., "$plan" -> "plan.txt")
+    const contentFile = join(CONTEXT_DIR, variableToFilename(variableName));
     writeFileSync(contentFile, content);
 
-    // Store metadata in index
-    this.index.set(id, meta);
+    // Index by variable name
+    this.index.set(variableName, meta);
     this.saveIndex();
 
-    return { id, variableName };
-  }
-
-  /**
-   * Retrieve stored context by reference ID.
-   *
-   * @param id - The context reference ID
-   * @returns The content, label, and variable name, or null if not found
-   */
-  get(id: string): { content: string; label: string; variableName: string } | null {
-    const meta = this.index.get(id);
-    if (!meta) return null;
-
-    const contentFile = join(CONTEXT_DIR, `${id}.txt`);
-    if (!existsSync(contentFile)) {
-      // Content file missing, clean up index
-      this.index.delete(id);
-      this.saveIndex();
-      return null;
-    }
-
-    const content = readFileSync(contentFile, 'utf-8');
-    return { content, label: meta.label, variableName: meta.variableName };
+    return { variableName };
   }
 
   /**
    * Retrieve stored context by variable name.
    *
-   * @param variableName - The variable name (e.g., "$user_input")
-   * @returns The content, label, and id, or null if not found
+   * @param variableName - The variable name (e.g., "$plan")
+   * @returns The content and label, or null if not found
    */
-  getByVariable(variableName: string): { content: string; label: string; id: string } | null {
-    for (const [id, meta] of this.index.entries()) {
-      if (meta.variableName === variableName) {
-        const result = this.get(id);
-        if (result) {
-          return { content: result.content, label: result.label, id };
-        }
-      }
+  get(variableName: string): { content: string; label: string } | null {
+    const meta = this.index.get(variableName);
+    if (!meta) return null;
+
+    const contentFile = join(CONTEXT_DIR, variableToFilename(variableName));
+    if (!existsSync(contentFile)) {
+      this.index.delete(variableName);
+      this.saveIndex();
+      return null;
     }
-    return null;
+
+    const content = readFileSync(contentFile, 'utf-8');
+    return { content, label: meta.label };
   }
 
   /**
-   * Get all active context variables with their metadata (for injection into system prompt).
-   * Does NOT load content - only returns metadata.
+   * Get all active context variables with their metadata.
    */
-  getActiveVariables(): Array<{ id: string; variableName: string; label: string; charCount: number }> {
+  getActiveVariables(): Array<{ variableName: string; label: string; charCount: number }> {
     return Array.from(this.index.values()).map(meta => ({
-      id: meta.id,
       variableName: meta.variableName,
       label: meta.label,
       charCount: meta.charCount,
@@ -203,37 +183,32 @@ export class ContextStore {
 
   /**
    * Get metadata for a stored context (without loading content).
-   *
-   * @param id - The context reference ID
-   * @returns The metadata, or null if not found
    */
-  getMeta(id: string): StoredContextMeta | null {
-    return this.index.get(id) ?? null;
+  getMeta(variableName: string): StoredContextMeta | null {
+    return this.index.get(variableName) ?? null;
   }
 
   /**
    * Delete a stored context.
    *
-   * @param id - The context reference ID
+   * @param variableName - The variable name (e.g., "$plan")
    * @returns true if deleted, false if not found
    */
-  delete(id: string): boolean {
-    if (!this.index.has(id)) return false;
+  delete(variableName: string): boolean {
+    if (!this.index.has(variableName)) return false;
 
-    const contentFile = join(CONTEXT_DIR, `${id}.txt`);
+    const contentFile = join(CONTEXT_DIR, variableToFilename(variableName));
     if (existsSync(contentFile)) {
       unlinkSync(contentFile);
     }
 
-    this.index.delete(id);
+    this.index.delete(variableName);
     this.saveIndex();
     return true;
   }
 
   /**
    * List all stored contexts (metadata only).
-   *
-   * @returns Array of context metadata
    */
   list(): StoredContextMeta[] {
     return Array.from(this.index.values());
@@ -241,9 +216,6 @@ export class ContextStore {
 
   /**
    * Clean up contexts older than specified days.
-   *
-   * @param olderThanDays - Delete contexts older than this many days (default: 7)
-   * @returns Number of contexts deleted
    */
   cleanup(olderThanDays: number = 7): number {
     const cutoffDate = new Date();
@@ -251,10 +223,10 @@ export class ContextStore {
     const cutoffTime = cutoffDate.getTime();
 
     let deleted = 0;
-    for (const [id, meta] of this.index.entries()) {
+    for (const [variableName, meta] of this.index.entries()) {
       const createdTime = new Date(meta.createdAt).getTime();
       if (createdTime < cutoffTime) {
-        this.delete(id);
+        this.delete(variableName);
         deleted++;
       }
     }
@@ -264,24 +236,29 @@ export class ContextStore {
 
   /**
    * Clear all stored contexts.
-   *
-   * @returns Number of contexts deleted
    */
   clear(): number {
     const count = this.index.size;
 
-    // Delete all content files
     if (existsSync(CONTEXT_DIR)) {
       const files = readdirSync(CONTEXT_DIR);
       for (const file of files) {
-        if (file.startsWith('ctx_') && file.endsWith('.txt')) {
-          unlinkSync(join(CONTEXT_DIR, file));
+        if (file.endsWith('.md')) {
+          const filePath = join(CONTEXT_DIR, file);
+          // Check if file exists before trying to delete (handles race conditions)
+          if (existsSync(filePath)) {
+            try {
+              unlinkSync(filePath);
+            } catch {
+              // Ignore errors (file may have been deleted by another process)
+            }
+          }
         }
       }
     }
 
-    // Clear and save index
     this.index.clear();
+    this.variableCounter.clear();
     this.saveIndex();
 
     return count;

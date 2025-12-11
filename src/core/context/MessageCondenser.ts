@@ -18,8 +18,7 @@ export const LONG_CONTENT_THRESHOLD = 500;
 export interface CondenseResult {
   condensed: string;       // The condensed text (with reference)
   wasCondensed: boolean;   // Whether condensing occurred
-  contextId?: string;      // The context ID if stored
-  variableName?: string;   // The variable name if stored
+  variableName?: string;   // The variable name if stored (e.g., "$plan")
 }
 
 /**
@@ -49,7 +48,7 @@ export function condenseContent(
   }
 
   // Store the content
-  const { id, variableName } = contextStore.store(content, label, {
+  const { variableName } = contextStore.store(content, label, {
     source: options.source ?? 'user_input',
     variableBaseName: options.variableBaseName ?? label,
   });
@@ -57,18 +56,16 @@ export function condenseContent(
   // Create a condensed reference with clear instructions
   const preview = content.slice(0, 150).replace(/\n/g, ' ').trim();
   const condensed = `[STORED CONTENT: ${variableName}]
-context_ref: "${id}"
 Length: ${content.length} chars
 
 Preview: "${preview}..."
 
-IMPORTANT: When dispatching sub-agents that need this content, pass context_ref="${id}" instead of inline context.
-Example: dispatch_content_agent(task="...", context_ref="${id}", ...)`;
+IMPORTANT: When dispatching sub-agents, include this in context_refs array.
+Example: dispatch_content_agent(task="...", content_type="...", context_refs=["${variableName}", ...])`;
 
   return {
     condensed,
     wasCondensed: true,
-    contextId: id,
     variableName,
   };
 }
@@ -132,7 +129,7 @@ export function generateVariableBaseName(content: string): string {
       contentLower.slice(0, 200).includes('city') || contentLower.slice(0, 200).includes('forest')) {
     // Try to extract location name
     const villageMatch = content.match(/(?:village|town|city)\s+(?:of\s+)?(\w+)/i);
-    if (villageMatch) {
+    if (villageMatch?.[1]) {
       return `setting_${villageMatch[1].toLowerCase()}`;
     }
     return 'setting';

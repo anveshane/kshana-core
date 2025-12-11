@@ -4,6 +4,7 @@ export type { AskUserOption } from './askUser.js';
 export { dispatchAgentTool } from './dispatchAgent.js';
 export { dispatchContentAgentTool } from './dispatchContentAgent.js';
 export { dispatchImageAgentTool } from './dispatchImageAgent.js';
+export { dispatchVideoAgentTool } from './dispatchVideoAgent.js';
 export {
   setTodosTool,
   updateTodoTool,

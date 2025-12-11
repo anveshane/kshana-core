@@ -38,30 +38,29 @@ export const storeContextTool = createTool(
       };
     }
 
-    const { id, variableName } = contextStore.store(content, label, { source: 'tool' });
+    const { variableName } = contextStore.store(content, label, { source: 'tool' });
     return {
       status: 'stored',
-      context_ref: id,
-      variable_name: variableName,
+      context_ref: variableName,
       label,
       char_count: content.length,
-      message: `Context stored as ${variableName}. Pass context_ref="${id}" to dispatch tools instead of inline context to preserve the original content.`,
+      message: `Context stored as ${variableName}. Pass context_ref="${variableName}" to dispatch tools instead of inline context to preserve the original content.`,
     };
   }
 );
 
 /**
- * Fetch stored context by reference ID.
+ * Fetch stored context by variable name.
  */
 export const fetchContextTool = createTool(
   'fetch_context',
-  'Fetch stored context by reference ID. Use this to retrieve full content passed from parent agent via context_ref. This ensures you receive the original, unmodified content.',
+  'Fetch stored context by variable name. Use this to retrieve full content passed from parent agent via context_ref. This ensures you receive the original, unmodified content.',
   {
     type: 'object',
     properties: {
       context_ref: {
         type: 'string',
-        description: 'The context reference ID to fetch (e.g., "ctx_abc123")',
+        description: 'The context variable name to fetch (e.g., "$plan", "$chapter_1")',
       },
     },
     required: ['context_ref'],
@@ -109,8 +108,7 @@ export const listContextsTool = createTool(
       status: 'success',
       count: contexts.length,
       contexts: contexts.map(ctx => ({
-        context_ref: ctx.id,
-        variable_name: ctx.variableName,
+        context_ref: ctx.variableName,
         label: ctx.label,
         char_count: ctx.charCount,
         created_at: ctx.createdAt,
@@ -124,13 +122,13 @@ export const listContextsTool = createTool(
  */
 export const deleteContextTool = createTool(
   'delete_context',
-  'Delete a stored context by reference ID. Use this to clean up contexts that are no longer needed.',
+  'Delete a stored context by variable name. Use this to clean up contexts that are no longer needed.',
   {
     type: 'object',
     properties: {
       context_ref: {
         type: 'string',
-        description: 'The context reference ID to delete',
+        description: 'The context variable name to delete (e.g., "$plan", "$chapter_1")',
       },
     },
     required: ['context_ref'],

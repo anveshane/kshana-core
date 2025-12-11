@@ -40,6 +40,8 @@ export interface ToolCallHistoryItem {
   startTime: number;
   endTime?: number;
   duration?: number;
+  /** Name of the agent that invoked this tool */
+  agentName?: string;
 }
 
 /**
@@ -54,6 +56,8 @@ export interface HistoryEntry {
   toolArgs?: Record<string, unknown>;
   toolResult?: unknown;
   duration?: number;
+  /** Name of the agent that performed this action (e.g., "Orchestrator", "Content Agent") */
+  agentName?: string;
 }
 
 /**
@@ -66,6 +70,8 @@ export interface CurrentAction {
   toolArgs?: Record<string, unknown>;
   toolCallId?: string;
   startTime: number;
+  /** Name of the agent performing this action */
+  agentName?: string;
 }
 
 /**
@@ -93,22 +99,24 @@ interface AgentState {
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
   currentAction: CurrentAction | null;
+  /** Current agent name (for tracking across streaming) */
+  currentAgentName: string | undefined;
 }
 
 type AgentAction =
-  | { type: 'SET_STATUS'; status: AgentStatus }
+  | { type: 'SET_STATUS'; status: AgentStatus; agentName?: string }
   | { type: 'SET_TODOS'; todos: ExpandableTodoItem[] }
   | { type: 'APPEND_OUTPUT'; text: string }
   | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[]; autoApproveTimeoutMs?: number }
   | { type: 'CLEAR_QUESTION' }
   | { type: 'SET_ERROR'; error: string }
-  | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown> }
-  | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean }
-  | { type: 'ADD_AGENT_TEXT'; text: string }
+  | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown>; agentName?: string }
+  | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean; agentName?: string }
+  | { type: 'ADD_AGENT_TEXT'; text: string; agentName?: string }
   | { type: 'ADD_USER_INPUT'; text: string; isTask?: boolean }
-  | { type: 'STREAM_CHUNK'; chunk: string }
-  | { type: 'STREAM_DONE'; skipHistory?: boolean }
-  | { type: 'SET_THINKING' }
+  | { type: 'STREAM_CHUNK'; chunk: string; agentName?: string }
+  | { type: 'STREAM_DONE'; skipHistory?: boolean; agentName?: string }
+  | { type: 'SET_THINKING'; agentName?: string }
   | { type: 'CLEAR_CURRENT_ACTION' }
   | { type: 'RESET' }
   | { type: 'START_TASK'; task: string };
@@ -130,6 +138,7 @@ const initialState: AgentState = {
   recentTools: [],
   history: [],
   currentAction: null,
+  currentAgentName: undefined,
 };
 
 function agentReducer(state: AgentState, action: AgentAction): AgentState {
@@ -167,17 +176,20 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       return {
         ...state,
         status: 'thinking',
-        currentAction: { type: 'thinking', startTime: Date.now() },
+        currentAction: { type: 'thinking', startTime: Date.now(), agentName: action.agentName },
+        currentAgentName: action.agentName ?? state.currentAgentName,
       };
 
     case 'TOOL_START': {
       const startTime = Date.now();
+      const agentName = action.agentName ?? state.currentAgentName;
       const newTool: ToolCallHistoryItem = {
         id: action.toolCallId,
         name: action.toolName,
         args: action.args,
         status: 'executing',
         startTime,
+        agentName,
       };
       return {
         ...state,
@@ -187,8 +199,10 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
           toolArgs: action.args,
           toolCallId: action.toolCallId,
           startTime,
+          agentName,
         },
         recentTools: [...state.recentTools.slice(-(MAX_VISIBLE_TOOLS - 1)), newTool],
+        currentAgentName: agentName,
       };
     }
 
@@ -196,6 +210,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       const endTime = Date.now();
       const tool = state.recentTools.find(t => t.id === action.toolCallId);
       const duration = tool ? endTime - tool.startTime : 0;
+      const agentName = action.agentName ?? tool?.agentName ?? state.currentAgentName;
 
       // Create history entry
       const historyEntry: HistoryEntry | null = tool
@@ -208,6 +223,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
             toolArgs: tool.args,
             toolResult: action.result,
             duration,
+            agentName,
           }
         : null;
 
@@ -225,7 +241,8 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       };
     }
 
-    case 'ADD_AGENT_TEXT':
+    case 'ADD_AGENT_TEXT': {
+      const agentName = action.agentName ?? state.currentAgentName;
       return {
         ...state,
         output: state.output ? `${state.output}\n\n${action.text}` : action.text,
@@ -236,9 +253,12 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
             type: 'agent_text',
             content: action.text,
             timestamp: Date.now(),
+            agentName,
           },
         ],
+        currentAgentName: agentName,
       };
+    }
 
     case 'ADD_USER_INPUT':
       return {
@@ -259,11 +279,13 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         ...state,
         streamingText: state.streamingText + action.chunk,
         isStreaming: true,
+        currentAgentName: action.agentName ?? state.currentAgentName,
       };
 
     case 'STREAM_DONE': {
       // Move completed streaming text to history if there's content
       const finalText = state.streamingText.trim();
+      const agentName = action.agentName ?? state.currentAgentName;
       if (!finalText || action.skipHistory) {
         // Either no content or skipHistory flag set (e.g., plan shown via ToolCallDisplay)
         return {
@@ -284,6 +306,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
             type: 'agent_text',
             content: finalText,
             timestamp: Date.now(),
+            agentName,
           },
         ],
       };
@@ -369,21 +392,21 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
       switch (event.status) {
         case 'started':
         case 'thinking':
-          dispatch({ type: 'SET_THINKING' });
+          dispatch({ type: 'SET_THINKING', agentName: event.agentName });
           break;
         case 'waiting':
           // Question event will handle this
           break;
         case 'completed':
-          dispatch({ type: 'SET_STATUS', status: 'completed' });
+          dispatch({ type: 'SET_STATUS', status: 'completed', agentName: event.agentName });
           dispatch({ type: 'CLEAR_CURRENT_ACTION' });
           break;
         case 'error':
-          dispatch({ type: 'SET_STATUS', status: 'error' });
+          dispatch({ type: 'SET_STATUS', status: 'error', agentName: event.agentName });
           dispatch({ type: 'CLEAR_CURRENT_ACTION' });
           break;
         case 'interrupted':
-          dispatch({ type: 'SET_STATUS', status: 'idle' });
+          dispatch({ type: 'SET_STATUS', status: 'idle', agentName: event.agentName });
           dispatch({ type: 'CLEAR_CURRENT_ACTION' });
           break;
       }
@@ -435,6 +458,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         args: event.arguments,
+        agentName: event.agentName,
       });
       onEvent?.(event);
     });
@@ -445,6 +469,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         toolCallId: event.toolCallId,
         result: event.result,
         isError: event.isError ?? false,
+        agentName: event.agentName,
       });
       onEvent?.(event);
     });
@@ -461,6 +486,9 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
       const agent = createAgent();
 
       try {
+        // Initialize agent (queries model context length, validates requirements)
+        await agent.initialize();
+
         const result = await agent.run(task);
 
         dispatch({ type: 'SET_TODOS', todos: result.todos });
