@@ -71,7 +71,7 @@ interface AgentViewProps {
 }
 
 // Maximum visible history items to prevent overflow
-const MAX_VISIBLE_HISTORY = 10;
+const MAX_VISIBLE_HISTORY = 25;
 
 export function AgentView({
   agentName = 'Agent',

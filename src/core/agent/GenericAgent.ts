@@ -89,7 +89,9 @@ export class GenericAgent extends TypedEventEmitter {
     lastPromptTokens: 0,
     lastCompletionTokens: 0,
   };
-  private static readonly CONTEXT_THRESHOLD = 0.80; // 80% of max context
+  // Lower threshold (60%) to leave room for response generation
+  // llama.cpp servers often can't handle mid-generation overflow
+  private static readonly CONTEXT_THRESHOLD = 0.60;
   private maxContextTokens: number = 16000; // Will be updated from LLM client
 
   // Current mode for more descriptive agent names in UI
@@ -2738,11 +2740,12 @@ Your classification:`;
 
     // Method 2: Estimate based on message count and content length
     // This helps catch cases where we haven't had a successful LLM call yet
-    // Rough estimate: ~4 chars per token, plus overhead for tool definitions (~2000 tokens)
+    // Conservative estimate: ~3 chars per token (models vary, better to overestimate)
+    // Plus overhead for tool definitions (~250 tokens each) and message formatting
     const estimatedContentTokens = this.messages.reduce((sum, msg) => {
-      return sum + Math.ceil((msg.content?.length ?? 0) / 4);
+      return sum + Math.ceil((msg.content?.length ?? 0) / 3) + 10; // +10 for message overhead
     }, 0);
-    const estimatedToolTokens = this.tools.size * 200; // ~200 tokens per tool definition
+    const estimatedToolTokens = this.tools.size * 250; // ~250 tokens per tool definition
     const estimatedTotal = estimatedContentTokens + estimatedToolTokens;
 
     if (estimatedTotal > threshold) {
@@ -2752,7 +2755,8 @@ Your classification:`;
 
     // Method 3: Trigger compression if we have many messages regardless
     // This is a safety net for long conversations
-    const MESSAGE_COUNT_THRESHOLD = 30;
+    // Lower threshold to be more aggressive with compression
+    const MESSAGE_COUNT_THRESHOLD = 20;
     if (this.messages.length > MESSAGE_COUNT_THRESHOLD) {
       debugLog(`[GenericAgent] Message count (${this.messages.length}) exceeds threshold (${MESSAGE_COUNT_THRESHOLD}) - compression needed`);
       return true;

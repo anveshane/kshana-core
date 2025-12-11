@@ -374,10 +374,10 @@ Actions:
 - "transition_phase": Automatically transition to next phase if current is complete
 - "add_character": Register a character. Data: { name, description?, visual_description?, approval_status? }
 - "update_character": Update an existing character. Data: { name, updates: { ... } }
-- "update_character_approval": Update character approval. Data: { name, status, contentArtifactId?, referenceImageId? }
+- "update_character_approval": Update character approval. Data: { name, status, approval_type?: 'content'|'image', contentArtifactId?, referenceImageId? }
 - "add_setting": Register a setting. Data: { name, description?, visual_description?, approval_status? }
 - "update_setting": Update an existing setting. Data: { name, updates: { ... } }
-- "update_setting_approval": Update setting approval. Data: { name, status, contentArtifactId?, referenceImageId? }
+- "update_setting_approval": Update setting approval. Data: { name, status, approval_type?: 'content'|'image', contentArtifactId?, referenceImageId? }
 - "add_scene": Register a scene reference. Data: { scene_number, title?, description? }
 - "update_scene": Update scene reference. Data: { scene_number, updates: { ... } }
 - "update_scene_approval": Update scene approval. Data: { scene_number, approval_type: 'content'|'image'|'video', status, artifactId? }
@@ -601,6 +601,7 @@ What story would you like to turn into a video?`,
         case 'update_character_approval': {
           const name = data['name'] as string;
           const approvalStatus = data['status'] as ItemApprovalStatus;
+          const approvalType = (data['approval_type'] as 'content' | 'image') || 'content';
           if (!name || !approvalStatus) {
             return { status: 'error', error: 'name and status are required for update_character_approval' };
           }
@@ -621,11 +622,12 @@ What story would you like to turn into a video?`,
           if (Object.keys(artifactUpdates).length > 0) {
             updateCharacter(name, artifactUpdates);
           }
-          const success = updateCharacterApproval(name, approvalStatus);
+          const success = updateCharacterApproval(name, approvalStatus, approvalType);
           if (!success) {
             return { status: 'error', error: `Character "${name}" not found` };
           }
-          return { status: 'success', message: `Character "${name}" approval updated to ${approvalStatus}` };
+          const typeLabel = approvalType === 'image' ? 'reference image' : 'content';
+          return { status: 'success', message: `Character "${name}" ${typeLabel} approval updated to ${approvalStatus}` };
         }
 
         case 'add_setting': {
@@ -665,6 +667,7 @@ What story would you like to turn into a video?`,
         case 'update_setting_approval': {
           const name = data['name'] as string;
           const approvalStatus = data['status'] as ItemApprovalStatus;
+          const approvalType = (data['approval_type'] as 'content' | 'image') || 'content';
           if (!name || !approvalStatus) {
             return { status: 'error', error: 'name and status are required for update_setting_approval' };
           }
@@ -685,11 +688,12 @@ What story would you like to turn into a video?`,
           if (Object.keys(artifactUpdates).length > 0) {
             updateSetting(name, artifactUpdates);
           }
-          const success = updateSettingApproval(name, approvalStatus);
+          const success = updateSettingApproval(name, approvalStatus, approvalType);
           if (!success) {
             return { status: 'error', error: `Setting "${name}" not found` };
           }
-          return { status: 'success', message: `Setting "${name}" approval updated to ${approvalStatus}` };
+          const typeLabel = approvalType === 'image' ? 'reference image' : 'content';
+          return { status: 'success', message: `Setting "${name}" ${typeLabel} approval updated to ${approvalStatus}` };
         }
 
         case 'add_scene': {

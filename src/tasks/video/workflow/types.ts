@@ -116,16 +116,20 @@ export interface CharacterData {
   name: string;
   description: string;
   visualDescription: string;
-  /** Approval status for the character description */
+  /** Approval status for the character description (CHARACTERS_SETTINGS phase) */
   approvalStatus: ItemApprovalStatus;
+  /** Approval status for the reference image (CHARACTER_SETTING_IMAGES phase) */
+  referenceImageApprovalStatus?: ItemApprovalStatus;
   /** Content artifact ID for the description */
   contentArtifactId?: string;
   /** Reference image artifact ID */
   referenceImageId?: string;
   /** Reference image file path */
   referenceImagePath?: string;
-  /** Timestamp when approved */
+  /** Timestamp when content was approved */
   approvedAt?: number;
+  /** Timestamp when reference image was approved */
+  referenceImageApprovedAt?: number;
   /** Number of regeneration attempts */
   regenerationCount: number;
 }
@@ -138,16 +142,20 @@ export interface SettingData {
   name: string;
   description: string;
   visualDescription: string;
-  /** Approval status for the setting description */
+  /** Approval status for the setting description (CHARACTERS_SETTINGS phase) */
   approvalStatus: ItemApprovalStatus;
+  /** Approval status for the reference image (CHARACTER_SETTING_IMAGES phase) */
+  referenceImageApprovalStatus?: ItemApprovalStatus;
   /** Content artifact ID for the description */
   contentArtifactId?: string;
   /** Reference image artifact ID */
   referenceImageId?: string;
   /** Reference image file path */
   referenceImagePath?: string;
-  /** Timestamp when approved */
+  /** Timestamp when content was approved */
   approvedAt?: number;
+  /** Timestamp when reference image was approved */
+  referenceImageApprovedAt?: number;
   /** Number of regeneration attempts */
   regenerationCount: number;
 }
@@ -642,25 +650,32 @@ export function getPhaseItems(project: ProjectFile, phase: WorkflowPhase): ItemA
 
     case 'list_all_refs':
       // Combine characters and settings
+      // For CHARACTER_SETTING_IMAGES phase, check referenceImageApprovalStatus
+      // For CHARACTERS_SETTINGS phase, check approvalStatus (content approval)
+      const isImagePhase = phase === WorkflowPhase.CHARACTER_SETTING_IMAGES;
       const charItems: ItemApprovalEntry[] = project.characters.map(char => ({
         id: `char_${char.name.toLowerCase().replace(/\s+/g, '_')}`,
         type: 'character' as const,
         name: char.name,
-        status: char.approvalStatus,
+        status: isImagePhase
+          ? (char.referenceImageApprovalStatus || 'pending')
+          : char.approvalStatus,
         regenerationCount: char.regenerationCount,
         contentArtifactId: char.contentArtifactId,
         imageArtifactId: char.referenceImageId,
-        approvedAt: char.approvedAt,
+        approvedAt: isImagePhase ? char.referenceImageApprovedAt : char.approvedAt,
       }));
       const settingItems: ItemApprovalEntry[] = project.settings.map(setting => ({
         id: `setting_${setting.name.toLowerCase().replace(/\s+/g, '_')}`,
         type: 'setting' as const,
         name: setting.name,
-        status: setting.approvalStatus,
+        status: isImagePhase
+          ? (setting.referenceImageApprovalStatus || 'pending')
+          : setting.approvalStatus,
         regenerationCount: setting.regenerationCount,
         contentArtifactId: setting.contentArtifactId,
         imageArtifactId: setting.referenceImageId,
-        approvedAt: setting.approvedAt,
+        approvedAt: isImagePhase ? setting.referenceImageApprovedAt : setting.approvedAt,
       }));
       return [...charItems, ...settingItems];
 

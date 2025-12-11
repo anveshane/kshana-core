@@ -122,7 +122,7 @@ type AgentAction =
   | { type: 'START_TASK'; task: string };
 
 const MAX_VISIBLE_TOOLS = 15;
-const MAX_HISTORY = 50; // Limit history to prevent memory issues
+const MAX_HISTORY = 500; // Keep more history for scrolling
 
 const initialState: AgentState = {
   status: 'idle',

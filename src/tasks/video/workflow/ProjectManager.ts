@@ -544,10 +544,12 @@ export function updateCharacter(
 
 /**
  * Update a character's approval status.
+ * @param approvalType - 'content' for description approval (CHARACTERS_SETTINGS phase), 'image' for reference image approval (CHARACTER_SETTING_IMAGES phase)
  */
 export function updateCharacterApproval(
   name: string,
   status: ItemApprovalStatus,
+  approvalType: 'content' | 'image' = 'content',
   feedback?: string,
   basePath: string = process.cwd()
 ): CharacterData | null {
@@ -560,10 +562,21 @@ export function updateCharacterApproval(
   const character = project.characters[index];
   if (!character) return null;
 
-  character.approvalStatus = status;
-  if (status === 'approved') {
-    character.approvedAt = Date.now();
-  } else if (status === 'regenerating') {
+  if (approvalType === 'image') {
+    // Update reference image approval status
+    character.referenceImageApprovalStatus = status;
+    if (status === 'approved') {
+      character.referenceImageApprovedAt = Date.now();
+    }
+  } else {
+    // Update content approval status
+    character.approvalStatus = status;
+    if (status === 'approved') {
+      character.approvedAt = Date.now();
+    }
+  }
+
+  if (status === 'regenerating') {
     character.regenerationCount++;
   }
 
@@ -674,10 +687,12 @@ export function updateSetting(
 
 /**
  * Update a setting's approval status.
+ * @param approvalType - 'content' for description approval (CHARACTERS_SETTINGS phase), 'image' for reference image approval (CHARACTER_SETTING_IMAGES phase)
  */
 export function updateSettingApproval(
   name: string,
   status: ItemApprovalStatus,
+  approvalType: 'content' | 'image' = 'content',
   feedback?: string,
   basePath: string = process.cwd()
 ): SettingData | null {
@@ -690,10 +705,21 @@ export function updateSettingApproval(
   const setting = project.settings[index];
   if (!setting) return null;
 
-  setting.approvalStatus = status;
-  if (status === 'approved') {
-    setting.approvedAt = Date.now();
-  } else if (status === 'regenerating') {
+  if (approvalType === 'image') {
+    // Update reference image approval status
+    setting.referenceImageApprovalStatus = status;
+    if (status === 'approved') {
+      setting.referenceImageApprovedAt = Date.now();
+    }
+  } else {
+    // Update content approval status
+    setting.approvalStatus = status;
+    if (status === 'approved') {
+      setting.approvedAt = Date.now();
+    }
+  }
+
+  if (status === 'regenerating') {
     setting.regenerationCount++;
   }
 
