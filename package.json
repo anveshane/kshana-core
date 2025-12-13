@@ -14,6 +14,7 @@
     "server": "tsx src/server/cli.ts",
     "server:dev": "tsx watch src/server/cli.ts",
     "test:client": "tsx src/server/testClient.ts",
+    "test:wan": "tsx scripts/test-wan-workflow.ts",
     "build": "tsup",
     "test": "vitest",
     "test:ci": "vitest run",

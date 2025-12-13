@@ -51,6 +51,15 @@ export interface WorkflowParams {
   inputImageFilename?: string;
 }
 
+export interface WanStartEndParams {
+  prompt: string;
+  negativePrompt?: string;
+  seed?: number;
+  filenamePrefix?: string;
+  startImageFilename: string;
+  endImageFilename: string;
+}
+
 /**
  * Parameterize Z-Image workflow.
  */
@@ -170,6 +179,7 @@ export function parameterizeChromaRadianceWorkflow(
 /**
  * Parameterize Wan 2.2 Lightning workflow for video generation.
  * Returns workflow in API format ready for submission.
+ * Supports both old workflow (node 52 LoadImage) and new wan-singleimage.json (node 106 LoadImage).
  */
 export function parameterizeWanWorkflow(
   template: WorkflowTemplate,
@@ -184,37 +194,46 @@ export function parameterizeWanWorkflow(
     const nodeId = node.id;
     const nodeType = node.type;
 
-    // LoadImage (Node 52)
-    if (nodeId === 52 && nodeType === 'LoadImage') {
+    // LoadImage - support both node 52 (old workflow) and node 106 (wan-singleimage.json)
+    if (nodeType === 'LoadImage') {
       if (params.inputImageFilename && node.widgets_values) {
         node.widgets_values[0] = params.inputImageFilename;
-        console.log(`[WanWorkflow] Set LoadImage (node 52) image to: ${params.inputImageFilename}`);
+        console.log(`[WanWorkflow] Set LoadImage (node ${nodeId}) image to: ${params.inputImageFilename}`);
       }
     }
-    // Positive prompt (Node 6)
-    else if (nodeId === 6 && nodeType === 'CLIPTextEncode') {
+    // Positive prompt (Node 6) - identified by title containing "Positive"
+    else if (nodeType === 'CLIPTextEncode' && node.title?.includes('Positive')) {
       if (node.widgets_values) {
         node.widgets_values[0] = params.prompt || '';
-        console.log(`[WanWorkflow] Set positive prompt (node 6) to: ${(params.prompt || '').substring(0, 50)}...`);
+        console.log(`[WanWorkflow] Set positive prompt (node ${nodeId}) to: ${(params.prompt || '').substring(0, 50)}...`);
       }
     }
-    // Negative prompt (Node 7)
-    else if (nodeId === 7 && nodeType === 'CLIPTextEncode') {
+    // Negative prompt (Node 7) - identified by title containing "Negative"
+    else if (nodeType === 'CLIPTextEncode' && node.title?.includes('Negative')) {
       if (params.negativePrompt && node.widgets_values) {
         node.widgets_values[0] = params.negativePrompt;
+        console.log(`[WanWorkflow] Set negative prompt (node ${nodeId})`);
       }
     }
-    // KSamplerAdvanced - Seed control
+    // Seed (rgthree) node - set seed value
+    else if (nodeType === 'Seed (rgthree)') {
+      if (node.widgets_values && Array.isArray(node.widgets_values)) {
+        node.widgets_values[0] = seed;
+        console.log(`[WanWorkflow] Set seed (node ${nodeId}) to: ${seed}`);
+      }
+    }
+    // KSamplerAdvanced - Seed control (for workflows without Seed rgthree node)
     else if (nodeType === 'KSamplerAdvanced') {
       if (node.widgets_values && node.widgets_values.length > 1) {
         node.widgets_values[1] = seed;
       }
     }
-    // VHS_VideoCombine (Node 82) - Filename
-    else if (nodeId === 82 && nodeType === 'VHS_VideoCombine') {
+    // VHS_VideoCombine - Filename (support both node 82 and node 99)
+    else if (nodeType === 'VHS_VideoCombine') {
       if (node.widgets_values && typeof node.widgets_values === 'object') {
         if (!Array.isArray(node.widgets_values)) {
           (node.widgets_values as Record<string, unknown>)['filename_prefix'] = params.filenamePrefix || 'Wan';
+          console.log(`[WanWorkflow] Set VHS_VideoCombine (node ${nodeId}) filename_prefix to: ${params.filenamePrefix || 'Wan'}`);
         }
       }
     }
@@ -224,12 +243,121 @@ export function parameterizeWanWorkflow(
   const apiWorkflow = workflowToPrompt(workflow);
 
   // Ensure LoadImage node has the correct image filename in API format
-  // The API format uses 'image' input for the filename
-  const loadImageNode = apiWorkflow['52'] as { class_type?: string; inputs?: Record<string, unknown> } | undefined;
-  if (loadImageNode && loadImageNode.class_type === 'LoadImage' && params.inputImageFilename) {
-    loadImageNode.inputs = loadImageNode.inputs || {};
-    loadImageNode.inputs['image'] = params.inputImageFilename;
-    console.log(`[WanWorkflow] API format - Set LoadImage inputs.image to: ${params.inputImageFilename}`);
+  // Check for both node 52 (old) and node 106 (new)
+  for (const nodeIdStr of ['52', '106']) {
+    const loadImageNode = apiWorkflow[nodeIdStr] as { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+    if (loadImageNode && loadImageNode.class_type === 'LoadImage' && params.inputImageFilename) {
+      loadImageNode.inputs = loadImageNode.inputs || {};
+      loadImageNode.inputs['image'] = params.inputImageFilename;
+      console.log(`[WanWorkflow] API format - Set LoadImage (node ${nodeIdStr}) inputs.image to: ${params.inputImageFilename}`);
+    }
+  }
+
+  // Remove non-essential visualization/debug nodes that may not be installed
+  // These nodes are only for debugging and not needed for actual generation
+  const nodesToRemove = [
+    'SigmasPreview',      // Debug node from RES4LYF package
+    'Note',               // Comment nodes
+    'MarkdownNote',       // Comment nodes
+  ];
+
+  for (const [nodeId, node] of Object.entries(apiWorkflow)) {
+    const nodeData = node as { class_type?: string };
+    if (nodesToRemove.includes(nodeData.class_type || '')) {
+      delete apiWorkflow[nodeId];
+      console.log(`[WanWorkflow] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
+    }
+  }
+
+  return apiWorkflow;
+}
+
+/**
+ * Parameterize Wan Start-End workflow for video generation between two images.
+ * Uses WanFunInpaintToVideo node for interpolation between start and end frames.
+ */
+export function parameterizeWanStartEndWorkflow(
+  template: WorkflowTemplate,
+  params: WanStartEndParams
+): Record<string, unknown> {
+  // Deep copy
+  const workflow: WorkflowTemplate = JSON.parse(JSON.stringify(template));
+  const seed = params.seed ?? Math.floor(Math.random() * 2 ** 32);
+
+  // Modify the LiteGraph format
+  for (const node of workflow.nodes || []) {
+    const nodeId = node.id;
+    const nodeType = node.type;
+
+    // LoadImage for start image (Node 110)
+    if (nodeId === 110 && nodeType === 'LoadImage') {
+      if (node.widgets_values) {
+        node.widgets_values[0] = params.startImageFilename;
+        console.log(`[WanStartEnd] Set start image (node 110) to: ${params.startImageFilename}`);
+      }
+    }
+    // LoadImage for end image (Node 112)
+    else if (nodeId === 112 && nodeType === 'LoadImage') {
+      if (node.widgets_values) {
+        node.widgets_values[0] = params.endImageFilename;
+        console.log(`[WanStartEnd] Set end image (node 112) to: ${params.endImageFilename}`);
+      }
+    }
+    // Positive prompt (Node 99) - identified by title containing "Positive"
+    else if (nodeType === 'CLIPTextEncode' && node.title?.includes('Positive')) {
+      if (node.widgets_values) {
+        node.widgets_values[0] = params.prompt || '';
+        console.log(`[WanStartEnd] Set positive prompt (node ${nodeId}) to: ${(params.prompt || '').substring(0, 50)}...`);
+      }
+    }
+    // Negative prompt (Node 91) - identified by title containing "Negative"
+    else if (nodeType === 'CLIPTextEncode' && node.title?.includes('Negative')) {
+      if (params.negativePrompt && node.widgets_values) {
+        node.widgets_values[0] = params.negativePrompt;
+        console.log(`[WanStartEnd] Set negative prompt (node ${nodeId})`);
+      }
+    }
+    // KSamplerAdvanced - Seed control
+    else if (nodeType === 'KSamplerAdvanced') {
+      if (node.widgets_values && Array.isArray(node.widgets_values) && node.widgets_values.length > 1) {
+        node.widgets_values[1] = seed;
+      }
+    }
+    // SaveVideo (Node 158) - Filename prefix
+    else if (nodeType === 'SaveVideo') {
+      if (node.widgets_values && Array.isArray(node.widgets_values)) {
+        node.widgets_values[0] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/ComfyUI';
+        console.log(`[WanStartEnd] Set SaveVideo filename_prefix to: ${node.widgets_values[0]}`);
+      }
+    }
+  }
+
+  // Convert to API format
+  const apiWorkflow = workflowToPrompt(workflow);
+
+  // Ensure LoadImage nodes have correct image filenames in API format
+  const startImageNode = apiWorkflow['110'] as { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+  if (startImageNode && startImageNode.class_type === 'LoadImage') {
+    startImageNode.inputs = startImageNode.inputs || {};
+    startImageNode.inputs['image'] = params.startImageFilename;
+    console.log(`[WanStartEnd] API format - Set start image (node 110) to: ${params.startImageFilename}`);
+  }
+
+  const endImageNode = apiWorkflow['112'] as { class_type?: string; inputs?: Record<string, unknown> } | undefined;
+  if (endImageNode && endImageNode.class_type === 'LoadImage') {
+    endImageNode.inputs = endImageNode.inputs || {};
+    endImageNode.inputs['image'] = params.endImageFilename;
+    console.log(`[WanStartEnd] API format - Set end image (node 112) to: ${params.endImageFilename}`);
+  }
+
+  // Remove non-essential nodes
+  const nodesToRemove = ['Note', 'MarkdownNote'];
+  for (const [nodeId, node] of Object.entries(apiWorkflow)) {
+    const nodeData = node as { class_type?: string };
+    if (nodesToRemove.includes(nodeData.class_type || '')) {
+      delete apiWorkflow[nodeId];
+      console.log(`[WanStartEnd] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
+    }
   }
 
   return apiWorkflow;
@@ -249,6 +377,8 @@ export function parameterizeWorkflowByName(
     style?: string;
     seed?: number;
     inputImageFilename?: string;
+    startImageFilename?: string;
+    endImageFilename?: string;
     filenamePrefix?: string;
   }
 ): Record<string, unknown> | WorkflowTemplate {
@@ -287,13 +417,27 @@ export function parameterizeWorkflowByName(
       cfg: 1.0,
       filenamePrefix,
     });
-  } else if (workflowName === 'wan_lightning') {
+  } else if (workflowName === 'wan_lightning' || workflowName === 'wan_single_image') {
+    // Both wan_lightning (legacy) and wan_single_image use the same parameterization
     return parameterizeWanWorkflow(template, {
       prompt: params.prompt,
       negativePrompt: params.negativePrompt,
       seed: params.seed,
       filenamePrefix,
       inputImageFilename: params.inputImageFilename,
+    });
+  } else if (workflowName === 'wan_start_end') {
+    // Start-end workflow requires both start and end images
+    if (!params.startImageFilename || !params.endImageFilename) {
+      throw new Error('wan_start_end workflow requires both startImageFilename and endImageFilename');
+    }
+    return parameterizeWanStartEndWorkflow(template, {
+      prompt: params.prompt,
+      negativePrompt: params.negativePrompt,
+      seed: params.seed,
+      filenamePrefix,
+      startImageFilename: params.startImageFilename,
+      endImageFilename: params.endImageFilename,
     });
   }
 
@@ -328,8 +472,21 @@ export function workflowToPrompt(workflow: WorkflowTemplate): Record<string, unk
 
     const convertedInputs: Record<string, unknown> = {};
 
-    // Special handling for KSampler
-    if (nodeType === 'KSampler' && widgetValues.length === 7) {
+    // First, add all linked inputs
+    for (const inputSpec of inputsSpec) {
+      const name = inputSpec.name;
+      const linkId = inputSpec.link;
+      if (linkId !== null && linkId !== undefined && name) {
+        const source = linkLookup.get(linkId);
+        if (source) {
+          const [fromNode, fromSlot] = source;
+          convertedInputs[name] = [String(fromNode), fromSlot];
+        }
+      }
+    }
+
+    // Special handling for KSampler (standard version)
+    if (nodeType === 'KSampler' && Array.isArray(widgetValues) && widgetValues.length === 7) {
       convertedInputs['seed'] = widgetValues[0];
       convertedInputs['steps'] = widgetValues[2];
       convertedInputs['cfg'] = widgetValues[3];
@@ -337,26 +494,119 @@ export function workflowToPrompt(workflow: WorkflowTemplate): Record<string, unk
       convertedInputs['scheduler'] = widgetValues[5];
       convertedInputs['denoise'] = widgetValues[6];
     }
+    // Special handling for KSamplerAdvanced
+    else if (nodeType === 'KSamplerAdvanced' && Array.isArray(widgetValues)) {
+      // KSamplerAdvanced widget order: add_noise, noise_seed, control_after_generate, steps, cfg, sampler_name, scheduler, start_at_step, end_at_step, return_with_leftover_noise
+      convertedInputs['add_noise'] = widgetValues[0];
+      convertedInputs['noise_seed'] = widgetValues[1];
+      // widgetValues[2] is control_after_generate (not needed in API)
+      convertedInputs['steps'] = widgetValues[3];
+      convertedInputs['cfg'] = widgetValues[4];
+      convertedInputs['sampler_name'] = widgetValues[5];
+      convertedInputs['scheduler'] = widgetValues[6];
+      convertedInputs['start_at_step'] = widgetValues[7];
+      convertedInputs['end_at_step'] = widgetValues[8];
+      convertedInputs['return_with_leftover_noise'] = widgetValues[9];
+    }
     // Special handling for LoadImage - only needs 'image' input
     else if (nodeType === 'LoadImage') {
-      // widgets_values[0] is the image filename
-      if (widgetValues.length > 0) {
+      if (Array.isArray(widgetValues) && widgetValues.length > 0) {
         convertedInputs['image'] = widgetValues[0];
       }
-    } else {
+    }
+    // Special handling for Seed (rgthree)
+    else if (nodeType === 'Seed (rgthree)' && Array.isArray(widgetValues)) {
+      convertedInputs['seed'] = widgetValues[0];
+    }
+    // Special handling for VHS_VideoCombine - uses object-based widgets_values
+    else if (nodeType === 'VHS_VideoCombine') {
+      if (typeof widgetValues === 'object' && !Array.isArray(widgetValues)) {
+        // Object-based widget values - copy directly
+        const wv = widgetValues as Record<string, unknown>;
+        convertedInputs['frame_rate'] = wv['frame_rate'];
+        convertedInputs['loop_count'] = wv['loop_count'];
+        convertedInputs['filename_prefix'] = wv['filename_prefix'];
+        convertedInputs['format'] = wv['format'];
+        convertedInputs['pingpong'] = wv['pingpong'];
+        convertedInputs['save_output'] = wv['save_output'];
+        if (wv['pix_fmt'] !== undefined) convertedInputs['pix_fmt'] = wv['pix_fmt'];
+        if (wv['crf'] !== undefined) convertedInputs['crf'] = wv['crf'];
+        if (wv['save_metadata'] !== undefined) convertedInputs['save_metadata'] = wv['save_metadata'];
+        if (wv['trim_to_audio'] !== undefined) convertedInputs['trim_to_audio'] = wv['trim_to_audio'];
+      }
+    }
+    // Special handling for INTConstant and easy float
+    else if ((nodeType === 'INTConstant' || nodeType === 'easy float') && Array.isArray(widgetValues)) {
+      convertedInputs['value'] = widgetValues[0];
+    }
+    // Special handling for WanImageToVideo
+    else if (nodeType === 'WanImageToVideo' && Array.isArray(widgetValues)) {
+      convertedInputs['width'] = widgetValues[0];
+      convertedInputs['height'] = widgetValues[1];
+      convertedInputs['length'] = widgetValues[2];
+      convertedInputs['batch_size'] = widgetValues[3];
+    }
+    // Special handling for CLIPTextEncode
+    else if (nodeType === 'CLIPTextEncode' && Array.isArray(widgetValues)) {
+      convertedInputs['text'] = widgetValues[0];
+    }
+    // Special handling for ModelSamplingSD3
+    else if (nodeType === 'ModelSamplingSD3' && Array.isArray(widgetValues)) {
+      convertedInputs['shift'] = widgetValues[0];
+    }
+    // Special handling for FastUnsharpSharpen
+    else if (nodeType === 'FastUnsharpSharpen' && Array.isArray(widgetValues)) {
+      convertedInputs['strength'] = widgetValues[0];
+    }
+    // Special handling for UNETLoader
+    else if (nodeType === 'UNETLoader' && Array.isArray(widgetValues)) {
+      convertedInputs['unet_name'] = widgetValues[0];
+      convertedInputs['weight_dtype'] = widgetValues[1];
+    }
+    // Special handling for CLIPLoader
+    else if (nodeType === 'CLIPLoader' && Array.isArray(widgetValues)) {
+      convertedInputs['clip_name'] = widgetValues[0];
+      convertedInputs['type'] = widgetValues[1];
+      if (widgetValues[2] !== undefined) convertedInputs['device'] = widgetValues[2];
+    }
+    // Special handling for VAELoader
+    else if (nodeType === 'VAELoader' && Array.isArray(widgetValues)) {
+      convertedInputs['vae_name'] = widgetValues[0];
+    }
+    // Special handling for WanFunInpaintToVideo (start-end workflow)
+    else if (nodeType === 'WanFunInpaintToVideo' && Array.isArray(widgetValues)) {
+      convertedInputs['width'] = widgetValues[0];
+      convertedInputs['height'] = widgetValues[1];
+      convertedInputs['length'] = widgetValues[2];
+      convertedInputs['batch_size'] = widgetValues[3];
+    }
+    // Special handling for CreateVideo
+    else if (nodeType === 'CreateVideo' && Array.isArray(widgetValues)) {
+      convertedInputs['fps'] = widgetValues[0];
+    }
+    // Special handling for SaveVideo
+    else if (nodeType === 'SaveVideo' && Array.isArray(widgetValues)) {
+      convertedInputs['filename_prefix'] = widgetValues[0];
+      convertedInputs['format'] = widgetValues[1];
+      convertedInputs['codec'] = widgetValues[2];
+    }
+    // Special handling for LoraLoaderModelOnly
+    else if (nodeType === 'LoraLoaderModelOnly' && Array.isArray(widgetValues)) {
+      convertedInputs['lora_name'] = widgetValues[0];
+      convertedInputs['strength_model'] = widgetValues[1];
+    }
+    // Default handling for other nodes
+    else if (Array.isArray(widgetValues)) {
       let widgetIndex = 0;
       for (const inputSpec of inputsSpec) {
         const name = inputSpec.name;
         if (!name) continue;
 
+        // Skip if already set via link
+        if (convertedInputs[name] !== undefined) continue;
+
         const linkId = inputSpec.link;
-        if (linkId !== null && linkId !== undefined) {
-          const source = linkLookup.get(linkId);
-          if (source) {
-            const [fromNode, fromSlot] = source;
-            convertedInputs[name] = [String(fromNode), fromSlot];
-          }
-        } else {
+        if (linkId === null || linkId === undefined) {
           let value: unknown = undefined;
           if (widgetIndex < widgetValues.length) {
             value = widgetValues[widgetIndex];
@@ -367,21 +617,6 @@ export function workflowToPrompt(workflow: WorkflowTemplate): Record<string, unk
             value = inputSpec.value;
           }
           convertedInputs[name] = value;
-        }
-      }
-    }
-
-    // Add linked inputs for KSampler
-    if (nodeType === 'KSampler') {
-      for (const inputSpec of inputsSpec) {
-        const name = inputSpec.name;
-        const linkId = inputSpec.link;
-        if (linkId !== null && linkId !== undefined && name) {
-          const source = linkLookup.get(linkId);
-          if (source) {
-            const [fromNode, fromSlot] = source;
-            convertedInputs[name] = [String(fromNode), fromSlot];
-          }
         }
       }
     }

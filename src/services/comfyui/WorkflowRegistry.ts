@@ -107,7 +107,7 @@ class WorkflowRegistry {
       qualityLevel: 'high',
     });
 
-    // 4. Wan 2.2 Lightning - Video generation
+    // 4. Wan 2.2 Lightning - Video generation (legacy - kept for compatibility)
     this.register({
       name: 'wan_lightning',
       filename: 'Wan 2.2 Lightning Standard.json',
@@ -126,6 +126,50 @@ class WorkflowRegistry {
       supportsImageToImage: true,
       outputFormat: 'video',
       estimatedTimeSeconds: 60,
+      qualityLevel: 'standard',
+    });
+
+    // 5. Wan Single Image - Video from single image with motion prompt
+    this.register({
+      name: 'wan_single_image',
+      filename: 'wan-singleimage.json',
+      workflowType: WorkflowType.VIDEO_GENERATION,
+      description: 'Generate video from a single image with motion guided by a text prompt. Best for animating static images with camera movements, character motion, or environmental effects.',
+      capabilities: [
+        'single-image-to-video',
+        'motion-from-prompt',
+        'camera-movement',
+        'character-animation',
+        'environmental-effects',
+      ],
+      displayName: 'Wan Single Image Video',
+      requiresBaseImage: true,
+      supportsTextPrompts: true,
+      supportsImageToImage: true,
+      outputFormat: 'video',
+      estimatedTimeSeconds: 90,
+      qualityLevel: 'standard',
+    });
+
+    // 6. Wan Start-End - Video interpolation between two frames
+    this.register({
+      name: 'wan_start_end',
+      filename: 'wan start-end.json',
+      workflowType: WorkflowType.VIDEO_GENERATION,
+      description: 'Generate video by interpolating between a start frame and end frame. Best for creating smooth transitions between two keyframes, scene transitions, or morphing effects.',
+      capabilities: [
+        'frame-interpolation',
+        'start-end-video',
+        'smooth-transitions',
+        'keyframe-animation',
+        'scene-morphing',
+      ],
+      displayName: 'Wan Start-End Video',
+      requiresBaseImage: true,
+      supportsTextPrompts: true,
+      supportsImageToImage: true,
+      outputFormat: 'video',
+      estimatedTimeSeconds: 120,
       qualityLevel: 'standard',
     });
   }

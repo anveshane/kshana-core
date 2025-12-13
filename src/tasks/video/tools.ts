@@ -524,15 +524,70 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
 );
 
 /**
- * Generate video tool.
- * This is a COMPLEX tool - requires user confirmation.
+ * Helper function to find image path from artifact ID.
  */
-export const generateVideoTool: ToolDefinition = createTool(
-  'generate_video',
-  `Generate a video from a scene image using ComfyUI's Wan Lightning workflow.
+function findImagePathFromArtifactId(artifactId: string): string | undefined {
+  const project = loadProject();
+  if (!project) return undefined;
 
-Takes a scene image artifact and creates a short video clip with motion.
-The tool will return a job ID. Use wait_for_job to check completion.`,
+  // Check project assets manifest
+  const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets');
+  const manifestPath = path.join(assetsDir, 'manifest.json');
+  if (fs.existsSync(manifestPath)) {
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    const asset = manifest.assets?.find((a: { id: string }) => a.id === artifactId);
+    if (asset) {
+      return path.join(process.cwd(), PROJECT_DIR, asset.path);
+    }
+  }
+
+  // Check scenes for matching artifact
+  for (const scene of project.scenes) {
+    if (scene.imageArtifactId === artifactId) {
+      // Try to find path from manifest
+      if (fs.existsSync(manifestPath)) {
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        const asset = manifest.assets?.find((a: { id: string }) => a.id === artifactId);
+        if (asset) {
+          return path.join(process.cwd(), PROJECT_DIR, asset.path);
+        }
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Generate video from single image tool.
+ * This is a COMPLEX tool - requires user confirmation.
+ *
+ * Use this for animating a SINGLE scene - NOT for transitions between scenes.
+ */
+export const generateVideoFromImageTool: ToolDefinition = createTool(
+  'generate_video_from_image',
+  `Animate a SINGLE scene image with motion effects.
+
+**USE THIS TOOL WHEN:**
+- Creating video for ONE scene (e.g., "animate Scene 3")
+- The scene has internal motion but doesn't transition to another scene
+- Adding camera movement within the same scene composition
+- Adding character movement, environmental effects within ONE frame
+
+**DO NOT USE THIS TOOL WHEN:**
+- You need to transition BETWEEN two different scene images
+- You want to connect Scene N to Scene N+1 (use generate_video_from_frames instead)
+
+**Input:** Single scene image artifact
+**Output:** Video clip of that scene with motion
+
+**Example motion prompts:**
+- "camera slowly pans across the scene"
+- "the character gestures while speaking"
+- "wind blows through the trees, clouds drift"
+- "subtle breathing motion, eyes blinking"
+
+Returns a job ID. Use wait_for_job to check completion.`,
   {
     type: 'object',
     properties: {
@@ -544,21 +599,26 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         type: 'number',
         description: 'Scene number',
       },
-      prompt: {
+      motion_prompt: {
         type: 'string',
-        description: 'Optional motion description for the video',
+        description: 'Description of the motion/animation to apply (camera movements, character actions, environmental effects)',
+      },
+      negative_prompt: {
+        type: 'string',
+        description: 'What to avoid in the video (optional)',
       },
       seed: {
         type: 'number',
         description: 'Random seed for reproducibility (optional)',
       },
     },
-    required: ['scene_image_artifact_id', 'scene_number'],
+    required: ['scene_image_artifact_id', 'scene_number', 'motion_prompt'],
   },
   async (args) => {
     const sceneImageArtifactId = args['scene_image_artifact_id'] as string;
     const sceneNumber = args['scene_number'] as number;
-    const prompt = (args['prompt'] as string) || '';
+    const motionPrompt = args['motion_prompt'] as string;
+    const negativePrompt = args['negative_prompt'] as string | undefined;
     const seed = args['seed'] as number | undefined;
 
     // Create job for tracking with context for linking
@@ -579,40 +639,17 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
 
     try {
       // Find the image file from the artifact ID
-      const project = loadProject();
-      if (!project) {
-        throw new Error('No project found');
-      }
-
-      // Look for the artifact in project assets or scenes
-      let imagePath: string | undefined;
-
-      // Check scenes for the image artifact
-      for (const scene of project.scenes) {
-        if (scene.imageArtifactId === sceneImageArtifactId) {
-          // Look up the asset path from the manifest
-          const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets');
-          const manifestPath = path.join(assetsDir, 'manifest.json');
-          if (fs.existsSync(manifestPath)) {
-            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-            const asset = manifest.assets?.find((a: { id: string }) => a.id === sceneImageArtifactId);
-            if (asset) {
-              imagePath = path.join(process.cwd(), PROJECT_DIR, asset.path);
-            }
-          }
-          break;
-        }
-      }
+      const imagePath = findImagePathFromArtifactId(sceneImageArtifactId);
 
       if (!imagePath || !fs.existsSync(imagePath)) {
         throw new Error(`Image not found for artifact: ${sceneImageArtifactId}`);
       }
 
       const registry = getRegistry();
-      const workflowMetadata = registry.get('wan_lightning');
+      const workflowMetadata = registry.get('wan_single_image');
 
       if (!workflowMetadata) {
-        throw new Error("Workflow 'wan_lightning' not found");
+        throw new Error("Workflow 'wan_single_image' not found");
       }
 
       const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'videos');
@@ -629,9 +666,10 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
 
       // Load and parameterize the workflow
       const template = loadWorkflowTemplate(workflowMetadata.filename);
-      const workflow = parameterizeWorkflowByName('wan_lightning', template, {
+      const workflow = parameterizeWorkflowByName('wan_single_image', template, {
         sceneNumber,
-        prompt,
+        prompt: motionPrompt,
+        negativePrompt,
         seed,
         inputImageFilename: uploadResult.name,
         filenamePrefix: `Scene${sceneNumber}_video`,
@@ -648,11 +686,12 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       return {
         status: 'submitted',
         job_id: jobId,
-        message: `Video generation job submitted. Use wait_for_job("${jobId}") to check status.`,
+        workflow: 'wan_single_image',
+        message: `Single-image video generation job submitted. Use wait_for_job("${jobId}") to check status.`,
         params: {
           scene_number: sceneNumber,
           image_artifact: sceneImageArtifactId,
-          prompt,
+          motion_prompt: motionPrompt,
         },
       };
     } catch (error) {
@@ -666,6 +705,227 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         error: String(error),
       };
     }
+  }
+);
+
+/**
+ * Generate video from start and end frames tool.
+ * This is a COMPLEX tool - requires user confirmation.
+ *
+ * Use this for TRANSITIONS between two different scene images.
+ */
+export const generateVideoFromFramesTool: ToolDefinition = createTool(
+  'generate_video_from_frames',
+  `Create a TRANSITION video between TWO different scene images.
+
+**USE THIS TOOL WHEN:**
+- Connecting Scene N to Scene N+1 (e.g., "transition from Scene 3 to Scene 4")
+- You have TWO different scene images and need smooth motion between them
+- Creating a video that starts at one composition and ends at another
+- The character/camera needs to move from position A (start image) to position B (end image)
+
+**DO NOT USE THIS TOOL WHEN:**
+- You only have ONE scene image (use generate_video_from_image instead)
+- You want to animate a single scene without transitioning to another
+
+**Input:** TWO scene image artifacts (start_image + end_image)
+**Output:** Video that smoothly transitions from start to end
+
+**Example transition prompts:**
+- "character walks from the doorway to the window"
+- "camera smoothly dollies from wide shot to close-up"
+- "smooth transition as the scene shifts from day to night"
+- "the character turns and walks toward the camera"
+
+**Typical workflow:**
+1. Scene 3 image → generate_video_from_image (animate Scene 3)
+2. Scene 3 + Scene 4 images → generate_video_from_frames (transition 3→4)
+3. Scene 4 image → generate_video_from_image (animate Scene 4)
+
+Returns a job ID. Use wait_for_job to check completion.`,
+  {
+    type: 'object',
+    properties: {
+      start_image_artifact_id: {
+        type: 'string',
+        description: 'Artifact ID of the starting frame image',
+      },
+      end_image_artifact_id: {
+        type: 'string',
+        description: 'Artifact ID of the ending frame image',
+      },
+      scene_number: {
+        type: 'number',
+        description: 'Scene number (use the scene number of the start frame)',
+      },
+      transition_prompt: {
+        type: 'string',
+        description: 'Description of the transition/motion between the two frames',
+      },
+      negative_prompt: {
+        type: 'string',
+        description: 'What to avoid in the video (optional)',
+      },
+      seed: {
+        type: 'number',
+        description: 'Random seed for reproducibility (optional)',
+      },
+    },
+    required: ['start_image_artifact_id', 'end_image_artifact_id', 'scene_number', 'transition_prompt'],
+  },
+  async (args) => {
+    const startImageArtifactId = args['start_image_artifact_id'] as string;
+    const endImageArtifactId = args['end_image_artifact_id'] as string;
+    const sceneNumber = args['scene_number'] as number;
+    const transitionPrompt = args['transition_prompt'] as string;
+    const negativePrompt = args['negative_prompt'] as string | undefined;
+    const seed = args['seed'] as number | undefined;
+
+    // Create job for tracking with context for linking
+    const jobId = `vid-${Date.now()}-${nanoid(6)}`;
+    const job: GenerationJob = {
+      id: jobId,
+      type: 'video',
+      status: 'pending',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      context: {
+        entityType: 'scene',
+        sceneNumber,
+        artifactType: 'video',
+      },
+    };
+    jobs.set(jobId, job);
+
+    try {
+      // Find both image files from artifact IDs
+      const startImagePath = findImagePathFromArtifactId(startImageArtifactId);
+      const endImagePath = findImagePathFromArtifactId(endImageArtifactId);
+
+      if (!startImagePath || !fs.existsSync(startImagePath)) {
+        throw new Error(`Start image not found for artifact: ${startImageArtifactId}`);
+      }
+
+      if (!endImagePath || !fs.existsSync(endImagePath)) {
+        throw new Error(`End image not found for artifact: ${endImageArtifactId}`);
+      }
+
+      const registry = getRegistry();
+      const workflowMetadata = registry.get('wan_start_end');
+
+      if (!workflowMetadata) {
+        throw new Error("Workflow 'wan_start_end' not found");
+      }
+
+      const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'videos');
+      if (!fs.existsSync(assetsDir)) {
+        fs.mkdirSync(assetsDir, { recursive: true });
+      }
+
+      const client = new ComfyUIClient({
+        outputDir: assetsDir,
+      });
+
+      // Upload both images to ComfyUI
+      const startUploadResult = await client.uploadImage(startImagePath, 'input', true);
+      const endUploadResult = await client.uploadImage(endImagePath, 'input', true);
+
+      // Load and parameterize the workflow
+      const template = loadWorkflowTemplate(workflowMetadata.filename);
+      const workflow = parameterizeWorkflowByName('wan_start_end', template, {
+        sceneNumber,
+        prompt: transitionPrompt,
+        negativePrompt,
+        seed,
+        startImageFilename: startUploadResult.name,
+        endImageFilename: endUploadResult.name,
+        filenamePrefix: `Scene${sceneNumber}_transition`,
+      });
+
+      // Queue workflow
+      const promptId = await client.queueWorkflow(workflow as Record<string, unknown>);
+
+      // Update job
+      job.promptId = promptId;
+      job.status = 'processing';
+      job.updatedAt = Date.now();
+
+      return {
+        status: 'submitted',
+        job_id: jobId,
+        workflow: 'wan_start_end',
+        message: `Start-end video generation job submitted. Use wait_for_job("${jobId}") to check status.`,
+        params: {
+          scene_number: sceneNumber,
+          start_image_artifact: startImageArtifactId,
+          end_image_artifact: endImageArtifactId,
+          transition_prompt: transitionPrompt,
+        },
+      };
+    } catch (error) {
+      job.status = 'failed';
+      job.error = String(error);
+      job.updatedAt = Date.now();
+
+      return {
+        status: 'error',
+        job_id: jobId,
+        error: String(error),
+      };
+    }
+  }
+);
+
+/**
+ * Generate video tool (legacy wrapper).
+ * This is a COMPLEX tool - requires user confirmation.
+ *
+ * This tool is kept for backward compatibility and routes to generate_video_from_image.
+ */
+export const generateVideoTool: ToolDefinition = createTool(
+  'generate_video',
+  `[LEGACY - prefer generate_video_from_image or generate_video_from_frames]
+
+Generate a video from a scene image. This is a legacy tool that wraps generate_video_from_image.
+
+For new implementations, use:
+- generate_video_from_image: When you have ONE image to animate
+- generate_video_from_frames: When you have TWO images (start/end) to interpolate
+
+Returns a job ID. Use wait_for_job to check completion.`,
+  {
+    type: 'object',
+    properties: {
+      scene_image_artifact_id: {
+        type: 'string',
+        description: 'Artifact ID of the scene image to animate',
+      },
+      scene_number: {
+        type: 'number',
+        description: 'Scene number',
+      },
+      prompt: {
+        type: 'string',
+        description: 'Motion description for the video',
+      },
+      seed: {
+        type: 'number',
+        description: 'Random seed for reproducibility (optional)',
+      },
+    },
+    required: ['scene_image_artifact_id', 'scene_number'],
+  },
+  async (args) => {
+    // Route to the new generate_video_from_image tool
+    const newArgs = {
+      scene_image_artifact_id: args['scene_image_artifact_id'],
+      scene_number: args['scene_number'],
+      motion_prompt: args['prompt'] || 'subtle motion and movement in the scene',
+      seed: args['seed'],
+    };
+
+    // Call the handler of generate_video_from_image
+    return generateVideoFromImageTool.handler!(newArgs);
   }
 );
 
@@ -870,11 +1130,24 @@ When job completes, returns the artifact ID and file path.`,
  * Get all video generation tools.
  */
 export function getVideoGenerationTools(): ToolDefinition[] {
-  return [generateImageTool, generateVideoTool, editImageTool, waitForJobTool];
+  return [
+    generateImageTool,
+    generateVideoFromImageTool,
+    generateVideoFromFramesTool,
+    generateVideoTool, // Legacy wrapper
+    editImageTool,
+    waitForJobTool,
+  ];
 }
 
 /**
  * Register video tools as complex tools.
  * These require user confirmation before execution.
  */
-export const VIDEO_COMPLEX_TOOLS = new Set(['generate_image', 'generate_video', 'edit_image']);
+export const VIDEO_COMPLEX_TOOLS = new Set([
+  'generate_image',
+  'generate_video',
+  'generate_video_from_image',
+  'generate_video_from_frames',
+  'edit_image',
+]);
