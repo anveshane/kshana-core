@@ -48,7 +48,10 @@ export interface WorkflowParams {
   steps?: number;
   cfg?: number;
   filenamePrefix?: string;
+  /** Primary input image filename (for single-image workflows) */
   inputImageFilename?: string;
+  /** Additional reference image filenames (for qwen_edit - up to 3 total) */
+  referenceImageFilenames?: string[];
 }
 
 export interface WanStartEndParams {
@@ -174,6 +177,111 @@ export function parameterizeChromaRadianceWorkflow(
   }
 
   return workflow;
+}
+
+/**
+ * Parameterize Qwen Edit Simple workflow for image editing.
+ * Takes a base image and up to 2 additional reference images.
+ * Uses qwen_edit-simple.json which has no rgthree dependencies.
+ *
+ * Image slots:
+ * - Node 4: Primary image (required) - the main image being edited
+ * - Node 5: Optional 2nd reference image (e.g., character reference)
+ * - Node 6: Optional 3rd reference image (e.g., setting reference)
+ */
+export function parameterizeQwenEditWorkflow(
+  template: WorkflowTemplate,
+  params: WorkflowParams
+): Record<string, unknown> {
+  // Deep copy
+  const workflow: WorkflowTemplate = JSON.parse(JSON.stringify(template));
+  const seed = params.seed ?? Math.floor(Math.random() * 2 ** 32);
+
+  // Get all reference images (primary + additional)
+  const allImages: string[] = [];
+  if (params.inputImageFilename) {
+    allImages.push(params.inputImageFilename);
+  }
+  if (params.referenceImageFilenames) {
+    allImages.push(...params.referenceImageFilenames);
+  }
+
+  // Simple workflow node IDs: 4 = primary, 5 = ref2, 6 = ref3
+  const loadImageNodeIds = [4, 5, 6];
+
+  // Track which nodes to remove (bypassed LoadImage nodes break connections)
+  const nodesToRemove = new Set<number>();
+
+  // Modify the LiteGraph format
+  for (const node of workflow.nodes || []) {
+    const nodeId = node.id;
+    const nodeType = node.type;
+
+    // LoadImage nodes - assign images in order
+    if (nodeType === 'LoadImage') {
+      const nodeIndex = loadImageNodeIds.indexOf(nodeId);
+      if (nodeIndex !== -1 && nodeIndex < allImages.length) {
+        const imageName = allImages[nodeIndex];
+        if (node.widgets_values && imageName) {
+          node.widgets_values[0] = imageName;
+          node.mode = 0; // Enable
+          console.log(`[QwenEdit] Set LoadImage (node ${nodeId}) to: ${imageName}`);
+        }
+      } else if (nodeIndex !== -1) {
+        // No image for this slot - mark for removal
+        nodesToRemove.add(nodeId);
+        console.log(`[QwenEdit] Will remove LoadImage node ${nodeId} - no image provided`);
+      }
+    }
+
+    // Positive prompt (node 11)
+    if (nodeType === 'TextEncodeQwenImageEditPlus' && nodeId === 11) {
+      if (node.widgets_values) {
+        node.widgets_values[0] = params.prompt;
+        console.log(`[QwenEdit] Set positive prompt: ${params.prompt.substring(0, 50)}...`);
+      }
+    }
+
+    // Negative prompt (node 12)
+    if (nodeType === 'TextEncodeQwenImageEditPlus' && nodeId === 12) {
+      if (node.widgets_values && params.negativePrompt) {
+        node.widgets_values[0] = params.negativePrompt;
+        console.log(`[QwenEdit] Set negative prompt: ${params.negativePrompt.substring(0, 50)}...`);
+      }
+    }
+
+    // KSampler (node 13) - set seed
+    if (nodeType === 'KSampler' && nodeId === 13) {
+      if (node.widgets_values) {
+        node.widgets_values[0] = seed;
+        console.log(`[QwenEdit] Set seed: ${seed}`);
+      }
+    }
+
+    // SaveImage (node 15) - set filename prefix
+    if (nodeType === 'SaveImage' && nodeId === 15) {
+      if (node.widgets_values) {
+        node.widgets_values[0] = params.filenamePrefix || 'QwenEdit';
+        console.log(`[QwenEdit] Set filename prefix: ${node.widgets_values[0]}`);
+      }
+    }
+  }
+
+  // Remove unused LoadImage nodes
+  workflow.nodes = (workflow.nodes || []).filter(node => !nodesToRemove.has(node.id));
+
+  // Remove links connected to removed nodes
+  workflow.links = (workflow.links || []).filter(link => {
+    const sourceNode = link[1];
+    return !nodesToRemove.has(sourceNode);
+  });
+
+  console.log(`[QwenEdit] Total images: ${allImages.length} (max 3)`);
+
+  // Convert to API format
+  const apiWorkflow = workflowToPrompt(workflow);
+
+  return apiWorkflow;
 }
 
 /**
@@ -377,6 +485,8 @@ export function parameterizeWorkflowByName(
     style?: string;
     seed?: number;
     inputImageFilename?: string;
+    /** Additional reference image filenames (for qwen_edit - up to 3 total including inputImageFilename) */
+    referenceImageFilenames?: string[];
     startImageFilename?: string;
     endImageFilename?: string;
     filenamePrefix?: string;
@@ -438,6 +548,19 @@ export function parameterizeWorkflowByName(
       filenamePrefix,
       startImageFilename: params.startImageFilename,
       endImageFilename: params.endImageFilename,
+    });
+  } else if (workflowName === 'qwen_edit') {
+    // Qwen Edit workflow for image-to-image editing (supports up to 3 images)
+    if (!params.inputImageFilename) {
+      throw new Error('qwen_edit workflow requires inputImageFilename');
+    }
+    return parameterizeQwenEditWorkflow(template, {
+      prompt: params.prompt,
+      negativePrompt: params.negativePrompt,
+      seed: params.seed,
+      filenamePrefix,
+      inputImageFilename: params.inputImageFilename,
+      referenceImageFilenames: params.referenceImageFilenames,
     });
   }
 
@@ -594,6 +717,33 @@ export function workflowToPrompt(workflow: WorkflowTemplate): Record<string, unk
     else if (nodeType === 'LoraLoaderModelOnly' && Array.isArray(widgetValues)) {
       convertedInputs['lora_name'] = widgetValues[0];
       convertedInputs['strength_model'] = widgetValues[1];
+    }
+    // Special handling for LoraLoader (full version with clip)
+    else if (nodeType === 'LoraLoader' && Array.isArray(widgetValues)) {
+      convertedInputs['lora_name'] = widgetValues[0];
+      convertedInputs['strength_model'] = widgetValues[1];
+      convertedInputs['strength_clip'] = widgetValues[2];
+    }
+    // Special handling for ModelSamplingAuraFlow
+    else if (nodeType === 'ModelSamplingAuraFlow' && Array.isArray(widgetValues)) {
+      convertedInputs['shift'] = widgetValues[0];
+    }
+    // Special handling for CFGNorm
+    else if (nodeType === 'CFGNorm' && Array.isArray(widgetValues)) {
+      convertedInputs['strength'] = widgetValues[0];
+    }
+    // Special handling for ImageScaleToTotalPixels
+    else if (nodeType === 'ImageScaleToTotalPixels' && Array.isArray(widgetValues)) {
+      convertedInputs['upscale_method'] = widgetValues[0];
+      convertedInputs['megapixels'] = widgetValues[1];
+    }
+    // Special handling for TextEncodeQwenImageEditPlus
+    else if (nodeType === 'TextEncodeQwenImageEditPlus' && Array.isArray(widgetValues)) {
+      convertedInputs['prompt'] = widgetValues[0];
+    }
+    // Special handling for SaveImage
+    else if (nodeType === 'SaveImage' && Array.isArray(widgetValues)) {
+      convertedInputs['filename_prefix'] = widgetValues[0];
     }
     // Default handling for other nodes
     else if (Array.isArray(widgetValues)) {

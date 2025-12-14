@@ -29,6 +29,8 @@ interface ToolHistoryItem {
   startTime: number;
   endTime?: number;
   duration?: number;
+  /** Streaming content being accumulated for this tool */
+  streamingContent?: string;
 }
 
 export interface ConversationMessage {
@@ -70,8 +72,8 @@ interface AgentViewProps {
   expanded?: boolean;
 }
 
-// Maximum visible history items to prevent overflow
-const MAX_VISIBLE_HISTORY = 25;
+// Maximum visible history items - increased for better scrollback
+const MAX_VISIBLE_HISTORY = 100;
 
 export function AgentView({
   agentName = 'Agent',
@@ -80,6 +82,7 @@ export function AgentView({
   todos,
   streamingText,
   isStreaming = false,
+  recentTools = [],
   question,
   isConfirmation = false,
   questionOptions,
@@ -124,6 +127,7 @@ export function AgentView({
               compact
               expanded={expanded}
               agentName={currentAction.agentName}
+              streamingContent={recentTools.find(t => t.id === currentAction.toolCallId)?.streamingContent}
             />
           )}
         </Box>

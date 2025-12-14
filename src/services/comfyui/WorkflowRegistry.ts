@@ -85,18 +85,20 @@ class WorkflowRegistry {
       qualityLevel: 'high',
     });
 
-    // 3. Qwen Edit Switcher - Image editing for variations
+    // 3. Qwen Edit Simple - Image editing with up to 3 reference images
     this.register({
       name: 'qwen_edit',
-      filename: 'qwen_edit-switcher-standard.json',
+      filename: 'qwen_edit-simple.json',
       workflowType: WorkflowType.IMAGE_EDITING,
-      description: 'Intelligent image editing using Qwen model. Edit existing images to create variations, modify scenes, or adjust visual elements based on text instructions.',
+      description: 'Intelligent image editing using Qwen model. Supports 1-3 input images for editing, combining, or transforming visuals based on text instructions. Use for scene generation with character/setting references.',
       capabilities: [
         'image-to-image',
+        'multi-image-input',
         'intelligent-editing',
         'scene-variation',
         'visual-modification',
         'consistency-preservation',
+        'reference-based-generation',
       ],
       displayName: 'Qwen Image Editor',
       requiresBaseImage: true,

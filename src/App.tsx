@@ -493,6 +493,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         todos={todos}
         streamingText={streamingText}
         isStreaming={isStreaming}
+        recentTools={recentTools}
         question={awaitingFeedbackText ? 'Please enter your feedback:' : question}
         isConfirmation={isConfirmation}
         questionOptions={awaitingFeedbackText ? undefined : questionOptions}

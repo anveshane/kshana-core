@@ -20,13 +20,18 @@ export const dispatchImageAgentTool = createTool(
    - No reference_images needed
    - Creates initial reference images from text descriptions
 
-2. **Image+Text-to-Image** (for scene images):
+2. **Image+Text-to-Image** (for scene images with 1-3 references):
    - Use for scene image_type
-   - REQUIRES reference_images array with character/setting refs
+   - REQUIRES reference_images array with 1, 2, or 3 character/setting refs
+   - Uses Qwen Image Edit workflow which processes multiple reference images
    - Maintains visual consistency with established characters/settings
-   - The sub-agent will include references in the generation call
 
-Always use this tool for image generation to ensure high-quality, user-approved prompts.`,
+**Intelligent Reference Selection (IMPORTANT):**
+- Use 1 image: Character-only or setting-only shots
+- Use 2 images: Character + setting combination (most common)
+- Use 3 images: Two characters + setting, or character + multiple settings
+
+Always analyze the scene content and select the appropriate number of references!`,
   {
     type: 'object',
     properties: {
@@ -61,7 +66,7 @@ Always use this tool for image generation to ensure high-quality, user-approved 
       },
       reference_images: {
         type: 'array',
-        description: 'Reference images for consistency (REQUIRED for scene image_type). Include all characters and settings that appear in the scene.',
+        description: 'Reference images for consistency (REQUIRED for scene image_type). Include 1-3 images based on scene content. Order matters: image1=primary subject, image2=setting or secondary, image3=additional element.',
         items: {
           type: 'object',
           properties: {

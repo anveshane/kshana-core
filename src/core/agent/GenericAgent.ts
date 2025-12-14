@@ -1088,6 +1088,8 @@ export class GenericAgent extends TypedEventEmitter {
     messages: Message[];
     currentPlan: string;
     iterations: number;
+    /** Tool call ID for streaming events */
+    toolCallId: string;
   } | null = null;
 
   // State for dispatch_content_agent sub-agent (creative content generation)
@@ -1100,6 +1102,8 @@ export class GenericAgent extends TypedEventEmitter {
     messages: Message[];
     currentContent: string;
     iterations: number;
+    /** Tool call ID for streaming events */
+    toolCallId: string;
   } | null = null;
 
   // State for dispatch_image_agent sub-agent (image prompt planning + generation)
@@ -1127,6 +1131,8 @@ export class GenericAgent extends TypedEventEmitter {
     }>;
     /** Generation mode determined by image_type and reference availability */
     generationMode: 'text_to_image' | 'image_text_to_image';
+    /** Tool call ID for streaming events */
+    toolCallId: string;
   } | null = null;
 
   // State for dispatch_video_agent sub-agent (video generation)
@@ -1211,6 +1217,7 @@ export class GenericAgent extends TypedEventEmitter {
       ],
       currentPlan: '',
       iterations: 0,
+      toolCallId: toolCall.id,
     };
 
     // Generate the initial plan
@@ -1243,7 +1250,6 @@ export class GenericAgent extends TypedEventEmitter {
 
     try {
       // Generate or refine the plan with streaming
-      // Note: skipHistory=true because plan is shown via ToolCallDisplay
       let planContent = '';
 
       for await (const chunk of this.llm.generateStream({
@@ -1252,10 +1258,23 @@ export class GenericAgent extends TypedEventEmitter {
       })) {
         if (chunk.content) {
           planContent += chunk.content;
-          this.emit({ type: 'streaming_text', chunk: chunk.content, done: false, skipHistory: true });
+          // Emit tool_streaming to show content inside the ToolCallDisplay
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: this.planningState.toolCallId,
+            chunk: chunk.content,
+            done: false,
+            agentName: this.getEffectiveAgentName(),
+          });
         }
         if (chunk.done) {
-          this.emit({ type: 'streaming_text', chunk: '', done: true, skipHistory: true });
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: this.planningState.toolCallId,
+            chunk: '',
+            done: true,
+            agentName: this.getEffectiveAgentName(),
+          });
         }
       }
 
@@ -1609,6 +1628,7 @@ Respond in JSON format:
       ],
       currentContent: '',
       iterations: 0,
+      toolCallId: toolCall.id,
     };
 
     // Generate the initial content
@@ -1651,10 +1671,23 @@ Respond in JSON format:
       })) {
         if (chunk.content) {
           content += chunk.content;
-          this.emit({ type: 'streaming_text', chunk: chunk.content, done: false, skipHistory: true });
+          // Emit tool_streaming to show content inside the ToolCallDisplay
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: this.contentState.toolCallId,
+            chunk: chunk.content,
+            done: false,
+            agentName: this.getEffectiveAgentName(),
+          });
         }
         if (chunk.done) {
-          this.emit({ type: 'streaming_text', chunk: '', done: true, skipHistory: true });
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: this.contentState.toolCallId,
+            chunk: '',
+            done: true,
+            agentName: this.getEffectiveAgentName(),
+          });
         }
       }
 
@@ -1872,6 +1905,7 @@ Respond in JSON format:
       },
       referenceImages,
       generationMode,
+      toolCallId: toolCall.id,
     };
 
     // Generate the initial prompt
@@ -1914,10 +1948,23 @@ Respond in JSON format:
       })) {
         if (chunk.content) {
           promptContent += chunk.content;
-          this.emit({ type: 'streaming_text', chunk: chunk.content, done: false, skipHistory: true });
+          // Emit tool_streaming to show content inside the ToolCallDisplay
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: this.imageGenState.toolCallId,
+            chunk: chunk.content,
+            done: false,
+            agentName: this.getEffectiveAgentName(),
+          });
         }
         if (chunk.done) {
-          this.emit({ type: 'streaming_text', chunk: '', done: true, skipHistory: true });
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: this.imageGenState.toolCallId,
+            chunk: '',
+            done: true,
+            agentName: this.getEffectiveAgentName(),
+          });
         }
       }
 

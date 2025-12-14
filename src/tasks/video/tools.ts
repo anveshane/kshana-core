@@ -140,6 +140,8 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
     image_type = 'scene',
     character_name,
     setting_name,
+    generation_mode = 'text_to_image',
+    reference_images = [],
   } = params;
 
   // Determine filename prefix based on image type
@@ -183,14 +185,60 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
 
   try {
     const registry = getRegistry();
-    const workflowMetadata = registry.get('zimage');
+    const client = new ComfyUIClient({
+      outputDir: getAssetsDir(),
+    });
+
+    // Determine which workflow to use based on generation mode and reference images
+    const useQwenEdit = generation_mode === 'image_text_to_image' && reference_images.length > 0;
+    const workflowName = useQwenEdit ? 'qwen_edit' : 'zimage';
+    const workflowMetadata = registry.get(workflowName);
 
     if (!workflowMetadata) {
-      throw new Error("Workflow 'zimage' not found");
+      throw new Error(`Workflow '${workflowName}' not found`);
+    }
+
+    console.log(`[ImageGen] Using workflow: ${workflowName} for ${logDesc}`);
+    if (useQwenEdit) {
+      console.log(`[ImageGen] Reference images: ${reference_images.map(r => `${r.type}:${r.name}`).join(', ')}`);
+    }
+
+    let inputImageFilename: string | undefined;
+    const referenceImageFilenames: string[] = [];
+
+    // If using qwen_edit, upload reference images (up to 3 total)
+    if (useQwenEdit && reference_images.length > 0) {
+      // Limit to 3 images total for qwen_edit workflow
+      const imagesToUpload = reference_images.slice(0, 3);
+
+      for (let i = 0; i < imagesToUpload.length; i++) {
+        const refImage = imagesToUpload[i];
+        const refImagePath = findImagePathFromArtifactId(refImage.image_id);
+
+        if (!refImagePath || !fs.existsSync(refImagePath)) {
+          console.warn(`[ImageGen] Reference image not found for artifact: ${refImage.image_id}, skipping`);
+          continue;
+        }
+
+        console.log(`[ImageGen] Uploading reference image ${i + 1}/${imagesToUpload.length}: ${refImagePath}`);
+        const uploadResult = await client.uploadImage(refImagePath);
+
+        if (i === 0) {
+          // First image is the primary input (base image to edit)
+          inputImageFilename = uploadResult.name;
+          console.log(`[ImageGen] Set primary input image: ${inputImageFilename}`);
+        } else {
+          // Additional images are stored separately
+          referenceImageFilenames.push(uploadResult.name);
+          console.log(`[ImageGen] Added reference image ${i + 1}: ${uploadResult.name}`);
+        }
+      }
+
+      console.log(`[ImageGen] Total images for qwen_edit: 1 primary + ${referenceImageFilenames.length} additional = ${1 + referenceImageFilenames.length}`);
     }
 
     const template = loadWorkflowTemplate(workflowMetadata.filename);
-    const workflow = parameterizeWorkflowByName('zimage', template, {
+    const workflow = parameterizeWorkflowByName(workflowName, template, {
       sceneNumber: scene_number,
       prompt,
       negativePrompt: negative_prompt,
@@ -198,11 +246,8 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
       style: 'cinematic',
       seed,
       filenamePrefix,
-    });
-
-    // Queue workflow to ComfyUI
-    const client = new ComfyUIClient({
-      outputDir: getAssetsDir(),
+      inputImageFilename,
+      referenceImageFilenames: referenceImageFilenames.length > 0 ? referenceImageFilenames : undefined,
     });
 
     const promptId = await client.queueWorkflow(workflow as Record<string, unknown>);
@@ -1127,6 +1172,147 @@ When job completes, returns the artifact ID and file path.`,
 );
 
 /**
+ * Storyboard parameters for preview image generation.
+ */
+export interface StoryboardParams {
+  /** Act or sequence number */
+  act_number: number;
+  /** Array of scene summaries to generate previews for */
+  scene_summaries: Array<{
+    scene_number: number;
+    title: string;
+    description: string;
+  }>;
+  /** Optional: Maximum number of preview images (default: 6) */
+  max_images?: number;
+}
+
+/**
+ * Get storyboard directory for storing preview images.
+ */
+function getStoryboardDir(): string {
+  const storyboardDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'storyboard');
+  if (!fs.existsSync(storyboardDir)) {
+    fs.mkdirSync(storyboardDir, { recursive: true });
+  }
+  return storyboardDir;
+}
+
+/**
+ * Generate storyboard preview images for an act.
+ * Creates quick preview images for key scenes to help visualize the story flow.
+ */
+export const generateStoryboardTool: ToolDefinition = createTool(
+  'generate_storyboard',
+  `Generate storyboard preview images for a sequence of scenes.
+
+USE THIS TOOL WHEN:
+- User wants to see a visual preview of the story before detailed scene generation
+- Planning scene composition and flow
+- Getting quick visual feedback on story direction
+- Visualizing key moments in an act
+
+This tool generates ~6 quick preview images representing key moments.
+The images are lower quality but faster to generate for quick iteration.
+
+Returns an array of job IDs that can be tracked with wait_for_job.`,
+  {
+    type: 'object',
+    properties: {
+      act_number: {
+        type: 'number',
+        description: 'Act or sequence number for organizing storyboard images',
+      },
+      scene_summaries: {
+        type: 'array',
+        description: 'Array of scene summaries to generate preview images for',
+        items: {
+          type: 'object',
+          properties: {
+            scene_number: {
+              type: 'number',
+              description: 'Scene number',
+            },
+            title: {
+              type: 'string',
+              description: 'Scene title',
+            },
+            description: {
+              type: 'string',
+              description: 'Brief description of what happens in the scene (used as image prompt)',
+            },
+          },
+          required: ['scene_number', 'title', 'description'],
+        },
+      },
+      max_images: {
+        type: 'number',
+        description: 'Maximum number of preview images to generate (default: 6)',
+      },
+    },
+    required: ['act_number', 'scene_summaries'],
+  },
+  async (args) => {
+    const actNumber = args['act_number'] as number;
+    const sceneSummaries = args['scene_summaries'] as StoryboardParams['scene_summaries'];
+    const maxImages = (args['max_images'] as number) || 6;
+
+    if (!sceneSummaries || sceneSummaries.length === 0) {
+      return {
+        status: 'error',
+        error: 'No scene summaries provided',
+      };
+    }
+
+    // Select up to maxImages scenes evenly distributed across the summaries
+    const step = Math.max(1, Math.ceil(sceneSummaries.length / maxImages));
+    const selectedScenes = sceneSummaries.filter((_, index) => index % step === 0).slice(0, maxImages);
+
+    const jobIds: string[] = [];
+    const storyboardDir = getStoryboardDir();
+
+    console.log(`[Storyboard] Generating ${selectedScenes.length} preview images for Act ${actNumber}`);
+
+    for (const scene of selectedScenes) {
+      try {
+        // Create storyboard-specific prompt (concise for fast generation)
+        const storyboardPrompt = `Storyboard sketch: ${scene.description}. Cinematic composition, 16:9 aspect ratio.`;
+
+        // Use zimage for fast generation with lower step count
+        const filenamePrefix = `Storyboard_Act${actNumber}_Scene${scene.scene_number}`;
+
+        const result = await submitImageGeneration({
+          scene_number: scene.scene_number,
+          prompt: storyboardPrompt,
+          negative_prompt: 'blurry, low quality, text, watermark',
+          aspect_ratio: '16:9',
+          image_type: 'scene',
+          generation_mode: 'text_to_image',
+        });
+
+        if (result.status === 'submitted' && result.jobId) {
+          jobIds.push(result.jobId);
+          console.log(`[Storyboard] Queued scene ${scene.scene_number}: ${result.jobId}`);
+        } else {
+          console.error(`[Storyboard] Failed to queue scene ${scene.scene_number}: ${result.error}`);
+        }
+      } catch (error) {
+        console.error(`[Storyboard] Error generating scene ${scene.scene_number}:`, error);
+      }
+    }
+
+    return {
+      status: 'submitted',
+      act_number: actNumber,
+      job_ids: jobIds,
+      total_images: jobIds.length,
+      message: `Queued ${jobIds.length} storyboard preview images for Act ${actNumber}. Use wait_for_job with each job_id to track completion.`,
+      scenes_selected: selectedScenes.map(s => s.scene_number),
+    };
+  }
+);
+
+/**
  * Get all video generation tools.
  */
 export function getVideoGenerationTools(): ToolDefinition[] {
@@ -1136,6 +1322,7 @@ export function getVideoGenerationTools(): ToolDefinition[] {
     generateVideoFromFramesTool,
     generateVideoTool, // Legacy wrapper
     editImageTool,
+    generateStoryboardTool,
     waitForJobTool,
   ];
 }
@@ -1150,4 +1337,5 @@ export const VIDEO_COMPLEX_TOOLS = new Set([
   'generate_video_from_image',
   'generate_video_from_frames',
   'edit_image',
+  'generate_storyboard',
 ]);

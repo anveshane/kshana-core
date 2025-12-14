@@ -42,6 +42,8 @@ export interface ToolCallHistoryItem {
   duration?: number;
   /** Name of the agent that invoked this tool */
   agentName?: string;
+  /** Streaming content being accumulated for this tool (for sub-agent loops) */
+  streamingContent?: string;
 }
 
 /**
@@ -58,6 +60,8 @@ export interface HistoryEntry {
   duration?: number;
   /** Name of the agent that performed this action (e.g., "Orchestrator", "Content Agent") */
   agentName?: string;
+  /** Streaming content that was generated during this tool call */
+  streamingContent?: string;
 }
 
 /**
@@ -112,6 +116,7 @@ type AgentAction =
   | { type: 'SET_ERROR'; error: string }
   | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown>; agentName?: string }
   | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean; agentName?: string }
+  | { type: 'TOOL_STREAM'; toolCallId: string; chunk: string; done: boolean }
   | { type: 'ADD_AGENT_TEXT'; text: string; agentName?: string }
   | { type: 'ADD_USER_INPUT'; text: string; isTask?: boolean }
   | { type: 'STREAM_CHUNK'; chunk: string; agentName?: string }
@@ -212,7 +217,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       const duration = tool ? endTime - tool.startTime : 0;
       const agentName = action.agentName ?? tool?.agentName ?? state.currentAgentName;
 
-      // Create history entry
+      // Create history entry, including any streaming content that was generated
       const historyEntry: HistoryEntry | null = tool
         ? {
             id: `tool-${action.toolCallId}`,
@@ -224,6 +229,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
             toolResult: action.result,
             duration,
             agentName,
+            streamingContent: tool.streamingContent,
           }
         : null;
 
@@ -238,6 +244,18 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         history: historyEntry
           ? [...state.history.slice(-MAX_HISTORY + 1), historyEntry]
           : state.history,
+      };
+    }
+
+    case 'TOOL_STREAM': {
+      // Update streaming content for a specific tool
+      return {
+        ...state,
+        recentTools: state.recentTools.map(t =>
+          t.id === action.toolCallId
+            ? { ...t, streamingContent: (t.streamingContent ?? '') + action.chunk }
+            : t
+        ),
       };
     }
 
@@ -470,6 +488,16 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         result: event.result,
         isError: event.isError ?? false,
         agentName: event.agentName,
+      });
+      onEvent?.(event);
+    });
+
+    agent.on('tool_streaming', event => {
+      dispatch({
+        type: 'TOOL_STREAM',
+        toolCallId: event.toolCallId,
+        chunk: event.chunk,
+        done: event.done,
       });
       onEvent?.(event);
     });
