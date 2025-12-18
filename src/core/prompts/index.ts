@@ -73,6 +73,8 @@ let orchestratorPrompt: PromptJson;
 let subAgentPrompt: PromptJson;
 let planningPrompt: PromptJson;
 let imageGenerationPrompt: PromptJson;
+let contentPrompt: PromptJson;
+let videoGenerationPrompt: PromptJson;
 
 try {
   basePrompt = loadPrompt('base');
@@ -80,6 +82,8 @@ try {
   subAgentPrompt = loadPrompt('subAgent');
   planningPrompt = loadPrompt('planning');
   imageGenerationPrompt = loadPrompt('imageGeneration');
+  contentPrompt = loadPrompt('content');
+  videoGenerationPrompt = loadPrompt('videoGeneration');
 } catch (error) {
   console.error(`Failed to load prompts from ${PROMPTS_DIR}:`, error);
   throw error;
