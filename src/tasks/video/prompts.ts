@@ -7,24 +7,66 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Get prompts directory - try multiple locations for flexibility
-// When running from dist/tasks/video/prompts.js: __dirname = dist/tasks/video/ -> dist/prompts/
+// When running from bundled code: find package root by looking for dist/prompts/ or package.json
 // When running from source: src/tasks/video/prompts.ts -> prompts/
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Try dist/prompts first (for compiled/installed packages)
-// From dist/tasks/video/: go up 2 levels to dist/, then into prompts/
-let PROMPTS_DIR = join(__dirname, '..', '..', 'prompts');
-
-// If not found, try going up one more level (for different dist structure)
-if (!existsSync(join(PROMPTS_DIR, 'video.json'))) {
-  PROMPTS_DIR = join(__dirname, '..', '..', '..', 'prompts');
+// Strategy: Find the package root by searching up for dist/prompts/ or package.json
+// This works whether code is bundled or not
+function findPackageRoot(startDir: string): string | null {
+  let currentDir = startDir;
+  const maxDepth = 10; // Prevent infinite loops
+  
+  for (let i = 0; i < maxDepth; i++) {
+    // Check if dist/prompts exists (indicates package root)
+    const distPromptsPath = join(currentDir, 'dist', 'prompts');
+    if (existsSync(distPromptsPath)) {
+      return currentDir;
+    }
+    
+    // Check if package.json exists (also indicates package root)
+    const packageJsonPath = join(currentDir, 'package.json');
+    if (existsSync(packageJsonPath)) {
+      return currentDir;
+    }
+    
+    // Go up one level
+    const parentDir = dirname(currentDir);
+    if (parentDir === currentDir) {
+      // Reached filesystem root
+      break;
+    }
+    currentDir = parentDir;
+  }
+  
+  return null;
 }
 
-// If still not found, try source location (for development)
-if (!existsSync(join(PROMPTS_DIR, 'video.json'))) {
-  const sourcePromptsDir = join(__dirname, '..', '..', '..', 'prompts');
-  if (existsSync(join(sourcePromptsDir, 'video.json'))) {
-    PROMPTS_DIR = sourcePromptsDir;
+// Find package root
+const packageRoot = findPackageRoot(__dirname);
+let PROMPTS_DIR: string;
+
+if (packageRoot) {
+  // Try dist/prompts first (for compiled/installed packages)
+  const distPromptsPath = join(packageRoot, 'dist', 'prompts');
+  if (existsSync(join(distPromptsPath, 'video.json'))) {
+    PROMPTS_DIR = distPromptsPath;
+  } else {
+    // Fallback to source prompts (for development)
+    const sourcePromptsPath = join(packageRoot, 'prompts');
+    if (existsSync(join(sourcePromptsPath, 'video.json'))) {
+      PROMPTS_DIR = sourcePromptsPath;
+    } else {
+      // Last resort: try relative paths from __dirname
+      PROMPTS_DIR = join(__dirname, '..', '..', 'prompts');
+    }
+  }
+} else {
+  // Fallback: try relative paths (for development or edge cases)
+  PROMPTS_DIR = join(__dirname, '..', '..', 'prompts');
+  
+  if (!existsSync(join(PROMPTS_DIR, 'video.json'))) {
+    PROMPTS_DIR = join(__dirname, '..', '..', '..', 'prompts');
   }
 }
 
