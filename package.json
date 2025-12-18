@@ -34,6 +34,7 @@
     "test:client": "tsx src/server/testClient.ts",
     "build": "tsup && npm run copy-prompts",
     "copy-prompts": "node -e \"require('fs').cpSync('prompts', 'dist/prompts', {recursive: true, force: true})\"",
+    "test:wan": "tsx scripts/test-wan-workflow.ts",
     "test": "vitest",
     "test:ci": "vitest run",
     "test:coverage": "vitest run --coverage",

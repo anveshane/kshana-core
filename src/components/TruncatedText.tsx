@@ -44,25 +44,10 @@ export function TruncatedText({
   bold,
   children,
 }: TruncatedTextProps) {
-  // If expanded or using custom children, show full content
-  if (expanded || children) {
-    return (
-      <Box flexDirection="column">
-        {children ?? <Text color={color} dimColor={dimColor} bold={bold}>{text}</Text>}
-      </Box>
-    );
-  }
-
-  const { truncated, wasTruncated } = truncateToLines(text, maxLines);
-
+  // Always show full content - truncation disabled
   return (
     <Box flexDirection="column">
-      <Text color={color} dimColor={dimColor} bold={bold}>{truncated}</Text>
-      {wasTruncated && (
-        <Text dimColor italic>
-          ... [truncated - press Ctrl+O to expand]
-        </Text>
-      )}
+      {children ?? <Text color={color} dimColor={dimColor} bold={bold}>{text}</Text>}
     </Box>
   );
 }

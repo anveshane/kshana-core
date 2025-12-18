@@ -544,10 +544,12 @@ export function updateCharacter(
 
 /**
  * Update a character's approval status.
+ * @param approvalType - 'content' for description approval (CHARACTERS_SETTINGS phase), 'image' for reference image approval (CHARACTER_SETTING_IMAGES phase)
  */
 export function updateCharacterApproval(
   name: string,
   status: ItemApprovalStatus,
+  approvalType: 'content' | 'image' = 'content',
   feedback?: string,
   basePath: string = process.cwd()
 ): CharacterData | null {
@@ -560,10 +562,21 @@ export function updateCharacterApproval(
   const character = project.characters[index];
   if (!character) return null;
 
-  character.approvalStatus = status;
-  if (status === 'approved') {
-    character.approvedAt = Date.now();
-  } else if (status === 'regenerating') {
+  if (approvalType === 'image') {
+    // Update reference image approval status
+    character.referenceImageApprovalStatus = status;
+    if (status === 'approved') {
+      character.referenceImageApprovedAt = Date.now();
+    }
+  } else {
+    // Update content approval status
+    character.approvalStatus = status;
+    if (status === 'approved') {
+      character.approvedAt = Date.now();
+    }
+  }
+
+  if (status === 'regenerating') {
     character.regenerationCount++;
   }
 
@@ -674,10 +687,12 @@ export function updateSetting(
 
 /**
  * Update a setting's approval status.
+ * @param approvalType - 'content' for description approval (CHARACTERS_SETTINGS phase), 'image' for reference image approval (CHARACTER_SETTING_IMAGES phase)
  */
 export function updateSettingApproval(
   name: string,
   status: ItemApprovalStatus,
+  approvalType: 'content' | 'image' = 'content',
   feedback?: string,
   basePath: string = process.cwd()
 ): SettingData | null {
@@ -690,10 +705,21 @@ export function updateSettingApproval(
   const setting = project.settings[index];
   if (!setting) return null;
 
-  setting.approvalStatus = status;
-  if (status === 'approved') {
-    setting.approvedAt = Date.now();
-  } else if (status === 'regenerating') {
+  if (approvalType === 'image') {
+    // Update reference image approval status
+    setting.referenceImageApprovalStatus = status;
+    if (status === 'approved') {
+      setting.referenceImageApprovedAt = Date.now();
+    }
+  } else {
+    // Update content approval status
+    setting.approvalStatus = status;
+    if (status === 'approved') {
+      setting.approvedAt = Date.now();
+    }
+  }
+
+  if (status === 'regenerating') {
     setting.regenerationCount++;
   }
 
@@ -1088,7 +1114,66 @@ Identify the items to process for this phase, register them in the project, then
 - **Status**: ${nextItem.status}
 
 ## Per-Item Workflow
+`;
+    // Add phase-specific instructions
+    switch (phaseConfig.phase) {
+      case WorkflowPhase.SCENE_IMAGES:
+        instruction += `
+**For Scene Image Generation:**
+1. Use todo_write to create a todo: "Generate image for Scene ${nextItem.name}"
+2. Mark the todo as in_progress
+3. Read the scene description (content already exists from SCENES phase)
+4. Select 1-3 reference images based on characters/settings in the scene
+5. Use dispatch_image_agent to generate the scene image
+6. Present the result to user for approval
+7. If approved:
+   - Use update_project(action: "update_scene_approval", data: {scene_number: N, approval_type: "image", status: "approved", artifactId: "..."})
+   - Mark the todo as completed
+   - Move to the next scene
+8. If rejected, regenerate with feedback
 
+**DO NOT use dispatch_content_agent** - scene content already exists!
+**DO NOT create scene profiles** - just generate images for existing scenes.
+`;
+        break;
+
+      case WorkflowPhase.CHARACTER_SETTING_IMAGES:
+        instruction += `
+**For Reference Image Generation:**
+1. Use todo_write to create a todo: "Generate reference image for ${nextItem.name}"
+2. Mark the todo as in_progress
+3. Read the ${nextItem.type} description
+4. Use dispatch_image_agent to generate the reference image
+5. Present the result to user for approval
+6. If approved:
+   - Use update_project(action: "update_${nextItem.type}_approval", data: {name: "${nextItem.name}", status: "approved", approval_type: "image", referenceImageId: "..."})
+   - Mark the todo as completed
+   - Move to the next item
+7. If rejected, regenerate with feedback
+
+**DO NOT use dispatch_content_agent** - ${nextItem.type} content already exists!
+`;
+        break;
+
+      case WorkflowPhase.VIDEO:
+        instruction += `
+**For Video Generation:**
+1. Use todo_write to create a todo: "Generate video for Scene ${nextItem.name}"
+2. Mark the todo as in_progress
+3. Read the scene image artifact ID
+4. Use dispatch_video_agent to generate the video clip
+5. Present the result to user for approval
+6. If approved:
+   - Use update_project(action: "update_scene_approval", data: {scene_number: N, approval_type: "video", status: "approved", artifactId: "..."})
+   - Mark the todo as completed
+   - Move to the next scene
+7. If rejected, regenerate with feedback
+`;
+        break;
+
+      default:
+        // Default for content creation phases (CHARACTERS_SETTINGS, SCENES)
+        instruction += `
 **CRITICAL: Create a todo for THIS SPECIFIC ITEM before processing it!**
 
 1. Use todo_write to create a todo: "Create ${nextItem.type} profile: ${nextItem.name}"
@@ -1104,6 +1189,8 @@ Identify the items to process for this phase, register them in the project, then
 **DO NOT** create a single todo for "all characters" or "all settings".
 **DO** create individual todos like "Create character profile: Alice", "Create setting profile: Forest".
 `;
+        break;
+    }
   } else if (areAllItemsApproved(project, phaseConfig.phase)) {
     instruction += `
 ## All Items Approved!
