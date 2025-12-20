@@ -1200,10 +1200,14 @@ export class GenericAgent extends TypedEventEmitter {
       ? this.todoManager.mergeTodosById(todos)
       : this.todoManager.writeTodos(todos);
 
+    const updatedTodos = this.todoManager.getTodos();
+    debugLog(`[GenericAgent] handleTodoTool: merge=${merge}, inputTodos=${todos.length}, resultTodos=${updatedTodos.length}`);
+    debugLog(`[GenericAgent] handleTodoTool emitting todo_update with ${updatedTodos.length} todos: ${JSON.stringify(updatedTodos.map(t => ({ id: t.id, status: t.status, content: t.content?.slice(0, 30) })))}`);
+
     // Emit todo update event
     this.emit({
       type: 'todo_update',
-      todos: this.todoManager.getTodos(),
+      todos: updatedTodos,
       agentName: this.getEffectiveAgentName(),
     });
 

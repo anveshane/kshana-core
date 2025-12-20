@@ -152,6 +152,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       return { ...state, status: action.status };
 
     case 'SET_TODOS':
+      debugLog(`[useAgent] SET_TODOS: updating from ${state.todos.length} to ${action.todos.length} todos`);
       return { ...state, todos: action.todos };
 
     case 'APPEND_OUTPUT':
@@ -445,6 +446,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('todo_update', event => {
+      debugLog(`[useAgent] todo_update event received: ${event.todos.length} todos`);
       dispatch({ type: 'SET_TODOS', todos: event.todos });
       onEvent?.(event);
     });
