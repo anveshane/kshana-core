@@ -1060,12 +1060,32 @@ export class GenericAgent extends TypedEventEmitter {
     const args = toolCall.arguments;
     const todos = args['todos'] as Array<Record<string, unknown>>;
 
-    // Enforce minimum 2 todos to prevent single-item lists
-    if (todos.length < 2) {
+    // Enforce minimum 3 todos to ensure granular task breakdown
+    if (todos.length < 3) {
       return {
-        error: 'Todo list must have at least 2 items. If you only have one task, execute it directly without using todo_write.',
-        suggestion: 'Either add more tasks to track, or just do the single task without tracking it.',
+        error: 'Todo list must have at least 3 items to ensure proper task breakdown. If you only have 1-2 tasks, execute them directly without tracking.',
+        suggestion: 'Break down your work into more granular items (e.g., separate todos for each character, scene, or image).',
       };
+    }
+
+    // Check for tool call patterns in todo content (forbidden)
+    const toolCallPatterns = [
+      /\b(dispatch_\w+|update_project|read_project|write_file|read_file|todo_write|ask_user)\b/i,
+      /\baction:\s*["']?\w+["']?/i,
+      /\buse\s+(the\s+)?[\w_]+\s+tool/i,
+      /\bcall\s+[\w_]+/i,
+    ];
+
+    for (const todo of todos) {
+      const content = (todo['content'] as string) || '';
+      for (const pattern of toolCallPatterns) {
+        if (pattern.test(content)) {
+          return {
+            error: `Todo "${content.slice(0, 50)}..." contains tool/function references. Todos should describe WHAT to accomplish, not HOW.`,
+            suggestion: 'Rewrite todos to be task-focused. Good: "Create character profile for Alice". Bad: "Use dispatch_content_agent to create Alice".',
+          };
+        }
+      }
     }
 
     const result = this.todoManager.writeTodos(todos);
@@ -1452,6 +1472,43 @@ Respond in JSON format:
   }
 
   /**
+   * Generate a name and summary for approved content.
+   * The summary is injected into message history; full content is stored externally.
+   */
+  private async generateContentMetadata(
+    task: string,
+    contentType: string,
+    content: string
+  ): Promise<{ name: string; summary: string }> {
+    const prompt = `Given this content creation task, content type, and the resulting content, generate:
+1. A short descriptive name (3-5 words, no quotes)
+2. A 1-2 sentence summary that captures the essence of the content and can be used to remember what it contains
+
+<task>${task}</task>
+<content_type>${contentType}</content_type>
+
+<content>${content.slice(0, 3000)}${content.length > 3000 ? '...[truncated]' : ''}</content>
+
+Respond in JSON format:
+{"name": "...", "summary": "..."}`;
+
+    try {
+      const response = await this.llm.generate({
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        maxTokens: 200,
+      });
+
+      return JSON.parse(response.content ?? '{}');
+    } catch {
+      return {
+        name: `${contentType}: ${task.slice(0, 30)}`,
+        summary: `${contentType} content for: ${task.slice(0, 100)}`,
+      };
+    }
+  }
+
+  /**
    * Check if there's an active planning session awaiting user input.
    */
   isPlanningActive(): boolean {
@@ -1558,6 +1615,16 @@ Respond in JSON format:
     if (!contentType) {
       this.currentMode = 'orchestrator';
       return { error: 'No content_type provided for dispatch_content_agent' };
+    }
+
+    // Validate content_type is one of the allowed types
+    const validContentTypes = ['plot', 'story', 'character', 'setting', 'scene', 'narration'];
+    if (!validContentTypes.includes(contentType)) {
+      this.currentMode = 'orchestrator';
+      return {
+        error: `Invalid content_type "${contentType}". Must be one of: ${validContentTypes.join(', ')}`,
+        suggestion: 'Use the appropriate content_type for your task. For example, use "character" for character profiles, "scene" for scene descriptions.',
+      };
     }
 
     // Resolve all context_refs into a combined context
@@ -1770,17 +1837,34 @@ Respond in JSON format:
         }
       }
 
+      // Generate content name and summary using LLM (similar to planning)
+      const { name, summary } = await this.generateContentMetadata(
+        this.contentState.task,
+        this.contentState.contentType,
+        this.contentState.currentContent
+      );
+
+      // Store full content in external context store (NOT in messages)
+      // This prevents context bloat from large content being repeatedly passed
+      const { variableName } = contextStore.store(
+        this.contentState.currentContent,
+        name,
+        { source: 'tool', variableBaseName: this.contentState.contentType }
+      );
+
       const result = {
         status: 'approved',
-        content: this.contentState.currentContent,
+        name,
+        summary,
+        content_ref: variableName,
         content_type: this.contentState.contentType,
         task: this.contentState.task,
         output_file: this.contentState.outputFile,
         file_saved: fileSaved,
         iterations: this.contentState.iterations,
         message: fileSaved
-          ? `Content approved and saved to ${this.contentState.outputFile}.`
-          : 'Content approved by user. Ready to save.',
+          ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`
+          : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`,
         next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
       this.contentState = null;

@@ -29,9 +29,10 @@ import {
   updateSettingApproval,
   updateSceneApproval,
   updateScene,
+  setProjectInputType,
 } from './ProjectManager.js';
-import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus } from './types.js';
-import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase } from './types.js';
+import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus, InputType } from './types.js';
+import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase, INPUT_TYPE_CONFIGS } from './types.js';
 import { LLMClient } from '../../../core/llm/index.js';
 import { contextStore } from '../../../core/context/index.js';
 
@@ -382,7 +383,8 @@ Actions:
 - "update_scene": Update scene reference. Data: { scene_number, updates: { ... } }
 - "update_scene_approval": Update scene approval. Data: { scene_number, approval_type: 'content'|'image'|'video', status, artifactId? }
 - "add_asset": Register a generated asset. Data: { id, type, path, metadata? }
-- "set_final_video": Set the final video info. Data: { artifactId, path, duration }`,
+- "set_final_video": Set the final video info. Data: { artifactId, path, duration }
+- "set_input_type": Set the input type after analyzing user input. Data: { input_type: 'idea'|'story' }. Use 'story' if user provided a complete story/chapter (skips plot and story phases).`,
   {
     type: 'object',
     properties: {
@@ -405,6 +407,7 @@ Actions:
           'update_scene_approval',
           'add_asset',
           'set_final_video',
+          'set_input_type',
         ],
         description: 'The action to perform',
       },
@@ -527,11 +530,14 @@ What story would you like to turn into a video?`,
           return {
             status: 'success',
             message: phaseCompleted
-              ? `Planner stage for ${phase} updated to ${stage}. Phase ${phase} is now completed. Use transition_phase to move to the next phase.`
+              ? `Planner stage for ${phase} updated to ${stage}. Phase ${phase} is now completed.`
               : `Planner stage for ${phase} updated to ${stage}`,
             current_phase: project.currentPhase,
             phase_status: project.phases[phase]?.status,
             phase_completed: phaseCompleted,
+            next_action: phaseCompleted
+              ? 'IMPORTANT: Phase is complete. Call transition_phase immediately to move to the next phase, then continue working. Do NOT stop or ask the user what to do.'
+              : 'Continue with the current phase work.',
           };
         }
 
@@ -551,11 +557,19 @@ What story would you like to turn into a video?`,
             result.reason,
             result.transitioned
           );
+
+          // Get the new phase config for the next action instruction
+          const newPhaseConfig = PHASE_CONFIGS[result.project.currentPhase as WorkflowPhase];
+
           return {
             status: 'success',
             transitioned: result.transitioned,
             reason: result.reason,
             current_phase: result.project.currentPhase,
+            new_phase_name: newPhaseConfig?.displayName ?? result.project.currentPhase,
+            next_action: result.transitioned
+              ? `IMPORTANT: You have transitioned to a new phase. Do NOT stop or ask the user what to do next. Call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
+              : 'Phase transition not needed. Call read_project to check current state.',
             debug: {
               before_phase: beforePhase,
               before_status: beforeStatus,
@@ -799,6 +813,34 @@ What story would you like to turn into a video?`,
           };
           saveProject(project);
           return { status: 'success', message: 'Final video set', path };
+        }
+
+        case 'set_input_type': {
+          const inputType = data['input_type'] as InputType;
+          if (!inputType || !['idea', 'story'].includes(inputType)) {
+            return { status: 'error', error: 'input_type must be "idea" or "story"' };
+          }
+
+          const updatedProject = setProjectInputType(inputType);
+          if (!updatedProject) {
+            return { status: 'error', error: 'No project found' };
+          }
+
+          const inputTypeConfig = INPUT_TYPE_CONFIGS[inputType];
+          const skippedPhases = inputTypeConfig.skipPhases.length > 0
+            ? inputTypeConfig.skipPhases.join(', ')
+            : 'none';
+
+          return {
+            status: 'success',
+            message: `Input type set to "${inputTypeConfig.displayName}"`,
+            input_type: inputType,
+            current_phase: updatedProject.currentPhase,
+            skipped_phases: skippedPhases,
+            note: inputType === 'story'
+              ? 'Plot and Story phases have been skipped. The story has been saved to plans/story.md. Proceeding to Characters & Settings phase.'
+              : 'Starting from Plot phase.',
+          };
         }
 
         default:

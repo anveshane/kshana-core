@@ -20,9 +20,14 @@ import {
   type ItemApprovalStatus,
   type ItemApprovalEntry,
   type PhaseConfig,
+  type ProjectStyle,
+  type StyleConfig,
+  type InputType,
   WorkflowPhase,
   PlannerStage,
   PHASE_CONFIGS,
+  STYLE_CONFIGS,
+  INPUT_TYPE_CONFIGS,
   PROJECT_DIR,
   PROJECT_FILE,
   PROJECT_VERSION,
@@ -142,8 +147,15 @@ function stripWrapperTags(content: string): string {
 /**
  * Create a new project file with the given input.
  * Stores originalInput in a separate file, only reference in project.json.
+ * @param originalInput - The original story/prompt input
+ * @param style - The visual style for the project (cinematic_realism or anime)
+ * @param basePath - Base path for the project
  */
-export function createProject(originalInput: string, basePath: string = process.cwd()): ProjectFile {
+export function createProject(
+  originalInput: string,
+  style: ProjectStyle = 'cinematic_realism',
+  basePath: string = process.cwd()
+): ProjectFile {
   // Ensure directory structure exists
   createProjectStructure(basePath);
 
@@ -158,11 +170,14 @@ export function createProject(originalInput: string, basePath: string = process.
   const fullInputPath = join(getProjectDir(basePath), inputFilePath);
   writeFileSync(fullInputPath, cleanInput, 'utf-8');
 
+  // Default to 'idea' input type - agent will analyze and update if it's a full story
   const project: ProjectFile = {
     version: '2.0',
     id: projectId,
     title: generateProjectTitle(cleanInput),
     originalInputFile: inputFilePath,
+    style,
+    inputType: 'idea',
     createdAt: now,
     updatedAt: now,
     currentPhase: WorkflowPhase.PLOT,
@@ -218,6 +233,59 @@ export function createProject(originalInput: string, basePath: string = process.
   // Save project file
   saveProject(project, basePath);
 
+  return project;
+}
+
+/**
+ * Set the input type for a project and handle phase skipping.
+ * Called by the agent after analyzing the user's input.
+ * @param inputType - The detected input type (idea or story)
+ * @param basePath - Base path for the project
+ */
+export function setProjectInputType(
+  inputType: InputType,
+  basePath: string = process.cwd()
+): ProjectFile | null {
+  const project = loadProject(basePath);
+  if (!project) return null;
+
+  const now = Date.now();
+  const inputTypeConfig = INPUT_TYPE_CONFIGS[inputType];
+
+  // Update the input type
+  project.inputType = inputType;
+
+  // If it's a full story, skip plot and story phases
+  if (inputType === 'story') {
+    // Mark skipped phases
+    for (const skipPhase of inputTypeConfig.skipPhases) {
+      const phaseKey = skipPhase as keyof typeof project.phases;
+      if (project.phases[phaseKey]) {
+        project.phases[phaseKey].status = 'skipped';
+        project.phases[phaseKey].completedAt = now;
+        project.phases[phaseKey].plannerStage = PlannerStage.COMPLETE;
+      }
+    }
+
+    // Update current phase to the start phase for this input type
+    project.currentPhase = inputTypeConfig.startPhase;
+
+    // Read the original input and save it as the story
+    const originalInput = getOriginalInput(project, basePath);
+    if (originalInput) {
+      const storyDir = join(getProjectDir(basePath), 'plans');
+      if (!existsSync(storyDir)) {
+        mkdirSync(storyDir, { recursive: true });
+      }
+      const storyPath = join(storyDir, 'story.md');
+      writeFileSync(storyPath, `# Story\n\n${originalInput}`, 'utf-8');
+
+      // Update content registry
+      project.content.story.status = 'available';
+    }
+  }
+
+  saveProject(project, basePath);
   return project;
 }
 
@@ -300,12 +368,16 @@ export function getOriginalInput(project: ProjectFile, basePath: string = proces
 /**
  * Get or create a project.
  */
-export function getOrCreateProject(originalInput: string, basePath: string = process.cwd()): ProjectFile {
+export function getOrCreateProject(
+  originalInput: string,
+  style: ProjectStyle = 'cinematic_realism',
+  basePath: string = process.cwd()
+): ProjectFile {
   const existing = loadProject(basePath);
   if (existing) {
     return existing;
   }
-  return createProject(originalInput, basePath);
+  return createProject(originalInput, style, basePath);
 }
 
 /**
@@ -313,6 +385,22 @@ export function getOrCreateProject(originalInput: string, basePath: string = pro
  */
 export function getCurrentPhase(project: ProjectFile): WorkflowPhase {
   return project.currentPhase;
+}
+
+/**
+ * Get the project style.
+ */
+export function getProjectStyle(basePath: string = process.cwd()): ProjectStyle {
+  const project = loadProject(basePath);
+  return project?.style ?? 'cinematic_realism';
+}
+
+/**
+ * Get the style configuration for the current project.
+ */
+export function getProjectStyleConfig(basePath: string = process.cwd()): StyleConfig {
+  const style = getProjectStyle(basePath);
+  return STYLE_CONFIGS[style];
 }
 
 /**
@@ -940,13 +1028,29 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
     itemProgress = `\nItem Progress: ${approved}/${total} approved`;
   }
 
+  // Get style display name
+  const styleConfig = STYLE_CONFIGS[project.style];
+  const styleDisplay = styleConfig ? styleConfig.displayName : project.style;
+
+  // Get input type display name
+  const inputTypeConfig = INPUT_TYPE_CONFIGS[project.inputType];
+  const inputTypeDisplay = inputTypeConfig ? inputTypeConfig.displayName : project.inputType;
+
+  // Get skipped phases
+  const skippedPhases = Object.entries(project.phases)
+    .filter(([, info]) => info.status === 'skipped')
+    .map(([key]) => key);
+
   return `
 Project: ${project.title || '(untitled)'}
 ID: ${project.id}
 Version: ${project.version}
+Style: ${styleDisplay}
+Input Type: ${inputTypeDisplay}
 Current Phase: ${phaseConfig.displayName} (${currentPhase})
 Planner Stage: ${phaseInfo?.plannerStage ?? 'not started'}
 Completed Phases: ${completedPhases.length > 0 ? completedPhases.join(', ') : 'none'}
+Skipped Phases: ${skippedPhases.length > 0 ? skippedPhases.join(', ') : 'none'}
 Characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'none defined'}
 Settings: ${settingNames.length > 0 ? settingNames.join(', ') : 'none defined'}
 Scenes: ${project.scenes.length}
@@ -1080,30 +1184,28 @@ function getPerItemPhaseInstructions(
 
   if (totalItems === 0) {
     instruction += `
-## No Items Found
-No items to process yet. You need to identify the items first:
+## No Items Registered Yet
+
 `;
     switch (phaseConfig.phase) {
       case WorkflowPhase.CHARACTERS_SETTINGS:
-        instruction += `
-1. Read the story from plans/story.md
-2. Identify all characters and settings mentioned
-3. Add each character using update_project(action: "add_character", data: {name: "..."})
-4. Add each setting using update_project(action: "add_setting", data: {name: "..."})
-5. Then start processing each item one by one
+        instruction += `Read the story and identify all characters and settings mentioned. Register each one before creating their profiles.
+`;
+        break;
+      case WorkflowPhase.CHARACTER_SETTING_IMAGES:
+        instruction += `No characters or settings are registered yet. Read the story, identify all characters and settings, and register each one with their descriptions before generating reference images.
 `;
         break;
       case WorkflowPhase.SCENES:
-        instruction += `
-1. Read the story and character/setting profiles
-2. Break the story into individual scenes
-3. Add each scene using update_project(action: "add_scene", data: {scene_number: N, title: "..."})
-4. Then start processing each scene one by one
+        instruction += `Read the story and break it into individual scenes. Register each scene before creating detailed scene descriptions.
+`;
+        break;
+      case WorkflowPhase.SCENE_IMAGES:
+        instruction += `No scenes are registered yet. Read the scene breakdown and register each scene before generating images.
 `;
         break;
       default:
-        instruction += `
-Identify the items to process for this phase, register them in the project, then process each one.
+        instruction += `Identify the items to process for this phase and register them before proceeding.
 `;
     }
   } else if (nextItem) {
@@ -1113,81 +1215,45 @@ Identify the items to process for this phase, register them in the project, then
 - **Name**: ${nextItem.name}
 - **Status**: ${nextItem.status}
 
-## Per-Item Workflow
+## What to Do
+
 `;
-    // Add phase-specific instructions
+    // Add phase-specific instructions (task-focused, no tool names)
     switch (phaseConfig.phase) {
       case WorkflowPhase.SCENE_IMAGES:
-        instruction += `
-**For Scene Image Generation:**
-1. Use todo_write to create a todo: "Generate image for Scene ${nextItem.name}"
-2. Mark the todo as in_progress
-3. Read the scene description (content already exists from SCENES phase)
-4. Select 1-3 reference images based on characters/settings in the scene
-5. Use dispatch_image_agent to generate the scene image
-6. Present the result to user for approval
-7. If approved:
-   - Use update_project(action: "update_scene_approval", data: {scene_number: N, approval_type: "image", status: "approved", artifactId: "..."})
-   - Mark the todo as completed
-   - Move to the next scene
-8. If rejected, regenerate with feedback
+        instruction += `Generate the scene image for **Scene ${nextItem.name}**.
 
-**DO NOT use dispatch_content_agent** - scene content already exists!
-**DO NOT create scene profiles** - just generate images for existing scenes.
+The scene description already exists from the SCENES phase. Use reference images from characters and settings that appear in this scene to maintain visual consistency.
+
+After generating, get user approval before moving to the next scene.
 `;
         break;
 
       case WorkflowPhase.CHARACTER_SETTING_IMAGES:
-        instruction += `
-**For Reference Image Generation:**
-1. Use todo_write to create a todo: "Generate reference image for ${nextItem.name}"
-2. Mark the todo as in_progress
-3. Read the ${nextItem.type} description
-4. Use dispatch_image_agent to generate the reference image
-5. Present the result to user for approval
-6. If approved:
-   - Use update_project(action: "update_${nextItem.type}_approval", data: {name: "${nextItem.name}", status: "approved", approval_type: "image", referenceImageId: "..."})
-   - Mark the todo as completed
-   - Move to the next item
-7. If rejected, regenerate with feedback
+        instruction += `Generate a reference image for **${nextItem.name}** (${nextItem.type}).
 
-**DO NOT use dispatch_content_agent** - ${nextItem.type} content already exists!
+Read the ${nextItem.type} description to understand the visual requirements, then generate an appropriate reference image.
+
+After generating, get user approval before moving to the next item.
 `;
         break;
 
       case WorkflowPhase.VIDEO:
-        instruction += `
-**For Video Generation:**
-1. Use todo_write to create a todo: "Generate video for Scene ${nextItem.name}"
-2. Mark the todo as in_progress
-3. Read the scene image artifact ID
-4. Use dispatch_video_agent to generate the video clip
-5. Present the result to user for approval
-6. If approved:
-   - Use update_project(action: "update_scene_approval", data: {scene_number: N, approval_type: "video", status: "approved", artifactId: "..."})
-   - Mark the todo as completed
-   - Move to the next scene
-7. If rejected, regenerate with feedback
+        instruction += `Generate video for **Scene ${nextItem.name}**.
+
+Use the scene's image artifact to create an animated video clip with appropriate motion.
+
+After generating, get user approval before moving to the next scene.
 `;
         break;
 
       default:
         // Default for content creation phases (CHARACTERS_SETTINGS, SCENES)
-        instruction += `
-**CRITICAL: Create a todo for THIS SPECIFIC ITEM before processing it!**
+        instruction += `Create the ${nextItem.type} profile for **${nextItem.name}**.
 
-1. Use todo_write to create a todo: "Create ${nextItem.type} profile: ${nextItem.name}"
-2. Mark the todo as in_progress
-3. Use dispatch_content_agent to generate content for "${nextItem.name}"
-4. Present the result to user for approval
-5. If approved:
-   - Use update_project to update the item's approval status
-   - Mark the todo as completed
-   - Move to the next item
-6. If rejected, regenerate with feedback
+Generate detailed content including description and visual characteristics suitable for image generation.
 
-**DO NOT** create a single todo for "all characters" or "all settings".
-**DO** create individual todos like "Create character profile: Alice", "Create setting profile: Forest".
+After creating, get user approval before moving to the next item.
 `;
         break;
     }
@@ -1195,10 +1261,7 @@ Identify the items to process for this phase, register them in the project, then
     instruction += `
 ## All Items Approved!
 
-All ${totalItems} items have been approved.
-
-1. Mark this phase as complete using update_planner_stage(phase: "${phaseConfig.phase}", stage: "complete")
-2. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+All ${totalItems} items have been approved. Mark this phase as complete and move to the next phase: **${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}**
 `;
   }
 

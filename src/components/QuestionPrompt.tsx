@@ -40,8 +40,14 @@ export function QuestionPrompt({
     autoApproveTimeoutMs ? Math.ceil(autoApproveTimeoutMs / 1000) : null
   );
 
+  // Track if timeout has been triggered to prevent double-firing
+  const timeoutTriggeredRef = React.useRef(false);
+
   // Countdown timer effect
   React.useEffect(() => {
+    // Reset triggered flag when timeout changes
+    timeoutTriggeredRef.current = false;
+
     if (!autoApproveTimeoutMs || autoApproveTimeoutMs <= 0) {
       setRemainingSeconds(null);
       return;
@@ -53,7 +59,6 @@ export function QuestionPrompt({
       setRemainingSeconds(prev => {
         if (prev === null || prev <= 1) {
           clearInterval(interval);
-          onTimeout?.();
           return 0;
         }
         return prev - 1;
@@ -61,7 +66,18 @@ export function QuestionPrompt({
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [autoApproveTimeoutMs, onTimeout]);
+  }, [autoApproveTimeoutMs]);
+
+  // Separate effect to handle timeout callback - avoids setState during render
+  React.useEffect(() => {
+    if (remainingSeconds === 0 && !timeoutTriggeredRef.current) {
+      timeoutTriggeredRef.current = true;
+      // Use setTimeout to ensure the callback runs outside the render cycle
+      setTimeout(() => {
+        onTimeout?.();
+      }, 0);
+    }
+  }, [remainingSeconds, onTimeout]);
 
   // Countdown display component
   const CountdownDisplay = () => {

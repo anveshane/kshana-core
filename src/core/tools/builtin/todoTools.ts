@@ -6,7 +6,30 @@ import { createTool } from '../ToolRegistry.js';
 // todo_write - Primary todo management tool (matches prompt)
 export const todoWriteTool = createTool(
   'todo_write',
-  'Manage your todo list. Create, update, and track progress on tasks. Each todo has content (task description), status (pending/in_progress/completed), and optional visible flag. IMPORTANT: Always provide at least 2 items - if you only have one task, do not use this tool and just execute the task directly.',
+  `Manage your todo list. Create, update, and track progress on tasks.
+
+## Todo Requirements
+
+**DO** create granular, specific todos:
+- "Create character profile for Alice"
+- "Create character profile for Bob"
+- "Create setting profile for Castle Throne Room"
+- "Generate reference image for Alice"
+- "Generate scene image for Scene 1"
+- "Write scene description for Scene 3"
+
+**DO NOT** create vague or implementation-focused todos:
+- ❌ "Process all characters" (too vague)
+- ❌ "Use dispatch_content_agent to create profiles" (no tool names)
+- ❌ "Call update_project with action add_character" (no tool calls)
+- ❌ "Generate images" (not specific enough)
+
+**RULES:**
+1. Each todo describes WHAT to accomplish, not HOW (no tool names or function calls)
+2. Each todo is a single, specific task (one character, one scene, one image)
+3. Create a complete list upfront - break down work into all individual items
+4. Minimum 3+ items when planning work (if only 1-2 items, just do the work directly)
+5. Update status as you work: pending → in_progress → completed`,
   {
     type: 'object',
     properties: {
@@ -15,7 +38,7 @@ export const todoWriteTool = createTool(
         items: {
           type: 'object',
           properties: {
-            content: { type: 'string', description: 'Task description' },
+            content: { type: 'string', description: 'Specific task description (no tool names or function calls)' },
             status: {
               type: 'string',
               enum: ['pending', 'in_progress', 'completed'],
@@ -28,7 +51,7 @@ export const todoWriteTool = createTool(
           },
           required: ['content'],
         },
-        description: 'The complete todo list',
+        description: 'The complete todo list - should be granular with specific items',
       },
     },
     required: ['todos'],

@@ -20,6 +20,8 @@ import {
   updateCharacter,
   updateSetting,
   updateScene,
+  getProjectStyleConfig,
+  STYLE_CONFIGS,
 } from './workflow/index.js';
 
 /**
@@ -198,11 +200,6 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
       throw new Error(`Workflow '${workflowName}' not found`);
     }
 
-    console.log(`[ImageGen] Using workflow: ${workflowName} for ${logDesc}`);
-    if (useQwenEdit) {
-      console.log(`[ImageGen] Reference images: ${reference_images.map(r => `${r.type}:${r.name}`).join(', ')}`);
-    }
-
     let inputImageFilename: string | undefined;
     const referenceImageFilenames: string[] = [];
 
@@ -216,34 +213,35 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
         const refImagePath = findImagePathFromArtifactId(refImage.image_id);
 
         if (!refImagePath || !fs.existsSync(refImagePath)) {
-          console.warn(`[ImageGen] Reference image not found for artifact: ${refImage.image_id}, skipping`);
           continue;
         }
 
-        console.log(`[ImageGen] Uploading reference image ${i + 1}/${imagesToUpload.length}: ${refImagePath}`);
         const uploadResult = await client.uploadImage(refImagePath);
 
         if (i === 0) {
           // First image is the primary input (base image to edit)
           inputImageFilename = uploadResult.name;
-          console.log(`[ImageGen] Set primary input image: ${inputImageFilename}`);
         } else {
           // Additional images are stored separately
           referenceImageFilenames.push(uploadResult.name);
-          console.log(`[ImageGen] Added reference image ${i + 1}: ${uploadResult.name}`);
         }
       }
-
-      console.log(`[ImageGen] Total images for qwen_edit: 1 primary + ${referenceImageFilenames.length} additional = ${1 + referenceImageFilenames.length}`);
     }
+
+    // Get the project style configuration and enhance the prompt
+    const styleConfig = getProjectStyleConfig();
+    const enhancedPrompt = `${prompt}, ${styleConfig.promptModifier}`;
+    const enhancedNegativePrompt = negative_prompt
+      ? `${negative_prompt}, ${styleConfig.negativePromptModifier}`
+      : styleConfig.negativePromptModifier;
 
     const template = loadWorkflowTemplate(workflowMetadata.filename);
     const workflow = parameterizeWorkflowByName(workflowName, template, {
       sceneNumber: scene_number,
-      prompt,
-      negativePrompt: negative_prompt,
+      prompt: enhancedPrompt,
+      negativePrompt: enhancedNegativePrompt,
       aspectRatio: aspect_ratio,
-      style: 'cinematic',
+      style: styleConfig.displayName.toLowerCase().replace(/\s+/g, '_'),
       seed,
       filenamePrefix,
       inputImageFilename,
@@ -378,24 +376,20 @@ async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<
             referenceImageId: artifactId,
             referenceImagePath: relativePath,
           });
-          console.log(`Linked artifact ${artifactId} to character: ${job.context.characterName}`);
         } else if (job.context.entityType === 'setting' && job.context.settingName) {
           updateSetting(job.context.settingName, {
             referenceImageId: artifactId,
             referenceImagePath: relativePath,
           });
-          console.log(`Linked artifact ${artifactId} to setting: ${job.context.settingName}`);
         } else if (job.context.entityType === 'scene' && job.context.sceneNumber !== undefined) {
           if (job.context.artifactType === 'video') {
             updateScene(job.context.sceneNumber, {
               videoArtifactId: artifactId,
             });
-            console.log(`Linked video artifact ${artifactId} to scene: ${job.context.sceneNumber}`);
           } else {
             updateScene(job.context.sceneNumber, {
               imageArtifactId: artifactId,
             });
-            console.log(`Linked image artifact ${artifactId} to scene: ${job.context.sceneNumber}`);
           }
         }
       } catch (e) {
