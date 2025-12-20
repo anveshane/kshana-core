@@ -302,6 +302,105 @@ export function setProjectInputType(
 }
 
 /**
+ * Sync the content registry to match actual project content.
+ * This ensures existing projects that were created before content tracking
+ * have their content registry properly populated.
+ */
+function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
+  let needsSave = false;
+
+  // Ensure content registry exists
+  if (!project.content) {
+    project.content = createDefaultContentRegistry();
+    needsSave = true;
+  }
+
+  const projectDir = getProjectDir(basePath);
+
+  // Sync plot content
+  const plotFile = join(projectDir, 'plans', 'plot.md');
+  if (existsSync(plotFile) && project.content.plot.status === 'missing') {
+    project.content.plot.status = 'complete';
+    needsSave = true;
+  }
+
+  // Sync story content
+  const storyFile = join(projectDir, 'plans', 'story.md');
+  if (existsSync(storyFile) && project.content.story.status === 'missing') {
+    project.content.story.status = 'complete';
+    needsSave = true;
+  }
+
+  // Sync characters from project.characters
+  for (const char of project.characters) {
+    if (!project.content.characters.items?.includes(char.name)) {
+      if (!project.content.characters.items) {
+        project.content.characters.items = [];
+      }
+      project.content.characters.items.push(char.name);
+      needsSave = true;
+    }
+    // Also track file path
+    const safeName = char.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const charFile = `characters/${safeName}.md`;
+    if (!project.content.characters.itemFiles) {
+      project.content.characters.itemFiles = {};
+    }
+    if (!project.content.characters.itemFiles[char.name]) {
+      project.content.characters.itemFiles[char.name] = charFile;
+      needsSave = true;
+    }
+  }
+  if ((project.content.characters.items?.length ?? 0) > 0 && project.content.characters.status === 'missing') {
+    project.content.characters.status = 'partial';
+    needsSave = true;
+  }
+
+  // Sync settings from project.settings
+  for (const setting of project.settings) {
+    if (!project.content.settings.items?.includes(setting.name)) {
+      if (!project.content.settings.items) {
+        project.content.settings.items = [];
+      }
+      project.content.settings.items.push(setting.name);
+      needsSave = true;
+    }
+    // Also track file path
+    const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const settingFile = `settings/${safeName}.md`;
+    if (!project.content.settings.itemFiles) {
+      project.content.settings.itemFiles = {};
+    }
+    if (!project.content.settings.itemFiles[setting.name]) {
+      project.content.settings.itemFiles[setting.name] = settingFile;
+      needsSave = true;
+    }
+  }
+  if ((project.content.settings.items?.length ?? 0) > 0 && project.content.settings.status === 'missing') {
+    project.content.settings.status = 'partial';
+    needsSave = true;
+  }
+
+  // Sync scenes from project.scenes
+  for (const scene of project.scenes) {
+    const sceneName = scene.title || `Scene ${scene.sceneNumber}`;
+    if (!project.content.scenes.items?.includes(sceneName)) {
+      if (!project.content.scenes.items) {
+        project.content.scenes.items = [];
+      }
+      project.content.scenes.items.push(sceneName);
+      needsSave = true;
+    }
+  }
+  if ((project.content.scenes.items?.length ?? 0) > 0 && project.content.scenes.status === 'missing') {
+    project.content.scenes.status = 'partial';
+    needsSave = true;
+  }
+
+  return needsSave;
+}
+
+/**
  * Load an existing project file.
  * Returns null if project doesn't exist or is incompatible (old version).
  */
@@ -321,6 +420,11 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
       console.warn(`[ProjectManager] Incompatible project version: ${project.version ?? 'unknown'}. Expected: 2.0`);
       console.warn('[ProjectManager] Please delete the .kshana directory and start a new project.');
       return null;
+    }
+
+    // Sync content registry for backward compatibility
+    if (syncContentRegistry(project, basePath)) {
+      saveProject(project, basePath);
     }
 
     return project as ProjectFile;
@@ -583,7 +687,9 @@ export function saveCharacter(
     } else {
       project.characters.push(character);
     }
-    saveProject(project, basePath);
+    // Also track in content registry for persistence across restarts
+    addContentItem(project, 'characters', character.name, filePath, basePath);
+    // Note: addContentItem calls saveProject internally
   }
 }
 
@@ -726,7 +832,9 @@ export function saveSetting(setting: SettingData, basePath: string = process.cwd
     } else {
       project.settings.push(setting);
     }
-    saveProject(project, basePath);
+    // Also track in content registry for persistence across restarts
+    addContentItem(project, 'settings', setting.name, filePath, basePath);
+    // Note: addContentItem calls saveProject internally
   }
 }
 
@@ -853,7 +961,10 @@ export function addScene(sceneRef: SceneRef, basePath: string = process.cwd()): 
     project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
   }
 
-  saveProject(project, basePath);
+  // Also track in content registry for persistence across restarts
+  const sceneName = sceneRef.title || `Scene ${sceneRef.sceneNumber}`;
+  addContentItem(project, 'scenes', sceneName, undefined, basePath);
+  // Note: addContentItem calls saveProject internally
 }
 
 /**
@@ -988,7 +1099,21 @@ export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): vo
   const project = loadProject(basePath);
   if (project && !project.assets.includes(asset.id)) {
     project.assets.push(asset.id);
-    saveProject(project, basePath);
+
+    // Also track in content registry for persistence across restarts
+    // Map asset types to content types
+    const contentType: ContentTypeName | null =
+      asset.type === 'scene_image' || asset.type === 'character_ref' || asset.type === 'setting_ref'
+        ? 'images'
+        : asset.type === 'scene_video' || asset.type === 'final_video'
+          ? 'videos'
+          : null;
+
+    if (contentType) {
+      addContentItem(project, contentType, asset.id, asset.path, basePath);
+    } else {
+      saveProject(project, basePath);
+    }
   }
 }
 

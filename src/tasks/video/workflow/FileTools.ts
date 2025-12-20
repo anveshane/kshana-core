@@ -30,8 +30,9 @@ import {
   updateSceneApproval,
   updateScene,
   setProjectInputType,
+  updateContentStatus,
 } from './ProjectManager.js';
-import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus, InputType } from './types.js';
+import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus, InputType, ContentTypeName } from './types.js';
 import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase, INPUT_TYPE_CONFIGS } from './types.js';
 import { LLMClient } from '../../../core/llm/index.js';
 import { contextStore } from '../../../core/context/index.js';
@@ -273,6 +274,21 @@ For structured data (characters, settings, assets, scenes), prefer using update_
 
     try {
       writeProjectFile(filePath, content);
+
+      // Track plot/story content in the content registry for persistence
+      const project = loadProject();
+      if (project) {
+        // Map file paths to content types
+        const fileToContentType: Record<string, ContentTypeName> = {
+          'plans/plot.md': 'plot',
+          'plans/story.md': 'story',
+        };
+        const contentType = fileToContentType[filePath];
+        if (contentType) {
+          updateContentStatus(project, contentType, 'complete');
+        }
+      }
+
       return {
         status: 'success',
         message: `File written successfully: ${filePath}`,
