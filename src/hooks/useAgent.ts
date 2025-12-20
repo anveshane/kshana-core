@@ -249,11 +249,17 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
 
     case 'TOOL_STREAM': {
       // Update streaming content for a specific tool
+      const targetTool = state.recentTools.find(t => t.id === action.toolCallId);
+      const newStreamingContent = (targetTool?.streamingContent ?? '') + action.chunk;
+      debugLog(`[useAgent] TOOL_STREAM: toolCallId=${action.toolCallId}, chunk=${action.chunk.length} chars, done=${action.done}, newTotal=${newStreamingContent.length} chars, toolFound=${!!targetTool}`);
+      if (!targetTool) {
+        debugLog(`[useAgent] TOOL_STREAM WARNING: tool not found in recentTools. Available tools: ${state.recentTools.map(t => t.id).join(', ')}`);
+      }
       return {
         ...state,
         recentTools: state.recentTools.map(t =>
           t.id === action.toolCallId
-            ? { ...t, streamingContent: (t.streamingContent ?? '') + action.chunk }
+            ? { ...t, streamingContent: newStreamingContent }
             : t
         ),
       };
@@ -293,6 +299,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       };
 
     case 'STREAM_CHUNK':
+      debugLog(`[useAgent] STREAM_CHUNK: chunk=${action.chunk.length} chars, newTotal=${(state.streamingText + action.chunk).length} chars`);
       return {
         ...state,
         streamingText: state.streamingText + action.chunk,
@@ -304,14 +311,20 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       // Move completed streaming text to history if there's content
       const finalText = state.streamingText.trim();
       const agentName = action.agentName ?? state.currentAgentName;
+      debugLog(`[useAgent] STREAM_DONE: finalText=${finalText.length} chars, skipHistory=${action.skipHistory}, addToHistory=${!!(finalText && !action.skipHistory)}`);
+      if (finalText) {
+        debugLog(`[useAgent] STREAM_DONE content preview: "${finalText.slice(0, 200)}${finalText.length > 200 ? '...' : ''}"`);
+      }
       if (!finalText || action.skipHistory) {
         // Either no content or skipHistory flag set (e.g., plan shown via ToolCallDisplay)
+        debugLog(`[useAgent] STREAM_DONE: skipping history (no content or skipHistory flag)`);
         return {
           ...state,
           streamingText: '',
           isStreaming: false,
         };
       }
+      debugLog(`[useAgent] STREAM_DONE: adding to history with agentName=${agentName}`);
       return {
         ...state,
         streamingText: '',
@@ -444,6 +457,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('streaming_text', event => {
+      debugLog(`[useAgent] streaming_text event: done=${event.done}, chunkLen=${event.chunk?.length ?? 0}, skipHistory=${event.skipHistory}`);
       if (event.done) {
         dispatch({ type: 'STREAM_DONE', skipHistory: event.skipHistory });
       } else if (event.chunk) {
@@ -493,6 +507,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('tool_streaming', event => {
+      debugLog(`[useAgent] tool_streaming event: toolCallId=${event.toolCallId}, chunkLen=${event.chunk.length}, done=${event.done}`);
       dispatch({
         type: 'TOOL_STREAM',
         toolCallId: event.toolCallId,

@@ -6,27 +6,50 @@ import { createTool } from '../ToolRegistry.js';
 
 export const taskTool = createTool(
   'Task',
-  `Launch a new agent to handle complex, multi-step tasks autonomously.
+  `Launch a specialized subagent to handle a specific task in the story-to-video pipeline.
 
-The Task tool launches specialized agents (subprocesses) that autonomously handle complex tasks. Each agent type has specific capabilities and tools available to it.
+Available subagent types:
+- Plan: Read-only planning specialist. Analyzes project state and designs execution plans. Does NOT generate content.
+- Explore: Read-only project explorer. Reads and summarizes existing project content (characters, settings, scenes).
+- content-creator: Creative content generator. Creates plot, story, characters, settings, scenes, narration. Iterates with user until approved.
+- image-generator: Image generation specialist. Crafts prompts and generates images for characters, settings, and scenes.
+- video-assembler: Video generation specialist. Creates video clips from scene images and stitches them into final video.
 
-Available agent types and the tools they have access to:
-- general-purpose: General-purpose agent for researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. (Tools: *)
-- statusline-setup: Use this agent to configure the user's Claude Code status line setting. (Tools: Read, Edit)
-- Explore: Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions. (Tools: All tools)
-- Plan: Software architect agent for designing implementation plans. Use this when you need to plan the implementation strategy for a task. Returns step-by-step plans, identifies critical files, and considers architectural trade-offs. (Tools: All tools)
+Context Passing:
+- Use context_refs to pass stored context variables (e.g., ["$story", "$character_daniel"])
+- The subagent will receive the full content of each referenced variable
+- Use store_context to store content before passing it
 
-When using the Task tool, you must specify a subagent_type parameter to select which agent type to use.`,
+Content Type (for content-creator):
+- plot: High-level story outline
+- story: Full narrative with dialogue
+- character: Character profile
+- setting: Location description
+- scene: Visual scene description
+- narration: Voice-over text`,
   {
     type: 'object',
     properties: {
       subagent_type: {
         type: 'string',
-        description: 'Which agent type to use (e.g., "Explore", "Plan", "general-purpose")',
+        description: 'Which subagent to use: "Plan", "Explore", "content-creator", "image-generator", "video-assembler"',
       },
       task: {
         type: 'string',
         description: 'Detailed task description for the subagent',
+      },
+      context_refs: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Array of context variable names to pass to the subagent (e.g., ["$story", "$character_daniel"])',
+      },
+      content_type: {
+        type: 'string',
+        description: 'For content-creator: type of content to generate (plot, story, character, setting, scene, narration)',
+      },
+      output_file: {
+        type: 'string',
+        description: 'Optional file path to save the output (e.g., "plans/story.md")',
       },
       run_in_background: {
         type: 'boolean',
@@ -41,5 +64,3 @@ When using the Task tool, you must specify a subagent_type parameter to select w
   }
   // No handler - handled by GenericAgent
 );
-
-

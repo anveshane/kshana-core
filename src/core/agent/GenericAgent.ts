@@ -201,6 +201,7 @@ export class GenericAgent extends TypedEventEmitter {
         // Handle content chunks
         if (chunk.content) {
           content += chunk.content;
+          debugLog(`[GenericAgent] streaming_text emit: chunk=${chunk.content.length} chars, total=${content.length} chars`);
           this.emit({ type: 'streaming_text', chunk: chunk.content, done: false });
         }
 
@@ -221,6 +222,7 @@ export class GenericAgent extends TypedEventEmitter {
 
         // Handle stream completion and capture usage
         if (chunk.done) {
+          debugLog(`[GenericAgent] streaming_text DONE: total content=${content.length} chars, toolCallCount=${toolCallAccumulators.size}`);
           this.emit({ type: 'streaming_text', chunk: '', done: true });
           if (chunk.usage) {
             usage = chunk.usage;
@@ -255,6 +257,11 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Clean content (remove <think> tags)
     const cleanedContent = content ? content.replace(/<think>.*?<\/think>/gs, '').trim() : null;
+
+    debugLog(`[GenericAgent] generateWithStreaming result: rawContent=${content.length} chars, cleanedContent=${cleanedContent?.length ?? 0} chars, toolCalls=${toolCalls.length}`);
+    if (cleanedContent) {
+      debugLog(`[GenericAgent] generateWithStreaming content preview: "${cleanedContent.slice(0, 200)}${cleanedContent.length > 200 ? '...' : ''}"`);
+    }
 
     return {
       content: cleanedContent,
@@ -1374,6 +1381,7 @@ export class GenericAgent extends TypedEventEmitter {
     try {
       // Generate or refine the plan with streaming
       let planContent = '';
+      debugLog(`[GenericAgent] continuePlanningLoop starting generation, toolCallId=${this.planningState.toolCallId}`);
 
       for await (const chunk of this.llm.generateStream({
         messages: this.planningState.messages,
@@ -1381,6 +1389,7 @@ export class GenericAgent extends TypedEventEmitter {
       })) {
         if (chunk.content) {
           planContent += chunk.content;
+          debugLog(`[GenericAgent] tool_streaming emit: chunk=${chunk.content.length} chars, total=${planContent.length} chars`);
           // Emit tool_streaming to show content inside the ToolCallDisplay
           this.emit({
             type: 'tool_streaming',
@@ -1391,6 +1400,7 @@ export class GenericAgent extends TypedEventEmitter {
           });
         }
         if (chunk.done) {
+          debugLog(`[GenericAgent] tool_streaming DONE: total planContent=${planContent.length} chars`);
           this.emit({
             type: 'tool_streaming',
             toolCallId: this.planningState.toolCallId,
@@ -2009,6 +2019,7 @@ Respond in JSON format:
     const task = args['task'] as string;
     let context = args['context'] as string | undefined;
     const contextRef = args['context_ref'] as string | undefined;
+    const contextRefs = args['context_refs'] as string[] | undefined;
     const sceneNumber = (args['scene_number'] as number) ?? 1;
     const imageType = args['image_type'] as 'scene' | 'character_ref' | 'setting_ref' | undefined;
     const characterName = args['character_name'] as string | undefined;
@@ -2024,8 +2035,24 @@ Respond in JSON format:
       return { error: 'No task provided for dispatch_image_agent' };
     }
 
-    // Resolve context_ref if provided (takes precedence over inline context)
-    if (contextRef) {
+    // Resolve context_refs (array) if provided - combines multiple contexts
+    if (contextRefs && contextRefs.length > 0) {
+      const contextParts: string[] = [];
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push(`## ${ref} (${stored.label})\n\n${stored.content}`);
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} for image agent (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
+        }
+      }
+      if (contextParts.length > 0) {
+        context = contextParts.join('\n\n---\n\n');
+      }
+    }
+    // Fallback to singular context_ref if provided
+    else if (contextRef) {
       const stored = contextStore.get(contextRef);
       if (stored) {
         context = stored.content;
@@ -2036,7 +2063,7 @@ Respond in JSON format:
     }
 
     // Warn about long inline context that should use context_ref
-    if (context && context.length > 500 && !contextRef) {
+    if (context && context.length > 500 && !contextRef && !contextRefs) {
       debugLog(`[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_image_agent without context_ref. Consider using store_context.`);
     }
 
@@ -2493,10 +2520,11 @@ Your classification:`;
 
     const args = toolCall.arguments;
     const task = args['task'] as string;
-    const sceneImageArtifactId = args['scene_image_artifact_id'] as string;
+    const sceneImageArtifactId = args['scene_image_artifact_id'] as string | undefined;
     const sceneNumber = (args['scene_number'] as number) ?? 1;
     const motionDescription = args['motion_description'] as string | undefined;
     const contextRef = args['context_ref'] as string | undefined;
+    const contextRefs = args['context_refs'] as string[] | undefined;
     const duration = (args['duration'] as number) ?? 4;
 
     if (!task) {
@@ -2504,14 +2532,33 @@ Your classification:`;
       return { error: 'No task provided for dispatch_video_agent' };
     }
 
-    if (!sceneImageArtifactId) {
+    // scene_image_artifact_id is optional for stitching operations
+    // But required for single scene video generation
+    const isStitchOperation = task.toLowerCase().includes('stitch');
+    if (!sceneImageArtifactId && !isStitchOperation) {
       this.currentMode = 'orchestrator';
       return { error: 'No scene_image_artifact_id provided for dispatch_video_agent' };
     }
 
-    // Resolve context_ref if provided
+    // Resolve context_refs (array) if provided - combines multiple contexts
     let context = '';
-    if (contextRef) {
+    if (contextRefs && contextRefs.length > 0) {
+      const contextParts: string[] = [];
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push(`## ${ref} (${stored.label})\n\n${stored.content}`);
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} for video agent (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
+        }
+      }
+      if (contextParts.length > 0) {
+        context = contextParts.join('\n\n---\n\n');
+      }
+    }
+    // Fallback to singular context_ref if provided
+    else if (contextRef) {
       const stored = contextStore.get(contextRef);
       if (stored) {
         context = stored.content;
