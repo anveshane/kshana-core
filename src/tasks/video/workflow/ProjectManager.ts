@@ -153,9 +153,21 @@ function stripWrapperTags(content: string): string {
  */
 export function createProject(
   originalInput: string,
-  style: ProjectStyle = 'cinematic_realism',
-  basePath: string = process.cwd()
+  styleOrBasePath: ProjectStyle | string = 'cinematic_realism',
+  basePathMaybe: string = process.cwd()
 ): ProjectFile {
+  // Back-compat:
+  // - Old signature: createProject(originalInput, basePath)
+  // - New signature: createProject(originalInput, style, basePath?)
+  const style: ProjectStyle =
+    styleOrBasePath === 'cinematic_realism' || styleOrBasePath === 'anime'
+      ? styleOrBasePath
+      : 'cinematic_realism';
+  const basePath: string =
+    styleOrBasePath === 'cinematic_realism' || styleOrBasePath === 'anime'
+      ? basePathMaybe
+      : String(styleOrBasePath);
+
   // Ensure directory structure exists
   createProjectStructure(basePath);
 

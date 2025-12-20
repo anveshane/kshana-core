@@ -1,15 +1,10 @@
-/**
- * Todo management tools - handled by GenericAgent directly.
- */
-import { createTool } from '../ToolRegistry.js';
+# TodoWrite
 
-// TodoWrite - Claude SDK-style todo tool (handled by GenericAgent)
-export const todoWriteTool = createTool(
-  'TodoWrite',
-  `Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
 It also helps the user understand the progress of the task and overall progress of their requests.
 
 ## When to Use This Tool
+
 Use this tool proactively in these scenarios:
 
 1. Complex multi-step tasks - When a task requires 3 or more distinct steps or actions
@@ -23,6 +18,7 @@ Use this tool proactively in these scenarios:
 ## When NOT to Use This Tool
 
 Skip using this tool when:
+
 1. There is only a single, straightforward task
 2. The task is trivial and tracking it provides no organizational benefit
 3. The task can be completed in less than 3 trivial steps
@@ -32,7 +28,7 @@ NOTE that you should not use this tool if there is only one trivial task to do. 
 
 ## Task States and Management
 
-1. Task States:
+1. Task States: Use these states to track progress:
    - pending: Task not yet started
    - in_progress: Currently working on (limit to ONE task at a time)
    - completed: Task finished successfully
@@ -67,48 +63,4 @@ NOTE that you should not use this tool if there is only one trivial task to do. 
      - content: "Fix authentication bug"
      - activeForm: "Fixing authentication bug"
 
-When in doubt, use this tool. Being proactive with task management demonstrates attentiveness and ensures you complete all requirements successfully.`,
-  {
-    type: 'object',
-    properties: {
-      merge: {
-        type: 'boolean',
-        description: 'When true, merge updates into existing todos by id; when false, replace the list.',
-      },
-      todos: {
-        type: 'array',
-        description: 'Array of todo items to write',
-        items: {
-          type: 'object',
-          properties: {
-            id: { type: 'string', description: 'Unique identifier for the todo item' },
-            content: { type: 'string', description: 'Imperative task description (what to do)' },
-            activeForm: { type: 'string', description: 'Present continuous form (what you are doing)' },
-            status: {
-              type: 'string',
-              enum: ['pending', 'in_progress', 'completed', 'cancelled'],
-              description: 'Task status',
-            },
-          },
-          required: ['id', 'content', 'status'],
-        },
-      },
-    },
-    required: ['merge', 'todos'],
-  }
-  // No handler - handled by GenericAgent
-);
-
-// Legacy aliases for backwards compatibility
-export const setTodosTool = todoWriteTool;
-export const updateTodoTool = todoWriteTool;
-export const addSubtasksTool = todoWriteTool;
-export const expandTodoTool = todoWriteTool;
-
-// Back-compat alias tool name (so older prompts still work during migration)
-export const legacyTodoWriteTool = createTool(
-  'todo_write',
-  todoWriteTool.description,
-  todoWriteTool.parameters
-  // No handler - handled by GenericAgent
-);
+When in doubt, use this tool. Being proactive with task management demonstrates attentiveness and ensures you complete all requirements successfully.

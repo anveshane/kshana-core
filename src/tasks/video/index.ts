@@ -7,7 +7,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { GenericAgent } from '../../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
-import { ToolRegistry, createDefaultToolRegistry, dispatchImageAgentTool } from '../../core/tools/index.js';
+import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
@@ -73,9 +73,6 @@ export interface VideoAgentConfig {
 export function createVideoToolRegistry(): ToolRegistry {
   // Start with default generic tools (think, ask_user, todos)
   const registry = createDefaultToolRegistry();
-
-  // Add dispatch_image_agent for image prompt crafting
-  registry.register(dispatchImageAgentTool);
 
   // Add video generation tools
   for (const tool of getVideoGenerationTools()) {
@@ -167,8 +164,7 @@ export function createWorkflowToolRegistry(): ToolRegistry {
   // Start with default generic tools (think, ask_user, dispatch_agent, todos)
   const registry = createDefaultToolRegistry();
 
-  // Add dispatch_image_agent for image prompt crafting
-  registry.register(dispatchImageAgentTool);
+  // Note: Image generation is now handled via Task tool with subagent_type: 'image-generator'
 
   // Add video generation tools
   for (const tool of getVideoGenerationTools()) {

@@ -41,7 +41,7 @@ export class ExpandableTodoManager {
    * Partial match is supported. Auto-starts next pending when completing.
    */
   updateTodo(task: string, status: TodoStatus): TodoManagerResult {
-    if (!['completed', 'in_progress', 'pending'].includes(status)) {
+    if (!['completed', 'in_progress', 'pending', 'cancelled'].includes(status)) {
       return {
         status: 'error',
         message: `Invalid status: ${status}`,
@@ -78,8 +78,8 @@ export class ExpandableTodoManager {
     const oldStatus = todo.status;
     todo.status = status;
 
-    // Auto-start next pending when completing
-    if (status === 'completed') {
+    // Auto-start next pending when completing/cancelling
+    if (status === 'completed' || status === 'cancelled') {
       const nextPending = this.todos.find(t => t.status === 'pending');
       if (nextPending) {
         nextPending.status = 'in_progress';
@@ -208,13 +208,22 @@ export class ExpandableTodoManager {
     const existingCompleted = this.todos.filter(t => t.status === 'completed');
 
     // Create new todos from input
-    const newTodos = todos.map(t =>
-      createTodoItem(t['content'] as string, {
-        status: (t['status'] as TodoStatus | undefined) ?? 'pending',
+    const newTodos = todos.map(t => {
+      const content = (t['content'] as string | undefined) ?? '';
+      const status = (t['status'] as TodoStatus | undefined) ?? 'pending';
+      const activeForm = t['activeForm'] as string | undefined;
+
+      // Preserve explicit IDs if provided (Claude SDK-style TodoWrite), otherwise generate.
+      const providedId = t['id'] as string | undefined;
+      const item = createTodoItem(content, {
+        status,
+        activeForm,
         visible: (t['visible'] as boolean | undefined) ?? true,
         depth: (t['depth'] as number | undefined) ?? 0,
-      })
-    );
+      });
+      if (providedId) item.id = providedId;
+      return item;
+    });
 
     // Check if new todos contain the completed ones (by content)
     const newContents = new Set(newTodos.map(t => t.content.toLowerCase()));
@@ -230,6 +239,59 @@ export class ExpandableTodoManager {
     return {
       status: 'success',
       message: `Todo list updated with ${this.todos.length} items (${preservedCompleted.length} completed preserved)`,
+      todos: this.todos,
+    };
+  }
+
+  /**
+   * Merge todo updates by id (Claude SDK-style TodoWrite merge=true).
+   * - Updates existing items if id matches
+   * - Adds new items if id is new
+   * - Leaves unspecified items unchanged
+   */
+  mergeTodosById(updates: Array<Record<string, unknown>>): TodoManagerResult {
+    const byId = new Map(this.todos.map(t => [t.id, t] as const));
+
+    for (const u of updates) {
+      const id = u['id'] as string | undefined;
+      const content = u['content'] as string | undefined;
+      const status = u['status'] as TodoStatus | undefined;
+      const activeForm = u['activeForm'] as string | undefined;
+
+      if (!id) continue;
+
+      const existing = byId.get(id);
+      if (existing) {
+        if (typeof content === 'string') existing.content = content;
+        if (typeof activeForm === 'string') existing.activeForm = activeForm;
+        if (status) existing.status = status;
+      } else {
+        const item = createTodoItem(content ?? '', {
+          status: status ?? 'pending',
+          activeForm,
+          depth: 0,
+        });
+        item.id = id;
+        this.todos.push(item);
+        byId.set(id, item);
+      }
+    }
+
+    // Ensure exactly one in_progress if possible (auto-heal)
+    const inProgress = this.todos.filter(t => t.status === 'in_progress');
+    if (inProgress.length === 0) {
+      const nextPending = this.todos.find(t => t.status === 'pending');
+      if (nextPending) nextPending.status = 'in_progress';
+    } else if (inProgress.length > 1) {
+      // Keep first, demote the rest to pending to enforce rule
+      for (let i = 1; i < inProgress.length; i++) {
+        inProgress[i]!.status = 'pending';
+      }
+    }
+
+    return {
+      status: 'success',
+      message: `Merged ${updates.length} todo updates by id`,
       todos: this.todos,
     };
   }

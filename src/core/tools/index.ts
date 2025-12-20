@@ -11,14 +11,17 @@ export {
 // Built-in tools
 export {
   thinkTool,
+  askUserQuestionTool,
   askUserTool,
-  dispatchAgentTool,
-  dispatchContentAgentTool,
-  dispatchImageAgentTool,
+  taskTool,
+  taskOutputTool,
+  enterPlanModeTool,
+  exitPlanModeTool,
   setTodosTool,
   updateTodoTool,
   addSubtasksTool,
   todoWriteTool,
+  legacyTodoWriteTool,
   expandTodoTool,
   storeContextTool,
   fetchContextTool,
@@ -30,11 +33,14 @@ export {
 import { ToolRegistry } from './ToolRegistry.js';
 import {
   thinkTool,
+  askUserQuestionTool,
   askUserTool,
-  dispatchAgentTool,
-  dispatchContentAgentTool,
-  dispatchImageAgentTool,
+  taskTool,
+  taskOutputTool,
+  enterPlanModeTool,
+  exitPlanModeTool,
   todoWriteTool,
+  legacyTodoWriteTool,
   storeContextTool,
   fetchContextTool,
 } from './builtin/index.js';
@@ -47,9 +53,16 @@ export function createDefaultToolRegistry(): ToolRegistry {
 
   // Register built-in tools
   registry.register(thinkTool);
+  registry.register(askUserQuestionTool);
+  // Keep legacy ask_user during migration
   registry.register(askUserTool);
-  registry.register(dispatchAgentTool);
+  registry.register(taskTool);
+  registry.register(taskOutputTool);
+  registry.register(enterPlanModeTool);
+  registry.register(exitPlanModeTool);
   registry.register(todoWriteTool);
+  // Keep legacy todo_write during migration
+  registry.register(legacyTodoWriteTool);
   registry.register(storeContextTool);
   registry.register(fetchContextTool);
 

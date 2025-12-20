@@ -35,13 +35,15 @@ function debugLog(message: string) {
  */
 const SIMPLE_TOOLS = new Set([
   'think',
-  'ask_user',
+  'AskUserQuestion',
+  'ask_user', // back-compat during migration
   'dispatch_agent',
   'dispatch_content_agent',
   'dispatch_image_agent',
   'dispatch_video_agent',
   'wait_for_job',
-  'todo_write',
+  'TodoWrite',
+  'todo_write', // back-compat during migration
 ]);
 
 const COMPLEX_TOOLS = new Set(['generate_image', 'generate_video', 'edit_image']);
@@ -51,7 +53,15 @@ function isComplexTool(name: string): boolean {
 }
 
 function isBuiltinTodoTool(name: string): boolean {
-  return name === 'todo_write';
+  return name === 'TodoWrite' || name === 'todo_write';
+}
+
+function isTaskTool(name: string): boolean {
+  return name === 'Task';
+}
+
+function isPlanModeTool(name: string): boolean {
+  return name === 'EnterPlanMode' || name === 'ExitPlanMode';
 }
 
 export class GenericAgent extends TypedEventEmitter {
@@ -96,6 +106,9 @@ export class GenericAgent extends TypedEventEmitter {
 
   // Current mode for more descriptive agent names in UI
   private currentMode: 'orchestrator' | 'content' | 'image' | 'video' | 'planning' = 'orchestrator';
+
+  // Claude SDK-style plan mode state
+  private planModeActive = false;
 
   constructor(
     tools: Map<string, ToolDefinition>,
@@ -564,7 +577,7 @@ export class GenericAgent extends TypedEventEmitter {
       // Execute tool calls
       for (const toolCall of response.toolCalls) {
         // Special handling for ask_user - pause execution
-        if (toolCall.name === 'ask_user') {
+        if (toolCall.name === 'ask_user' || toolCall.name === 'AskUserQuestion') {
           const result = this.handleAskUser(toolCall);
           if (result) {
             this.emit({ type: 'agent_status', status: 'waiting', agentName: this.getEffectiveAgentName() });
@@ -729,8 +742,8 @@ export class GenericAgent extends TypedEventEmitter {
       agentName: this.getEffectiveAgentName(),
     });
 
-    // Check for looping (skip for think tool - it's normal to think often)
-    if (toolCall.name !== 'think' && toolCall.name !== 'todo_write') {
+    // Check for looping (skip for think + TodoWrite - these may be called frequently)
+    if (toolCall.name !== 'think' && !isBuiltinTodoTool(toolCall.name)) {
       const loopResult = this.detectLoop(toolCall.name, toolCall.arguments);
       if (loopResult) {
         const resultStatus = loopResult.isHardError ? 'loop_blocked' : 'loop_warning';
@@ -755,6 +768,34 @@ export class GenericAgent extends TypedEventEmitter {
     // Handle built-in todo tools specially (no handler required)
     if (isBuiltinTodoTool(toolCall.name)) {
       const result = this.handleTodoTool(toolCall);
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
+      return result;
+    }
+
+    // Handle plan mode tools (Claude SDK style)
+    if (isPlanModeTool(toolCall.name)) {
+      const result = this.handlePlanModeTool(toolCall.name);
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
+      return result;
+    }
+
+    // Handle Task tool specially - unified subagent entrypoint (Claude SDK style)
+    if (isTaskTool(toolCall.name)) {
+      const result = await this.handleTask(toolCall);
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -1054,23 +1095,80 @@ export class GenericAgent extends TypedEventEmitter {
   }
 
   /**
+   * Handle Task tool - launches a subagent by subagent_type.
+   * For now, maps to existing internal sub-agent handlers so we can migrate incrementally.
+   */
+  private async handleTask(toolCall: ToolCall): Promise<unknown> {
+    const args = toolCall.arguments;
+    const subagentType = args['subagent_type'] as string | undefined;
+
+    if (!subagentType) {
+      return { error: 'Task requires subagent_type' };
+    }
+
+    // Incremental compatibility mapping onto existing sub-agent handlers.
+    if (subagentType === 'Plan') {
+      return await this.handleDispatchAgent({
+        ...toolCall,
+        name: 'dispatch_agent',
+      });
+    }
+
+    if (subagentType === 'content-creator') {
+      return await this.handleDispatchContentAgent({
+        ...toolCall,
+        name: 'dispatch_content_agent',
+      });
+    }
+
+    if (subagentType === 'image-generator') {
+      return await this.handleDispatchImageAgent({
+        ...toolCall,
+        name: 'dispatch_image_agent',
+      });
+    }
+
+    if (subagentType === 'video-assembler') {
+      return await this.handleDispatchVideoAgent({
+        ...toolCall,
+        name: 'dispatch_video_agent',
+      });
+    }
+
+    return { error: `Unsupported subagent_type: ${subagentType}` };
+  }
+
+  private handlePlanModeTool(toolName: string): Record<string, unknown> {
+    if (toolName === 'EnterPlanMode') {
+      this.planModeActive = true;
+      this.currentMode = 'planning';
+      return { status: 'entered_plan_mode' };
+    }
+
+    // ExitPlanMode
+    this.planModeActive = false;
+    this.currentMode = 'orchestrator';
+    return { status: 'exited_plan_mode' };
+  }
+
+  /**
    * Handle built-in todo management tool.
    */
   private handleTodoTool(toolCall: ToolCall): unknown {
     const args = toolCall.arguments;
-    const todos = args['todos'] as Array<Record<string, unknown>>;
+    const merge = (args['merge'] as boolean | undefined) ?? false;
+    const todos = (args['todos'] as Array<Record<string, unknown>> | undefined) ?? [];
 
-    // Enforce minimum 3 todos to ensure granular task breakdown
-    if (todos.length < 3) {
+    // Claude SDK guidance: never create single-item todo lists.
+    if (todos.length < 2) {
       return {
-        error: 'Todo list must have at least 3 items to ensure proper task breakdown. If you only have 1-2 tasks, execute them directly without tracking.',
-        suggestion: 'Break down your work into more granular items (e.g., separate todos for each character, scene, or image).',
+        error: 'Never create single-item todo lists. If you only have one task, just do it directly.',
       };
     }
 
     // Check for tool call patterns in todo content (forbidden)
     const toolCallPatterns = [
-      /\b(dispatch_\w+|update_project|read_project|write_file|read_file|todo_write|ask_user)\b/i,
+      /\b(dispatch_\w+|update_project|read_project|write_file|read_file|todo_write|TodoWrite|ask_user|AskUserQuestion)\b/i,
       /\baction:\s*["']?\w+["']?/i,
       /\buse\s+(the\s+)?[\w_]+\s+tool/i,
       /\bcall\s+[\w_]+/i,
@@ -1088,7 +1186,12 @@ export class GenericAgent extends TypedEventEmitter {
       }
     }
 
-    const result = this.todoManager.writeTodos(todos);
+    // Apply todo updates.
+    // - merge=false: replace list (preserving any existing completed items via manager logic)
+    // - merge=true: merge by id onto existing items
+    const result = merge
+      ? this.todoManager.mergeTodosById(todos)
+      : this.todoManager.writeTodos(todos);
 
     // Emit todo update event
     this.emit({
@@ -2684,10 +2787,19 @@ Your classification:`;
    */
   private handleAskUser(toolCall: ToolCall): GenericAgentResult | null {
     const args = toolCall.arguments;
-    const question = args['question'] as string;
+    // Support both legacy ask_user schema and Claude SDK-style AskUserQuestion schema.
+    const question =
+      (args['question'] as string | undefined) ??
+      (args['prompt'] as string | undefined) ??
+      '';
+
+    // Legacy-only fields (kept for back-compat)
     const isConfirmation = (args['is_confirmation'] as boolean | undefined) ?? false;
-    const providedOptions = args['options'] as Array<{ label: string; description?: string }> | undefined;
+    const providedOptions = args['options'] as Array<{ label: string; description?: string }> | string[] | undefined;
     const providedTimeout = args['auto_approve_timeout_ms'] as number | undefined;
+
+    // Claude SDK-style multiSelect (currently informational; UI supports single-select)
+    const multiSelect = (args['multiSelect'] as boolean | undefined) ?? false;
 
     // Default options for non-confirmation questions without explicit options
     const DEFAULT_OPTIONS: Array<{ label: string; description?: string }> = [
@@ -2696,8 +2808,25 @@ Your classification:`;
     ];
     const DEFAULT_AUTO_APPROVE_TIMEOUT_MS = 15000; // 15 seconds
 
+    // Normalize options to {label, description?}[]
+    let normalizedOptions: Array<{ label: string; description?: string }> | undefined;
+    if (Array.isArray(providedOptions) && providedOptions.length > 0) {
+      if (typeof providedOptions[0] === 'string') {
+        normalizedOptions = (providedOptions as string[]).map(label => ({ label }));
+      } else {
+        normalizedOptions = providedOptions as Array<{ label: string; description?: string }>;
+      }
+    }
+
+    // Ensure "Other" is always available as per Claude SDK usage notes (for non-confirmation questions)
+    if (!isConfirmation) {
+      const opts = normalizedOptions ?? DEFAULT_OPTIONS;
+      const hasOther = opts.some(o => o.label.toLowerCase() === 'other');
+      normalizedOptions = hasOther ? opts : [...opts, { label: 'Other', description: 'Provide custom input' }];
+    }
+
     // Use provided options or defaults (only for non-confirmation questions)
-    const options = isConfirmation ? undefined : (providedOptions ?? DEFAULT_OPTIONS);
+    const options = isConfirmation ? undefined : (normalizedOptions ?? DEFAULT_OPTIONS);
     const autoApproveTimeoutMs = isConfirmation ? undefined : (providedTimeout ?? DEFAULT_AUTO_APPROVE_TIMEOUT_MS);
 
     this.waitingForUser = true;
@@ -2709,6 +2838,7 @@ Your classification:`;
       is_confirmation: isConfirmation,
       options: options ?? null,
       auto_approve_timeout_ms: autoApproveTimeoutMs ?? null,
+      multiSelect,
     };
 
     this.messages.push({
