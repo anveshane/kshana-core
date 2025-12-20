@@ -8,6 +8,10 @@ export const taskTool = createTool(
   'Task',
   `Launch a specialized subagent to handle a specific task in the story-to-video pipeline.
 
+IMPORTANT: Tasks run SYNCHRONOUSLY and return results directly. Do NOT use TaskOutput - results come back immediately from this tool call.
+
+IMPORTANT: Only ONE task of each type can run at a time. Wait for the current task to complete before starting another of the same type.
+
 Available subagent types:
 - Plan: Read-only planning specialist. Analyzes project state and designs execution plans. Does NOT generate content.
 - Explore: Read-only project explorer. Reads and summarizes existing project content (characters, settings, scenes).
@@ -50,14 +54,6 @@ Content Type (for content-creator):
       output_file: {
         type: 'string',
         description: 'Optional file path to save the output (e.g., "plans/story.md")',
-      },
-      run_in_background: {
-        type: 'boolean',
-        description: 'If true, run agent in background and return a task_id',
-      },
-      resume: {
-        type: 'string',
-        description: 'Resume a previously started agent by id',
       },
     },
     required: ['subagent_type', 'task'],

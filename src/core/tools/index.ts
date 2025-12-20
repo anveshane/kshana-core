@@ -14,7 +14,7 @@ export {
   askUserQuestionTool,
   askUserTool,
   taskTool,
-  taskOutputTool,
+  // taskOutputTool - NOT IMPLEMENTED, removed to avoid confusion
   enterPlanModeTool,
   exitPlanModeTool,
   setTodosTool,
@@ -36,7 +36,6 @@ import {
   askUserQuestionTool,
   askUserTool,
   taskTool,
-  taskOutputTool,
   enterPlanModeTool,
   exitPlanModeTool,
   todoWriteTool,
@@ -57,7 +56,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   // Keep legacy ask_user during migration
   registry.register(askUserTool);
   registry.register(taskTool);
-  registry.register(taskOutputTool);
+  // TaskOutput is NOT implemented - tasks run synchronously and return directly
   registry.register(enterPlanModeTool);
   registry.register(exitPlanModeTool);
   registry.register(todoWriteTool);
