@@ -265,6 +265,32 @@ export class ConversationManager {
       agent.on('agent_text', (data) => {
         events.onAgentText!(sessionId, data.text, data.isFinal);
       });
+      
+      // Also handle streaming_text events for real-time streaming
+      agent.on('streaming_text', (data) => {
+        if (data.chunk !== undefined) {
+          console.log('[ConversationManager] streaming_text event:', { 
+            sessionId, 
+            chunkLength: data.chunk?.length ?? 0, 
+            done: data.done ?? false 
+          });
+          events.onAgentText!(sessionId, data.chunk, data.done ?? false);
+        }
+      });
+      
+      // Also handle tool_streaming events (used by dispatch_agent and dispatch_content_agent)
+      agent.on('tool_streaming', (data) => {
+        // Always forward tool_streaming events (even empty chunks when done: true)
+        const chunk = data.chunk ?? '';
+        console.log('[ConversationManager] tool_streaming event:', { 
+          sessionId, 
+          toolCallId: data.toolCallId,
+          chunkLength: chunk.length, 
+          done: data.done ?? false 
+        });
+        // Forward tool_streaming as stream_chunk so it appears in chat
+        events.onAgentText!(sessionId, chunk, data.done ?? false);
+      });
     }
 
     if (events.onAgentStatus) {

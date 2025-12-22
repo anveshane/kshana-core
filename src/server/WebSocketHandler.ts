@@ -298,6 +298,7 @@ export class WebSocketHandler {
       },
 
       onAgentText: (sid, text, isFinal) => {
+        console.log('[WebSocketHandler] onAgentText called:', { sessionId: sid, textLength: text?.length ?? 0, isFinal });
         this.sendMessage(socket, createServerMessage<StreamChunkData>('stream_chunk', sid, {
           content: text,
           done: isFinal ?? false,

@@ -47,7 +47,7 @@ const packageRoot = findPackageRoot(__dirname);
 let PROMPTS_DIR: string;
 
 if (packageRoot) {
-  // Try dist/prompts first (for compiled/installed packages)
+// Try dist/prompts first (for compiled/installed packages)
   const distPromptsPath = join(packageRoot, 'dist', 'prompts');
   if (existsSync(join(distPromptsPath, 'video.json'))) {
     PROMPTS_DIR = distPromptsPath;
@@ -65,8 +65,8 @@ if (packageRoot) {
   // Fallback: try relative paths (for development or edge cases)
   PROMPTS_DIR = join(__dirname, '..', '..', 'prompts');
   
-  if (!existsSync(join(PROMPTS_DIR, 'video.json'))) {
-    PROMPTS_DIR = join(__dirname, '..', '..', '..', 'prompts');
+if (!existsSync(join(PROMPTS_DIR, 'video.json'))) {
+  PROMPTS_DIR = join(__dirname, '..', '..', '..', 'prompts');
   }
 }
 
