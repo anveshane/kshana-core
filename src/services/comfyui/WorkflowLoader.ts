@@ -225,12 +225,10 @@ export function parameterizeQwenEditWorkflow(
         if (node.widgets_values && imageName) {
           node.widgets_values[0] = imageName;
           node.mode = 0; // Enable
-          console.log(`[QwenEdit] Set LoadImage (node ${nodeId}) to: ${imageName}`);
         }
       } else if (nodeIndex !== -1) {
         // No image for this slot - mark for removal
         nodesToRemove.add(nodeId);
-        console.log(`[QwenEdit] Will remove LoadImage node ${nodeId} - no image provided`);
       }
     }
 
@@ -238,7 +236,6 @@ export function parameterizeQwenEditWorkflow(
     if (nodeType === 'TextEncodeQwenImageEditPlus' && nodeId === 11) {
       if (node.widgets_values) {
         node.widgets_values[0] = params.prompt;
-        console.log(`[QwenEdit] Set positive prompt: ${params.prompt.substring(0, 50)}...`);
       }
     }
 
@@ -246,7 +243,6 @@ export function parameterizeQwenEditWorkflow(
     if (nodeType === 'TextEncodeQwenImageEditPlus' && nodeId === 12) {
       if (node.widgets_values && params.negativePrompt) {
         node.widgets_values[0] = params.negativePrompt;
-        console.log(`[QwenEdit] Set negative prompt: ${params.negativePrompt.substring(0, 50)}...`);
       }
     }
 
@@ -254,7 +250,6 @@ export function parameterizeQwenEditWorkflow(
     if (nodeType === 'KSampler' && nodeId === 13) {
       if (node.widgets_values) {
         node.widgets_values[0] = seed;
-        console.log(`[QwenEdit] Set seed: ${seed}`);
       }
     }
 
@@ -262,7 +257,6 @@ export function parameterizeQwenEditWorkflow(
     if (nodeType === 'SaveImage' && nodeId === 15) {
       if (node.widgets_values) {
         node.widgets_values[0] = params.filenamePrefix || 'QwenEdit';
-        console.log(`[QwenEdit] Set filename prefix: ${node.widgets_values[0]}`);
       }
     }
   }
@@ -275,8 +269,6 @@ export function parameterizeQwenEditWorkflow(
     const sourceNode = link[1];
     return !nodesToRemove.has(sourceNode);
   });
-
-  console.log(`[QwenEdit] Total images: ${allImages.length} (max 3)`);
 
   // Convert to API format
   const apiWorkflow = workflowToPrompt(workflow);

@@ -80,7 +80,6 @@ export class ComfyUIClient {
     formData.append('type', imageType);
     formData.append('overwrite', overwrite.toString());
 
-    console.log(`Uploading image: ${fileName}`);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -111,7 +110,6 @@ export class ComfyUIClient {
       client_id: clientId,
     };
 
-    console.log(`Queueing workflow to ComfyUI: ${this.baseUrl}/prompt`);
 
     const response = await fetch(`${this.baseUrl}/prompt`, {
       method: 'POST',
@@ -131,7 +129,6 @@ export class ComfyUIClient {
       throw new Error(`ComfyUI did not return prompt_id: ${JSON.stringify(result)}`);
     }
 
-    console.log(`Workflow queued successfully: prompt_id=${promptId}`);
     return promptId;
   }
 
@@ -143,7 +140,6 @@ export class ComfyUIClient {
     progressCallback?: ProgressCallback,
     pollInterval: number = 10
   ): Promise<CompletionResult> {
-    console.log(`HTTP polling for completion | prompt_id=${promptId} | poll_interval=${pollInterval}s`);
     const startTime = Date.now();
 
     // Emit initial progress
@@ -180,7 +176,6 @@ export class ComfyUIClient {
           const outputs = history.outputs || {};
 
           if (Object.keys(outputs).length > 0) {
-            console.log(`Workflow ${promptId} completed! Found outputs.`);
             if (progressCallback) {
               await this.callProgressCallback(progressCallback, 100, 'Complete!');
             }
@@ -188,7 +183,6 @@ export class ComfyUIClient {
           }
 
           if (history.status?.completed) {
-            console.log(`Workflow ${promptId} completed (status flag)!`);
             if (progressCallback) {
               await this.callProgressCallback(progressCallback, 100, 'Complete!');
             }
@@ -207,7 +201,6 @@ export class ComfyUIClient {
    * Get output images from completed workflow.
    */
   async getOutputImages(promptId: string): Promise<ImageInfo[]> {
-    console.log(`Fetching output images for prompt_id=${promptId}`);
 
     const history = await this.getHistory(promptId);
     if (!history) {
@@ -262,7 +255,6 @@ export class ComfyUIClient {
       }
     }
 
-    console.log(`Found ${images.length} output files (images/videos)`);
     return images;
   }
 
@@ -284,7 +276,6 @@ export class ComfyUIClient {
     }
 
     const url = `${this.baseUrl}/view?${params.toString()}`;
-    console.log(`Downloading image: ${filename}`);
 
     const response = await fetch(url);
     if (!response.ok) {
@@ -296,7 +287,6 @@ export class ComfyUIClient {
     const outputPath = path.join(this.outputDir, finalFilename);
 
     fs.writeFileSync(outputPath, Buffer.from(buffer));
-    console.log(`Image saved to: ${outputPath}`);
 
     return outputPath;
   }

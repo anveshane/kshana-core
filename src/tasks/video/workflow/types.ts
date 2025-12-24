@@ -9,6 +9,82 @@
 export const PROJECT_VERSION = '2.0';
 
 /**
+ * Visual style for the project.
+ * This determines the overall aesthetic of generated images and videos.
+ */
+export type ProjectStyle = 'cinematic_realism' | 'anime';
+
+/**
+ * Style configuration with display names and prompt modifiers.
+ */
+export interface StyleConfig {
+  /** Display name shown to user */
+  displayName: string;
+  /** Short description of the style */
+  description: string;
+  /** Positive prompt additions for this style */
+  promptModifier: string;
+  /** Negative prompt additions for this style */
+  negativePromptModifier: string;
+}
+
+/**
+ * Style configurations for each project style.
+ */
+export const STYLE_CONFIGS: Record<ProjectStyle, StyleConfig> = {
+  cinematic_realism: {
+    displayName: 'Cinematic Realism',
+    description: 'Photorealistic, cinematic look with dramatic lighting and film-quality visuals',
+    promptModifier: 'cinematic, photorealistic, dramatic lighting, high detail, film quality, 8k, professional photography',
+    negativePromptModifier: 'anime, cartoon, illustration, drawing, sketch, 2d, cel shaded',
+  },
+  anime: {
+    displayName: 'Anime',
+    description: 'Japanese anime style with vibrant colors and expressive characters',
+    promptModifier: 'anime style, anime art, vibrant colors, detailed anime, studio quality anime, anime aesthetic',
+    negativePromptModifier: 'photorealistic, realistic, photograph, live action, 3d render',
+  },
+};
+
+/**
+ * Type of input provided by the user.
+ * This determines which phases can be skipped.
+ */
+export type InputType = 'idea' | 'story';
+
+/**
+ * Input type configuration with display names and phase implications.
+ */
+export interface InputTypeConfig {
+  /** Display name shown to user */
+  displayName: string;
+  /** Description of this input type */
+  description: string;
+  /** Which phase to start from */
+  startPhase: WorkflowPhase;
+  /** Phases to mark as skipped/completed */
+  skipPhases: WorkflowPhase[];
+}
+
+/**
+ * Input type configurations.
+ */
+export const INPUT_TYPE_CONFIGS: Record<InputType, InputTypeConfig> = {
+  idea: {
+    displayName: 'Story Idea',
+    description: 'A brief concept or premise that needs to be developed into a full story',
+    startPhase: WorkflowPhase.PLOT,
+    skipPhases: [],
+  },
+  story: {
+    displayName: 'Complete Story',
+    description: 'A full story, chapter, or detailed narrative ready for visualization',
+    startPhase: WorkflowPhase.CHARACTERS_SETTINGS,
+    skipPhases: [WorkflowPhase.PLOT, WorkflowPhase.STORY],
+  },
+};
+
+/**
  * Video workflow phases in execution order.
  * 8-phase workflow matching Sequence.md specification.
  */
@@ -59,7 +135,7 @@ export enum PlannerStage {
 /**
  * Phase status values.
  */
-export type PhaseStatus = 'pending' | 'in_progress' | 'completed';
+export type PhaseStatus = 'pending' | 'in_progress' | 'completed' | 'skipped';
 
 /**
  * Phase metadata stored in project.json.
@@ -285,6 +361,10 @@ export interface ProjectFile {
   title: string;
   /** Path to original input file (relative to .kshana/) */
   originalInputFile: string;
+  /** Visual style for the project (cinematic_realism or anime) */
+  style: ProjectStyle;
+  /** Type of input provided (idea or story) - determines which phases to skip */
+  inputType: InputType;
   /** Creation timestamp */
   createdAt: number;
   /** Last update timestamp */

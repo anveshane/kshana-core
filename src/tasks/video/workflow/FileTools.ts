@@ -6,6 +6,7 @@
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
 import { getWorkflowLogger } from './WorkflowLogger.js';
+import { loadAndRenderMarkdown } from '../../../core/prompts/loader.js';
 import {
   loadProject,
   saveProject,
@@ -29,9 +30,11 @@ import {
   updateSettingApproval,
   updateSceneApproval,
   updateScene,
+  setProjectInputType,
+  updateContentStatus,
 } from './ProjectManager.js';
-import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus } from './types.js';
-import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase } from './types.js';
+import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus, InputType, ContentTypeName } from './types.js';
+import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase, INPUT_TYPE_CONFIGS } from './types.js';
 import { LLMClient } from '../../../core/llm/index.js';
 import { contextStore } from '../../../core/context/index.js';
 
@@ -70,36 +73,10 @@ async function validateStoryInput(input: string): Promise<{ valid: boolean; reas
   try {
     const client = new LLMClient();
 
-    const validationPrompt = `You are a strict input validator for a video generation tool. Your job is to determine if the user's input is a valid STORY IDEA that can be turned into a video.
-
-VALID inputs (respond with "VALID"):
-- Story concepts or narratives (e.g., "A detective solves a mystery in space")
-- Theme/genre requests (e.g., "Make a horror story about a haunted house")
-- Scripts, outlines, or synopses
-- Descriptions of events, characters, or plots
-- Existing stories to adapt
-
-INVALID inputs (respond with "INVALID: [reason]"):
-- Philosophical statements or manifestos
-- Rhetorical questions that don't describe a story
-- Technical discussions or explanations
-- Promotional content or calls to action
-- Random pasted text, articles, or essays
-- Questions asking for information (not story requests)
-- Meta-commentary about storytelling itself (unless it's a story ABOUT storytelling)
-- Gibberish, random characters, or nonsensical text
-- Single words or very short phrases that don't describe a story
-- Keyboard mashing or test input (e.g., "asdfasdf", "test123")
-
-Be STRICT. The input must describe or request an actual story/narrative that can be visualized.
-When in doubt, respond with INVALID.
-
-User input:
-"""
-${trimmed}
-"""
-
-Respond with ONLY "VALID" or "INVALID: [brief reason]"`;
+    // Load validation prompt from file
+    const validationPrompt = loadAndRenderMarkdown('video/validation.md', {
+      user_input: trimmed,
+    });
 
     const response = await client.generate({
       messages: [{ role: 'user', content: validationPrompt }],
@@ -272,6 +249,21 @@ For structured data (characters, settings, assets, scenes), prefer using update_
 
     try {
       writeProjectFile(filePath, content);
+
+      // Track plot/story content in the content registry for persistence
+      const project = loadProject();
+      if (project) {
+        // Map file paths to content types
+        const fileToContentType: Record<string, ContentTypeName> = {
+          'plans/plot.md': 'plot',
+          'plans/story.md': 'story',
+        };
+        const contentType = fileToContentType[filePath];
+        if (contentType) {
+          updateContentStatus(project, contentType, 'complete');
+        }
+      }
+
       return {
         status: 'success',
         message: `File written successfully: ${filePath}`,
@@ -382,7 +374,8 @@ Actions:
 - "update_scene": Update scene reference. Data: { scene_number, updates: { ... } }
 - "update_scene_approval": Update scene approval. Data: { scene_number, approval_type: 'content'|'image'|'video', status, artifactId? }
 - "add_asset": Register a generated asset. Data: { id, type, path, metadata? }
-- "set_final_video": Set the final video info. Data: { artifactId, path, duration }`,
+- "set_final_video": Set the final video info. Data: { artifactId, path, duration }
+- "set_input_type": Set the input type after analyzing user input. Data: { input_type: 'idea'|'story' }. Use 'story' if user provided a complete story/chapter (skips plot and story phases).`,
   {
     type: 'object',
     properties: {
@@ -405,6 +398,7 @@ Actions:
           'update_scene_approval',
           'add_asset',
           'set_final_video',
+          'set_input_type',
         ],
         description: 'The action to perform',
       },
@@ -527,11 +521,14 @@ What story would you like to turn into a video?`,
           return {
             status: 'success',
             message: phaseCompleted
-              ? `Planner stage for ${phase} updated to ${stage}. Phase ${phase} is now completed. Use transition_phase to move to the next phase.`
+              ? `Planner stage for ${phase} updated to ${stage}. Phase ${phase} is now completed.`
               : `Planner stage for ${phase} updated to ${stage}`,
             current_phase: project.currentPhase,
             phase_status: project.phases[phase]?.status,
             phase_completed: phaseCompleted,
+            next_action: phaseCompleted
+              ? 'IMPORTANT: Phase is complete. Call transition_phase immediately to move to the next phase, then continue working. Do NOT stop or ask the user what to do.'
+              : 'Continue with the current phase work.',
           };
         }
 
@@ -551,11 +548,19 @@ What story would you like to turn into a video?`,
             result.reason,
             result.transitioned
           );
+
+          // Get the new phase config for the next action instruction
+          const newPhaseConfig = PHASE_CONFIGS[result.project.currentPhase as WorkflowPhase];
+
           return {
             status: 'success',
             transitioned: result.transitioned,
             reason: result.reason,
             current_phase: result.project.currentPhase,
+            new_phase_name: newPhaseConfig?.displayName ?? result.project.currentPhase,
+            next_action: result.transitioned
+              ? `IMPORTANT: You have transitioned to a new phase. Do NOT stop or ask the user what to do next. Call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
+              : 'Phase transition not needed. Call read_project to check current state.',
             debug: {
               before_phase: beforePhase,
               before_status: beforeStatus,
@@ -799,6 +804,34 @@ What story would you like to turn into a video?`,
           };
           saveProject(project);
           return { status: 'success', message: 'Final video set', path };
+        }
+
+        case 'set_input_type': {
+          const inputType = data['input_type'] as InputType;
+          if (!inputType || !['idea', 'story'].includes(inputType)) {
+            return { status: 'error', error: 'input_type must be "idea" or "story"' };
+          }
+
+          const updatedProject = setProjectInputType(inputType);
+          if (!updatedProject) {
+            return { status: 'error', error: 'No project found' };
+          }
+
+          const inputTypeConfig = INPUT_TYPE_CONFIGS[inputType];
+          const skippedPhases = inputTypeConfig.skipPhases.length > 0
+            ? inputTypeConfig.skipPhases.join(', ')
+            : 'none';
+
+          return {
+            status: 'success',
+            message: `Input type set to "${inputTypeConfig.displayName}"`,
+            input_type: inputType,
+            current_phase: updatedProject.currentPhase,
+            skipped_phases: skippedPhases,
+            note: inputType === 'story'
+              ? 'Plot and Story phases have been skipped. The story has been saved to plans/story.md. Proceeding to Characters & Settings phase.'
+              : 'Starting from Plot phase.',
+          };
         }
 
         default:

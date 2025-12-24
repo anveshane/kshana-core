@@ -1,10 +1,7 @@
 /**
  * System prompts for the generic agent framework.
- * Reads prompts from JSON files in /prompts/ directory.
+ * Reads prompts from markdown files in /prompts/ directory.
  */
-import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { ToolDefinition } from '../llm/index.js';
 
 // Get prompts directory - try multiple locations for flexibility
@@ -191,15 +188,17 @@ export function buildSystemMessage(
   tools: Map<string, ToolDefinition>,
   customPrompt?: string
 ): string {
-  let prompt: string;
+  const envContext: PromptRuntimeContext = {
+    // Defaults are empty; caller may add more later via interpolation.
+  };
 
-  if (isSubAgent) {
-    // Sub-agents get base + sub-agent section (no orchestrator)
-    prompt = GENERIC_AGENT_BASE_PROMPT + '\n' + GENERIC_AGENT_SUB_AGENT_SECTION;
-  } else {
-    // Main agent gets base + orchestrator section
-    prompt = GENERIC_AGENT_SYSTEM_PROMPT;
-  }
+  const base = loadAndRenderMarkdown('system/base.md', toPromptContext(envContext));
+  const roleSection = isSubAgent
+    ? loadAndRenderMarkdown('system/subagent.md', toPromptContext(envContext))
+    : loadAndRenderMarkdown('system/orchestrator.md', toPromptContext(envContext));
+  const env = loadAndRenderMarkdown('system/env.md', toPromptContext(envContext));
+
+  let prompt = [base, roleSection, env].filter(Boolean).join('\n\n');
 
   // Add tool descriptions wrapped in XML tags
   prompt += '\n\n<tools>\n' + buildToolDescriptions(tools) + '\n</tools>';
@@ -215,8 +214,9 @@ export function buildSystemMessage(
 /**
  * Get prompt metadata (version, sections, etc.)
  */
-export function getPromptMetadata(name: 'base' | 'orchestrator' | 'subAgent' | 'planning'): PromptJson {
-  return loadPrompt(name);
+// Metadata is no longer tracked in JSON.
+export function getPromptMetadata(): null {
+  return null;
 }
 
 /**
@@ -230,9 +230,10 @@ export function getPromptMetadata(name: 'base' | 'orchestrator' | 'subAgent' | '
 export function buildPlanningPrompt(task: string, context?: string): string {
   const taskSection = `<task>\n${task}\n</task>`;
   const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
-  return PLANNING_AGENT_PROMPT
-    .replace('{{task}}', taskSection)
-    .replace('{{context}}', contextSection);
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const plan = loadAndRenderMarkdown('subagents/plan.md', {});
+  return [base, sub, plan, taskSection, contextSection].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -256,10 +257,10 @@ export function buildContentPrompt(
 ): string {
   const taskSection = `<task>\n${task}\n</task>`;
   const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
-  return CONTENT_AGENT_PROMPT
-    .replace('{{task}}', taskSection)
-    .replace('{{content_type}}', contentType)
-    .replace('{{context}}', contextSection);
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const content = loadAndRenderMarkdown('subagents/content-creator.md', { content_type: contentType });
+  return [base, sub, content, taskSection, contextSection].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -287,9 +288,10 @@ export function wrapCustomPrompt(prompt: string): string {
 export function buildImageGenerationPrompt(task: string, context?: string): string {
   const taskSection = `<task>\n${task}\n</task>`;
   const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
-  return IMAGE_GENERATION_AGENT_PROMPT
-    .replace('{{task}}', taskSection)
-    .replace('{{context}}', contextSection);
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const img = loadAndRenderMarkdown('subagents/image-generator.md', {});
+  return [base, sub, img, taskSection, contextSection].filter(Boolean).join('\n\n');
 }
 
 /**
@@ -316,153 +318,13 @@ export function buildVideoGenerationPrompt(options: VideoGenerationPromptOptions
   const taskSection = `<task>\n${task}\n</task>`;
   const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
   const sceneNumberStr = String(sceneNumber);
-  const motionStr = motionDescription || 'subtle camera movement, natural motion';
+  const motionStr = motionDescription ?? 'subtle camera movement, natural motion';
 
-  return VIDEO_GENERATION_AGENT_PROMPT
-    .replace('{{task}}', taskSection)
-    .replace('{{context}}', contextSection)
-    .replace('{{scene_number}}', sceneNumberStr)
-    .replace('{{scene_image_artifact_id}}', sceneImageArtifactId)
-    .replace('{{motion_description}}', motionStr);
-}
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const vid = loadAndRenderMarkdown('subagents/video-assembler.md', {});
 
-// ============================================================================
-// Workflow Prompt Functions
-// ============================================================================
+  const sceneSection = `<scene>\n<scene_number>\n${sceneNumberStr}\n</scene_number>\n<scene_image_artifact_id>\n${sceneImageArtifactId}\n</scene_image_artifact_id>\n<motion_description>\n${motionStr}\n</motion_description>\n</scene>`;
 
-/**
- * Workflow prompt names that can be loaded.
- */
-export type WorkflowPromptName =
-  // Legacy prompts
-  | 'story-discovery'
-  | 'character-descriptions'
-  | 'three-acts'
-  | 'act-scenes'
-  | 'storyboard-images'
-  | 'video-generation'
-  | 'final-signoff'
-  // 8-phase workflow prompts
-  | 'orchestrator'
-  | 'plot'
-  | 'story'
-  | 'characters-settings'
-  | 'scenes'
-  | 'character-setting-images'
-  | 'scene-images'
-  | 'video'
-  | 'video-combine';
-
-/**
- * Load a workflow prompt from the workflow prompts directory.
- * @param name - Name of the workflow prompt (without .json extension)
- * @returns The prompt JSON or null if not found
- */
-export function loadWorkflowPrompt(name: WorkflowPromptName): PromptJson | null {
-  const filePath = join(WORKFLOW_PROMPTS_DIR, `${name}.json`);
-
-  if (!existsSync(filePath)) {
-    return null;
-  }
-
-  try {
-    const content = readFileSync(filePath, 'utf-8');
-    return JSON.parse(content) as PromptJson;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Build a workflow phase prompt with variable substitution.
- *
- * @param phaseName - Name of the workflow phase prompt
- * @param variables - Variables to substitute in the prompt (e.g., task, context, output_file)
- * @returns The complete prompt with variables substituted
- */
-export function buildWorkflowPhasePrompt(
-  phaseName: WorkflowPromptName,
-  variables: Record<string, string>
-): string | null {
-  const prompt = loadWorkflowPrompt(phaseName);
-
-  if (!prompt) {
-    return null;
-  }
-
-  let content = prompt.content;
-
-  // Substitute all variables
-  for (const [key, value] of Object.entries(variables)) {
-    const placeholder = `{{${key}}}`;
-    content = content.replace(new RegExp(placeholder, 'g'), value);
-  }
-
-  return content;
-}
-
-/**
- * Build a planner agent prompt for a specific workflow phase.
- * This wraps the workflow phase prompt with appropriate XML tags.
- *
- * @param phaseName - The workflow phase
- * @param task - The task description
- * @param context - Context from previous phases
- * @param outputFile - File path where plan should be written
- * @returns The complete planner prompt
- */
-export function buildWorkflowPlannerPrompt(
-  phaseName: WorkflowPromptName,
-  task: string,
-  context: string,
-  outputFile: string
-): string {
-  const prompt = buildWorkflowPhasePrompt(phaseName, {
-    task,
-    context,
-    output_file: outputFile,
-  });
-
-  if (!prompt) {
-    // Fallback to generic planning prompt
-    return buildPlanningPrompt(task, context);
-  }
-
-  return prompt;
-}
-
-/**
- * Get the orchestrator prompt for workflow-based video generation.
- * @returns The orchestrator prompt content or null
- */
-export function getWorkflowOrchestratorPrompt(): string | null {
-  const prompt = loadWorkflowPrompt('orchestrator');
-  return prompt?.content ?? null;
-}
-
-/**
- * List all available workflow prompts.
- * @returns Array of available prompt names
- */
-export function listWorkflowPrompts(): WorkflowPromptName[] {
-  return [
-    // Legacy prompts
-    'story-discovery',
-    'character-descriptions',
-    'three-acts',
-    'act-scenes',
-    'storyboard-images',
-    'video-generation',
-    'final-signoff',
-    // 8-phase workflow prompts
-    'orchestrator',
-    'plot',
-    'story',
-    'characters-settings',
-    'scenes',
-    'character-setting-images',
-    'scene-images',
-    'video',
-    'video-combine',
-  ];
+  return [base, sub, vid, taskSection, contextSection, sceneSection].filter(Boolean).join('\n\n');
 }

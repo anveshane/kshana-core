@@ -15,6 +15,7 @@ const STATUS_ICONS: Record<TodoStatus, { icon: string; color: string }> = {
   pending: { icon: '○', color: 'gray' },
   in_progress: { icon: '●', color: 'yellow' },
   completed: { icon: '✓', color: 'green' },
+  cancelled: { icon: '⨯', color: 'gray' },
   expanded: { icon: '↳', color: 'blue' },
 };
 

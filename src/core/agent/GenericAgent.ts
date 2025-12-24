@@ -14,6 +14,7 @@ import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
 import { buildSystemMessage, buildPlanningPrompt, buildContentPrompt, buildImageGenerationPrompt, wrapUserTask, type ContentType } from '../prompts/index.js';
+import { loadAndRenderMarkdown } from '../prompts/loader.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
 import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, LONG_CONTENT_THRESHOLD } from '../context/index.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
@@ -35,13 +36,15 @@ function debugLog(message: string) {
  */
 const SIMPLE_TOOLS = new Set([
   'think',
-  'ask_user',
+  'AskUserQuestion',
+  'ask_user', // back-compat during migration
   'dispatch_agent',
   'dispatch_content_agent',
   'dispatch_image_agent',
   'dispatch_video_agent',
   'wait_for_job',
-  'todo_write',
+  'TodoWrite',
+  'todo_write', // back-compat during migration
 ]);
 
 const COMPLEX_TOOLS = new Set(['generate_image', 'generate_video', 'edit_image']);
@@ -51,7 +54,15 @@ function isComplexTool(name: string): boolean {
 }
 
 function isBuiltinTodoTool(name: string): boolean {
-  return name === 'todo_write';
+  return name === 'TodoWrite' || name === 'todo_write';
+}
+
+function isTaskTool(name: string): boolean {
+  return name === 'Task';
+}
+
+function isPlanModeTool(name: string): boolean {
+  return name === 'EnterPlanMode' || name === 'ExitPlanMode';
 }
 
 export class GenericAgent extends TypedEventEmitter {
@@ -96,6 +107,9 @@ export class GenericAgent extends TypedEventEmitter {
 
   // Current mode for more descriptive agent names in UI
   private currentMode: 'orchestrator' | 'content' | 'image' | 'video' | 'planning' = 'orchestrator';
+
+  // Claude SDK-style plan mode state
+  private planModeActive = false;
 
   constructor(
     tools: Map<string, ToolDefinition>,
@@ -188,6 +202,7 @@ export class GenericAgent extends TypedEventEmitter {
         // Handle content chunks
         if (chunk.content) {
           content += chunk.content;
+          debugLog(`[GenericAgent] streaming_text emit: chunk=${chunk.content.length} chars, total=${content.length} chars`);
           this.emit({ type: 'streaming_text', chunk: chunk.content, done: false });
         }
 
@@ -208,6 +223,7 @@ export class GenericAgent extends TypedEventEmitter {
 
         // Handle stream completion and capture usage
         if (chunk.done) {
+          debugLog(`[GenericAgent] streaming_text DONE: total content=${content.length} chars, toolCallCount=${toolCallAccumulators.size}`);
           this.emit({ type: 'streaming_text', chunk: '', done: true });
           if (chunk.usage) {
             usage = chunk.usage;
@@ -242,6 +258,11 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Clean content (remove <think> tags)
     const cleanedContent = content ? content.replace(/<think>.*?<\/think>/gs, '').trim() : null;
+
+    debugLog(`[GenericAgent] generateWithStreaming result: rawContent=${content.length} chars, cleanedContent=${cleanedContent?.length ?? 0} chars, toolCalls=${toolCalls.length}`);
+    if (cleanedContent) {
+      debugLog(`[GenericAgent] generateWithStreaming content preview: "${cleanedContent.slice(0, 200)}${cleanedContent.length > 200 ? '...' : ''}"`);
+    }
 
     return {
       content: cleanedContent,
@@ -564,7 +585,7 @@ export class GenericAgent extends TypedEventEmitter {
       // Execute tool calls
       for (const toolCall of response.toolCalls) {
         // Special handling for ask_user - pause execution
-        if (toolCall.name === 'ask_user') {
+        if (toolCall.name === 'ask_user' || toolCall.name === 'AskUserQuestion') {
           const result = this.handleAskUser(toolCall);
           if (result) {
             this.emit({ type: 'agent_status', status: 'waiting', agentName: this.getEffectiveAgentName() });
@@ -729,8 +750,8 @@ export class GenericAgent extends TypedEventEmitter {
       agentName: this.getEffectiveAgentName(),
     });
 
-    // Check for looping (skip for think tool - it's normal to think often)
-    if (toolCall.name !== 'think' && toolCall.name !== 'todo_write') {
+    // Check for looping (skip for think + TodoWrite - these may be called frequently)
+    if (toolCall.name !== 'think' && !isBuiltinTodoTool(toolCall.name)) {
       const loopResult = this.detectLoop(toolCall.name, toolCall.arguments);
       if (loopResult) {
         const resultStatus = loopResult.isHardError ? 'loop_blocked' : 'loop_warning';
@@ -755,6 +776,34 @@ export class GenericAgent extends TypedEventEmitter {
     // Handle built-in todo tools specially (no handler required)
     if (isBuiltinTodoTool(toolCall.name)) {
       const result = this.handleTodoTool(toolCall);
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
+      return result;
+    }
+
+    // Handle plan mode tools (Claude SDK style)
+    if (isPlanModeTool(toolCall.name)) {
+      const result = this.handlePlanModeTool(toolCall.name);
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
+      return result;
+    }
+
+    // Handle Task tool specially - unified subagent entrypoint (Claude SDK style)
+    if (isTaskTool(toolCall.name)) {
+      const result = await this.handleTask(toolCall);
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -1060,26 +1109,112 @@ export class GenericAgent extends TypedEventEmitter {
   }
 
   /**
+   * Handle Task tool - launches a subagent by subagent_type.
+   * For now, maps to existing internal sub-agent handlers so we can migrate incrementally.
+   */
+  private async handleTask(toolCall: ToolCall): Promise<unknown> {
+    const args = toolCall.arguments;
+    const subagentType = args['subagent_type'] as string | undefined;
+
+    if (!subagentType) {
+      return { error: 'Task requires subagent_type' };
+    }
+
+    // Incremental compatibility mapping onto existing sub-agent handlers.
+    if (subagentType === 'Plan') {
+      return await this.handleDispatchAgent({
+        ...toolCall,
+        name: 'dispatch_agent',
+      });
+    }
+
+    if (subagentType === 'content-creator') {
+      return await this.handleDispatchContentAgent({
+        ...toolCall,
+        name: 'dispatch_content_agent',
+      });
+    }
+
+    if (subagentType === 'image-generator') {
+      return await this.handleDispatchImageAgent({
+        ...toolCall,
+        name: 'dispatch_image_agent',
+      });
+    }
+
+    if (subagentType === 'video-assembler') {
+      return await this.handleDispatchVideoAgent({
+        ...toolCall,
+        name: 'dispatch_video_agent',
+      });
+    }
+
+    return { error: `Unsupported subagent_type: ${subagentType}` };
+  }
+
+  private handlePlanModeTool(toolName: string): Record<string, unknown> {
+    if (toolName === 'EnterPlanMode') {
+      this.planModeActive = true;
+      this.currentMode = 'planning';
+      return { status: 'entered_plan_mode' };
+    }
+
+    // ExitPlanMode
+    this.planModeActive = false;
+    this.currentMode = 'orchestrator';
+    return { status: 'exited_plan_mode' };
+  }
+
+  /**
    * Handle built-in todo management tool.
    */
   private handleTodoTool(toolCall: ToolCall): unknown {
     const args = toolCall.arguments;
-    const todos = args['todos'] as Array<Record<string, unknown>>;
+    const merge = (args['merge'] as boolean | undefined) ?? false;
+    const todos = (args['todos'] as Array<Record<string, unknown>> | undefined) ?? [];
 
-    // Enforce minimum 2 todos to prevent single-item lists
+    // Claude SDK guidance: never create single-item todo lists.
     if (todos.length < 2) {
       return {
-        error: 'Todo list must have at least 2 items. If you only have one task, execute it directly without using todo_write.',
-        suggestion: 'Either add more tasks to track, or just do the single task without tracking it.',
+        error: 'Never create single-item todo lists. If you only have one task, just do it directly.',
       };
     }
 
-    const result = this.todoManager.writeTodos(todos);
+    // Check for tool call patterns in todo content (forbidden)
+    const toolCallPatterns = [
+      /\b(dispatch_\w+|update_project|read_project|write_file|read_file|todo_write|TodoWrite|ask_user|AskUserQuestion)\b/i,
+      /\baction:\s*["']?\w+["']?/i,
+      /\buse\s+(the\s+)?[\w_]+\s+tool/i,
+      /\bcall\s+[\w_]+/i,
+    ];
+
+    for (const todo of todos) {
+      const content = (todo['content'] as string) || '';
+      for (const pattern of toolCallPatterns) {
+        if (pattern.test(content)) {
+          return {
+            error: `Todo "${content.slice(0, 50)}..." contains tool/function references. Todos should describe WHAT to accomplish, not HOW.`,
+            suggestion: 'Rewrite todos to be task-focused. Good: "Create character profile for Alice". Bad: "Use dispatch_content_agent to create Alice".',
+          };
+        }
+      }
+    }
+
+    // Apply todo updates.
+    // - merge=false: replace list (preserving any existing completed items via manager logic)
+    // - merge=true: merge by id onto existing items
+    const result = merge
+      ? this.todoManager.mergeTodosById(todos)
+      : this.todoManager.writeTodos(todos);
+
+    const updatedTodos = this.todoManager.getTodos();
+    debugLog(`[GenericAgent] handleTodoTool: merge=${merge}, inputTodos=${todos.length}, resultTodos=${updatedTodos.length}`);
+    debugLog(`[GenericAgent] handleTodoTool emitting todo_update with ${updatedTodos.length} todos: ${JSON.stringify(updatedTodos.map(t => ({ id: t.id, status: t.status, content: t.content?.slice(0, 30) })))}`);
 
     // Emit todo update event
     this.emit({
       type: 'todo_update',
-      todos: this.todoManager.getTodos(),
+      todos: updatedTodos,
       agentName: this.getEffectiveAgentName(),
     });
 
@@ -1257,6 +1392,7 @@ export class GenericAgent extends TypedEventEmitter {
     try {
       // Generate or refine the plan with streaming
       let planContent = '';
+      debugLog(`[GenericAgent] continuePlanningLoop starting generation, toolCallId=${this.planningState.toolCallId}`);
 
       for await (const chunk of this.llm.generateStream({
         messages: this.planningState.messages,
@@ -1264,6 +1400,7 @@ export class GenericAgent extends TypedEventEmitter {
       })) {
         if (chunk.content) {
           planContent += chunk.content;
+          debugLog(`[GenericAgent] tool_streaming emit: chunk=${chunk.content.length} chars, total=${planContent.length} chars`);
           // Emit tool_streaming to show content inside the ToolCallDisplay
           this.emit({
             type: 'tool_streaming',
@@ -1274,6 +1411,7 @@ export class GenericAgent extends TypedEventEmitter {
           });
         }
         if (chunk.done) {
+          debugLog(`[GenericAgent] tool_streaming DONE: total planContent=${planContent.length} chars`);
           this.emit({
             type: 'tool_streaming',
             toolCallId: this.planningState.toolCallId,
@@ -1387,21 +1525,10 @@ export class GenericAgent extends TypedEventEmitter {
    * Use LLM to classify whether user response indicates approval or feedback.
    */
   private async classifyPlanResponse(userResponse: string): Promise<boolean> {
-    const classificationPrompt = `You are a simple intent classifier. Determine if the user's response indicates they want to APPROVE and proceed with the plan, or if they are providing FEEDBACK to modify it.
-
-<user_response>
-${userResponse}
-</user_response>
-
-Respond with exactly one word: "APPROVE" or "FEEDBACK"
-
-Examples of APPROVE responses:
-- "yes", "ok", "proceed", "looks good", "accept", "go ahead", "start", "continue", "lgtm", "y", "1"
-
-Examples of FEEDBACK responses:
-- "add more detail to step 3", "I think we should...", "can you change...", "what about...", "no", "2"
-
-Your classification:`;
+    // Load classification prompt from file
+    const classificationPrompt = loadAndRenderMarkdown('system/classification/plan-approval.md', {
+      user_response: userResponse,
+    });
 
     try {
       const response = await this.llm.generate({
@@ -1453,6 +1580,43 @@ Respond in JSON format:
       return {
         name: task.slice(0, 50),
         summary: `Plan for: ${task}`,
+      };
+    }
+  }
+
+  /**
+   * Generate a name and summary for approved content.
+   * The summary is injected into message history; full content is stored externally.
+   */
+  private async generateContentMetadata(
+    task: string,
+    contentType: string,
+    content: string
+  ): Promise<{ name: string; summary: string }> {
+    const prompt = `Given this content creation task, content type, and the resulting content, generate:
+1. A short descriptive name (3-5 words, no quotes)
+2. A 1-2 sentence summary that captures the essence of the content and can be used to remember what it contains
+
+<task>${task}</task>
+<content_type>${contentType}</content_type>
+
+<content>${content.slice(0, 3000)}${content.length > 3000 ? '...[truncated]' : ''}</content>
+
+Respond in JSON format:
+{"name": "...", "summary": "..."}`;
+
+    try {
+      const response = await this.llm.generate({
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        maxTokens: 200,
+      });
+
+      return JSON.parse(response.content ?? '{}');
+    } catch {
+      return {
+        name: `${contentType}: ${task.slice(0, 30)}`,
+        summary: `${contentType} content for: ${task.slice(0, 100)}`,
       };
     }
   }
@@ -1564,6 +1728,16 @@ Respond in JSON format:
     if (!contentType) {
       this.currentMode = 'orchestrator';
       return { error: 'No content_type provided for dispatch_content_agent' };
+    }
+
+    // Validate content_type is one of the allowed types
+    const validContentTypes = ['plot', 'story', 'character', 'setting', 'scene', 'narration'];
+    if (!validContentTypes.includes(contentType)) {
+      this.currentMode = 'orchestrator';
+      return {
+        error: `Invalid content_type "${contentType}". Must be one of: ${validContentTypes.join(', ')}`,
+        suggestion: 'Use the appropriate content_type for your task. For example, use "character" for character profiles, "scene" for scene descriptions.',
+      };
     }
 
     // Resolve all context_refs into a combined context
@@ -1776,17 +1950,34 @@ Respond in JSON format:
         }
       }
 
+      // Generate content name and summary using LLM (similar to planning)
+      const { name, summary } = await this.generateContentMetadata(
+        this.contentState.task,
+        this.contentState.contentType,
+        this.contentState.currentContent
+      );
+
+      // Store full content in external context store (NOT in messages)
+      // This prevents context bloat from large content being repeatedly passed
+      const { variableName } = contextStore.store(
+        this.contentState.currentContent,
+        name,
+        { source: 'tool', variableBaseName: this.contentState.contentType }
+      );
+
       const result = {
         status: 'approved',
-        content: this.contentState.currentContent,
+        name,
+        summary,
+        content_ref: variableName,
         content_type: this.contentState.contentType,
         task: this.contentState.task,
         output_file: this.contentState.outputFile,
         file_saved: fileSaved,
         iterations: this.contentState.iterations,
         message: fileSaved
-          ? `Content approved and saved to ${this.contentState.outputFile}.`
-          : 'Content approved by user. Ready to save.',
+          ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`
+          : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`,
         next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
       this.contentState = null;
@@ -1828,6 +2019,7 @@ Respond in JSON format:
     const task = args['task'] as string;
     let context = args['context'] as string | undefined;
     const contextRef = args['context_ref'] as string | undefined;
+    const contextRefs = args['context_refs'] as string[] | undefined;
     const sceneNumber = (args['scene_number'] as number) ?? 1;
     const imageType = args['image_type'] as 'scene' | 'character_ref' | 'setting_ref' | undefined;
     const characterName = args['character_name'] as string | undefined;
@@ -1843,8 +2035,24 @@ Respond in JSON format:
       return { error: 'No task provided for dispatch_image_agent' };
     }
 
-    // Resolve context_ref if provided (takes precedence over inline context)
-    if (contextRef) {
+    // Resolve context_refs (array) if provided - combines multiple contexts
+    if (contextRefs && contextRefs.length > 0) {
+      const contextParts: string[] = [];
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push(`## ${ref} (${stored.label})\n\n${stored.content}`);
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} for image agent (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
+        }
+      }
+      if (contextParts.length > 0) {
+        context = contextParts.join('\n\n---\n\n');
+      }
+    }
+    // Fallback to singular context_ref if provided
+    else if (contextRef) {
       const stored = contextStore.get(contextRef);
       if (stored) {
         context = stored.content;
@@ -1855,7 +2063,7 @@ Respond in JSON format:
     }
 
     // Warn about long inline context that should use context_ref
-    if (context && context.length > 500 && !contextRef) {
+    if (context && context.length > 500 && !contextRef && !contextRefs) {
       debugLog(`[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_image_agent without context_ref. Consider using store_context.`);
     }
 
@@ -2094,21 +2302,10 @@ Respond in JSON format:
    * Use LLM to classify whether user response indicates approval or feedback for image generation.
    */
   private async classifyImageGenResponse(userResponse: string): Promise<boolean> {
-    const classificationPrompt = `You are a simple intent classifier. Determine if the user's response indicates they want to APPROVE and generate the image, or if they are providing FEEDBACK to modify the prompt.
-
-<user_response>
-${userResponse}
-</user_response>
-
-Respond with exactly one word: "APPROVE" or "FEEDBACK"
-
-Examples of APPROVE responses:
-- "yes", "ok", "generate", "looks good", "go ahead", "create it", "make it", "proceed", "lgtm", "y", "1"
-
-Examples of FEEDBACK responses:
-- "make it more colorful", "add more detail", "change the lighting", "I want...", "can you...", "no", "2"
-
-Your classification:`;
+    // Load classification prompt from file
+    const classificationPrompt = loadAndRenderMarkdown('system/classification/image-approval.md', {
+      user_response: userResponse,
+    });
 
     try {
       const response = await this.llm.generate({
@@ -2312,10 +2509,11 @@ Your classification:`;
 
     const args = toolCall.arguments;
     const task = args['task'] as string;
-    const sceneImageArtifactId = args['scene_image_artifact_id'] as string;
+    const sceneImageArtifactId = args['scene_image_artifact_id'] as string | undefined;
     const sceneNumber = (args['scene_number'] as number) ?? 1;
     const motionDescription = args['motion_description'] as string | undefined;
     const contextRef = args['context_ref'] as string | undefined;
+    const contextRefs = args['context_refs'] as string[] | undefined;
     const duration = (args['duration'] as number) ?? 4;
 
     if (!task) {
@@ -2323,14 +2521,33 @@ Your classification:`;
       return { error: 'No task provided for dispatch_video_agent' };
     }
 
-    if (!sceneImageArtifactId) {
+    // scene_image_artifact_id is optional for stitching operations
+    // But required for single scene video generation
+    const isStitchOperation = task.toLowerCase().includes('stitch');
+    if (!sceneImageArtifactId && !isStitchOperation) {
       this.currentMode = 'orchestrator';
       return { error: 'No scene_image_artifact_id provided for dispatch_video_agent' };
     }
 
-    // Resolve context_ref if provided
+    // Resolve context_refs (array) if provided - combines multiple contexts
     let context = '';
-    if (contextRef) {
+    if (contextRefs && contextRefs.length > 0) {
+      const contextParts: string[] = [];
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push(`## ${ref} (${stored.label})\n\n${stored.content}`);
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} for video agent (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
+        }
+      }
+      if (contextParts.length > 0) {
+        context = contextParts.join('\n\n---\n\n');
+      }
+    }
+    // Fallback to singular context_ref if provided
+    else if (contextRef) {
       const stored = contextStore.get(contextRef);
       if (stored) {
         context = stored.content;
@@ -2606,10 +2823,19 @@ Your classification:`;
    */
   private handleAskUser(toolCall: ToolCall): GenericAgentResult | null {
     const args = toolCall.arguments;
-    const question = args['question'] as string;
+    // Support both legacy ask_user schema and Claude SDK-style AskUserQuestion schema.
+    const question =
+      (args['question'] as string | undefined) ??
+      (args['prompt'] as string | undefined) ??
+      '';
+
+    // Legacy-only fields (kept for back-compat)
     const isConfirmation = (args['is_confirmation'] as boolean | undefined) ?? false;
-    const providedOptions = args['options'] as Array<{ label: string; description?: string }> | undefined;
+    const providedOptions = args['options'] as Array<{ label: string; description?: string }> | string[] | undefined;
     const providedTimeout = args['auto_approve_timeout_ms'] as number | undefined;
+
+    // Claude SDK-style multiSelect (currently informational; UI supports single-select)
+    const multiSelect = (args['multiSelect'] as boolean | undefined) ?? false;
 
     // Default options for non-confirmation questions without explicit options
     const DEFAULT_OPTIONS: Array<{ label: string; description?: string }> = [
@@ -2618,8 +2844,25 @@ Your classification:`;
     ];
     const DEFAULT_AUTO_APPROVE_TIMEOUT_MS = 15000; // 15 seconds
 
+    // Normalize options to {label, description?}[]
+    let normalizedOptions: Array<{ label: string; description?: string }> | undefined;
+    if (Array.isArray(providedOptions) && providedOptions.length > 0) {
+      if (typeof providedOptions[0] === 'string') {
+        normalizedOptions = (providedOptions as string[]).map(label => ({ label }));
+      } else {
+        normalizedOptions = providedOptions as Array<{ label: string; description?: string }>;
+      }
+    }
+
+    // Ensure "Other" is always available as per Claude SDK usage notes (for non-confirmation questions)
+    if (!isConfirmation) {
+      const opts = normalizedOptions ?? DEFAULT_OPTIONS;
+      const hasOther = opts.some(o => o.label.toLowerCase() === 'other');
+      normalizedOptions = hasOther ? opts : [...opts, { label: 'Other', description: 'Provide custom input' }];
+    }
+
     // Use provided options or defaults (only for non-confirmation questions)
-    const options = isConfirmation ? undefined : (providedOptions ?? DEFAULT_OPTIONS);
+    const options = isConfirmation ? undefined : (normalizedOptions ?? DEFAULT_OPTIONS);
     const autoApproveTimeoutMs = isConfirmation ? undefined : (providedTimeout ?? DEFAULT_AUTO_APPROVE_TIMEOUT_MS);
 
     this.waitingForUser = true;
@@ -2631,6 +2874,7 @@ Your classification:`;
       is_confirmation: isConfirmation,
       options: options ?? null,
       auto_approve_timeout_ms: autoApproveTimeoutMs ?? null,
+      multiSelect,
     };
 
     this.messages.push({

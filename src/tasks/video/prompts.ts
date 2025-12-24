@@ -1,6 +1,6 @@
 /**
  * Video creation task-specific prompts.
- * Reads prompts from JSON files in /prompts/ directory.
+ * Reads prompts from markdown files in /prompts/ directory.
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -119,17 +119,17 @@ try {
  * System prompt for video creation tasks.
  * This is injected as customPrompt when creating the agent for video tasks.
  */
-export const VIDEO_CREATION_SYSTEM_PROMPT = videoPrompt.content;
+export const VIDEO_CREATION_SYSTEM_PROMPT = loadMarkdown('video/main.md');
 
 /**
  * Additional guidelines for character development sub-tasks.
  */
-export const CHARACTER_DEVELOPMENT_PROMPT = videoPrompt.extensions?.character_development ?? '';
+export const CHARACTER_DEVELOPMENT_PROMPT = '';
 
 /**
  * Additional guidelines for storyboard creation.
  */
-export const STORYBOARD_CREATION_PROMPT = videoPrompt.extensions?.storyboard_creation ?? '';
+export const STORYBOARD_CREATION_PROMPT = '';
 
 /**
  * Get the video creation prompt with optional customizations.
@@ -154,6 +154,11 @@ export function getVideoCreationPrompt(options?: {
 /**
  * Get video prompt metadata (version, etc.)
  */
-export function getVideoPromptMetadata(): VideoPromptJson {
-  return loadVideoPrompt();
+export function getVideoPromptMetadata() {
+  return {
+    name: 'video-main',
+    description: 'Main video workflow orchestrator prompt',
+    version: '1.0',
+    content: VIDEO_CREATION_SYSTEM_PROMPT,
+  };
 }

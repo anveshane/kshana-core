@@ -36,3 +36,6 @@ prompt-optimizer/
 
 # Project data
 .kshana/
+
+# Local outputs (generated images/videos)
+outputs/

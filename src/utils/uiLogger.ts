@@ -224,6 +224,7 @@ export function getUILogPath(): string {
 
 const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
   think: { gerund: 'Thinking', past: 'Thought' },
+  AskUserQuestion: { gerund: 'Asking user', past: 'Asked user' },
   ask_user: { gerund: 'Asking user', past: 'Asked user' },
   dispatch_agent: { gerund: 'Dispatching agent', past: 'Dispatched agent' },
   generate_image: { gerund: 'Generating image', past: 'Generated image' },
@@ -236,10 +237,11 @@ const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
   update_project: { gerund: 'Updating project', past: 'Updated project' },
   read_file: { gerund: 'Reading file', past: 'Read file' },
   write_file: { gerund: 'Writing file', past: 'Wrote file' },
+  TodoWrite: { gerund: 'Updating todos', past: 'Updated todos' },
   todo_write: { gerund: 'Updating todos', past: 'Updated todos' },
 };
 
-const HIDDEN_TOOLS = new Set(['todo_write']);
+const HIDDEN_TOOLS = new Set(['TodoWrite', 'todo_write']);
 
 function isHiddenTool(toolName: string): boolean {
   return HIDDEN_TOOLS.has(toolName);

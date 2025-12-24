@@ -85,12 +85,12 @@ class WorkflowRegistry {
       qualityLevel: 'high',
     });
 
-    // 3. Qwen Edit Simple - Image editing with up to 3 reference images
+    // 3. Qwen Edit Lightning - Fast image editing with up to 3 reference images (default)
     this.register({
       name: 'qwen_edit',
-      filename: 'qwen_edit-simple.json',
+      filename: 'qwen_edit-lightning.json',
       workflowType: WorkflowType.IMAGE_EDITING,
-      description: 'Intelligent image editing using Qwen model. Supports 1-3 input images for editing, combining, or transforming visuals based on text instructions. Use for scene generation with character/setting references.',
+      description: 'Fast intelligent image editing using Qwen model with Lightning acceleration. Supports 1-3 input images for editing, combining, or transforming visuals based on text instructions. Use for scene generation with character/setting references.',
       capabilities: [
         'image-to-image',
         'multi-image-input',
@@ -100,13 +100,37 @@ class WorkflowRegistry {
         'consistency-preservation',
         'reference-based-generation',
       ],
-      displayName: 'Qwen Image Editor',
+      displayName: 'Qwen Image Editor (Lightning)',
       requiresBaseImage: true,
       supportsTextPrompts: true,
       supportsImageToImage: true,
       outputFormat: 'image',
-      estimatedTimeSeconds: 35,
+      estimatedTimeSeconds: 15,
       qualityLevel: 'high',
+    });
+
+    // 3b. Qwen Edit Simple - Slower but higher quality variant
+    this.register({
+      name: 'qwen_edit_hq',
+      filename: 'qwen_edit-simple.json',
+      workflowType: WorkflowType.IMAGE_EDITING,
+      description: 'High-quality image editing using Qwen model (slower). Supports 1-3 input images. Use when quality is more important than speed.',
+      capabilities: [
+        'image-to-image',
+        'multi-image-input',
+        'intelligent-editing',
+        'scene-variation',
+        'visual-modification',
+        'consistency-preservation',
+        'reference-based-generation',
+      ],
+      displayName: 'Qwen Image Editor (HQ)',
+      requiresBaseImage: true,
+      supportsTextPrompts: true,
+      supportsImageToImage: true,
+      outputFormat: 'image',
+      estimatedTimeSeconds: 60,
+      qualityLevel: 'ultra',
     });
 
     // 4. Wan 2.2 Lightning - Video generation (legacy - kept for compatibility)

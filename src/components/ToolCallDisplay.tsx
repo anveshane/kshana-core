@@ -27,7 +27,7 @@ interface ToolCallDisplayProps {
 }
 
 // Tools that should be hidden (rendered elsewhere in UI)
-export const HIDDEN_TOOLS = new Set(['todo_write']);
+export const HIDDEN_TOOLS = new Set(['TodoWrite', 'todo_write']);
 
 // Tools with special rendering (not standard tool call format)
 const SPECIAL_RENDER_TOOLS = new Set(['think', 'write_project_state', 'read_project_state', 'dispatch_agent']);
@@ -35,6 +35,7 @@ const SPECIAL_RENDER_TOOLS = new Set(['think', 'write_project_state', 'read_proj
 // User-friendly display names with gerund (ongoing) and past tense (completed)
 const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
   think: { gerund: 'Thinking', past: 'Thought' },
+  AskUserQuestion: { gerund: 'Asking user', past: 'Asked user' },
   ask_user: { gerund: 'Asking user', past: 'Asked user' },
   dispatch_agent: { gerund: 'Dispatching agent', past: 'Dispatched agent' },
   generate_image: { gerund: 'Generating image', past: 'Generated image' },
