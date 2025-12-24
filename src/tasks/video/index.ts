@@ -10,6 +10,7 @@ import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
+import { loadAndRenderMarkdown, loadMarkdown } from '../../core/prompts/loader.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
@@ -265,8 +266,23 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
 }
 
 /**
+ * Map workflow phases to their prompt file paths.
+ */
+const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
+  [WorkflowPhase.PLOT]: 'video/phases/plot.md',
+  [WorkflowPhase.STORY]: 'video/phases/story.md',
+  [WorkflowPhase.CHARACTERS_SETTINGS]: 'video/phases/characters-settings.md',
+  [WorkflowPhase.SCENES]: 'video/phases/scenes.md',
+  [WorkflowPhase.CHARACTER_SETTING_IMAGES]: 'video/phases/character-setting-images.md',
+  [WorkflowPhase.SCENE_IMAGES]: 'video/phases/scene-images.md',
+  [WorkflowPhase.VIDEO]: 'video/phases/video.md',
+  [WorkflowPhase.VIDEO_COMBINE]: 'video/phases/video-combine.md',
+  [WorkflowPhase.COMPLETED]: 'video/phases/completed.md',
+};
+
+/**
  * Build the custom prompt for the workflow agent based on current phase.
- * Uses simplified phases: plot → story → scenes → images → video
+ * Loads prompts from markdown files for easier maintenance.
  */
 function buildWorkflowAgentPrompt(
   project: ReturnType<typeof loadProject>,
@@ -275,144 +291,48 @@ function buildWorkflowAgentPrompt(
 ): string {
   const phaseConfig = PHASE_CONFIGS[currentPhase];
 
-  // Base workflow instructions
-  let prompt = `# Video Generation Workflow Agent
-
-You are a video generation orchestrator using a state-based workflow approach.
-
-## Current Project
-- **Project ID**: ${project?.id ?? 'new'}
-- **Title**: ${project?.title || '(not set)'}
-- **Current Phase**: ${phaseConfig.displayName} (${currentPhase})
-
-## Project Location
-All project files are stored in the \`.kshana/\` directory in the current working directory.
-
-## Loaded Project Contexts
-${loadedContexts.length > 0
-  ? `The following project files have been loaded as contexts. **ALWAYS pass these to dispatch_agent and dispatch_content_agent**:
+  // Build loaded contexts section
+  let loadedContextsSection = 'No existing project files loaded yet.';
+  if (loadedContexts.length > 0) {
+    loadedContextsSection = `The following project files have been loaded as contexts. **ALWAYS pass these to Task calls**:
 ${loadedContexts.map(c => `- ${c}`).join('\n')}
 
 Example:
 \`\`\`
-dispatch_agent(task="Plan story development", context_refs=[${loadedContexts.map(c => `"${c}"`).join(', ')}])
-dispatch_content_agent(task="Create character", content_type="character", context_refs=[${loadedContexts.map(c => `"${c}"`).join(', ')}])
-\`\`\``
-  : 'No existing project files loaded yet.'}
-
-## Workflow Phases
-plot → story → scenes → images → video
-
-## How to Proceed
-1. Call \`read_project\` to get the current project state and next action instructions
-2. When using \`dispatch_agent\` or \`dispatch_content_agent\`, ALWAYS pass all loaded context_refs
-3. The \`next_action\` field will tell you exactly what to do
-4. Follow the planner stage cycle: planning → verify → refining → complete
-
-## Planner Stage Cycle
-Each phase goes through these stages:
-- **PLANNING**: Create the initial plan, write to plan file
-- **VERIFY**: Present plan to user for approval (auto-approve after 15s if no response)
-- **REFINING**: Apply user feedback if provided, update plan
-- **COMPLETE**: Plan approved, mark phase complete and transition
-
-## Your Current Task
-You are in the **${phaseConfig.displayName}** phase.
-
-`;
-
-  // Add phase-specific instructions
-  switch (currentPhase) {
-    case WorkflowPhase.PLOT:
-      prompt += `
-### Plot Development Phase
-1. Read the user's original input from \`read_project\`
-2. Create a plot outline with main story beats
-3. Write the plot to \`plans/plot.md\` using \`write_file\`
-4. Update planner stage to 'verify' using \`update_project\`
-5. Present plot to user with \`ask_user\`
-6. After approval, update planner stage to 'complete' and mark phase completed
-`;
-      break;
-
-    case WorkflowPhase.STORY:
-      prompt += `
-### Story Development Phase
-1. Read \`plans/plot.md\` for context
-2. Expand the plot into a full story with:
-   - Character introductions and descriptions
-   - Setting descriptions
-   - Detailed narrative
-3. Write to \`plans/story.md\`
-4. Save characters using \`update_project\` action: 'add_character'
-5. Save settings using \`update_project\` action: 'add_setting'
-6. Follow the verify → complete cycle
-`;
-      break;
-
-    case WorkflowPhase.SCENES:
-      prompt += `
-### Scene Breakdown Phase
-1. Read \`plans/story.md\` for context
-2. Break the story into individual visual scenes
-3. Each scene should have:
-   - Scene number
-   - Description
-   - Characters involved
-   - Setting
-   - Action/movement
-4. Write to \`plans/scenes.md\`
-5. Register each scene using \`update_project\` action: 'add_scene'
-6. Follow the verify → complete cycle
-`;
-      break;
-
-    case WorkflowPhase.SCENE_IMAGES:
-      prompt += `
-### Scene Image Generation Phase
-1. Read \`plans/scenes.md\` and character/setting data
-2. Create image prompts for each scene
-3. Write image plan to \`plans/images.md\`
-4. After approval, generate images using \`generate_image\` or \`dispatch_image_agent\`
-5. Update scenes with imageArtifactId using \`update_project\` action: 'update_scene'
-6. Mark phase complete when all images are generated
-`;
-      break;
-
-    case WorkflowPhase.VIDEO:
-      prompt += `
-### Video Generation Phase
-1. Read project to get all scene image artifact IDs
-2. Create video generation plan in \`plans/video.md\`
-3. After approval, generate videos for each scene using \`generate_video\`
-4. Update scenes with videoArtifactId
-5. Use \`stitch_videos\` to combine all scene videos
-6. Wait for stitching job to complete
-7. Mark phase complete
-`;
-      break;
-
-    case WorkflowPhase.COMPLETED:
-      prompt += `
-### Workflow Complete
-The video has been generated successfully.
-Present the final video location to the user.
-Offer to help with any adjustments or start a new project.
-`;
-      break;
+Task(subagent_type: 'content-creator', task: "Create character", content_type: "character", context_refs: [${loadedContexts.map(c => `"${c}"`).join(', ')}])
+\`\`\``;
   }
 
-  // Add checkpoint reminder for expensive phases
+  // Load phase-specific instructions from file
+  const phasePromptFile = PHASE_PROMPT_FILES[currentPhase];
+  let phaseInstructions = '';
+  try {
+    phaseInstructions = loadMarkdown(phasePromptFile);
+  } catch {
+    // Fallback if file not found
+    phaseInstructions = `Phase instructions for ${currentPhase} not found.`;
+  }
+
+  // Build expensive checkpoint section
+  let expensiveCheckpoint = '';
   if (phaseConfig.isExpensive) {
-    prompt += `
+    expensiveCheckpoint = `
 ## Important: Checkpoint Required
 This phase involves expensive operations (${phaseConfig.displayName}).
 You MUST get user approval before starting generation.
-Use \`ask_user\` to confirm before proceeding with generation.
 `;
   }
 
-  return prompt;
+  // Load and render the base workflow template
+  return loadAndRenderMarkdown('video/workflow.md', {
+    project_id: project?.id ?? 'new',
+    project_title: project?.title || '(not set)',
+    phase_display_name: phaseConfig.displayName,
+    current_phase: currentPhase,
+    loaded_contexts: loadedContextsSection,
+    phase_instructions: phaseInstructions,
+    expensive_checkpoint: expensiveCheckpoint,
+  });
 }
 
 /**

@@ -14,6 +14,7 @@ import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
 import { buildSystemMessage, buildPlanningPrompt, buildContentPrompt, buildImageGenerationPrompt, wrapUserTask, type ContentType } from '../prompts/index.js';
+import { loadAndRenderMarkdown } from '../prompts/loader.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
 import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, LONG_CONTENT_THRESHOLD } from '../context/index.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
@@ -1518,21 +1519,10 @@ export class GenericAgent extends TypedEventEmitter {
    * Use LLM to classify whether user response indicates approval or feedback.
    */
   private async classifyPlanResponse(userResponse: string): Promise<boolean> {
-    const classificationPrompt = `You are a simple intent classifier. Determine if the user's response indicates they want to APPROVE and proceed with the plan, or if they are providing FEEDBACK to modify it.
-
-<user_response>
-${userResponse}
-</user_response>
-
-Respond with exactly one word: "APPROVE" or "FEEDBACK"
-
-Examples of APPROVE responses:
-- "yes", "ok", "proceed", "looks good", "accept", "go ahead", "start", "continue", "lgtm", "y", "1"
-
-Examples of FEEDBACK responses:
-- "add more detail to step 3", "I think we should...", "can you change...", "what about...", "no", "2"
-
-Your classification:`;
+    // Load classification prompt from file
+    const classificationPrompt = loadAndRenderMarkdown('system/classification/plan-approval.md', {
+      user_response: userResponse,
+    });
 
     try {
       const response = await this.llm.generate({
@@ -2306,21 +2296,10 @@ Respond in JSON format:
    * Use LLM to classify whether user response indicates approval or feedback for image generation.
    */
   private async classifyImageGenResponse(userResponse: string): Promise<boolean> {
-    const classificationPrompt = `You are a simple intent classifier. Determine if the user's response indicates they want to APPROVE and generate the image, or if they are providing FEEDBACK to modify the prompt.
-
-<user_response>
-${userResponse}
-</user_response>
-
-Respond with exactly one word: "APPROVE" or "FEEDBACK"
-
-Examples of APPROVE responses:
-- "yes", "ok", "generate", "looks good", "go ahead", "create it", "make it", "proceed", "lgtm", "y", "1"
-
-Examples of FEEDBACK responses:
-- "make it more colorful", "add more detail", "change the lighting", "I want...", "can you...", "no", "2"
-
-Your classification:`;
+    // Load classification prompt from file
+    const classificationPrompt = loadAndRenderMarkdown('system/classification/image-approval.md', {
+      user_response: userResponse,
+    });
 
     try {
       const response = await this.llm.generate({
