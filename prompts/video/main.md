@@ -82,37 +82,55 @@ Extract and develop characters and settings from the story.
 store_context(content: storyContent, label: "Full story")
 // Returns: { context_ref: "$story" }
 
-// Create each character profile
+// Create each character profile (ONE at a time, individual files!)
 Task(
   subagent_type: 'content-creator',
   task: 'Create detailed character profile for Daniel',
   content_type: 'character',
   context_refs: ['$story'],  // Pass the story for context
-  output_file: 'characters/daniel.json'
+  output_file: 'characters/daniel.md'  // ALWAYS use .md, NEVER .json
 )
 
-// Create each setting
+// Create each setting (ONE at a time, individual files!)
 Task(
   subagent_type: 'content-creator',
   task: 'Create detailed setting description for the train station',
   content_type: 'setting',
   context_refs: ['$story'],
-  output_file: 'settings/train_station.json'
+  output_file: 'settings/train_station.md'  // ALWAYS use .md, NEVER .json
 )
 ```
 
 ### Phase 4: SCENES
 
-Break story into visual scenes.
+**⛔ DO NOT create all scenes at once. Create 5-8 scenes, ONE at a time.**
 
+First, YOU (orchestrator) plan the scenes with TodoWrite (NOT a Task):
+```javascript
+// YOU identify 5-8 key moments from the story, then:
+TodoWrite(todos: [
+  { id: "scene-1", content: "Create scene 1: Opening", activeForm: "Creating scene 1", status: "in_progress" },
+  { id: "scene-2", content: "Create scene 2: First conflict", activeForm: "Creating scene 2", status: "pending" },
+  // ... up to 8 scenes maximum
+], merge: false)
+```
+
+Then create EACH scene individually:
 ```javascript
 Task(
   subagent_type: 'content-creator',
-  task: 'Break the story into visual scenes for video generation',
+  task: 'Create scene 1: Opening - Daniel arrives at the train station',  // Specific scene!
   content_type: 'scene',
-  context_refs: ['$story', '$character_daniel', '$setting_train_station'],
-  output_file: 'plans/scenes.md'
+  context_refs: ['$story'],
+  output_file: 'scenes/scene_01.md'  // Individual file!
 )
+// Wait for approval, then create scene 2, etc.
+```
+
+**❌ NEVER do this:**
+```javascript
+Task(task: 'Break the story into visual scenes')  // WRONG - creates 30+ scenes!
+Task(output_file: 'plans/scenes.md')  // WRONG - bundles all scenes!
 ```
 
 ### Phase 5: CHARACTER & SETTING IMAGES

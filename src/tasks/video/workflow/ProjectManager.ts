@@ -968,7 +968,14 @@ export function addScene(sceneRef: SceneRef, basePath: string = process.cwd()): 
 }
 
 /**
+ * Maximum number of scenes allowed per project.
+ * This is a hard limit to prevent infinite loops.
+ */
+export const MAX_SCENES = 12;
+
+/**
  * Add a new scene to the project (creates default entry).
+ * Throws an error if the scene limit is exceeded.
  */
 export function addNewScene(
   sceneNumber: number,
@@ -978,6 +985,11 @@ export function addNewScene(
   const project = loadProject(basePath);
   if (!project) {
     throw new Error('No project found');
+  }
+
+  // HARD LIMIT: Prevent infinite scene creation
+  if (sceneNumber > MAX_SCENES) {
+    throw new Error(`⛔ SCENE LIMIT EXCEEDED: Maximum ${MAX_SCENES} scenes allowed. Scene ${sceneNumber} cannot be created.`);
   }
 
   // Check if scene already exists
@@ -1178,6 +1190,17 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
     .filter(([, info]) => info.status === 'skipped')
     .map(([key]) => key);
 
+  // Scene limit warning
+  let sceneLimitWarning = '';
+  if (currentPhase === 'scenes') {
+    const sceneCount = project.scenes.length;
+    if (sceneCount >= MAX_SCENES) {
+      sceneLimitWarning = `\n⛔ SCENE LIMIT REACHED: You have ${sceneCount} scenes. Maximum is ${MAX_SCENES}. STOP creating scenes and transition to the next phase NOW.`;
+    } else if (sceneCount >= MAX_SCENES - 2) {
+      sceneLimitWarning = `\n⚠️ APPROACHING SCENE LIMIT: ${sceneCount}/${MAX_SCENES} scenes. Finish up soon.`;
+    }
+  }
+
   return `
 Project: ${project.title || '(untitled)'}
 ID: ${project.id}
@@ -1190,8 +1213,8 @@ Completed Phases: ${completedPhases.length > 0 ? completedPhases.join(', ') : 'n
 Skipped Phases: ${skippedPhases.length > 0 ? skippedPhases.join(', ') : 'none'}
 Characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'none defined'}
 Settings: ${settingNames.length > 0 ? settingNames.join(', ') : 'none defined'}
-Scenes: ${project.scenes.length}
-Assets: ${project.assets.length}${itemProgress}
+Scenes: ${project.scenes.length}/${MAX_SCENES} (max)
+Assets: ${project.assets.length}${itemProgress}${sceneLimitWarning}
 `.trim();
 }
 
@@ -1363,6 +1386,13 @@ function getPerItemPhaseInstructions(
 The scene description already exists from the SCENES phase. Use reference images from characters and settings that appear in this scene to maintain visual consistency.
 
 After generating, get user approval before moving to the next scene.
+
+**CRITICAL - After User Approval:**
+1. Update scene with update_project(action: 'update_scene_approval', ...)
+2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current scene as 'completed' and the next as 'in_progress'
+3. Then generate the next scene image
+
+**DO NOT skip the TodoWrite call!**
 `;
         break;
 
@@ -1372,6 +1402,13 @@ After generating, get user approval before moving to the next scene.
 Read the ${nextItem.type} description to understand the visual requirements, then generate an appropriate reference image.
 
 After generating, get user approval before moving to the next item.
+
+**CRITICAL - After User Approval:**
+1. Update with update_project(action: 'update_${nextItem.type}_approval', ...)
+2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current item as 'completed' and the next as 'in_progress'
+3. Then generate the next reference image
+
+**DO NOT skip the TodoWrite call!**
 `;
         break;
 
@@ -1381,6 +1418,29 @@ After generating, get user approval before moving to the next item.
 Use the scene's image artifact to create an animated video clip with appropriate motion.
 
 After generating, get user approval before moving to the next scene.
+
+**CRITICAL - After User Approval:**
+1. Update scene with update_project(action: 'update_scene_approval', ...)
+2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current scene as 'completed' and the next as 'in_progress'
+3. Then generate the next video
+
+**DO NOT skip the TodoWrite call!**
+`;
+        break;
+
+      case WorkflowPhase.SCENES:
+        instruction += `Create **Scene ${nextItem.name}**.
+
+Generate a detailed scene description including characters, setting, action, emotional tone, camera angles, and motion.
+
+After creating, get user approval before moving to the next scene.
+
+**CRITICAL - After User Approval:**
+1. Register the scene with update_project(action: 'add_scene', data: { scene_number: ${nextItem.name}, title: '...' })
+2. **MUST** call TodoWrite(merge: true, todos: [{ id: 'scene-${nextItem.name}', status: 'completed' }, { id: 'scene-NEXT', status: 'in_progress' }])
+3. Then create the next scene
+
+**DO NOT skip the TodoWrite call! The todo list MUST be updated after each scene approval.**
 `;
         break;
 
@@ -1391,6 +1451,13 @@ After generating, get user approval before moving to the next scene.
 Generate detailed content including description and visual characteristics suitable for image generation.
 
 After creating, get user approval before moving to the next item.
+
+**CRITICAL - After User Approval:**
+1. Register the item with update_project(action: 'add_${nextItem.type}', ...)
+2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current item as 'completed' and the next as 'in_progress'
+3. Then create the next item
+
+**DO NOT skip the TodoWrite call!**
 `;
         break;
     }

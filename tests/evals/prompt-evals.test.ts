@@ -727,6 +727,59 @@ describe('Prompt Evaluations', () => {
         }]
       }));
 
+      // File extension tests - MUST use .md, NOT .json
+      mock.when('character profile for Marcus', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'character',
+            task: 'Create character profile for Marcus',
+            output_file: 'characters/marcus.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
+      mock.when('setting description for the Mountain Cave', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'setting',
+            task: 'Create setting description for the Mountain Cave',
+            output_file: 'settings/mountain_cave.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
+      mock.when('character profile for Nina', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'character',
+            task: 'Create character profile for Nina',
+            output_file: 'characters/nina.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
+      mock.when('setting description for the Harbor', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'setting',
+            task: 'Create setting description for the Harbor',
+            output_file: 'settings/harbor.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
       // Default: character creation with individual file
       mock.setDefault(JSON.stringify({
         tool_calls: [{
@@ -811,6 +864,323 @@ describe('Prompt Evaluations', () => {
       for (const evalCase of contextCases) {
         const result = await evaluator.runCase(fixture, evalCase);
         expect(result.passed, `${evalCase.name}: context_refs should include $story. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Files MUST use .md extension, NOT .json', async () => {
+      const fileExtCases = fixture.cases.filter(c => c.tags?.includes('file-extension'));
+      expect(fileExtCases.length).toBeGreaterThan(0);
+      for (const evalCase of fileExtCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: output_file MUST use .md, NOT .json. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+  });
+
+  describe('Workflow: Scenes Individual Files', () => {
+    let fixture: EvalFixture;
+
+    /**
+     * Create a mock client for scenes tests.
+     * Returns appropriate tool calls that create individual scene files (not bundled).
+     */
+    function createScenesMockClient(): MockEvalLLMClient {
+      const mock = new MockEvalLLMClient();
+
+      // Scene creation - should use individual file paths
+      mock.when('scene 1', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'scene',
+            task: 'Create scene 1: Opening',
+            output_file: 'scenes/scene_01.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
+      mock.when('scene 2', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'scene',
+            task: 'Create scene 2: Rising action',
+            output_file: 'scenes/scene_02.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
+      mock.when('scene 3', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'scene',
+            task: 'Create scene 3: Climax',
+            output_file: 'scenes/scene_03.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
+      mock.when('scene 4', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'scene',
+            task: 'Create scene 4',
+            output_file: 'scenes/scene_04.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
+      mock.when('scene 5', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'scene',
+            task: 'Create scene 5: Resolution',
+            output_file: 'scenes/scene_05.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
+      mock.when('scene 6', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'scene',
+            task: 'Create scene 6',
+            output_file: 'scenes/scene_06.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
+      // TodoWrite for planning scenes
+      mock.when('Opening, Inciting incident, Rising action, Climax, Resolution', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'scene-1', content: 'Create scene 1: Opening', status: 'in_progress' },
+              { id: 'scene-2', content: 'Create scene 2: Inciting incident', status: 'pending' },
+              { id: 'scene-3', content: 'Create scene 3: Rising action', status: 'pending' },
+              { id: 'scene-4', content: 'Create scene 4: Climax', status: 'pending' },
+              { id: 'scene-5', content: 'Create scene 5: Resolution', status: 'pending' }
+            ]
+          }
+        }]
+      }));
+
+      // Scene approval - TodoWrite update
+      mock.when('Scene 2 has been approved', JSON.stringify({
+        tool_calls: [
+          {
+            name: 'update_project',
+            arguments: { action: 'add_scene', data: { scene_number: 2, title: 'Rising action' } }
+          },
+          {
+            name: 'TodoWrite',
+            arguments: {
+              merge: true,
+              todos: [
+                { id: 'scene-2', status: 'completed' },
+                { id: 'scene-3', status: 'in_progress' }
+              ]
+            }
+          }
+        ]
+      }));
+
+      // Middle scene - no premature complete
+      mock.when('Scene 2 of 6', JSON.stringify({
+        tool_calls: [
+          {
+            name: 'update_project',
+            arguments: { action: 'add_scene', data: { scene_number: 2 } }
+          },
+          {
+            name: 'TodoWrite',
+            arguments: {
+              merge: true,
+              todos: [
+                { id: 'scene-2', status: 'completed' },
+                { id: 'scene-3', status: 'in_progress' }
+              ]
+            }
+          }
+        ]
+      }));
+
+      // Last scene - now call complete
+      mock.when('LAST scene', JSON.stringify({
+        tool_calls: [
+          {
+            name: 'update_project',
+            arguments: { action: 'add_scene', data: { scene_number: 6, title: 'Resolution' } }
+          },
+          {
+            name: 'TodoWrite',
+            arguments: { merge: true, todos: [{ id: 'scene-6', status: 'completed' }] }
+          },
+          {
+            name: 'update_project',
+            arguments: { action: 'update_planner_stage', data: { phase: 'scenes', stage: 'complete' } }
+          },
+          {
+            name: 'update_project',
+            arguments: { action: 'transition_phase', data: { next_phase: 'character_setting_images' } }
+          }
+        ]
+      }));
+
+      // Scene 3 register
+      mock.when('Scene 3: Rising Action has been approved', JSON.stringify({
+        tool_calls: [{
+          name: 'update_project',
+          arguments: { action: 'add_scene', data: { scene_number: 3, title: 'Rising Action' } }
+        }]
+      }));
+
+      // Scene 4 todo update
+      mock.when('Scene 4 approved', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: true,
+            todos: [
+              { id: 'scene-4', status: 'completed' },
+              { id: 'scene-5', status: 'in_progress' }
+            ]
+          }
+        }]
+      }));
+
+      // Default: scene creation with individual file
+      mock.setDefault(JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'content-creator',
+            content_type: 'scene',
+            task: 'Create scene',
+            output_file: 'scenes/scene_01.md',
+            context_refs: ['$story']
+          }
+        }]
+      }));
+
+      return mock;
+    }
+
+    beforeAll(() => {
+      if (isLiveMode) {
+        evaluator = new PromptEvaluator(undefined, __dirname);
+      } else {
+        const mockClient = createScenesMockClient();
+        evaluator = new PromptEvaluator(mockClient, __dirname);
+      }
+      fixture = evaluator.loadFixture('workflow/scenes.eval.json');
+    });
+
+    it('should have test cases for individual scene file creation', () => {
+      expect(fixture.cases.length).toBeGreaterThan(5);
+      const sceneCases = fixture.cases.filter(c => c.tags?.includes('scene'));
+      expect(sceneCases.length).toBeGreaterThan(5);
+    });
+
+    it('Scene files should be saved to scenes/scene_XX.md', async () => {
+      const sceneFileCases = fixture.cases.filter(
+        c => c.tags?.includes('scene') && c.tags?.includes('individual-file')
+      );
+      for (const evalCase of sceneFileCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: output_file should be scenes/scene_XX.md. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should NOT use bundled files like plans/scenes.md', async () => {
+      const noBundledCases = fixture.cases.filter(c => c.tags?.includes('no-bundled-file'));
+      for (const evalCase of noBundledCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should NOT use plans/scenes.md. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Task should be for single scene, not batch creation', async () => {
+      const singleItemCases = fixture.cases.filter(c => c.tags?.includes('single-item') || c.tags?.includes('no-batch'));
+      for (const evalCase of singleItemCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Task should be for single scene. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Scene file names should use numbered convention', async () => {
+      const numberedCases = fixture.cases.filter(c => c.tags?.includes('numbered'));
+      for (const evalCase of numberedCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: File path should use numbered naming. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should use $story as context source', async () => {
+      const contextCases = fixture.cases.filter(c => c.tags?.includes('story-source'));
+      for (const evalCase of contextCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: context_refs should include $story. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Scene files MUST use .md extension, NOT .json', async () => {
+      const fileExtCases = fixture.cases.filter(c => c.tags?.includes('file-extension'));
+      expect(fileExtCases.length).toBeGreaterThan(0);
+      for (const evalCase of fileExtCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: output_file MUST use .md, NOT .json. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Task description should specify scene number', async () => {
+      const sceneNumCases = fixture.cases.filter(c => c.tags?.includes('scene-number'));
+      for (const evalCase of sceneNumCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Task should mention specific scene number. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should call TodoWrite after scene approval', async () => {
+      const todoUpdateCases = fixture.cases.filter(c => c.tags?.includes('todo-update'));
+      expect(todoUpdateCases.length).toBeGreaterThan(0);
+      for (const evalCase of todoUpdateCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should call TodoWrite after approval. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should call add_scene after scene approval', async () => {
+      const registerCases = fixture.cases.filter(c => c.tags?.includes('register'));
+      for (const evalCase of registerCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should register scene with add_scene. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should call update_planner_stage complete ONLY after last scene', async () => {
+      const lastSceneCases = fixture.cases.filter(c => c.tags?.includes('last-scene'));
+      for (const evalCase of lastSceneCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should only complete phase after last scene. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
   });

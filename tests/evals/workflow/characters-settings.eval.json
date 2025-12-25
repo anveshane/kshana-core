@@ -223,6 +223,78 @@
         { "type": "tool_arg_contains", "toolName": "Task", "argPath": "context_refs", "value": "$story" }
       ],
       "tags": ["setting", "context-source", "story-source"]
+    },
+    {
+      "name": "Character file MUST use .md extension, NOT .json",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create character profile for Marcus. Save to characters/marcus.md. CRITICAL: Always use .md extension, NEVER .json.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "output_file", "value": ".md" },
+        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "output_file", "value": ".json" }
+      ],
+      "tags": ["character", "file-extension", "md-not-json"]
+    },
+    {
+      "name": "Setting file MUST use .md extension, NOT .json",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create setting description for the Mountain Cave. Save to settings/mountain_cave.md. CRITICAL: Always use .md extension, NEVER .json.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "output_file", "value": ".md" },
+        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "output_file", "value": ".json" }
+      ],
+      "tags": ["setting", "file-extension", "md-not-json"]
+    },
+    {
+      "name": "Character file should NOT use .json even without explicit instruction",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create character profile for Nina. Save to characters/ directory.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "output_file", "value": "characters/" },
+        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "output_file", "value": ".json" }
+      ],
+      "tags": ["character", "file-extension", "implicit-md"]
+    },
+    {
+      "name": "Setting file should NOT use .json even without explicit instruction",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create setting description for the Harbor. Save to settings/ directory.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "output_file", "value": "settings/" },
+        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "output_file", "value": ".json" }
+      ],
+      "tags": ["setting", "file-extension", "implicit-md"]
     }
   ]
 }

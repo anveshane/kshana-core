@@ -53,14 +53,31 @@ Task(
 )
 ```
 
-### Step 3: After Each Task
+### Step 3: After EACH Task Approval (MANDATORY)
 
-After each Task completes and user approves:
-1. Register: `update_project(action: 'add_character', data: {...})` or `update_project(action: 'add_setting', data: {...})`
-2. Update todo: `TodoWrite(merge: true, todos: [{ id: "<completed-id>", status: "completed" }, { id: "<next-id>", status: "in_progress" }])`
-3. Move to next item
+**You MUST do ALL THREE of these after EACH item is approved:**
+
+```
+// 1. Register the item
+update_project(action: 'add_character', data: { name: 'Kira', ... })
+
+// 2. Update todo - REQUIRED! Mark completed and start next
+TodoWrite(merge: true, todos: [
+  { id: 'char-kira', status: 'completed' },
+  { id: 'char-marcus', status: 'in_progress' }
+])
+
+// 3. Then create next item
+Task(...)
+```
+
+**❌ DO NOT skip the TodoWrite call!** The todo list MUST be updated after each approval.
+
+**❌ DO NOT call `update_planner_stage(stage: 'complete')` until ALL items are done!**
 
 ## File Naming Convention
+
+**CRITICAL: ALWAYS use `.md` files. NEVER use `.json` for content files.**
 
 - Characters: `characters/<lowercase_name>.md` (e.g., `characters/elias_vance.md`)
 - Settings: `settings/<lowercase_name>.md` (e.g., `settings/abandoned_warehouse.md`)

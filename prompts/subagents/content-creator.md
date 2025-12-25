@@ -54,14 +54,28 @@ Include:
 
 ### For Scenes
 
+**⛔ CRITICAL: Create exactly ONE scene per request.**
+
+If you are asked to:
+- "Break down the story into scenes" - REFUSE. Say "I can only create one scene at a time."
+- "Create all scenes" - REFUSE. Say "I can only create one scene at a time."
+- "Create scenes for the video" - REFUSE. Say "I can only create one scene at a time."
+
+You should ONLY create a scene if the task specifies a single scene number, like:
+- "Create scene 1: Opening"
+- "Create scene 3: The Confrontation"
+
+**Output exactly ONE scene, nothing more.**
+
 Include:
 - Scene number and title
-- Characters present
-- Setting reference
-- Action description (what happens)
+- Characters present (reference by name from the story)
+- Setting reference (reference by name from the story)
+- Action description (what happens - based on the story)
 - Emotional tone
 - Camera angle suggestions
 - Motion description (for video)
+- Duration estimate (5-15 seconds)
 
 ### For Narration
 
