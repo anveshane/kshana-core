@@ -107,6 +107,8 @@ interface AgentState {
   questionOptions: QuestionOption[] | undefined;
   /** Auto-approve timeout in milliseconds (for countdown display) */
   autoApproveTimeoutMs: number | undefined;
+  /** Context content to display with the question (e.g., image prompt being approved) */
+  questionContext: string | undefined;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
@@ -119,7 +121,7 @@ type AgentAction =
   | { type: 'SET_STATUS'; status: AgentStatus; agentName?: string }
   | { type: 'SET_TODOS'; todos: ExpandableTodoItem[] }
   | { type: 'APPEND_OUTPUT'; text: string }
-  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[]; autoApproveTimeoutMs?: number }
+  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[]; autoApproveTimeoutMs?: number; context?: string }
   | { type: 'CLEAR_QUESTION' }
   | { type: 'SET_ERROR'; error: string }
   | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown>; agentName?: string }
@@ -148,6 +150,7 @@ const initialState: AgentState = {
   isConfirmation: false,
   questionOptions: undefined,
   autoApproveTimeoutMs: undefined,
+  questionContext: undefined,
   error: undefined,
   recentTools: [],
   history: [],
@@ -177,12 +180,13 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         isConfirmation: action.isConfirmation,
         questionOptions: action.options,
         autoApproveTimeoutMs: action.autoApproveTimeoutMs,
+        questionContext: action.context,
         status: 'waiting',
         currentAction: null,
       };
 
     case 'CLEAR_QUESTION':
-      return { ...state, question: undefined, isConfirmation: false, questionOptions: undefined, autoApproveTimeoutMs: undefined };
+      return { ...state, question: undefined, isConfirmation: false, questionOptions: undefined, autoApproveTimeoutMs: undefined, questionContext: undefined };
 
     case 'SET_ERROR':
       return { ...state, error: action.error, status: 'error', currentAction: null };
@@ -503,6 +507,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         options: event.options,
         isConfirmation: event.isConfirmation,
         autoApproveTimeoutMs: event.autoApproveTimeoutMs,
+        hasContext: !!event.context,
       }, null, 2)}`);
       dispatch({
         type: 'SET_QUESTION',
@@ -510,6 +515,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         isConfirmation: event.isConfirmation,
         options: event.options,
         autoApproveTimeoutMs: event.autoApproveTimeoutMs,
+        context: event.context,
       });
       onEvent?.(event);
     });
@@ -686,6 +692,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     isConfirmation: state.isConfirmation,
     questionOptions: state.questionOptions,
     autoApproveTimeoutMs: state.autoApproveTimeoutMs,
+    questionContext: state.questionContext,
     error: state.error,
     recentTools: state.recentTools,
     history: state.history,

@@ -112,6 +112,8 @@ export interface QuestionEvent {
   data?: Record<string, unknown>;
   /** Auto-approve timeout in milliseconds (for countdown display) */
   autoApproveTimeoutMs?: number;
+  /** Context content to display with the question (e.g., image prompt being approved) */
+  context?: string;
 }
 
 /**

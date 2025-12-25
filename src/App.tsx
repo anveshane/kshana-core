@@ -132,6 +132,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     isConfirmation,
     questionOptions,
     autoApproveTimeoutMs,
+    questionContext,
     error,
     recentTools,
     history,
@@ -582,6 +583,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         selectedOptionIndex={selectedOptionIndex}
         autoApproveTimeoutMs={awaitingFeedbackText ? undefined : autoApproveTimeoutMs}
         onAutoApproveTimeout={handleAutoApproveTimeout}
+        questionContext={awaitingFeedbackText ? undefined : questionContext}
         showTodos
         history={history}
         currentAction={currentAction}

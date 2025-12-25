@@ -65,6 +65,8 @@ interface AgentViewProps {
   autoApproveTimeoutMs?: number;
   /** Callback when auto-approve timeout expires */
   onAutoApproveTimeout?: () => void;
+  /** Context content to display with questions (e.g., image prompt being approved) */
+  questionContext?: string;
   showTodos?: boolean;
   history?: HistoryEntry[];
   currentAction?: CurrentAction | null;
@@ -89,6 +91,7 @@ export function AgentView({
   selectedOptionIndex = 0,
   autoApproveTimeoutMs,
   onAutoApproveTimeout,
+  questionContext,
   showTodos = true,
   history = [],
   currentAction = null,
@@ -153,6 +156,7 @@ export function AgentView({
           selectedIndex={selectedOptionIndex}
           autoApproveTimeoutMs={autoApproveTimeoutMs}
           onTimeout={onAutoApproveTimeout}
+          context={questionContext}
         />
       )}
 

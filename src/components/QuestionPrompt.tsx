@@ -21,6 +21,8 @@ interface QuestionPromptProps {
   autoApproveTimeoutMs?: number;
   /** Callback when timeout expires */
   onTimeout?: () => void;
+  /** Context content to display above the question (e.g., image prompt being approved) */
+  context?: string;
 }
 
 /**
@@ -35,6 +37,7 @@ export function QuestionPrompt({
   selectedIndex = 0,
   autoApproveTimeoutMs,
   onTimeout,
+  context,
 }: QuestionPromptProps) {
   const [remainingSeconds, setRemainingSeconds] = React.useState<number | null>(
     autoApproveTimeoutMs ? Math.ceil(autoApproveTimeoutMs / 1000) : null
@@ -93,10 +96,21 @@ export function QuestionPrompt({
       </Box>
     );
   };
+  // Context display component (e.g., image prompt being approved)
+  const ContextDisplay = () => {
+    if (!context) return null;
+    return (
+      <Box flexDirection="column" marginBottom={1} borderStyle="single" borderColor="gray" paddingX={1}>
+        <Text dimColor wrap="wrap">{context}</Text>
+      </Box>
+    );
+  };
+
   // Render multiple choice options
   if (options && options.length > 0) {
     return (
       <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginY={1}>
+        <ContextDisplay />
         <Box marginBottom={1}>
           <Text color="cyan" bold>?</Text>
           <Text bold> {question}</Text>

@@ -401,9 +401,10 @@ export class GenericAgent extends TypedEventEmitter {
             isConfirmation: false,
             options: imageResultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: imageResultObj['autoApproveTimeoutMs'] as number | undefined,
+            context: imageResultObj['prompt'] as string,
           });
 
-          // Prompt is shown via ToolCallDisplay
+          // Prompt is shown in QuestionPrompt context
           return {
             status: 'waiting_for_user',
             output: '',
@@ -970,6 +971,7 @@ export class GenericAgent extends TypedEventEmitter {
           isConfirmation: false,
           options: resultObj['options'] as Array<{ label: string; description?: string }>,
           autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
+          context: resultObj['prompt'] as string,
         });
 
         // Emit status change
