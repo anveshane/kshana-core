@@ -51,9 +51,13 @@ export function UserInput({
     } else if (key.escape) {
       exit();
     } else if (input && !key.ctrl && !key.meta) {
-      // Filter out newlines and normalize whitespace when adding input
-      const sanitized = input.replace(/[\r\n]/g, ' ');
-      setValue(prev => prev + sanitized);
+      // Filter out newlines, control chars and normalize whitespace when adding input
+      const sanitized = input
+        .replace(/[\r\n\t\x00-\x1F\x7F]/g, ' ')
+        .replace(/\s+/g, ' ');
+      if (sanitized) {
+        setValue(prev => prev + sanitized);
+      }
     }
   });
 
@@ -110,9 +114,13 @@ export function SimpleInput({
     } else if (key.backspace || key.delete) {
       setValue(prev => prev.slice(0, -1));
     } else if (input && !key.ctrl && !key.meta) {
-      // Filter out newlines and normalize whitespace when adding input
-      const sanitized = input.replace(/[\r\n]/g, ' ');
-      setValue(prev => prev + sanitized);
+      // Filter out newlines, control chars and normalize whitespace when adding input
+      const sanitized = input
+        .replace(/[\r\n\t\x00-\x1F\x7F]/g, ' ')
+        .replace(/\s+/g, ' ');
+      if (sanitized) {
+        setValue(prev => prev + sanitized);
+      }
     }
   });
 

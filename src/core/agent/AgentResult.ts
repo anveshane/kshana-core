@@ -28,6 +28,8 @@ export interface GenericAgentResult {
   isConfirmation?: boolean;
   /** Options for multiple choice questions */
   options?: QuestionOption[];
+  /** Auto-approve timeout in milliseconds */
+  autoApproveTimeoutMs?: number;
 }
 
 /**

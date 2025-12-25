@@ -11,22 +11,37 @@ export {
 // Built-in tools
 export {
   thinkTool,
+  askUserQuestionTool,
   askUserTool,
-  dispatchAgentTool,
+  taskTool,
+  // taskOutputTool - NOT IMPLEMENTED, removed to avoid confusion
+  enterPlanModeTool,
+  exitPlanModeTool,
   setTodosTool,
   updateTodoTool,
   addSubtasksTool,
   todoWriteTool,
+  legacyTodoWriteTool,
   expandTodoTool,
+  storeContextTool,
+  fetchContextTool,
+  listContextsTool,
+  deleteContextTool,
 } from './builtin/index.js';
 
 // Re-export for convenience
 import { ToolRegistry } from './ToolRegistry.js';
 import {
   thinkTool,
+  askUserQuestionTool,
   askUserTool,
-  dispatchAgentTool,
+  taskTool,
+  enterPlanModeTool,
+  exitPlanModeTool,
   todoWriteTool,
+  legacyTodoWriteTool,
+  storeContextTool,
+  fetchContextTool,
 } from './builtin/index.js';
 
 /**
@@ -37,9 +52,13 @@ export function createDefaultToolRegistry(): ToolRegistry {
 
   // Register built-in tools
   registry.register(thinkTool);
-  registry.register(askUserTool);
-  registry.register(dispatchAgentTool);
+  registry.register(askUserQuestionTool);
+  registry.register(taskTool);
+  registry.register(enterPlanModeTool);
+  registry.register(exitPlanModeTool);
   registry.register(todoWriteTool);
+  registry.register(storeContextTool);
+  registry.register(fetchContextTool);
 
   return registry;
 }

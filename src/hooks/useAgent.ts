@@ -3,10 +3,24 @@
  * Optimized to reduce re-renders and flickering.
  */
 import React from 'react';
+import * as fs from 'fs';
+import * as path from 'path';
 import { GenericAgent, type AgentConfig, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig, type ToolDefinition } from '../core/llm/index.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { AgentEvent } from '../events/index.js';
+
+// Debug logging to file
+const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+function debugLog(message: string) {
+  try {
+    const timestamp = new Date().toISOString();
+    const logLine = `[${timestamp}] ${message}\n`;
+    fs.appendFileSync(DEBUG_LOG_PATH, logLine);
+  } catch {
+    // Ignore logging errors
+  }
+}
 
 type AgentStatus = 'idle' | 'thinking' | 'waiting' | 'completed' | 'error';
 
@@ -26,6 +40,10 @@ export interface ToolCallHistoryItem {
   startTime: number;
   endTime?: number;
   duration?: number;
+  /** Name of the agent that invoked this tool */
+  agentName?: string;
+  /** Streaming content being accumulated for this tool (for sub-agent loops) */
+  streamingContent?: string;
 }
 
 /**
@@ -33,13 +51,25 @@ export interface ToolCallHistoryItem {
  */
 export interface HistoryEntry {
   id: string;
-  type: 'user_input' | 'agent_text' | 'tool_completed' | 'error';
+  type: 'user_input' | 'agent_text' | 'tool_completed' | 'error' | 'phase_transition';
   content: string;
   timestamp: number;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolResult?: unknown;
   duration?: number;
+  /** Name of the agent that performed this action (e.g., "Orchestrator", "Content Agent") */
+  agentName?: string;
+  /** Streaming content that was generated during this tool call */
+  streamingContent?: string;
+  /** Whether streaming content was already shown live (to avoid duplicate display) */
+  wasStreamed?: boolean;
+  /** For phase_transition entries: the phase being entered */
+  phaseName?: string;
+  /** For phase_transition entries: human-readable phase name */
+  phaseDisplayName?: string;
+  /** For phase_transition entries: description of the phase */
+  phaseDescription?: string;
 }
 
 /**
@@ -52,6 +82,8 @@ export interface CurrentAction {
   toolArgs?: Record<string, unknown>;
   toolCallId?: string;
   startTime: number;
+  /** Name of the agent performing this action */
+  agentName?: string;
 }
 
 /**
@@ -73,31 +105,38 @@ interface AgentState {
   question: string | undefined;
   isConfirmation: boolean;
   questionOptions: QuestionOption[] | undefined;
+  /** Auto-approve timeout in milliseconds (for countdown display) */
+  autoApproveTimeoutMs: number | undefined;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
   currentAction: CurrentAction | null;
+  /** Current agent name (for tracking across streaming) */
+  currentAgentName: string | undefined;
 }
 
 type AgentAction =
-  | { type: 'SET_STATUS'; status: AgentStatus }
+  | { type: 'SET_STATUS'; status: AgentStatus; agentName?: string }
   | { type: 'SET_TODOS'; todos: ExpandableTodoItem[] }
   | { type: 'APPEND_OUTPUT'; text: string }
-  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[] }
+  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[]; autoApproveTimeoutMs?: number }
   | { type: 'CLEAR_QUESTION' }
   | { type: 'SET_ERROR'; error: string }
-  | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown> }
-  | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean }
-  | { type: 'ADD_AGENT_TEXT'; text: string }
-  | { type: 'STREAM_CHUNK'; chunk: string }
-  | { type: 'STREAM_DONE'; skipHistory?: boolean }
-  | { type: 'SET_THINKING' }
+  | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown>; agentName?: string }
+  | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean; agentName?: string }
+  | { type: 'TOOL_STREAM'; toolCallId: string; chunk: string; done: boolean }
+  | { type: 'ADD_AGENT_TEXT'; text: string; agentName?: string }
+  | { type: 'ADD_USER_INPUT'; text: string; isTask?: boolean }
+  | { type: 'STREAM_CHUNK'; chunk: string; agentName?: string }
+  | { type: 'STREAM_DONE'; skipHistory?: boolean; agentName?: string }
+  | { type: 'SET_THINKING'; agentName?: string }
   | { type: 'CLEAR_CURRENT_ACTION' }
   | { type: 'RESET' }
-  | { type: 'START_TASK' };
+  | { type: 'START_TASK'; task: string }
+  | { type: 'ADD_PHASE_TRANSITION'; fromPhase: string; toPhase: string; displayName?: string; description?: string };
 
 const MAX_VISIBLE_TOOLS = 15;
-const MAX_HISTORY = 50; // Limit history to prevent memory issues
+const MAX_HISTORY = 500; // Keep more history for scrolling
 
 const initialState: AgentState = {
   status: 'idle',
@@ -108,10 +147,12 @@ const initialState: AgentState = {
   question: undefined,
   isConfirmation: false,
   questionOptions: undefined,
+  autoApproveTimeoutMs: undefined,
   error: undefined,
   recentTools: [],
   history: [],
   currentAction: null,
+  currentAgentName: undefined,
 };
 
 function agentReducer(state: AgentState, action: AgentAction): AgentState {
@@ -120,6 +161,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       return { ...state, status: action.status };
 
     case 'SET_TODOS':
+      debugLog(`[useAgent] SET_TODOS: updating from ${state.todos.length} to ${action.todos.length} todos`);
       return { ...state, todos: action.todos };
 
     case 'APPEND_OUTPUT':
@@ -134,12 +176,13 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         question: action.question,
         isConfirmation: action.isConfirmation,
         questionOptions: action.options,
+        autoApproveTimeoutMs: action.autoApproveTimeoutMs,
         status: 'waiting',
         currentAction: null,
       };
 
     case 'CLEAR_QUESTION':
-      return { ...state, question: undefined, isConfirmation: false, questionOptions: undefined };
+      return { ...state, question: undefined, isConfirmation: false, questionOptions: undefined, autoApproveTimeoutMs: undefined };
 
     case 'SET_ERROR':
       return { ...state, error: action.error, status: 'error', currentAction: null };
@@ -148,17 +191,20 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       return {
         ...state,
         status: 'thinking',
-        currentAction: { type: 'thinking', startTime: Date.now() },
+        currentAction: { type: 'thinking', startTime: Date.now(), agentName: action.agentName },
+        currentAgentName: action.agentName ?? state.currentAgentName,
       };
 
     case 'TOOL_START': {
       const startTime = Date.now();
+      const agentName = action.agentName ?? state.currentAgentName;
       const newTool: ToolCallHistoryItem = {
         id: action.toolCallId,
         name: action.toolName,
         args: action.args,
         status: 'executing',
         startTime,
+        agentName,
       };
       return {
         ...state,
@@ -168,8 +214,10 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
           toolArgs: action.args,
           toolCallId: action.toolCallId,
           startTime,
+          agentName,
         },
         recentTools: [...state.recentTools.slice(-(MAX_VISIBLE_TOOLS - 1)), newTool],
+        currentAgentName: agentName,
       };
     }
 
@@ -177,8 +225,10 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       const endTime = Date.now();
       const tool = state.recentTools.find(t => t.id === action.toolCallId);
       const duration = tool ? endTime - tool.startTime : 0;
+      const agentName = action.agentName ?? tool?.agentName ?? state.currentAgentName;
 
-      // Create history entry
+      // Create history entry, including any streaming content that was generated
+      // Mark wasStreamed if content was already displayed live (to avoid duplicate display)
       const historyEntry: HistoryEntry | null = tool
         ? {
             id: `tool-${action.toolCallId}`,
@@ -189,6 +239,9 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
             toolArgs: tool.args,
             toolResult: action.result,
             duration,
+            agentName,
+            streamingContent: tool.streamingContent,
+            wasStreamed: !!tool.streamingContent,
           }
         : null;
 
@@ -206,7 +259,26 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       };
     }
 
-    case 'ADD_AGENT_TEXT':
+    case 'TOOL_STREAM': {
+      // Update streaming content for a specific tool
+      const targetTool = state.recentTools.find(t => t.id === action.toolCallId);
+      const newStreamingContent = (targetTool?.streamingContent ?? '') + action.chunk;
+      debugLog(`[useAgent] TOOL_STREAM: toolCallId=${action.toolCallId}, chunk=${action.chunk.length} chars, done=${action.done}, newTotal=${newStreamingContent.length} chars, toolFound=${!!targetTool}`);
+      if (!targetTool) {
+        debugLog(`[useAgent] TOOL_STREAM WARNING: tool not found in recentTools. Available tools: ${state.recentTools.map(t => t.id).join(', ')}`);
+      }
+      return {
+        ...state,
+        recentTools: state.recentTools.map(t =>
+          t.id === action.toolCallId
+            ? { ...t, streamingContent: newStreamingContent }
+            : t
+        ),
+      };
+    }
+
+    case 'ADD_AGENT_TEXT': {
+      const agentName = action.agentName ?? state.currentAgentName;
       return {
         ...state,
         output: state.output ? `${state.output}\n\n${action.text}` : action.text,
@@ -217,28 +289,54 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
             type: 'agent_text',
             content: action.text,
             timestamp: Date.now(),
+            agentName,
+          },
+        ],
+        currentAgentName: agentName,
+      };
+    }
+
+    case 'ADD_USER_INPUT':
+      return {
+        ...state,
+        history: [
+          ...state.history.slice(-MAX_HISTORY + 1),
+          {
+            id: `user-${Date.now()}`,
+            type: 'user_input',
+            content: action.text,
+            timestamp: Date.now(),
           },
         ],
       };
 
     case 'STREAM_CHUNK':
+      debugLog(`[useAgent] STREAM_CHUNK: chunk=${action.chunk.length} chars, newTotal=${(state.streamingText + action.chunk).length} chars`);
       return {
         ...state,
         streamingText: state.streamingText + action.chunk,
         isStreaming: true,
+        currentAgentName: action.agentName ?? state.currentAgentName,
       };
 
     case 'STREAM_DONE': {
       // Move completed streaming text to history if there's content
       const finalText = state.streamingText.trim();
+      const agentName = action.agentName ?? state.currentAgentName;
+      debugLog(`[useAgent] STREAM_DONE: finalText=${finalText.length} chars, skipHistory=${action.skipHistory}, addToHistory=${!!(finalText && !action.skipHistory)}`);
+      if (finalText) {
+        debugLog(`[useAgent] STREAM_DONE content preview: "${finalText.slice(0, 200)}${finalText.length > 200 ? '...' : ''}"`);
+      }
       if (!finalText || action.skipHistory) {
         // Either no content or skipHistory flag set (e.g., plan shown via ToolCallDisplay)
+        debugLog(`[useAgent] STREAM_DONE: skipping history (no content or skipHistory flag)`);
         return {
           ...state,
           streamingText: '',
           isStreaming: false,
         };
       }
+      debugLog(`[useAgent] STREAM_DONE: adding to history with agentName=${agentName}`);
       return {
         ...state,
         streamingText: '',
@@ -251,6 +349,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
             type: 'agent_text',
             content: finalText,
             timestamp: Date.now(),
+            agentName,
           },
         ],
       };
@@ -270,10 +369,37 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         streamingText: '',
         isStreaming: false,
         currentAction: { type: 'thinking', startTime: Date.now() },
+        // Add the task to history
+        history: [
+          ...state.history.slice(-MAX_HISTORY + 1),
+          {
+            id: `task-${Date.now()}`,
+            type: 'user_input',
+            content: action.task,
+            timestamp: Date.now(),
+          },
+        ],
       };
 
     case 'RESET':
       return initialState;
+
+    case 'ADD_PHASE_TRANSITION':
+      return {
+        ...state,
+        history: [
+          ...state.history.slice(-MAX_HISTORY + 1),
+          {
+            id: `phase-${Date.now()}`,
+            type: 'phase_transition',
+            content: `${action.fromPhase} → ${action.toPhase}`,
+            timestamp: Date.now(),
+            phaseName: action.toPhase,
+            phaseDisplayName: action.displayName,
+            phaseDescription: action.description,
+          },
+        ],
+      };
 
     default:
       return state;
@@ -289,6 +415,7 @@ interface UseAgentReturn {
   question: string | undefined;
   isConfirmation: boolean;
   questionOptions: QuestionOption[] | undefined;
+  autoApproveTimeoutMs: number | undefined;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
@@ -325,21 +452,21 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
       switch (event.status) {
         case 'started':
         case 'thinking':
-          dispatch({ type: 'SET_THINKING' });
+          dispatch({ type: 'SET_THINKING', agentName: event.agentName });
           break;
         case 'waiting':
           // Question event will handle this
           break;
         case 'completed':
-          dispatch({ type: 'SET_STATUS', status: 'completed' });
+          dispatch({ type: 'SET_STATUS', status: 'completed', agentName: event.agentName });
           dispatch({ type: 'CLEAR_CURRENT_ACTION' });
           break;
         case 'error':
-          dispatch({ type: 'SET_STATUS', status: 'error' });
+          dispatch({ type: 'SET_STATUS', status: 'error', agentName: event.agentName });
           dispatch({ type: 'CLEAR_CURRENT_ACTION' });
           break;
         case 'interrupted':
-          dispatch({ type: 'SET_STATUS', status: 'idle' });
+          dispatch({ type: 'SET_STATUS', status: 'idle', agentName: event.agentName });
           dispatch({ type: 'CLEAR_CURRENT_ACTION' });
           break;
       }
@@ -347,6 +474,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('todo_update', event => {
+      debugLog(`[useAgent] todo_update event received: ${event.todos.length} todos`);
       dispatch({ type: 'SET_TODOS', todos: event.todos });
       onEvent?.(event);
     });
@@ -359,6 +487,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('streaming_text', event => {
+      debugLog(`[useAgent] streaming_text event: done=${event.done}, chunkLen=${event.chunk?.length ?? 0}, skipHistory=${event.skipHistory}`);
       if (event.done) {
         dispatch({ type: 'STREAM_DONE', skipHistory: event.skipHistory });
       } else if (event.chunk) {
@@ -368,11 +497,19 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('question', event => {
+      debugLog(`[useAgent] Question event received: ${JSON.stringify({
+        question: event.question?.slice(0, 50),
+        optionsCount: event.options?.length,
+        options: event.options,
+        isConfirmation: event.isConfirmation,
+        autoApproveTimeoutMs: event.autoApproveTimeoutMs,
+      }, null, 2)}`);
       dispatch({
         type: 'SET_QUESTION',
         question: event.question,
         isConfirmation: event.isConfirmation,
         options: event.options,
+        autoApproveTimeoutMs: event.autoApproveTimeoutMs,
       });
       onEvent?.(event);
     });
@@ -383,6 +520,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         args: event.arguments,
+        agentName: event.agentName,
       });
       onEvent?.(event);
     });
@@ -393,6 +531,30 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         toolCallId: event.toolCallId,
         result: event.result,
         isError: event.isError ?? false,
+        agentName: event.agentName,
+      });
+      onEvent?.(event);
+    });
+
+    agent.on('tool_streaming', event => {
+      debugLog(`[useAgent] tool_streaming event: toolCallId=${event.toolCallId}, chunkLen=${event.chunk.length}, done=${event.done}`);
+      dispatch({
+        type: 'TOOL_STREAM',
+        toolCallId: event.toolCallId,
+        chunk: event.chunk,
+        done: event.done,
+      });
+      onEvent?.(event);
+    });
+
+    agent.on('phase_transition', event => {
+      debugLog(`[useAgent] phase_transition event: ${event.fromPhase} → ${event.toPhase}`);
+      dispatch({
+        type: 'ADD_PHASE_TRANSITION',
+        fromPhase: event.fromPhase,
+        toPhase: event.toPhase,
+        displayName: event.displayName,
+        description: event.description,
       });
       onEvent?.(event);
     });
@@ -404,11 +566,14 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
   // Run agent on a task
   const run = React.useCallback(
     async (task: string): Promise<GenericAgentResult> => {
-      dispatch({ type: 'START_TASK' });
+      dispatch({ type: 'START_TASK', task });
 
       const agent = createAgent();
 
       try {
+        // Initialize agent (queries model context length, validates requirements)
+        await agent.initialize();
+
         const result = await agent.run(task);
 
         dispatch({ type: 'SET_TODOS', todos: result.todos });
@@ -418,6 +583,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
             type: 'SET_QUESTION',
             question: result.pendingQuestion ?? '',
             isConfirmation: result.isConfirmation ?? false,
+            options: result.options,
+            autoApproveTimeoutMs: result.autoApproveTimeoutMs,
           });
         } else if (result.status === 'completed') {
           dispatch({ type: 'SET_STATUS', status: 'completed' });
@@ -451,6 +618,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         };
       }
 
+      // Add user response to history
+      dispatch({ type: 'ADD_USER_INPUT', text: userInput });
       dispatch({ type: 'SET_THINKING' });
       dispatch({ type: 'CLEAR_QUESTION' });
 
@@ -464,6 +633,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
             type: 'SET_QUESTION',
             question: result.pendingQuestion ?? '',
             isConfirmation: result.isConfirmation ?? false,
+            options: result.options,
+            autoApproveTimeoutMs: result.autoApproveTimeoutMs,
           });
         } else if (result.status === 'completed') {
           dispatch({ type: 'SET_STATUS', status: 'completed' });
@@ -514,6 +685,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     question: state.question,
     isConfirmation: state.isConfirmation,
     questionOptions: state.questionOptions,
+    autoApproveTimeoutMs: state.autoApproveTimeoutMs,
     error: state.error,
     recentTools: state.recentTools,
     history: state.history,

@@ -1,0 +1,147 @@
+{
+  "name": "Classification Edge Cases",
+  "description": "Edge cases likely to break the classification prompts",
+  "promptPath": "system/classification/plan-approval.md",
+  "temperature": 0,
+  "maxTokens": 10,
+  "cases": [
+    {
+      "name": "TRICKY: yes but (should be FEEDBACK)",
+      "context": { "user_response": "yes, but can you add more detail to step 2?" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["edge", "tricky", "feedback"]
+    },
+    {
+      "name": "TRICKY: ok but (should be FEEDBACK)",
+      "context": { "user_response": "ok, but make it shorter" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["edge", "tricky", "feedback"]
+    },
+    {
+      "name": "TRICKY: good but (should be FEEDBACK)",
+      "context": { "user_response": "good, but I think we need to reconsider step 3" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["edge", "tricky", "feedback"]
+    },
+    {
+      "name": "TRICKY: looks good but (should be FEEDBACK)",
+      "context": { "user_response": "looks good but can we swap steps 2 and 3?" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["edge", "tricky", "feedback"]
+    },
+    {
+      "name": "Negative phrasing approval: no issues",
+      "context": { "user_response": "I don't see any issues" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "approve"]
+    },
+    {
+      "name": "Negative phrasing approval: nothing to change",
+      "context": { "user_response": "nothing to change, let's go" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "approve"]
+    },
+    {
+      "name": "Emoji approval: thumbs up",
+      "context": { "user_response": "👍" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "emoji", "approve"]
+    },
+    {
+      "name": "Emoji approval: checkmark",
+      "context": { "user_response": "✅" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "emoji", "approve"]
+    },
+    {
+      "name": "Unlisted approval: sure",
+      "context": { "user_response": "sure" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "approve"]
+    },
+    {
+      "name": "Unlisted approval: sounds good",
+      "context": { "user_response": "sounds good" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "approve"]
+    },
+    {
+      "name": "Unlisted approval: let's do it",
+      "context": { "user_response": "let's do it" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "approve"]
+    },
+    {
+      "name": "Unlisted approval: perfect",
+      "context": { "user_response": "perfect" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "approve"]
+    },
+    {
+      "name": "Unlisted approval: great",
+      "context": { "user_response": "great" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "approve"]
+    },
+    {
+      "name": "Verbose approval",
+      "context": { "user_response": "I've reviewed everything and I think we should move forward with this plan" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "verbose", "approve"]
+    },
+    {
+      "name": "Typo: yse",
+      "context": { "user_response": "yse" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "typo", "approve"]
+    },
+    {
+      "name": "Typo: lok good",
+      "context": { "user_response": "lok good" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "typo", "approve"]
+    },
+    {
+      "name": "All caps: YES",
+      "context": { "user_response": "YES" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "caps", "approve"]
+    },
+    {
+      "name": "All caps: PROCEED",
+      "context": { "user_response": "PROCEED" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "caps", "approve"]
+    },
+    {
+      "name": "Enthusiastic: yes!!!",
+      "context": { "user_response": "yes!!!" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "enthusiastic", "approve"]
+    },
+    {
+      "name": "Question that implies approval",
+      "context": { "user_response": "shall we proceed?" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "question", "approve"]
+    },
+    {
+      "name": "Sarcastic no (tricky - actually means yes)",
+      "context": { "user_response": "no complaints here" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["edge", "tricky", "approve"]
+    },
+    {
+      "name": "Partial agreement (should be FEEDBACK)",
+      "context": { "user_response": "mostly good, but step 1 needs work" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["edge", "tricky", "feedback"]
+    },
+    {
+      "name": "Agreement with reservation (should be FEEDBACK)",
+      "context": { "user_response": "I agree with most of it, except the last part" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["edge", "tricky", "feedback"]
+    }
+  ]
+}

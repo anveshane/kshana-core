@@ -1,0 +1,111 @@
+{
+  "name": "Plan Approval Classification",
+  "description": "Tests the plan-approval.md prompt for classifying user responses as APPROVE or FEEDBACK",
+  "promptPath": "system/classification/plan-approval.md",
+  "temperature": 0,
+  "maxTokens": 10,
+  "cases": [
+    {
+      "name": "Approve: yes",
+      "context": { "user_response": "yes" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Approve: ok",
+      "context": { "user_response": "ok" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Approve: proceed",
+      "context": { "user_response": "proceed" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Approve: looks good",
+      "context": { "user_response": "looks good" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "phrase"]
+    },
+    {
+      "name": "Approve: go ahead",
+      "context": { "user_response": "go ahead" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "phrase"]
+    },
+    {
+      "name": "Approve: lgtm",
+      "context": { "user_response": "lgtm" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "abbreviation"]
+    },
+    {
+      "name": "Approve: y",
+      "context": { "user_response": "y" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Approve: accept",
+      "context": { "user_response": "accept" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Approve: start",
+      "context": { "user_response": "start" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Approve: continue",
+      "context": { "user_response": "continue" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Feedback: add more detail to step 3",
+      "context": { "user_response": "add more detail to step 3" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "specific"]
+    },
+    {
+      "name": "Feedback: I think we should change the approach",
+      "context": { "user_response": "I think we should change the approach" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "opinion"]
+    },
+    {
+      "name": "Feedback: can you change the order",
+      "context": { "user_response": "can you change the order" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "request"]
+    },
+    {
+      "name": "Feedback: what about adding tests",
+      "context": { "user_response": "what about adding tests" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "question"]
+    },
+    {
+      "name": "Feedback: no",
+      "context": { "user_response": "no" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "simple"]
+    },
+    {
+      "name": "Feedback: can we make it faster",
+      "context": { "user_response": "can we make it faster" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "improvement"]
+    },
+    {
+      "name": "Feedback: remove step 2",
+      "context": { "user_response": "remove step 2" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "modification"]
+    }
+  ]
+}

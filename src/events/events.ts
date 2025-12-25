@@ -67,6 +67,23 @@ export interface StreamingTextEvent {
 }
 
 /**
+ * Tool streaming event for streaming content within a tool call display.
+ * Used for sub-agent loops (content, image prompt, plan) that generate content
+ * which should be displayed inside the tool's UI box.
+ */
+export interface ToolStreamingEvent {
+  type: 'tool_streaming';
+  /** ID of the tool call this streaming belongs to */
+  toolCallId: string;
+  /** The text chunk to append */
+  chunk: string;
+  /** Whether this is the final chunk */
+  done: boolean;
+  /** Name of the agent */
+  agentName?: string;
+}
+
+/**
  * Notification event for user-facing messages.
  */
 export interface NotificationEvent {
@@ -93,6 +110,8 @@ export interface QuestionEvent {
   /** Options for multiple choice questions (max 4, last should allow custom input) */
   options?: QuestionOption[];
   data?: Record<string, unknown>;
+  /** Auto-approve timeout in milliseconds (for countdown display) */
+  autoApproveTimeoutMs?: number;
 }
 
 /**
@@ -114,6 +133,17 @@ export interface UserInputInjectedEvent {
 }
 
 /**
+ * Phase transition event when workflow transitions to a new phase.
+ */
+export interface PhaseTransitionEvent {
+  type: 'phase_transition';
+  fromPhase: string;
+  toPhase: string;
+  displayName?: string;
+  description?: string;
+}
+
+/**
  * Union of all agent events.
  */
 export type AgentEvent =
@@ -123,10 +153,12 @@ export type AgentEvent =
   | TodoUpdateEvent
   | AgentTextEvent
   | StreamingTextEvent
+  | ToolStreamingEvent
   | NotificationEvent
   | QuestionEvent
   | AgentStatusEvent
-  | UserInputInjectedEvent;
+  | UserInputInjectedEvent
+  | PhaseTransitionEvent;
 
 /**
  * Event type names for type-safe event handling.

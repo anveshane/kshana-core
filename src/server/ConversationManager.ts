@@ -33,6 +33,7 @@ interface ActiveSession {
   state: SessionState;
   agent: GenericAgent;
   abortController?: AbortController;
+  initialized?: boolean;
 }
 
 export class ConversationManager {
@@ -124,6 +125,12 @@ export class ConversationManager {
 
     if (session.state.status === 'running') {
       throw new Error('Session already has a running task');
+    }
+
+    // Initialize agent if not already done (queries model context length)
+    if (!session.initialized) {
+      await session.agent.initialize();
+      session.initialized = true;
     }
 
     // Update session state

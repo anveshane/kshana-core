@@ -1,0 +1,117 @@
+{
+  "name": "Image Approval Classification",
+  "description": "Tests the image-approval.md prompt for classifying user responses as APPROVE or FEEDBACK",
+  "promptPath": "system/classification/image-approval.md",
+  "temperature": 0,
+  "maxTokens": 10,
+  "cases": [
+    {
+      "name": "Approve: yes",
+      "context": { "user_response": "yes" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Approve: ok",
+      "context": { "user_response": "ok" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Approve: generate",
+      "context": { "user_response": "generate" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "action"]
+    },
+    {
+      "name": "Approve: looks good",
+      "context": { "user_response": "looks good" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "phrase"]
+    },
+    {
+      "name": "Approve: go ahead",
+      "context": { "user_response": "go ahead" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "phrase"]
+    },
+    {
+      "name": "Approve: create it",
+      "context": { "user_response": "create it" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "action"]
+    },
+    {
+      "name": "Approve: make it",
+      "context": { "user_response": "make it" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "action"]
+    },
+    {
+      "name": "Approve: proceed",
+      "context": { "user_response": "proceed" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Approve: lgtm",
+      "context": { "user_response": "lgtm" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "abbreviation"]
+    },
+    {
+      "name": "Approve: y",
+      "context": { "user_response": "y" },
+      "assertions": [{ "type": "exact", "value": "APPROVE" }],
+      "tags": ["approve", "simple"]
+    },
+    {
+      "name": "Feedback: make it more colorful",
+      "context": { "user_response": "make it more colorful" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "style"]
+    },
+    {
+      "name": "Feedback: add more detail",
+      "context": { "user_response": "add more detail" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "detail"]
+    },
+    {
+      "name": "Feedback: change the lighting",
+      "context": { "user_response": "change the lighting" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "style"]
+    },
+    {
+      "name": "Feedback: I want it darker",
+      "context": { "user_response": "I want it darker" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "preference"]
+    },
+    {
+      "name": "Feedback: can you make him look older",
+      "context": { "user_response": "can you make him look older" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "character"]
+    },
+    {
+      "name": "Feedback: no",
+      "context": { "user_response": "no" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "simple"]
+    },
+    {
+      "name": "Feedback: add a hat",
+      "context": { "user_response": "add a hat" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "element"]
+    },
+    {
+      "name": "Feedback: make the background blue",
+      "context": { "user_response": "make the background blue" },
+      "assertions": [{ "type": "exact", "value": "FEEDBACK" }],
+      "tags": ["feedback", "style"]
+    }
+  ]
+}

@@ -11,17 +11,107 @@ import type {
   GenerateOptions,
   LLMClientConfig,
 } from './types.js';
+import { getLLMLogger } from './LLMLogger.js';
 
 export class LLMClient {
   private client: OpenAI;
   private model: string;
+  private baseUrl: string;
+  private cachedContextLength: number | null = null;
 
   constructor(config: LLMClientConfig = {}) {
+    this.baseUrl = config.baseUrl ?? process.env['LLM_BASE_URL'] ?? 'http://127.0.0.1:1234/v1';
     this.client = new OpenAI({
-      baseURL: config.baseUrl ?? process.env['LLM_BASE_URL'] ?? 'http://127.0.0.1:1234/v1',
+      baseURL: this.baseUrl,
       apiKey: config.apiKey ?? process.env['LLM_API_KEY'] ?? 'not-needed',
     });
     this.model = config.model ?? process.env['LLM_MODEL'] ?? 'local-model';
+  }
+
+  /**
+   * Get the model's context length from the provider.
+   * Queries /v1/models endpoint and extracts context_length.
+   * Falls back to env var LLM_CONTEXT_TOKENS or default if not available.
+   */
+  async getContextLength(): Promise<number> {
+    // Return cached value if available
+    if (this.cachedContextLength !== null) {
+      return this.cachedContextLength;
+    }
+
+    const DEFAULT_CONTEXT = 16000;
+    const envContextLength = process.env['LLM_CONTEXT_TOKENS'];
+
+    try {
+      // Query the models endpoint
+      const response = await fetch(`${this.baseUrl}/models`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch models: ${response.status}`);
+      }
+
+      const data = await response.json() as {
+        data?: Array<{
+          id: string;
+          context_length?: number;
+          max_context_length?: number;
+          // LM Studio specific fields
+          max_model_len?: number;
+        }>;
+      };
+
+      // Find our model in the list
+      const modelInfo = data.data?.find(m =>
+        m.id === this.model ||
+        m.id.toLowerCase().includes(this.model.toLowerCase())
+      );
+
+      // Try various field names that providers use
+      const contextLength =
+        modelInfo?.context_length ??
+        modelInfo?.max_context_length ??
+        modelInfo?.max_model_len ??
+        null;
+
+      if (contextLength && contextLength > 0) {
+        this.cachedContextLength = contextLength;
+        this.validateContextLength(contextLength);
+        return contextLength;
+      }
+    } catch (error) {
+      // Silently fall back - many providers don't support this endpoint
+    }
+
+    // Fall back to env var or default
+    const fallback = envContextLength ? parseInt(envContextLength, 10) : DEFAULT_CONTEXT;
+    this.cachedContextLength = fallback;
+    this.validateContextLength(fallback);
+
+    return fallback;
+  }
+
+  /**
+   * Validate that context length meets minimum requirements.
+   * Throws an error if context is too small to run effectively.
+   */
+  private validateContextLength(contextLength: number): void {
+    const MIN_CONTEXT_LENGTH = 8000;
+    if (contextLength < MIN_CONTEXT_LENGTH) {
+      throw new Error(
+        `Context length (${contextLength} tokens) is below minimum required (${MIN_CONTEXT_LENGTH} tokens).\n` +
+        `The agent cannot run effectively with such a small context window.\n` +
+        `Please either:\n` +
+        `  1. Use a model with larger context (recommended: 16000+ tokens)\n` +
+        `  2. Increase the context in LM Studio model settings\n` +
+        `  3. Set LLM_CONTEXT_TOKENS=${MIN_CONTEXT_LENGTH} or higher in .env`
+      );
+    }
+  }
+
+  /**
+   * Get the current model name.
+   */
+  getModel(): string {
+    return this.model;
   }
 
   /**
@@ -29,6 +119,10 @@ export class LLMClient {
    */
   async generate(options: GenerateOptions): Promise<LLMResponse> {
     const { messages, tools, temperature = 0.7, maxTokens } = options;
+    const logger = getLLMLogger();
+
+    // Log request
+    logger.logRequest(messages, tools, { temperature });
 
     const request: OpenAI.ChatCompletionCreateParamsNonStreaming = {
       model: this.model,
@@ -43,7 +137,12 @@ export class LLMClient {
     }
 
     const response = await this.client.chat.completions.create(request);
-    return this.parseResponse(response);
+    const result = this.parseResponse(response);
+
+    // Log response
+    logger.logResponse(result);
+
+    return result;
   }
 
   /**
@@ -53,6 +152,10 @@ export class LLMClient {
     options: Omit<GenerateOptions, 'stream'>
   ): AsyncGenerator<StreamChunk, void, unknown> {
     const { messages, tools, temperature = 0.7 } = options;
+    const logger = getLLMLogger();
+
+    // Log request
+    logger.logRequest(messages, tools, { temperature });
 
     const stream = await this.client.chat.completions.create({
       model: this.model,
@@ -60,17 +163,34 @@ export class LLMClient {
       tools: tools ? this.convertTools(tools) : undefined,
       temperature,
       stream: true,
+      stream_options: { include_usage: true },
     });
+
+    // Accumulate for final logging
+    let fullContent = '';
+    const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> = new Map();
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
+        fullContent += delta.content;
+        logger.logStreamChunk(delta.content);
         yield { content: delta.content, done: false };
       }
 
       if (delta?.tool_calls) {
         for (const tc of delta.tool_calls) {
+          // Accumulate tool calls for logging
+          let acc = toolCallAccumulators.get(tc.index);
+          if (!acc) {
+            acc = { id: tc.id ?? '', name: tc.function?.name ?? '', arguments: '' };
+            toolCallAccumulators.set(tc.index, acc);
+          }
+          if (tc.id) acc.id = tc.id;
+          if (tc.function?.name) acc.name = tc.function.name;
+          if (tc.function?.arguments) acc.arguments += tc.function.arguments;
+
           yield {
             toolCallDelta: {
               index: tc.index,
@@ -84,7 +204,43 @@ export class LLMClient {
       }
 
       if (chunk.choices[0]?.finish_reason) {
-        yield { done: true };
+        // Build final tool calls for logging
+        const toolCalls: ToolCall[] = [];
+        for (const [, acc] of toolCallAccumulators) {
+          if (acc.id && acc.name) {
+            try {
+              toolCalls.push({
+                id: acc.id,
+                name: acc.name,
+                arguments: acc.arguments ? JSON.parse(acc.arguments) : {},
+              });
+            } catch {
+              toolCalls.push({
+                id: acc.id,
+                name: acc.name,
+                arguments: {},
+              });
+            }
+          }
+        }
+
+        // Log complete response
+        logger.logStreamComplete({
+          content: fullContent || null,
+          toolCalls,
+          finishReason: chunk.choices[0].finish_reason,
+        });
+
+        // Include usage if available (requires stream_options: { include_usage: true })
+        const usage = chunk.usage
+          ? {
+              promptTokens: chunk.usage.prompt_tokens,
+              completionTokens: chunk.usage.completion_tokens,
+              totalTokens: chunk.usage.total_tokens,
+            }
+          : undefined;
+
+        yield { done: true, usage };
       }
     }
   }

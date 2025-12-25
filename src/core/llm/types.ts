@@ -74,6 +74,11 @@ export interface StreamChunk {
     arguments?: string;
   };
   done: boolean;
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 }
 
 /**
