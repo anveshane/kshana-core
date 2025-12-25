@@ -3,7 +3,7 @@
  * Manages the .kshana directory structure and project.json index file.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
 import { join } from 'path';
 import {
   type ProjectFile,
@@ -351,6 +351,47 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       needsSave = true;
     }
   }
+
+  // Sync characters from disk - scan characters/ directory for .md files
+  const charactersDir = join(projectDir, 'characters');
+  if (existsSync(charactersDir)) {
+    const charFiles = readdirSync(charactersDir).filter(f => f.endsWith('.md'));
+
+    for (const charFile of charFiles) {
+      try {
+        const charContent = readFileSync(join(charactersDir, charFile), 'utf-8');
+        // Extract name from first heading or filename
+        const nameMatch = charContent.match(/^#\s*(?:Character[:\-–—\s]*)?(.+)/m);
+        const charName = nameMatch
+          ? nameMatch[1].trim()
+          : charFile.replace(/\.md$/, '').replace(/[-_]/g, ' ');
+
+        // Check if character is already registered
+        const existingChar = project.characters.find(
+          c => c.name.toLowerCase() === charName.toLowerCase()
+        );
+        if (!existingChar) {
+          const character = createDefaultCharacterData(charName);
+          character.file = `characters/${charFile}`;
+
+          // If characters_settings phase is complete, mark as approved
+          if (
+            project.phases.characters_settings?.status === 'completed' ||
+            project.phases.characters_settings?.plannerStage === 'complete'
+          ) {
+            character.approvalStatus = 'approved';
+            character.approvedAt = Date.now();
+          }
+
+          project.characters.push(character);
+          needsSave = true;
+        }
+      } catch {
+        /* ignore read errors */
+      }
+    }
+  }
+
   if ((project.content.characters.items?.length ?? 0) > 0 && project.content.characters.status === 'missing') {
     project.content.characters.status = 'partial';
     needsSave = true;
@@ -376,6 +417,47 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       needsSave = true;
     }
   }
+
+  // Sync settings from disk - scan settings/ directory for .md files
+  const settingsDir = join(projectDir, 'settings');
+  if (existsSync(settingsDir)) {
+    const settingFiles = readdirSync(settingsDir).filter(f => f.endsWith('.md'));
+
+    for (const settingFile of settingFiles) {
+      try {
+        const settingContent = readFileSync(join(settingsDir, settingFile), 'utf-8');
+        // Extract name from first heading or filename
+        const nameMatch = settingContent.match(/^#\s*(?:Setting[:\-–—\s]*)?(.+)/m);
+        const settingName = nameMatch
+          ? nameMatch[1].trim()
+          : settingFile.replace(/\.md$/, '').replace(/[-_]/g, ' ');
+
+        // Check if setting is already registered
+        const existingSetting = project.settings.find(
+          s => s.name.toLowerCase() === settingName.toLowerCase()
+        );
+        if (!existingSetting) {
+          const setting = createDefaultSettingData(settingName);
+          setting.file = `settings/${settingFile}`;
+
+          // If characters_settings phase is complete, mark as approved
+          if (
+            project.phases.characters_settings?.status === 'completed' ||
+            project.phases.characters_settings?.plannerStage === 'complete'
+          ) {
+            setting.approvalStatus = 'approved';
+            setting.approvedAt = Date.now();
+          }
+
+          project.settings.push(setting);
+          needsSave = true;
+        }
+      } catch {
+        /* ignore read errors */
+      }
+    }
+  }
+
   if ((project.content.settings.items?.length ?? 0) > 0 && project.content.settings.status === 'missing') {
     project.content.settings.status = 'partial';
     needsSave = true;
@@ -395,6 +477,74 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
   if ((project.content.scenes.items?.length ?? 0) > 0 && project.content.scenes.status === 'missing') {
     project.content.scenes.status = 'partial';
     needsSave = true;
+  }
+
+  // Sync scenes from disk - scan scenes/ directory for scene_XX.md files
+  // This catches scenes that were created but never registered in project.scenes
+  const scenesDir = join(projectDir, 'scenes');
+  if (existsSync(scenesDir)) {
+    const sceneFiles = readdirSync(scenesDir)
+      .filter(f => /^scene_\d+\.md$/.test(f))
+      .sort();
+
+    for (const sceneFile of sceneFiles) {
+      const match = sceneFile.match(/^scene_(\d+)\.md$/);
+      if (match) {
+        const sceneNumber = parseInt(match[1], 10);
+
+        // Check if scene is already registered
+        const existingScene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+        if (!existingScene) {
+          // Create new scene ref
+          const sceneRef = createDefaultSceneRef(sceneNumber);
+          sceneRef.file = `scenes/${sceneFile}`;
+
+          // Extract title from file content
+          try {
+            const sceneContent = readFileSync(join(scenesDir, sceneFile), 'utf-8');
+            const titleMatch = sceneContent.match(/^#\s*(?:Scene\s*\d+[:\-–—\s]*)?(.+)/m);
+            if (titleMatch) {
+              sceneRef.title = titleMatch[1].trim();
+            }
+          } catch {
+            /* ignore read errors */
+          }
+
+          // If scenes phase is complete, mark scene as approved
+          if (
+            project.phases.scenes?.status === 'completed' ||
+            project.phases.scenes?.plannerStage === 'complete'
+          ) {
+            sceneRef.contentApprovalStatus = 'approved';
+            sceneRef.contentApprovedAt = Date.now();
+          }
+
+          project.scenes.push(sceneRef);
+          needsSave = true;
+        }
+      }
+    }
+
+    // Sort scenes by number
+    if (project.scenes.length > 0) {
+      project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
+    }
+
+    // Update content registry with newly discovered scenes
+    for (const scene of project.scenes) {
+      const sceneName = scene.title || `Scene ${scene.sceneNumber}`;
+      if (!project.content.scenes.items?.includes(sceneName)) {
+        if (!project.content.scenes.items) {
+          project.content.scenes.items = [];
+        }
+        project.content.scenes.items.push(sceneName);
+        needsSave = true;
+      }
+    }
+    if ((project.content.scenes.items?.length ?? 0) > 0 && project.content.scenes.status === 'missing') {
+      project.content.scenes.status = 'partial';
+      needsSave = true;
+    }
   }
 
   return needsSave;
@@ -1333,6 +1483,9 @@ function getPerItemPhaseInstructions(
   const nextItem = getNextUnapprovedItem(project, phaseConfig.phase);
   const { approved: approvedCount, total: totalItems } = countApprovedItems(project, phaseConfig.phase);
 
+  // Get full item list for TODO reconstruction
+  const allItems = getPhaseItems(project, phaseConfig.phase);
+
   let instruction = `
 **IMPORTANT: This phase requires PER-ITEM approval.**
 
@@ -1341,6 +1494,41 @@ function getPerItemPhaseInstructions(
 - Approved: ${approvedCount}
 - Remaining: ${totalItems - approvedCount}
 `;
+
+  // Add item list with statuses so orchestrator can recreate TODO list
+  if (totalItems > 0) {
+    instruction += `
+## Current Item Statuses
+`;
+    for (const item of allItems) {
+      const statusIcon = item.status === 'approved' ? '✓' : item.status === 'pending' ? '○' : '●';
+      instruction += `${statusIcon} ${item.name}: ${item.status}\n`;
+    }
+    instruction += '\n';
+  }
+
+  // Add instructions for resuming mid-phase
+  if (approvedCount > 0 && approvedCount < totalItems) {
+    instruction += `
+## ⚠️ RESUMING MID-PHASE: Recreate Todo List
+
+You are resuming this phase with ${approvedCount} of ${totalItems} items already approved.
+
+**Create the todo list to match the current state:**
+\`\`\`
+TodoWrite(merge: false, todos: [
+${allItems
+  .map((item, idx) => {
+    const status = item.status === 'approved' ? 'completed' : idx === allItems.findIndex(i => i.status !== 'approved') ? 'in_progress' : 'pending';
+    return `  { id: "${item.id}", content: "Process ${item.name}", activeForm: "Processing ${item.name}", status: "${status}" },`;
+  })
+  .join('\n')}
+])
+\`\`\`
+
+Then continue with the next item: **${nextItem?.name}**
+`;
+  }
 
   // Add fresh todo creation instructions at phase start
   if (approvedCount === 0 && totalItems > 0) {
