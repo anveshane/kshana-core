@@ -1045,6 +1045,14 @@ describe('Prompt Evaluations', () => {
         ]
       }));
 
+      // All scenes done - mark phase complete
+      mock.when('All 6 scenes have been created', JSON.stringify({
+        tool_calls: [{
+          name: 'update_project',
+          arguments: { action: 'update_planner_stage', data: { phase: 'scenes', stage: 'complete' } }
+        }]
+      }));
+
       // Scene 3 register
       mock.when('Scene 3: Rising Action has been approved', JSON.stringify({
         tool_calls: [{
@@ -1185,6 +1193,224 @@ describe('Prompt Evaluations', () => {
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
   });
 
+  describe('Workflow: Character & Setting Images - Todo Management', () => {
+    let fixture: EvalFixture;
+
+    /**
+     * Create a mock client for character-setting-images tests.
+     * Tests todo creation at phase start (merge: false) and updates after approval (merge: true).
+     */
+    function createCharacterSettingImagesMockClient(): MockEvalLLMClient {
+      const mock = new MockEvalLLMClient();
+
+      // Phase start - create fresh todos with merge: false
+      mock.when('just entered', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'img-char-elara', content: 'Generate image for character: Elara', activeForm: 'Generating image for Elara', status: 'in_progress' },
+              { id: 'img-char-kael', content: 'Generate image for character: Kael', activeForm: 'Generating image for Kael', status: 'pending' },
+              { id: 'img-setting-forest', content: 'Generate image for setting: Forest', activeForm: 'Generating image for Forest', status: 'pending' },
+              { id: 'img-setting-castle', content: 'Generate image for setting: Castle', activeForm: 'Generating image for Castle', status: 'pending' }
+            ]
+          }
+        }]
+      }));
+
+      mock.when('Phase just started', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'img-char-hero', content: 'Generate image for character: Hero', activeForm: 'Generating image for Hero', status: 'in_progress' },
+              { id: 'img-char-villain', content: 'Generate image for character: Villain', activeForm: 'Generating image for Villain', status: 'pending' },
+              { id: 'img-setting-cave', content: 'Generate image for setting: Cave', activeForm: 'Generating image for Cave', status: 'pending' }
+            ]
+          }
+        }]
+      }));
+
+      mock.when('Phase start. You have 2 characters', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'img-char-aria', content: 'Generate image for character: Aria', activeForm: 'Generating image for Aria', status: 'in_progress' },
+              { id: 'img-char-bolt', content: 'Generate image for character: Bolt', activeForm: 'Generating image for Bolt', status: 'pending' },
+              { id: 'img-setting-castle', content: 'Generate image for setting: Castle', activeForm: 'Generating image for Castle', status: 'pending' },
+              { id: 'img-setting-forest', content: 'Generate image for setting: Forest', activeForm: 'Generating image for Forest', status: 'pending' }
+            ]
+          }
+        }]
+      }));
+
+      mock.when('Phase start. 3 items', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'img-char-zara', content: 'Generate image for character: Zara', activeForm: 'Generating image for Zara', status: 'in_progress' },
+              { id: 'img-char-milo', content: 'Generate image for character: Milo', activeForm: 'Generating image for Milo', status: 'pending' },
+              { id: 'img-setting-temple', content: 'Generate image for setting: Temple', activeForm: 'Generating image for Temple', status: 'pending' }
+            ]
+          }
+        }]
+      }));
+
+      mock.when('Todo list already created', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'image-generator',
+            task: 'Generate reference image for Luna'
+          }
+        }]
+      }));
+
+      // After approval - update todos with merge: true
+      mock.when('Image for character \'Rex\' has been approved', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: true,
+            todos: [
+              { id: 'img-char-rex', status: 'completed' },
+              { id: 'img-setting-lab', status: 'in_progress' }
+            ]
+          }
+        }]
+      }));
+
+      mock.when('Elara has been approved', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: true,
+            todos: [
+              { id: 'img-char-elara', status: 'completed' },
+              { id: 'img-char-kael', status: 'in_progress' }
+            ]
+          }
+        }]
+      }));
+
+      // First image approved - still more to go
+      mock.when('First character image (1 of 4)', JSON.stringify({
+        tool_calls: [{
+          name: 'Task',
+          arguments: {
+            subagent_type: 'image-generator',
+            task: 'Generate reference image for next character'
+          }
+        }]
+      }));
+
+      // All images done - transition
+      mock.when('ALL images have been generated', JSON.stringify({
+        tool_calls: [
+          {
+            name: 'update_project',
+            arguments: { action: 'transition_phase', data: { next_phase: 'scene_images' } }
+          }
+        ]
+      }));
+
+      // Default: TodoWrite with merge: false
+      mock.setDefault(JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'img-char-default', content: 'Generate image for character', activeForm: 'Generating image', status: 'in_progress' }
+            ]
+          }
+        }]
+      }));
+
+      return mock;
+    }
+
+    beforeAll(() => {
+      if (isLiveMode) {
+        evaluator = new PromptEvaluator(undefined, __dirname);
+      } else {
+        const mockClient = createCharacterSettingImagesMockClient();
+        evaluator = new PromptEvaluator(mockClient, __dirname);
+      }
+      fixture = evaluator.loadFixture('workflow/character-setting-images.eval.json');
+    });
+
+    it('should have test cases for todo management', () => {
+      expect(fixture.cases.length).toBeGreaterThan(5);
+      const phaseStartCases = fixture.cases.filter(c => c.tags?.includes('phase-start'));
+      const afterApprovalCases = fixture.cases.filter(c => c.tags?.includes('after-approval'));
+      expect(phaseStartCases.length).toBeGreaterThan(3);
+      expect(afterApprovalCases.length).toBeGreaterThan(1);
+    });
+
+    it('Should create FRESH todo list with merge: false when entering phase', async () => {
+      const phaseStartCases = fixture.cases.filter(c => c.tags?.includes('phase-start') && c.tags?.includes('merge-false'));
+      for (const evalCase of phaseStartCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should use merge: false for new phase. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should use merge: true when updating after image approval', async () => {
+      const afterApprovalCases = fixture.cases.filter(c => c.tags?.includes('after-approval') && c.tags?.includes('merge-true'));
+      for (const evalCase of afterApprovalCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should use merge: true after approval. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should include both characters and settings in initial todo list', async () => {
+      const allItemsCases = fixture.cases.filter(c => c.tags?.includes('all-items'));
+      for (const evalCase of allItemsCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should include all items in todos. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should generate image with Task after creating todos', async () => {
+      const taskCallCases = fixture.cases.filter(c => c.tags?.includes('task-call'));
+      for (const evalCase of taskCallCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should call Task for image generation. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should call TodoWrite after image approval to mark completed', async () => {
+      const markCompletedCases = fixture.cases.filter(c => c.tags?.includes('mark-completed'));
+      for (const evalCase of markCompletedCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should call TodoWrite after approval. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should NOT call update_planner_stage complete after first image', async () => {
+      const noPrematureCompleteCases = fixture.cases.filter(c => c.tags?.includes('no-premature-complete'));
+      for (const evalCase of noPrematureCompleteCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should NOT complete phase prematurely. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should transition phase after ALL images are done', async () => {
+      const transitionCases = fixture.cases.filter(c => c.tags?.includes('phase-complete') && c.tags?.includes('transition'));
+      for (const evalCase of transitionCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should transition after all images done. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+  });
+
   describe('Workflow: Phase Completion and Transitions', () => {
     let fixture: EvalFixture;
 
@@ -1225,6 +1451,22 @@ describe('Prompt Evaluations', () => {
         ]
       }));
 
+      // Mark todo completed when item is done
+      mock.when('just approved. Mark the todo', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: { merge: true, todos: [{ id: 'setting-forest', status: 'completed' }] }
+        }]
+      }));
+
+      // Call ONLY transition_phase (MUST be checked before 'transition_phase' pattern)
+      mock.when('Call ONLY update_project', JSON.stringify({
+        tool_calls: [{
+          name: 'update_project',
+          arguments: { action: 'transition_phase', data: { next_phase: 'scenes' } }
+        }]
+      }));
+
       // Characters_settings to scenes transition
       mock.when('transition_phase', JSON.stringify({
         tool_calls: [
@@ -1237,6 +1479,14 @@ describe('Prompt Evaluations', () => {
             arguments: { action: 'transition_phase', data: { next_phase: 'scenes' } }
           }
         ]
+      }));
+
+      // Phase is complete - just transition
+      mock.when('just transition', JSON.stringify({
+        tool_calls: [{
+          name: 'update_project',
+          arguments: { action: 'transition_phase', data: { next_phase: 'scenes' } }
+        }]
       }));
 
       // Plot to story transition
@@ -1344,6 +1594,8 @@ describe('Prompt Evaluations', () => {
       expect(fixtures).toContain('workflow/context-usage.eval.json');
       expect(fixtures).toContain('workflow/plan-mode.eval.json');
       expect(fixtures).toContain('workflow/characters-settings.eval.json');
+      expect(fixtures).toContain('workflow/character-setting-images.eval.json');
+      expect(fixtures).toContain('workflow/scenes.eval.json');
       expect(fixtures).toContain('workflow/phase-completion.eval.json');
     });
   });

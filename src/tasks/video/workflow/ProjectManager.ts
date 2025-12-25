@@ -1342,6 +1342,25 @@ function getPerItemPhaseInstructions(
 - Remaining: ${totalItems - approvedCount}
 `;
 
+  // Add fresh todo creation instructions at phase start
+  if (approvedCount === 0 && totalItems > 0) {
+    instruction += `
+## ⚠️ PHASE START: Create Fresh Todo List
+
+**FIRST THING when entering this phase**: Create a NEW todo list with \`merge: false\` to replace old todos from the previous phase.
+
+\`\`\`
+TodoWrite(merge: false, todos: [
+  { id: "item-1", content: "Process first item", activeForm: "Processing first item", status: "in_progress" },
+  { id: "item-2", content: "Process second item", activeForm: "Processing second item", status: "pending" },
+  ...
+])
+\`\`\`
+
+**CRITICAL**: Use \`merge: false\` to REPLACE the old todos. This clears the todo list from the previous phase.
+`;
+  }
+
   if (totalItems === 0) {
     instruction += `
 ## No Items Registered Yet

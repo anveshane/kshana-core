@@ -1,0 +1,230 @@
+{
+  "name": "Character & Setting Images Phase - Todo Management",
+  "description": "Tests that todos are created fresh at phase start (merge: false) and updated after each image approval.",
+  "promptPath": "video/workflow.md",
+  "temperature": 0,
+  "maxTokens": 1500,
+  "systemPrompt": "You are a video generation orchestrator. When entering a new phase, you MUST create a FRESH todo list with merge: false to replace old todos. After each item approval, update todos with merge: true.",
+  "tools": [
+    {
+      "name": "Task",
+      "description": "Dispatch a subagent to perform a task",
+      "parameters": {
+        "subagent_type": {
+          "type": "string",
+          "description": "Type of subagent: content-creator, image-generator, video-assembler"
+        },
+        "task": {
+          "type": "string",
+          "description": "The task description"
+        },
+        "content_type": {
+          "type": "string",
+          "description": "Type of content: character_image, setting_image"
+        }
+      }
+    },
+    {
+      "name": "TodoWrite",
+      "description": "Create or update the todo list. Use merge: false to replace all todos, merge: true to update existing.",
+      "parameters": {
+        "merge": {
+          "type": "boolean",
+          "description": "false = replace all todos (phase start), true = update existing (after approval)"
+        },
+        "todos": {
+          "type": "array",
+          "description": "Array of todo items"
+        }
+      }
+    },
+    {
+      "name": "read_project",
+      "description": "Read the current project state including characters and settings",
+      "parameters": {}
+    },
+    {
+      "name": "update_project",
+      "description": "Update the project state",
+      "parameters": {
+        "action": { "type": "string" },
+        "data": { "type": "object" }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "Should create FRESH todo list with merge: false when entering phase",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Epic Fantasy",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Character & Setting Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "You just entered the CHARACTER_SETTING_IMAGES phase. Characters: Elara, Kael. Settings: Forest, Castle. Your FIRST action MUST be to create a fresh TodoWrite with merge: false listing all items. DO NOT use merge: true - that would update old todos instead of replacing them.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": false }
+      ],
+      "tags": ["phase-start", "fresh-todos", "merge-false"]
+    },
+    {
+      "name": "Should NOT use merge: true when starting new phase",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Character & Setting Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "Phase just started. Characters: Hero, Villain. Settings: Cave. Create the initial todo list using TodoWrite with merge: false. CRITICAL: merge must be FALSE to replace old scene todos.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": false }
+      ],
+      "tags": ["phase-start", "merge-false", "replace-old-todos"]
+    },
+    {
+      "name": "Should use merge: true when updating after image approval",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Character & Setting Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "Character image for Elara has been approved. Update the todo list using TodoWrite(merge: true, todos: [{id: 'img-char-elara', status: 'completed'}, {id: 'img-char-kael', status: 'in_progress'}]). IMPORTANT: Use merge: true because we're updating existing todos, not replacing them.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": true }
+      ],
+      "tags": ["after-approval", "todo-update", "merge-true"]
+    },
+    {
+      "name": "Should include both characters and settings in initial todo list",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Fantasy Adventure",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Character & Setting Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "Phase start. You have 2 characters (Aria, Bolt) and 2 settings (Castle, Forest). Create TodoWrite(merge: false, todos: [...]) with ALL 4 items.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": false },
+        { "type": "tool_arg_length", "toolName": "TodoWrite", "argPath": "todos", "value": { "min": 4 } }
+      ],
+      "tags": ["phase-start", "all-items", "characters-and-settings"]
+    },
+    {
+      "name": "First todo item should be in_progress, rest should be pending",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Character & Setting Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "Phase start. 3 items: char Zara, char Milo, setting Temple. Create TodoWrite(merge: false, todos: [{id: 'img-char-zara', content: '...', activeForm: '...', status: 'in_progress'}, {id: 'img-char-milo', ..., status: 'pending'}, {id: 'img-setting-temple', ..., status: 'pending'}]).",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": false },
+        { "type": "tool_arg_length", "toolName": "TodoWrite", "argPath": "todos", "value": { "min": 3 } }
+      ],
+      "tags": ["phase-start", "status-ordering", "in-progress-first"]
+    },
+    {
+      "name": "Should generate image with Task after creating todos",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Character & Setting Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "Todo list already created. First item is 'Generate image for character: Luna' (in_progress). Use Task(subagent_type: 'image-generator', task: 'Generate reference image for Luna').",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_equals", "toolName": "Task", "argPath": "subagent_type", "value": "image-generator" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "task", "value": "Luna" }
+      ],
+      "tags": ["image-generation", "task-call", "character-image"]
+    },
+    {
+      "name": "Should call TodoWrite after image approval to mark completed",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Character & Setting Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "Image for character 'Rex' has been approved. Your ONLY task right now is to call TodoWrite to update the todo list. Call: TodoWrite(merge: true, todos: [{id: 'img-char-rex', status: 'completed'}, {id: 'img-setting-lab', status: 'in_progress'}]). Do NOT call any other tool first.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": true }
+      ],
+      "tags": ["after-approval", "todo-update", "mark-completed"]
+    },
+    {
+      "name": "Should NOT call update_planner_stage complete after first image",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Character & Setting Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "First character image (1 of 4) has been approved. Generate the next image. DO NOT call update_planner_stage(stage: 'complete') - you still have 3 more items!",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_not_equals", "toolName": "update_project", "argPath": "data.stage", "value": "complete" }
+      ],
+      "tags": ["negative", "no-premature-complete", "more-items-remaining"]
+    },
+    {
+      "name": "Should transition phase after ALL images are done",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Character & Setting Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "ALL images have been generated and approved. This phase is COMPLETE. Your task now is to mark the phase complete by calling: update_project(action: 'transition_phase', data: { next_phase: 'scene_images' }). Do NOT generate any more images.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "update_project" },
+        { "type": "tool_arg_equals", "toolName": "update_project", "argPath": "action", "value": "transition_phase" }
+      ],
+      "tags": ["phase-complete", "transition", "all-images-done"]
+    },
+    {
+      "name": "Todo ids should use img- prefix to distinguish from other phases",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Character & Setting Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "Phase start. Create todos with ids like 'img-char-name' or 'img-setting-name'. Example: TodoWrite(merge: false, todos: [{id: 'img-char-aria', ...}]).",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": false }
+      ],
+      "tags": ["phase-start", "id-prefix", "naming-convention"]
+    }
+  ]
+}
