@@ -3,7 +3,8 @@
  *
  * Template syntax (subset, Claude-SDK style):
  * - {{var}}: string interpolation
- * - {{#if var}} ... {{/if}}: conditional block
+ * - {{#if var}} ... {{/if}}: conditional block (truthy check)
+ * - {{#if_eq var "value"}} ... {{else}} ... {{/if_eq}}: equality check with else support
  * - {{#each list}} ... {{/each}}: loop over array of objects
  *
  * Notes:
@@ -62,6 +63,135 @@ function renderIfBlocks(template: string, context: PromptContext): string {
   });
 }
 
+/**
+ * Find the matching closing tag for an opening tag, accounting for nesting.
+ * Returns the index of the closing tag, or -1 if not found.
+ */
+function findMatchingClose(template: string, openTag: RegExp, closeTag: string, startIndex: number): number {
+  let depth = 1;
+  let i = startIndex;
+
+  while (i < template.length && depth > 0) {
+    // Check for closing tag first (longer match wins for ambiguous cases)
+    if (template.slice(i).startsWith(closeTag)) {
+      depth--;
+      if (depth === 0) return i;
+      i += closeTag.length;
+      continue;
+    }
+
+    // Check for nested opening tag
+    const remaining = template.slice(i);
+    const openMatch = remaining.match(openTag);
+    if (openMatch && openMatch.index === 0) {
+      depth++;
+      i += openMatch[0].length;
+      continue;
+    }
+
+    i++;
+  }
+
+  return -1;
+}
+
+/**
+ * Find the top-level {{else}} within a block body (not nested inside other blocks).
+ */
+function findTopLevelElse(body: string): number {
+  let depth = 0;
+  let i = 0;
+
+  while (i < body.length) {
+    // Check for any block-opening tags that might nest
+    const remaining = body.slice(i);
+
+    // Check for {{else}} at depth 0
+    if (depth === 0 && remaining.startsWith('{{else}}')) {
+      return i;
+    }
+
+    // Track nesting for {{#if ...}}
+    if (remaining.match(/^\{\{#if\s/)) {
+      depth++;
+      i += 4; // Skip past "{{#i"
+      continue;
+    }
+    if (remaining.match(/^\{\{#if_eq\s/)) {
+      depth++;
+      i += 7; // Skip past "{{#if_e"
+      continue;
+    }
+    if (remaining.startsWith('{{/if}}')) {
+      depth--;
+      i += 7;
+      continue;
+    }
+    if (remaining.startsWith('{{/if_eq}}')) {
+      depth--;
+      i += 10;
+      continue;
+    }
+
+    i++;
+  }
+
+  return -1;
+}
+
+/**
+ * Render {{#if_eq var "value"}} ... {{else}} ... {{/if_eq}} blocks.
+ * Supports equality comparison with string literals and nested blocks.
+ */
+function renderIfEqBlocks(template: string, context: PromptContext): string {
+  const openTagRegex = /\{\{#if_eq\s+([a-zA-Z0-9_.-]+)\s+"([^"]*)"\s*\}\}/;
+  const closeTag = '{{/if_eq}}';
+
+  let result = template;
+  let match;
+
+  // Process from left to right, handling one block at a time
+  while ((match = result.match(openTagRegex)) !== null) {
+    const fullOpenTag = match[0];
+    const key = match[1];
+    const compareValue = match[2];
+    const openStart = match.index!;
+    const bodyStart = openStart + fullOpenTag.length;
+
+    // Find the matching close tag
+    const closeStart = findMatchingClose(result, /\{\{#if_eq\s+[a-zA-Z0-9_.-]+\s+"[^"]*"\s*\}\}/, closeTag, bodyStart);
+    if (closeStart === -1) {
+      // No matching close tag found, skip this match to avoid infinite loop
+      break;
+    }
+
+    const body = result.slice(bodyStart, closeStart);
+
+    // Evaluate the condition
+    const v = getPathValue(context, String(key));
+    const actualValue = v === undefined || v === null ? '' : String(v);
+    const isEqual = actualValue === compareValue;
+
+    // Find top-level {{else}} in body
+    const elseIndex = findTopLevelElse(body);
+    let trueBranch: string;
+    let falseBranch: string;
+
+    if (elseIndex !== -1) {
+      trueBranch = body.slice(0, elseIndex);
+      falseBranch = body.slice(elseIndex + 8); // 8 = length of '{{else}}'
+    } else {
+      trueBranch = body;
+      falseBranch = '';
+    }
+
+    const replacement = isEqual ? trueBranch : falseBranch;
+    result = result.slice(0, openStart) + replacement + result.slice(closeStart + closeTag.length);
+  }
+
+  return result;
+}
+
 function renderEachBlocks(template: string, context: PromptContext): string {
   return template.replace(/\{\{#each\s+([a-zA-Z0-9_.-]+)\s*\}\}([\s\S]*?)\{\{\/each\}\}/g, (_m, key, body) => {
     const v = getPathValue(context, String(key));
@@ -83,6 +213,7 @@ export function renderTemplate(template: string, context: PromptContext): string
   // Order matters: render blocks first, then interpolations
   let out = template;
   out = renderEachBlocks(out, context);
+  out = renderIfEqBlocks(out, context);  // Must come before renderIfBlocks
   out = renderIfBlocks(out, context);
   out = renderInterpolations(out, context);
   return out;

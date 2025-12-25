@@ -1,9 +1,12 @@
 ### Scene Breakdown Phase
 
+**REQUIRED CONTEXT**: `$story` - Use the APPROVED STORY to break down into scenes.
+Also reference the registered characters and settings from `read_project`.
+
 IMPORTANT: Each scene requires user approval before saving.
 
 For each scene:
-1. Use Task(subagent_type: 'content-creator', content_type: 'scene') to generate the scene description
+1. Use Task(subagent_type: 'content-creator', content_type: 'scene', context_refs: ["$story"]) to generate the scene description
 2. The content-creator will show the content and ask for user approval
 3. After approval, register the scene using `update_project` action: 'add_scene'
 

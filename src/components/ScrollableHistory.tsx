@@ -7,6 +7,7 @@ import React from 'react';
 import { Text, Box, Static } from 'ink';
 import { ToolCallDisplay, HIDDEN_TOOLS } from './ToolCallDisplay.js';
 import { TruncatedText } from './TruncatedText.js';
+import { PhaseBanner } from './PhaseBanner.js';
 import type { HistoryEntry } from '../hooks/useAgent.js';
 
 /** Maximum lines to show before truncation */
@@ -44,7 +45,9 @@ function HistoryItem({ entry, expanded }: { entry: HistoryEntry; expanded: boole
         compact
         expanded={expanded}
         agentName={entry.agentName}
-        streamingContent={entry.streamingContent}
+        // Don't show streaming content in history if it was already displayed live
+        // The content will be shown from result.content instead for Task tools
+        streamingContent={entry.wasStreamed ? undefined : entry.streamingContent}
       />
     );
   }
@@ -57,6 +60,16 @@ function HistoryItem({ entry, expanded }: { entry: HistoryEntry; expanded: boole
         )}
         <TruncatedText text={entry.content} maxLines={MAX_LINES_TRUNCATED} expanded={expanded} />
       </Box>
+    );
+  }
+
+  if (entry.type === 'phase_transition') {
+    return (
+      <PhaseBanner
+        phaseName={entry.phaseName ?? ''}
+        displayName={entry.phaseDisplayName}
+        description={entry.phaseDescription}
+      />
     );
   }
 

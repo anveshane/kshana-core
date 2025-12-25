@@ -1,0 +1,126 @@
+{
+  "name": "TodoWrite Tool Usage",
+  "description": "Tests that the agent correctly uses TodoWrite for multi-step tasks",
+  "promptPath": "system/todo-instructions.md",
+  "temperature": 0,
+  "maxTokens": 500,
+  "systemPrompt": "You are a helpful AI assistant. When given tasks, use the TodoWrite tool to track work. Always call TodoWrite for multi-step tasks.",
+  "tools": [
+    {
+      "name": "TodoWrite",
+      "description": "Create and manage a todo list for tracking work",
+      "parameters": {
+        "merge": {
+          "type": "boolean",
+          "description": "When true, merge updates into existing todos; when false, replace the list"
+        },
+        "todos": {
+          "type": "array",
+          "description": "Array of todo items",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "content": { "type": "string" },
+              "activeForm": { "type": "string" },
+              "status": { "type": "string", "enum": ["pending", "in_progress", "completed"] }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "Multi-character task should create multiple todos",
+      "context": {
+        "task": "Create character profiles for Daniel, Sarah, and Mike"
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_length", "toolName": "TodoWrite", "argPath": "todos", "value": { "min": 3 } }
+      ],
+      "tags": ["todo", "multi-step"]
+    },
+    {
+      "name": "Image generation task should create todos per image",
+      "context": {
+        "task": "Generate reference images for 3 characters: Alice, Bob, and Carol"
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_length", "toolName": "TodoWrite", "argPath": "todos", "value": { "min": 3 } }
+      ],
+      "tags": ["todo", "multi-step"]
+    },
+    {
+      "name": "Scene breakdown task should create atomic todos",
+      "context": {
+        "task": "Break down the story into scenes and create scene descriptions for scenes 1-4"
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_length", "toolName": "TodoWrite", "argPath": "todos", "value": { "min": 4 } }
+      ],
+      "tags": ["todo", "multi-step"]
+    },
+    {
+      "name": "First todo should be in_progress",
+      "context": {
+        "task": "Create settings for: Castle, Forest, Village"
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "todos.0.status", "value": "in_progress" }
+      ],
+      "tags": ["todo", "status"]
+    },
+    {
+      "name": "Subsequent todos should be pending",
+      "context": {
+        "task": "Generate videos for scenes 1, 2, and 3"
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "todos.1.status", "value": "pending" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "todos.2.status", "value": "pending" }
+      ],
+      "tags": ["todo", "status"]
+    },
+    {
+      "name": "Todos should have content field",
+      "context": {
+        "task": "Write narration for opening and closing scenes"
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_exists", "toolName": "TodoWrite", "argPath": "todos.0.content" },
+        { "type": "tool_arg_exists", "toolName": "TodoWrite", "argPath": "todos.1.content" }
+      ],
+      "tags": ["todo", "structure"]
+    },
+    {
+      "name": "Todos should have activeForm field",
+      "context": {
+        "task": "Create background music for intro and outro"
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_exists", "toolName": "TodoWrite", "argPath": "todos.0.activeForm" }
+      ],
+      "tags": ["todo", "structure"]
+    },
+    {
+      "name": "Todos should have id field",
+      "context": {
+        "task": "Review and approve character designs for Hero and Villain"
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_exists", "toolName": "TodoWrite", "argPath": "todos.0.id" },
+        { "type": "tool_arg_exists", "toolName": "TodoWrite", "argPath": "todos.1.id" }
+      ],
+      "tags": ["todo", "structure"]
+    }
+  ]
+}

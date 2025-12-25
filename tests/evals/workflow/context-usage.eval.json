@@ -1,0 +1,240 @@
+{
+  "name": "Context Usage Across All Phases",
+  "description": "Tests that the orchestrator uses the correct context_refs for each phase. Each phase should use outputs from its previous phase, not earlier phases.",
+  "promptPath": "video/workflow.md",
+  "temperature": 0,
+  "maxTokens": 1000,
+  "systemPrompt": "You are a video generation orchestrator. You must use Task to create content. Always follow the phase instructions exactly and use the specified context_refs.",
+  "tools": [
+    {
+      "name": "Task",
+      "description": "Dispatch a subagent to perform a task",
+      "parameters": {
+        "subagent_type": {
+          "type": "string",
+          "description": "Type of subagent: content-creator, image-generator, video-assembler"
+        },
+        "task": {
+          "type": "string",
+          "description": "The task description"
+        },
+        "content_type": {
+          "type": "string",
+          "description": "Type of content: plot, story, character, setting, scene, etc."
+        },
+        "context_refs": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Context references like $story, $plot, $original_input"
+        },
+        "output_file": {
+          "type": "string",
+          "description": "Output file path"
+        }
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Read a file from the project",
+      "parameters": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to the file"
+        }
+      }
+    },
+    {
+      "name": "read_project",
+      "description": "Read the current project state",
+      "parameters": {}
+    },
+    {
+      "name": "update_project",
+      "description": "Update the project state",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "description": "Action to perform"
+        },
+        "data": {
+          "type": "object",
+          "description": "Action data"
+        }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "PLOT phase: should use $original_input",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "plot",
+        "phase_display_name": "Plot Development",
+        "loaded_contexts": "$original_input",
+        "phase_instructions": "Call Task tool with subagent_type='content-creator', content_type='plot', and context_refs=['$original_input'] to create the plot.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_equals", "toolName": "Task", "argPath": "content_type", "value": "plot" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "context_refs", "value": "$original_input" }
+      ],
+      "tags": ["context", "plot", "original-input"]
+    },
+    {
+      "name": "STORY phase: should use $plot (not $original_input)",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "story",
+        "phase_display_name": "Story Development",
+        "loaded_contexts": "$plot, $original_input",
+        "phase_instructions": "Call Task tool with subagent_type='content-creator', content_type='story', and context_refs=['$plot'] to expand the plot into a full story.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_equals", "toolName": "Task", "argPath": "content_type", "value": "story" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "context_refs", "value": "$plot" }
+      ],
+      "tags": ["context", "story", "plot-source"]
+    },
+    {
+      "name": "CHARACTERS_SETTINGS phase: character should use $story",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story, $plot, $original_input",
+        "phase_instructions": "Call Task tool with subagent_type='content-creator', content_type='character', and context_refs=['$story'] to create a character profile.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_equals", "toolName": "Task", "argPath": "content_type", "value": "character" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "context_refs", "value": "$story" }
+      ],
+      "tags": ["context", "character", "story-source"]
+    },
+    {
+      "name": "CHARACTERS_SETTINGS phase: setting should use $story",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story, $plot, $original_input",
+        "phase_instructions": "Call Task tool with subagent_type='content-creator', content_type='setting', and context_refs=['$story'] to create a setting description.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_equals", "toolName": "Task", "argPath": "content_type", "value": "setting" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "context_refs", "value": "$story" }
+      ],
+      "tags": ["context", "setting", "story-source"]
+    },
+    {
+      "name": "SCENES phase: should use $story",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story, $plot, $original_input",
+        "phase_instructions": "Call Task tool with subagent_type='content-creator', content_type='scene', and context_refs=['$story'] to break down the story into scenes.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_equals", "toolName": "Task", "argPath": "content_type", "value": "scene" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "context_refs", "value": "$story" }
+      ],
+      "tags": ["context", "scene", "story-source"]
+    },
+    {
+      "name": "CHARACTER_SETTING_IMAGES phase: should use read_project (not $story)",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Reference Images",
+        "loaded_contexts": "$story, $plot",
+        "phase_instructions": "Call read_project to get character data for generating reference images.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "read_project" }
+      ],
+      "tags": ["context", "image", "project-data"]
+    },
+    {
+      "name": "SCENE_IMAGES phase: should use read_project for scene data",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scene_images",
+        "phase_display_name": "Scene Image Generation",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Call read_project to get scene data for generating scene images.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "read_project" }
+      ],
+      "tags": ["context", "scene-image", "project-data"]
+    },
+    {
+      "name": "VIDEO phase: should use read_project for scene images",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "video",
+        "phase_display_name": "Video Generation",
+        "loaded_contexts": "",
+        "phase_instructions": "Call read_project to get scene images for generating video clips.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "read_project" }
+      ],
+      "tags": ["context", "video", "project-data"]
+    },
+    {
+      "name": "Story phase should NOT use $original_input",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "story",
+        "phase_display_name": "Story Development",
+        "loaded_contexts": "$plot, $original_input",
+        "phase_instructions": "Call Task tool with subagent_type='content-creator', content_type='story', and context_refs=['$plot'] to create the full story. Use $plot as the source, NOT $original_input.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "context_refs", "value": "$plot" }
+      ],
+      "tags": ["context", "negative", "no-original-input"]
+    },
+    {
+      "name": "Characters phase should NOT use $original_input",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story, $original_input",
+        "phase_instructions": "Call Task tool with subagent_type='content-creator', content_type='character', and context_refs=['$story'] to create the character profile. Use $story as the source, NOT $original_input.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "context_refs", "value": "$story" }
+      ],
+      "tags": ["context", "negative", "no-original-input"]
+    }
+  ]
+}

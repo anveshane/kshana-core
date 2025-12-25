@@ -1,0 +1,22 @@
+# Qwen3-VL-8B Vision Language Model
+# Note: Qwen3-VL requires both the main model and vision projector.
+# Currently Ollama has limited support for this architecture.
+# Use LM Studio instead for full VL functionality.
+
+FROM /Users/ganaraj.permunda/.lmstudio/models/huihui-ai/Huihui-Qwen3-VL-8B-Instruct-abliterated/ggml-model-Q4_K_M.gguf
+
+# Qwen3 chat template (ChatML format)
+TEMPLATE """{{- if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}
+{{- range .Messages }}
+{{- if eq .Role "user" }}<|im_start|>user
+{{ .Content }}<|im_end|>
+{{ else if eq .Role "assistant" }}<|im_start|>assistant
+{{ .Content }}<|im_end|>
+{{ end }}
+{{- end }}<|im_start|>assistant
+"""
+
+PARAMETER stop "<|im_end|>"
+PARAMETER num_ctx 32768

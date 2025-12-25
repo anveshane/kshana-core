@@ -1314,7 +1314,6 @@ export function getVideoGenerationTools(): ToolDefinition[] {
     generateImageTool,
     generateVideoFromImageTool,
     generateVideoFromFramesTool,
-    generateVideoTool, // Legacy wrapper
     editImageTool,
     generateStoryboardTool,
     waitForJobTool,
@@ -1327,7 +1326,6 @@ export function getVideoGenerationTools(): ToolDefinition[] {
  */
 export const VIDEO_COMPLEX_TOOLS = new Set([
   'generate_image',
-  'generate_video',
   'generate_video_from_image',
   'generate_video_from_frames',
   'edit_image',

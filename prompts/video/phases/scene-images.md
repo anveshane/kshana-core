@@ -1,13 +1,18 @@
 ### Scene Image Generation Phase
 
+**REQUIRED CONTEXT**: Use the registered scenes from `read_project`.
+Each scene has a description and references to characters/settings with reference images.
+DO NOT re-read $story or earlier phase outputs - use the approved scene descriptions and reference images.
+
 IMPORTANT: Each scene image requires user approval before generation.
 
 For each scene:
-1. Read the scene description and gather character/setting references
-2. Use Task(subagent_type: 'image-generator') to craft a scene image prompt
-3. The prompt will be shown to the user for approval
-4. After approval, generate the image using character/setting references for consistency
-5. Update scene with imageArtifactId using `update_project` action: 'update_scene_approval'
+1. Get scene description from `read_project` (scenes array)
+2. Get character/setting reference images for characters and settings in that scene
+3. Use Task(subagent_type: 'image-generator', task: "Generate scene image for [scene title]") with the scene's visual description and reference images
+4. The prompt will be shown to the user for approval
+5. After approval, generate the image using character/setting references for consistency
+6. Update scene with imageArtifactId using `update_project` action: 'update_scene_approval'
 
 Scene image prompts should:
 - Describe the complete scene composition

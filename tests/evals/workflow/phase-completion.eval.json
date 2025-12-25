@@ -1,0 +1,158 @@
+{
+  "name": "Phase Completion - Todo Marking and Phase Transitions",
+  "description": "Tests that the final todo is marked complete and update_project with transition_phase action is called",
+  "promptPath": "video/workflow.md",
+  "temperature": 0,
+  "maxTokens": 1500,
+  "systemPrompt": "You are a video generation orchestrator. When completing a phase, you MUST: 1) Mark the final todo as completed, 2) Call update_project(action: 'update_planner_stage', data: {stage: 'complete'}), 3) IMMEDIATELY call update_project(action: 'transition_phase', data: {next_phase: '...'}) to move to the next phase. NEVER stop after just marking the stage complete.",
+  "tools": [
+    {
+      "name": "Task",
+      "description": "Dispatch a subagent to perform a task",
+      "parameters": {
+        "subagent_type": { "type": "string" },
+        "task": { "type": "string" }
+      }
+    },
+    {
+      "name": "TodoWrite",
+      "description": "Create or update the todo list",
+      "parameters": {
+        "merge": { "type": "boolean" },
+        "todos": { "type": "array" }
+      }
+    },
+    {
+      "name": "update_project",
+      "description": "Update the project state. Actions include: update_planner_stage, transition_phase, add_character, add_setting, etc.",
+      "parameters": {
+        "action": { "type": "string", "description": "Action to perform: update_planner_stage, transition_phase, add_character, add_setting" },
+        "data": { "type": "object", "description": "Action data. For transition_phase: {next_phase: 'phase_name'}" }
+      }
+    },
+    {
+      "name": "read_project",
+      "description": "Read the current project state",
+      "parameters": {}
+    }
+  ],
+  "cases": [
+    {
+      "name": "Should mark final todo as completed when last item is done",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "The last setting (Castle) has been approved and registered. Current todos: char-1 (completed), char-2 (completed), setting-1 (in_progress). Mark setting-1 as completed using TodoWrite(merge: true, todos: [{id: 'setting-1', status: 'completed'}]).",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": true },
+        { "type": "tool_arg_length", "toolName": "TodoWrite", "argPath": "todos", "value": { "min": 1 } }
+      ],
+      "tags": ["todo", "final-item", "mark-completed"]
+    },
+    {
+      "name": "Should call update_project with transition_phase action after stage complete",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Phase is complete. Call ONLY update_project(action: 'transition_phase', data: {next_phase: 'scenes'}). Do NOT call update_planner_stage - just transition.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "update_project" },
+        { "type": "tool_arg_equals", "toolName": "update_project", "argPath": "action", "value": "transition_phase" }
+      ],
+      "tags": ["phase-complete", "transition", "characters-to-scenes"]
+    },
+    {
+      "name": "Plot phase should call update_project when complete",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "plot",
+        "phase_display_name": "Plot Development",
+        "loaded_contexts": "$original_input",
+        "phase_instructions": "Plot has been approved. Mark the phase as complete using update_project.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "update_project" }
+      ],
+      "tags": ["phase-complete", "plot-to-story"]
+    },
+    {
+      "name": "Story phase should call update_project when complete",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "story",
+        "phase_display_name": "Story Development",
+        "loaded_contexts": "$plot",
+        "phase_instructions": "Story has been approved. Mark the phase as complete using update_project.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "update_project" }
+      ],
+      "tags": ["phase-complete", "story-to-characters"]
+    },
+    {
+      "name": "Should NOT call Task after marking phase complete (negative test)",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Phase is complete. Mark completion using update_project. Do NOT create any new content or call Task.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "update_project" },
+        { "type": "tool_not_called", "value": "Task" }
+      ],
+      "tags": ["phase-complete", "negative", "no-task-after-complete"]
+    },
+    {
+      "name": "Scenes phase should call update_project when complete",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story, $characters, $settings",
+        "phase_instructions": "All scenes have been approved. Mark the phase as complete using update_project.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "update_project" }
+      ],
+      "tags": ["phase-complete", "scenes-to-images"]
+    },
+    {
+      "name": "Should mark todo completed when item is done",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Setting 'Ancient Forest' just approved. Mark the todo as completed using TodoWrite(merge: true, todos: [{id: 'setting-forest', status: 'completed'}]).",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": true }
+      ],
+      "tags": ["todo", "phase-complete", "item-done"]
+    }
+  ]
+}

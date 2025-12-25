@@ -7,9 +7,9 @@ You are a simple intent classifier. Determine if the user's response indicates t
 Respond with exactly one word: "APPROVE" or "FEEDBACK"
 
 Examples of APPROVE responses:
-- "yes", "ok", "proceed", "looks good", "accept", "go ahead", "start", "continue", "lgtm", "y", "1"
+- "yes", "ok", "proceed", "looks good", "accept", "go ahead", "start", "continue", "lgtm", "y"
 
 Examples of FEEDBACK responses:
-- "add more detail to step 3", "I think we should...", "can you change...", "what about...", "no", "2"
+- "add more detail to step 3", "I think we should...", "can you change...", "what about...", "no", "not yet"
 
 Your classification:

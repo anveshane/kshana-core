@@ -1,0 +1,117 @@
+{
+  "name": "Story Input Validation",
+  "description": "Tests the video/validation.md prompt for classifying user input as VALID story ideas or INVALID",
+  "promptPath": "video/validation.md",
+  "temperature": 0,
+  "maxTokens": 50,
+  "cases": [
+    {
+      "name": "Valid: detective story",
+      "context": { "user_input": "A detective solves a mystery in space" },
+      "assertions": [{ "type": "exact", "value": "VALID" }],
+      "tags": ["valid", "story-concept"]
+    },
+    {
+      "name": "Valid: horror story request",
+      "context": { "user_input": "Make a horror story about a haunted house" },
+      "assertions": [{ "type": "exact", "value": "VALID" }],
+      "tags": ["valid", "genre-request"]
+    },
+    {
+      "name": "Valid: adventure narrative",
+      "context": { "user_input": "A young wizard discovers a hidden portal to another dimension and must save both worlds from an ancient evil" },
+      "assertions": [{ "type": "exact", "value": "VALID" }],
+      "tags": ["valid", "narrative"]
+    },
+    {
+      "name": "Valid: simple story idea",
+      "context": { "user_input": "A robot learns to love" },
+      "assertions": [{ "type": "exact", "value": "VALID" }],
+      "tags": ["valid", "simple"]
+    },
+    {
+      "name": "Valid: character journey",
+      "context": { "user_input": "An elderly woman finds a lost puppy and they go on a road trip together" },
+      "assertions": [{ "type": "exact", "value": "VALID" }],
+      "tags": ["valid", "character"]
+    },
+    {
+      "name": "Valid: adaptation request",
+      "context": { "user_input": "Can you make a video based on Little Red Riding Hood but set in a cyberpunk city" },
+      "assertions": [{ "type": "exact", "value": "VALID" }],
+      "tags": ["valid", "adaptation"]
+    },
+    {
+      "name": "Valid: thriller plot",
+      "context": { "user_input": "A spy must infiltrate a tech company before they launch an AI that will destroy humanity" },
+      "assertions": [{ "type": "exact", "value": "VALID" }],
+      "tags": ["valid", "plot"]
+    },
+    {
+      "name": "Invalid: philosophical statement",
+      "context": { "user_input": "The meaning of life is found in the connections we make with others" },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "philosophy"]
+    },
+    {
+      "name": "Invalid: question for information",
+      "context": { "user_input": "How does video generation work?" },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "question"]
+    },
+    {
+      "name": "Invalid: technical discussion",
+      "context": { "user_input": "The transformer architecture uses self-attention mechanisms to process sequences" },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "technical"]
+    },
+    {
+      "name": "Invalid: promotional content",
+      "context": { "user_input": "Subscribe to my channel for more content! Like and share!" },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "promotional"]
+    },
+    {
+      "name": "Invalid: gibberish",
+      "context": { "user_input": "asdfasdf jkl;jkl; qwerty" },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "gibberish"]
+    },
+    {
+      "name": "Invalid: test input",
+      "context": { "user_input": "test123" },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "test"]
+    },
+    {
+      "name": "Invalid: single word",
+      "context": { "user_input": "hello" },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "short"]
+    },
+    {
+      "name": "Invalid: meta-commentary",
+      "context": { "user_input": "Stories are powerful because they help us understand the human condition" },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "meta"]
+    },
+    {
+      "name": "Invalid: rhetorical question",
+      "context": { "user_input": "What if we could live forever? Would we even want to?" },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "rhetorical"]
+    },
+    {
+      "name": "Invalid: random article text",
+      "context": { "user_input": "According to recent studies, climate change has accelerated beyond initial predictions. Scientists warn that immediate action is needed." },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "article"]
+    },
+    {
+      "name": "Invalid: empty-ish",
+      "context": { "user_input": "..." },
+      "assertions": [{ "type": "starts_with", "value": "INVALID" }],
+      "tags": ["invalid", "empty"]
+    }
+  ]
+}

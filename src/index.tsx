@@ -7,6 +7,7 @@ import React from 'react';
 import { render } from 'ink';
 import { App } from './App.js';
 import { getLLMConfig, getLLMProvider, validateLLMConfig, resetLLMLogger, type LLMClientConfig } from './core/llm/index.js';
+import { resetPhaseLogger } from './utils/phaseLogger.js';
 
 // Task type for agent specialization
 type TaskType = 'generic' | 'video';
@@ -218,8 +219,9 @@ if (server) {
   // Clear the screen
   process.stdout.write('\x1B[2J\x1B[0f');
 
-  // Reset LLM logger (creates fresh log file for this session)
+  // Reset loggers (creates fresh log files for this session)
   resetLLMLogger();
+  resetPhaseLogger();
 
   // Render with fullscreen mode enabled
   render(<App llmConfig={llmConfig} initialTask={task} taskType={taskType} />);

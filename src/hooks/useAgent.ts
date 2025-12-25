@@ -51,7 +51,7 @@ export interface ToolCallHistoryItem {
  */
 export interface HistoryEntry {
   id: string;
-  type: 'user_input' | 'agent_text' | 'tool_completed' | 'error';
+  type: 'user_input' | 'agent_text' | 'tool_completed' | 'error' | 'phase_transition';
   content: string;
   timestamp: number;
   toolName?: string;
@@ -62,6 +62,14 @@ export interface HistoryEntry {
   agentName?: string;
   /** Streaming content that was generated during this tool call */
   streamingContent?: string;
+  /** Whether streaming content was already shown live (to avoid duplicate display) */
+  wasStreamed?: boolean;
+  /** For phase_transition entries: the phase being entered */
+  phaseName?: string;
+  /** For phase_transition entries: human-readable phase name */
+  phaseDisplayName?: string;
+  /** For phase_transition entries: description of the phase */
+  phaseDescription?: string;
 }
 
 /**
@@ -124,7 +132,8 @@ type AgentAction =
   | { type: 'SET_THINKING'; agentName?: string }
   | { type: 'CLEAR_CURRENT_ACTION' }
   | { type: 'RESET' }
-  | { type: 'START_TASK'; task: string };
+  | { type: 'START_TASK'; task: string }
+  | { type: 'ADD_PHASE_TRANSITION'; fromPhase: string; toPhase: string; displayName?: string; description?: string };
 
 const MAX_VISIBLE_TOOLS = 15;
 const MAX_HISTORY = 500; // Keep more history for scrolling
@@ -219,6 +228,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       const agentName = action.agentName ?? tool?.agentName ?? state.currentAgentName;
 
       // Create history entry, including any streaming content that was generated
+      // Mark wasStreamed if content was already displayed live (to avoid duplicate display)
       const historyEntry: HistoryEntry | null = tool
         ? {
             id: `tool-${action.toolCallId}`,
@@ -231,6 +241,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
             duration,
             agentName,
             streamingContent: tool.streamingContent,
+            wasStreamed: !!tool.streamingContent,
           }
         : null;
 
@@ -372,6 +383,23 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
 
     case 'RESET':
       return initialState;
+
+    case 'ADD_PHASE_TRANSITION':
+      return {
+        ...state,
+        history: [
+          ...state.history.slice(-MAX_HISTORY + 1),
+          {
+            id: `phase-${Date.now()}`,
+            type: 'phase_transition',
+            content: `${action.fromPhase} → ${action.toPhase}`,
+            timestamp: Date.now(),
+            phaseName: action.toPhase,
+            phaseDisplayName: action.displayName,
+            phaseDescription: action.description,
+          },
+        ],
+      };
 
     default:
       return state;
@@ -515,6 +543,18 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         toolCallId: event.toolCallId,
         chunk: event.chunk,
         done: event.done,
+      });
+      onEvent?.(event);
+    });
+
+    agent.on('phase_transition', event => {
+      debugLog(`[useAgent] phase_transition event: ${event.fromPhase} → ${event.toPhase}`);
+      dispatch({
+        type: 'ADD_PHASE_TRANSITION',
+        fromPhase: event.fromPhase,
+        toPhase: event.toPhase,
+        displayName: event.displayName,
+        description: event.description,
       });
       onEvent?.(event);
     });

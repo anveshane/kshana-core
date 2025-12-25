@@ -1,0 +1,276 @@
+{
+  "name": "Plan Mode Tool Usage",
+  "description": "Tests that EnterPlanMode and ExitPlanMode are called ONLY during initial project setup, not during workflow phases. During workflow phases, update_planner_stage should be used instead.",
+  "promptPath": "video/workflow.md",
+  "temperature": 0,
+  "maxTokens": 1000,
+  "systemPrompt": "You are a video generation orchestrator. You must follow the workflow rules exactly. EnterPlanMode/ExitPlanMode are ONLY for initial project setup. During workflow phases, use update_planner_stage instead.",
+  "tools": [
+    {
+      "name": "EnterPlanMode",
+      "description": "Enter initial project planning mode. ONLY use at the very start of a NEW project.",
+      "parameters": {}
+    },
+    {
+      "name": "ExitPlanMode",
+      "description": "Exit initial project planning mode. ONLY use after user approves the initial plan.",
+      "parameters": {}
+    },
+    {
+      "name": "update_planner_stage",
+      "description": "Update the planner stage within the current workflow phase (planning, verify, refining, complete)",
+      "parameters": {
+        "stage": {
+          "type": "string",
+          "enum": ["planning", "verify", "refining", "complete"],
+          "description": "The stage to transition to"
+        }
+      }
+    },
+    {
+      "name": "transition_phase",
+      "description": "Transition to the next workflow phase",
+      "parameters": {
+        "next_phase": {
+          "type": "string",
+          "description": "The phase to transition to"
+        }
+      }
+    },
+    {
+      "name": "Task",
+      "description": "Dispatch a subagent to perform a task",
+      "parameters": {
+        "subagent_type": {
+          "type": "string",
+          "description": "Type of subagent"
+        },
+        "task": {
+          "type": "string",
+          "description": "The task description"
+        }
+      }
+    },
+    {
+      "name": "read_project",
+      "description": "Read the current project state",
+      "parameters": {}
+    },
+    {
+      "name": "AskUserQuestion",
+      "description": "Ask the user a question",
+      "parameters": {
+        "question": {
+          "type": "string",
+          "description": "The question to ask"
+        },
+        "options": {
+          "type": "array",
+          "description": "Answer options"
+        }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "NEW project: should call EnterPlanMode",
+      "context": {
+        "project_id": "",
+        "project_title": "",
+        "current_phase": "null",
+        "phase_display_name": "null",
+        "loaded_contexts": "",
+        "phase_instructions": "A user has provided a new story idea. Begin initial project planning.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "EnterPlanMode" }
+      ],
+      "tags": ["plan-mode", "new-project", "enter"]
+    },
+    {
+      "name": "In PLAN mode after analysis: should ask for approval before ExitPlanMode",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "null",
+        "phase_display_name": "Initial Planning",
+        "loaded_contexts": "",
+        "phase_instructions": "You have analyzed the input and created a plan. Present it to the user for approval.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "AskUserQuestion" }
+      ],
+      "tags": ["plan-mode", "approval", "ask-user"]
+    },
+    {
+      "name": "In PLAN mode after user approval: should call ExitPlanMode",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "plan_approved",
+        "phase_display_name": "Initial Planning Complete",
+        "loaded_contexts": "",
+        "phase_instructions": "The user has approved your execution plan. Now call ExitPlanMode to start the workflow. Do NOT call EnterPlanMode - you are already in plan mode.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "ExitPlanMode" }
+      ],
+      "tags": ["plan-mode", "exit", "approved"]
+    },
+    {
+      "name": "PLOT phase: should NOT call EnterPlanMode",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "plot",
+        "phase_display_name": "Plot Development",
+        "loaded_contexts": "$original_input",
+        "phase_instructions": "Create a plot outline for the story using the Task tool.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_not_called", "value": "EnterPlanMode" },
+        { "type": "tool_not_called", "value": "ExitPlanMode" }
+      ],
+      "tags": ["plan-mode", "workflow", "plot", "negative"]
+    },
+    {
+      "name": "PLOT phase completion: should NOT call ExitPlanMode",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "plot",
+        "phase_display_name": "Plot Development",
+        "loaded_contexts": "$original_input",
+        "phase_instructions": "User has approved the plot content. You should call read_project or update_planner_stage. Do NOT call EnterPlanMode or ExitPlanMode.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_not_called", "value": "EnterPlanMode" },
+        { "type": "tool_not_called", "value": "ExitPlanMode" }
+      ],
+      "tags": ["plan-mode", "workflow", "plot", "stage-update"]
+    },
+    {
+      "name": "STORY phase: should NOT call EnterPlanMode",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "story",
+        "phase_display_name": "Story Development",
+        "loaded_contexts": "$plot",
+        "phase_instructions": "Create the full story from the approved plot.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_not_called", "value": "EnterPlanMode" },
+        { "type": "tool_not_called", "value": "ExitPlanMode" }
+      ],
+      "tags": ["plan-mode", "workflow", "story", "negative"]
+    },
+    {
+      "name": "STORY phase completion: should NOT call ExitPlanMode",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "story",
+        "phase_display_name": "Story Development",
+        "loaded_contexts": "$plot",
+        "phase_instructions": "User has approved the story content. You should call read_project or update_planner_stage. Do NOT call EnterPlanMode or ExitPlanMode.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_not_called", "value": "EnterPlanMode" },
+        { "type": "tool_not_called", "value": "ExitPlanMode" }
+      ],
+      "tags": ["plan-mode", "workflow", "story", "stage-update"]
+    },
+    {
+      "name": "CHARACTERS_SETTINGS phase: should NOT call EnterPlanMode",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create character profiles and setting descriptions.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_not_called", "value": "EnterPlanMode" },
+        { "type": "tool_not_called", "value": "ExitPlanMode" }
+      ],
+      "tags": ["plan-mode", "workflow", "characters", "negative"]
+    },
+    {
+      "name": "Phase transition: should NOT call plan mode tools",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "plot",
+        "phase_display_name": "Plot Development",
+        "loaded_contexts": "$original_input",
+        "phase_instructions": "Plot phase is complete. You may call read_project or transition_phase. Do NOT call EnterPlanMode or ExitPlanMode - those are only for initial project setup.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_not_called", "value": "EnterPlanMode" },
+        { "type": "tool_not_called", "value": "ExitPlanMode" }
+      ],
+      "tags": ["plan-mode", "workflow", "transition", "negative"]
+    },
+    {
+      "name": "IMAGE phase: should NOT call plan mode tools",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Reference Images",
+        "loaded_contexts": "",
+        "phase_instructions": "Generate reference images for characters using read_project and Task.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_not_called", "value": "EnterPlanMode" },
+        { "type": "tool_not_called", "value": "ExitPlanMode" }
+      ],
+      "tags": ["plan-mode", "workflow", "images", "negative"]
+    },
+    {
+      "name": "VIDEO phase: should NOT call plan mode tools",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "video",
+        "phase_display_name": "Video Generation",
+        "loaded_contexts": "",
+        "phase_instructions": "Generate video clips for scenes using read_project and Task.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_not_called", "value": "EnterPlanMode" },
+        { "type": "tool_not_called", "value": "ExitPlanMode" }
+      ],
+      "tags": ["plan-mode", "workflow", "video", "negative"]
+    },
+    {
+      "name": "Existing project resume: should NOT call EnterPlanMode",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Detective Story",
+        "current_phase": "story",
+        "phase_display_name": "Story Development",
+        "loaded_contexts": "$plot",
+        "phase_instructions": "Resume work on the existing project's story phase.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_not_called", "value": "EnterPlanMode" }
+      ],
+      "tags": ["plan-mode", "resume", "negative"]
+    }
+  ]
+}

@@ -17,7 +17,7 @@ import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.
 
 // Workflow imports
 import {
-  getAllWorkflowTools,
+  getWorkflowFileTools,
   getOrCreateProject,
   loadProject,
   getCurrentPhase,
@@ -159,27 +159,16 @@ export interface WorkflowVideoAgentConfig {
 
 /**
  * Create a tool registry with workflow tools for state-based video creation.
- * Includes file tools, project tools, and all generation tools.
+ * Orchestrator only needs file/project tools - generation is handled by subagents via Task.
  */
 export function createWorkflowToolRegistry(): ToolRegistry {
-  // Start with default generic tools (think, ask_user, dispatch_agent, todos)
+  // Start with default generic tools (think, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode, TodoWrite, context tools)
   const registry = createDefaultToolRegistry();
 
-  // Note: Image generation is now handled via Task tool with subagent_type: 'image-generator'
-
-  // Add video generation tools
-  for (const tool of getVideoGenerationTools()) {
+  // Add workflow file tools (read_file, write_file, read_project, update_project)
+  // Note: Generation tools (images, videos, stitch) are handled by subagents via Task tool
+  for (const tool of getWorkflowFileTools()) {
     registry.register(tool);
-  }
-
-  // Add workflow file tools (read_file, write_file, read_project, update_project, stitch_videos)
-  for (const tool of getAllWorkflowTools()) {
-    registry.register(tool);
-  }
-
-  // Register video tools as complex (require confirmation)
-  for (const toolName of VIDEO_COMPLEX_TOOLS) {
-    registerComplexTool(toolName);
   }
 
   return registry;
@@ -188,11 +177,20 @@ export function createWorkflowToolRegistry(): ToolRegistry {
 /**
  * Load existing project plan files into context store.
  * Returns array of context variable names that were loaded.
+ *
+ * Phase-specific loading could be added here in the future:
+ * - plot phase: only original_input
+ * - story phase: plot
+ * - characters_settings: story
+ * - scenes: story, characters
+ * - images: characters, scenes
+ * - video: scenes, images
  */
 function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
   const projectDir = getProjectDir(basePath);
   const plansDir = join(projectDir, 'plans');
   const loadedContexts: string[] = [];
+  let totalChars = 0;
 
   // Plan files to load with their context labels
   const planFiles = [
@@ -203,6 +201,8 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
     { file: 'settings.md', label: 'Settings', varName: 'settings' },
     { file: 'images.md', label: 'Image Plan', varName: 'images' },
   ];
+
+  const contextSizes: Record<string, number> = {};
 
   for (const { file, label, varName } of planFiles) {
     const filePath = join(plansDir, file);
@@ -215,11 +215,27 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
             variableBaseName: varName,
           });
           loadedContexts.push(variableName);
+          contextSizes[varName] = content.length;
+          totalChars += content.length;
         }
       } catch {
         // Skip files that can't be read
       }
     }
+  }
+
+  // Log context loading metrics for phase-aware monitoring
+  if (loadedContexts.length > 0) {
+    const { getPhaseLogger } = require('../../utils/phaseLogger.js');
+    const phaseLogger = getPhaseLogger();
+    // Estimate tokens: ~3 chars per token
+    const estimatedTokens = Math.ceil(totalChars / 3);
+    phaseLogger.info('Workflow', 'context_loading', `Loaded ${loadedContexts.length} contexts (~${estimatedTokens} tokens)`, {
+      contexts: loadedContexts,
+      sizes: contextSizes,
+      totalChars,
+      estimatedTokens,
+    });
   }
 
   return loadedContexts;

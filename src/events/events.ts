@@ -133,6 +133,17 @@ export interface UserInputInjectedEvent {
 }
 
 /**
+ * Phase transition event when workflow transitions to a new phase.
+ */
+export interface PhaseTransitionEvent {
+  type: 'phase_transition';
+  fromPhase: string;
+  toPhase: string;
+  displayName?: string;
+  description?: string;
+}
+
+/**
  * Union of all agent events.
  */
 export type AgentEvent =
@@ -146,7 +157,8 @@ export type AgentEvent =
   | NotificationEvent
   | QuestionEvent
   | AgentStatusEvent
-  | UserInputInjectedEvent;
+  | UserInputInjectedEvent
+  | PhaseTransitionEvent;
 
 /**
  * Event type names for type-safe event handling.

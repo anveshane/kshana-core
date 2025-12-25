@@ -1,11 +1,13 @@
 ### Story Development Phase
 
+**REQUIRED CONTEXT**: `$plot` - Use the APPROVED PLOT from the previous phase. DO NOT use `$original_input`.
+The plot has been refined and approved - expand the PLOT into a full story.
+
 IMPORTANT: The story requires user approval before proceeding.
 
-1. Read `plans/plot.md` for context (use fetch_context or read_file)
-2. Use Task(subagent_type: 'content-creator', content_type: 'story') to expand the plot into a full story
-3. The content-creator will show the story and ask for user approval
-4. After approval, the story is automatically saved to `plans/story.md`
+1. Use Task(subagent_type: 'content-creator', content_type: 'story', context_refs: ["$plot"]) to expand the plot into a full story
+2. The content-creator will show the story and ask for user approval
+3. After approval, the story is automatically saved to `plans/story.md`
 
 The story should include:
 - Character introductions with physical descriptions

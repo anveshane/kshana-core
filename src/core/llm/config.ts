@@ -4,7 +4,7 @@
  */
 import type { LLMClientConfig } from './types.js';
 
-export type LLMProvider = 'gemini' | 'lmstudio' | 'openai' | 'custom';
+export type LLMProvider = 'gemini' | 'lmstudio' | 'llamacpp' | 'ollama' | 'openai' | 'custom';
 
 /**
  * Get the LLM provider from environment.
@@ -16,6 +16,10 @@ export function getLLMProvider(): LLMProvider {
       return 'gemini';
     case 'lmstudio':
       return 'lmstudio';
+    case 'llamacpp':
+      return 'llamacpp';
+    case 'ollama':
+      return 'ollama';
     case 'openai':
       return 'openai';
     default:
@@ -43,6 +47,28 @@ function getLMStudioConfig(): LLMClientConfig {
     baseUrl: process.env['LMSTUDIO_BASE_URL'] ?? 'http://127.0.0.1:1234/v1',
     apiKey: process.env['LMSTUDIO_API_KEY'] ?? 'not-needed',
     model: process.env['LMSTUDIO_MODEL'] ?? 'local-model',
+  };
+}
+
+/**
+ * Get Ollama configuration from environment.
+ */
+function getOllamaConfig(): LLMClientConfig {
+  return {
+    baseUrl: process.env['OLLAMA_BASE_URL'] ?? 'http://localhost:11434/v1',
+    apiKey: 'ollama', // Ollama doesn't need a key but OpenAI SDK requires something
+    model: process.env['OLLAMA_MODEL'] ?? 'llama3.2',
+  };
+}
+
+/**
+ * Get llama.cpp server configuration from environment.
+ */
+function getLlamaCppConfig(): LLMClientConfig {
+  return {
+    baseUrl: process.env['LLAMACPP_BASE_URL'] ?? 'http://127.0.0.1:8080/v1',
+    apiKey: 'not-needed', // llama-server doesn't need a key
+    model: process.env['LLAMACPP_MODEL'] ?? 'local-model',
   };
 }
 
@@ -83,6 +109,12 @@ export function getLLMConfig(overrides?: Partial<LLMClientConfig>): LLMClientCon
     case 'lmstudio':
       config = getLMStudioConfig();
       break;
+    case 'llamacpp':
+      config = getLlamaCppConfig();
+      break;
+    case 'ollama':
+      config = getOllamaConfig();
+      break;
     case 'openai':
       config = getOpenAIConfig();
       break;
@@ -120,6 +152,12 @@ export function validateLLMConfig(): { valid: boolean; errors: string[] } {
       break;
     case 'lmstudio':
       // LM Studio typically doesn't need an API key
+      break;
+    case 'llamacpp':
+      // llama-server doesn't need an API key
+      break;
+    case 'ollama':
+      // Ollama doesn't need an API key
       break;
     default:
       // Custom provider - no validation

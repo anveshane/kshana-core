@@ -18,16 +18,21 @@ import { loadAndRenderMarkdown } from '../prompts/loader.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
 import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, LONG_CONTENT_THRESHOLD } from '../context/index.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
+import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
-// Debug logging to file
-const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+// Get the phase logger instance
+const phaseLogger = getPhaseLogger();
+
+// Legacy debug logging (wraps phaseLogger for backward compatibility during migration)
 function debugLog(message: string) {
-  try {
-    const timestamp = new Date().toISOString();
-    const logLine = `[${timestamp}] ${message}\n`;
-    fs.appendFileSync(DEBUG_LOG_PATH, logLine);
-  } catch {
-    // Ignore logging errors
+  // Parse the message to extract component and content
+  const match = message.match(/^\[([^\]]+)\]\s*(.*)$/);
+  if (match) {
+    const component = match[1];
+    const content = match[2];
+    phaseLogger.debug(component, 'legacy', content);
+  } else {
+    phaseLogger.debug('GenericAgent', 'legacy', message);
   }
 }
 
@@ -141,6 +146,8 @@ export class GenericAgent extends TypedEventEmitter {
    */
   private getEffectiveAgentName(): string {
     switch (this.currentMode) {
+      case 'orchestrator':
+        return 'Orchestrator';
       case 'content':
         return 'Content Agent';
       case 'image':
@@ -567,6 +574,9 @@ export class GenericAgent extends TypedEventEmitter {
         this.tokenUsage.lastPromptTokens = response.usage.promptTokens;
         this.tokenUsage.lastCompletionTokens = response.usage.completionTokens;
         debugLog(`[GenericAgent] Token usage: prompt=${response.usage.promptTokens}, completion=${response.usage.completionTokens}, total=${response.usage.totalTokens}`);
+
+        // Log context usage for phase-aware monitoring
+        phaseLogger.contextUsage('GenericAgent', response.usage.promptTokens, this.maxContextTokens);
       }
 
       // Add assistant message to history
@@ -1079,6 +1089,25 @@ export class GenericAgent extends TypedEventEmitter {
     // Execute the tool handler
     try {
       const result = await Promise.resolve(tool.handler(toolCall.arguments));
+
+      // Check for phase transition info in result and emit event
+      const resultObj = result as Record<string, unknown> | null;
+      if (resultObj && typeof resultObj === 'object' && '_phaseTransition' in resultObj) {
+        const phaseTransition = resultObj['_phaseTransition'] as {
+          fromPhase: string;
+          toPhase: string;
+          displayName?: string;
+          description?: string;
+        };
+        this.emit({
+          type: 'phase_transition',
+          fromPhase: phaseTransition.fromPhase,
+          toPhase: phaseTransition.toPhase,
+          displayName: phaseTransition.displayName,
+          description: phaseTransition.description,
+        });
+      }
+
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -1771,6 +1800,22 @@ Respond in JSON format:
     if (missingRefs.length > 0) {
       debugLog(`[GenericAgent] ERROR: Could not resolve context_refs: ${missingRefs.join(', ')}`);
       debugLog(`[GenericAgent] Available context variables: ${contextStore.list().map(c => c.variableName).join(', ') || 'none'}`);
+    }
+
+    // Validate context usage: warn if $original_input is used for characters/settings
+    // The approved $story should be used instead for consistency
+    const usesOriginalInput = contextRefs?.some(ref => ref === '$original_input');
+    const isCharacterOrSetting = contentType === 'character' || contentType === 'setting';
+    if (usesOriginalInput && isCharacterOrSetting) {
+      debugLog(`[GenericAgent] WARNING: Using $original_input for ${contentType} creation. Consider using $story instead for approved content.`);
+      // Return a warning but allow execution to continue (soft validation)
+      const storyAvailable = contextStore.get('$story') || this.tryResolveFromProjectFiles('$story');
+      if (storyAvailable) {
+        return {
+          warning: `You are using $original_input for ${contentType} creation, but $story is available. Characters and settings should be extracted from the APPROVED STORY content, not the original input. Please use context_refs: ["$story"] instead.`,
+          suggestion: 'Update your Task call to use context_refs: ["$story"] for character and setting creation.',
+        };
+      }
     }
 
     // Build combined context with clear sections
@@ -3080,6 +3125,13 @@ Respond in JSON format:
     if (result.wasCompressed) {
       this.messages = result.messages;
       debugLog(`[GenericAgent] Compressed ${result.removedCount} messages. New count: ${this.messages.length}`);
+
+      // Log compression with phase context
+      phaseLogger.info('GenericAgent', 'context_compression', 'Conversation history compressed', {
+        removedCount: result.removedCount,
+        newMessageCount: this.messages.length,
+        maxContextTokens: this.maxContextTokens,
+      });
 
       // Emit event so UI can show compression occurred
       this.emit({

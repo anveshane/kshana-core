@@ -6,6 +6,7 @@
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
 import { getWorkflowLogger } from './WorkflowLogger.js';
+import { getPhaseLogger } from '../../../utils/phaseLogger.js';
 import { loadAndRenderMarkdown } from '../../../core/prompts/loader.js';
 import {
   loadProject,
@@ -329,6 +330,14 @@ Use this at the start of each turn to understand the project state and what acti
       };
     }
 
+    // Set phase context in phaseLogger for all subsequent logs
+    const phaseLogger = getPhaseLogger();
+    phaseLogger.setContext({
+      phase: project.currentPhase,
+      stage: project.plannerStage,
+      projectId: project.id,
+    });
+
     const result: Record<string, unknown> = {
       status: 'success',
       project: project,
@@ -481,6 +490,7 @@ What story would you like to turn into a video?`,
 
         case 'update_planner_stage': {
           const logger = getWorkflowLogger();
+          const phaseLogger = getPhaseLogger();
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
@@ -505,6 +515,9 @@ What story would you like to turn into a video?`,
           // The phase is only complete when all items are approved
           const phaseCompleted = stage === 'complete' && !isPerItemPhase;
           logger.logPlannerStage(phase, stage, phaseCompleted);
+
+          // Update phase logger context with new stage
+          phaseLogger.stageTransition(stage, `Phase ${phase} entered ${stage} stage`);
 
           if (stage === 'complete' && isPerItemPhase) {
             return {
@@ -534,6 +547,7 @@ What story would you like to turn into a video?`,
 
         case 'transition_phase': {
           const logger = getWorkflowLogger();
+          const phaseLogger = getPhaseLogger();
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
@@ -549,6 +563,11 @@ What story would you like to turn into a video?`,
             result.transitioned
           );
 
+          // Update phase logger context on successful transition
+          if (result.transitioned) {
+            phaseLogger.phaseTransition(beforePhase, result.project.currentPhase, result.reason);
+          }
+
           // Get the new phase config for the next action instruction
           const newPhaseConfig = PHASE_CONFIGS[result.project.currentPhase as WorkflowPhase];
 
@@ -559,13 +578,22 @@ What story would you like to turn into a video?`,
             current_phase: result.project.currentPhase,
             new_phase_name: newPhaseConfig?.displayName ?? result.project.currentPhase,
             next_action: result.transitioned
-              ? `IMPORTANT: You have transitioned to a new phase. Do NOT stop or ask the user what to do next. Call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
+              ? `IMPORTANT: You have transitioned to a new phase. Update your todo list (mark the previous phase complete, mark the new phase in_progress), then call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
               : 'Phase transition not needed. Call read_project to check current state.',
             debug: {
               before_phase: beforePhase,
               before_status: beforeStatus,
               after_phase: result.project.currentPhase,
             },
+            // Include phase transition data for UI banner display
+            ...(result.transitioned && {
+              _phaseTransition: {
+                fromPhase: beforePhase,
+                toPhase: result.project.currentPhase,
+                displayName: newPhaseConfig?.displayName,
+                description: `Working on ${newPhaseConfig?.displayName ?? result.project.currentPhase}`,
+              },
+            }),
           };
         }
 
@@ -844,8 +872,16 @@ What story would you like to turn into a video?`,
 );
 
 /**
- * Get all workflow file tools.
+ * Get workflow file tools for the orchestrator.
+ * Only includes project state tools - content files are handled by subagents via Task.
  */
 export function getWorkflowFileTools(): ToolDefinition[] {
+  return [readProjectTool, updateProjectTool];
+}
+
+/**
+ * Get all file tools including read_file/write_file (for subagents that need direct file access).
+ */
+export function getAllFileTools(): ToolDefinition[] {
   return [readFileTool, writeFileTool, readProjectTool, updateProjectTool];
 }

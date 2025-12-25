@@ -393,6 +393,19 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
   const statusIcon = getStatusIcon(status);
   const toolCallStr = formatToolCall(toolName, args);
 
+  // For completed tools, extract content from result if available (used by Task tools)
+  // This allows streaming content to show during execution, and result.content after completion
+  const resultContent = React.useMemo(() => {
+    if (isExecuting || streamingContent) return undefined;
+    if (result && typeof result === 'object' && 'content' in result) {
+      const content = (result as Record<string, unknown>).content;
+      if (typeof content === 'string' && content.length > 0) {
+        return content;
+      }
+    }
+    return undefined;
+  }, [isExecuting, streamingContent, result]);
+
   if (compact) {
     return (
       <Box
@@ -434,6 +447,11 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
         {streamingContent && (
           <Box marginLeft={2} marginTop={1} flexDirection="column">
             <MarkdownText text={streamingContent} />
+          </Box>
+        )}
+        {resultContent && (
+          <Box marginLeft={2} marginTop={1} flexDirection="column">
+            <MarkdownText text={resultContent} />
           </Box>
         )}
       </Box>
@@ -484,6 +502,11 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
       {streamingContent && (
         <Box marginLeft={2} marginTop={1} flexDirection="column">
           <MarkdownText text={streamingContent} />
+        </Box>
+      )}
+      {resultContent && (
+        <Box marginLeft={2} marginTop={1} flexDirection="column">
+          <MarkdownText text={resultContent} />
         </Box>
       )}
     </Box>
