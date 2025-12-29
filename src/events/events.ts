@@ -81,6 +81,12 @@ export interface ToolStreamingEvent {
   done: boolean;
   /** Name of the agent */
   agentName?: string;
+  /** Tool name (for resuming display after feedback) */
+  toolName?: string;
+  /** Tool arguments (for resuming display after feedback) */
+  toolArgs?: Record<string, unknown>;
+  /** If true, reset streaming content before appending (used when regenerating after feedback) */
+  reset?: boolean;
 }
 
 /**

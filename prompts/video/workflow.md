@@ -75,14 +75,27 @@ Phase transitions:
 - etc.
 
 ## User Approval Flow
-Content that requires user approval must use the Task tool with appropriate subagent:
-- Creative content (plot, story, characters, settings, scenes): `Task(subagent_type: 'content-creator')`
-- Images: `Task(subagent_type: 'image-generator')`
+Content that requires user approval uses the `generate_content` tool, which automatically handles context injection.
+
+**For creative content (plot, story, characters, settings, scenes):**
+- `generate_content(content_type: "plot")` - Creates plot from user's story idea
+- `generate_content(content_type: "story")` - Creates story from plot
+- `generate_content(content_type: "character", name: "Alice")` - Creates character profile
+- `generate_content(content_type: "setting", name: "Forest")` - Creates setting description
+- `generate_content(content_type: "scene")` - Creates scene description
+
+**For image prompts (character/setting reference images and scene images):**
+- `generate_content(content_type: "character_image_prompt", name: "Alice")` - Creates image prompt for character
+- `generate_content(content_type: "setting_image_prompt", name: "Forest")` - Creates image prompt for setting
+- `generate_content(content_type: "scene_image_prompt", scene_number: 3)` - Creates image prompt for scene
+
+Image prompts automatically include the project style and relevant descriptions/reference images.
+After the prompt is approved, the image is generated automatically.
+
+**For videos:**
 - Videos: `Task(subagent_type: 'video-assembler')`
 
-The subagent will show the content to the user and wait for approval before proceeding.
-
-**DO NOT use write_file directly for content that needs approval.** The Task tool handles saving after approval.
+**DO NOT use write_file directly for content that needs approval.** The tools handle saving after approval.
 
 ## Progress Tracking with TodoWrite
 

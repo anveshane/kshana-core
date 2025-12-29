@@ -226,127 +226,91 @@ describe('Prompt Evaluations', () => {
     /**
      * Create a mock client for context usage tests.
      * Returns appropriate tool calls based on the phase context.
+     * Content phases use generate_content (which auto-injects context).
+     * Image/video phases use read_project + Task.
      */
     function createContextUsageMockClient(): MockEvalLLMClient {
       const mock = new MockEvalLLMClient();
 
-      // Plot phase: use $original_input
+      // Plot phase: use generate_content (auto-injects $original_input)
       mock.when('Plot Development', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'plot',
-            task: 'Create plot outline',
-            context_refs: ['$original_input']
+            content_type: 'plot'
           }
         }]
       }));
 
-      // Story phase: use $plot
+      // Story phase: use generate_content (auto-injects $plot)
       mock.when('Story Development', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'story',
-            task: 'Create full story',
-            context_refs: ['$plot']
+            content_type: 'story'
           }
         }]
       }));
 
-      // Characters/Settings phase - Setting: use $story
-      // Check for "setting description" first (more specific)
-      mock.when('setting description', JSON.stringify({
-        tool_calls: [{
-          name: 'Task',
-          arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'setting',
-            task: 'Create setting description',
-            context_refs: ['$story']
-          }
-        }]
+      // Image phases: use read_project (check first - before character/setting matches)
+      mock.when('Call read_project to get character data', JSON.stringify({
+        tool_calls: [
+          { name: 'read_project', arguments: {} }
+        ]
       }));
 
-      // Characters/Settings phase - Character: use $story
-      mock.when('Character & Setting Descriptions', JSON.stringify({
+      mock.when('Call read_project to get scene data', JSON.stringify({
+        tool_calls: [
+          { name: 'read_project', arguments: {} }
+        ]
+      }));
+
+      mock.when('Call read_project to get scene images', JSON.stringify({
+        tool_calls: [
+          { name: 'read_project', arguments: {} }
+        ]
+      }));
+
+      // Characters/Settings phase - Character: use generate_content
+      // Use unique phrase from phase_instructions (not template examples)
+      mock.when('to create a character profile', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create character profile',
-            context_refs: ['$story']
+            name: 'Alice'
           }
         }]
       }));
 
-      // Scenes phase: use $story
-      mock.when('Scene Breakdown', JSON.stringify({
+      // Characters/Settings phase - Setting: use generate_content
+      // Use unique phrase from phase_instructions (not template examples)
+      mock.when('to create a setting description', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'scene',
-            task: 'Create scene description',
-            context_refs: ['$story']
+            content_type: 'setting',
+            name: 'Forest'
           }
         }]
       }));
 
-      // Image phases: use read_project
-      mock.when('Reference Images', JSON.stringify({
-        tool_calls: [
-          { name: 'read_project', arguments: {} },
-          {
-            name: 'Task',
-            arguments: {
-              subagent_type: 'image-generator',
-              task: 'Generate reference image'
-            }
+      // Scenes phase: use generate_content
+      mock.when('content_type: "scene"', JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'scene',
+            task_description: 'Scene 1'
           }
-        ]
-      }));
-
-      mock.when('Scene Image', JSON.stringify({
-        tool_calls: [
-          { name: 'read_project', arguments: {} },
-          {
-            name: 'Task',
-            arguments: {
-              subagent_type: 'image-generator',
-              task: 'Generate scene image'
-            }
-          }
-        ]
-      }));
-
-      // Video phase: use read_project
-      mock.when('Video Generation', JSON.stringify({
-        tool_calls: [
-          { name: 'read_project', arguments: {} },
-          {
-            name: 'Task',
-            arguments: {
-              subagent_type: 'video-assembler',
-              task: 'Generate video clip'
-            }
-          }
-        ]
+        }]
       }));
 
       // Default fallback
       mock.setDefault(JSON.stringify({
         tool_calls: [{
-          name: 'Task',
-          arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'character',
-            task: 'Create character profile',
-            context_refs: ['$story']
-          }
+          name: 'read_project',
+          arguments: {}
         }]
       }));
 
@@ -372,31 +336,31 @@ describe('Prompt Evaluations', () => {
       }
     });
 
-    it('PLOT phase should use $original_input', async () => {
+    it('PLOT phase should use generate_content (auto-injects $original_input)', async () => {
       const plotCases = fixture.cases.filter(c => c.tags?.includes('original-input'));
       for (const evalCase of plotCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('STORY phase should use $plot (not $original_input)', async () => {
+    it('STORY phase should use generate_content (auto-injects $plot)', async () => {
       const storyCases = fixture.cases.filter(c => c.tags?.includes('plot-source'));
       for (const evalCase of storyCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Task should use $plot, not $original_input. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('CHARACTERS_SETTINGS phase should use $story', async () => {
+    it('CHARACTERS_SETTINGS phase should use generate_content (auto-injects $story)', async () => {
       const charSettingCases = fixture.cases.filter(c => c.tags?.includes('story-source'));
       for (const evalCase of charSettingCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Task should use $story. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Later phases should use read_project (not context_refs)', async () => {
+    it('Later phases should use read_project (not generate_content)', async () => {
       const projectDataCases = fixture.cases.filter(c => c.tags?.includes('project-data'));
       for (const evalCase of projectDataCases) {
         const result = await evaluator.runCase(fixture, evalCase);
@@ -601,113 +565,79 @@ describe('Prompt Evaluations', () => {
 
     /**
      * Create a mock client for characters-settings tests.
-     * Returns appropriate tool calls that create individual files (not bundled).
+     * Returns appropriate generate_content tool calls for individual character/setting creation.
      */
     function createCharactersSettingsMockClient(): MockEvalLLMClient {
       const mock = new MockEvalLLMClient();
 
-      // Character creation - should use individual file paths
+      // Character creation - uses generate_content with name parameter
       mock.when('character profile for Kira', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create detailed character profile for Kira',
-            output_file: 'characters/kira.md',
-            context_refs: ['$story']
+            name: 'Kira'
           }
         }]
       }));
 
       mock.when('character profile for Daniel', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create detailed character profile for Daniel',
-            output_file: 'characters/daniel.md',
-            context_refs: ['$story']
+            name: 'Daniel'
           }
         }]
       }));
 
       mock.when('character profile for Sarah', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create detailed character profile for Sarah',
-            output_file: 'characters/sarah.md',
-            context_refs: ['$story']
-          }
-        }]
-      }));
-
-      mock.when('Commander Rex', JSON.stringify({
-        tool_calls: [{
-          name: 'Task',
-          arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'character',
-            task: 'Create character profile for Commander Rex',
-            output_file: 'characters/commander_rex.md',
-            context_refs: ['$story']
+            name: 'Sarah'
           }
         }]
       }));
 
       mock.when('profile for Elena', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create character profile for Elena',
-            output_file: 'characters/elena.md',
-            context_refs: ['$story']
+            name: 'Elena'
           }
         }]
       }));
 
-      // Setting creation - should use individual file paths
+      // Setting creation - uses generate_content with name parameter
       mock.when('setting description for the Ancient Forest', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'setting',
-            task: 'Create detailed setting description for the Ancient Forest',
-            output_file: 'settings/ancient_forest.md',
-            context_refs: ['$story']
+            name: 'Ancient Forest'
           }
         }]
       }));
 
       mock.when('setting description for the Train Station', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'setting',
-            task: 'Create setting description for the Train Station',
-            output_file: 'settings/train_station.md',
-            context_refs: ['$story']
+            name: 'Train Station'
           }
         }]
       }));
 
       mock.when('setting description for the Castle', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'setting',
-            task: 'Create setting description for the Castle',
-            output_file: 'settings/castle.md',
-            context_refs: ['$story']
+            name: 'Castle'
           }
         }]
       }));
@@ -727,69 +657,13 @@ describe('Prompt Evaluations', () => {
         }]
       }));
 
-      // File extension tests - MUST use .md, NOT .json
-      mock.when('character profile for Marcus', JSON.stringify({
-        tool_calls: [{
-          name: 'Task',
-          arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'character',
-            task: 'Create character profile for Marcus',
-            output_file: 'characters/marcus.md',
-            context_refs: ['$story']
-          }
-        }]
-      }));
-
-      mock.when('setting description for the Mountain Cave', JSON.stringify({
-        tool_calls: [{
-          name: 'Task',
-          arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'setting',
-            task: 'Create setting description for the Mountain Cave',
-            output_file: 'settings/mountain_cave.md',
-            context_refs: ['$story']
-          }
-        }]
-      }));
-
-      mock.when('character profile for Nina', JSON.stringify({
-        tool_calls: [{
-          name: 'Task',
-          arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'character',
-            task: 'Create character profile for Nina',
-            output_file: 'characters/nina.md',
-            context_refs: ['$story']
-          }
-        }]
-      }));
-
-      mock.when('setting description for the Harbor', JSON.stringify({
-        tool_calls: [{
-          name: 'Task',
-          arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'setting',
-            task: 'Create setting description for the Harbor',
-            output_file: 'settings/harbor.md',
-            context_refs: ['$story']
-          }
-        }]
-      }));
-
-      // Default: character creation with individual file
+      // Default: character creation with generate_content
       mock.setDefault(JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create character profile',
-            output_file: 'characters/default.md',
-            context_refs: ['$story']
+            name: 'Default'
           }
         }]
       }));
@@ -815,64 +689,47 @@ describe('Prompt Evaluations', () => {
       expect(settingCases.length).toBeGreaterThan(2);
     });
 
-    it('Character files should be saved to characters/<name>.md', async () => {
+    it('Character files should use generate_content with name', async () => {
       const charFileCases = fixture.cases.filter(
         c => c.tags?.includes('character') && c.tags?.includes('individual-file')
       );
       for (const evalCase of charFileCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: output_file should be characters/<name>.md. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content with character name. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Setting files should be saved to settings/<name>.md', async () => {
+    it('Setting files should use generate_content with name', async () => {
       const settingFileCases = fixture.cases.filter(
         c => c.tags?.includes('setting') && c.tags?.includes('individual-file')
       );
       for (const evalCase of settingFileCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: output_file should be settings/<name>.md. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content with setting name. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Should NOT use bundled files like plans/characters.md', async () => {
+    it('Should use generate_content (not bundled Task)', async () => {
       const negativeCases = fixture.cases.filter(c => c.tags?.includes('negative'));
       for (const evalCase of negativeCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Should NOT use bundled file paths. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Task should be for single item, not batch creation', async () => {
+    it('generate_content should be for single item, not batch creation', async () => {
       const singleItemCases = fixture.cases.filter(c => c.tags?.includes('single-item'));
       for (const evalCase of singleItemCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Task should be for single character/setting. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: generate_content should be for single character/setting. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('File names should use lowercase', async () => {
-      const lowercaseCases = fixture.cases.filter(c => c.tags?.includes('lowercase'));
-      for (const evalCase of lowercaseCases) {
-        const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: File path should be lowercase. ${result.errors.join(', ')}`).toBe(true);
-      }
-    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
-
-    it('Should use $story as context source', async () => {
+    it('Should use generate_content with name (context auto-injected)', async () => {
       const contextCases = fixture.cases.filter(c => c.tags?.includes('story-source'));
       for (const evalCase of contextCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: context_refs should include $story. ${result.errors.join(', ')}`).toBe(true);
-      }
-    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
-
-    it('Files MUST use .md extension, NOT .json', async () => {
-      const fileExtCases = fixture.cases.filter(c => c.tags?.includes('file-extension'));
-      expect(fileExtCases.length).toBeGreaterThan(0);
-      for (const evalCase of fileExtCases) {
-        const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: output_file MUST use .md, NOT .json. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content which auto-injects context. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
   });
@@ -882,86 +739,68 @@ describe('Prompt Evaluations', () => {
 
     /**
      * Create a mock client for scenes tests.
-     * Returns appropriate tool calls that create individual scene files (not bundled).
+     * Returns appropriate generate_content tool calls for scene creation.
      */
     function createScenesMockClient(): MockEvalLLMClient {
       const mock = new MockEvalLLMClient();
 
-      // Scene creation - should use individual file paths
+      // Scene creation - uses generate_content with task_description
       mock.when('scene 1', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'scene',
-            task: 'Create scene 1: Opening',
-            output_file: 'scenes/scene_01.md',
-            context_refs: ['$story']
+            task_description: 'Scene 1: Opening'
           }
         }]
       }));
 
       mock.when('scene 2', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'scene',
-            task: 'Create scene 2: Rising action',
-            output_file: 'scenes/scene_02.md',
-            context_refs: ['$story']
+            task_description: 'Scene 2: Rising action'
           }
         }]
       }));
 
       mock.when('scene 3', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'scene',
-            task: 'Create scene 3: Climax',
-            output_file: 'scenes/scene_03.md',
-            context_refs: ['$story']
+            task_description: 'Scene 3: Climax'
           }
         }]
       }));
 
       mock.when('scene 4', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'scene',
-            task: 'Create scene 4',
-            output_file: 'scenes/scene_04.md',
-            context_refs: ['$story']
+            task_description: 'Scene 4'
           }
         }]
       }));
 
       mock.when('scene 5', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'scene',
-            task: 'Create scene 5: Resolution',
-            output_file: 'scenes/scene_05.md',
-            context_refs: ['$story']
+            task_description: 'Scene 5: Resolution'
           }
         }]
       }));
 
       mock.when('scene 6', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'scene',
-            task: 'Create scene 6',
-            output_file: 'scenes/scene_06.md',
-            context_refs: ['$story']
+            task_description: 'Scene 6'
           }
         }]
       }));
@@ -1075,16 +914,13 @@ describe('Prompt Evaluations', () => {
         }]
       }));
 
-      // Default: scene creation with individual file
+      // Default: scene creation with generate_content
       mock.setDefault(JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'scene',
-            task: 'Create scene',
-            output_file: 'scenes/scene_01.md',
-            context_refs: ['$story']
+            task_description: 'Create scene'
           }
         }]
       }));
@@ -1108,62 +944,45 @@ describe('Prompt Evaluations', () => {
       expect(sceneCases.length).toBeGreaterThan(5);
     });
 
-    it('Scene files should be saved to scenes/scene_XX.md', async () => {
+    it('Scene creation should use generate_content', async () => {
       const sceneFileCases = fixture.cases.filter(
         c => c.tags?.includes('scene') && c.tags?.includes('individual-file')
       );
       for (const evalCase of sceneFileCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: output_file should be scenes/scene_XX.md. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content for scene. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Should NOT use bundled files like plans/scenes.md', async () => {
+    it('Should use generate_content (not bundled Task)', async () => {
       const noBundledCases = fixture.cases.filter(c => c.tags?.includes('no-bundled-file'));
       for (const evalCase of noBundledCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Should NOT use plans/scenes.md. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Task should be for single scene, not batch creation', async () => {
+    it('generate_content should be for single scene, not batch creation', async () => {
       const singleItemCases = fixture.cases.filter(c => c.tags?.includes('single-item') || c.tags?.includes('no-batch'));
       for (const evalCase of singleItemCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Task should be for single scene. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: generate_content should be for single scene. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Scene file names should use numbered convention', async () => {
-      const numberedCases = fixture.cases.filter(c => c.tags?.includes('numbered'));
-      for (const evalCase of numberedCases) {
-        const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: File path should use numbered naming. ${result.errors.join(', ')}`).toBe(true);
-      }
-    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
-
-    it('Should use $story as context source', async () => {
+    it('Should use generate_content with context auto-injected', async () => {
       const contextCases = fixture.cases.filter(c => c.tags?.includes('story-source'));
       for (const evalCase of contextCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: context_refs should include $story. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content which auto-injects context. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Scene files MUST use .md extension, NOT .json', async () => {
-      const fileExtCases = fixture.cases.filter(c => c.tags?.includes('file-extension'));
-      expect(fileExtCases.length).toBeGreaterThan(0);
-      for (const evalCase of fileExtCases) {
-        const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: output_file MUST use .md, NOT .json. ${result.errors.join(', ')}`).toBe(true);
-      }
-    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
-
-    it('Task description should specify scene number', async () => {
+    it('task_description should specify scene number', async () => {
       const sceneNumCases = fixture.cases.filter(c => c.tags?.includes('scene-number'));
       for (const evalCase of sceneNumCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Task should mention specific scene number. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: task_description should mention specific scene number. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
@@ -1264,10 +1083,10 @@ describe('Prompt Evaluations', () => {
 
       mock.when('Todo list already created', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'image-generator',
-            task: 'Generate reference image for Luna'
+            content_type: 'character_image_prompt',
+            name: 'Luna'
           }
         }]
       }));
@@ -1302,10 +1121,10 @@ describe('Prompt Evaluations', () => {
       // First image approved - still more to go
       mock.when('First character image (1 of 4)', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'image-generator',
-            task: 'Generate reference image for next character'
+            content_type: 'character_image_prompt',
+            name: 'Marcus'
           }
         }]
       }));
@@ -1379,10 +1198,10 @@ describe('Prompt Evaluations', () => {
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
     it('Should generate image with Task after creating todos', async () => {
-      const taskCallCases = fixture.cases.filter(c => c.tags?.includes('task-call'));
-      for (const evalCase of taskCallCases) {
+      const generateContentCases = fixture.cases.filter(c => c.tags?.includes('generate-content'));
+      for (const evalCase of generateContentCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Should call Task for image generation. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should call generate_content for image prompt. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 

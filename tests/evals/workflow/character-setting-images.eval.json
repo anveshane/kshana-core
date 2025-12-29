@@ -1,26 +1,26 @@
 {
   "name": "Character & Setting Images Phase - Todo Management",
-  "description": "Tests that todos are created fresh at phase start (merge: false) and updated after each image approval.",
+  "description": "Tests that todos are created fresh at phase start (merge: false) and updated after each image approval. Uses generate_content for image prompts.",
   "promptPath": "video/workflow.md",
   "temperature": 0,
   "maxTokens": 1500,
-  "systemPrompt": "You are a video generation orchestrator. When entering a new phase, you MUST create a FRESH todo list with merge: false to replace old todos. After each item approval, update todos with merge: true.",
+  "systemPrompt": "You are a video generation orchestrator. When entering a new phase, you MUST create a FRESH todo list with merge: false to replace old todos. After each item approval, update todos with merge: true. Use generate_content for image prompts.",
   "tools": [
     {
-      "name": "Task",
-      "description": "Dispatch a subagent to perform a task",
+      "name": "generate_content",
+      "description": "Generate content including image prompts. For images: character_image_prompt, setting_image_prompt, scene_image_prompt",
       "parameters": {
-        "subagent_type": {
-          "type": "string",
-          "description": "Type of subagent: content-creator, image-generator, video-assembler"
-        },
-        "task": {
-          "type": "string",
-          "description": "The task description"
-        },
         "content_type": {
           "type": "string",
-          "description": "Type of content: character_image, setting_image"
+          "description": "Type of content: character_image_prompt, setting_image_prompt, scene_image_prompt"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of character or setting for image prompt"
+        },
+        "scene_number": {
+          "type": "number",
+          "description": "Scene number for scene_image_prompt"
         }
       }
     },
@@ -141,22 +141,22 @@
       "tags": ["phase-start", "status-ordering", "in-progress-first"]
     },
     {
-      "name": "Should generate image with Task after creating todos",
+      "name": "Should generate image prompt with generate_content after creating todos",
       "context": {
         "project_id": "proj-123",
         "project_title": "Test Story",
         "current_phase": "character_setting_images",
         "phase_display_name": "Character & Setting Reference Images",
         "loaded_contexts": "",
-        "phase_instructions": "Todo list already created. First item is 'Generate image for character: Luna' (in_progress). Use Task(subagent_type: 'image-generator', task: 'Generate reference image for Luna').",
+        "phase_instructions": "Todo list already created. First item is 'Generate image for character: Luna' (in_progress). Use generate_content(content_type: 'character_image_prompt', name: 'Luna') to create the image prompt.",
         "expensive_checkpoint": ""
       },
       "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_equals", "toolName": "Task", "argPath": "subagent_type", "value": "image-generator" },
-        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "task", "value": "Luna" }
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "character_image_prompt" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "name", "value": "Luna" }
       ],
-      "tags": ["image-generation", "task-call", "character-image"]
+      "tags": ["image-generation", "generate-content", "character-image"]
     },
     {
       "name": "Should call TodoWrite after image approval to mark completed",
@@ -183,11 +183,11 @@
         "current_phase": "character_setting_images",
         "phase_display_name": "Character & Setting Reference Images",
         "loaded_contexts": "",
-        "phase_instructions": "First character image (1 of 4) has been approved. Generate the next image. DO NOT call update_planner_stage(stage: 'complete') - you still have 3 more items!",
+        "phase_instructions": "First character image (1 of 4) has been approved. Generate the next image prompt using generate_content(content_type: 'character_image_prompt', name: 'Marcus'). DO NOT call update_planner_stage(stage: 'complete') - you still have 3 more items!",
         "expensive_checkpoint": ""
       },
       "assertions": [
-        { "type": "tool_called", "value": "Task" },
+        { "type": "tool_called", "value": "generate_content" },
         { "type": "tool_arg_not_equals", "toolName": "update_project", "argPath": "data.stage", "value": "complete" }
       ],
       "tags": ["negative", "no-premature-complete", "more-items-remaining"]
@@ -200,7 +200,7 @@
         "current_phase": "character_setting_images",
         "phase_display_name": "Character & Setting Reference Images",
         "loaded_contexts": "",
-        "phase_instructions": "ALL images have been generated and approved. This phase is COMPLETE. Your task now is to mark the phase complete by calling: update_project(action: 'transition_phase', data: { next_phase: 'scene_images' }). Do NOT generate any more images.",
+        "phase_instructions": "ALL images have been generated and approved. The phase has already been marked as complete with update_planner_stage. Your ONLY remaining task is to call: update_project(action: 'transition_phase', data: { next_phase: 'scene_images' }). Do NOT call update_planner_stage again - just call transition_phase.",
         "expensive_checkpoint": ""
       },
       "assertions": [

@@ -1,19 +1,22 @@
 ### Plot Development Phase
 
-**REQUIRED CONTEXT**: `$original_input` - This is the first phase, use the user's original input.
+**Step-by-step instructions:**
 
-IMPORTANT: The plot requires user approval before proceeding.
+1. Generate the plot outline:
+```
+generate_content(content_type: "plot")
+```
 
-1. Read the user's original input from `read_project`
-2. Use Task(subagent_type: 'content-creator', content_type: 'plot', context_refs: ["$original_input"]) to generate the plot
-3. The content-creator will show the plot and ask for user approval
-4. After approval, the plot is automatically saved to `plans/plot.md`
-5. Update planner stage to 'complete' and transition to the next phase
+That's it! The tool automatically:
+- Fetches the user's original input from the context store
+- Passes it to the content-creator agent
+- Handles user approval flow
+- Saves approved content to `plans/plot.md`
 
-The plot should include:
-- Main story beats and structure
+2. After approval, update planner stage to 'complete' and transition to story phase
+
+**The plot should include:**
+- Main story beats and structure based on user's input
 - Key turning points
 - Character arcs overview
 - Beginning, middle, and end
-
-Wait for user approval before marking the phase complete.

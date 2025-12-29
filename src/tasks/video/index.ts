@@ -192,6 +192,28 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
   const loadedContexts: string[] = [];
   let totalChars = 0;
 
+  const contextSizes: Record<string, number> = {};
+
+  // Load the original user input first - this is critical for content generation
+  // Variable name MUST be $original_input to match phase prompts
+  const originalInputPath = join(projectDir, 'original_input.md');
+  if (existsSync(originalInputPath)) {
+    try {
+      const content = readFileSync(originalInputPath, 'utf-8');
+      if (content.trim().length > 0) {
+        const { variableName } = contextStore.store(content, 'Original User Input', {
+          source: 'user_input',
+          variableBaseName: 'original_input',
+        });
+        loadedContexts.push(variableName);
+        contextSizes['original_input'] = content.length;
+        totalChars += content.length;
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
+
   // Plan files to load with their context labels
   const planFiles = [
     { file: 'plot.md', label: 'Plot Outline', varName: 'plot' },
@@ -201,8 +223,6 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
     { file: 'settings.md', label: 'Settings', varName: 'settings' },
     { file: 'images.md', label: 'Image Plan', varName: 'images' },
   ];
-
-  const contextSizes: Record<string, number> = {};
 
   for (const { file, label, varName } of planFiles) {
     const filePath = join(plansDir, file);
@@ -310,13 +330,12 @@ function buildWorkflowAgentPrompt(
   // Build loaded contexts section
   let loadedContextsSection = 'No existing project files loaded yet.';
   if (loadedContexts.length > 0) {
-    loadedContextsSection = `The following project files have been loaded as contexts. **ALWAYS pass these to Task calls**:
+    loadedContextsSection = `## Available Contexts
+The following project files have been loaded as contexts:
 ${loadedContexts.map(c => `- ${c}`).join('\n')}
 
-Example:
-\`\`\`
-Task(subagent_type: 'content-creator', task: "Create character", content_type: "character", context_refs: [${loadedContexts.map(c => `"${c}"`).join(', ')}])
-\`\`\``;
+Use the \`generate_content\` tool for creating content - it automatically injects the correct contexts.
+For example: \`generate_content(content_type: "plot")\` automatically uses \$original_input.`;
   }
 
   // Load phase-specific instructions from file

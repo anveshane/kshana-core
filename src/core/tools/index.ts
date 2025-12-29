@@ -27,6 +27,9 @@ export {
   fetchContextTool,
   listContextsTool,
   deleteContextTool,
+  generateContentTool,
+  CONTENT_TYPE_CONTEXTS,
+  CONTENT_TYPE_OUTPUT_FILES,
 } from './builtin/index.js';
 
 // Re-export for convenience
@@ -42,6 +45,7 @@ import {
   legacyTodoWriteTool,
   storeContextTool,
   fetchContextTool,
+  generateContentTool,
 } from './builtin/index.js';
 
 /**
@@ -59,6 +63,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   registry.register(todoWriteTool);
   registry.register(storeContextTool);
   registry.register(fetchContextTool);
+  registry.register(generateContentTool);
 
   return registry;
 }

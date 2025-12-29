@@ -1,35 +1,22 @@
 {
-  "name": "Scenes Phase - Individual File Creation",
-  "description": "Tests that scenes are created individually with separate output files, not bundled together in a single file like plans/scenes.md.",
+  "name": "Scenes Phase - Individual Scene Creation",
+  "description": "Tests that scenes are created individually using generate_content. Each scene is saved automatically. Create 5-8 scenes maximum.",
   "promptPath": "video/workflow.md",
   "temperature": 0,
   "maxTokens": 1500,
-  "systemPrompt": "You are a video generation orchestrator. You must process scenes ONE AT A TIME. Each scene must be saved to its own file in the scenes/ directory (e.g., scenes/scene_01.md). NEVER create a single file with all scenes bundled together like plans/scenes.md. Create 5-8 scenes for short videos, 8-12 maximum for medium videos. NEVER create more than 12 scenes.",
+  "systemPrompt": "You are a video generation orchestrator. You must process scenes ONE AT A TIME using generate_content. Each scene is saved automatically to plans/scenes.md (appended). Create 5-8 scenes for short videos. NEVER create more than 8 scenes.",
   "tools": [
     {
-      "name": "Task",
-      "description": "Dispatch a subagent to perform a task",
+      "name": "generate_content",
+      "description": "Generate creative content with automatic context injection",
       "parameters": {
-        "subagent_type": {
-          "type": "string",
-          "description": "Type of subagent: content-creator, image-generator, video-assembler"
-        },
-        "task": {
-          "type": "string",
-          "description": "The task description - should be for a SINGLE scene"
-        },
         "content_type": {
           "type": "string",
           "description": "Type of content: scene"
         },
-        "context_refs": {
-          "type": "array",
-          "items": { "type": "string" },
-          "description": "Context references like $story"
-        },
-        "output_file": {
+        "task_description": {
           "type": "string",
-          "description": "Output file path - should be scenes/scene_01.md, scenes/scene_02.md, etc."
+          "description": "Description of the scene to create"
         }
       }
     },
@@ -63,58 +50,54 @@
   ],
   "cases": [
     {
-      "name": "Should create individual scene file with specific name",
+      "name": "Should create individual scene using generate_content",
       "context": {
         "project_id": "proj-123",
         "project_title": "Epic Fantasy",
         "current_phase": "scenes",
         "phase_display_name": "Scene Breakdown",
         "loaded_contexts": "$story",
-        "phase_instructions": "Create scene 1: Opening. Use Task with content_type='scene' and output_file='scenes/scene_01.md'. Process ONE scene at a time.",
+        "phase_instructions": "Create scene 1: Opening. Use generate_content(content_type: \"scene\", task_description: \"Scene 1: Opening\"). Process ONE scene at a time.",
         "expensive_checkpoint": ""
       },
       "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_equals", "toolName": "Task", "argPath": "content_type", "value": "scene" },
-        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "output_file", "value": "scenes/" },
-        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "output_file", "value": "scene_01" }
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "scene" }
       ],
       "tags": ["scene", "individual-file", "output-path"]
     },
     {
-      "name": "Scene output_file should NOT be plans/scenes.md",
+      "name": "Scene should use generate_content (not bundled Task)",
       "context": {
         "project_id": "proj-123",
         "project_title": "Test Story",
         "current_phase": "scenes",
         "phase_display_name": "Scene Breakdown",
         "loaded_contexts": "$story",
-        "phase_instructions": "Create scene 2: Rising action. Save to individual file scenes/scene_02.md. DO NOT use plans/scenes.md - that's a bundled file which is WRONG.",
+        "phase_instructions": "Create scene 2: Rising action. Use generate_content - it automatically handles context and saves the scene.",
         "expensive_checkpoint": ""
       },
       "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_equals", "toolName": "Task", "argPath": "content_type", "value": "scene" },
-        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "output_file", "value": "plans/scenes" }
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "scene" }
       ],
       "tags": ["scene", "negative", "no-bundled-file"]
     },
     {
-      "name": "Task description should be for single scene, not multiple",
+      "name": "generate_content should be for single scene, not multiple",
       "context": {
         "project_id": "proj-123",
         "project_title": "Test Story",
         "current_phase": "scenes",
         "phase_display_name": "Scene Breakdown",
         "loaded_contexts": "$story",
-        "phase_instructions": "Create scene 3: Climax. This is one scene only. Do not create multiple scenes in this Task.",
+        "phase_instructions": "Create scene 3: Climax. Use generate_content(content_type: \"scene\", task_description: \"Scene 3: Climax\"). This is one scene only.",
         "expensive_checkpoint": ""
       },
       "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "task", "value": "scene" },
-        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "task", "value": "all scenes" },
-        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "task", "value": "Break the story" }
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "scene" },
+        { "type": "tool_arg_contains", "toolName": "generate_content", "argPath": "task_description", "value": "Scene" }
       ],
       "tags": ["scene", "single-item", "no-batch"]
     },
@@ -136,109 +119,36 @@
       "tags": ["scene", "todo", "planning", "individual-items"]
     },
     {
-      "name": "Scene file path should use numbered naming convention",
-      "context": {
-        "project_id": "proj-123",
-        "project_title": "Test Story",
-        "current_phase": "scenes",
-        "phase_display_name": "Scene Breakdown",
-        "loaded_contexts": "$story",
-        "phase_instructions": "Create scene 4. Save to scenes/scene_04.md (use zero-padded numbers like 01, 02, 03, etc.).",
-        "expensive_checkpoint": ""
-      },
-      "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "output_file", "value": "scenes/" },
-        { "type": "tool_arg_matches", "toolName": "Task", "argPath": "output_file", "pattern": "scenes/scene_\\d+\\.md$" }
-      ],
-      "tags": ["scene", "file-naming", "numbered"]
-    },
-    {
-      "name": "Should use $story as context_refs for scene",
+      "name": "Should use generate_content for scene (context auto-injected)",
       "context": {
         "project_id": "proj-123",
         "project_title": "Test Story",
         "current_phase": "scenes",
         "phase_display_name": "Scene Breakdown",
         "loaded_contexts": "$story, $characters, $settings",
-        "phase_instructions": "Create scene 1 using the story content. Use context_refs=['$story'].",
+        "phase_instructions": "Create scene 1. Use generate_content(content_type: \"scene\"). Context is automatically injected.",
         "expensive_checkpoint": ""
       },
       "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "context_refs", "value": "$story" }
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "scene" }
       ],
       "tags": ["scene", "context-source", "story-source"]
     },
     {
-      "name": "Scene file MUST use .md extension, NOT .json",
+      "name": "Individual scene should specify scene number in task_description",
       "context": {
         "project_id": "proj-123",
         "project_title": "Test Story",
         "current_phase": "scenes",
         "phase_display_name": "Scene Breakdown",
         "loaded_contexts": "$story",
-        "phase_instructions": "Create scene 5: Resolution. Save to scenes/scene_05.md. CRITICAL: Always use .md extension, NEVER .json.",
+        "phase_instructions": "Create scene 3: The Confrontation. Use generate_content(content_type: \"scene\", task_description: \"Scene 3: The Confrontation\").",
         "expensive_checkpoint": ""
       },
       "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "output_file", "value": ".md" },
-        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "output_file", "value": ".json" }
-      ],
-      "tags": ["scene", "file-extension", "md-not-json"]
-    },
-    {
-      "name": "Scene file should NOT use .json even without explicit instruction",
-      "context": {
-        "project_id": "proj-123",
-        "project_title": "Test Story",
-        "current_phase": "scenes",
-        "phase_display_name": "Scene Breakdown",
-        "loaded_contexts": "$story",
-        "phase_instructions": "Create scene 6. Save to scenes/ directory.",
-        "expensive_checkpoint": ""
-      },
-      "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_contains", "toolName": "Task", "argPath": "output_file", "value": "scenes/" },
-        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "output_file", "value": ".json" }
-      ],
-      "tags": ["scene", "file-extension", "implicit-md"]
-    },
-    {
-      "name": "Should NOT create all scenes in one Task call",
-      "context": {
-        "project_id": "proj-123",
-        "project_title": "Test Story",
-        "current_phase": "scenes",
-        "phase_display_name": "Scene Breakdown",
-        "loaded_contexts": "$story",
-        "phase_instructions": "Create scene 1: The Beginning. Create ONE scene at a time. Do NOT break the story into all scenes at once.",
-        "expensive_checkpoint": ""
-      },
-      "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "task", "value": "Break the story into" },
-        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "task", "value": "all scenes" },
-        { "type": "tool_arg_not_contains", "toolName": "Task", "argPath": "task", "value": "scenes for video" }
-      ],
-      "tags": ["scene", "single-item", "no-batch-creation"]
-    },
-    {
-      "name": "Individual scene Task should specify scene number in task",
-      "context": {
-        "project_id": "proj-123",
-        "project_title": "Test Story",
-        "current_phase": "scenes",
-        "phase_display_name": "Scene Breakdown",
-        "loaded_contexts": "$story",
-        "phase_instructions": "Create scene 3: The Confrontation. Task description should mention scene 3.",
-        "expensive_checkpoint": ""
-      },
-      "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_matches", "toolName": "Task", "argPath": "task", "pattern": "[Ss]cene\\s*3|[Ss]cene\\s*#?3" }
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_matches", "toolName": "generate_content", "argPath": "task_description", "pattern": "[Ss]cene\\s*3|[Ss]cene\\s*#?3" }
       ],
       "tags": ["scene", "task-description", "scene-number"]
     },
@@ -260,21 +170,21 @@
       "tags": ["scene", "todo-update", "after-approval"]
     },
     {
-      "name": "Should NOT call update_planner_stage complete after middle scene",
+      "name": "After scene approval must register with add_scene",
       "context": {
         "project_id": "proj-123",
         "project_title": "Test Story",
         "current_phase": "scenes",
         "phase_display_name": "Scene Breakdown",
         "loaded_contexts": "$story",
-        "phase_instructions": "Scene 2 of 6 has been approved. Create scene 3 next. DO NOT call update_planner_stage(stage: 'complete') - you still have scenes 3-6 to create!",
+        "phase_instructions": "Scene 3: Rising Action has been approved. Register it using update_project(action: 'add_scene', data: {scene_number: 3, title: 'Rising Action'}).",
         "expensive_checkpoint": ""
       },
       "assertions": [
-        { "type": "tool_called", "value": "Task" },
-        { "type": "tool_arg_not_equals", "toolName": "update_project", "argPath": "data.stage", "value": "complete" }
+        { "type": "tool_called", "value": "update_project" },
+        { "type": "tool_arg_equals", "toolName": "update_project", "argPath": "action", "value": "add_scene" }
       ],
-      "tags": ["scene", "negative", "no-premature-complete"]
+      "tags": ["scene", "register", "add-scene"]
     },
     {
       "name": "Should call update_planner_stage complete ONLY after LAST scene",
@@ -292,23 +202,6 @@
         { "type": "tool_arg_equals", "toolName": "update_project", "argPath": "action", "value": "update_planner_stage" }
       ],
       "tags": ["scene", "phase-complete", "last-scene"]
-    },
-    {
-      "name": "After scene approval must register with add_scene",
-      "context": {
-        "project_id": "proj-123",
-        "project_title": "Test Story",
-        "current_phase": "scenes",
-        "phase_display_name": "Scene Breakdown",
-        "loaded_contexts": "$story",
-        "phase_instructions": "Scene 3: Rising Action has been approved. Register it using update_project(action: 'add_scene', data: {scene_number: 3, title: 'Rising Action'}).",
-        "expensive_checkpoint": ""
-      },
-      "assertions": [
-        { "type": "tool_called", "value": "update_project" },
-        { "type": "tool_arg_equals", "toolName": "update_project", "argPath": "action", "value": "add_scene" }
-      ],
-      "tags": ["scene", "register", "add-scene"]
     },
     {
       "name": "TodoWrite after approval should mark previous scene completed",

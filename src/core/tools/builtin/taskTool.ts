@@ -19,17 +19,19 @@ Available subagent types:
 - image-generator: Image generation specialist. Crafts prompts and generates images for characters, settings, and scenes.
 - video-assembler: Video generation specialist. Creates video clips from scene images and stitches them into final video.
 
-Context Passing:
-- Use context_refs to pass stored context variables (e.g., ["$story", "$character_daniel"])
-- The subagent will receive the full content of each referenced variable
-- Use store_context to store content before passing it
+⚠️ CRITICAL - Context Passing for content-creator:
+- YOU MUST ALWAYS PASS context_refs when using content-creator!
+- Without context_refs, the subagent has NO ACCESS to the user's story and will generate random content!
+- For plot phase: context_refs: ["$original_input"]
+- For other phases: include relevant contexts like ["$plot", "$story", "$character_name"]
+- The subagent receives ONLY what you pass in context_refs - nothing else!
 
 Content Type (for content-creator):
-- plot: High-level story outline
-- story: Full narrative with dialogue
-- character: Character profile
-- setting: Location description
-- scene: Visual scene description
+- plot: High-level story outline (REQUIRES context_refs: ["$original_input"])
+- story: Full narrative with dialogue (REQUIRES context_refs: ["$plot"])
+- character: Character profile (REQUIRES context_refs: ["$story"])
+- setting: Location description (REQUIRES context_refs: ["$story"])
+- scene: Visual scene description (REQUIRES context_refs: ["$story", "$characters"])
 - narration: Voice-over text`,
   {
     type: 'object',

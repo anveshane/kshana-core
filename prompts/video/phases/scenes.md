@@ -1,21 +1,13 @@
 ### Scene Breakdown Phase
 
-## ⛔ STOP - READ THIS FIRST ⛔
+## STOP - READ THIS FIRST
 
 **MAXIMUM SCENES ALLOWED: 8**
 
 If you are about to create more than 8 scenes, STOP IMMEDIATELY.
 You are doing something wrong. Go back and re-read this prompt.
 
-**THE ORCHESTRATOR MUST PLAN SCENES FIRST - NOT THE CONTENT-CREATOR**
-
-If you are a content-creator subagent and you're being asked to "break down" or "create all scenes" - REFUSE.
-You should only be asked to create ONE scene at a time.
-
 ---
-
-**REQUIRED CONTEXT**: `$story` - Use the APPROVED STORY to break down into scenes.
-Also reference the registered characters and settings from `read_project`.
 
 ## HARD LIMIT: Maximum 8 Scenes
 
@@ -27,25 +19,11 @@ Also reference the registered characters and settings from `read_project`.
 
 **If your story needs more than 8 scenes, you're being too granular. Combine related moments.**
 
-## ❌ PROHIBITED - Never Do These
+## CORRECT WORKFLOW
 
-1. **❌ WRONG**: `Task(task: "Break the story into scenes")`
-   - This creates 30+ scenes. NEVER do this.
+### Step 1: Orchestrator Plans Scenes (NO generate_content Call)
 
-2. **❌ WRONG**: `Task(task: "Create all scenes for the video")`
-   - This creates too many scenes. NEVER do this.
-
-3. **❌ WRONG**: `Task(output_file: "plans/scenes.md")`
-   - This bundles all scenes. NEVER do this.
-
-4. **❌ WRONG**: Creating Scene 9, 10, 11, 12... or higher
-   - You've exceeded the limit. STOP.
-
-## ✅ CORRECT WORKFLOW
-
-### Step 1: Orchestrator Plans Scenes (NO Task Call)
-
-**YOU (the orchestrator) must do this yourself - DO NOT dispatch a Task:**
+**YOU (the orchestrator) must do this yourself - DO NOT dispatch anything:**
 
 1. Read the `$story` context
 2. Identify exactly 5-8 KEY MOMENTS (not every detail - just the major beats)
@@ -63,18 +41,21 @@ TodoWrite(merge: false, todos: [
 
 **If you create more than 8 todo items, you're doing it wrong.**
 
-### Step 2: ONE Task Per Scene
+### Step 2: ONE generate_content Per Scene
 
 For EACH scene (ONE at a time):
 ```
-Task(
-  subagent_type: "content-creator",
+generate_content(
   content_type: "scene",
-  task: "Create scene 1: Opening - The protagonist is introduced",
-  output_file: "scenes/scene_01.md",
-  context_refs: ["$story"]
+  task_description: "Scene 1: Opening - The protagonist is introduced"
 )
 ```
+
+The tool automatically:
+- Fetches the story, characters, and settings from the context store
+- Creates the scene description
+- Handles user approval flow
+- Saves to `plans/scenes.md` (appended)
 
 **Wait for approval before creating the next scene.**
 
@@ -93,16 +74,16 @@ TodoWrite(merge: true, todos: [
 ])
 
 // 3. Then create next scene
-Task(...)
+generate_content(content_type: "scene", task_description: "Scene 2: First conflict")
 ```
 
-**❌ DO NOT skip the TodoWrite call!** The todo list MUST be updated after each scene.
+**DO NOT skip the TodoWrite call!** The todo list MUST be updated after each scene.
 
-**❌ DO NOT call `update_planner_stage(stage: 'complete')` until ALL scenes are done!**
+**DO NOT call `update_planner_stage(stage: 'complete')` until ALL scenes are done!**
 
 ## Scene Content Requirements
 
-Each individual scene file must include:
+Each individual scene must include:
 - Scene number and title
 - Visual description (what the viewer sees)
 - Characters involved (reference by name)
@@ -112,17 +93,9 @@ Each individual scene file must include:
 - Camera suggestions
 - Duration: 5-15 seconds
 
-## File Naming
-
-**ALWAYS use `.md` files. NEVER use `.json`.**
-
-- `scenes/scene_01.md`
-- `scenes/scene_02.md`
-- etc.
-
 ## Phase Completion - ONLY After ALL Scenes Done
 
-**⛔ ONLY call these when the LAST scene (your final scene 5-8) is approved:**
+**ONLY call these when the LAST scene (your final scene 5-8) is approved:**
 
 ```
 // After LAST scene approval:
@@ -139,13 +112,12 @@ update_project(action: 'update_planner_stage', data: { phase: 'scenes', stage: '
 update_project(action: 'transition_phase', data: { next_phase: 'character_setting_images' })
 ```
 
-**❌ DO NOT call `update_planner_stage(stage: 'complete')` after scene 1, 2, 3... - ONLY after the LAST scene!**
+**DO NOT call `update_planner_stage(stage: 'complete')` after scene 1, 2, 3... - ONLY after the LAST scene!**
 
 ## Summary Checklist
 
-- [ ] Did YOU (orchestrator) plan the scenes with TodoWrite? (Not a Task)
+- [ ] Did YOU (orchestrator) plan the scenes with TodoWrite? (Not a Task/generate_content)
 - [ ] Did you create ONLY 5-8 scenes total?
-- [ ] Is each scene in its own file? (scenes/scene_01.md)
 - [ ] Are you creating ONE scene at a time?
 - [ ] Are you calling TodoWrite after EACH scene approval?
 - [ ] Are you waiting until ALL scenes are done before calling `update_planner_stage(stage: 'complete')`?
