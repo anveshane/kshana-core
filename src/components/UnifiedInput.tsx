@@ -24,6 +24,8 @@ interface UnifiedInputProps {
   hint?: string;
   /** Callback when selection index changes (for parent to update QuestionPrompt) */
   onSelectionChange?: (index: number) => void;
+  /** Called when any key is pressed (before processing) - used to stop countdown timer */
+  onAnyKeyPress?: () => void;
 }
 
 export function UnifiedInput({
@@ -34,6 +36,7 @@ export function UnifiedInput({
   placeholder = '',
   hint,
   onSelectionChange,
+  onAnyKeyPress,
 }: UnifiedInputProps) {
   const [textValue, setTextValue] = React.useState('');
   const [cursorPos, setCursorPos] = React.useState(0);
@@ -72,6 +75,9 @@ export function UnifiedInput({
 
     const handleData = (data: Buffer) => {
       const input = data.toString();
+
+      // Notify parent that user pressed a key (for stopping countdown timer)
+      onAnyKeyPress?.();
 
       // Handle confirmation mode (y/n)
       if (mode === 'confirmation') {
@@ -233,7 +239,7 @@ export function UnifiedInput({
     return () => {
       stdin.off('data', handleData);
     };
-  }, [stdin, mode, options, selectedIndex, textValue, cursorPos, onSubmit, updateSelection, lastEscapeTime]);
+  }, [stdin, mode, options, selectedIndex, textValue, cursorPos, onSubmit, updateSelection, lastEscapeTime, onAnyKeyPress]);
 
   // Render text with cursor
   const renderTextWithCursor = () => {

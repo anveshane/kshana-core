@@ -3,7 +3,7 @@
  * Manages the .kshana directory structure and project.json index file.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
 import { join } from 'path';
 import {
   type ProjectFile,
@@ -351,6 +351,47 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       needsSave = true;
     }
   }
+
+  // Sync characters from disk - scan characters/ directory for .md files
+  const charactersDir = join(projectDir, 'characters');
+  if (existsSync(charactersDir)) {
+    const charFiles = readdirSync(charactersDir).filter(f => f.endsWith('.md'));
+
+    for (const charFile of charFiles) {
+      try {
+        const charContent = readFileSync(join(charactersDir, charFile), 'utf-8');
+        // Extract name from first heading or filename
+        const nameMatch = charContent.match(/^#\s*(?:Character[:\-–—\s]*)?(.+)/m);
+        const charName = nameMatch
+          ? nameMatch[1].trim()
+          : charFile.replace(/\.md$/, '').replace(/[-_]/g, ' ');
+
+        // Check if character is already registered
+        const existingChar = project.characters.find(
+          c => c.name.toLowerCase() === charName.toLowerCase()
+        );
+        if (!existingChar) {
+          const character = createDefaultCharacterData(charName);
+          character.file = `characters/${charFile}`;
+
+          // If characters_settings phase is complete, mark as approved
+          if (
+            project.phases.characters_settings?.status === 'completed' ||
+            project.phases.characters_settings?.plannerStage === 'complete'
+          ) {
+            character.approvalStatus = 'approved';
+            character.approvedAt = Date.now();
+          }
+
+          project.characters.push(character);
+          needsSave = true;
+        }
+      } catch {
+        /* ignore read errors */
+      }
+    }
+  }
+
   if ((project.content.characters.items?.length ?? 0) > 0 && project.content.characters.status === 'missing') {
     project.content.characters.status = 'partial';
     needsSave = true;
@@ -376,6 +417,47 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       needsSave = true;
     }
   }
+
+  // Sync settings from disk - scan settings/ directory for .md files
+  const settingsDir = join(projectDir, 'settings');
+  if (existsSync(settingsDir)) {
+    const settingFiles = readdirSync(settingsDir).filter(f => f.endsWith('.md'));
+
+    for (const settingFile of settingFiles) {
+      try {
+        const settingContent = readFileSync(join(settingsDir, settingFile), 'utf-8');
+        // Extract name from first heading or filename
+        const nameMatch = settingContent.match(/^#\s*(?:Setting[:\-–—\s]*)?(.+)/m);
+        const settingName = nameMatch
+          ? nameMatch[1].trim()
+          : settingFile.replace(/\.md$/, '').replace(/[-_]/g, ' ');
+
+        // Check if setting is already registered
+        const existingSetting = project.settings.find(
+          s => s.name.toLowerCase() === settingName.toLowerCase()
+        );
+        if (!existingSetting) {
+          const setting = createDefaultSettingData(settingName);
+          setting.file = `settings/${settingFile}`;
+
+          // If characters_settings phase is complete, mark as approved
+          if (
+            project.phases.characters_settings?.status === 'completed' ||
+            project.phases.characters_settings?.plannerStage === 'complete'
+          ) {
+            setting.approvalStatus = 'approved';
+            setting.approvedAt = Date.now();
+          }
+
+          project.settings.push(setting);
+          needsSave = true;
+        }
+      } catch {
+        /* ignore read errors */
+      }
+    }
+  }
+
   if ((project.content.settings.items?.length ?? 0) > 0 && project.content.settings.status === 'missing') {
     project.content.settings.status = 'partial';
     needsSave = true;
@@ -395,6 +477,74 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
   if ((project.content.scenes.items?.length ?? 0) > 0 && project.content.scenes.status === 'missing') {
     project.content.scenes.status = 'partial';
     needsSave = true;
+  }
+
+  // Sync scenes from disk - scan scenes/ directory for scene_XX.md files
+  // This catches scenes that were created but never registered in project.scenes
+  const scenesDir = join(projectDir, 'scenes');
+  if (existsSync(scenesDir)) {
+    const sceneFiles = readdirSync(scenesDir)
+      .filter(f => /^scene_\d+\.md$/.test(f))
+      .sort();
+
+    for (const sceneFile of sceneFiles) {
+      const match = sceneFile.match(/^scene_(\d+)\.md$/);
+      if (match) {
+        const sceneNumber = parseInt(match[1], 10);
+
+        // Check if scene is already registered
+        const existingScene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+        if (!existingScene) {
+          // Create new scene ref
+          const sceneRef = createDefaultSceneRef(sceneNumber);
+          sceneRef.file = `scenes/${sceneFile}`;
+
+          // Extract title from file content
+          try {
+            const sceneContent = readFileSync(join(scenesDir, sceneFile), 'utf-8');
+            const titleMatch = sceneContent.match(/^#\s*(?:Scene\s*\d+[:\-–—\s]*)?(.+)/m);
+            if (titleMatch) {
+              sceneRef.title = titleMatch[1].trim();
+            }
+          } catch {
+            /* ignore read errors */
+          }
+
+          // If scenes phase is complete, mark scene as approved
+          if (
+            project.phases.scenes?.status === 'completed' ||
+            project.phases.scenes?.plannerStage === 'complete'
+          ) {
+            sceneRef.contentApprovalStatus = 'approved';
+            sceneRef.contentApprovedAt = Date.now();
+          }
+
+          project.scenes.push(sceneRef);
+          needsSave = true;
+        }
+      }
+    }
+
+    // Sort scenes by number
+    if (project.scenes.length > 0) {
+      project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
+    }
+
+    // Update content registry with newly discovered scenes
+    for (const scene of project.scenes) {
+      const sceneName = scene.title || `Scene ${scene.sceneNumber}`;
+      if (!project.content.scenes.items?.includes(sceneName)) {
+        if (!project.content.scenes.items) {
+          project.content.scenes.items = [];
+        }
+        project.content.scenes.items.push(sceneName);
+        needsSave = true;
+      }
+    }
+    if ((project.content.scenes.items?.length ?? 0) > 0 && project.content.scenes.status === 'missing') {
+      project.content.scenes.status = 'partial';
+      needsSave = true;
+    }
   }
 
   return needsSave;
@@ -968,7 +1118,14 @@ export function addScene(sceneRef: SceneRef, basePath: string = process.cwd()): 
 }
 
 /**
+ * Maximum number of scenes allowed per project.
+ * This is a hard limit to prevent infinite loops.
+ */
+export const MAX_SCENES = 12;
+
+/**
  * Add a new scene to the project (creates default entry).
+ * Throws an error if the scene limit is exceeded.
  */
 export function addNewScene(
   sceneNumber: number,
@@ -978,6 +1135,11 @@ export function addNewScene(
   const project = loadProject(basePath);
   if (!project) {
     throw new Error('No project found');
+  }
+
+  // HARD LIMIT: Prevent infinite scene creation
+  if (sceneNumber > MAX_SCENES) {
+    throw new Error(`⛔ SCENE LIMIT EXCEEDED: Maximum ${MAX_SCENES} scenes allowed. Scene ${sceneNumber} cannot be created.`);
   }
 
   // Check if scene already exists
@@ -1178,6 +1340,17 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
     .filter(([, info]) => info.status === 'skipped')
     .map(([key]) => key);
 
+  // Scene limit warning
+  let sceneLimitWarning = '';
+  if (currentPhase === 'scenes') {
+    const sceneCount = project.scenes.length;
+    if (sceneCount >= MAX_SCENES) {
+      sceneLimitWarning = `\n⛔ SCENE LIMIT REACHED: You have ${sceneCount} scenes. Maximum is ${MAX_SCENES}. STOP creating scenes and transition to the next phase NOW.`;
+    } else if (sceneCount >= MAX_SCENES - 2) {
+      sceneLimitWarning = `\n⚠️ APPROACHING SCENE LIMIT: ${sceneCount}/${MAX_SCENES} scenes. Finish up soon.`;
+    }
+  }
+
   return `
 Project: ${project.title || '(untitled)'}
 ID: ${project.id}
@@ -1190,8 +1363,8 @@ Completed Phases: ${completedPhases.length > 0 ? completedPhases.join(', ') : 'n
 Skipped Phases: ${skippedPhases.length > 0 ? skippedPhases.join(', ') : 'none'}
 Characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'none defined'}
 Settings: ${settingNames.length > 0 ? settingNames.join(', ') : 'none defined'}
-Scenes: ${project.scenes.length}
-Assets: ${project.assets.length}${itemProgress}
+Scenes: ${project.scenes.length}/${MAX_SCENES} (max)
+Assets: ${project.assets.length}${itemProgress}${sceneLimitWarning}
 `.trim();
 }
 
@@ -1310,6 +1483,9 @@ function getPerItemPhaseInstructions(
   const nextItem = getNextUnapprovedItem(project, phaseConfig.phase);
   const { approved: approvedCount, total: totalItems } = countApprovedItems(project, phaseConfig.phase);
 
+  // Get full item list for TODO reconstruction
+  const allItems = getPhaseItems(project, phaseConfig.phase);
+
   let instruction = `
 **IMPORTANT: This phase requires PER-ITEM approval.**
 
@@ -1318,6 +1494,60 @@ function getPerItemPhaseInstructions(
 - Approved: ${approvedCount}
 - Remaining: ${totalItems - approvedCount}
 `;
+
+  // Add item list with statuses so orchestrator can recreate TODO list
+  if (totalItems > 0) {
+    instruction += `
+## Current Item Statuses
+`;
+    for (const item of allItems) {
+      const statusIcon = item.status === 'approved' ? '✓' : item.status === 'pending' ? '○' : '●';
+      instruction += `${statusIcon} ${item.name}: ${item.status}\n`;
+    }
+    instruction += '\n';
+  }
+
+  // Add instructions for resuming mid-phase
+  if (approvedCount > 0 && approvedCount < totalItems) {
+    instruction += `
+## ⚠️ RESUMING MID-PHASE: Recreate Todo List
+
+You are resuming this phase with ${approvedCount} of ${totalItems} items already approved.
+
+**Create the todo list to match the current state:**
+\`\`\`
+TodoWrite(merge: false, todos: [
+${allItems
+  .map((item, idx) => {
+    const status = item.status === 'approved' ? 'completed' : idx === allItems.findIndex(i => i.status !== 'approved') ? 'in_progress' : 'pending';
+    return `  { id: "${item.id}", content: "Process ${item.name}", activeForm: "Processing ${item.name}", status: "${status}" },`;
+  })
+  .join('\n')}
+])
+\`\`\`
+
+Then continue with the next item: **${nextItem?.name}**
+`;
+  }
+
+  // Add fresh todo creation instructions at phase start
+  if (approvedCount === 0 && totalItems > 0) {
+    instruction += `
+## ⚠️ PHASE START: Create Fresh Todo List
+
+**FIRST THING when entering this phase**: Create a NEW todo list with \`merge: false\` to replace old todos from the previous phase.
+
+\`\`\`
+TodoWrite(merge: false, todos: [
+  { id: "item-1", content: "Process first item", activeForm: "Processing first item", status: "in_progress" },
+  { id: "item-2", content: "Process second item", activeForm: "Processing second item", status: "pending" },
+  ...
+])
+\`\`\`
+
+**CRITICAL**: Use \`merge: false\` to REPLACE the old todos. This clears the todo list from the previous phase.
+`;
+  }
 
   if (totalItems === 0) {
     instruction += `
@@ -1363,6 +1593,13 @@ function getPerItemPhaseInstructions(
 The scene description already exists from the SCENES phase. Use reference images from characters and settings that appear in this scene to maintain visual consistency.
 
 After generating, get user approval before moving to the next scene.
+
+**CRITICAL - After User Approval:**
+1. Update scene with update_project(action: 'update_scene_approval', ...)
+2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current scene as 'completed' and the next as 'in_progress'
+3. Then generate the next scene image
+
+**DO NOT skip the TodoWrite call!**
 `;
         break;
 
@@ -1372,6 +1609,13 @@ After generating, get user approval before moving to the next scene.
 Read the ${nextItem.type} description to understand the visual requirements, then generate an appropriate reference image.
 
 After generating, get user approval before moving to the next item.
+
+**CRITICAL - After User Approval:**
+1. Update with update_project(action: 'update_${nextItem.type}_approval', ...)
+2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current item as 'completed' and the next as 'in_progress'
+3. Then generate the next reference image
+
+**DO NOT skip the TodoWrite call!**
 `;
         break;
 
@@ -1381,6 +1625,29 @@ After generating, get user approval before moving to the next item.
 Use the scene's image artifact to create an animated video clip with appropriate motion.
 
 After generating, get user approval before moving to the next scene.
+
+**CRITICAL - After User Approval:**
+1. Update scene with update_project(action: 'update_scene_approval', ...)
+2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current scene as 'completed' and the next as 'in_progress'
+3. Then generate the next video
+
+**DO NOT skip the TodoWrite call!**
+`;
+        break;
+
+      case WorkflowPhase.SCENES:
+        instruction += `Create **Scene ${nextItem.name}**.
+
+Generate a detailed scene description including characters, setting, action, emotional tone, camera angles, and motion.
+
+After creating, get user approval before moving to the next scene.
+
+**CRITICAL - After User Approval:**
+1. Register the scene with update_project(action: 'add_scene', data: { scene_number: ${nextItem.name}, title: '...' })
+2. **MUST** call TodoWrite(merge: true, todos: [{ id: 'scene-${nextItem.name}', status: 'completed' }, { id: 'scene-NEXT', status: 'in_progress' }])
+3. Then create the next scene
+
+**DO NOT skip the TodoWrite call! The todo list MUST be updated after each scene approval.**
 `;
         break;
 
@@ -1391,6 +1658,13 @@ After generating, get user approval before moving to the next scene.
 Generate detailed content including description and visual characteristics suitable for image generation.
 
 After creating, get user approval before moving to the next item.
+
+**CRITICAL - After User Approval:**
+1. Register the item with update_project(action: 'add_${nextItem.type}', ...)
+2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current item as 'completed' and the next as 'in_progress'
+3. Then create the next item
+
+**DO NOT skip the TodoWrite call!**
 `;
         break;
     }

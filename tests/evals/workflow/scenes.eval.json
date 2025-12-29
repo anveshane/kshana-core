@@ -1,0 +1,225 @@
+{
+  "name": "Scenes Phase - Individual Scene Creation",
+  "description": "Tests that scenes are created individually using generate_content. Each scene is saved automatically. Create 5-8 scenes maximum.",
+  "promptPath": "video/workflow.md",
+  "temperature": 0,
+  "maxTokens": 1500,
+  "systemPrompt": "You are a video generation orchestrator. You must process scenes ONE AT A TIME using generate_content. Each scene is saved automatically to plans/scenes.md (appended). Create 5-8 scenes for short videos. NEVER create more than 8 scenes.",
+  "tools": [
+    {
+      "name": "generate_content",
+      "description": "Generate creative content with automatic context injection",
+      "parameters": {
+        "content_type": {
+          "type": "string",
+          "description": "Type of content: scene"
+        },
+        "task_description": {
+          "type": "string",
+          "description": "Description of the scene to create"
+        }
+      }
+    },
+    {
+      "name": "TodoWrite",
+      "description": "Create or update the todo list",
+      "parameters": {
+        "merge": {
+          "type": "boolean",
+          "description": "Whether to merge with existing todos"
+        },
+        "todos": {
+          "type": "array",
+          "description": "Array of todo items"
+        }
+      }
+    },
+    {
+      "name": "read_project",
+      "description": "Read the current project state",
+      "parameters": {}
+    },
+    {
+      "name": "update_project",
+      "description": "Update the project state",
+      "parameters": {
+        "action": { "type": "string" },
+        "data": { "type": "object" }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "Should create individual scene using generate_content",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Epic Fantasy",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create scene 1: Opening. Use generate_content(content_type: \"scene\", task_description: \"Scene 1: Opening\"). Process ONE scene at a time.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "scene" }
+      ],
+      "tags": ["scene", "individual-file", "output-path"]
+    },
+    {
+      "name": "Scene should use generate_content (not bundled Task)",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create scene 2: Rising action. Use generate_content - it automatically handles context and saves the scene.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "scene" }
+      ],
+      "tags": ["scene", "negative", "no-bundled-file"]
+    },
+    {
+      "name": "generate_content should be for single scene, not multiple",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create scene 3: Climax. Use generate_content(content_type: \"scene\", task_description: \"Scene 3: Climax\"). This is one scene only.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "scene" },
+        { "type": "tool_arg_contains", "toolName": "generate_content", "argPath": "task_description", "value": "Scene" }
+      ],
+      "tags": ["scene", "single-item", "no-batch"]
+    },
+    {
+      "name": "Should create TodoWrite with individual scene items before processing",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Fantasy Adventure",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Story needs 5 scenes: Opening, Inciting incident, Rising action, Climax, Resolution. Create a TodoWrite with each scene as a separate item, then process them one at a time. Start by creating the TodoWrite.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": false }
+      ],
+      "tags": ["scene", "todo", "planning", "individual-items"]
+    },
+    {
+      "name": "Should use generate_content for scene (context auto-injected)",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story, $characters, $settings",
+        "phase_instructions": "Create scene 1. Use generate_content(content_type: \"scene\"). Context is automatically injected.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "scene" }
+      ],
+      "tags": ["scene", "context-source", "story-source"]
+    },
+    {
+      "name": "Individual scene should specify scene number in task_description",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create scene 3: The Confrontation. Use generate_content(content_type: \"scene\", task_description: \"Scene 3: The Confrontation\").",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_matches", "toolName": "generate_content", "argPath": "task_description", "pattern": "[Ss]cene\\s*3|[Ss]cene\\s*#?3" }
+      ],
+      "tags": ["scene", "task-description", "scene-number"]
+    },
+    {
+      "name": "Should call TodoWrite after scene approval to mark completed",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Scene 2 has been approved. Your ONLY task right now is to call TodoWrite to update the todo list. Call: TodoWrite(merge: true, todos: [{id: 'scene-2', status: 'completed'}, {id: 'scene-3', status: 'in_progress'}]). Do NOT call any other tool first.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": true }
+      ],
+      "tags": ["scene", "todo-update", "after-approval"]
+    },
+    {
+      "name": "After scene approval must register with add_scene",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Scene 3: Rising Action has been approved. Register it using update_project(action: 'add_scene', data: {scene_number: 3, title: 'Rising Action'}).",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "update_project" },
+        { "type": "tool_arg_equals", "toolName": "update_project", "argPath": "action", "value": "add_scene" }
+      ],
+      "tags": ["scene", "register", "add-scene"]
+    },
+    {
+      "name": "Should call update_planner_stage complete ONLY after LAST scene",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story",
+        "phase_instructions": "All 6 scenes have been created and approved. This phase is COMPLETE. Your task now is to mark the phase complete by calling: update_project(action: 'update_planner_stage', data: {phase: 'scenes', stage: 'complete'}). Do NOT create any more scenes.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "update_project" },
+        { "type": "tool_arg_equals", "toolName": "update_project", "argPath": "action", "value": "update_planner_stage" }
+      ],
+      "tags": ["scene", "phase-complete", "last-scene"]
+    },
+    {
+      "name": "TodoWrite after approval should mark previous scene completed",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Scene 4 approved. Update todo: mark scene-4 as 'completed' and scene-5 as 'in_progress'. Use TodoWrite(merge: true, todos: [{id: 'scene-4', status: 'completed'}, {id: 'scene-5', status: 'in_progress'}]).",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": true },
+        { "type": "tool_arg_length", "toolName": "TodoWrite", "argPath": "todos", "value": { "min": 1 } }
+      ],
+      "tags": ["scene", "todo-update", "mark-completed"]
+    }
+  ]
+}

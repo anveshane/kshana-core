@@ -107,6 +107,8 @@ interface AgentState {
   questionOptions: QuestionOption[] | undefined;
   /** Auto-approve timeout in milliseconds (for countdown display) */
   autoApproveTimeoutMs: number | undefined;
+  /** Context content to display with the question (e.g., image prompt being approved) */
+  questionContext: string | undefined;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
@@ -119,12 +121,12 @@ type AgentAction =
   | { type: 'SET_STATUS'; status: AgentStatus; agentName?: string }
   | { type: 'SET_TODOS'; todos: ExpandableTodoItem[] }
   | { type: 'APPEND_OUTPUT'; text: string }
-  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[]; autoApproveTimeoutMs?: number }
+  | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[]; autoApproveTimeoutMs?: number; context?: string }
   | { type: 'CLEAR_QUESTION' }
   | { type: 'SET_ERROR'; error: string }
   | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown>; agentName?: string }
   | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean; agentName?: string }
-  | { type: 'TOOL_STREAM'; toolCallId: string; chunk: string; done: boolean }
+  | { type: 'TOOL_STREAM'; toolCallId: string; chunk: string; done: boolean; reset?: boolean; toolName?: string; toolArgs?: Record<string, unknown>; agentName?: string }
   | { type: 'ADD_AGENT_TEXT'; text: string; agentName?: string }
   | { type: 'ADD_USER_INPUT'; text: string; isTask?: boolean }
   | { type: 'STREAM_CHUNK'; chunk: string; agentName?: string }
@@ -148,6 +150,7 @@ const initialState: AgentState = {
   isConfirmation: false,
   questionOptions: undefined,
   autoApproveTimeoutMs: undefined,
+  questionContext: undefined,
   error: undefined,
   recentTools: [],
   history: [],
@@ -177,12 +180,13 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         isConfirmation: action.isConfirmation,
         questionOptions: action.options,
         autoApproveTimeoutMs: action.autoApproveTimeoutMs,
+        questionContext: action.context,
         status: 'waiting',
         currentAction: null,
       };
 
     case 'CLEAR_QUESTION':
-      return { ...state, question: undefined, isConfirmation: false, questionOptions: undefined, autoApproveTimeoutMs: undefined };
+      return { ...state, question: undefined, isConfirmation: false, questionOptions: undefined, autoApproveTimeoutMs: undefined, questionContext: undefined };
 
     case 'SET_ERROR':
       return { ...state, error: action.error, status: 'error', currentAction: null };
@@ -262,13 +266,29 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
     case 'TOOL_STREAM': {
       // Update streaming content for a specific tool
       const targetTool = state.recentTools.find(t => t.id === action.toolCallId);
-      const newStreamingContent = (targetTool?.streamingContent ?? '') + action.chunk;
-      debugLog(`[useAgent] TOOL_STREAM: toolCallId=${action.toolCallId}, chunk=${action.chunk.length} chars, done=${action.done}, newTotal=${newStreamingContent.length} chars, toolFound=${!!targetTool}`);
+
+      // If reset flag is set, clear existing content before appending (used when regenerating after feedback)
+      const baseContent = action.reset ? '' : (targetTool?.streamingContent ?? '');
+      const newStreamingContent = baseContent + action.chunk;
+
+      debugLog(`[useAgent] TOOL_STREAM: toolCallId=${action.toolCallId}, chunk=${action.chunk.length} chars, done=${action.done}, reset=${action.reset}, newTotal=${newStreamingContent.length} chars, toolFound=${!!targetTool}`);
       if (!targetTool) {
         debugLog(`[useAgent] TOOL_STREAM WARNING: tool not found in recentTools. Available tools: ${state.recentTools.map(t => t.id).join(', ')}`);
       }
+
+      // If reset flag is set, also update currentAction to show the tool executing
+      // This ensures the ToolCallDisplay is shown after feedback
+      const newCurrentAction = action.reset && targetTool ? {
+        type: 'tool_executing' as const,
+        toolCallId: action.toolCallId,
+        toolName: action.toolName ?? targetTool.name,
+        toolArgs: action.toolArgs ?? targetTool.args,
+        agentName: action.agentName ?? targetTool.agentName,
+      } : state.currentAction;
+
       return {
         ...state,
+        currentAction: newCurrentAction,
         recentTools: state.recentTools.map(t =>
           t.id === action.toolCallId
             ? { ...t, streamingContent: newStreamingContent }
@@ -503,6 +523,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         options: event.options,
         isConfirmation: event.isConfirmation,
         autoApproveTimeoutMs: event.autoApproveTimeoutMs,
+        hasContext: !!event.context,
       }, null, 2)}`);
       dispatch({
         type: 'SET_QUESTION',
@@ -510,6 +531,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         isConfirmation: event.isConfirmation,
         options: event.options,
         autoApproveTimeoutMs: event.autoApproveTimeoutMs,
+        context: event.context,
       });
       onEvent?.(event);
     });
@@ -537,12 +559,16 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('tool_streaming', event => {
-      debugLog(`[useAgent] tool_streaming event: toolCallId=${event.toolCallId}, chunkLen=${event.chunk.length}, done=${event.done}`);
+      debugLog(`[useAgent] tool_streaming event: toolCallId=${event.toolCallId}, chunkLen=${event.chunk.length}, done=${event.done}, reset=${event.reset}`);
       dispatch({
         type: 'TOOL_STREAM',
         toolCallId: event.toolCallId,
         chunk: event.chunk,
         done: event.done,
+        reset: event.reset,
+        toolName: event.toolName,
+        toolArgs: event.toolArgs,
+        agentName: event.agentName,
       });
       onEvent?.(event);
     });
@@ -686,6 +712,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     isConfirmation: state.isConfirmation,
     questionOptions: state.questionOptions,
     autoApproveTimeoutMs: state.autoApproveTimeoutMs,
+    questionContext: state.questionContext,
     error: state.error,
     recentTools: state.recentTools,
     history: state.history,

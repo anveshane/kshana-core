@@ -226,127 +226,91 @@ describe('Prompt Evaluations', () => {
     /**
      * Create a mock client for context usage tests.
      * Returns appropriate tool calls based on the phase context.
+     * Content phases use generate_content (which auto-injects context).
+     * Image/video phases use read_project + Task.
      */
     function createContextUsageMockClient(): MockEvalLLMClient {
       const mock = new MockEvalLLMClient();
 
-      // Plot phase: use $original_input
+      // Plot phase: use generate_content (auto-injects $original_input)
       mock.when('Plot Development', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'plot',
-            task: 'Create plot outline',
-            context_refs: ['$original_input']
+            content_type: 'plot'
           }
         }]
       }));
 
-      // Story phase: use $plot
+      // Story phase: use generate_content (auto-injects $plot)
       mock.when('Story Development', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'story',
-            task: 'Create full story',
-            context_refs: ['$plot']
+            content_type: 'story'
           }
         }]
       }));
 
-      // Characters/Settings phase - Setting: use $story
-      // Check for "setting description" first (more specific)
-      mock.when('setting description', JSON.stringify({
-        tool_calls: [{
-          name: 'Task',
-          arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'setting',
-            task: 'Create setting description',
-            context_refs: ['$story']
-          }
-        }]
+      // Image phases: use read_project (check first - before character/setting matches)
+      mock.when('Call read_project to get character data', JSON.stringify({
+        tool_calls: [
+          { name: 'read_project', arguments: {} }
+        ]
       }));
 
-      // Characters/Settings phase - Character: use $story
-      mock.when('Character & Setting Descriptions', JSON.stringify({
+      mock.when('Call read_project to get scene data', JSON.stringify({
+        tool_calls: [
+          { name: 'read_project', arguments: {} }
+        ]
+      }));
+
+      mock.when('Call read_project to get scene images', JSON.stringify({
+        tool_calls: [
+          { name: 'read_project', arguments: {} }
+        ]
+      }));
+
+      // Characters/Settings phase - Character: use generate_content
+      // Use unique phrase from phase_instructions (not template examples)
+      mock.when('to create a character profile', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create character profile',
-            context_refs: ['$story']
+            name: 'Alice'
           }
         }]
       }));
 
-      // Scenes phase: use $story
-      mock.when('Scene Breakdown', JSON.stringify({
+      // Characters/Settings phase - Setting: use generate_content
+      // Use unique phrase from phase_instructions (not template examples)
+      mock.when('to create a setting description', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'scene',
-            task: 'Create scene description',
-            context_refs: ['$story']
+            content_type: 'setting',
+            name: 'Forest'
           }
         }]
       }));
 
-      // Image phases: use read_project
-      mock.when('Reference Images', JSON.stringify({
-        tool_calls: [
-          { name: 'read_project', arguments: {} },
-          {
-            name: 'Task',
-            arguments: {
-              subagent_type: 'image-generator',
-              task: 'Generate reference image'
-            }
+      // Scenes phase: use generate_content
+      mock.when('content_type: "scene"', JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'scene',
+            task_description: 'Scene 1'
           }
-        ]
-      }));
-
-      mock.when('Scene Image', JSON.stringify({
-        tool_calls: [
-          { name: 'read_project', arguments: {} },
-          {
-            name: 'Task',
-            arguments: {
-              subagent_type: 'image-generator',
-              task: 'Generate scene image'
-            }
-          }
-        ]
-      }));
-
-      // Video phase: use read_project
-      mock.when('Video Generation', JSON.stringify({
-        tool_calls: [
-          { name: 'read_project', arguments: {} },
-          {
-            name: 'Task',
-            arguments: {
-              subagent_type: 'video-assembler',
-              task: 'Generate video clip'
-            }
-          }
-        ]
+        }]
       }));
 
       // Default fallback
       mock.setDefault(JSON.stringify({
         tool_calls: [{
-          name: 'Task',
-          arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'character',
-            task: 'Create character profile',
-            context_refs: ['$story']
-          }
+          name: 'read_project',
+          arguments: {}
         }]
       }));
 
@@ -372,31 +336,31 @@ describe('Prompt Evaluations', () => {
       }
     });
 
-    it('PLOT phase should use $original_input', async () => {
+    it('PLOT phase should use generate_content (auto-injects $original_input)', async () => {
       const plotCases = fixture.cases.filter(c => c.tags?.includes('original-input'));
       for (const evalCase of plotCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('STORY phase should use $plot (not $original_input)', async () => {
+    it('STORY phase should use generate_content (auto-injects $plot)', async () => {
       const storyCases = fixture.cases.filter(c => c.tags?.includes('plot-source'));
       for (const evalCase of storyCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Task should use $plot, not $original_input. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('CHARACTERS_SETTINGS phase should use $story', async () => {
+    it('CHARACTERS_SETTINGS phase should use generate_content (auto-injects $story)', async () => {
       const charSettingCases = fixture.cases.filter(c => c.tags?.includes('story-source'));
       for (const evalCase of charSettingCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Task should use $story. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Later phases should use read_project (not context_refs)', async () => {
+    it('Later phases should use read_project (not generate_content)', async () => {
       const projectDataCases = fixture.cases.filter(c => c.tags?.includes('project-data'));
       for (const evalCase of projectDataCases) {
         const result = await evaluator.runCase(fixture, evalCase);
@@ -601,113 +565,79 @@ describe('Prompt Evaluations', () => {
 
     /**
      * Create a mock client for characters-settings tests.
-     * Returns appropriate tool calls that create individual files (not bundled).
+     * Returns appropriate generate_content tool calls for individual character/setting creation.
      */
     function createCharactersSettingsMockClient(): MockEvalLLMClient {
       const mock = new MockEvalLLMClient();
 
-      // Character creation - should use individual file paths
+      // Character creation - uses generate_content with name parameter
       mock.when('character profile for Kira', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create detailed character profile for Kira',
-            output_file: 'characters/kira.md',
-            context_refs: ['$story']
+            name: 'Kira'
           }
         }]
       }));
 
       mock.when('character profile for Daniel', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create detailed character profile for Daniel',
-            output_file: 'characters/daniel.md',
-            context_refs: ['$story']
+            name: 'Daniel'
           }
         }]
       }));
 
       mock.when('character profile for Sarah', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create detailed character profile for Sarah',
-            output_file: 'characters/sarah.md',
-            context_refs: ['$story']
-          }
-        }]
-      }));
-
-      mock.when('Commander Rex', JSON.stringify({
-        tool_calls: [{
-          name: 'Task',
-          arguments: {
-            subagent_type: 'content-creator',
-            content_type: 'character',
-            task: 'Create character profile for Commander Rex',
-            output_file: 'characters/commander_rex.md',
-            context_refs: ['$story']
+            name: 'Sarah'
           }
         }]
       }));
 
       mock.when('profile for Elena', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create character profile for Elena',
-            output_file: 'characters/elena.md',
-            context_refs: ['$story']
+            name: 'Elena'
           }
         }]
       }));
 
-      // Setting creation - should use individual file paths
+      // Setting creation - uses generate_content with name parameter
       mock.when('setting description for the Ancient Forest', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'setting',
-            task: 'Create detailed setting description for the Ancient Forest',
-            output_file: 'settings/ancient_forest.md',
-            context_refs: ['$story']
+            name: 'Ancient Forest'
           }
         }]
       }));
 
       mock.when('setting description for the Train Station', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'setting',
-            task: 'Create setting description for the Train Station',
-            output_file: 'settings/train_station.md',
-            context_refs: ['$story']
+            name: 'Train Station'
           }
         }]
       }));
 
       mock.when('setting description for the Castle', JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'setting',
-            task: 'Create setting description for the Castle',
-            output_file: 'settings/castle.md',
-            context_refs: ['$story']
+            name: 'Castle'
           }
         }]
       }));
@@ -727,16 +657,13 @@ describe('Prompt Evaluations', () => {
         }]
       }));
 
-      // Default: character creation with individual file
+      // Default: character creation with generate_content
       mock.setDefault(JSON.stringify({
         tool_calls: [{
-          name: 'Task',
+          name: 'generate_content',
           arguments: {
-            subagent_type: 'content-creator',
             content_type: 'character',
-            task: 'Create character profile',
-            output_file: 'characters/default.md',
-            context_refs: ['$story']
+            name: 'Default'
           }
         }]
       }));
@@ -762,55 +689,543 @@ describe('Prompt Evaluations', () => {
       expect(settingCases.length).toBeGreaterThan(2);
     });
 
-    it('Character files should be saved to characters/<name>.md', async () => {
+    it('Character files should use generate_content with name', async () => {
       const charFileCases = fixture.cases.filter(
         c => c.tags?.includes('character') && c.tags?.includes('individual-file')
       );
       for (const evalCase of charFileCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: output_file should be characters/<name>.md. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content with character name. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Setting files should be saved to settings/<name>.md', async () => {
+    it('Setting files should use generate_content with name', async () => {
       const settingFileCases = fixture.cases.filter(
         c => c.tags?.includes('setting') && c.tags?.includes('individual-file')
       );
       for (const evalCase of settingFileCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: output_file should be settings/<name>.md. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content with setting name. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Should NOT use bundled files like plans/characters.md', async () => {
+    it('Should use generate_content (not bundled Task)', async () => {
       const negativeCases = fixture.cases.filter(c => c.tags?.includes('negative'));
       for (const evalCase of negativeCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Should NOT use bundled file paths. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('Task should be for single item, not batch creation', async () => {
+    it('generate_content should be for single item, not batch creation', async () => {
       const singleItemCases = fixture.cases.filter(c => c.tags?.includes('single-item'));
       for (const evalCase of singleItemCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: Task should be for single character/setting. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: generate_content should be for single character/setting. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
 
-    it('File names should use lowercase', async () => {
-      const lowercaseCases = fixture.cases.filter(c => c.tags?.includes('lowercase'));
-      for (const evalCase of lowercaseCases) {
-        const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: File path should be lowercase. ${result.errors.join(', ')}`).toBe(true);
-      }
-    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
-
-    it('Should use $story as context source', async () => {
+    it('Should use generate_content with name (context auto-injected)', async () => {
       const contextCases = fixture.cases.filter(c => c.tags?.includes('story-source'));
       for (const evalCase of contextCases) {
         const result = await evaluator.runCase(fixture, evalCase);
-        expect(result.passed, `${evalCase.name}: context_refs should include $story. ${result.errors.join(', ')}`).toBe(true);
+        expect(result.passed, `${evalCase.name}: Should use generate_content which auto-injects context. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+  });
+
+  describe('Workflow: Scenes Individual Files', () => {
+    let fixture: EvalFixture;
+
+    /**
+     * Create a mock client for scenes tests.
+     * Returns appropriate generate_content tool calls for scene creation.
+     */
+    function createScenesMockClient(): MockEvalLLMClient {
+      const mock = new MockEvalLLMClient();
+
+      // Scene creation - uses generate_content with task_description
+      mock.when('scene 1', JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'scene',
+            task_description: 'Scene 1: Opening'
+          }
+        }]
+      }));
+
+      mock.when('scene 2', JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'scene',
+            task_description: 'Scene 2: Rising action'
+          }
+        }]
+      }));
+
+      mock.when('scene 3', JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'scene',
+            task_description: 'Scene 3: Climax'
+          }
+        }]
+      }));
+
+      mock.when('scene 4', JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'scene',
+            task_description: 'Scene 4'
+          }
+        }]
+      }));
+
+      mock.when('scene 5', JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'scene',
+            task_description: 'Scene 5: Resolution'
+          }
+        }]
+      }));
+
+      mock.when('scene 6', JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'scene',
+            task_description: 'Scene 6'
+          }
+        }]
+      }));
+
+      // TodoWrite for planning scenes
+      mock.when('Opening, Inciting incident, Rising action, Climax, Resolution', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'scene-1', content: 'Create scene 1: Opening', status: 'in_progress' },
+              { id: 'scene-2', content: 'Create scene 2: Inciting incident', status: 'pending' },
+              { id: 'scene-3', content: 'Create scene 3: Rising action', status: 'pending' },
+              { id: 'scene-4', content: 'Create scene 4: Climax', status: 'pending' },
+              { id: 'scene-5', content: 'Create scene 5: Resolution', status: 'pending' }
+            ]
+          }
+        }]
+      }));
+
+      // Scene approval - TodoWrite update
+      mock.when('Scene 2 has been approved', JSON.stringify({
+        tool_calls: [
+          {
+            name: 'update_project',
+            arguments: { action: 'add_scene', data: { scene_number: 2, title: 'Rising action' } }
+          },
+          {
+            name: 'TodoWrite',
+            arguments: {
+              merge: true,
+              todos: [
+                { id: 'scene-2', status: 'completed' },
+                { id: 'scene-3', status: 'in_progress' }
+              ]
+            }
+          }
+        ]
+      }));
+
+      // Middle scene - no premature complete
+      mock.when('Scene 2 of 6', JSON.stringify({
+        tool_calls: [
+          {
+            name: 'update_project',
+            arguments: { action: 'add_scene', data: { scene_number: 2 } }
+          },
+          {
+            name: 'TodoWrite',
+            arguments: {
+              merge: true,
+              todos: [
+                { id: 'scene-2', status: 'completed' },
+                { id: 'scene-3', status: 'in_progress' }
+              ]
+            }
+          }
+        ]
+      }));
+
+      // Last scene - now call complete
+      mock.when('LAST scene', JSON.stringify({
+        tool_calls: [
+          {
+            name: 'update_project',
+            arguments: { action: 'add_scene', data: { scene_number: 6, title: 'Resolution' } }
+          },
+          {
+            name: 'TodoWrite',
+            arguments: { merge: true, todos: [{ id: 'scene-6', status: 'completed' }] }
+          },
+          {
+            name: 'update_project',
+            arguments: { action: 'update_planner_stage', data: { phase: 'scenes', stage: 'complete' } }
+          },
+          {
+            name: 'update_project',
+            arguments: { action: 'transition_phase', data: { next_phase: 'character_setting_images' } }
+          }
+        ]
+      }));
+
+      // All scenes done - mark phase complete
+      mock.when('All 6 scenes have been created', JSON.stringify({
+        tool_calls: [{
+          name: 'update_project',
+          arguments: { action: 'update_planner_stage', data: { phase: 'scenes', stage: 'complete' } }
+        }]
+      }));
+
+      // Scene 3 register
+      mock.when('Scene 3: Rising Action has been approved', JSON.stringify({
+        tool_calls: [{
+          name: 'update_project',
+          arguments: { action: 'add_scene', data: { scene_number: 3, title: 'Rising Action' } }
+        }]
+      }));
+
+      // Scene 4 todo update
+      mock.when('Scene 4 approved', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: true,
+            todos: [
+              { id: 'scene-4', status: 'completed' },
+              { id: 'scene-5', status: 'in_progress' }
+            ]
+          }
+        }]
+      }));
+
+      // Default: scene creation with generate_content
+      mock.setDefault(JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'scene',
+            task_description: 'Create scene'
+          }
+        }]
+      }));
+
+      return mock;
+    }
+
+    beforeAll(() => {
+      if (isLiveMode) {
+        evaluator = new PromptEvaluator(undefined, __dirname);
+      } else {
+        const mockClient = createScenesMockClient();
+        evaluator = new PromptEvaluator(mockClient, __dirname);
+      }
+      fixture = evaluator.loadFixture('workflow/scenes.eval.json');
+    });
+
+    it('should have test cases for individual scene file creation', () => {
+      expect(fixture.cases.length).toBeGreaterThan(5);
+      const sceneCases = fixture.cases.filter(c => c.tags?.includes('scene'));
+      expect(sceneCases.length).toBeGreaterThan(5);
+    });
+
+    it('Scene creation should use generate_content', async () => {
+      const sceneFileCases = fixture.cases.filter(
+        c => c.tags?.includes('scene') && c.tags?.includes('individual-file')
+      );
+      for (const evalCase of sceneFileCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should use generate_content for scene. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should use generate_content (not bundled Task)', async () => {
+      const noBundledCases = fixture.cases.filter(c => c.tags?.includes('no-bundled-file'));
+      for (const evalCase of noBundledCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should use generate_content. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('generate_content should be for single scene, not batch creation', async () => {
+      const singleItemCases = fixture.cases.filter(c => c.tags?.includes('single-item') || c.tags?.includes('no-batch'));
+      for (const evalCase of singleItemCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: generate_content should be for single scene. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should use generate_content with context auto-injected', async () => {
+      const contextCases = fixture.cases.filter(c => c.tags?.includes('story-source'));
+      for (const evalCase of contextCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should use generate_content which auto-injects context. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('task_description should specify scene number', async () => {
+      const sceneNumCases = fixture.cases.filter(c => c.tags?.includes('scene-number'));
+      for (const evalCase of sceneNumCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: task_description should mention specific scene number. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should call TodoWrite after scene approval', async () => {
+      const todoUpdateCases = fixture.cases.filter(c => c.tags?.includes('todo-update'));
+      expect(todoUpdateCases.length).toBeGreaterThan(0);
+      for (const evalCase of todoUpdateCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should call TodoWrite after approval. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should call add_scene after scene approval', async () => {
+      const registerCases = fixture.cases.filter(c => c.tags?.includes('register'));
+      for (const evalCase of registerCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should register scene with add_scene. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should call update_planner_stage complete ONLY after last scene', async () => {
+      const lastSceneCases = fixture.cases.filter(c => c.tags?.includes('last-scene'));
+      for (const evalCase of lastSceneCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should only complete phase after last scene. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+  });
+
+  describe('Workflow: Character & Setting Images - Todo Management', () => {
+    let fixture: EvalFixture;
+
+    /**
+     * Create a mock client for character-setting-images tests.
+     * Tests todo creation at phase start (merge: false) and updates after approval (merge: true).
+     */
+    function createCharacterSettingImagesMockClient(): MockEvalLLMClient {
+      const mock = new MockEvalLLMClient();
+
+      // Phase start - create fresh todos with merge: false
+      mock.when('just entered', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'img-char-elara', content: 'Generate image for character: Elara', activeForm: 'Generating image for Elara', status: 'in_progress' },
+              { id: 'img-char-kael', content: 'Generate image for character: Kael', activeForm: 'Generating image for Kael', status: 'pending' },
+              { id: 'img-setting-forest', content: 'Generate image for setting: Forest', activeForm: 'Generating image for Forest', status: 'pending' },
+              { id: 'img-setting-castle', content: 'Generate image for setting: Castle', activeForm: 'Generating image for Castle', status: 'pending' }
+            ]
+          }
+        }]
+      }));
+
+      mock.when('Phase just started', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'img-char-hero', content: 'Generate image for character: Hero', activeForm: 'Generating image for Hero', status: 'in_progress' },
+              { id: 'img-char-villain', content: 'Generate image for character: Villain', activeForm: 'Generating image for Villain', status: 'pending' },
+              { id: 'img-setting-cave', content: 'Generate image for setting: Cave', activeForm: 'Generating image for Cave', status: 'pending' }
+            ]
+          }
+        }]
+      }));
+
+      mock.when('Phase start. You have 2 characters', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'img-char-aria', content: 'Generate image for character: Aria', activeForm: 'Generating image for Aria', status: 'in_progress' },
+              { id: 'img-char-bolt', content: 'Generate image for character: Bolt', activeForm: 'Generating image for Bolt', status: 'pending' },
+              { id: 'img-setting-castle', content: 'Generate image for setting: Castle', activeForm: 'Generating image for Castle', status: 'pending' },
+              { id: 'img-setting-forest', content: 'Generate image for setting: Forest', activeForm: 'Generating image for Forest', status: 'pending' }
+            ]
+          }
+        }]
+      }));
+
+      mock.when('Phase start. 3 items', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'img-char-zara', content: 'Generate image for character: Zara', activeForm: 'Generating image for Zara', status: 'in_progress' },
+              { id: 'img-char-milo', content: 'Generate image for character: Milo', activeForm: 'Generating image for Milo', status: 'pending' },
+              { id: 'img-setting-temple', content: 'Generate image for setting: Temple', activeForm: 'Generating image for Temple', status: 'pending' }
+            ]
+          }
+        }]
+      }));
+
+      mock.when('Todo list already created', JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'character_image_prompt',
+            name: 'Luna'
+          }
+        }]
+      }));
+
+      // After approval - update todos with merge: true
+      mock.when('Image for character \'Rex\' has been approved', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: true,
+            todos: [
+              { id: 'img-char-rex', status: 'completed' },
+              { id: 'img-setting-lab', status: 'in_progress' }
+            ]
+          }
+        }]
+      }));
+
+      mock.when('Elara has been approved', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: true,
+            todos: [
+              { id: 'img-char-elara', status: 'completed' },
+              { id: 'img-char-kael', status: 'in_progress' }
+            ]
+          }
+        }]
+      }));
+
+      // First image approved - still more to go
+      mock.when('First character image (1 of 4)', JSON.stringify({
+        tool_calls: [{
+          name: 'generate_content',
+          arguments: {
+            content_type: 'character_image_prompt',
+            name: 'Marcus'
+          }
+        }]
+      }));
+
+      // All images done - transition
+      mock.when('ALL images have been generated', JSON.stringify({
+        tool_calls: [
+          {
+            name: 'update_project',
+            arguments: { action: 'transition_phase', data: { next_phase: 'scene_images' } }
+          }
+        ]
+      }));
+
+      // Default: TodoWrite with merge: false
+      mock.setDefault(JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: {
+            merge: false,
+            todos: [
+              { id: 'img-char-default', content: 'Generate image for character', activeForm: 'Generating image', status: 'in_progress' }
+            ]
+          }
+        }]
+      }));
+
+      return mock;
+    }
+
+    beforeAll(() => {
+      if (isLiveMode) {
+        evaluator = new PromptEvaluator(undefined, __dirname);
+      } else {
+        const mockClient = createCharacterSettingImagesMockClient();
+        evaluator = new PromptEvaluator(mockClient, __dirname);
+      }
+      fixture = evaluator.loadFixture('workflow/character-setting-images.eval.json');
+    });
+
+    it('should have test cases for todo management', () => {
+      expect(fixture.cases.length).toBeGreaterThan(5);
+      const phaseStartCases = fixture.cases.filter(c => c.tags?.includes('phase-start'));
+      const afterApprovalCases = fixture.cases.filter(c => c.tags?.includes('after-approval'));
+      expect(phaseStartCases.length).toBeGreaterThan(3);
+      expect(afterApprovalCases.length).toBeGreaterThan(1);
+    });
+
+    it('Should create FRESH todo list with merge: false when entering phase', async () => {
+      const phaseStartCases = fixture.cases.filter(c => c.tags?.includes('phase-start') && c.tags?.includes('merge-false'));
+      for (const evalCase of phaseStartCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should use merge: false for new phase. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should use merge: true when updating after image approval', async () => {
+      const afterApprovalCases = fixture.cases.filter(c => c.tags?.includes('after-approval') && c.tags?.includes('merge-true'));
+      for (const evalCase of afterApprovalCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should use merge: true after approval. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should include both characters and settings in initial todo list', async () => {
+      const allItemsCases = fixture.cases.filter(c => c.tags?.includes('all-items'));
+      for (const evalCase of allItemsCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should include all items in todos. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should generate image with Task after creating todos', async () => {
+      const generateContentCases = fixture.cases.filter(c => c.tags?.includes('generate-content'));
+      for (const evalCase of generateContentCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should call generate_content for image prompt. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should call TodoWrite after image approval to mark completed', async () => {
+      const markCompletedCases = fixture.cases.filter(c => c.tags?.includes('mark-completed'));
+      for (const evalCase of markCompletedCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should call TodoWrite after approval. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should NOT call update_planner_stage complete after first image', async () => {
+      const noPrematureCompleteCases = fixture.cases.filter(c => c.tags?.includes('no-premature-complete'));
+      for (const evalCase of noPrematureCompleteCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should NOT complete phase prematurely. ${result.errors.join(', ')}`).toBe(true);
+      }
+    }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
+
+    it('Should transition phase after ALL images are done', async () => {
+      const transitionCases = fixture.cases.filter(c => c.tags?.includes('phase-complete') && c.tags?.includes('transition'));
+      for (const evalCase of transitionCases) {
+        const result = await evaluator.runCase(fixture, evalCase);
+        expect(result.passed, `${evalCase.name}: Should transition after all images done. ${result.errors.join(', ')}`).toBe(true);
       }
     }, isLiveMode ? LIVE_TEST_TIMEOUT : undefined);
   });
@@ -855,6 +1270,22 @@ describe('Prompt Evaluations', () => {
         ]
       }));
 
+      // Mark todo completed when item is done
+      mock.when('just approved. Mark the todo', JSON.stringify({
+        tool_calls: [{
+          name: 'TodoWrite',
+          arguments: { merge: true, todos: [{ id: 'setting-forest', status: 'completed' }] }
+        }]
+      }));
+
+      // Call ONLY transition_phase (MUST be checked before 'transition_phase' pattern)
+      mock.when('Call ONLY update_project', JSON.stringify({
+        tool_calls: [{
+          name: 'update_project',
+          arguments: { action: 'transition_phase', data: { next_phase: 'scenes' } }
+        }]
+      }));
+
       // Characters_settings to scenes transition
       mock.when('transition_phase', JSON.stringify({
         tool_calls: [
@@ -867,6 +1298,14 @@ describe('Prompt Evaluations', () => {
             arguments: { action: 'transition_phase', data: { next_phase: 'scenes' } }
           }
         ]
+      }));
+
+      // Phase is complete - just transition
+      mock.when('just transition', JSON.stringify({
+        tool_calls: [{
+          name: 'update_project',
+          arguments: { action: 'transition_phase', data: { next_phase: 'scenes' } }
+        }]
       }));
 
       // Plot to story transition
@@ -974,6 +1413,8 @@ describe('Prompt Evaluations', () => {
       expect(fixtures).toContain('workflow/context-usage.eval.json');
       expect(fixtures).toContain('workflow/plan-mode.eval.json');
       expect(fixtures).toContain('workflow/characters-settings.eval.json');
+      expect(fixtures).toContain('workflow/character-setting-images.eval.json');
+      expect(fixtures).toContain('workflow/scenes.eval.json');
       expect(fixtures).toContain('workflow/phase-completion.eval.json');
     });
   });

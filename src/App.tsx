@@ -21,6 +21,7 @@ import {
 import type { LLMClientConfig } from './core/llm/index.js';
 import type { AgentConfig } from './core/agent/index.js';
 import * as uiLogger from './utils/uiLogger.js';
+import { contextStore } from './core/context/ContextStore.js';
 
 type TaskType = 'generic' | 'video';
 
@@ -41,6 +42,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   const [selectedOptionIndex, setSelectedOptionIndex] = React.useState(0);
   // Track when user selected "Provide feedback" and needs to enter actual feedback
   const [awaitingFeedbackText, setAwaitingFeedbackText] = React.useState(false);
+  // Track when user pressed any key to pause the countdown timer
+  const [timerPaused, setTimerPaused] = React.useState(false);
 
   // Startup flow state for video mode
   const [startupMode, setStartupMode] = React.useState<StartupMode>('checking');
@@ -132,6 +135,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     isConfirmation,
     questionOptions,
     autoApproveTimeoutMs,
+    questionContext,
     error,
     recentTools,
     history,
@@ -226,13 +230,24 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         return;
       }
 
+      // Store feedback in context store with context about what was reviewed
+      const feedbackWithContext = questionContext
+        ? `## Context Being Reviewed\n${questionContext}\n\n## User Feedback\n${feedbackText}`
+        : feedbackText;
+
+      contextStore.store(
+        feedbackWithContext,
+        `User feedback for: ${question?.slice(0, 50) ?? 'content review'}`,
+        { source: 'user_input', variableBaseName: 'feedback' }
+      );
+
       // Clear feedback mode and send the feedback
       setAwaitingFeedbackText(false);
       uiLogger.logUserInput(feedbackText);
       // Send the actual feedback text to the agent
       void respond(feedbackText);
     },
-    [respond, exit]
+    [respond, exit, question, questionContext]
   );
 
   // Handle auto-approve timeout
@@ -247,6 +262,13 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     uiLogger.logAutoApprove(selectedOption);
     void respond(selectedOption);
   }, [respond, isConfirmation, questionOptions]);
+
+  // Pause countdown timer when user presses any key
+  const handleAnyKeyPress = React.useCallback(() => {
+    if (autoApproveTimeoutMs && !timerPaused) {
+      setTimerPaused(true);
+    }
+  }, [autoApproveTimeoutMs, timerPaused]);
 
   // Handle user input during execution (inject into running agent)
   const handleInjectedInput = React.useCallback(
@@ -273,10 +295,11 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     [handleTaskSubmit, exit]
   );
 
-  // Reset selection and feedback mode when options change - MUST be before any conditional returns
+  // Reset selection, feedback mode, and timer pause when options change - MUST be before any conditional returns
   React.useEffect(() => {
     setSelectedOptionIndex(0);
     setAwaitingFeedbackText(false);
+    setTimerPaused(false);
   }, [questionOptions]);
 
   // Track previous streaming state to log when streaming completes
@@ -580,8 +603,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         isConfirmation={isConfirmation}
         questionOptions={awaitingFeedbackText ? undefined : questionOptions}
         selectedOptionIndex={selectedOptionIndex}
-        autoApproveTimeoutMs={awaitingFeedbackText ? undefined : autoApproveTimeoutMs}
+        autoApproveTimeoutMs={awaitingFeedbackText || timerPaused ? undefined : autoApproveTimeoutMs}
         onAutoApproveTimeout={handleAutoApproveTimeout}
+        questionContext={awaitingFeedbackText ? undefined : questionContext}
         showTodos
         history={history}
         currentAction={currentAction}
@@ -597,6 +621,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           prompt={status === 'waiting' || awaitingFeedbackText ? '?' : '>'}
           hint={inputConfig.hint}
           onSelectionChange={setSelectedOptionIndex}
+          onAnyKeyPress={handleAnyKeyPress}
         />
       </Box>
     </Box>

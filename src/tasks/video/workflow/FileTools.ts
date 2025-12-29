@@ -734,6 +734,19 @@ What story would you like to turn into a video?`,
           if (sceneNumber === undefined) {
             return { status: 'error', error: 'scene_number is required for add_scene' };
           }
+
+          // HARD LIMIT: Maximum 12 scenes allowed
+          const MAX_SCENES = 12;
+          if (sceneNumber > MAX_SCENES) {
+            return {
+              status: 'error',
+              error: `⛔ SCENE LIMIT EXCEEDED: Maximum ${MAX_SCENES} scenes allowed. You are trying to create scene ${sceneNumber}. STOP creating scenes and transition to the next phase immediately using update_project(action: 'transition_phase', data: { next_phase: 'character_setting_images' })`,
+              limit_exceeded: true,
+              max_scenes: MAX_SCENES,
+              attempted_scene: sceneNumber,
+            };
+          }
+
           const title = data['title'] as string | undefined;
           const sceneRef = addNewScene(sceneNumber, title);
           // Also update with any additional data if provided
@@ -747,6 +760,16 @@ What story would you like to turn into a video?`,
           if (Object.keys(additionalUpdates).length > 0) {
             updateScene(sceneNumber, additionalUpdates);
           }
+
+          // Warn if approaching limit
+          if (sceneNumber >= MAX_SCENES - 2) {
+            return {
+              status: 'success',
+              message: `Scene ${sceneRef.sceneNumber} reference added`,
+              warning: `⚠️ You have created ${sceneNumber} scenes. Maximum is ${MAX_SCENES}. Consider wrapping up the scene phase soon.`,
+            };
+          }
+
           return { status: 'success', message: `Scene ${sceneRef.sceneNumber} reference added` };
         }
 

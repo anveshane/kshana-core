@@ -17,6 +17,7 @@ import { buildSystemMessage, buildPlanningPrompt, buildContentPrompt, buildImage
 import { loadAndRenderMarkdown } from '../prompts/loader.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
 import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, LONG_CONTENT_THRESHOLD } from '../context/index.js';
+import { CONTENT_TYPE_CONTEXTS, CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
@@ -47,6 +48,7 @@ const SIMPLE_TOOLS = new Set([
   'dispatch_content_agent',
   'dispatch_image_agent',
   'dispatch_video_agent',
+  'generate_content', // Deterministic content generation
   'wait_for_job',
   'TodoWrite',
   'todo_write', // back-compat during migration
@@ -401,9 +403,10 @@ export class GenericAgent extends TypedEventEmitter {
             isConfirmation: false,
             options: imageResultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: imageResultObj['autoApproveTimeoutMs'] as number | undefined,
+            context: imageResultObj['prompt'] as string,
           });
 
-          // Prompt is shown via ToolCallDisplay
+          // Prompt is shown in QuestionPrompt context
           return {
             status: 'waiting_for_user',
             output: '',
@@ -887,6 +890,93 @@ export class GenericAgent extends TypedEventEmitter {
       return result;
     }
 
+    // Handle generate_content - deterministic content generation with automatic context injection
+    if (toolCall.name === 'generate_content') {
+      const args = toolCall.arguments;
+      const contentType = args['content_type'] as string;
+      const name = args['name'] as string | undefined;
+      const taskDescription = args['task_description'] as string | undefined;
+
+      if (!contentType) {
+        return { error: 'content_type is required for generate_content' };
+      }
+
+      // Get the required contexts for this content type
+      const requiredContexts = CONTENT_TYPE_CONTEXTS[contentType] || [];
+      debugLog(`[GenericAgent] generate_content: content_type=${contentType}, required_contexts=${requiredContexts.join(', ')}`);
+
+      // Build the output file path
+      let outputFile = CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
+      if ((contentType === 'character' || contentType === 'setting') && name) {
+        // For character/setting, append the name to the directory path
+        const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.md`;
+      }
+
+      // Build the task description
+      const task = taskDescription ||
+        (name ? `Create ${contentType} profile for: ${name}` : `Create ${contentType} content`);
+
+      // Create a synthetic tool call for handleDispatchContentAgent
+      const syntheticToolCall: ToolCall = {
+        id: toolCall.id,
+        name: 'dispatch_content_agent',
+        arguments: {
+          task,
+          content_type: contentType,
+          context_refs: requiredContexts,
+          output_file: outputFile,
+        },
+      };
+
+      debugLog(`[GenericAgent] generate_content dispatching with context_refs: ${JSON.stringify(requiredContexts)}`);
+      const result = await this.handleDispatchContentAgent(syntheticToolCall);
+      const resultObj = result as Record<string, unknown>;
+
+      // Check if content needs user verification
+      if (resultObj['status'] === 'awaiting_verification') {
+        this.emit({
+          type: 'tool_result',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          result,
+          isError: false,
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        this.waitingForUser = true;
+        this.pendingQuestion = resultObj['question'] as string;
+
+        const questionOptions = resultObj['options'] as Array<{ label: string; description?: string }>;
+        const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
+        this.emit({
+          type: 'question',
+          question: resultObj['question'] as string,
+          isConfirmation: false,
+          options: questionOptions,
+          autoApproveTimeoutMs: questionTimeout,
+        });
+
+        this.emit({
+          type: 'agent_status',
+          status: 'waiting',
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        return { __awaiting_user_input: true, ...resultObj };
+      }
+
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
+      return result;
+    }
+
     // Handle dispatch_content_agent specially - spawn a sub-agent for creative content
     if (toolCall.name === 'dispatch_content_agent') {
       const result = await this.handleDispatchContentAgent(toolCall);
@@ -970,6 +1060,7 @@ export class GenericAgent extends TypedEventEmitter {
           isConfirmation: false,
           options: resultObj['options'] as Array<{ label: string; description?: string }>,
           autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
+          context: resultObj['prompt'] as string,
         });
 
         // Emit status change
@@ -1415,7 +1506,11 @@ export class GenericAgent extends TypedEventEmitter {
     try {
       // Generate or refine the plan with streaming
       let planContent = '';
+      let isFirstChunk = true;
       debugLog(`[GenericAgent] continuePlanningLoop starting generation, toolCallId=${this.planningState.toolCallId}`);
+
+      // If this is a subsequent iteration (after feedback), we need to reset the streaming display
+      const shouldReset = this.planningState.iterations > 1;
 
       for await (const chunk of this.llm.generateStream({
         messages: this.planningState.messages,
@@ -1425,13 +1520,17 @@ export class GenericAgent extends TypedEventEmitter {
           planContent += chunk.content;
           debugLog(`[GenericAgent] tool_streaming emit: chunk=${chunk.content.length} chars, total=${planContent.length} chars`);
           // Emit tool_streaming to show content inside the ToolCallDisplay
+          // On first chunk of a regeneration, include reset flag to clear old content and show display
           this.emit({
             type: 'tool_streaming',
             toolCallId: this.planningState.toolCallId,
             chunk: chunk.content,
             done: false,
             agentName: this.getEffectiveAgentName(),
+            toolName: 'dispatch_agent',
+            reset: shouldReset && isFirstChunk,
           });
+          isFirstChunk = false;
         }
         if (chunk.done) {
           debugLog(`[GenericAgent] tool_streaming DONE: total planContent=${planContent.length} chars`);
@@ -1796,6 +1895,22 @@ Respond in JSON format:
       }
     }
 
+    // FALLBACK: Auto-inject $original_input for plot phase if no context was provided
+    // This ensures the content agent always has access to the user's story idea
+    if (contextParts.length === 0 && contentType === 'plot') {
+      const originalInput = contextStore.get('$original_input');
+      if (originalInput) {
+        contextParts.push({
+          variableName: '$original_input',
+          label: originalInput.label,
+          content: originalInput.content,
+        });
+        debugLog(`[GenericAgent] AUTO-INJECTED $original_input for plot phase (${originalInput.content.length} chars)`);
+      } else {
+        debugLog(`[GenericAgent] WARNING: No context_refs provided for plot and $original_input not found in context store`);
+      }
+    }
+
     // Log error for missing refs to help debug
     if (missingRefs.length > 0) {
       debugLog(`[GenericAgent] ERROR: Could not resolve context_refs: ${missingRefs.join(', ')}`);
@@ -1883,6 +1998,10 @@ Respond in JSON format:
     try {
       // Generate or refine the content with streaming
       let content = '';
+      let isFirstChunk = true;
+
+      // If this is a subsequent iteration (after feedback), we need to reset the streaming display
+      const shouldReset = this.contentState.iterations > 1;
 
       for await (const chunk of this.llm.generateStream({
         messages: this.contentState.messages,
@@ -1891,13 +2010,17 @@ Respond in JSON format:
         if (chunk.content) {
           content += chunk.content;
           // Emit tool_streaming to show content inside the ToolCallDisplay
+          // On first chunk of a regeneration, include reset flag to clear old content and show display
           this.emit({
             type: 'tool_streaming',
             toolCallId: this.contentState.toolCallId,
             chunk: chunk.content,
             done: false,
             agentName: this.getEffectiveAgentName(),
+            toolName: 'dispatch_content_agent',
+            reset: shouldReset && isFirstChunk,
           });
+          isFirstChunk = false;
         }
         if (chunk.done) {
           this.emit({
@@ -2194,6 +2317,10 @@ Respond in JSON format:
     try {
       // Generate or refine the prompt with streaming
       let promptContent = '';
+      let isFirstChunk = true;
+
+      // If this is a subsequent iteration (after feedback), we need to reset the streaming display
+      const shouldReset = this.imageGenState.iterations > 1;
 
       for await (const chunk of this.llm.generateStream({
         messages: this.imageGenState.messages,
@@ -2202,13 +2329,17 @@ Respond in JSON format:
         if (chunk.content) {
           promptContent += chunk.content;
           // Emit tool_streaming to show content inside the ToolCallDisplay
+          // On first chunk of a regeneration, include reset flag to clear old content and show display
           this.emit({
             type: 'tool_streaming',
             toolCallId: this.imageGenState.toolCallId,
             chunk: chunk.content,
             done: false,
             agentName: this.getEffectiveAgentName(),
+            toolName: 'dispatch_image_agent',
+            reset: shouldReset && isFirstChunk,
           });
+          isFirstChunk = false;
         }
         if (chunk.done) {
           this.emit({

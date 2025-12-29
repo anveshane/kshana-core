@@ -1,16 +1,5 @@
 ### Characters & Settings Phase
 
-**CRITICAL**: You MUST use `$story` as your source of truth for this phase. DO NOT use `$original_input`.
-The story has been refined and approved - extract characters and settings from the STORY, not the original input.
-
-## PROHIBITED ACTIONS - DO NOT DO THESE
-
-**NEVER** do any of the following:
-- `Task(task: "Extract and register all characters...")` - WRONG! Don't extract all at once!
-- `Task(output_file: "plans/characters.md")` - WRONG! No bundled files!
-- `Task(output_file: "plans/settings.md")` - WRONG! No bundled files!
-- Creating a single file containing multiple characters or settings
-
 ## CORRECT WORKFLOW
 
 ### Step 1: YOU (Orchestrator) Identify Items
@@ -29,43 +18,45 @@ TodoWrite(merge: false, todos: [
 ])
 ```
 
-### Step 2: Process EACH Item with a SEPARATE Task Call
+### Step 2: Process EACH Item with generate_content
 
 For EACH character (ONE at a time - do not batch!):
 ```
-Task(
-  subagent_type: "content-creator",
-  content_type: "character",
-  task: "Create detailed character profile for <CHARACTER_NAME>",
-  output_file: "characters/<character_name_lowercase>.md",
-  context_refs: ["$story"]
-)
+generate_content(content_type: "character", name: "<CHARACTER_NAME>")
 ```
 
 For EACH setting (ONE at a time - do not batch!):
 ```
-Task(
-  subagent_type: "content-creator",
-  content_type: "setting",
-  task: "Create detailed setting description for <SETTING_NAME>",
-  output_file: "settings/<setting_name_lowercase>.md",
-  context_refs: ["$story"]
-)
+generate_content(content_type: "setting", name: "<SETTING_NAME>")
 ```
 
-### Step 3: After Each Task
+The tool automatically:
+- Fetches the story and other required contexts
+- Creates the character/setting profile
+- Handles user approval flow
+- Saves to `characters/<name>.md` or `settings/<name>.md`
 
-After each Task completes and user approves:
-1. Register: `update_project(action: 'add_character', data: {...})` or `update_project(action: 'add_setting', data: {...})`
-2. Update todo: `TodoWrite(merge: true, todos: [{ id: "<completed-id>", status: "completed" }, { id: "<next-id>", status: "in_progress" }])`
-3. Move to next item
+### Step 3: After EACH Approval (MANDATORY)
 
-## File Naming Convention
+**You MUST do ALL THREE of these after EACH item is approved:**
 
-- Characters: `characters/<lowercase_name>.md` (e.g., `characters/elias_vance.md`)
-- Settings: `settings/<lowercase_name>.md` (e.g., `settings/abandoned_warehouse.md`)
+```
+// 1. Register the item
+update_project(action: 'add_character', data: { name: 'Kira', ... })
 
-Use underscores for spaces. All lowercase.
+// 2. Update todo - REQUIRED! Mark completed and start next
+TodoWrite(merge: true, todos: [
+  { id: 'char-kira', status: 'completed' },
+  { id: 'char-marcus', status: 'in_progress' }
+])
+
+// 3. Then create next item
+generate_content(content_type: "character", name: "Marcus")
+```
+
+**DO NOT skip the TodoWrite call!** The todo list MUST be updated after each approval.
+
+**DO NOT call `update_planner_stage(stage: 'complete')` until ALL items are done!**
 
 ## Character Profile Requirements
 Each character profile must include:
@@ -88,11 +79,11 @@ Each setting description must include:
 ## Summary
 
 1. **Step 1**: YOU read $story and create TodoWrite (NO Task call)
-2. **Step 2**: ONE Task call per character/setting (individual files!)
+2. **Step 2**: ONE generate_content call per character/setting (individual files!)
 3. **Step 3**: Update todo and move to next
-4. **Step 4**: After ALL items done → call `update_project(action: 'transition_phase', data: { next_phase: 'scenes' })`
+4. **Step 4**: After ALL items done -> call `update_project(action: 'transition_phase', data: { next_phase: 'scenes' })`
 
-**Remember**: Each character = separate Task + separate file. Each setting = separate Task + separate file.
+**Remember**: Each character = separate generate_content + separate file. Each setting = separate generate_content + separate file.
 
 ## CRITICAL: After All Items Complete
 

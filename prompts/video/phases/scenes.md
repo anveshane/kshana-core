@@ -1,87 +1,125 @@
 ### Scene Breakdown Phase
 
-**REQUIRED CONTEXT**: `$story` - Use the APPROVED STORY to break down into scenes.
-Also reference the registered characters and settings from `read_project`.
+## STOP - READ THIS FIRST
 
-## CRITICAL: Scene Limits
+**MAXIMUM SCENES ALLOWED: 8**
 
-**For short videos (1-3 minutes)**: Create 5-8 scenes maximum.
-**For medium videos (3-5 minutes)**: Create 8-12 scenes maximum.
+If you are about to create more than 8 scenes, STOP IMMEDIATELY.
+You are doing something wrong. Go back and re-read this prompt.
 
-**DO NOT create more than 12 scenes.** If the story is complex, focus on the KEY MOMENTS only.
+---
 
-## PROHIBITED ACTIONS
+## HARD LIMIT: Maximum 8 Scenes
 
-**NEVER** do any of the following:
-- `Task(output_file: "plans/scenes.md")` - WRONG! No bundled files!
-- Creating all scenes in a single Task call
-- Creating 20+ scenes - this is excessive!
+| Video Length | Scene Count |
+|--------------|-------------|
+| Short (1-3 min) | 5-6 scenes |
+| Medium (3-5 min) | 6-8 scenes |
+| **ABSOLUTE MAX** | **8 scenes** |
+
+**If your story needs more than 8 scenes, you're being too granular. Combine related moments.**
 
 ## CORRECT WORKFLOW
 
-### Step 1: YOU (Orchestrator) Plan the Scenes
+### Step 1: Orchestrator Plans Scenes (NO generate_content Call)
 
-**DO NOT dispatch a Task for this step.** YOU must:
+**YOU (the orchestrator) must do this yourself - DO NOT dispatch anything:**
+
 1. Read the `$story` context
-2. Identify 5-8 KEY MOMENTS that will make compelling video scenes
-3. Create a TodoWrite list with each scene:
+2. Identify exactly 5-8 KEY MOMENTS (not every detail - just the major beats)
+3. Create a TodoWrite with ONLY 5-8 scenes:
 
 ```
 TodoWrite(merge: false, todos: [
   { id: "scene-1", content: "Create scene 1: Opening", activeForm: "Creating scene 1", status: "in_progress" },
-  { id: "scene-2", content: "Create scene 2: Inciting incident", activeForm: "Creating scene 2", status: "pending" },
-  { id: "scene-3", content: "Create scene 3: Rising action", activeForm: "Creating scene 3", status: "pending" },
+  { id: "scene-2", content: "Create scene 2: First conflict", activeForm: "Creating scene 2", status: "pending" },
+  { id: "scene-3", content: "Create scene 3: Rising tension", activeForm: "Creating scene 3", status: "pending" },
   { id: "scene-4", content: "Create scene 4: Climax", activeForm: "Creating scene 4", status: "pending" },
   { id: "scene-5", content: "Create scene 5: Resolution", activeForm: "Creating scene 5", status: "pending" }
 ])
 ```
 
-### Step 2: Process EACH Scene with a SEPARATE Task Call
+**If you create more than 8 todo items, you're doing it wrong.**
 
-For EACH scene (ONE at a time - do not batch!):
+### Step 2: ONE generate_content Per Scene
+
+For EACH scene (ONE at a time):
 ```
-Task(
-  subagent_type: "content-creator",
+generate_content(
   content_type: "scene",
-  task: "Create scene 1: <SCENE_TITLE> - <brief description>",
-  output_file: "scenes/scene_01.md",
-  context_refs: ["$story"]
+  task_description: "Scene 1: Opening - The protagonist is introduced"
 )
 ```
 
-### Step 3: After Each Scene Task
+The tool automatically:
+- Fetches the story, characters, and settings from the context store
+- Creates the scene description
+- Handles user approval flow
+- Saves to `plans/scenes.md` (appended)
 
-After each scene is approved:
-1. Register: `update_project(action: 'add_scene', data: { scene_number: 1, title: '...', ... })`
-2. Update todo: `TodoWrite(merge: true, todos: [{ id: 'scene-1', status: 'completed' }, { id: 'scene-2', status: 'in_progress' }])`
-3. Move to next scene
+**Wait for approval before creating the next scene.**
 
-## Scene Requirements
+### Step 3: After EACH Scene Approval (MANDATORY)
 
-Each scene description must include:
+**You MUST do ALL THREE of these after EACH scene is approved:**
+
+```
+// 1. Register the scene
+update_project(action: 'add_scene', data: { scene_number: 1, title: 'Opening' })
+
+// 2. Update todo - REQUIRED! Mark completed and start next
+TodoWrite(merge: true, todos: [
+  { id: 'scene-1', status: 'completed' },
+  { id: 'scene-2', status: 'in_progress' }
+])
+
+// 3. Then create next scene
+generate_content(content_type: "scene", task_description: "Scene 2: First conflict")
+```
+
+**DO NOT skip the TodoWrite call!** The todo list MUST be updated after each scene.
+
+**DO NOT call `update_planner_stage(stage: 'complete')` until ALL scenes are done!**
+
+## Scene Content Requirements
+
+Each individual scene must include:
 - Scene number and title
 - Visual description (what the viewer sees)
-- Characters involved (reference by name from registered characters)
-- Setting (reference by name from registered settings)
+- Characters involved (reference by name)
+- Setting (reference by name)
 - Action and movement
-- Emotional tone and atmosphere
-- Camera suggestions (wide shot, close-up, pan, etc.)
-- Duration estimate (5-15 seconds per scene)
+- Emotional tone
+- Camera suggestions
+- Duration: 5-15 seconds
 
-## File Naming Convention
+## Phase Completion - ONLY After ALL Scenes Done
 
-- Scenes: `scenes/scene_01.md`, `scenes/scene_02.md`, etc.
+**ONLY call these when the LAST scene (your final scene 5-8) is approved:**
 
-## Summary
+```
+// After LAST scene approval:
+// 1. Register final scene
+update_project(action: 'add_scene', data: { scene_number: 8, title: 'Resolution' })
 
-1. **Step 1**: YOU read $story and create TodoWrite with 5-8 scenes (NO Task call)
-2. **Step 2**: ONE Task call per scene (individual files!)
-3. **Step 3**: Update todo and move to next
+// 2. Mark final todo completed
+TodoWrite(merge: true, todos: [{ id: 'scene-8', status: 'completed' }])
 
-## CRITICAL: After All Scenes Complete
+// 3. NOW mark phase complete
+update_project(action: 'update_planner_stage', data: { phase: 'scenes', stage: 'complete' })
 
-When the LAST scene is approved and registered:
+// 4. Transition to next phase
+update_project(action: 'transition_phase', data: { next_phase: 'character_setting_images' })
+```
 
-1. Mark final todo as completed
-2. `update_project(action: 'update_planner_stage', data: { phase: 'scenes', stage: 'complete' })`
-3. `update_project(action: 'transition_phase', data: { next_phase: 'character_setting_images' })`
+**DO NOT call `update_planner_stage(stage: 'complete')` after scene 1, 2, 3... - ONLY after the LAST scene!**
+
+## Summary Checklist
+
+- [ ] Did YOU (orchestrator) plan the scenes with TodoWrite? (Not a Task/generate_content)
+- [ ] Did you create ONLY 5-8 scenes total?
+- [ ] Are you creating ONE scene at a time?
+- [ ] Are you calling TodoWrite after EACH scene approval?
+- [ ] Are you waiting until ALL scenes are done before calling `update_planner_stage(stage: 'complete')`?
+
+**If you answered NO to any of these, STOP and fix your workflow.**
