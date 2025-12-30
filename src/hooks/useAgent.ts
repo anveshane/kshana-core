@@ -9,6 +9,7 @@ import { GenericAgent, type AgentConfig, type GenericAgentResult } from '../core
 import { LLMClient, type LLMClientConfig, type ToolDefinition } from '../core/llm/index.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { AgentEvent } from '../events/index.js';
+import { contextStore } from '../core/context/ContextStore.js';
 
 // Debug logging to file
 const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
@@ -29,6 +30,7 @@ interface UseAgentOptions {
   llmConfig?: LLMClientConfig;
   agentConfig?: AgentConfig;
   onEvent?: (event: AgentEvent) => void;
+  projectId?: string | null;
 }
 
 export interface ToolCallHistoryItem {
@@ -445,14 +447,16 @@ interface UseAgentReturn {
   reset: () => void;
   stop: () => void;
   injectInput: (input: string) => void;
+  setProjectId: (projectId: string | null) => void;
 }
 
 export function useAgent(options: UseAgentOptions): UseAgentReturn {
-  const { tools, llmConfig, agentConfig, onEvent } = options;
+  const { tools, llmConfig, agentConfig, onEvent, projectId } = options;
 
   const [state, dispatch] = React.useReducer(agentReducer, initialState);
   const agentRef = React.useRef<GenericAgent | null>(null);
   const llmRef = React.useRef<LLMClient | null>(null);
+  const projectIdRef = React.useRef<string | null>(projectId ?? null);
 
   // Initialize LLM client
   const getLLM = React.useCallback(() => {
@@ -465,7 +469,13 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
   // Create agent
   const createAgent = React.useCallback(() => {
     const llm = getLLM();
-    const agent = new GenericAgent(tools, llm, agentConfig);
+    // Use the ref value to ensure we get the latest projectId even if prop hasn't updated yet
+    const currentProjectId = projectIdRef.current ?? projectId ?? null;
+    // Pass projectId to agent config for isolation
+    const agent = new GenericAgent(tools, llm, {
+      ...agentConfig,
+      projectId: currentProjectId,
+    });
 
     // Subscribe to events
     agent.on('agent_status', event => {
@@ -587,7 +597,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
 
     agentRef.current = agent;
     return agent;
-  }, [tools, agentConfig, getLLM, onEvent]);
+  }, [tools, agentConfig, getLLM, onEvent, projectId]);
 
   // Run agent on a task
   const run = React.useCallback(
@@ -629,7 +639,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         };
       }
     },
-    [createAgent]
+    [createAgent, projectId]
   );
 
   // Respond to agent question
@@ -682,6 +692,19 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     []
   );
 
+  // Reset agent state when projectId changes
+  React.useEffect(() => {
+    if (projectIdRef.current !== projectId) {
+      // Project changed - reset agent to ensure isolation
+      debugLog(`[useAgent] Project ID changed from ${projectIdRef.current} to ${projectId}. Resetting agent.`);
+      agentRef.current = null;
+      dispatch({ type: 'RESET' });
+      projectIdRef.current = projectId ?? null;
+      // Reload context store for the new project
+      contextStore.reload(projectId ?? null);
+    }
+  }, [projectId]);
+
   // Reset agent state
   const reset = React.useCallback(() => {
     agentRef.current = null;
@@ -699,6 +722,20 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
   const injectInput = React.useCallback((input: string) => {
     if (agentRef.current) {
       agentRef.current.injectInput(input);
+    }
+  }, []);
+
+  // Set project ID directly (bypasses React state update delay)
+  // This is used when creating a new project to ensure immediate isolation
+  const setProjectId = React.useCallback((newProjectId: string | null) => {
+    if (projectIdRef.current !== newProjectId) {
+      debugLog(`[useAgent] Setting project ID directly from ${projectIdRef.current} to ${newProjectId}`);
+      projectIdRef.current = newProjectId;
+      // Reset agent to ensure isolation
+      agentRef.current = null;
+      dispatch({ type: 'RESET' });
+      // Reload context store for the new project
+      contextStore.reload(newProjectId);
     }
   }, []);
 
@@ -722,5 +759,6 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     reset,
     stop,
     injectInput,
+    setProjectId,
   };
 }

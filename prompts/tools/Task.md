@@ -2,11 +2,16 @@ Launch a specialized subagent to handle a specific task in the story-to-video pi
 
 ## Available Subagent Types
 
-- **Plan**: Read-only planning specialist. Analyzes project state and designs execution plans. Does NOT generate content.
+- **Plan**: **ONLY for initial project planning (EnterPlanMode).** Read-only planning specialist. Analyzes project state and designs execution plans. Does NOT generate content. **DO NOT use for phase-level planning - use generate_content instead.**
 - **Explore**: Read-only project explorer. Reads and summarizes existing project content.
 - **content-creator**: Creative content generator. Creates plot, story, characters, settings, scenes, narration.
 - **image-generator**: Image generation specialist. Crafts prompts and generates images.
 - **video-assembler**: Video generation specialist. Creates video clips and stitches them together.
+
+**IMPORTANT: After Task completes and user approves:**
+- If using Plan subagent: Call `ExitPlanMode` after approval (only for initial project setup)
+- If using content-creator: IMMEDIATELY call `update_project` to update planner stage and transition phase
+- DO NOT enter feedback loops after approval
 
 ## Parameters
 

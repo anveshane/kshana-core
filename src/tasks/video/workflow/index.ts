@@ -33,6 +33,7 @@ export {
   PHASE_CONFIGS,
   PHASE_ORDER,
   PROJECT_DIR,
+  AGENT_DIR,
   PROJECT_FILE,
   PROJECT_VERSION,
   AUTO_APPROVE_TIMEOUT_MS,
@@ -51,8 +52,19 @@ export {
 
 // Project Manager
 export {
+  // Execution context detection
+  getExecutionContext,
+  getCLIProjectBasePath,
+  getCLIAgentDir,
+  getUserProjectAgentDir,
+  // Path utilities (context-aware)
   getProjectDir,
+  getAgentDir,
+  getIndexDir,
+  getManifestFilePath,
+  getProjectIndexPath,
   getProjectFilePath,
+  // Project operations (CLI context: uses CLI's own directory by default)
   projectExists,
   deleteProject,
   createProjectStructure,
@@ -103,6 +115,10 @@ export {
   getContentRegistryJson,
   hasRequiredContent,
   markContentAvailable,
+  // Index functions
+  generateProjectIndex,
+  readProjectIndex,
+  rebuildProjectIndex,
 } from './ProjectManager.js';
 
 // File Tools

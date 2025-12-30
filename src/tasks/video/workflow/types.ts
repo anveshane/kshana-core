@@ -47,6 +47,39 @@ export const STYLE_CONFIGS: Record<ProjectStyle, StyleConfig> = {
 };
 
 /**
+ * Video workflow phases in execution order.
+ * 8-phase workflow matching Sequence.md specification.
+ */
+export enum WorkflowPhase {
+  /** Phase 1: Analyze input and create plot outline */
+  PLOT = 'plot',
+
+  /** Phase 2: Generate full story from plot (or accept direct story input) */
+  STORY = 'story',
+
+  /** Phase 3: Plan and create detailed descriptions for each character and setting */
+  CHARACTERS_SETTINGS = 'characters_settings',
+
+  /** Phase 4: Break story into individual visual scenes with descriptions */
+  SCENES = 'scenes',
+
+  /** Phase 5: Generate reference images for each character and setting (text-to-image) */
+  CHARACTER_SETTING_IMAGES = 'character_setting_images',
+
+  /** Phase 6: Generate scene images using character/setting references (image+text-to-image) */
+  SCENE_IMAGES = 'scene_images',
+
+  /** Phase 7: Generate video clip for each scene image */
+  VIDEO = 'video',
+
+  /** Phase 8: Stitch all scene videos into final video */
+  VIDEO_COMBINE = 'video_combine',
+
+  /** Workflow complete */
+  COMPLETED = 'completed',
+}
+
+/**
  * Type of input provided by the user.
  * This determines which phases can be skipped.
  */
@@ -85,39 +118,6 @@ export const INPUT_TYPE_CONFIGS: Record<InputType, InputTypeConfig> = {
 };
 
 /**
- * Video workflow phases in execution order.
- * 8-phase workflow matching Sequence.md specification.
- */
-export enum WorkflowPhase {
-  /** Phase 1: Analyze input and create plot outline */
-  PLOT = 'plot',
-
-  /** Phase 2: Generate full story from plot (or accept direct story input) */
-  STORY = 'story',
-
-  /** Phase 3: Plan and create detailed descriptions for each character and setting */
-  CHARACTERS_SETTINGS = 'characters_settings',
-
-  /** Phase 4: Break story into individual visual scenes with descriptions */
-  SCENES = 'scenes',
-
-  /** Phase 5: Generate reference images for each character and setting (text-to-image) */
-  CHARACTER_SETTING_IMAGES = 'character_setting_images',
-
-  /** Phase 6: Generate scene images using character/setting references (image+text-to-image) */
-  SCENE_IMAGES = 'scene_images',
-
-  /** Phase 7: Generate video clip for each scene image */
-  VIDEO = 'video',
-
-  /** Phase 8: Stitch all scene videos into final video */
-  VIDEO_COMBINE = 'video_combine',
-
-  /** Workflow complete */
-  COMPLETED = 'completed',
-}
-
-/**
  * Planner stage within a phase.
  * Each planning agent goes through these stages.
  */
@@ -145,7 +145,7 @@ export interface PhaseInfo {
   status: PhaseStatus;
   /** Current planner stage (if in_progress) */
   plannerStage?: PlannerStage;
-  /** Path to the plan file (relative to .kshana/) */
+  /** Path to the plan file (relative to agent/) */
   planFile?: string;
   /** Timestamp when phase was completed */
   completedAt: number | null;
@@ -238,13 +238,15 @@ export interface SettingData {
 
 /**
  * Scene reference in project.json index.
- * Full scene content is stored in plans/scenes.md or scenes/*.md files.
+ * Full scene content is stored in agent/scenes/scene-XXX/scene.md files.
  * Tracks approval status separately for content, image, and video phases.
  */
 export interface SceneRef {
   /** Scene number/identifier */
   sceneNumber: number;
-  /** Reference to scene file (relative to .kshana/) */
+  /** Reference to scene folder (relative to agent/, e.g., "scenes/scene-001") */
+  folder?: string;
+  /** Reference to scene file (relative to agent/, e.g., "scenes/scene-001/scene.md") */
   file?: string;
   /** Scene title */
   title?: string;
@@ -284,7 +286,7 @@ export interface SceneRef {
 }
 
 /**
- * Asset metadata stored in assets/manifest.json.
+ * Asset metadata stored in agent/manifest.json.
  */
 export interface AssetInfo {
   id: string;
@@ -292,6 +294,78 @@ export interface AssetInfo {
   path: string;
   createdAt: number;
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * Project index structure for .kshana/index/project_index.json.
+ * Contains state and pointers only, derived from agent/project.json and agent/manifest.json.
+ * Follows Kshana Indexing Architecture: Control Plane with no content, only pointers/versions/state.
+ */
+export interface ProjectIndex {
+  index_version: '1.0';
+  project_id: string;
+  last_modified: number;
+
+  // Context variables (from ContextStore) - merged into consolidated index
+  context?: {
+    variables: Record<string, import('../../../core/context/index.js').StoredContextMeta>;
+  };
+
+  workflow: {
+    current_phase: WorkflowPhase;
+    completed_phases: WorkflowPhase[];
+    is_blocked: boolean;
+    blocking_reasons: string[];
+  };
+
+  routing: {
+    scenes: Record<string, SceneRoutingEntry>;
+    entities: {
+      characters: Record<string, EntityRoutingEntry>;
+      settings: Record<string, EntityRoutingEntry>;
+    };
+  };
+
+  stats: {
+    total_scenes: number;
+    total_duration: number;
+    asset_counts: {
+      video: number;
+      audio: number;
+      image: number;
+    };
+  };
+}
+
+/**
+ * Scene routing entry in the index.
+ * Describes where the scene lives, what version is active, and its current status.
+ */
+export interface SceneRoutingEntry {
+  id: string;
+  folder: string;
+  active: {
+    video?: number;
+    audio?: string;
+    image?: number;
+  };
+  status: {
+    content: ItemApprovalStatus;
+    image: ItemApprovalStatus;
+    video: ItemApprovalStatus;
+    audio?: ItemApprovalStatus;
+  };
+  duration?: number;
+}
+
+/**
+ * Entity routing entry (character or setting).
+ * Describes where the entity lives and its readiness state.
+ */
+export interface EntityRoutingEntry {
+  path: string;
+  ready: boolean;
+  has_ref_image?: boolean;
 }
 
 /**
@@ -311,7 +385,7 @@ export type ContentStatus = 'available' | 'partial' | 'missing';
 export interface ContentEntry {
   /** Current status of this content */
   status: ContentStatus;
-  /** Path to the main file for this content (relative to .kshana/) */
+  /** Path to the main file for this content (relative to agent/) */
   file: string;
   /** For itemized content (characters/settings), list of item names */
   items?: string[];
@@ -359,7 +433,7 @@ export interface ProjectFile {
   id: string;
   /** Project title */
   title: string;
-  /** Path to original input file (relative to .kshana/) */
+  /** Path to original input file (relative to agent/) */
   originalInputFile: string;
   /** Visual style for the project (cinematic_realism or anime) */
   style: ProjectStyle;
@@ -435,8 +509,8 @@ export interface PhaseConfig {
   nextPhase: WorkflowPhase | null;
   /** Prompt file name (without .json) for agent */
   promptFile: string;
-  /** Path to plan output file (relative to .kshana/) */
-  planOutputFile?: string;
+    /** Path to plan output file (relative to agent/) */
+    planOutputFile?: string;
   /** Primary agent type for this phase */
   agentType: AgentType;
   /** Tools available in this phase */
@@ -462,13 +536,14 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Plot Development',
     nextPhase: WorkflowPhase.STORY,
     promptFile: 'plot',
-    planOutputFile: 'plans/plot.md',
-    agentType: 'planning',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_agent'],
+    planOutputFile: 'agent/plans/plot-plan.md',
+    agentType: 'content',
+    contentType: 'plot',
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_content_agent'],
     itemProcessMode: 'single',
     requiresPerItemApproval: false,
     isExpensive: false,
-    description: 'Analyze user input and create plot outline',
+    description: 'Generate plot outline from user input',
   },
 
   [WorkflowPhase.STORY]: {
@@ -476,7 +551,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Story Development',
     nextPhase: WorkflowPhase.CHARACTERS_SETTINGS,
     promptFile: 'story',
-    planOutputFile: 'plans/story.md',
+    planOutputFile: 'agent/plans/story-plan.md',
     agentType: 'content',
     contentType: 'story',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_content_agent'],
@@ -491,7 +566,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Character & Setting Descriptions',
     nextPhase: WorkflowPhase.SCENES,
     promptFile: 'characters-settings',
-    planOutputFile: 'plans/characters-settings.md',
+    planOutputFile: 'agent/plans/characters-settings-plan.md',
     agentType: 'content',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_agent', 'dispatch_content_agent', 'todo_write'],
     itemProcessMode: 'list_all_refs',
@@ -505,7 +580,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Scene Breakdown',
     nextPhase: WorkflowPhase.CHARACTER_SETTING_IMAGES,
     promptFile: 'scenes',
-    planOutputFile: 'plans/scenes.md',
+    planOutputFile: 'agent/plans/scenes-plan.md',
     agentType: 'content',
     contentType: 'scene',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_agent', 'dispatch_content_agent', 'todo_write'],
@@ -520,7 +595,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Reference Image Generation',
     nextPhase: WorkflowPhase.SCENE_IMAGES,
     promptFile: 'character-setting-images',
-    planOutputFile: 'plans/ref-images.md',
+    planOutputFile: 'agent/plans/ref-images.md',
     agentType: 'image',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'list_all_refs',
@@ -534,7 +609,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Scene Image Generation',
     nextPhase: WorkflowPhase.VIDEO,
     promptFile: 'scene-images',
-    planOutputFile: 'plans/scene-images.md',
+    planOutputFile: 'agent/plans/scene-images.md',
     agentType: 'image',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'list_scene_images',
@@ -548,7 +623,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Video Generation',
     nextPhase: WorkflowPhase.VIDEO_COMBINE,
     promptFile: 'video',
-    planOutputFile: 'plans/video.md',
+    planOutputFile: 'agent/plans/video.md',
     agentType: 'video',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_video_agent', 'generate_video', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'list_scenes',
@@ -562,7 +637,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Video Stitching',
     nextPhase: WorkflowPhase.COMPLETED,
     promptFile: 'video-combine',
-    planOutputFile: 'plans/final-video.md',
+    planOutputFile: 'agent/plans/final-video.md',
     agentType: 'video',
     allowedTools: ['think', 'ask_user', 'read_file', 'read_project', 'update_project', 'stitch_videos', 'wait_for_job'],
     itemProcessMode: 'single',
@@ -601,14 +676,41 @@ export const PHASE_ORDER: WorkflowPhase[] = [
 ];
 
 /**
+ * Execution context for the application.
+ * CLI manages .kshana/agent/* in its own project directory.
+ * Desktop manages user project workspaces and coordinates with .kshana/agent/* in user space.
+ */
+export type ExecutionContext = 'cli' | 'desktop';
+
+/**
  * Default project directory name.
  */
 export const PROJECT_DIR = '.kshana';
 
 /**
- * Project file name within PROJECT_DIR.
+ * Agent subdirectory within PROJECT_DIR.
+ */
+export const AGENT_DIR = 'agent';
+
+/**
+ * Index subdirectory within PROJECT_DIR.
+ */
+export const INDEX_DIR = 'index';
+
+/**
+ * Project file name within AGENT_DIR.
  */
 export const PROJECT_FILE = 'project.json';
+
+/**
+ * Manifest file name within AGENT_DIR.
+ */
+export const MANIFEST_FILE = 'manifest.json';
+
+/**
+ * Project index file name within INDEX_DIR.
+ */
+export const PROJECT_INDEX_FILE = 'project_index.json';
 
 /**
  * Auto-approve timeout in milliseconds (15 seconds).
@@ -866,8 +968,11 @@ export function createDefaultSettingData(name: string): SettingData {
  * Create a default SceneRef entry.
  */
 export function createDefaultSceneRef(sceneNumber: number, title?: string): SceneRef {
+  const sceneFolder = `scenes/scene-${String(sceneNumber).padStart(3, '0')}`;
   return {
     sceneNumber,
+    folder: sceneFolder,
+    file: `${sceneFolder}/scene.md`,
     title,
     contentApprovalStatus: 'pending',
     imageApprovalStatus: 'pending',

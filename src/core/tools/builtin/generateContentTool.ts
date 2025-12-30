@@ -31,12 +31,12 @@ export const CONTENT_TYPE_CONTEXTS: Record<string, string[]> = {
  */
 export const CONTENT_TYPE_OUTPUT_FILES: Record<string, string> = {
   // Content creation phases
-  plot: 'plans/plot.md',
-  story: 'plans/story.md',
-  character: 'characters/',  // Will be appended with character name
-  setting: 'settings/',      // Will be appended with setting name
-  scene: 'plans/scenes.md',
-  narration: 'plans/narration.md',
+  plot: 'agent/script/plot.md',
+  story: 'agent/script/story.md',
+  narration: 'agent/script/narration.md',
+  character: 'agent/characters/',  // Will be appended with character name
+  setting: 'agent/settings/',      // Will be appended with setting name
+  scene: 'agent/plans/scenes.md',
 
   // Image prompt generation - prompts are passed directly to image generator, not saved
   character_image_prompt: '',  // Not saved - passed to image generator

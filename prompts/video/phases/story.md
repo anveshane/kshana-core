@@ -13,13 +13,15 @@ The tool automatically:
 - Handles user approval flow
 - Saves approved content to `plans/story.md`
 
-2. After story approval, extract characters and settings from the story
+2. **CRITICAL: After story approval, IMMEDIATELY update project state:**
+```
+update_project(action: 'update_planner_stage', data: { phase: 'story', stage: 'complete' })
+update_project(action: 'transition_phase', data: { next_phase: 'characters_settings' })
+```
 
-3. Extract characters and save using `update_project` action: 'add_character'
-
-4. Extract settings and save using `update_project` action: 'add_setting'
-
-5. Update planner stage to 'complete' and transition to the next phase
+**DO NOT use Task with subagent_type="Plan" for phase-level planning.**
+**DO NOT enter a feedback loop after approval.**
+**After the user accepts the story, IMMEDIATELY call the two update_project actions above.**
 
 **The story should include:**
 - Character introductions with physical descriptions

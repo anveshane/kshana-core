@@ -98,7 +98,21 @@ async function validateStoryInput(input: string): Promise<{ valid: boolean; reas
     console.warn('Could not parse LLM validation response, rejecting input:', result);
     return { valid: false, reason: 'Unable to validate - please provide a clearer story idea' };
   } catch (error) {
-    // If LLM validation fails, reject to be safe rather than allowing garbage through
+    // If validation fails due to connection/API errors, allow workflow to continue
+    // The basic heuristics (length, garbage detection) already passed, so it's likely valid
+    // Connection errors shouldn't block the entire workflow
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isConnectionError = errorMessage.toLowerCase().includes('connection') || 
+                              errorMessage.toLowerCase().includes('econnrefused') ||
+                              errorMessage.toLowerCase().includes('network');
+    
+    if (isConnectionError) {
+      console.warn('Story input validation failed due to connection error, allowing workflow to continue:', error);
+      // Allow workflow to proceed - basic heuristics already passed
+      return { valid: true };
+    }
+    
+    // For other errors, still reject to be safe
     console.warn('Story input validation failed:', error);
     return { valid: false, reason: 'Validation service unavailable - please try again' };
   }
@@ -164,11 +178,13 @@ export const readFileTool: ToolDefinition = createTool(
   `Read content from a project file within the .kshana directory.
 
 Use this to read:
-- Plan files: plans/plot.md, plans/story.md, plans/scenes.md, plans/images.md, plans/video.md
-- Character files: characters/[name].md
-- Setting files: settings/[name].md
-- Original input: original_input.md
-- Asset manifest: assets/manifest.json
+- Narrative content: agent/script/plot.md, agent/script/story.md, agent/script/narration.md
+- Plan files: agent/plans/plot-plan.md, agent/plans/story-plan.md, agent/plans/scenes-plan.md, etc.
+- Character files: agent/characters/[name].md
+- Setting files: agent/settings/[name].md
+- Scene files: agent/scenes/scene-XXX/scene.md
+- Original input: agent/original_input.md
+- Asset manifest: agent/manifest.json
 
 Returns the file content as a string, or an error if file doesn't exist.`,
   {
@@ -176,7 +192,7 @@ Returns the file content as a string, or an error if file doesn't exist.`,
     properties: {
       file_path: {
         type: 'string',
-        description: 'Relative path within .kshana directory (e.g., "plans/plot.md")',
+        description: 'Relative path within .kshana directory (e.g., "agent/script/plot.md" or "agent/plans/plot-plan.md")',
       },
     },
     required: ['file_path'],
@@ -218,7 +234,9 @@ export const writeFileTool: ToolDefinition = createTool(
   `Write content to a project file within the .kshana directory.
 
 Use this to write:
-- Plan files: plans/plot.md, plans/story.md, plans/scenes.md, etc.
+- Narrative content: agent/script/plot.md, agent/script/story.md, agent/script/narration.md
+- Plan files: agent/plans/plot-plan.md, agent/plans/story-plan.md, agent/plans/scenes-plan.md, etc.
+- Scene files: agent/scenes/scene-XXX/scene.md
 - Any other text files within the project
 
 For structured data (characters, settings, assets, scenes), prefer using update_project instead.`,
@@ -227,7 +245,7 @@ For structured data (characters, settings, assets, scenes), prefer using update_
     properties: {
       file_path: {
         type: 'string',
-        description: 'Relative path within .kshana directory (e.g., "plans/plot.md")',
+        description: 'Relative path within .kshana directory (e.g., "agent/script/plot.md" or "agent/plans/plot-plan.md")',
       },
       content: {
         type: 'string',
@@ -256,12 +274,18 @@ For structured data (characters, settings, assets, scenes), prefer using update_
       if (project) {
         // Map file paths to content types
         const fileToContentType: Record<string, ContentTypeName> = {
-          'plans/plot.md': 'plot',
-          'plans/story.md': 'story',
+          'agent/script/plot.md': 'plot',
+          'script/plot.md': 'plot',
+          'agent/plans/plot.md': 'plot', // Backward compatibility
+          'plans/plot.md': 'plot', // Backward compatibility
+          'agent/script/story.md': 'story',
+          'script/story.md': 'story',
+          'agent/plans/story.md': 'story', // Backward compatibility
+          'plans/story.md': 'story', // Backward compatibility
         };
         const contentType = fileToContentType[filePath];
         if (contentType) {
-          updateContentStatus(project, contentType, 'complete');
+          updateContentStatus(project, contentType, 'available');
         }
       }
 
@@ -332,9 +356,11 @@ Use this at the start of each turn to understand the project state and what acti
 
     // Set phase context in phaseLogger for all subsequent logs
     const phaseLogger = getPhaseLogger();
+    const currentPhaseKey = project.currentPhase as keyof typeof project.phases;
+    const phaseInfo = project.phases[currentPhaseKey];
     phaseLogger.setContext({
       phase: project.currentPhase,
-      stage: project.plannerStage,
+      stage: phaseInfo?.plannerStage,
       projectId: project.id,
     });
 
@@ -428,6 +454,17 @@ Actions:
           let originalInput = data['original_input'] as string;
           if (!originalInput) {
             return { status: 'error', error: 'original_input is required for create action' };
+          }
+
+          // Check if project already exists - don't overwrite it
+          const existingProject = loadProject();
+          if (existingProject) {
+            return {
+              status: 'error',
+              error: 'Project already exists. Use a different action to update the project.',
+              existing_project_id: existingProject.id,
+              message: 'A project already exists. To start a new project, you must first delete or complete the existing one.',
+            };
           }
 
           // Expand context references (e.g., $wakes -> actual content)
@@ -880,7 +917,7 @@ What story would you like to turn into a video?`,
             current_phase: updatedProject.currentPhase,
             skipped_phases: skippedPhases,
             note: inputType === 'story'
-              ? 'Plot and Story phases have been skipped. The story has been saved to plans/story.md. Proceeding to Characters & Settings phase.'
+              ? 'Plot and Story phases have been skipped. The story has been saved to script/story.md. Proceeding to Characters & Settings phase.'
               : 'Starting from Plot phase.',
           };
         }

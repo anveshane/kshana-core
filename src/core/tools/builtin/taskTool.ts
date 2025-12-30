@@ -55,7 +55,7 @@ Content Type (for content-creator):
       },
       output_file: {
         type: 'string',
-        description: 'Optional file path to save the output (e.g., "plans/story.md")',
+        description: 'Optional file path to save the output (e.g., "script/story.md" for content or "plans/story-plan.md" for plans)',
       },
     },
     required: ['subagent_type', 'task'],

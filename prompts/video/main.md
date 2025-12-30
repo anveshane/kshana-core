@@ -34,7 +34,7 @@ If ALL of the following are true, it's just an idea:
 update_project(action: 'set_input_type', data: { input_type: 'story' })
 ```
 
-This automatically skips Plot and Story phases. Start from Characters/Settings phase.
+This automatically skips Plot and Story phases. **IMMEDIATELY after calling this, start working on the Characters/Settings phase. DO NOT enter PlanMode - proceed directly to creating characters and settings from the story.**
 
 **If IDEA:**
 Proceed with normal workflow starting from Plot phase.

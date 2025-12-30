@@ -15,6 +15,7 @@ import {
 } from '../../services/comfyui/index.js';
 import {
   PROJECT_DIR,
+  AGENT_DIR,
   addAsset,
   loadProject,
   updateCharacter,
@@ -22,6 +23,8 @@ import {
   updateScene,
   getProjectStyleConfig,
   STYLE_CONFIGS,
+  getAgentDir,
+  getAssets,
 } from './workflow/index.js';
 
 /**
@@ -116,9 +119,9 @@ export interface ImageEditParams {
 // Job storage (in-memory for now, could be Redis/DB in production)
 const jobs = new Map<string, GenerationJob>();
 
-// Get the project assets directory
+// Get the project assets directory for images
 function getAssetsDir(): string {
-  const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'images');
+  const assetsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'assets', 'images');
   if (!fs.existsSync(assetsDir)) {
     fs.mkdirSync(assetsDir, { recursive: true });
   }
@@ -332,13 +335,18 @@ async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<
     // Create artifact ID
     const artifactId = `img_${nanoid(8)}`;
 
-    // Get relative path for storage
+    // Get relative path for storage (relative to .kshana/)
     const projectDir = path.join(process.cwd(), PROJECT_DIR);
     let relativePath: string;
     try {
       relativePath = path.relative(projectDir, savedPath);
     } catch {
       relativePath = savedPath;
+    }
+    
+    // Ensure path uses forward slashes and starts with agent/ if it's an agent asset
+    if (!relativePath.startsWith('agent/') && !relativePath.startsWith('context/') && !relativePath.startsWith('index/')) {
+      relativePath = `agent/${relativePath}`;
     }
 
     // Determine asset type based on context
@@ -569,27 +577,21 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
   const project = loadProject();
   if (!project) return undefined;
 
-  // Check project assets manifest
-  const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets');
-  const manifestPath = path.join(assetsDir, 'manifest.json');
-  if (fs.existsSync(manifestPath)) {
-    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-    const asset = manifest.assets?.find((a: { id: string }) => a.id === artifactId);
-    if (asset) {
-      return path.join(process.cwd(), PROJECT_DIR, asset.path);
-    }
+  // Check project assets manifest (now in agent/manifest.json)
+  const assets = getAssets();
+  const asset = assets.find((a) => a.id === artifactId);
+  if (asset) {
+    // Asset path is relative to .kshana/, so join with project dir
+    return path.join(process.cwd(), PROJECT_DIR, asset.path);
   }
 
   // Check scenes for matching artifact
   for (const scene of project.scenes) {
-    if (scene.imageArtifactId === artifactId) {
-      // Try to find path from manifest
-      if (fs.existsSync(manifestPath)) {
-        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-        const asset = manifest.assets?.find((a: { id: string }) => a.id === artifactId);
-        if (asset) {
-          return path.join(process.cwd(), PROJECT_DIR, asset.path);
-        }
+    if (scene.imageArtifactId === artifactId || scene.videoArtifactId === artifactId) {
+      // Try to find path from assets
+      const foundAsset = assets.find((a) => a.id === artifactId);
+      if (foundAsset) {
+        return path.join(process.cwd(), PROJECT_DIR, foundAsset.path);
       }
     }
   }
@@ -691,7 +693,7 @@ Returns a job ID. Use wait_for_job to check completion.`,
         throw new Error("Workflow 'wan_single_image' not found");
       }
 
-      const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'videos');
+      const assetsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'assets', 'videos');
       if (!fs.existsSync(assetsDir)) {
         fs.mkdirSync(assetsDir, { recursive: true });
       }
@@ -856,7 +858,7 @@ Returns a job ID. Use wait_for_job to check completion.`,
         throw new Error("Workflow 'wan_start_end' not found");
       }
 
-      const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'videos');
+      const assetsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'assets', 'videos');
       if (!fs.existsSync(assetsDir)) {
         fs.mkdirSync(assetsDir, { recursive: true });
       }
@@ -1040,7 +1042,12 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       let imagePath = params.base_image_path;
       if (!path.isAbsolute(imagePath) && !imagePath.startsWith('.')) {
         // Assume it's relative to project
-        imagePath = path.join(process.cwd(), PROJECT_DIR, imagePath);
+        // imagePath is already relative to .kshana/, just join
+        if (!imagePath.startsWith(PROJECT_DIR)) {
+          imagePath = path.join(process.cwd(), PROJECT_DIR, imagePath);
+        } else {
+          imagePath = path.join(process.cwd(), imagePath);
+        }
       }
 
       if (!fs.existsSync(imagePath)) {
@@ -1185,7 +1192,7 @@ export interface StoryboardParams {
  * Get storyboard directory for storing preview images.
  */
 function getStoryboardDir(): string {
-  const storyboardDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'storyboard');
+  const storyboardDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'assets', 'storyboard');
   if (!fs.existsSync(storyboardDir)) {
     fs.mkdirSync(storyboardDir, { recursive: true });
   }

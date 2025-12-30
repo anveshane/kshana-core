@@ -37,13 +37,16 @@ After entering plan mode, you will:
 3. After user approval, call `ExitPlanMode` to start the workflow
 {{/if}}
 {{else}}
-### EXISTING PROJECT - Continue Workflow
+### CONTINUE WORKFLOW - Current Phase: {{phase_display_name}}
+**CRITICAL: If you just called `set_input_type` with `input_type: 'story'`, DO NOT enter PlanMode.**
+**The project phase has been set to {{current_phase}}. IMMEDIATELY start working on this phase.**
+
 **Follow the phase_instructions below** - they tell you exactly what to do.
 
-If the phase_instructions tell you to call a specific tool (like `Task`), do that directly.
+If the phase_instructions tell you to call a specific tool (like `generate_content`), do that directly.
 Otherwise, call `read_project` to get the current project state and next action instructions.
 
-When using Task, ALWAYS pass the required context_refs for the current phase.
+When using Task or generate_content, ALWAYS pass the required context_refs for the current phase.
 Follow the planner stage cycle: planning → verify → refining → complete.
 Use `update_planner_stage` to track progress within each phase.
 
@@ -57,6 +60,14 @@ Each phase goes through these stages (managed via `update_planner_stage`):
 - **VERIFY**: Present to user for approval
 - **REFINING**: Apply user feedback if provided
 - **COMPLETE**: Approved, ready to move to next phase
+
+**CRITICAL: After User Approval**
+When the user accepts/approves content (via `generate_content` or `Task`):
+1. The content is automatically saved to the file
+2. **IMMEDIATELY** call: `update_project(action: 'update_planner_stage', data: { phase: '<current_phase>', stage: 'complete' })`
+3. **IMMEDIATELY** call: `update_project(action: 'transition_phase', data: { next_phase: '<next_phase>' })`
+4. **DO NOT** ask for approval again or enter a feedback loop
+5. **DO NOT** use `Task` with `subagent_type="Plan"` for phase-level planning - use `generate_content` instead
 
 ## CRITICAL: Phase Completion Flow
 
@@ -83,6 +94,15 @@ Content that requires user approval uses the `generate_content` tool, which auto
 - `generate_content(content_type: "character", name: "Alice")` - Creates character profile
 - `generate_content(content_type: "setting", name: "Forest")` - Creates setting description
 - `generate_content(content_type: "scene")` - Creates scene description
+
+**CRITICAL: After User Accepts Content**
+When `generate_content` returns with user approval:
+1. The content is automatically saved to the file
+2. **IMMEDIATELY** call: `update_project(action: 'update_planner_stage', data: { phase: '<current_phase>', stage: 'complete' })`
+3. **IMMEDIATELY** call: `update_project(action: 'transition_phase', data: { next_phase: '<next_phase>' })`
+4. **DO NOT** ask for approval again
+5. **DO NOT** enter a feedback loop
+6. **DO NOT** use `Task` with `subagent_type="Plan"` for phase-level planning - that's only for initial project setup
 
 **For image prompts (character/setting reference images and scene images):**
 - `generate_content(content_type: "character_image_prompt", name: "Alice")` - Creates image prompt for character

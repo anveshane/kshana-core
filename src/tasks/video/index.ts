@@ -188,7 +188,9 @@ export function createWorkflowToolRegistry(): ToolRegistry {
  */
 function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
   const projectDir = getProjectDir(basePath);
-  const plansDir = join(projectDir, 'plans');
+  const agentDir = join(projectDir, 'agent');
+  const plansDir = join(agentDir, 'plans');
+  const scriptDir = join(agentDir, 'script');
   const loadedContexts: string[] = [];
   let totalChars = 0;
 
@@ -196,7 +198,7 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
 
   // Load the original user input first - this is critical for content generation
   // Variable name MUST be $original_input to match phase prompts
-  const originalInputPath = join(projectDir, 'original_input.md');
+  const originalInputPath = join(agentDir, 'original_input.md');
   if (existsSync(originalInputPath)) {
     try {
       const content = readFileSync(originalInputPath, 'utf-8');
@@ -214,18 +216,19 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
     }
   }
 
-  // Plan files to load with their context labels
-  const planFiles = [
-    { file: 'plot.md', label: 'Plot Outline', varName: 'plot' },
-    { file: 'story.md', label: 'Story', varName: 'story' },
-    { file: 'scenes.md', label: 'Scenes', varName: 'scenes' },
-    { file: 'characters.md', label: 'Characters', varName: 'characters' },
-    { file: 'settings.md', label: 'Settings', varName: 'settings' },
-    { file: 'images.md', label: 'Image Plan', varName: 'images' },
+  // Files to load with their context labels
+  // Note: plot.md and story.md are now in script/ directory, not plans/
+  const contentFiles = [
+    { dir: scriptDir, file: 'plot.md', label: 'Plot Outline', varName: 'plot' },
+    { dir: scriptDir, file: 'story.md', label: 'Story', varName: 'story' },
+    { dir: plansDir, file: 'scenes.md', label: 'Scenes', varName: 'scenes' },
+    { dir: plansDir, file: 'characters.md', label: 'Characters', varName: 'characters' },
+    { dir: plansDir, file: 'settings.md', label: 'Settings', varName: 'settings' },
+    { dir: plansDir, file: 'images.md', label: 'Image Plan', varName: 'images' },
   ];
 
-  for (const { file, label, varName } of planFiles) {
-    const filePath = join(plansDir, file);
+  for (const { dir, file, label, varName } of contentFiles) {
+    const filePath = join(dir, file);
     if (existsSync(filePath)) {
       try {
         const content = readFileSync(filePath, 'utf-8');
@@ -264,19 +267,31 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
 /**
  * Create a GenericAgent configured for workflow-based video creation.
  * Uses state-based approach with project files in .kshana/ directory.
+ * 
+ * Execution Context:
+ * - CLI: Uses CLI's own project directory by default (manages .kshana/agent/* in kshana-ink project)
+ * - Desktop: Should pass user project workspace path as basePath (coordinates with .kshana/agent/* in user space)
+ * 
+ * @param config - Configuration for the workflow video agent
+ * @param config.basePath - Base path for the project. In CLI context, defaults to CLI's own directory.
+ *                          In Desktop context, should be the user's project workspace.
  */
 export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): GenericAgent {
   const {
     llmConfig,
     maxIterations = 100,
     originalInput = '',
-    basePath = process.cwd(),
+    basePath = process.cwd(), // CLI context: defaults to CLI's own directory
   } = config;
 
   // Initialize or load project
-  const project = getOrCreateProject(originalInput, basePath);
+  const project = getOrCreateProject(originalInput, 'cinematic_realism', basePath);
   const currentPhase = getCurrentPhase(project);
   const phaseConfig = PHASE_CONFIGS[currentPhase];
+
+  // Reload context store for this project to ensure isolation
+  // This must be done BEFORE loading project files into context store
+  contextStore.reload(project.id);
 
   // Load existing project files into context store
   // This makes them available to dispatch_agent and dispatch_content_agent

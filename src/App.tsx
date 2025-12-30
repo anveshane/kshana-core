@@ -66,6 +66,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       if (projectExists()) {
         const project = loadProject();
         setExistingProject(project);
+        // Reload context store for the existing project
+        if (project) {
+          contextStore.reload(project.id);
+        }
         setStartupMode('select_action');
       } else {
         // No existing project - go to style selection first
@@ -144,6 +148,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     respond,
     stop,
     injectInput,
+    reset,
+    setProjectId,
   } = useAgent({
     tools,
     llmConfig,
@@ -153,6 +159,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       customPrompt,
     },
     onEvent: handleAgentEvent,
+    projectId: existingProject?.id ?? null,
   });
 
   // Handle global keyboard shortcuts
@@ -187,16 +194,22 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       // For video mode with a new project, create the project with the selected style
       // Input type will be determined by the agent based on the content
       if (taskType === 'video' && !existingProject) {
-        createProject(task, selectedStyle);
+        const newProject = createProject(task, selectedStyle);
+        // Set projectId directly to bypass React state update delay
+        // This ensures the agent is immediately reset with the new projectId
+        setProjectId(newProject.id);
+        // Update existingProject state for UI consistency
+        setExistingProject(newProject);
         uiLogger.logUserInput(`Starting new project with style: ${STYLE_CONFIGS[selectedStyle].displayName}`);
       }
 
       setStarted(true);
       uiLogger.logUserInput(task);
       // Task is added to history by useAgent
+      // Note: run() will create a new agent with the updated projectId from existingProject
       void run(task);
     },
-    [run, exit, taskType, existingProject, selectedStyle]
+    [run, exit, taskType, existingProject, selectedStyle, setProjectId]
   );
 
   // Handle user response (when agent is waiting for input)
@@ -375,6 +388,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     if (startupMode === 'select_action') {
       if (index === 0) {
         // Continue existing project
+        if (existingProject) {
+          // Reload context store for the existing project
+          contextStore.reload(existingProject.id);
+        }
         setStarted(true);
         uiLogger.logUserInput('Continue existing project');
         void run('Continue working on the existing project. Call read_project to see current state.');
@@ -384,10 +401,12 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           deleteProject();
           setExistingProject(null);
         }
+        // Reset agent state and clear projectId to ensure complete isolation
+        setProjectId(null);
         setStartupMode('select_style');
       }
     }
-  }, [startupMode, existingProject, run]);
+  }, [startupMode, existingProject, run, setProjectId]);
 
   // Handle style selection
   const handleStyleSelect = React.useCallback((index: number) => {

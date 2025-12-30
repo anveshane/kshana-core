@@ -216,6 +216,12 @@ if (server) {
   });
 } else {
   // CLI mode - clear screen and render the React Ink app
+  // 
+  // Execution Context: CLI
+  // The CLI manages .kshana/agent/* in its own project directory (where kshana-ink is installed).
+  // All project operations use process.cwd() as the default basePath, which is the CLI's directory.
+  // This allows the CLI to maintain its own agent workspace for development/testing.
+  
   // Clear the screen
   process.stdout.write('\x1B[2J\x1B[0f');
 

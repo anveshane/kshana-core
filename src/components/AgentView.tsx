@@ -122,7 +122,7 @@ export function AgentView({
               {currentAction.agentName && <Text color="cyan" dimColor> [{currentAction.agentName}]</Text>}
             </Box>
           )}
-          {currentAction.type === 'tool_executing' && currentAction.toolName && (
+          {currentAction.type === 'tool_executing' && currentAction.toolName && currentAction.toolCallId && (
             <ToolCallDisplay
               toolName={currentAction.toolName}
               args={currentAction.toolArgs}
