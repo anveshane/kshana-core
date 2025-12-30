@@ -23,6 +23,8 @@ Available subagent types:
 - YOU MUST ALWAYS PASS context_refs when using content-creator!
 - Without context_refs, the subagent has NO ACCESS to the user's story and will generate random content!
 - For plot phase: context_refs: ["$original_input"]
+  - NOTE: $original_input is automatically loaded from agent/original_input.md when the project is created
+  - Do NOT use $user_input - that variable doesn't exist. Always use $original_input.
 - For other phases: include relevant contexts like ["$plot", "$story", "$character_name"]
 - The subagent receives ONLY what you pass in context_refs - nothing else!
 

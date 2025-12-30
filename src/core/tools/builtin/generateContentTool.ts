@@ -68,7 +68,9 @@ Image prompts are shown to the user for approval, then passed to the image gener
 
 ## Examples:
 - generate_content(content_type: "plot") - Creates plot from user's story idea
-- generate_content(content_type: "character", name: "Alice") - Creates character profile
+- generate_content(content_type: "character", name: "Alice") - Creates character profile (saved to agent/characters/alice.md)
+- generate_content(content_type: "setting", name: "Forest") - Creates setting description (saved to agent/settings/forest.md)
+- generate_content(content_type: "scene", scene_number: 1) - Creates scene 1 description (saved to agent/scenes/scene-001/scene.md)
 - generate_content(content_type: "character_image_prompt", name: "Alice") - Creates image prompt for Alice
 - generate_content(content_type: "scene_image_prompt", scene_number: 3) - Creates image prompt for scene 3`,
   {
@@ -88,7 +90,7 @@ Image prompts are shown to the user for approval, then passed to the image gener
       },
       scene_number: {
         type: 'number',
-        description: 'For scene_image_prompt: the scene number to generate an image prompt for',
+        description: 'For scene and scene_image_prompt: the scene number. For scene content, this determines which scene folder (scene-XXX) to save to. Required for scene content generation.',
       },
       task_description: {
         type: 'string',

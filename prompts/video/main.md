@@ -46,16 +46,13 @@ Proceed with normal workflow starting from Plot phase.
 Create high-level story outline.
 
 ```javascript
-// Store user input first
-store_context(content: userInput, label: "User's story idea")
-// Returns: { context_ref: "$user_input" }
-
+// $original_input is automatically loaded from agent/original_input.md
 Task(
   subagent_type: 'content-creator',
-  task: 'Create a plot outline based on the user input',
+  task: 'Create a plot outline based on the original user input',
   content_type: 'plot',
-  context_refs: ['$user_input'],
-  output_file: 'plans/plot.md'
+  context_refs: ['$original_input'],  // Use $original_input, not $user_input
+  output_file: 'agent/script/plot.md'  // Plot goes in script folder
 )
 ```
 
@@ -69,7 +66,7 @@ Task(
   task: 'Expand the plot into a full story with dialogue and character development',
   content_type: 'story',
   context_refs: ['$plot'],  // Reference the approved plot
-  output_file: 'plans/story.md'
+  output_file: 'agent/script/story.md'  // Story goes in script folder
 )
 ```
 

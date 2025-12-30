@@ -968,7 +968,7 @@ export function createDefaultSettingData(name: string): SettingData {
  * Create a default SceneRef entry.
  */
 export function createDefaultSceneRef(sceneNumber: number, title?: string): SceneRef {
-  const sceneFolder = `scenes/scene-${String(sceneNumber).padStart(3, '0')}`;
+  const sceneFolder = `agent/scenes/scene-${String(sceneNumber).padStart(3, '0')}`;
   return {
     sceneNumber,
     folder: sceneFolder,
