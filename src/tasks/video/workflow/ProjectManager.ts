@@ -4,6 +4,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
+import { CONTENT_TYPE_OUTPUT_FILES } from '../../../core/tools/builtin/generateContentTool.js';
 import { join } from 'path';
 import {
   type ProjectFile,
@@ -2010,10 +2011,43 @@ You are in the REFINING stage. Update the plan based on user feedback.
         break;
 
       case PlannerStage.COMPLETE:
-        instruction += `
+        // For content phases (plot, story), check if content file exists
+        if (phaseConfig.agentType === 'content' && phaseConfig.contentType) {
+          const contentFile = CONTENT_TYPE_OUTPUT_FILES[phaseConfig.contentType];
+          if (contentFile) {
+            const contentFilePath = join(basePath, '.kshana', 'agent', contentFile);
+            const contentExists = existsSync(contentFilePath) && readFileSync(contentFilePath, 'utf-8').trim().length > 0;
+          
+            if (!contentExists) {
+              instruction += `
+⚠️ **CRITICAL ISSUE DETECTED**: The ${phaseConfig.displayName} phase is marked complete, but the actual ${phaseConfig.contentType} content file is missing!
+
+**You MUST generate the content now before transitioning:**
+
+1. Use generate_content(content_type: "${phaseConfig.contentType}") to create the ${phaseConfig.contentType} content
+2. The tool will handle user approval automatically
+3. After user approves the content, then transition to the next phase
+
+DO NOT transition yet - the content is missing!
+`;
+            } else {
+              instruction += `
 The ${phaseConfig.displayName} phase is complete.
 1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
 `;
+            }
+          } else {
+            instruction += `
+The ${phaseConfig.displayName} phase is complete.
+1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+`;
+          }
+        } else {
+          instruction += `
+The ${phaseConfig.displayName} phase is complete.
+1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+`;
+        }
         break;
     }
   }
@@ -2105,7 +2139,14 @@ TodoWrite(merge: false, todos: [
 `;
     switch (phaseConfig.phase) {
       case WorkflowPhase.CHARACTERS_SETTINGS:
-        instruction += `Read the story and identify all characters and settings mentioned. Register each one before creating their profiles.
+        instruction += `**CRITICAL: Use $story context directly - DO NOT create tasks to read the story!**
+
+1. Use fetch_context(context_ref: "$story") to get the story content
+2. Identify all characters and settings mentioned in the story
+3. Check read_project() to see which characters/settings already exist
+4. Register each NEW character/setting before creating their profiles
+
+**DO NOT create story_content.md or any temporary story files. Use $story context directly.**
 `;
         break;
       case WorkflowPhase.CHARACTER_SETTING_IMAGES:
@@ -2204,7 +2245,13 @@ After creating, get user approval before moving to the next scene.
         // Default for content creation phases (CHARACTERS_SETTINGS, SCENES)
         instruction += `Create the ${nextItem.type} profile for **${nextItem.name}**.
 
+**BEFORE creating, check if this ${nextItem.type} already exists:**
+- Call read_project() and check if "${nextItem.name}" is already in project.${nextItem.type === 'character' ? 'characters' : 'settings'}
+- If it already exists, skip it and move to the next item
+
 Generate detailed content including description and visual characteristics suitable for image generation.
+
+**Use $story context directly - DO NOT create tasks to read story files!**
 
 After creating, get user approval before moving to the next item.
 
@@ -2213,7 +2260,7 @@ After creating, get user approval before moving to the next item.
 2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current item as 'completed' and the next as 'in_progress'
 3. Then create the next item
 
-**DO NOT skip the TodoWrite call!**
+**DO NOT skip the TodoWrite call! DO NOT create duplicates!**
 `;
         break;
     }

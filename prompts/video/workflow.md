@@ -62,6 +62,15 @@ Each phase goes through these stages (managed via `update_planner_stage`):
 - **COMPLETE**: Approved, ready to move to next phase
 
 **CRITICAL: After User Approval**
+
+**IMPORTANT: Check if current phase requires per-item approval first!**
+
+If the current phase is a **per-item phase** (characters_settings, scenes, character_setting_images, scene_images, video):
+- **DO NOT** call `update_planner_stage(stage: 'complete')` after each item approval
+- **DO NOT** call `transition_phase` after each item approval
+- Instead, follow the phase-specific instructions below (they tell you to update todos and create the next item)
+
+If the current phase is a **single-item phase** (plot, story, video_combine):
 When the user accepts/approves content (via `generate_content` or `Task`):
 1. The content is automatically saved to the file
 2. **IMMEDIATELY** call: `update_project(action: 'update_planner_stage', data: { phase: '<current_phase>', stage: 'complete' })`
@@ -71,8 +80,15 @@ When the user accepts/approves content (via `generate_content` or `Task`):
 
 ## CRITICAL: Phase Completion Flow
 
-When ALL work in a phase is done and approved:
+**For per-item phases** (characters_settings, scenes, character_setting_images, scene_images, video):
+- Only mark the phase complete when ALL items are approved
+- Check the phase-specific instructions below to see how many items need approval
+- After the LAST item is approved, then:
+  1. **FIRST**: Call `update_project(action: 'update_planner_stage', data: { phase: '<current_phase>', stage: 'complete' })`
+  2. **IMMEDIATELY AFTER**: Call `update_project(action: 'transition_phase', data: { next_phase: '<next_phase>' })`
 
+**For single-item phases** (plot, story, video_combine):
+When ALL work in a phase is done and approved:
 1. **FIRST**: Call `update_project(action: 'update_planner_stage', data: { phase: '<current_phase>', stage: 'complete' })`
 2. **IMMEDIATELY AFTER**: Call `update_project(action: 'transition_phase', data: { next_phase: '<next_phase>' })`
 
@@ -96,6 +112,16 @@ Content that requires user approval uses the `generate_content` tool, which auto
 - `generate_content(content_type: "scene")` - Creates scene description
 
 **CRITICAL: After User Accepts Content**
+
+**IMPORTANT: Check if current phase requires per-item approval first!**
+
+If the current phase is a **per-item phase** (characters_settings, scenes, character_setting_images, scene_images, video):
+- **DO NOT** call `update_planner_stage(stage: 'complete')` after each item approval
+- **DO NOT** call `transition_phase` after each item approval  
+- Instead, follow the phase-specific instructions below (they tell you to register the item, update todos, and create the next item)
+- Only call `update_planner_stage(stage: 'complete')` and `transition_phase` when ALL items in the phase are approved
+
+If the current phase is a **single-item phase** (plot, story, video_combine):
 When `generate_content` returns with user approval:
 1. The content is automatically saved to the file
 2. **IMMEDIATELY** call: `update_project(action: 'update_planner_stage', data: { phase: '<current_phase>', stage: 'complete' })`
