@@ -51,5 +51,5 @@ generate_content(content_type: "scene_image_prompt", scene_number: 2)
 
 After all scene images are approved:
 1. Mark final todo as completed
-2. Mark phase complete: `update_project(action: 'update_planner_stage', data: { phase: 'scene_images', stage: 'complete' })`
-3. **IMMEDIATELY** transition: `update_project(action: 'transition_phase', data: { next_phase: 'video' })`
+2. Mark phase complete: `update_project(action: 'update_phase', data: { phase: 'scene_images', status: 'completed' })`
+3. **IMMEDIATELY** transition: `update_project(action: 'transition_phase', data: {})`

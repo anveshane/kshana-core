@@ -9,6 +9,7 @@ export {
   PlannerStage,
   type PhaseStatus,
   type PhaseInfo,
+  type ProjectPlan,
   type CharacterData,
   type SettingData,
   type SceneRef,
@@ -78,7 +79,8 @@ export {
   getProjectStyleConfig,
   setProjectInputType,
   updatePhaseStatus,
-  updatePlannerStage,
+  updatePlanStage,
+  updatePlannerStage, // Deprecated - redirects to updatePlanStage
   transitionToNextPhase,
   planFileHasContent,
   readProjectFile,

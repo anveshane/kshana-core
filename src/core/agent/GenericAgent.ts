@@ -135,7 +135,28 @@ export class GenericAgent extends TypedEventEmitter {
     this.name = config.name ?? `agent-${nanoid(6)}`;
     this.customPrompt = config.customPrompt;
     this.projectId = config.projectId ?? null;
+    this.projectId = config.projectId ?? null;
     this.lastProjectId = this.projectId;
+  }
+
+  /**
+   * Update the custom prompt (instructions) for the agent.
+   * This rebuilds the system message immediately.
+   * Useful for phase transitions in workflow agents.
+   */
+  updateCustomPrompt(prompt: string): void {
+    this.customPrompt = prompt;
+    this.rebuildSystemMessage();
+  }
+
+  /**
+   * Rebuild the system message in the messages history.
+   */
+  private rebuildSystemMessage(): void {
+    if (this.messages.length > 0 && this.messages[0] && this.messages[0].role === 'system') {
+      this.messages[0].content = this.buildSystemMessage();
+      debugLog(`[GenericAgent] Updated system message (custom prompt length: ${this.customPrompt?.length ?? 0})`);
+    }
   }
 
   /**
@@ -348,14 +369,29 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
-        // Find the dispatch_agent tool call and add its result
-        // The main agent will continue processing
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(planResult),
-          toolCallId: toolCallId,
-          name: 'dispatch_agent',
-        });
+        // Find the dispatch_agent tool call and add/update its result
+        // Check if a tool message with this toolCallId already exists (from awaiting_verification)
+        const existingPlanToolMsgIndex = this.messages.findIndex(
+          msg => msg.role === 'tool' && msg.toolCallId === toolCallId
+        );
+        if (existingPlanToolMsgIndex >= 0) {
+          // Update existing message instead of adding duplicate
+          this.messages[existingPlanToolMsgIndex] = {
+            role: 'tool',
+            content: JSON.stringify(planResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_agent',
+          };
+          debugLog(`[GenericAgent] Updated existing tool message at index ${existingPlanToolMsgIndex} for dispatch_agent`);
+        } else {
+          // Add new tool message
+          this.messages.push({
+            role: 'tool',
+            content: JSON.stringify(planResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_agent',
+          });
+        }
 
         // Emit status change back to thinking
         this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
@@ -401,17 +437,33 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
-        // Add the dispatch_content_agent result to messages
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(contentResult),
-          toolCallId: toolCallId,
-          name: 'dispatch_content_agent',
-        });
+        // Add/update the dispatch_content_agent result to messages
+        // Check if a tool message with this toolCallId already exists (from awaiting_verification)
+        const existingContentToolMsgIndex = this.messages.findIndex(
+          msg => msg.role === 'tool' && msg.toolCallId === toolCallId
+        );
+        if (existingContentToolMsgIndex >= 0) {
+          // Update existing message instead of adding duplicate
+          this.messages[existingContentToolMsgIndex] = {
+            role: 'tool',
+            content: JSON.stringify(contentResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_content_agent',
+          };
+          debugLog(`[GenericAgent] Updated existing tool message at index ${existingContentToolMsgIndex} for dispatch_content_agent`);
+        } else {
+          // Add new tool message
+          this.messages.push({
+            role: 'tool',
+            content: JSON.stringify(contentResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_content_agent',
+          });
+        }
 
         // Emit status change back to thinking
         this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
-        
+
         // Continue main loop - don't reset messages since we're continuing from a tool result
         // Skip the "start fresh" logic below since we already have messages
         debugLog(`[GenericAgent] Content approved, continuing main loop with existing messages (${this.messages.length} messages)`);
@@ -454,13 +506,29 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
-        // Add the dispatch_image_agent result to messages
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(imageResult),
-          toolCallId: toolCallId,
-          name: 'dispatch_image_agent',
-        });
+        // Add/update the dispatch_image_agent result to messages
+        // Check if a tool message with this toolCallId already exists (from awaiting_prompt_approval)
+        const existingImageToolMsgIndex = this.messages.findIndex(
+          msg => msg.role === 'tool' && msg.toolCallId === toolCallId
+        );
+        if (existingImageToolMsgIndex >= 0) {
+          // Update existing message instead of adding duplicate
+          this.messages[existingImageToolMsgIndex] = {
+            role: 'tool',
+            content: JSON.stringify(imageResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_image_agent',
+          };
+          debugLog(`[GenericAgent] Updated existing tool message at index ${existingImageToolMsgIndex} for dispatch_image_agent`);
+        } else {
+          // Add new tool message
+          this.messages.push({
+            role: 'tool',
+            content: JSON.stringify(imageResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_image_agent',
+          });
+        }
 
         // Emit status change back to thinking
         this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
@@ -501,13 +569,29 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
-        // Add the dispatch_video_agent result to messages
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(videoResult),
-          toolCallId: toolCallId,
-          name: 'dispatch_video_agent',
-        });
+        // Add/update the dispatch_video_agent result to messages
+        // Check if a tool message with this toolCallId already exists (from awaiting_approval)
+        const existingVideoToolMsgIndex = this.messages.findIndex(
+          msg => msg.role === 'tool' && msg.toolCallId === toolCallId
+        );
+        if (existingVideoToolMsgIndex >= 0) {
+          // Update existing message instead of adding duplicate
+          this.messages[existingVideoToolMsgIndex] = {
+            role: 'tool',
+            content: JSON.stringify(videoResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_video_agent',
+          };
+          debugLog(`[GenericAgent] Updated existing tool message at index ${existingVideoToolMsgIndex} for dispatch_video_agent`);
+        } else {
+          // Add new tool message
+          this.messages.push({
+            role: 'tool',
+            content: JSON.stringify(videoResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_video_agent',
+          });
+        }
 
         // Emit status change back to thinking
         this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
@@ -517,7 +601,7 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
       }
-      
+
       // After handling user response (content/plan/image/video approval), continue main loop
       // Don't reset messages - we're continuing with existing conversation
       // The tool result has already been added to messages above
@@ -877,6 +961,48 @@ export class GenericAgent extends TypedEventEmitter {
     // Handle Task tool specially - unified subagent entrypoint (Claude SDK style)
     if (isTaskTool(toolCall.name)) {
       const result = await this.handleTask(toolCall);
+      const resultObj = result as Record<string, unknown>;
+
+      // Check if subagent needs user verification (same as dispatch_agent)
+      if (resultObj['status'] === 'awaiting_verification' || resultObj['status'] === 'awaiting_approval' || resultObj['status'] === 'awaiting_prompt_approval') {
+        // Emit tool result first
+        this.emit({
+          type: 'tool_result',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          result,
+          isError: false,
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        // Set up waiting state for user input
+        this.waitingForUser = true;
+        this.pendingQuestion = resultObj['question'] as string;
+
+        // Emit question event with options and auto-approve timeout
+        const questionOptions = resultObj['options'] as Array<{ label: string; description?: string }>;
+        const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
+
+        this.emit({
+          type: 'question',
+          question: resultObj['question'] as string,
+          isConfirmation: false,
+          options: questionOptions,
+          autoApproveTimeoutMs: questionTimeout,
+          context: resultObj['prompt'] as string, // Handle prompt context for image/video agents
+        });
+
+        // Emit status change
+        this.emit({
+          type: 'agent_status',
+          status: 'waiting',
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        // Return special marker to indicate we're pausing for user input
+        return { __awaiting_user_input: true, ...resultObj };
+      }
+
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -1629,167 +1755,34 @@ export class GenericAgent extends TypedEventEmitter {
         content: this.planningState.currentPlan,
       });
 
-      // AUTO-APPROVE: Automatically save plan without user confirmation
-      debugLog(`[GenericAgent] Auto-approving and saving plan (${this.planningState.currentPlan.length} chars)`);
-      
-      // Write plan to output file if specified
-      let fileSaved = false;
-      let normalizedPath: string | undefined;
-      // Always ensure outputFile is set - use default if not provided
-      let outputFileToUse = this.planningState.outputFile;
-      if (!outputFileToUse) {
-        // Try to infer from task or use default
-        const taskLower = this.planningState.task.toLowerCase();
-        if (taskLower.includes('plot') && !taskLower.includes('character') && !taskLower.includes('setting')) {
-          outputFileToUse = 'agent/plans/plot-plan.md';
-        } else if (taskLower.includes('story') && !taskLower.includes('character') && !taskLower.includes('setting')) {
-          outputFileToUse = 'agent/plans/story-plan.md';
-        } else if (taskLower.includes('character') || taskLower.includes('setting') || taskLower.includes('characters') || taskLower.includes('settings')) {
-          outputFileToUse = 'agent/plans/characters-settings-plan.md';
-        } else if (taskLower.includes('scene')) {
-          outputFileToUse = 'agent/plans/scenes-plan.md';
-        } else {
-          outputFileToUse = 'agent/plans/plan.md';
-        }
-        debugLog(`[GenericAgent] No outputFile specified, using inferred default: ${outputFileToUse} (task: ${this.planningState.task.substring(0, 100)})`);
-      } else {
-        debugLog(`[GenericAgent] Using provided outputFile: ${outputFileToUse}`);
-      }
-      
-      // Normalize path to ensure plans are saved to agent/plans/ directory with hyphenated names
-      normalizedPath = outputFileToUse;
-      
-      // If path starts with just "plans/", add "agent/" prefix
-      if (normalizedPath.startsWith('plans/') && !normalizedPath.startsWith('agent/plans/')) {
-        normalizedPath = `agent/${normalizedPath}`;
-      }
-      // If path doesn't start with "agent/", assume it should be in agent/plans/
-      else if (!normalizedPath.startsWith('agent/')) {
-        // If it's just a filename, put it in agent/plans/
-        if (!normalizedPath.includes('/')) {
-          normalizedPath = `agent/plans/${normalizedPath}`;
-        } else {
-          // If it has a path but no agent/ prefix, add it
-          normalizedPath = `agent/${normalizedPath}`;
-        }
-      }
-      
-      // Ensure plan files use hyphenated naming (e.g., plot-plan.md instead of plot.md)
-      // Extract filename and check if it needs the -plan suffix
-      if (normalizedPath.startsWith('agent/plans/')) {
-        const filename = normalizedPath.replace('agent/plans/', '');
-        // If filename doesn't end with -plan.md and is a common phase name, add -plan suffix
-        if (!filename.endsWith('-plan.md') && !filename.includes('-plan.')) {
-          const baseName = filename.replace(/\.md$/, '');
-          // Common phase names that should have -plan suffix
-          const phaseNames = ['plot', 'story', 'characters-settings', 'scenes', 'ref-images', 'scene-images', 'video', 'final-video'];
-          if (phaseNames.includes(baseName)) {
-            normalizedPath = `agent/plans/${baseName}-plan.md`;
-          }
-        }
-      }
-      
-      // Save the plan file
-      if (!normalizedPath) {
-        debugLog(`[GenericAgent] ERROR: normalizedPath is undefined, cannot save plan`);
-        console.error(`[GenericAgent] ERROR: Cannot save plan - no file path determined`);
-      } else {
-        try {
-          const projectDir = path.join(process.cwd(), '.kshana');
-          const filePath = path.join(projectDir, normalizedPath);
-          debugLog(`[GenericAgent] Auto-saving plan to: ${filePath} (normalized from: ${outputFileToUse}, original: ${this.planningState.outputFile || 'inferred'})`);
+      // Note: Plan is displayed via ToolCallDisplay when the tool result is rendered
+      // No need to emit agent_text here as it would cause duplicate display
 
-          // Ensure parent directory exists
-          const parentDir = path.dirname(filePath);
-          if (!fs.existsSync(parentDir)) {
-            debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
-            fs.mkdirSync(parentDir, { recursive: true });
-          }
+      // Return status indicating we need user verification
+      // The main agent will pause and wait for user input
+      const verificationQuestion = this.planningState.iterations === 1
+        ? 'I\'ve created a plan for this task. Would you like to proceed or provide feedback?'
+        : 'I\'ve updated the plan based on your feedback. Would you like to proceed or provide more feedback?';
 
-          fs.writeFileSync(filePath, this.planningState.currentPlan, 'utf-8');
-          fileSaved = true;
-          debugLog(`[GenericAgent] Successfully auto-saved plan to ${normalizedPath} (${this.planningState.currentPlan.length} bytes)`);
-          
-          // Verify file was actually written
-          if (fs.existsSync(filePath)) {
-            const stats = fs.statSync(filePath);
-            debugLog(`[GenericAgent] Verified plan file exists: ${filePath} (${stats.size} bytes)`);
-          } else {
-            debugLog(`[GenericAgent] WARNING: Plan file was not created at ${filePath}`);
-            console.error(`[GenericAgent] WARNING: Plan file write succeeded but file does not exist`);
-          }
-        } catch (err) {
-          debugLog(`[GenericAgent] ERROR: Failed to auto-save plan to ${normalizedPath}: ${err}`);
-          console.error(`[GenericAgent] File save error:`, err);
-        }
-      }
-
-      // Generate plan name and summary using LLM
-      // If this fails, we still want to save the plan, so wrap in try-catch
-      let name: string;
-      let summary: string;
-      try {
-        const metadata = await this.generatePlanMetadata(
-          this.planningState.task,
-          this.planningState.currentPlan
-        );
-        name = metadata.name;
-        summary = metadata.summary;
-      } catch (err) {
-        debugLog(`[GenericAgent] WARNING: Failed to generate plan metadata: ${err}. Using fallback.`);
-        // Fallback metadata if LLM call fails
-        name = this.planningState.task.slice(0, 50);
-        summary = `Plan for: ${this.planningState.task}`;
-      }
-
-      // Store reference to the saved plan file instead of duplicating content
-      let variableName: string;
-      if (fileSaved && normalizedPath) {
-        // Store reference to the file instead of duplicating content
-        variableName = contextStore.storeReference(
-          normalizedPath,
-          name,
-          undefined,
-          'tool'
-        ).variableName;
-        debugLog(`[GenericAgent] Stored reference to plan file in context store as ${variableName} (file: ${normalizedPath})`);
-      } else {
-        // Fallback: store plan content if file wasn't saved (shouldn't happen in normal flow)
-        variableName = contextStore.store(
-          this.planningState.currentPlan,
-          name,
-          { source: 'tool', variableBaseName: 'plan' }
-        ).variableName;
-        debugLog(`[GenericAgent] Stored plan content in context store as ${variableName} (no file saved)`);
-      }
-
-      const result = {
-        status: 'approved',
-        name,
-        summary,
-        plan_ref: variableName,
+      const verificationResult = {
+        status: 'awaiting_verification',
+        plan: this.planningState.currentPlan,
         task: this.planningState.task,
         iterations: this.planningState.iterations,
-        output_file: normalizedPath || outputFileToUse,
-        file_saved: fileSaved,
-        message: fileSaved
-          ? `Plan "${name}" auto-approved and saved to ${normalizedPath || outputFileToUse}. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`
-          : `Plan "${name}" auto-approved. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`,
-        next_steps: 'IMPORTANT: After plan approval, IMMEDIATELY update project state: 1) Call update_project(action: "update_planner_stage", data: { phase: "<current_phase>", stage: "complete" }), 2) Then call update_project(action: "transition_phase", data: {}) to move to the next phase. For content phases (plot/story), generate the actual content using generate_content(content_type: "plot" or "story") BEFORE updating project state.',
+        question: verificationQuestion,
+        options: [
+          { label: 'Accept plan', description: 'Proceed with this plan and start execution' },
+          { label: 'Provide feedback', description: 'Modify the plan with your input' },
+        ],
       };
-      
-      // Clear planning state
-      this.planningState = null;
-      // Reset mode back to orchestrator
-      this.currentMode = 'orchestrator';
-      
-      debugLog(`[GenericAgent] continuePlanningLoop auto-approved and returning: ${JSON.stringify({
-        status: result.status,
-        fileSaved: result.file_saved,
-        planRef: result.plan_ref,
-        outputFile: result.output_file,
+
+      debugLog(`[GenericAgent] continuePlanningLoop returning: ${JSON.stringify({
+        status: verificationResult.status,
+        question: verificationResult.question?.slice(0, 50),
+        optionsCount: verificationResult.options.length,
+        options: verificationResult.options,
       }, null, 2)}`);
-      return result;
+      return verificationResult;
     } catch (error) {
       const failedTask = this.planningState?.task;
       this.planningState = null;
@@ -1819,64 +1812,76 @@ export class GenericAgent extends TypedEventEmitter {
     debugLog(`[GenericAgent] handlePlanningResponse: isApproval=${isApproval}`);
 
     if (isApproval) {
-      // Write plan to output file if specified
+      // Write plan to output file
       let fileSaved = false;
       let normalizedPath: string | undefined;
-      debugLog(`[GenericAgent] handlePlanningResponse: isApproval=true, outputFile=${this.planningState.outputFile || 'undefined'}, planLength=${this.planningState.currentPlan.length}`);
-      if (this.planningState.outputFile) {
-        try {
-          // Normalize path to ensure plans are saved to agent/plans/ directory with hyphenated names
-          normalizedPath = this.planningState.outputFile;
-          
-          // If path starts with just "plans/", add "agent/" prefix
-          if (normalizedPath.startsWith('plans/') && !normalizedPath.startsWith('agent/plans/')) {
-            normalizedPath = `agent/${normalizedPath}`;
-          }
-          // If path doesn't start with "agent/", assume it should be in agent/plans/
-          else if (!normalizedPath.startsWith('agent/')) {
-            // If it's just a filename, put it in agent/plans/
-            if (!normalizedPath.includes('/')) {
-              normalizedPath = `agent/plans/${normalizedPath}`;
-            } else {
-              // If it has a path but no agent/ prefix, add it
-              normalizedPath = `agent/${normalizedPath}`;
-            }
-          }
-          
-          // Ensure plan files use hyphenated naming (e.g., plot-plan.md instead of plot.md)
-          // Extract filename and check if it needs the -plan suffix
-          if (normalizedPath.startsWith('agent/plans/')) {
-            const filename = normalizedPath.replace('agent/plans/', '');
-            // If filename doesn't end with -plan.md and is a common phase name, add -plan suffix
-            if (!filename.endsWith('-plan.md') && !filename.includes('-plan.')) {
-              const baseName = filename.replace(/\.md$/, '');
-              // Common phase names that should have -plan suffix
-              const phaseNames = ['plot', 'story', 'characters-settings', 'scenes', 'ref-images', 'scene-images', 'video', 'final-video'];
-              if (phaseNames.includes(baseName)) {
-                normalizedPath = `agent/plans/${baseName}-plan.md`;
-              }
-            }
-          }
-          
-          const projectDir = path.join(process.cwd(), '.kshana');
-          const filePath = path.join(projectDir, normalizedPath);
-          debugLog(`[GenericAgent] Attempting to save plan to: ${filePath} (normalized from: ${this.planningState.outputFile})`);
 
-          // Ensure parent directory exists
-          const parentDir = path.dirname(filePath);
-          if (!fs.existsSync(parentDir)) {
-            debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
-            fs.mkdirSync(parentDir, { recursive: true });
-          }
-
-          fs.writeFileSync(filePath, this.planningState.currentPlan, 'utf-8');
-          fileSaved = true;
-          debugLog(`[GenericAgent] Successfully saved plan to ${normalizedPath}`);
-        } catch (err) {
-          debugLog(`[GenericAgent] ERROR: Failed to save plan to ${this.planningState.outputFile}: ${err}`);
+      // Always ensure outputFile is set - use default if not provided
+      let outputFileToUse = this.planningState.outputFile;
+      if (!outputFileToUse) {
+        // Try to infer from task or use default
+        const taskLower = this.planningState.task.toLowerCase();
+        if (taskLower.includes('plot') && !taskLower.includes('character') && !taskLower.includes('setting')) {
+          outputFileToUse = 'agent/plans/plot-plan.md';
+        } else if (taskLower.includes('story') && !taskLower.includes('character') && !taskLower.includes('setting')) {
+          outputFileToUse = 'agent/plans/story-plan.md';
+        } else if (taskLower.includes('character') || taskLower.includes('setting') || taskLower.includes('characters') || taskLower.includes('settings')) {
+          outputFileToUse = 'agent/plans/characters-settings-plan.md';
+        } else if (taskLower.includes('scene')) {
+          outputFileToUse = 'agent/plans/scenes-plan.md';
+        } else {
+          outputFileToUse = 'agent/plans/plan.md';
         }
+        debugLog(`[GenericAgent] No outputFile specified, using inferred default: ${outputFileToUse} (task: ${this.planningState.task.substring(0, 100)})`);
       } else {
-        debugLog(`[GenericAgent] WARNING: No outputFile specified, plan will not be saved to disk`);
+        debugLog(`[GenericAgent] Using provided outputFile: ${outputFileToUse}`);
+      }
+
+      debugLog(`[GenericAgent] handlePlanningResponse: isApproval=true, outputFile=${outputFileToUse}, planLength=${this.planningState.currentPlan.length}`);
+
+      // Normalize path to ensure plans are saved to agent/plans/ directory with hyphenated names
+      normalizedPath = outputFileToUse;
+
+      // If path starts with just "plans/", add "agent/" prefix
+      if (normalizedPath.startsWith('plans/') && !normalizedPath.startsWith('agent/plans/')) {
+        normalizedPath = `agent/${normalizedPath}`;
+      }
+      // If path doesn't start with "agent/", assume it should be in agent/plans/
+      else if (!normalizedPath.startsWith('agent/')) {
+        // If it's just a filename, put it in agent/plans/
+        if (!normalizedPath.includes('/')) {
+          normalizedPath = `agent/plans/${normalizedPath}`;
+        } else {
+          // If it has a path but no agent/ prefix, add it
+          normalizedPath = `agent/${normalizedPath}`;
+        }
+      }
+
+      // For project-level planning, always save to master-plan.md
+      // This is the single source of truth for the entire workflow
+      if (normalizedPath.startsWith('agent/plans/') && !normalizedPath.includes('master-plan')) {
+        // Redirect all plan files to the master plan
+        normalizedPath = 'agent/plans/master-plan.md';
+        debugLog(`[GenericAgent] Redirecting plan to master-plan.md (project-level planning)`);
+      }
+
+      try {
+        const projectDir = path.join(process.cwd(), '.kshana');
+        const filePath = path.join(projectDir, normalizedPath);
+        debugLog(`[GenericAgent] Attempting to save plan to: ${filePath} (normalized from: ${outputFileToUse})`);
+
+        // Ensure parent directory exists
+        const parentDir = path.dirname(filePath);
+        if (!fs.existsSync(parentDir)) {
+          debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, this.planningState.currentPlan, 'utf-8');
+        fileSaved = true;
+        debugLog(`[GenericAgent] Successfully saved plan to ${normalizedPath}`);
+      } catch (err) {
+        debugLog(`[GenericAgent] ERROR: Failed to save plan to ${outputFileToUse}: ${err}`);
       }
 
       // Generate plan name and summary using LLM
@@ -1919,7 +1924,7 @@ export class GenericAgent extends TypedEventEmitter {
         ).variableName;
         debugLog(`[GenericAgent] Stored plan content in context store as ${variableName} (no file saved)`);
       }
-      
+
       debugLog(`[GenericAgent] Stored plan in context store as ${variableName}`);
 
       const result = {
@@ -1929,12 +1934,12 @@ export class GenericAgent extends TypedEventEmitter {
         plan_ref: variableName,
         task: this.planningState.task,
         iterations: this.planningState.iterations,
-        output_file: normalizedPath || this.planningState.outputFile,
+        output_file: normalizedPath || outputFileToUse,
         file_saved: fileSaved,
         message: fileSaved
-          ? `Plan "${name}" approved and saved to ${normalizedPath || this.planningState.outputFile}. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`
-          : `Plan "${name}" approved. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`,
-        next_steps: 'IMPORTANT: After plan approval, check the phase type. For content phases (plot/story), generate the actual content using generate_content(content_type: "plot" or "story") BEFORE updating project state. Only after content is approved, then update project state and transition. For planning-only phases, update project state immediately.',
+          ? `Master plan "${name}" approved and saved to ${normalizedPath || outputFileToUse}. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`
+          : `Master plan "${name}" approved. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`,
+        next_steps: 'IMPORTANT: Master plan approved! Call update_project with action "update_plan_stage" and stage "complete" to mark the plan as approved, then start executing phases based on the master plan.',
       };
       this.planningState = null;
       this.currentMode = 'orchestrator';
@@ -2092,7 +2097,7 @@ Respond in JSON format:
       // Re-throw so caller can handle it
       throw err;
     }
-    
+
     // Fallback if JSON parsing failed or missing fields
     return {
       name: `${contentType}: ${task.slice(0, 30)}`,
@@ -2257,11 +2262,11 @@ Respond in JSON format:
     if (contentType === 'plot') {
       // Check if $original_input is already in contextParts
       const hasOriginalInput = contextParts.some(part => part.variableName === '$original_input');
-      
+
       if (!hasOriginalInput) {
         // First, try to get it from context store
         let originalInput = contextStore.get('$original_input');
-        
+
         // If not in context store, try to load from project files
         if (!originalInput) {
           const projectFileContent = this.tryResolveFromProjectFiles('$original_input');
@@ -2280,19 +2285,19 @@ Respond in JSON format:
             }
           }
         }
-        
-      if (originalInput) {
-        contextParts.push({
-          variableName: '$original_input',
-          label: originalInput.label,
-          content: originalInput.content,
-        });
+
+        if (originalInput) {
+          contextParts.push({
+            variableName: '$original_input',
+            label: originalInput.label,
+            content: originalInput.content,
+          });
           if (contextRefs && contextRefs.length > 0) {
             debugLog(`[GenericAgent] WARNING: Plot phase requested context_refs: ${contextRefs.join(', ')}, but $original_input was missing. AUTO-INJECTED $original_input (${originalInput.content.length} chars)`);
           } else {
-        debugLog(`[GenericAgent] AUTO-INJECTED $original_input for plot phase (${originalInput.content.length} chars)`);
+            debugLog(`[GenericAgent] AUTO-INJECTED $original_input for plot phase (${originalInput.content.length} chars)`);
           }
-      } else {
+        } else {
           debugLog(`[GenericAgent] ERROR: No context_refs provided for plot and $original_input not found in context store or project files`);
         }
       }
@@ -2303,23 +2308,23 @@ Respond in JSON format:
       debugLog(`[GenericAgent] ERROR: Could not resolve context_refs: ${missingRefs.join(', ')}`);
       const availableContexts = contextStore.list().map(c => c.variableName);
       debugLog(`[GenericAgent] Available context variables: ${availableContexts.join(', ') || 'none'}`);
-      
+
       // For plot phase, provide helpful error message
       if (contentType === 'plot' && missingRefs.length > 0) {
         debugLog(`[GenericAgent] ERROR: Plot generation requires $original_input. Make sure to use context_refs: ["$original_input"] (not $user_input)`);
       }
     }
-    
+
     // Validate that we have context before proceeding (critical for plot phase)
     if (contextParts.length === 0) {
-      const errorMsg = contentType === 'plot' 
+      const errorMsg = contentType === 'plot'
         ? 'Plot generation requires $original_input context, but it was not found. Ensure the project has original_input.md file.'
         : `Content generation requires context, but none was provided or resolved.`;
       debugLog(`[GenericAgent] ERROR: ${errorMsg}`);
       this.currentMode = 'orchestrator';
       return {
         error: errorMsg,
-        suggestion: contentType === 'plot' 
+        suggestion: contentType === 'plot'
           ? 'Use context_refs: ["$original_input"] when calling Task for plot generation. The $original_input is automatically loaded from agent/original_input.md.'
           : 'Provide valid context_refs when calling Task for content generation.',
       };
@@ -2452,215 +2457,36 @@ Respond in JSON format:
         content: this.contentState.currentContent,
       });
 
-      // AUTO-APPROVE: Automatically save content without user confirmation
-      debugLog(`[GenericAgent] Auto-approving and saving ${this.contentState.contentType} content (${this.contentState.currentContent.length} chars)`);
-      
-      // Write content to output file if specified
-      let fileSaved = false;
-      let normalizedContentPath: string | undefined;
-      // Always ensure outputFile is set for plot/story/narration content types
-      let outputFileToUse = this.contentState.outputFile;
-      if (!outputFileToUse && (this.contentState.contentType === 'plot' || this.contentState.contentType === 'story' || this.contentState.contentType === 'narration')) {
-        // Fallback: use default path from CONTENT_TYPE_OUTPUT_FILES
-        outputFileToUse = CONTENT_TYPE_OUTPUT_FILES[this.contentState.contentType] || `agent/script/${this.contentState.contentType}.md`;
-        debugLog(`[GenericAgent] No outputFile specified, using default: ${outputFileToUse}`);
-      }
+      // Return status indicating we need user verification
+      // The main agent will pause and wait for user input
+      // NOTE: This uses the same "awaiting_verification" status as planning, which is
+      // handled by the patched executeTool to trigger a question event.
 
-      if (outputFileToUse) {
-        try {
-          // Normalize path to ensure content is saved to correct location
-          normalizedContentPath = outputFileToUse;
-          
-          // CRITICAL: For plot/story/narration, always ensure they go to agent/script/
-          if (this.contentState.contentType === 'plot' || this.contentState.contentType === 'story' || this.contentState.contentType === 'narration') {
-            // If path contains plot/ or story/ directory, redirect to script/
-            if (normalizedContentPath.includes('plot/') || normalizedContentPath.includes('story/')) {
-              const filename = normalizedContentPath.split('/').pop() || `${this.contentState.contentType}.md`;
-              normalizedContentPath = `agent/script/${filename}`;
-              debugLog(`[GenericAgent] Redirecting ${this.contentState.contentType} from ${outputFileToUse} to ${normalizedContentPath}`);
-            }
-            // If path starts with just "plans/", redirect to agent/script/
-            else if (normalizedContentPath.startsWith('plans/') && !normalizedContentPath.startsWith('agent/plans/')) {
-              const filename = normalizedContentPath.replace('plans/', '');
-              normalizedContentPath = `agent/script/${filename}`;
-              debugLog(`[GenericAgent] Redirecting ${this.contentState.contentType} from ${outputFileToUse} to ${normalizedContentPath}`);
-            }
-            // If path starts with "agent/plans/", redirect to agent/script/
-            else if (normalizedContentPath.startsWith('agent/plans/')) {
-              const filename = normalizedContentPath.replace('agent/plans/', '');
-              normalizedContentPath = `agent/script/${filename}`;
-              debugLog(`[GenericAgent] Redirecting ${this.contentState.contentType} from ${outputFileToUse} to ${normalizedContentPath}`);
-            }
-            // If path doesn't start with "agent/", ensure it goes to agent/script/
-            else if (!normalizedContentPath.startsWith('agent/')) {
-              if (!normalizedContentPath.includes('/')) {
-                normalizedContentPath = `agent/script/${normalizedContentPath}`;
-              } else {
-                // Extract just the filename and put it in script/
-                const filename = normalizedContentPath.split('/').pop() || `${this.contentState.contentType}.md`;
-                normalizedContentPath = `agent/script/${filename}`;
-              }
-              debugLog(`[GenericAgent] Normalizing ${this.contentState.contentType} path from ${outputFileToUse} to ${normalizedContentPath}`);
-            }
-            // If path already starts with "agent/script/", use as-is
-            // (no else needed - already correct)
-          } else if (this.contentState.contentType === 'scene') {
-            // For scenes, ensure they go to agent/scenes/scene-XXX/scene.md
-            // If path is agent/plans/scenes.md, extract scene number from task or use default
-            if (normalizedContentPath && (normalizedContentPath === 'agent/plans/scenes.md' || normalizedContentPath.startsWith('agent/plans/scenes'))) {
-              // Try to extract scene number from task description
-              const sceneMatch = this.contentState.task.match(/scene\s*(\d+)/i);
-              if (sceneMatch && sceneMatch[1]) {
-                const sceneNum = parseInt(sceneMatch[1], 10);
-                if (!isNaN(sceneNum)) {
-                  const sceneFolder = `scene-${String(sceneNum).padStart(3, '0')}`;
-                  normalizedContentPath = `agent/scenes/${sceneFolder}/scene.md`;
-                  debugLog(`[GenericAgent] Extracted scene number ${sceneNum} from task, redirecting to ${normalizedContentPath}`);
-                } else {
-                  debugLog(`[GenericAgent] WARNING: Could not parse scene number from task. Scene should be saved to individual folder.`);
-                }
-              } else {
-                // Fallback: use scenes.md but warn
-                debugLog(`[GenericAgent] WARNING: Could not extract scene number from task. Scene should be saved to individual folder.`);
-              }
-            }
-            // If path doesn't start with "agent/scenes/", ensure it does
-            else if (!normalizedContentPath.startsWith('agent/scenes/')) {
-              // If it's a scene folder path without agent/, add it
-              if (normalizedContentPath.startsWith('scenes/scene-')) {
-                normalizedContentPath = `agent/${normalizedContentPath}`;
-              } else {
-                // Default: assume it should go to agent/scenes/
-                normalizedContentPath = `agent/scenes/${normalizedContentPath}`;
-              }
-              debugLog(`[GenericAgent] Normalizing scene path to ${normalizedContentPath}`);
-            }
-          } else if (this.contentState.contentType === 'character' || this.contentState.contentType === 'setting') {
-            // For characters and settings, ensure flat structure: agent/characters/name.md or agent/settings/name.md
-            // If path contains a folder structure like name/character.md or name/setting.md, flatten it
-            if (normalizedContentPath.includes('/character.md')) {
-              // Extract character name and flatten: agent/characters/name/character.md -> agent/characters/name.md
-              const match = normalizedContentPath.match(/agent\/characters\/([^/]+)\/character\.md$/);
-              if (match && match[1]) {
-                normalizedContentPath = `agent/characters/${match[1]}.md`;
-                debugLog(`[GenericAgent] Flattening character path to ${normalizedContentPath}`);
-              }
-            } else if (normalizedContentPath.includes('/setting.md')) {
-              // Extract setting name and flatten: agent/settings/name/setting.md -> agent/settings/name.md
-              const match = normalizedContentPath.match(/agent\/settings\/([^/]+)\/setting\.md$/);
-              if (match && match[1]) {
-                normalizedContentPath = `agent/settings/${match[1]}.md`;
-                debugLog(`[GenericAgent] Flattening setting path to ${normalizedContentPath}`);
-              }
-            }
-            // If path starts with just "plans/" or doesn't start with "agent/", add "agent/" prefix
-            if (normalizedContentPath.startsWith('plans/') && !normalizedContentPath.startsWith('agent/plans/')) {
-              normalizedContentPath = `agent/${normalizedContentPath}`;
-            } else if (!normalizedContentPath.startsWith('agent/')) {
-              normalizedContentPath = `agent/${normalizedContentPath}`;
-            }
-          } else {
-            // For other content types, normalize paths
-            // If path starts with just "plans/", add "agent/" prefix
-            if (normalizedContentPath.startsWith('plans/') && !normalizedContentPath.startsWith('agent/plans/')) {
-              normalizedContentPath = `agent/${normalizedContentPath}`;
-            }
-            // If path doesn't start with "agent/", add it
-            else if (!normalizedContentPath.startsWith('agent/')) {
-              normalizedContentPath = `agent/${normalizedContentPath}`;
-            }
-          }
-          
-          const projectDir = path.join(process.cwd(), '.kshana');
-          const filePath = path.join(projectDir, normalizedContentPath);
-          debugLog(`[GenericAgent] Auto-saving content to: ${filePath} (normalized from: ${outputFileToUse}, contentType: ${this.contentState.contentType})`);
+      const verificationQuestion = this.contentState.iterations === 1
+        ? `I've created the ${this.contentState.contentType} content. Would you like to accept it or provide feedback?`
+        : `I've updated the ${this.contentState.contentType} content based on your feedback. Would you like to accept it or provide more feedback?`;
 
-          // Ensure parent directory exists
-          const parentDir = path.dirname(filePath);
-          if (!fs.existsSync(parentDir)) {
-            debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
-            fs.mkdirSync(parentDir, { recursive: true });
-          }
-
-          fs.writeFileSync(filePath, this.contentState.currentContent, 'utf-8');
-          fileSaved = true;
-          debugLog(`[GenericAgent] Successfully auto-saved content to ${normalizedContentPath} (${this.contentState.currentContent.length} bytes)`);
-        } catch (err) {
-          debugLog(`[GenericAgent] ERROR: Failed to auto-save content to ${outputFileToUse}: ${err}`);
-          console.error(`[GenericAgent] File save error:`, err);
-        }
-      } else {
-        debugLog(`[GenericAgent] WARNING: No outputFile specified for ${this.contentState.contentType}, content will not be saved to disk`);
-      }
-
-      // Generate content name and summary using LLM (similar to planning)
-      // If this fails, we still want to save the content, so wrap in try-catch
-      let name: string;
-      let summary: string;
-      try {
-        const metadata = await this.generateContentMetadata(
-          this.contentState.task,
-          this.contentState.contentType,
-          this.contentState.currentContent
-        );
-        name = metadata.name;
-        summary = metadata.summary;
-      } catch (err) {
-        debugLog(`[GenericAgent] WARNING: Failed to generate content metadata: ${err}. Using fallback.`);
-        // Fallback metadata if LLM call fails
-        name = `${this.contentState.contentType}: ${this.contentState.task.slice(0, 30)}`;
-        summary = `${this.contentState.contentType} content for: ${this.contentState.task.slice(0, 100)}`;
-      }
-
-      // Store reference to the saved file instead of duplicating content
-      let variableName: string;
-      if (fileSaved && normalizedContentPath) {
-        // Store reference to the file instead of duplicating content
-        variableName = contextStore.storeReference(
-          normalizedContentPath,
-          name,
-          undefined,
-          'tool'
-        ).variableName;
-        debugLog(`[GenericAgent] Stored reference to ${this.contentState.contentType} file in context store as ${variableName} (file: ${normalizedContentPath})`);
-      } else {
-        // Fallback: store content if file wasn't saved (shouldn't happen in normal flow)
-        variableName = contextStore.store(
-          this.contentState.currentContent,
-          name,
-          { source: 'tool', variableBaseName: this.contentState.contentType }
-        ).variableName;
-        debugLog(`[GenericAgent] Stored ${this.contentState.contentType} content in context store as ${variableName} (no file saved)`);
-      }
-
-      const result = {
-        status: 'approved',
-        name,
-        summary,
-        content_ref: variableName,
+      const verificationResult = {
+        status: 'awaiting_verification',
+        content: this.contentState.currentContent,
         content_type: this.contentState.contentType,
         task: this.contentState.task,
-        output_file: normalizedContentPath || this.contentState.outputFile,
-        file_saved: fileSaved,
         iterations: this.contentState.iterations,
-        message: fileSaved
-          ? `${this.contentState.contentType} content "${name}" auto-approved and saved to ${normalizedContentPath || this.contentState.outputFile}. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`
-          : `${this.contentState.contentType} content "${name}" auto-approved. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`,
-        next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
+        question: verificationQuestion,
+        options: [
+          { label: 'Accept content', description: 'Save and proceed to next step' },
+          { label: 'Provide feedback', description: 'Modify the content with your input' },
+        ],
+        // Context for the UI to display (using the content we just generated)
+        prompt: this.contentState.currentContent,
       };
-      
-      // Clear content state
-      this.contentState = null;
-      // Reset mode back to orchestrator
-      this.currentMode = 'orchestrator';
-      
-      debugLog(`[GenericAgent] continueContentLoop auto-approved and returning: ${JSON.stringify({
-        status: result.status,
-        contentType: result.content_type,
-        fileSaved: result.file_saved,
-        contentRef: result.content_ref,
+
+      debugLog(`[GenericAgent] continueContentLoop returning: ${JSON.stringify({
+        status: verificationResult.status,
+        question: verificationResult.question?.slice(0, 50),
+        contentType: verificationResult.content_type,
       }, null, 2)}`);
-      return result;
+      return verificationResult;
     } catch (error) {
       const failedTask = this.contentState?.task;
       this.contentState = null;
@@ -2691,7 +2517,7 @@ Respond in JSON format:
       // Fallback: check for common approval patterns
       const lower = userResponse.toLowerCase().trim();
       isApproval = ['accept', 'yes', 'ok', 'proceed', 'approve', '1'].some(word => lower.includes(word)) &&
-                   !['feedback', 'change', 'modify', 'revise'].some(word => lower.includes(word));
+        !['feedback', 'change', 'modify', 'revise'].some(word => lower.includes(word));
     }
 
     if (isApproval) {
@@ -2711,7 +2537,7 @@ Respond in JSON format:
           // Normalize path to ensure content is saved to correct location
           // For plot/story/narration, ensure they go to agent/script/
           normalizedContentPath = outputFileToUse;
-          
+
           // If path starts with just "plans/", add "agent/" prefix
           if (normalizedContentPath.startsWith('plans/') && !normalizedContentPath.startsWith('agent/plans/')) {
             normalizedContentPath = `agent/${normalizedContentPath}`;
@@ -2729,13 +2555,13 @@ Respond in JSON format:
             // For other content types (character/setting), they already have proper paths from generateContentTool
           }
           // If path already starts with "agent/plans/" but is plot/story/narration, redirect to agent/script/
-          else if (normalizedContentPath.startsWith('agent/plans/') && 
-                   (this.contentState.contentType === 'plot' || this.contentState.contentType === 'story' || this.contentState.contentType === 'narration')) {
+          else if (normalizedContentPath.startsWith('agent/plans/') &&
+            (this.contentState.contentType === 'plot' || this.contentState.contentType === 'story' || this.contentState.contentType === 'narration')) {
             const filename = normalizedContentPath.replace('agent/plans/', '');
             normalizedContentPath = `agent/script/${filename}`;
           }
           // If path already starts with "agent/script/", use it as-is (no normalization needed)
-          
+
           const projectDir = path.join(process.cwd(), '.kshana');
           const filePath = path.join(projectDir, normalizedContentPath);
           debugLog(`[GenericAgent] Attempting to save content to: ${filePath} (normalized from: ${outputFileToUse}, contentType: ${this.contentState.contentType})`);
@@ -2813,7 +2639,7 @@ Respond in JSON format:
         message: fileSaved
           ? `${this.contentState.contentType} content "${name}" approved and saved to ${normalizedContentPath || this.contentState.outputFile}. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`
           : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`,
-        next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
+        next_steps: 'IMPORTANT: Now update the project state - call update_project with action "update_phase" to mark the current phase as "completed", then use "transition_phase" to move to the next phase.',
       };
       this.contentState = null;
       // Reset mode back to orchestrator

@@ -69,7 +69,7 @@ generate_content(content_type: "character_image_prompt", name: "Marcus")
 When ALL images have been generated and approved:
 
 1. Mark final todo as completed: `TodoWrite(merge: true, todos: [{ id: '<last-item-id>', status: 'completed' }])`
-2. Mark phase complete: `update_project(action: 'update_planner_stage', data: { phase: 'character_setting_images', stage: 'complete' })`
-3. **IMMEDIATELY** transition: `update_project(action: 'transition_phase', data: { next_phase: 'scene_images' })`
+2. Mark phase complete: `update_project(action: 'update_phase', data: { phase: 'character_setting_images', status: 'completed' })`
+3. **IMMEDIATELY** transition: `update_project(action: 'transition_phase', data: {})`
 
 **DO NOT** stop after step 2. You MUST call `update_project(action: 'transition_phase', ...)` to move to scene images.

@@ -75,7 +75,7 @@ generate_content(content_type: "character", name: "Marcus")
 
 **DO NOT skip the TodoWrite call!** The todo list MUST be updated after each approval.
 
-**DO NOT call `update_planner_stage(stage: 'complete')` until ALL items are done!**
+**DO NOT mark phase as 'completed' until ALL items are done!**
 
 ## Character Profile Requirements
 Each character profile must include:
@@ -114,7 +114,7 @@ Each setting description must include:
 When the LAST character/setting is approved and registered:
 
 1. Mark final todo as completed: `TodoWrite(merge: true, todos: [{ id: '<last-item-id>', status: 'completed' }])`
-2. Mark phase complete: `update_project(action: 'update_planner_stage', data: { phase: 'characters_settings', stage: 'complete' })`
-3. **IMMEDIATELY** transition: `update_project(action: 'transition_phase', data: { next_phase: 'scenes' })`
+2. Mark phase complete: `update_project(action: 'update_phase', data: { phase: 'characters_settings', status: 'completed' })`
+3. **IMMEDIATELY** transition: `update_project(action: 'transition_phase', data: {})`
 
 **DO NOT** stop after step 2. You MUST call `update_project(action: 'transition_phase', ...)` to move to scenes.

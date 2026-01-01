@@ -21,5 +21,5 @@ Video clips should include:
 Process ONE scene at a time. Wait for user approval before moving to the next.
 
 After all scene videos are generated:
-1. Update planner stage to 'complete'
-2. Transition to the final video assembly phase
+1. Mark phase complete: `update_project(action: 'update_phase', data: { phase: 'video', status: 'completed' })`
+2. Transition to the final video assembly phase: `update_project(action: 'transition_phase', data: {})`

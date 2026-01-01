@@ -79,7 +79,7 @@ generate_content(content_type: "scene", task_description: "Scene 2: First confli
 
 **DO NOT skip the TodoWrite call!** The todo list MUST be updated after each scene.
 
-**DO NOT call `update_planner_stage(stage: 'complete')` until ALL scenes are done!**
+**DO NOT mark the phase as 'completed' until ALL scenes are done!**
 
 ## Scene Content Requirements
 
@@ -106,13 +106,13 @@ update_project(action: 'add_scene', data: { scene_number: 8, title: 'Resolution'
 TodoWrite(merge: true, todos: [{ id: 'scene-8', status: 'completed' }])
 
 // 3. NOW mark phase complete
-update_project(action: 'update_planner_stage', data: { phase: 'scenes', stage: 'complete' })
+update_project(action: 'update_phase', data: { phase: 'scenes', status: 'completed' })
 
 // 4. Transition to next phase
-update_project(action: 'transition_phase', data: { next_phase: 'character_setting_images' })
+update_project(action: 'transition_phase', data: {})
 ```
 
-**DO NOT call `update_planner_stage(stage: 'complete')` after scene 1, 2, 3... - ONLY after the LAST scene!**
+**DO NOT mark the phase as 'completed' after scene 1, 2, 3... - ONLY after the LAST scene!**
 
 ## Summary Checklist
 
@@ -120,6 +120,6 @@ update_project(action: 'transition_phase', data: { next_phase: 'character_settin
 - [ ] Did you create ONLY 5-8 scenes total?
 - [ ] Are you creating ONE scene at a time?
 - [ ] Are you calling TodoWrite after EACH scene approval?
-- [ ] Are you waiting until ALL scenes are done before calling `update_planner_stage(stage: 'complete')`?
+- [ ] Are you waiting until ALL scenes are done before marking the phase as 'completed'?
 
 **If you answered NO to any of these, STOP and fix your workflow.**

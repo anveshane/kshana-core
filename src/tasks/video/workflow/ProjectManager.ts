@@ -362,6 +362,9 @@ export function createProject(
     console.warn(`[ProjectManager] original_input.md already exists at ${fullInputPath}, preserving existing content.`);
   }
 
+  // Generate plan ID
+  const planId = `plan-${now}-${Math.random().toString(36).slice(2, 8)}`;
+
   // Default to 'idea' input type - agent will analyze and update if it's a full story
   const project: ProjectFile = {
     version: '2.0',
@@ -373,45 +376,46 @@ export function createProject(
     createdAt: now,
     updatedAt: now,
     currentPhase: WorkflowPhase.PLOT,
+    // Project-level master plan - one plan for all phases
+    plan: {
+      planId,
+      planFile: 'agent/plans/master-plan.md',
+      stage: PlannerStage.PLANNING,
+      refinementCount: 0,
+      createdAt: now,
+      approvedAt: null,
+    },
     phases: {
       plot: {
         status: 'pending',
-        planFile: 'agent/plans/plot-plan.md',
         completedAt: null,
       },
       story: {
         status: 'pending',
-        planFile: 'agent/plans/story-plan.md',
         completedAt: null,
       },
       characters_settings: {
         status: 'pending',
-        planFile: 'agent/plans/characters-settings-plan.md',
         completedAt: null,
       },
       scenes: {
         status: 'pending',
-        planFile: 'agent/plans/scenes-plan.md',
         completedAt: null,
       },
       character_setting_images: {
         status: 'pending',
-        planFile: 'agent/plans/ref-images.md',
         completedAt: null,
       },
       scene_images: {
         status: 'pending',
-        planFile: 'agent/plans/scene-images.md',
         completedAt: null,
       },
       video: {
         status: 'pending',
-        planFile: 'agent/plans/video.md',
         completedAt: null,
       },
       video_combine: {
         status: 'pending',
-        planFile: 'agent/plans/final-video.md',
         completedAt: null,
       },
     },
@@ -455,7 +459,6 @@ export function setProjectInputType(
       if (project.phases[phaseKey]) {
         project.phases[phaseKey].status = 'skipped';
         project.phases[phaseKey].completedAt = now;
-        project.phases[phaseKey].plannerStage = PlannerStage.COMPLETE;
       }
     }
 
@@ -555,10 +558,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
           // If characters_settings phase is complete, mark as approved
           const charactersSettingsPhase = project.phases.characters_settings;
-          if (
-            charactersSettingsPhase?.status === 'completed' ||
-            charactersSettingsPhase?.plannerStage === 'complete'
-          ) {
+          if (charactersSettingsPhase?.status === 'completed') {
             character.approvalStatus = 'approved';
             character.approvedAt = Date.now();
           }
@@ -621,10 +621,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
           // If characters_settings phase is complete, mark as approved
           const charactersSettingsPhase = project.phases.characters_settings;
-          if (
-            charactersSettingsPhase?.status === 'completed' ||
-            charactersSettingsPhase?.plannerStage === 'complete'
-          ) {
+          if (charactersSettingsPhase?.status === 'completed') {
             setting.approvalStatus = 'approved';
             setting.approvedAt = Date.now();
           }
@@ -698,10 +695,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
           }
 
           // If scenes phase is complete, mark scene as approved
-          if (
-            project.phases.scenes?.status === 'completed' ||
-            project.phases.scenes?.plannerStage === 'complete'
-          ) {
+          if (project.phases.scenes?.status === 'completed') {
             sceneRef.contentApprovalStatus = 'approved';
             sceneRef.contentApprovedAt = Date.now();
           }
@@ -1166,6 +1160,7 @@ export function getProjectStyleConfig(basePath: string = process.cwd()): StyleCo
 
 /**
  * Update a phase's status.
+ * Note: Planning is done at project level, not per-phase.
  */
 export function updatePhaseStatus(
   project: ProjectFile,
@@ -1178,9 +1173,6 @@ export function updatePhaseStatus(
 
   if (status === 'completed') {
     phaseInfo.completedAt = Date.now();
-    phaseInfo.plannerStage = PlannerStage.COMPLETE;
-  } else if (status === 'in_progress' && !phaseInfo.plannerStage) {
-    phaseInfo.plannerStage = PlannerStage.PLANNING;
   }
 
   saveProject(project, basePath);
@@ -1188,58 +1180,72 @@ export function updatePhaseStatus(
 }
 
 /**
- * Update a phase's planner stage.
+ * Update the project-level master plan stage.
+ * This is the single plan that governs all phases.
  */
-export function updatePlannerStage(
+export function updatePlanStage(
   project: ProjectFile,
-  phase: keyof ProjectFile['phases'],
   stage: PlannerStage,
   basePath: string = process.cwd()
 ): ProjectFile {
-  const phaseInfo = project.phases[phase];
-  phaseInfo.plannerStage = stage;
+  project.plan.stage = stage;
 
   if (stage === PlannerStage.REFINING) {
-    phaseInfo.refinementCount = (phaseInfo.refinementCount ?? 0) + 1;
+    project.plan.refinementCount += 1;
   }
 
-  // When planner stage reaches COMPLETE:
-  // - For per-item phases: Only the PLAN is complete, not the phase itself
-  //   The phase is only complete when all items are approved
-  // - For planning-only phases: The phase is complete
   if (stage === PlannerStage.COMPLETE) {
-    const phaseConfig = PHASE_CONFIGS[phase as WorkflowPhase];
-    const isPerItemPhase = phaseConfig?.requiresPerItemApproval ?? false;
-
-    if (!isPerItemPhase) {
-      // Planning-only phases (plot, story, video_combine) are complete when plan is approved
-      phaseInfo.status = 'completed';
-      phaseInfo.completedAt = Date.now();
+    project.plan.approvedAt = Date.now();
+    // When master plan is approved, mark the first phase as in_progress
+    const firstPhaseKey = project.currentPhase as keyof typeof project.phases;
+    if (project.phases[firstPhaseKey] && project.phases[firstPhaseKey].status === 'pending') {
+      project.phases[firstPhaseKey].status = 'in_progress';
     }
-    // For per-item phases, status remains 'in_progress' until all items are approved
   }
 
   saveProject(project, basePath);
   return project;
+}
+
+/**
+ * @deprecated Use updatePlanStage instead. Planning is now at project level.
+ */
+export function updatePlannerStage(
+  project: ProjectFile,
+  _phase: keyof ProjectFile['phases'],
+  stage: PlannerStage,
+  basePath: string = process.cwd()
+): ProjectFile {
+  // Redirect to project-level plan stage update
+  return updatePlanStage(project, stage, basePath);
 }
 
 /**
  * Transition to the next phase based on current state.
+ * Requires project-level plan to be approved before phases can progress.
  */
 export function transitionToNextPhase(
   project: ProjectFile,
   basePath: string = process.cwd()
 ): { project: ProjectFile; transitioned: boolean; reason: string } {
+  // Check if master plan is approved
+  if (project.plan.stage !== PlannerStage.COMPLETE) {
+    return { 
+      project, 
+      transitioned: false, 
+      reason: 'Master plan must be approved before transitioning phases. Current stage: ' + project.plan.stage 
+    };
+  }
+
   const result = determineNextPhase(project);
 
   if (result.nextPhase !== project.currentPhase) {
     project.currentPhase = result.nextPhase;
 
-    // Mark new phase as in_progress with planning stage
+    // Mark new phase as in_progress (no per-phase planning)
     const phaseKey = result.nextPhase as keyof typeof project.phases;
     if (project.phases[phaseKey]) {
       project.phases[phaseKey].status = 'in_progress';
-      project.phases[phaseKey].plannerStage = PlannerStage.PLANNING;
     }
 
     saveProject(project, basePath);
@@ -1884,14 +1890,20 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
     }
   }
 
+  // Plan status
+  const planStatus = project.plan.stage === PlannerStage.COMPLETE 
+    ? `✅ Approved (ID: ${project.plan.planId})` 
+    : `⏳ ${project.plan.stage} (ID: ${project.plan.planId})`;
+
   return `
 Project: ${project.title || '(untitled)'}
 ID: ${project.id}
 Version: ${project.version}
 Style: ${styleDisplay}
 Input Type: ${inputTypeDisplay}
+Master Plan: ${planStatus}
 Current Phase: ${phaseConfig.displayName} (${currentPhase})
-Planner Stage: ${phaseInfo?.plannerStage ?? 'not started'}
+Phase Status: ${phaseInfo?.status ?? 'not started'}
 Completed Phases: ${completedPhases.length > 0 ? completedPhases.join(', ') : 'none'}
 Skipped Phases: ${skippedPhases.length > 0 ? skippedPhases.join(', ') : 'none'}
 Characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'none defined'}
@@ -1904,6 +1916,7 @@ Assets: ${project.assets.length}${itemProgress}${sceneLimitWarning}
 /**
  * Get the state transition prompt for the main agent.
  * This tells the agent what phase it's in and what to do next.
+ * Planning is done at project level - all phases execute based on the approved master plan.
  */
 export function getStateTransitionPrompt(basePath: string = process.cwd()): string {
   const project = loadProject(basePath);
@@ -1915,140 +1928,127 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
   const currentPhase = project.currentPhase;
   const phaseConfig = PHASE_CONFIGS[currentPhase];
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
-  const plannerStage = phaseInfo?.plannerStage ?? PlannerStage.PLANNING;
+  const masterPlanStage = project.plan.stage;
 
-  // Check if plan file already has content
-  const planFileExists = phaseConfig.planOutputFile
-    ? planFileHasContent(phaseConfig.planOutputFile, basePath)
-    : false;
+  // Check if master plan file has content
+  const masterPlanExists = planFileHasContent(project.plan.planFile, basePath);
 
   let instruction = `
 ## Current State
 - **Phase**: ${phaseConfig.displayName}
-- **Stage**: ${plannerStage}
-- **Plan File**: ${phaseConfig.planOutputFile ?? 'N/A'}
-- **Plan File Has Content**: ${planFileExists ? 'YES' : 'NO'}
+- **Phase Status**: ${phaseInfo?.status ?? 'pending'}
+- **Master Plan**: ${project.plan.planFile}
+- **Master Plan ID**: ${project.plan.planId}
+- **Master Plan Stage**: ${masterPlanStage}
+- **Master Plan Has Content**: ${masterPlanExists ? 'YES' : 'NO'}
 - **Per-Item Approval Required**: ${phaseConfig.requiresPerItemApproval ? 'YES' : 'NO'}
 
 ## What to Do Next
+`;
+
+  // Check if master plan needs to be created/approved first
+  if (masterPlanStage !== PlannerStage.COMPLETE) {
+    switch (masterPlanStage) {
+      case PlannerStage.PLANNING:
+        if (masterPlanExists) {
+          instruction += `
+The master plan exists. Present it to the user for approval.
+1. Use ask_user to present a summary and ask for approval
+2. If approved, call update_project with action "update_plan_stage" and stage "complete"
+3. If feedback is given, call update_project with action "update_plan_stage" and stage "refining"
+`;
+        } else {
+          instruction += `
+**CREATE MASTER PLAN FIRST**
+
+Before executing any phase, you must create a master plan that covers the entire video generation workflow.
+
+1. Read the user's original input from agent/original_input.md
+2. Create a comprehensive master plan that outlines:
+   - Plot summary and key story beats
+   - Main characters to be visualized
+   - Key settings/locations
+   - Estimated number of scenes
+   - Visual style approach
+3. Write the plan to ${project.plan.planFile}
+4. Present the plan to the user for approval
+`;
+        }
+        break;
+
+      case PlannerStage.VERIFY:
+        instruction += `
+The master plan is ready for verification. Present it to the user for approval.
+1. Read the plan from ${project.plan.planFile}
+2. Use ask_user to present a summary and ask for approval
+3. If approved, call update_project with action "update_plan_stage" and stage "complete"
+4. If feedback is given, call update_project with action "update_plan_stage" and stage "refining"
+`;
+        break;
+
+      case PlannerStage.REFINING:
+        instruction += `
+Refine the master plan based on user feedback.
+1. Read the current plan from ${project.plan.planFile}
+2. Apply user feedback
+3. Update the plan in ${project.plan.planFile}
+4. Call update_project with action "update_plan_stage" and stage "verify"
+`;
+        break;
+    }
+    
+    return instruction.trim();
+  }
+
+  // Master plan is approved - proceed with phase execution
+  instruction += `
+✅ **Master plan approved** - Executing phase: ${phaseConfig.displayName}
+
 `;
 
   // For phases requiring per-item approval, provide specific instructions
   if (phaseConfig.requiresPerItemApproval) {
     instruction += getPerItemPhaseInstructions(project, phaseConfig, basePath);
   } else {
-    // Standard single-approval phase flow
-    switch (plannerStage) {
-      case PlannerStage.PLANNING:
-        if (planFileExists) {
-          // If plan exists and we're in PLANNING stage, it means plan was just approved
-          // For content phases (plot, story), we need to generate the actual content
-          if (phaseConfig.agentType === 'content' && phaseConfig.contentType) {
+    // Standard single-item phase flow (plot, story, video_combine)
+    const phaseStatus = phaseInfo?.status ?? 'pending';
+    
+    if (phaseStatus === 'completed') {
+      instruction += `
+The ${phaseConfig.displayName} phase is complete.
+1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+`;
+    } else {
+      // Check if content exists for content phases
+      if (phaseConfig.agentType === 'content' && phaseConfig.contentType) {
+        const contentFile = CONTENT_TYPE_OUTPUT_FILES[phaseConfig.contentType];
+        if (contentFile) {
+          const contentFilePath = join(basePath, '.kshana', 'agent', contentFile);
+          const contentExists = existsSync(contentFilePath) && readFileSync(contentFilePath, 'utf-8').trim().length > 0;
+        
+          if (contentExists) {
             instruction += `
-You are in the PLANNING stage and a plan already exists at ${phaseConfig.planOutputFile}.
-
-**IMPORTANT**: The plan was just approved. Now you must generate the actual ${phaseConfig.contentType} content.
-
-1. Use generate_content(content_type: "${phaseConfig.contentType}") to create the ${phaseConfig.contentType} content
-2. The tool will handle user approval automatically
-3. After user approves the content, update project state and transition to next phase
-
-DO NOT create a new plan. DO NOT re-enter plan mode. Generate the content now.
+The ${phaseConfig.contentType} content already exists. Mark phase as complete and transition.
+1. Call update_project with action "update_phase" to mark "${currentPhase}" as "completed"
+2. Call update_project with action "transition_phase" to move to the next phase
 `;
           } else {
-            // For non-content phases, if plan exists, mark complete and transition
             instruction += `
-You are in the PLANNING stage BUT a plan already exists at ${phaseConfig.planOutputFile}.
-
-**IMPORTANT**: An existing plan means it was ALREADY APPROVED previously. Do NOT ask for approval again.
-
-1. Mark this phase as COMPLETE immediately (update_project with action "update_planner_stage", stage "complete")
-2. Then transition to the next phase using transition_phase
-
-DO NOT create a new plan. DO NOT ask for approval - it's already approved.
+Generate the ${phaseConfig.contentType} content for this phase.
+1. Use generate_content(content_type: "${phaseConfig.contentType}") to create the content
+2. The tool will handle user approval automatically
+3. After content is approved, mark phase as complete and transition to next phase
 `;
           }
-        } else {
-          instruction += `
-You are in the PLANNING stage. Create a plan for ${phaseConfig.displayName}.
-1. Analyze the project context
-2. Create a detailed plan
-3. Write the plan to ${phaseConfig.planOutputFile}
-4. Move to VERIFY stage by updating the planner stage
-`;
         }
-        break;
-
-      case PlannerStage.VERIFY:
-        if (planFileExists) {
-          instruction += `
-You are in the VERIFY stage and a plan already exists at ${phaseConfig.planOutputFile}.
-
-**IMPORTANT**: An existing plan means it was ALREADY APPROVED previously. Do NOT ask for approval again.
-
-1. Mark this phase as COMPLETE immediately (update_project with action "update_planner_stage", stage "complete")
-2. Then transition to the next phase using transition_phase
-`;
-        } else {
-          instruction += `
-You are in the VERIFY stage. Present the plan to the user for approval.
-1. Read the plan from ${phaseConfig.planOutputFile}
-2. Present a summary to the user using ask_user
-3. If user approves (or 15 seconds pass with no response), move to COMPLETE
-4. If user provides feedback, move to REFINING stage
-`;
-        }
-        break;
-
-      case PlannerStage.REFINING:
+      } else {
         instruction += `
-You are in the REFINING stage. Update the plan based on user feedback.
-1. Read the current plan
-2. Apply user feedback
-3. Update the plan in ${phaseConfig.planOutputFile}
-4. Move back to VERIFY stage
+Execute the ${phaseConfig.displayName} phase.
+1. Follow the phase-specific instructions from the master plan
+2. When complete, call update_project with action "update_phase" to mark "${currentPhase}" as "completed"
+3. Then transition to the next phase
 `;
-        break;
-
-      case PlannerStage.COMPLETE:
-        // For content phases (plot, story), check if content file exists
-        if (phaseConfig.agentType === 'content' && phaseConfig.contentType) {
-          const contentFile = CONTENT_TYPE_OUTPUT_FILES[phaseConfig.contentType];
-          if (contentFile) {
-            const contentFilePath = join(basePath, '.kshana', 'agent', contentFile);
-            const contentExists = existsSync(contentFilePath) && readFileSync(contentFilePath, 'utf-8').trim().length > 0;
-          
-            if (!contentExists) {
-              instruction += `
-⚠️ **CRITICAL ISSUE DETECTED**: The ${phaseConfig.displayName} phase is marked complete, but the actual ${phaseConfig.contentType} content file is missing!
-
-**You MUST generate the content now before transitioning:**
-
-1. Use generate_content(content_type: "${phaseConfig.contentType}") to create the ${phaseConfig.contentType} content
-2. The tool will handle user approval automatically
-3. After user approves the content, then transition to the next phase
-
-DO NOT transition yet - the content is missing!
-`;
-            } else {
-              instruction += `
-The ${phaseConfig.displayName} phase is complete.
-1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
-`;
-            }
-          } else {
-            instruction += `
-The ${phaseConfig.displayName} phase is complete.
-1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
-`;
-          }
-        } else {
-          instruction += `
-The ${phaseConfig.displayName} phase is complete.
-1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
-`;
-        }
-        break;
+      }
     }
   }
 

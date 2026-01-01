@@ -17,6 +17,9 @@ import {
   createProject,
   STYLE_CONFIGS,
   type ProjectStyle,
+  buildWorkflowAgentPrompt,
+  getCurrentPhase,
+  loadProjectFilesAsContexts,
 } from './tasks/video/index.js';
 import type { LLMClientConfig } from './core/llm/index.js';
 import type { AgentConfig } from './core/agent/index.js';
@@ -88,18 +91,26 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   }, [taskType]);
 
   // Get custom prompt based on task type
+  // For video mode, we build it dynamically based on the current project state
   const customPrompt = React.useMemo(() => {
     if (taskType === 'video') {
+      if (existingProject) {
+        // Use dynamic workflow prompt if project exists
+        const currentPhase = getCurrentPhase(existingProject);
+        const loadedContexts = loadProjectFilesAsContexts();
+        return buildWorkflowAgentPrompt(existingProject, currentPhase, loadedContexts);
+      }
+      // Fallback to static prompt only if no project yet (initial creation)
       return VIDEO_CREATION_SYSTEM_PROMPT;
     }
     return agentConfig?.customPrompt;
-  }, [taskType, agentConfig?.customPrompt]);
+  }, [taskType, agentConfig?.customPrompt, existingProject]);
 
   // Compute effective agent name based on task type
   const agentName = agentConfig?.name ?? (taskType === 'video' ? 'kshana-video' : 'kshana-ink');
 
-  // Event handler for UI logging
-  const handleAgentEvent = React.useCallback((event: import('./events/index.js').AgentEvent) => {
+  // Event handler for UI logger (kept separate to avoid recursion in useAgent)
+  const handleAgentEventsForLogger = React.useCallback((event: import('./events/index.js').AgentEvent) => {
     switch (event.type) {
       case 'agent_status':
         uiLogger.logStatusChange(event.status, event.agentName);
@@ -110,9 +121,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         }
         break;
       case 'streaming_text':
-        if (event.done && event.chunk !== undefined) {
-          // Log completed streaming text - but we'll handle this via state change instead
-        }
+        // Log handled by state change
         break;
       case 'tool_call':
         uiLogger.logToolStart(event.toolName, event.arguments);
@@ -150,6 +159,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     injectInput,
     reset,
     setProjectId,
+    updateCustomPrompt,
   } = useAgent({
     tools,
     llmConfig,
@@ -158,9 +168,33 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       name: agentName,
       customPrompt,
     },
-    onEvent: handleAgentEvent,
+    onEvent: handleAgentEventsForLogger,
     projectId: existingProject?.id ?? null,
   });
+
+  // Handle phase transitions to update the prompt dynamically
+  // Listen to history updates because useAgent adds phase transitions to history
+  React.useEffect(() => {
+    if (history.length > 0) {
+      const lastEntry = history[history.length - 1];
+      if (lastEntry && lastEntry.type === 'phase_transition' && taskType === 'video') {
+        // Reload project to get fresh state
+        const project = loadProject();
+        if (project) {
+          // Update existingProject state
+          setExistingProject(project);
+
+          // Rebuild prompt with new phase
+          const currentPhase = getCurrentPhase(project);
+          const loadedContexts = loadProjectFilesAsContexts();
+          const newPrompt = buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
+
+          // Update the running agent's prompt
+          updateCustomPrompt(newPrompt);
+        }
+      }
+    }
+  }, [history, taskType, updateCustomPrompt]);
 
   // Handle global keyboard shortcuts
   useInput((input, key) => {

@@ -118,8 +118,8 @@ export const INPUT_TYPE_CONFIGS: Record<InputType, InputTypeConfig> = {
 };
 
 /**
- * Planner stage within a phase.
- * Each planning agent goes through these stages.
+ * Planner stage for the project-level master plan.
+ * The project goes through these stages ONCE before executing phases.
  */
 export enum PlannerStage {
   /** Initial planning - creating the first draft */
@@ -128,8 +128,27 @@ export enum PlannerStage {
   VERIFY = 'verify',
   /** Refining based on user feedback */
   REFINING = 'refining',
-  /** Plan approved, ready to execute */
+  /** Plan approved, ready to execute phases */
   COMPLETE = 'complete',
+}
+
+/**
+ * Project-level master plan.
+ * A single plan that covers all phases of the video generation workflow.
+ */
+export interface ProjectPlan {
+  /** Unique identifier for the plan */
+  planId: string;
+  /** Path to the master plan file (relative to .kshana/) */
+  planFile: string;
+  /** Current stage of the planning process */
+  stage: PlannerStage;
+  /** Number of refinement iterations */
+  refinementCount: number;
+  /** Timestamp when plan was created */
+  createdAt: number;
+  /** Timestamp when plan was approved (stage = COMPLETE) */
+  approvedAt: number | null;
 }
 
 /**
@@ -139,18 +158,13 @@ export type PhaseStatus = 'pending' | 'in_progress' | 'completed' | 'skipped';
 
 /**
  * Phase metadata stored in project.json.
+ * Note: Planning is done at project level via ProjectPlan, not per-phase.
  */
 export interface PhaseInfo {
   /** Current status of the phase */
   status: PhaseStatus;
-  /** Current planner stage (if in_progress) */
-  plannerStage?: PlannerStage;
-  /** Path to the plan file (relative to agent/) */
-  planFile?: string;
   /** Timestamp when phase was completed */
   completedAt: number | null;
-  /** Number of refinement iterations */
-  refinementCount?: number;
 }
 
 /**
@@ -424,7 +438,7 @@ export interface FinalVideoInfo {
 /**
  * Main project file structure (project.json).
  * This is an INDEX file - content lives in .md files, this just tracks references.
- * Version 2.0 - 8-phase workflow with per-item approval.
+ * Version 2.0 - 8-phase workflow with per-item approval and project-level planning.
  */
 export interface ProjectFile {
   /** Project version - must be '2.0' for 8-phase workflow */
@@ -446,6 +460,13 @@ export interface ProjectFile {
 
   /** Current workflow phase */
   currentPhase: WorkflowPhase;
+
+  /** 
+   * Project-level master plan.
+   * A single plan that covers all phases - created once at the start.
+   * All phases execute based on this approved plan.
+   */
+  plan: ProjectPlan;
 
   /** Phase status tracking for all 8 phases */
   phases: {
@@ -499,6 +520,7 @@ export type ContentType = 'plot' | 'story' | 'character' | 'setting' | 'scene' |
 
 /**
  * Configuration for each workflow phase.
+ * Note: Planning is done at project level, not per-phase.
  */
 export interface PhaseConfig {
   /** Phase identifier */
@@ -509,8 +531,6 @@ export interface PhaseConfig {
   nextPhase: WorkflowPhase | null;
   /** Prompt file name (without .json) for agent */
   promptFile: string;
-    /** Path to plan output file (relative to agent/) */
-    planOutputFile?: string;
   /** Primary agent type for this phase */
   agentType: AgentType;
   /** Tools available in this phase */
@@ -529,6 +549,7 @@ export interface PhaseConfig {
 
 /**
  * Phase configurations map for 8-phase workflow.
+ * Note: Planning is done at project level via ProjectPlan, not per-phase.
  */
 export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
   [WorkflowPhase.PLOT]: {
@@ -536,7 +557,6 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Plot Development',
     nextPhase: WorkflowPhase.STORY,
     promptFile: 'plot',
-    planOutputFile: 'agent/plans/plot-plan.md',
     agentType: 'content',
     contentType: 'plot',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_content_agent'],
@@ -551,7 +571,6 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Story Development',
     nextPhase: WorkflowPhase.CHARACTERS_SETTINGS,
     promptFile: 'story',
-    planOutputFile: 'agent/plans/story-plan.md',
     agentType: 'content',
     contentType: 'story',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_content_agent'],
@@ -566,7 +585,6 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Character & Setting Descriptions',
     nextPhase: WorkflowPhase.SCENES,
     promptFile: 'characters-settings',
-    planOutputFile: 'agent/plans/characters-settings-plan.md',
     agentType: 'content',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_agent', 'dispatch_content_agent', 'todo_write'],
     itemProcessMode: 'list_all_refs',
@@ -580,7 +598,6 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Scene Breakdown',
     nextPhase: WorkflowPhase.CHARACTER_SETTING_IMAGES,
     promptFile: 'scenes',
-    planOutputFile: 'agent/plans/scenes-plan.md',
     agentType: 'content',
     contentType: 'scene',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_agent', 'dispatch_content_agent', 'todo_write'],
@@ -595,7 +612,6 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Reference Image Generation',
     nextPhase: WorkflowPhase.SCENE_IMAGES,
     promptFile: 'character-setting-images',
-    planOutputFile: 'agent/plans/ref-images.md',
     agentType: 'image',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'list_all_refs',
@@ -609,7 +625,6 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Scene Image Generation',
     nextPhase: WorkflowPhase.VIDEO,
     promptFile: 'scene-images',
-    planOutputFile: 'agent/plans/scene-images.md',
     agentType: 'image',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'list_scene_images',
@@ -623,7 +638,6 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Video Generation',
     nextPhase: WorkflowPhase.VIDEO_COMBINE,
     promptFile: 'video',
-    planOutputFile: 'agent/plans/video.md',
     agentType: 'video',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_video_agent', 'generate_video', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'list_scenes',
@@ -637,7 +651,6 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Video Stitching',
     nextPhase: WorkflowPhase.COMPLETED,
     promptFile: 'video-combine',
-    planOutputFile: 'agent/plans/final-video.md',
     agentType: 'video',
     allowedTools: ['think', 'ask_user', 'read_file', 'read_project', 'update_project', 'stitch_videos', 'wait_for_job'],
     itemProcessMode: 'single',
@@ -777,6 +790,7 @@ export function determineNextPhase(project: ProjectFile): StateTransitionResult 
 
 /**
  * Check if a phase can transition to the next phase.
+ * Note: Planning is done at project level, so we only check phase status.
  */
 export function canTransitionToNextPhase(project: ProjectFile, phase: WorkflowPhase): boolean {
   const phaseKey = phase as keyof typeof project.phases;
@@ -787,8 +801,8 @@ export function canTransitionToNextPhase(project: ProjectFile, phase: WorkflowPh
   // Phase must be completed to transition
   if (phaseInfo.status !== 'completed') return false;
 
-  // Planner stage must be complete
-  if (phaseInfo.plannerStage && phaseInfo.plannerStage !== PlannerStage.COMPLETE) {
+  // Project-level plan must be approved before any phase can complete
+  if (project.plan.stage !== PlannerStage.COMPLETE) {
     return false;
   }
 

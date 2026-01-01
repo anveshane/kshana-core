@@ -33,6 +33,7 @@ import {
   updateScene,
   setProjectInputType,
   updateContentStatus,
+  updatePlanStage,
 } from './ProjectManager.js';
 import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus, InputType, ContentTypeName } from './types.js';
 import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase, INPUT_TYPE_CONFIGS } from './types.js';
@@ -356,11 +357,9 @@ Use this at the start of each turn to understand the project state and what acti
 
     // Set phase context in phaseLogger for all subsequent logs
     const phaseLogger = getPhaseLogger();
-    const currentPhaseKey = project.currentPhase as keyof typeof project.phases;
-    const phaseInfo = project.phases[currentPhaseKey];
     phaseLogger.setContext({
       phase: project.currentPhase,
-      stage: phaseInfo?.plannerStage,
+      stage: project.plan.stage,
       projectId: project.id,
     });
 
@@ -396,9 +395,10 @@ Note: project.json is an INDEX file. Content should be in .md files:
 Actions:
 - "create": Create a new project with the given original_input
 - "set_title": Set the project title
+- "update_plan_stage": Update the project-level master plan stage. Data: { stage: 'planning'|'verify'|'refining'|'complete' }
 - "update_phase": Update a phase status. Data: { phase: string, status: 'pending'|'in_progress'|'completed' }
-- "update_planner_stage": Update planner stage. Data: { phase: string, stage: 'planning'|'verify'|'refining'|'complete' }
-- "transition_phase": Automatically transition to next phase if current is complete
+- "update_planner_stage": DEPRECATED - redirects to update_plan_stage
+- "transition_phase": Automatically transition to next phase if master plan is approved and current phase is complete
 - "add_character": Register a character. Data: { name, description?, visual_description?, approval_status? }
 - "update_character": Update an existing character. Data: { name, updates: { ... } }
 - "update_character_approval": Update character approval. Data: { name, status, approval_type?: 'content'|'image', contentArtifactId?, referenceImageId? }
@@ -419,8 +419,9 @@ Actions:
         enum: [
           'create',
           'set_title',
+          'update_plan_stage',
           'update_phase',
-          'update_planner_stage',
+          'update_planner_stage', // Deprecated - redirects to update_plan_stage
           'transition_phase',
           'add_character',
           'update_character',
@@ -525,58 +526,83 @@ What story would you like to turn into a video?`,
           return { status: 'success', message: `Phase ${phase} updated to ${status}`, current_phase: project.currentPhase };
         }
 
-        case 'update_planner_stage': {
+        case 'update_plan_stage': {
+          // Update the project-level master plan stage
           const logger = getWorkflowLogger();
           const phaseLogger = getPhaseLogger();
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
-          // Accept both 'phase' and 'phase_name' for compatibility
-          const phase = (data['phase'] || data['phase_name']) as keyof ProjectFile['phases'];
           const stage = data['stage'] as PlannerStage;
-          if (!phase || !stage) {
-            return { status: 'error', error: 'phase (or phase_name) and stage are required' };
+          if (!stage) {
+            return { status: 'error', error: 'stage is required' };
           }
           const validStages = ['planning', 'verify', 'refining', 'complete'];
           if (!validStages.includes(stage)) {
             return { status: 'error', error: `Invalid stage. Must be one of: ${validStages.join(', ')}` };
           }
-          updatePlannerStage(project, phase, stage);
+          
+          updatePlanStage(project, stage);
+          
+          const planApproved = stage === 'complete';
+          logger.logPlannerStage('master_plan', stage, planApproved);
+          phaseLogger.stageTransition(stage, `Master plan entered ${stage} stage`);
 
-          // Check if this is a per-item phase
-          const phaseConfig = PHASE_CONFIGS[phase as WorkflowPhase];
-          const isPerItemPhase = phaseConfig?.requiresPerItemApproval ?? false;
-
-          // For per-item phases, phase is NOT complete when planner stage is complete
-          // The phase is only complete when all items are approved
-          const phaseCompleted = stage === 'complete' && !isPerItemPhase;
-          logger.logPlannerStage(phase, stage, phaseCompleted);
-
-          // Update phase logger context with new stage
-          phaseLogger.stageTransition(stage, `Phase ${phase} entered ${stage} stage`);
-
-          if (stage === 'complete' && isPerItemPhase) {
+          if (planApproved) {
             return {
               status: 'success',
-              message: `Planning for ${phase} is complete. Now you must process each item individually. Generate content/images/videos for each item, get approval, then mark the phase complete when ALL items are approved.`,
+              message: `Master plan approved! You can now execute phases. Current phase: ${project.currentPhase}`,
+              plan_id: project.plan.planId,
+              plan_stage: project.plan.stage,
               current_phase: project.currentPhase,
-              phase_status: project.phases[phase]?.status,
-              phase_completed: false,
-              requires_per_item_processing: true,
-              next_action: 'Process each item one by one, get individual approvals, then transition when all items are approved.',
+              next_action: 'Start executing the current phase based on the approved master plan.',
             };
           }
 
           return {
             status: 'success',
-            message: phaseCompleted
-              ? `Planner stage for ${phase} updated to ${stage}. Phase ${phase} is now completed.`
-              : `Planner stage for ${phase} updated to ${stage}`,
+            message: `Master plan stage updated to ${stage}`,
+            plan_id: project.plan.planId,
+            plan_stage: project.plan.stage,
             current_phase: project.currentPhase,
-            phase_status: project.phases[phase]?.status,
-            phase_completed: phaseCompleted,
-            next_action: phaseCompleted
+          };
+        }
+
+        case 'update_planner_stage': {
+          // DEPRECATED: Redirect to update_plan_stage for backward compatibility
+          const logger = getWorkflowLogger();
+          const phaseLogger = getPhaseLogger();
+          const project = loadProject();
+          if (!project) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const stage = data['stage'] as PlannerStage;
+          if (!stage) {
+            return { status: 'error', error: 'stage is required' };
+          }
+          const validStages = ['planning', 'verify', 'refining', 'complete'];
+          if (!validStages.includes(stage)) {
+            return { status: 'error', error: `Invalid stage. Must be one of: ${validStages.join(', ')}` };
+          }
+          
+          // Redirect to project-level plan update
+          updatePlanStage(project, stage);
+          
+          const planApproved = stage === 'complete';
+          logger.logPlannerStage('master_plan', stage, planApproved);
+          phaseLogger.stageTransition(stage, `Master plan entered ${stage} stage (via deprecated update_planner_stage)`);
+
+          return {
+            status: 'success',
+            message: planApproved
+              ? `Master plan approved! Now execute the current phase: ${project.currentPhase}`
+              : `Master plan stage updated to ${stage}`,
+            plan_id: project.plan.planId,
+            plan_stage: project.plan.stage,
+            current_phase: project.currentPhase,
+            deprecated_notice: 'update_planner_stage is deprecated. Use update_plan_stage instead.',
+            next_action: planApproved
               ? 'IMPORTANT: Phase is complete. Call transition_phase immediately to move to the next phase, then continue working. Do NOT stop or ask the user what to do.'
               : 'Continue with the current phase work.',
           };

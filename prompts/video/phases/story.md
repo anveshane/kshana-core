@@ -1,30 +1,31 @@
 ### Story Development Phase
 
-**⚠️ CRITICAL: This phase generates content directly. DO NOT create a plan first!**
+**⚠️ PREREQUISITE: Master plan must be approved before executing this phase!**
 
 **Step-by-step instructions:**
 
-1. **IMMEDIATELY generate the story content** (DO NOT create a plan first):
+1. **IMMEDIATELY generate the story content**:
+   - Uses the approved plot and master plan for guidance.
 ```
 generate_content(content_type: "story")
 ```
 
 The tool automatically:
 - Uses the approved plot from the context store
+- References the master plan for structure
 - Passes it to the content-creator agent
 - Handles user approval flow
 - Saves approved content to `agent/script/story.md`
 
 2. **CRITICAL: After story approval, IMMEDIATELY update project state:**
 ```
-update_project(action: 'update_planner_stage', data: { phase: 'story', stage: 'complete' })
-update_project(action: 'transition_phase', data: { next_phase: 'characters_settings' })
+update_project(action: 'update_phase', data: { phase: 'story', status: 'completed' })
+update_project(action: 'transition_phase', data: {})
 ```
 
-**❌ DO NOT use Task with subagent_type="Plan" for this phase.**
-**❌ DO NOT create story-plan.md - generate the story content directly.**
+**❌ DO NOT create per-phase plans - the master plan governs all phases.**
 **❌ DO NOT enter a feedback loop after approval.**
-**✅ After the user accepts the story, IMMEDIATELY call the two update_project actions above.**
+**✅ After the user accepts the story, IMMEDIATELY mark phase complete and transition.**
 
 **The story should include:**
 - Character introductions with physical descriptions

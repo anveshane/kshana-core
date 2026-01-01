@@ -11,6 +11,7 @@ import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
 import { loadAndRenderMarkdown, loadMarkdown } from '../../core/prompts/loader.js';
+import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
@@ -186,7 +187,7 @@ export function createWorkflowToolRegistry(): ToolRegistry {
  * - images: characters, scenes
  * - video: scenes, images
  */
-function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
+export function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
   const projectDir = getProjectDir(basePath);
   const agentDir = join(projectDir, 'agent');
   const plansDir = join(agentDir, 'plans');
@@ -220,7 +221,9 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
   // Note: plot.md and story.md are now in script/ directory, not plans/
   const contentFiles = [
     { dir: scriptDir, file: 'plot.md', label: 'Plot Outline', varName: 'plot' },
+    { dir: plansDir, file: 'plot-plan.md', label: 'Plot Creation Plan', varName: 'plot_plan' },
     { dir: scriptDir, file: 'story.md', label: 'Story', varName: 'story' },
+    { dir: plansDir, file: 'story-plan.md', label: 'Story Development Plan', varName: 'story_plan' },
     { dir: plansDir, file: 'scenes.md', label: 'Scenes', varName: 'scenes' },
     { dir: plansDir, file: 'characters.md', label: 'Characters', varName: 'characters' },
     { dir: plansDir, file: 'settings.md', label: 'Settings', varName: 'settings' },
@@ -249,7 +252,6 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
 
   // Log context loading metrics for phase-aware monitoring
   if (loadedContexts.length > 0) {
-    const { getPhaseLogger } = require('../../utils/phaseLogger.js');
     const phaseLogger = getPhaseLogger();
     // Estimate tokens: ~3 chars per token
     const estimatedTokens = Math.ceil(totalChars / 3);
@@ -335,7 +337,7 @@ const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
  * Build the custom prompt for the workflow agent based on current phase.
  * Loads prompts from markdown files for easier maintenance.
  */
-function buildWorkflowAgentPrompt(
+export function buildWorkflowAgentPrompt(
   project: ReturnType<typeof loadProject>,
   currentPhase: WorkflowPhase,
   loadedContexts: string[] = []

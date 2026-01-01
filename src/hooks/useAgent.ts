@@ -237,18 +237,18 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       // Mark wasStreamed if content was already displayed live (to avoid duplicate display)
       const historyEntry: HistoryEntry | null = tool
         ? {
-            id: `tool-${action.toolCallId}`,
-            type: 'tool_completed',
-            content: tool.name,
-            timestamp: endTime,
-            toolName: tool.name,
-            toolArgs: tool.args,
-            toolResult: action.result,
-            duration,
-            agentName,
-            streamingContent: tool.streamingContent,
-            wasStreamed: !!tool.streamingContent,
-          }
+          id: `tool-${action.toolCallId}`,
+          type: 'tool_completed',
+          content: tool.name,
+          timestamp: endTime,
+          toolName: tool.name,
+          toolArgs: tool.args,
+          toolResult: action.result,
+          duration,
+          agentName,
+          streamingContent: tool.streamingContent,
+          wasStreamed: !!tool.streamingContent,
+        }
         : null;
 
       return {
@@ -285,6 +285,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         toolCallId: action.toolCallId,
         toolName: action.toolName ?? targetTool.name,
         toolArgs: action.toolArgs ?? targetTool.args,
+        startTime: targetTool.startTime, // Use original start time
         agentName: action.agentName ?? targetTool.agentName,
       } : state.currentAction;
 
@@ -438,6 +439,7 @@ interface UseAgentReturn {
   isConfirmation: boolean;
   questionOptions: QuestionOption[] | undefined;
   autoApproveTimeoutMs: number | undefined;
+  questionContext: string | undefined;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
@@ -448,6 +450,7 @@ interface UseAgentReturn {
   stop: () => void;
   injectInput: (input: string) => void;
   setProjectId: (projectId: string | null) => void;
+  updateCustomPrompt: (prompt: string) => void;
 }
 
 export function useAgent(options: UseAgentOptions): UseAgentReturn {
@@ -739,6 +742,14 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     }
   }, []);
 
+  // Update custom prompt dynamically
+  const updateCustomPrompt = React.useCallback((prompt: string) => {
+    if (agentRef.current) {
+      debugLog(`[useAgent] Updating custom prompt. Length: ${prompt.length}`);
+      agentRef.current.updateCustomPrompt(prompt);
+    }
+  }, []);
+
   return {
     status: state.status,
     todos: state.todos,
@@ -760,5 +771,6 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     stop,
     injectInput,
     setProjectId,
+    updateCustomPrompt,
   };
 }
