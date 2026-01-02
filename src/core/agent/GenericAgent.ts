@@ -13,7 +13,7 @@ import * as path from 'path';
 import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
-import { buildSystemMessage, buildPlanningPrompt, buildContentPrompt, buildImageGenerationPrompt, wrapUserTask, type ContentType } from '../prompts/index.js';
+import { buildSystemMessage, buildPlanningPrompt, buildExplorePrompt, buildContentPrompt, buildImageGenerationPrompt, wrapUserTask, type ContentType } from '../prompts/index.js';
 import { loadAndRenderMarkdown } from '../prompts/loader.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
 import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, LONG_CONTENT_THRESHOLD } from '../context/index.js';
@@ -1549,6 +1549,10 @@ export class GenericAgent extends TypedEventEmitter {
       });
     }
 
+    if (subagentType === 'Explore') {
+      return await this.handleDispatchExploreAgent(toolCall);
+    }
+
     if (subagentType === 'content-creator') {
       return await this.handleDispatchContentAgent({
         ...toolCall,
@@ -1792,6 +1796,139 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Generate the initial plan
     return this.continuePlanningLoop();
+  }
+
+  /**
+   * Handle dispatch_explore_agent tool - spawns a sub-agent for read-only exploration.
+   * Returns a summary of existing project content for the requested task.
+   */
+  private async handleDispatchExploreAgent(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'content';
+
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_explore_agent' };
+    }
+
+    const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
+    const missingRefs: string[] = [];
+
+    if (contextRefs && contextRefs.length > 0) {
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push({
+            variableName: ref,
+            label: stored.label,
+            content: stored.content,
+          });
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} for explore agent (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          const projectFileContent = this.tryResolveFromProjectFiles(ref);
+          if (projectFileContent) {
+            contextParts.push({
+              variableName: ref,
+              label: projectFileContent.label,
+              content: projectFileContent.content,
+            });
+            debugLog(`[GenericAgent] Resolved context_ref ${ref} from project file for explore agent: ${projectFileContent.file}`);
+          } else {
+            debugLog(`[GenericAgent] WARNING: Context reference not found for explore agent: ${ref}`);
+            missingRefs.push(ref);
+          }
+        }
+      }
+    } else {
+      const autoRefs = ['$story', '$plot', '$original_input'];
+      for (const ref of autoRefs) {
+        const projectFileContent = this.tryResolveFromProjectFiles(ref);
+        if (projectFileContent) {
+          contextParts.push({
+            variableName: ref,
+            label: projectFileContent.label,
+            content: projectFileContent.content,
+          });
+          debugLog(`[GenericAgent] Auto-loaded ${ref} for explore agent from project file: ${projectFileContent.file}`);
+        }
+      }
+    }
+
+    let context: string | undefined;
+    if (contextParts.length > 0) {
+      context = contextParts.map(part =>
+        `## ${part.variableName} (${part.label})\n\n${part.content}`
+      ).join('\n\n---\n\n');
+      debugLog(`[GenericAgent] Combined ${contextParts.length} contexts for explore agent (${context.length} chars total)`);
+    } else {
+      debugLog(`[GenericAgent] WARNING: No context available for explore agent`);
+    }
+
+    const exploreSystemPrompt = buildExplorePrompt(task, context);
+    const messages: Message[] = [
+      { role: 'system', content: exploreSystemPrompt },
+      { role: 'user', content: '<request>\nSummarize existing project content for this task.\n</request>' },
+    ];
+
+    try {
+      let content = '';
+
+      for await (const chunk of this.llm.generateStream({
+        messages,
+        temperature: 0.2,
+      })) {
+        if (chunk.content) {
+          content += chunk.content;
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: toolCall.id,
+            chunk: chunk.content,
+            done: false,
+            agentName: this.getEffectiveAgentName(),
+            toolName: 'dispatch_explore_agent',
+          });
+        }
+        if (chunk.done) {
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: toolCall.id,
+            chunk: '',
+            done: true,
+            agentName: this.getEffectiveAgentName(),
+          });
+        }
+      }
+
+      const trimmed = content.trim() || 'No content generated';
+      const result: Record<string, unknown> = {
+        status: 'success',
+        content: trimmed,
+        task,
+      };
+
+      if (missingRefs.length > 0) {
+        result['warning'] = `Could not resolve context_refs: ${missingRefs.join(', ')}`;
+      }
+
+      if (outputFile) {
+        result['warning'] = result['warning']
+          ? `${result['warning']} | Explore subagent is read-only; output_file ignored: ${outputFile}`
+          : `Explore subagent is read-only; output_file ignored: ${outputFile}`;
+      }
+
+      this.currentMode = 'orchestrator';
+      return result;
+    } catch (error) {
+      this.currentMode = 'orchestrator';
+      return {
+        error: `Explore failed: ${String(error)}`,
+        task,
+      };
+    }
   }
 
   /**
@@ -2336,6 +2473,18 @@ Respond in JSON format:
       };
     }
 
+    const taskLower = task.toLowerCase();
+    const isMasterPlanRequest =
+      taskLower.includes('master plan') ||
+      (outputFile ? outputFile.toLowerCase().includes('master-plan.md') : false);
+    if (isMasterPlanRequest && (contentType === 'plot' || contentType === 'story' || contentType === 'narration')) {
+      this.currentMode = 'orchestrator';
+      return {
+        error: 'Master plans must be created by the Plan subagent, not the content-creator.',
+        suggestion: 'Use Task with subagent_type="Plan" and output_file="agent/plans/master-plan.md" in plan mode.',
+      };
+    }
+
     // Resolve all context_refs into a combined context
     const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
     const missingRefs: string[] = [];
@@ -2661,6 +2810,13 @@ Respond in JSON format:
     }
 
     if (isApproval) {
+      const cleanedContent = this.contentState.currentContent
+        .replace(/<think>[\s\S]*?<\/think>/g, '')
+        .trim();
+      if (cleanedContent.length > 0) {
+        this.contentState.currentContent = cleanedContent;
+      }
+
       // Write content to output file if specified
       let fileSaved = false;
       let normalizedContentPath: string | undefined;

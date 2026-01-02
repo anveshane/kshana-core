@@ -468,7 +468,7 @@ export function setProjectInputType(
     // Read the original input and save it as the story
     const originalInput = getOriginalInput(project, basePath);
     if (originalInput) {
-      const storyDir = join(getAgentDir(basePath), 'plans');
+      const storyDir = join(getAgentDir(basePath), 'script');
       if (!existsSync(storyDir)) {
         mkdirSync(storyDir, { recursive: true });
       }

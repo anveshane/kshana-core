@@ -10,6 +10,7 @@ export const GENERIC_AGENT_BASE_PROMPT = '';
 export const GENERIC_AGENT_ORCHESTRATOR_SECTION = '';
 export const GENERIC_AGENT_SUB_AGENT_SECTION = '';
 export const PLANNING_AGENT_PROMPT = '';
+export const EXPLORE_AGENT_PROMPT = '';
 export const CONTENT_AGENT_PROMPT = '';
 export const IMAGE_GENERATION_AGENT_PROMPT = '';
 export const VIDEO_GENERATION_AGENT_PROMPT = '';
@@ -164,6 +165,23 @@ export function buildPlanningPrompt(task: string, context?: string): string {
   const sub = loadAndRenderMarkdown('system/subagent.md', {});
   const plan = loadAndRenderMarkdown('subagents/plan.md', {});
   return [base, sub, plan, taskSection, contextSection].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Build the explore sub-agent system prompt.
+ * Used for read-only project content exploration.
+ *
+ * @param task - The exploration task description
+ * @param context - Optional background context (story content, existing files, etc.)
+ * @returns The complete explore system prompt
+ */
+export function buildExplorePrompt(task: string, context?: string): string {
+  const taskSection = `<task>\n${task}\n</task>`;
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const explore = loadAndRenderMarkdown('subagents/explore.md', {});
+  return [base, sub, explore, taskSection, contextSection].filter(Boolean).join('\n\n');
 }
 
 /**
