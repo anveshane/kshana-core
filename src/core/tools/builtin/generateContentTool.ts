@@ -14,9 +14,11 @@ export const CONTENT_TYPE_CONTEXTS: Record<string, string[]> = {
   // Content creation phases
   plot: ['$original_input'],
   story: ['$original_input', '$plot'],
-  character: ['$original_input', '$plot', '$story'],
-  setting: ['$original_input', '$plot', '$story'],
-  scene: ['$original_input', '$story', '$characters', '$settings'],
+  // Character and setting use $story (approved narrative) instead of $original_input
+  // to ensure consistency with what the user approved
+  character: ['$story'],
+  setting: ['$story'],
+  scene: ['$story', '$characters', '$settings'],
   narration: ['$story', '$scenes'],
 
   // Image prompt generation phases

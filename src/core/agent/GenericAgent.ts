@@ -97,6 +97,7 @@ export class GenericAgent extends TypedEventEmitter {
 
   // Loop detection state
   private recentToolCalls: string[] = [];
+  private contentGenerationHistory: string[] = [];
   private consecutiveLoopWarnings = 0;
   private static readonly LOOP_DETECTION_WINDOW = 6;
   private static readonly LOOP_THRESHOLD = 3; // Same tool called 3+ times in window
@@ -621,7 +622,9 @@ export class GenericAgent extends TypedEventEmitter {
         this.activeContextVariables = [];
         this.todoManager = new ExpandableTodoManager();
         this.iteration = 0;
+
         this.recentToolCalls = [];
+        this.contentGenerationHistory = [];
         // Reload context store for the new project to ensure isolation
         contextStore.reload(this.projectId);
         this.lastProjectId = this.projectId;
@@ -733,9 +736,37 @@ export class GenericAgent extends TypedEventEmitter {
         toolCalls: response.toolCalls,
       });
 
-      // If no tool calls, we're done
+      // If no tool calls, check if we should continue or finish
       if (response.toolCalls.length === 0) {
         finalOutput = response.content ?? '';
+
+        // Special case: if we're in plan mode but haven't created a plan yet, continue
+        if (this.planModeActive && this.iteration < this.maxIterations - 1) {
+          debugLog(`[GenericAgent] In plan mode but no tool calls. Prompting to create plan.`);
+          this.messages.push({
+            role: 'user',
+            content: 'You are in plan mode. Create the master plan using the Task tool with subagent_type="Plan". The plan should include plot summary, key story beats, main characters, and settings.',
+          });
+          continue;
+        }
+
+        // Check if there are pending or in-progress todos - if so, continue working
+        const todos = this.todoManager.getTodos();
+        const hasPendingWork = todos.some(t => t.status === 'pending' || t.status === 'in_progress');
+
+        if (hasPendingWork && this.iteration < this.maxIterations - 1) {
+          // There's still work to do - add a reminder and continue
+          // But only if we haven't reached max iterations yet
+          debugLog(`[GenericAgent] No tool calls but pending todos found. Adding reminder and continuing.`);
+          this.messages.push({
+            role: 'user',
+            content: `You have pending tasks in your todo list. Please continue working on them. Use the appropriate tools to complete the remaining tasks.`,
+          });
+          // Continue the loop instead of breaking
+          continue;
+        }
+
+        // No pending work or reached max iterations - we're done
         break;
       }
 
@@ -767,6 +798,26 @@ export class GenericAgent extends TypedEventEmitter {
             options: resultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
           };
+        }
+
+        // Special handling for EnterPlanMode - after entering plan mode, continue the loop
+        // so the agent can actually create the plan
+        if (toolCall.name === 'EnterPlanMode' && resultObj['status'] === 'entered_plan_mode') {
+          debugLog(`[GenericAgent] Entered plan mode. Adding tool result and continuing to create plan.`);
+          // Add tool result to messages
+          this.messages.push({
+            role: 'tool',
+            content: JSON.stringify(result),
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+          });
+          // Add a prompt to encourage the agent to create the plan
+          this.messages.push({
+            role: 'user',
+            content: 'You have entered plan mode. Now create the master plan using the Task tool with subagent_type="Plan". The plan should include plot summary, key story beats, main characters, and settings.',
+          });
+          // Continue the loop so the agent can create the plan
+          continue;
         }
 
         // Add tool result to messages
@@ -1088,6 +1139,27 @@ export class GenericAgent extends TypedEventEmitter {
         return { error: 'content_type is required for generate_content' };
       }
 
+      // Loop detection: prevent repeated calls for the same character/setting
+      if ((contentType === 'character' || contentType === 'setting') && name) {
+        const callKey = `${contentType}:${name.toLowerCase()}`;
+        const recentCalls = this.contentGenerationHistory.filter(call => call === callKey);
+
+        // Strict threshold for content generation - 2 calls is suspicious, 3 is a hard stop
+        if (recentCalls.length >= 2) {
+          debugLog(`[GenericAgent] LOOP DETECTED: generate_content called ${recentCalls.length + 1} times for ${callKey}. Stopping to prevent infinite loop.`);
+          return {
+            error: `Loop detected: ${contentType} "${name}" has been generated ${recentCalls.length + 1} times. Check if it already exists using read_project() and skip if it does.`,
+            suggestion: `Call read_project() to check if "${name}" already exists in project.${contentType === 'character' ? 'characters' : 'settings'}. If it exists, skip generation and move to the next item.`,
+          };
+        }
+
+        this.contentGenerationHistory.push(callKey);
+        // Keep history manageable but long enough to catch loops across many steps
+        if (this.contentGenerationHistory.length > 50) {
+          this.contentGenerationHistory.shift();
+        }
+      }
+
       // Get the required contexts for this content type
       const requiredContexts = CONTENT_TYPE_CONTEXTS[contentType] || [];
       debugLog(`[GenericAgent] generate_content: content_type=${contentType}, required_contexts=${requiredContexts.join(', ')}`);
@@ -1096,7 +1168,7 @@ export class GenericAgent extends TypedEventEmitter {
       let outputFile = CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
       if ((contentType === 'character' || contentType === 'setting') && name) {
         // For characters and settings, use flat structure: agent/characters/max.md or agent/settings/dusty-village.md
-        const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
         outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.md`;
       } else if (contentType === 'scene' && sceneNumber !== undefined) {
         // For scenes, save to individual scene folders: agent/scenes/scene-XXX/scene.md
@@ -1125,8 +1197,48 @@ export class GenericAgent extends TypedEventEmitter {
       };
 
       debugLog(`[GenericAgent] generate_content dispatching with context_refs: ${JSON.stringify(requiredContexts)}`);
+
+      // For character/setting generation, check if it already exists first
+      if ((contentType === 'character' || contentType === 'setting') && name) {
+        try {
+          const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+          const project = loadProject();
+          if (project) {
+            const items = contentType === 'character' ? project.characters : project.settings;
+            const existing = items.find(item =>
+              item.name.toLowerCase() === name.toLowerCase()
+            );
+            if (existing) {
+              debugLog(`[GenericAgent] ${contentType} "${name}" already exists in project. Skipping generation.`);
+              return {
+                status: 'skipped',
+                message: `${contentType} "${name}" already exists in project`,
+                content_type: contentType,
+                name: name,
+                suggestion: `Use read_project() to see existing ${contentType}s. Skip generating ${contentType}s that already exist.`,
+              };
+            }
+          }
+        } catch (err) {
+          debugLog(`[GenericAgent] WARNING: Failed to check for existing ${contentType}: ${err}. Proceeding with generation.`);
+        }
+      }
+
       const result = await this.handleDispatchContentAgent(syntheticToolCall);
       const resultObj = result as Record<string, unknown>;
+
+      // Check if content creation failed with an error
+      if (resultObj['error']) {
+        debugLog(`[GenericAgent] generate_content failed: ${resultObj['error']}`);
+        // For character/setting errors, suggest checking if it already exists
+        if ((contentType === 'character' || contentType === 'setting') && name) {
+          return {
+            ...resultObj,
+            suggestion: `The ${contentType} "${name}" could not be generated. Check if it already exists using read_project(), or verify the name is correct in the story context.`,
+          };
+        }
+        return result; // Return error directly to orchestrator
+      }
 
       // Check if content needs user verification
       if (resultObj['status'] === 'awaiting_verification') {
@@ -2332,17 +2444,15 @@ Respond in JSON format:
 
     // Validate context usage: warn if $original_input is used for characters/settings
     // The approved $story should be used instead for consistency
+    // NOTE: This is now just a soft warning - execution continues regardless
     const usesOriginalInput = contextRefs?.some(ref => ref === '$original_input');
     const isCharacterOrSetting = contentType === 'character' || contentType === 'setting';
     if (usesOriginalInput && isCharacterOrSetting) {
       debugLog(`[GenericAgent] WARNING: Using $original_input for ${contentType} creation. Consider using $story instead for approved content.`);
-      // Return a warning but allow execution to continue (soft validation)
+      // Log warning but continue execution - don't block content generation
       const storyAvailable = contextStore.get('$story') || this.tryResolveFromProjectFiles('$story');
       if (storyAvailable) {
-        return {
-          warning: `You are using $original_input for ${contentType} creation, but $story is available. Characters and settings should be extracted from the APPROVED STORY content, not the original input. Please use context_refs: ["$story"] instead.`,
-          suggestion: 'Update your Task call to use context_refs: ["$story"] for character and setting creation.',
-        };
+        debugLog(`[GenericAgent] NOTE: $story is available and would be preferred for ${contentType} creation.`);
       }
     }
 
@@ -2451,6 +2561,36 @@ Respond in JSON format:
 
       this.contentState.currentContent = content.trim() || 'No content generated';
 
+      // Check if the content is actually an error message instead of valid content
+      const contentLower = this.contentState.currentContent.toLowerCase();
+      const isErrorResponse =
+        contentLower.includes('cannot create') ||
+        contentLower.includes('cannot generate') ||
+        contentLower.includes('not mentioned') ||
+        contentLower.includes('not found') ||
+        contentLower.includes('not present') ||
+        contentLower.includes('not available') ||
+        contentLower.includes('does not exist') ||
+        contentLower.includes('unable to') ||
+        (contentLower.includes('error') && contentLower.length < 200) ||
+        (contentLower.startsWith('i cannot') || contentLower.startsWith('i cannot'));
+
+      if (isErrorResponse) {
+        // This is an error message, not actual content
+        const errorMessage = this.contentState.currentContent;
+        const failedTask = this.contentState.task;
+        const contentType = this.contentState.contentType;
+        debugLog(`[GenericAgent] Content Agent returned error message instead of content: ${errorMessage.slice(0, 100)}`);
+        this.contentState = null;
+        this.currentMode = 'orchestrator';
+        return {
+          error: `Content creation failed: ${errorMessage}`,
+          content_type: contentType,
+          task: failedTask,
+          suggestion: 'The requested content could not be generated. Please check if the character/setting exists in the story context.',
+        };
+      }
+
       // Add assistant response to history
       this.contentState.messages.push({
         role: 'assistant',
@@ -2526,10 +2666,33 @@ Respond in JSON format:
       let normalizedContentPath: string | undefined;
       // Always ensure outputFile is set for plot/story/narration content types
       let outputFileToUse = this.contentState.outputFile;
-      if (!outputFileToUse && (this.contentState.contentType === 'plot' || this.contentState.contentType === 'story' || this.contentState.contentType === 'narration')) {
-        // Fallback: use default path from CONTENT_TYPE_OUTPUT_FILES
-        outputFileToUse = CONTENT_TYPE_OUTPUT_FILES[this.contentState.contentType] || `agent/script/${this.contentState.contentType}.md`;
-        debugLog(`[GenericAgent] No outputFile specified, using default: ${outputFileToUse}`);
+      if (!outputFileToUse) {
+        if (this.contentState.contentType === 'plot' || this.contentState.contentType === 'story' || this.contentState.contentType === 'narration') {
+          // Fallback: use default path from CONTENT_TYPE_OUTPUT_FILES
+          outputFileToUse = CONTENT_TYPE_OUTPUT_FILES[this.contentState.contentType] || `agent/script/${this.contentState.contentType}.md`;
+          debugLog(`[GenericAgent] No outputFile specified, using default: ${outputFileToUse}`);
+        } else if (this.contentState.contentType === 'character' || this.contentState.contentType === 'setting') {
+          // For character/setting, use directory path - name will be extracted from task
+          outputFileToUse = CONTENT_TYPE_OUTPUT_FILES[this.contentState.contentType] || `agent/${this.contentState.contentType}s/`;
+          debugLog(`[GenericAgent] No outputFile specified for ${this.contentState.contentType}, using default directory: ${outputFileToUse}`);
+        }
+      }
+
+      // Normalize filename separators for character/setting files
+      // Convert underscores to hyphens in the filename to match saveSetting/saveCharacter conventions
+      if (outputFileToUse && (this.contentState.contentType === 'character' || this.contentState.contentType === 'setting')) {
+        // Extract directory and filename parts
+        const lastSlashIndex = outputFileToUse.lastIndexOf('/');
+        if (lastSlashIndex >= 0 && !outputFileToUse.endsWith('/')) {
+          const dir = outputFileToUse.substring(0, lastSlashIndex + 1);
+          const filename = outputFileToUse.substring(lastSlashIndex + 1);
+          // Normalize filename: replace underscores with hyphens
+          const normalizedFilename = filename.replace(/_/g, '-');
+          if (normalizedFilename !== filename) {
+            outputFileToUse = dir + normalizedFilename;
+            debugLog(`[GenericAgent] Normalized filename from ${filename} to ${normalizedFilename}`);
+          }
+        }
       }
 
       if (outputFileToUse) {
@@ -2562,20 +2725,109 @@ Respond in JSON format:
           }
           // If path already starts with "agent/script/", use it as-is (no normalization needed)
 
+          // Check if path ends with '/' (directory path) for character/setting content types
+          // If so, extract name from task and append it
+          if (normalizedContentPath.endsWith('/') &&
+            (this.contentState.contentType === 'character' || this.contentState.contentType === 'setting')) {
+            // Extract name from task (e.g., "Create character profile for: Joy" -> "Joy")
+            // Try to find name after common patterns
+            let name = '';
+            const taskLower = this.contentState.task.toLowerCase();
+            const patterns = [
+              /(?:for|named|called|:)\s+([a-z0-9\s'-]+?)(?:\s|$|\.|,)/i,
+              /(?:create|generate|write).*?(?:character|setting).*?(?:for|named|called|:)\s+([a-z0-9\s'-]+?)(?:\s|$|\.|,)/i,
+            ];
+
+            for (const pattern of patterns) {
+              const match = this.contentState.task.match(pattern);
+              if (match && match[1]) {
+                name = match[1].trim();
+                break;
+              }
+            }
+
+            // Fallback: try to extract from task by splitting on common delimiters
+            if (!name) {
+              const parts = this.contentState.task.split(/[:,\-]/);
+              if (parts.length > 1) {
+                const lastPart = parts[parts.length - 1];
+                if (lastPart) {
+                  name = lastPart.trim();
+                }
+              } else {
+                // Last resort: use first few words after "for" or similar
+                const words = this.contentState.task.split(/\s+/);
+                const forIndex = words.findIndex(w => /^(for|named|called|:)$/i.test(w));
+                if (forIndex >= 0 && forIndex < words.length - 1) {
+                  name = words.slice(forIndex + 1, forIndex + 4).join(' ').trim();
+                }
+              }
+            }
+
+            // If still no name, use a fallback based on content type
+            if (!name || name.length === 0) {
+              name = `unnamed-${this.contentState.contentType}`;
+            }
+
+            // Create safe filename (same logic as in generateContentTool)
+            const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            normalizedContentPath = `${normalizedContentPath}${safeName}.md`;
+            debugLog(`[GenericAgent] Extracted name "${name}" from task, using filename: ${safeName}.md`);
+          }
+
           const projectDir = path.join(process.cwd(), '.kshana');
           const filePath = path.join(projectDir, normalizedContentPath);
           debugLog(`[GenericAgent] Attempting to save content to: ${filePath} (normalized from: ${outputFileToUse}, contentType: ${this.contentState.contentType})`);
 
-          // Ensure parent directory exists
-          const parentDir = path.dirname(filePath);
-          if (!fs.existsSync(parentDir)) {
-            debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
-            fs.mkdirSync(parentDir, { recursive: true });
+          // Validate content before saving (especially for character/setting)
+          const content = this.contentState.currentContent.trim();
+          const isCharacterOrSetting = this.contentState.contentType === 'character' || this.contentState.contentType === 'setting';
+
+          if (isCharacterOrSetting) {
+            // Check if content is truncated or incomplete
+            const isVariableRef = content.startsWith('$') || /^\$\w+/.test(content);
+            const isEmpty = content.length < 100; // Very short content likely incomplete
+            // Check if there's actual content after headers (not just headers)
+            const hasActualContent = /##\s+\w+[\s\S]{30,}/.test(content) || content.split('\n').filter(line => line.trim() && !line.trim().startsWith('#')).length > 3;
+
+            // Check if file already exists with content - don't overwrite with truncated content
+            if (fs.existsSync(filePath)) {
+              const existingContent = fs.readFileSync(filePath, 'utf-8').trim();
+              if (existingContent.length > content.length && existingContent.length > 100) {
+                debugLog(`[GenericAgent] WARNING: Existing file has more content (${existingContent.length} vs ${content.length} bytes). Skipping save to prevent truncation.`);
+                fileSaved = false;
+              } else if (isVariableRef || isEmpty || !hasActualContent) {
+                debugLog(`[GenericAgent] WARNING: Content appears truncated or incomplete (variableRef: ${isVariableRef}, empty: ${isEmpty}, hasActualContent: ${hasActualContent}). Skipping save.`);
+                fileSaved = false;
+              } else {
+                // Content looks good, proceed with save
+                fileSaved = true;
+              }
+            } else if (isVariableRef || isEmpty || !hasActualContent) {
+              debugLog(`[GenericAgent] WARNING: Content appears truncated or incomplete (variableRef: ${isVariableRef}, empty: ${isEmpty}, hasActualContent: ${hasActualContent}). Skipping save.`);
+              fileSaved = false;
+            } else {
+              // Content looks good, proceed with save
+              fileSaved = true;
+            }
+          } else {
+            // For other content types, always save
+            fileSaved = true;
           }
 
-          fs.writeFileSync(filePath, this.contentState.currentContent, 'utf-8');
-          fileSaved = true;
-          debugLog(`[GenericAgent] Successfully saved content to ${normalizedContentPath} (${this.contentState.currentContent.length} bytes)`);
+          if (fileSaved) {
+            // Ensure parent directory exists
+            const parentDir = path.dirname(filePath);
+            if (!fs.existsSync(parentDir)) {
+              debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+              fs.mkdirSync(parentDir, { recursive: true });
+            }
+
+            fs.writeFileSync(filePath, content, 'utf-8');
+            debugLog(`[GenericAgent] Successfully saved content to ${normalizedContentPath} (${content.length} bytes)`);
+          } else {
+            debugLog(`[GenericAgent] Skipped saving truncated/incomplete content to ${normalizedContentPath}`);
+          }
         } catch (err) {
           debugLog(`[GenericAgent] ERROR: Failed to save content to ${outputFileToUse}: ${err}`);
           console.error(`[GenericAgent] File save error:`, err);

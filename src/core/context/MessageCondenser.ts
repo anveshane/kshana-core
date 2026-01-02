@@ -10,7 +10,7 @@ import { contextStore } from './ContextStore.js';
 /**
  * Threshold for considering content "long" and worth storing.
  */
-export const LONG_CONTENT_THRESHOLD = 500;
+export const LONG_CONTENT_THRESHOLD = 20000;
 
 /**
  * Result of condensing content.
@@ -126,7 +126,7 @@ export function generateVariableBaseName(content: string): string {
 
   // Check for setting/location descriptions
   if (contentLower.slice(0, 200).includes('village') || contentLower.slice(0, 200).includes('town') ||
-      contentLower.slice(0, 200).includes('city') || contentLower.slice(0, 200).includes('forest')) {
+    contentLower.slice(0, 200).includes('city') || contentLower.slice(0, 200).includes('forest')) {
     // Try to extract location name
     const villageMatch = content.match(/(?:village|town|city)\s+(?:of\s+)?(\w+)/i);
     if (villageMatch?.[1]) {

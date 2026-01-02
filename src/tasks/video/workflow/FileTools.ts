@@ -19,6 +19,8 @@ import {
   createProject,
   saveCharacter,
   saveSetting,
+  loadCharacterMarkdown,
+  loadSettingMarkdown,
   addAsset,
   addScene,
   addNewScene,
@@ -665,16 +667,43 @@ What story would you like to turn into a video?`,
           if (!name) {
             return { status: 'error', error: 'name is required for add_character' };
           }
+          
+          // Check if the character file already exists (created by Task tool)
+          // If so, DON'T overwrite it - just update project.json registry
+          const existingContent = loadCharacterMarkdown(name);
+          const fileAlreadyExists = existingContent !== null && existingContent.trim().length > 0;
+          
+          // Check if description is a variable reference (starts with $)
+          const rawDescription = (data['description'] as string) || '';
+          const isVariableRef = rawDescription.startsWith('$');
+          
           // Create character with defaults and provided data
           const character: CharacterData = {
             ...createDefaultCharacterData(name),
-            description: (data['description'] as string) || '',
+            description: isVariableRef ? '' : rawDescription, // Don't store variable refs as content
             visualDescription: (data['visual_description'] as string) || '',
             approvalStatus: (data['approval_status'] as ItemApprovalStatus) || 'pending',
             referenceImageId: data['reference_image_id'] as string | undefined,
             referenceImagePath: data['reference_image_path'] as string | undefined,
           };
-          saveCharacter(character);
+          
+          // NEVER overwrite existing files - Task tool already created the .md file with full content
+          // Only create new file if it doesn't exist and we have non-variable-ref content
+          if (!fileAlreadyExists && !isVariableRef && (character.description || character.visualDescription)) {
+            saveCharacter(character);
+          } else {
+            // Just update project.json registry without creating/overwriting file
+            const project = loadProject();
+            if (project) {
+              const existingIndex = project.characters.findIndex(c => c.name === character.name);
+              if (existingIndex >= 0) {
+                project.characters[existingIndex] = character;
+              } else {
+                project.characters.push(character);
+              }
+              saveProject(project);
+            }
+          }
           return { status: 'success', message: `Character "${character.name}" added` };
         }
 
@@ -731,16 +760,43 @@ What story would you like to turn into a video?`,
           if (!name) {
             return { status: 'error', error: 'name is required for add_setting' };
           }
+          
+          // Check if the setting file already exists (created by Task tool)
+          // If so, DON'T overwrite it - just update project.json registry
+          const existingContent = loadSettingMarkdown(name);
+          const fileAlreadyExists = existingContent !== null && existingContent.trim().length > 0;
+          
+          // Check if description is a variable reference (starts with $)
+          const rawDescription = (data['description'] as string) || '';
+          const isVariableRef = rawDescription.startsWith('$');
+          
           // Create setting with defaults and provided data
           const setting: SettingData = {
             ...createDefaultSettingData(name),
-            description: (data['description'] as string) || '',
+            description: isVariableRef ? '' : rawDescription, // Don't store variable refs as content
             visualDescription: (data['visual_description'] as string) || '',
             approvalStatus: (data['approval_status'] as ItemApprovalStatus) || 'pending',
             referenceImageId: data['reference_image_id'] as string | undefined,
             referenceImagePath: data['reference_image_path'] as string | undefined,
           };
-          saveSetting(setting);
+          
+          // NEVER overwrite existing files - Task tool already created the .md file with full content
+          // Only create new file if it doesn't exist and we have non-variable-ref content
+          if (!fileAlreadyExists && !isVariableRef && (setting.description || setting.visualDescription)) {
+            saveSetting(setting);
+          } else {
+            // Just update project.json registry without creating/overwriting file
+            const project = loadProject();
+            if (project) {
+              const existingIndex = project.settings.findIndex(s => s.name === setting.name);
+              if (existingIndex >= 0) {
+                project.settings[existingIndex] = setting;
+              } else {
+                project.settings.push(setting);
+              }
+              saveProject(project);
+            }
+          }
           return { status: 'success', message: `Setting "${setting.name}" added` };
         }
 

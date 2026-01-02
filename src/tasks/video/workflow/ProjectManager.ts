@@ -352,7 +352,7 @@ export function createProject(
   // Save original input to a separate file
   const inputFilePath = 'agent/original_input.md';
   const fullInputPath = join(getProjectDir(basePath), inputFilePath);
-  
+
   // Only write if file doesn't exist - preserve existing original input
   // This prevents overwriting the user's original input if createProject is called multiple times
   if (!existsSync(fullInputPath)) {
@@ -863,7 +863,7 @@ export function generateProjectIndex(basePath: string = process.cwd()): void {
     );
     const sceneImages = manifest.filter(
       a => (a.type === 'scene_image' || a.type === 'character_ref' || a.type === 'setting_ref') &&
-           a.metadata && 'sceneNumber' in a.metadata && a.metadata['sceneNumber'] === scene.sceneNumber
+        a.metadata && 'sceneNumber' in a.metadata && a.metadata['sceneNumber'] === scene.sceneNumber
     );
 
     // Determine active video version
@@ -1100,7 +1100,7 @@ export function saveProject(project: ProjectFile, basePath: string = process.cwd
   const filePath = getProjectFilePath(basePath);
   project.updatedAt = Date.now();
   writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
-  
+
   // Regenerate project index after every save
   generateProjectIndex(basePath);
 }
@@ -1230,10 +1230,10 @@ export function transitionToNextPhase(
 ): { project: ProjectFile; transitioned: boolean; reason: string } {
   // Check if master plan is approved
   if (project.plan.stage !== PlannerStage.COMPLETE) {
-    return { 
-      project, 
-      transitioned: false, 
-      reason: 'Master plan must be approved before transitioning phases. Current stage: ' + project.plan.stage 
+    return {
+      project,
+      transitioned: false,
+      reason: 'Master plan must be approved before transitioning phases. Current stage: ' + project.plan.stage
     };
   }
 
@@ -1369,7 +1369,7 @@ export function addCharacter(
   }
 
   // Check if character already exists
-  const existing = project.characters.find(c => c.name === name);
+  const existing = project.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
   if (existing) {
     return existing;
   }
@@ -1393,7 +1393,7 @@ export function updateCharacter(
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.characters.findIndex(c => c.name === name);
+  const index = project.characters.findIndex(c => c.name.toLowerCase() === name.toLowerCase());
   if (index < 0) return null;
 
   const existing = project.characters[index];
@@ -1403,9 +1403,28 @@ export function updateCharacter(
   project.characters[index] = updated;
   saveProject(project, basePath);
 
-  // Also save to markdown file if description changed
+  // Only save to markdown file if:
+  // 1. Description or visual description was updated, AND
+  // 2. The update contains actual content (not variable references or empty), AND
+  // 3. Either the file doesn't exist, or we're explicitly updating with full content
   if (updates.description || updates.visualDescription) {
-    saveCharacter(updated, basePath);
+    // Check if the file already exists with content
+    const existingContent = loadCharacterMarkdown(name, basePath);
+    const fileAlreadyExists = existingContent !== null && existingContent.trim().length > 0;
+
+    // Check if the update is a variable reference (starts with $)
+    const isVariableRef = (updates.description?.startsWith('$') || updates.visualDescription?.startsWith('$'));
+
+    // Only save if:
+    // - File doesn't exist, OR
+    // - File exists but update has actual non-variable-ref content
+    const hasActualContent = (updated.description && !updated.description.startsWith('$')) ||
+      (updated.visualDescription && !updated.visualDescription.startsWith('$'));
+
+    if (!fileAlreadyExists || (hasActualContent && !isVariableRef)) {
+      saveCharacter(updated, basePath);
+    }
+    // Otherwise, just update project.json registry without overwriting the file
   }
 
   return updated;
@@ -1425,7 +1444,7 @@ export function updateCharacterApproval(
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.characters.findIndex(c => c.name === name);
+  const index = project.characters.findIndex(c => c.name.toLowerCase() === name.toLowerCase());
   if (index < 0) return null;
 
   const character = project.characters[index];
@@ -1514,7 +1533,7 @@ export function addSetting(
   }
 
   // Check if setting already exists
-  const existing = project.settings.find(s => s.name === name);
+  const existing = project.settings.find(s => s.name.toLowerCase() === name.toLowerCase());
   if (existing) {
     return existing;
   }
@@ -1538,7 +1557,7 @@ export function updateSetting(
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.settings.findIndex(s => s.name === name);
+  const index = project.settings.findIndex(s => s.name.toLowerCase() === name.toLowerCase());
   if (index < 0) return null;
 
   const existing = project.settings[index];
@@ -1548,9 +1567,28 @@ export function updateSetting(
   project.settings[index] = updated;
   saveProject(project, basePath);
 
-  // Also save to markdown file if description changed
+  // Only save to markdown file if:
+  // 1. Description or visual description was updated, AND
+  // 2. The update contains actual content (not variable references or empty), AND
+  // 3. Either the file doesn't exist, or we're explicitly updating with full content
   if (updates.description || updates.visualDescription) {
-    saveSetting(updated, basePath);
+    // Check if the file already exists with content
+    const existingContent = loadSettingMarkdown(name, basePath);
+    const fileAlreadyExists = existingContent !== null && existingContent.trim().length > 0;
+
+    // Check if the update is a variable reference (starts with $)
+    const isVariableRef = (updates.description?.startsWith('$') || updates.visualDescription?.startsWith('$'));
+
+    // Only save if:
+    // - File doesn't exist, OR
+    // - File exists but update has actual non-variable-ref content
+    const hasActualContent = (updated.description && !updated.description.startsWith('$')) ||
+      (updated.visualDescription && !updated.visualDescription.startsWith('$'));
+
+    if (!fileAlreadyExists || (hasActualContent && !isVariableRef)) {
+      saveSetting(updated, basePath);
+    }
+    // Otherwise, just update project.json registry without overwriting the file
   }
 
   return updated;
@@ -1570,7 +1608,7 @@ export function updateSettingApproval(
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.settings.findIndex(s => s.name === name);
+  const index = project.settings.findIndex(s => s.name.toLowerCase() === name.toLowerCase());
   if (index < 0) return null;
 
   const setting = project.settings[index];
@@ -1677,13 +1715,13 @@ export function addNewScene(
 
   // Create new scene with default values
   const scene = createDefaultSceneRef(sceneNumber, title);
-  
+
   // Create scene directory
   const sceneFolderPath = join(getProjectDir(basePath), scene.folder!);
   if (!existsSync(sceneFolderPath)) {
     mkdirSync(sceneFolderPath, { recursive: true });
   }
-  
+
   project.scenes.push(scene);
   project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
   saveProject(project, basePath);
@@ -1780,7 +1818,7 @@ export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): vo
       // Use empty manifest on parse error
     }
   }
-  
+
   // Ensure schema_version is set
   if (!manifest.schema_version) {
     manifest.schema_version = '1';
@@ -1891,8 +1929,8 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   }
 
   // Plan status
-  const planStatus = project.plan.stage === PlannerStage.COMPLETE 
-    ? `✅ Approved (ID: ${project.plan.planId})` 
+  const planStatus = project.plan.stage === PlannerStage.COMPLETE
+    ? `✅ Approved (ID: ${project.plan.planId})`
     : `⏳ ${project.plan.stage} (ID: ${project.plan.planId})`;
 
   return `
@@ -1996,7 +2034,7 @@ Refine the master plan based on user feedback.
 `;
         break;
     }
-    
+
     return instruction.trim();
   }
 
@@ -2012,7 +2050,7 @@ Refine the master plan based on user feedback.
   } else {
     // Standard single-item phase flow (plot, story, video_combine)
     const phaseStatus = phaseInfo?.status ?? 'pending';
-    
+
     if (phaseStatus === 'completed') {
       instruction += `
 The ${phaseConfig.displayName} phase is complete.
@@ -2025,7 +2063,7 @@ The ${phaseConfig.displayName} phase is complete.
         if (contentFile) {
           const contentFilePath = join(basePath, '.kshana', 'agent', contentFile);
           const contentExists = existsSync(contentFilePath) && readFileSync(contentFilePath, 'utf-8').trim().length > 0;
-        
+
           if (contentExists) {
             instruction += `
 The ${phaseConfig.contentType} content already exists. Mark phase as complete and transition.
@@ -2101,11 +2139,11 @@ You are resuming this phase with ${approvedCount} of ${totalItems} items already
 \`\`\`
 TodoWrite(merge: false, todos: [
 ${allItems
-  .map((item, idx) => {
-    const status = item.status === 'approved' ? 'completed' : idx === allItems.findIndex(i => i.status !== 'approved') ? 'in_progress' : 'pending';
-    return `  { id: "${item.id}", content: "Process ${item.name}", activeForm: "Processing ${item.name}", status: "${status}" },`;
-  })
-  .join('\n')}
+        .map((item, idx) => {
+          const status = item.status === 'approved' ? 'completed' : idx === allItems.findIndex(i => i.status !== 'approved') ? 'in_progress' : 'pending';
+          return `  { id: "${item.id}", content: "Process ${item.name}", activeForm: "Processing ${item.name}", status: "${status}" },`;
+        })
+        .join('\n')}
 ])
 \`\`\`
 
@@ -2268,7 +2306,23 @@ After creating, get user approval before moving to the next item.
     instruction += `
 ## All Items Approved!
 
-All ${totalItems} items have been approved. Mark this phase as complete and move to the next phase: **${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}**
+All ${totalItems} items have been approved.
+
+**CRITICAL: Mark all items as COMPLETED in your todo list before transitioning.**
+
+\`\`\`
+TodoWrite(merge: false, todos: [
+${allItems
+        .map((item) => {
+          // Generate IDs consistent with how they are created in the loop
+          // For scenes, IDs are typically 'scene-N'. For others, it's 'item-ID' or just ID if used directly.
+          return `  { id: "${item.id}", content: "Process ${item.name}", status: "completed" },`;
+        })
+        .join('\n')}
+])
+\`\`\`
+
+Then mark this phase as complete and move to the next phase: **${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}**
 `;
   }
 
