@@ -203,6 +203,22 @@ export class ContextStore {
     } = {}
   ): { variableName: string } {
     const source = options.source ?? 'manual';
+    
+    // CRITICAL: Check if this content matches $original_input to prevent duplicates
+    // If $original_input exists and the content matches, return the existing variable
+    const existingOriginal = this.index.get('$original_input');
+    if (existingOriginal) {
+      try {
+        const existingContent = this.get('$original_input');
+        if (existingContent && existingContent.content === content) {
+          // Content matches $original_input - return existing variable instead of creating duplicate
+          return { variableName: '$original_input' };
+        }
+      } catch {
+        // If we can't read existing content, continue with normal storage
+      }
+    }
+    
     const variableName = this.generateVariableName(options.variableBaseName ?? label);
 
     // If filePath is provided, store a reference instead of duplicating content

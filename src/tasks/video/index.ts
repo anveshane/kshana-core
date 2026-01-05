@@ -206,6 +206,7 @@ export function loadProjectFilesAsContexts(basePath: string = process.cwd()): st
   const projectDir = getProjectDir(basePath);
   const agentDir = join(projectDir, 'agent');
   const plansDir = join(agentDir, 'plans');
+  const contentDir = join(agentDir, 'content');
   const scriptDir = join(agentDir, 'script');
   const project = loadProject(basePath);
   const loadedContexts: string[] = [];
@@ -215,36 +216,37 @@ export function loadProjectFilesAsContexts(basePath: string = process.cwd()): st
 
   // Load the original user input first - this is critical for content generation
   // Variable name MUST be $original_input to match phase prompts
+  // Only store if it doesn't already exist in context to prevent duplicates
   const originalInputPath = join(agentDir, 'original_input.md');
   if (existsSync(originalInputPath)) {
     try {
       const content = readFileSync(originalInputPath, 'utf-8');
       if (content.trim().length > 0) {
-        const { variableName } = contextStore.store(content, 'Original User Input', {
-          source: 'user_input',
-          variableBaseName: 'original_input',
-        });
-        loadedContexts.push(variableName);
-        contextSizes['original_input'] = content.length;
-        totalChars += content.length;
+        // Check if $original_input already exists in context store
+        const existing = contextStore.get('$original_input');
+        if (!existing) {
+          const { variableName } = contextStore.store(content, 'Original User Input', {
+            source: 'user_input',
+            variableBaseName: 'original_input',
+          });
+          loadedContexts.push(variableName);
+          contextSizes['original_input'] = content.length;
+          totalChars += content.length;
+        } else {
+          // Already exists, just add to loaded contexts
+          loadedContexts.push('$original_input');
+          contextSizes['original_input'] = existing.content.length;
+          totalChars += existing.content.length;
+        }
       }
     } catch {
       // Skip if can't be read
     }
   }
 
-  if (project?.transcriptEntries && project.transcriptEntries.length > 0) {
-    const transcriptText = project.transcriptEntries
-      .map(entry => `#${entry.index} ${entry.startTime.toFixed(3)}-${entry.endTime.toFixed(3)} ${entry.text}`)
-      .join('\n');
-    const { variableName } = contextStore.store(transcriptText, 'Transcript Entries', {
-      source: 'tool',
-      variableBaseName: 'transcript',
-    });
-    loadedContexts.push(variableName);
-    contextSizes['transcript'] = transcriptText.length;
-    totalChars += transcriptText.length;
-  }
+  // Transcript is already in agent/content/transcript.md - do NOT store in context directory
+  // $transcript will be resolved directly from agent/content/transcript.md when needed via context_refs
+  // This prevents duplication in the context directory
 
   // Files to load with their context labels
   // Load different files based on input type (YouTube vs Story workflow)
@@ -253,8 +255,8 @@ export function loadProjectFilesAsContexts(basePath: string = process.cwd()): st
   const contentFiles = isYouTubeWorkflow
     ? [
         // YouTube workflow files
-        { dir: plansDir, file: 'master-plan.md', label: 'Master Plan', varName: 'master_plan' },
-        { dir: plansDir, file: 'image-placements.md', label: 'Image Placement Plan', varName: 'image_placements' },
+        { dir: plansDir, file: 'content-plan.md', label: 'Content Plan', varName: 'content_plan' },
+        { dir: contentDir, file: 'image-placements.md', label: 'Image Placement Plan', varName: 'image_placements' },
         { dir: scriptDir, file: 'subtitles_with_images.srt', label: 'SRT with Images', varName: 'srt_with_images' },
       ]
     : [
@@ -425,6 +427,7 @@ You MUST get user approval before starting generation.
     project_title: project?.title || '(not set)',
     phase_display_name: phaseConfig.displayName,
     current_phase: currentPhase,
+    input_type: project?.inputType || 'idea',
     loaded_contexts: loadedContextsSection,
     phase_instructions: phaseInstructions,
     expensive_checkpoint: expensiveCheckpoint,

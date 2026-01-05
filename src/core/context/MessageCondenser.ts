@@ -92,6 +92,14 @@ export function generateVariableBaseName(content: string): string {
   const firstLine = content.split('\n')[0]?.trim().toLowerCase() ?? '';
   const contentLower = content.toLowerCase();
 
+  // CRITICAL: Check for transcript/SRT content first - should use original_input, not act/character
+  // Transcripts start with "Transcript" or have SRT format (timestamps like "00:00:00,000 --> 00:00:03,000")
+  if (firstLine.startsWith('transcript') || 
+      /^\d+\s*\n\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}/.test(content) ||
+      /\d{1,2}:\d{2}\s+[a-z]/i.test(firstLine)) {
+    return 'original_input';
+  }
+
   // Check for chapter references
   const chapterMatch = firstLine.match(/chapter\s*(\d+|one|two|three|four|five|six|seven|eight|nine|ten)/i);
   if (chapterMatch) {
@@ -108,8 +116,8 @@ export function generateVariableBaseName(content: string): string {
     return `scene_${numStr}`;
   }
 
-  // Check for act references
-  const actMatch = firstLine.match(/act\s*(\d+|one|two|three|i{1,3})/i);
+  // Check for act references (only at start of line to avoid false matches in transcript content)
+  const actMatch = firstLine.match(/^act\s*(\d+|one|two|three|i{1,3})/i);
   if (actMatch) {
     return `act_${actMatch[1]}`;
   }
@@ -176,6 +184,14 @@ export function generateContentLabel(content: string): string {
   const firstLine = content.split('\n')[0]?.trim() ?? '';
   const preview = firstLine.slice(0, 60);
 
+  // CRITICAL: Check for transcript/SRT content first - should use Original User Input label
+  // Transcripts start with "Transcript" or have SRT format
+  if (firstLine.toLowerCase().startsWith('transcript') || 
+      /^\d+\s*\n\d{2}:\d{2}:\d{2}[,.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,.]\d{3}/.test(content) ||
+      /\d{1,2}:\d{2}\s+[a-z]/i.test(firstLine)) {
+    return `Original User Input: "${preview}${preview.length < firstLine.length ? '...' : ''}"`;
+  }
+
   // Check for common patterns and add descriptive prefix
   if (/^chapter\s*\d/i.test(firstLine)) {
     return `Chapter: "${preview}${preview.length < firstLine.length ? '...' : ''}"`;
@@ -189,7 +205,8 @@ export function generateContentLabel(content: string): string {
   if (content.toLowerCase().slice(0, 200).includes('once upon a time')) {
     return `Story narrative: "${preview}${preview.length < firstLine.length ? '...' : ''}"`;
   }
-  if (firstLine.toLowerCase().includes('character')) {
+  // Only check for character if it's at the start of the line to avoid false matches
+  if (/^character/i.test(firstLine)) {
     return `Character description: "${preview}${preview.length < firstLine.length ? '...' : ''}"`;
   }
   if (content.toLowerCase().slice(0, 200).includes('protagonist')) {

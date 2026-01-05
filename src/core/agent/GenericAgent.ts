@@ -753,13 +753,26 @@ export class GenericAgent extends TypedEventEmitter {
         finalOutput = response.content ?? '';
 
         // Special case: if we're in plan mode but haven't created a plan yet, continue
+        // BUT: Skip this for YouTube workflow - check if we're in a YouTube workflow context
         if (this.planModeActive && this.iteration < this.maxIterations - 1) {
-          debugLog(`[GenericAgent] In plan mode but no tool calls. Prompting to create plan.`);
-          this.messages.push({
-            role: 'user',
-            content: 'You are in plan mode. Create the master plan using the Task tool with subagent_type="Plan". The plan should include plot summary, key story beats, main characters, and settings.',
-          });
-          continue;
+          // Check if this is a YouTube workflow by checking the custom prompt or project state
+          const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') || 
+                                     this.customPrompt?.includes('transcript') ||
+                                     this.customPrompt?.includes('YouTube');
+          
+          if (!isYouTubeWorkflow) {
+            debugLog(`[GenericAgent] In plan mode but no tool calls. Prompting to create plan.`);
+            this.messages.push({
+              role: 'user',
+              content: 'You are in plan mode. Create the master plan using the Task tool with subagent_type="Plan". The plan should include plot summary, key story beats, main characters, and settings.',
+            });
+            continue;
+          } else {
+            debugLog(`[GenericAgent] In plan mode but this is YouTube workflow. Exiting plan mode.`);
+            this.planModeActive = false;
+            this.currentMode = 'orchestrator';
+            // Don't continue - let the agent proceed with normal workflow
+          }
         }
 
         // Check if there are pending or in-progress todos - if so, continue working
@@ -814,7 +827,29 @@ export class GenericAgent extends TypedEventEmitter {
 
         // Special handling for EnterPlanMode - after entering plan mode, continue the loop
         // so the agent can actually create the plan
+        // BUT: Skip this for YouTube workflow
         if (toolCall.name === 'EnterPlanMode' && resultObj['status'] === 'entered_plan_mode') {
+          // Check if this is a YouTube workflow
+          const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') || 
+                                     this.customPrompt?.includes('transcript') ||
+                                     this.customPrompt?.includes('YouTube');
+          
+          if (isYouTubeWorkflow) {
+            debugLog(`[GenericAgent] EnterPlanMode called for YouTube workflow - this should not happen. Exiting plan mode.`);
+            this.planModeActive = false;
+            this.currentMode = 'orchestrator';
+            // Add tool result but don't prompt for Plan subagent
+            const resultWithWarning = result as Record<string, unknown>;
+            this.messages.push({
+              role: 'tool',
+              content: JSON.stringify({ ...resultWithWarning, warning: 'EnterPlanMode not needed for YouTube workflow. Proceed directly to TRANSCRIPT_INPUT phase.' }),
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+            });
+            // Continue without prompting for Plan subagent
+            continue;
+          }
+          
           debugLog(`[GenericAgent] Entered plan mode. Adding tool result and continuing to create plan.`);
           // Add tool result to messages
           this.messages.push({
@@ -2467,6 +2502,9 @@ Respond in JSON format:
       '$images': { file: 'agent/plans/images.md', label: 'Images Plan' },
       '$video': { file: 'agent/plans/video.md', label: 'Video Plan' },
       '$original_input': { file: 'agent/original_input.md', label: 'Original Input' },
+      '$transcript': { file: 'agent/content/transcript.md', label: 'Transcript' },
+      '$content_plan': { file: 'agent/plans/content-plan.md', label: 'Content Plan' },
+      '$image_placements': { file: 'agent/content/image-placements.md', label: 'Image Placement Plan' },
     };
 
     const projectDir = path.join(process.cwd(), '.kshana');

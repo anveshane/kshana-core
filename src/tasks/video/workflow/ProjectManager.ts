@@ -259,6 +259,7 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
     projectDir,
     agentDir,
     join(agentDir, 'plans'),
+    join(agentDir, 'content'),
     join(agentDir, 'script'), // Unified directory for plot, story, and narration
     join(agentDir, 'characters'),
     join(agentDir, 'settings'),
@@ -341,6 +342,37 @@ function looksLikeSrt(input: string): boolean {
   }
   
   return false;
+}
+
+function isYouTubeInputType(inputType: InputType): boolean {
+  return inputType === 'youtube_srt' || inputType === 'script';
+}
+
+const LEGACY_PHASES = new Set<WorkflowPhase>([
+  WorkflowPhase.PLOT,
+  WorkflowPhase.STORY,
+  WorkflowPhase.CHARACTERS_SETTINGS,
+  WorkflowPhase.SCENES,
+  WorkflowPhase.CHARACTER_SETTING_IMAGES,
+  WorkflowPhase.SCENE_IMAGES,
+  WorkflowPhase.VIDEO,
+]);
+
+function normalizeCurrentPhaseForInputType(project: ProjectFile): { phase: WorkflowPhase; changed: boolean } {
+  const inputTypeConfig = INPUT_TYPE_CONFIGS[project.inputType] ?? INPUT_TYPE_CONFIGS.idea;
+  const currentPhase = project.currentPhase;
+  const invalidPhase = !PHASE_CONFIGS[currentPhase];
+  const legacyPhase = LEGACY_PHASES.has(currentPhase);
+
+  if (isYouTubeInputType(project.inputType) && (legacyPhase || invalidPhase)) {
+    return { phase: inputTypeConfig.startPhase, changed: true };
+  }
+
+  if (invalidPhase) {
+    return { phase: inputTypeConfig.startPhase, changed: true };
+  }
+
+  return { phase: currentPhase, changed: false };
 }
 
 /**
@@ -833,8 +865,15 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
       return null;
     }
 
+    const { phase: normalizedPhase, changed } = normalizeCurrentPhaseForInputType(project);
+    if (changed) {
+      project.currentPhase = normalizedPhase;
+    }
+
     // Sync content registry for backward compatibility
-    if (syncContentRegistry(project, basePath)) {
+    const syncChanged = syncContentRegistry(project, basePath);
+
+    if (changed || syncChanged) {
       saveProject(project, basePath);
     }
 
@@ -1203,6 +1242,20 @@ export function getOrCreateProject(
 ): ProjectFile {
   const existing = loadProject(basePath);
   if (existing) {
+    // CRITICAL: If originalInput looks like a transcript but project has wrong inputType, fix it
+    if (originalInput && looksLikeSrt(originalInput) && existing.inputType !== 'youtube_srt' && existing.inputType !== 'script') {
+      // Update input type to youtube_srt and normalize phase
+      const updated = setProjectInputType('youtube_srt', basePath);
+      if (updated) {
+        return updated;
+      }
+    }
+    // Normalize phase for existing project (handles legacy phases)
+    const normalized = normalizeCurrentPhaseForInputType(existing);
+    if (normalized.changed) {
+      existing.currentPhase = normalized.phase;
+      saveProject(existing, basePath);
+    }
     return existing;
   }
   return createProject(originalInput, style, basePath);
@@ -1212,7 +1265,7 @@ export function getOrCreateProject(
  * Get the current workflow phase from the project.
  */
 export function getCurrentPhase(project: ProjectFile): WorkflowPhase {
-  return project.currentPhase;
+  return normalizeCurrentPhaseForInputType(project).phase;
 }
 
 /**
@@ -1301,8 +1354,10 @@ export function transitionToNextPhase(
   project: ProjectFile,
   basePath: string = process.cwd()
 ): { project: ProjectFile; transitioned: boolean; reason: string } {
-  // Check if master plan is approved
-  if (project.plan.stage !== PlannerStage.COMPLETE) {
+  const isYouTubeWorkflow = isYouTubeInputType(project.inputType);
+
+  // Check if master plan is approved (legacy workflow only)
+  if (!isYouTubeWorkflow && project.plan.stage !== PlannerStage.COMPLETE) {
     return {
       project,
       transitioned: false,
@@ -2039,12 +2094,21 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
   const currentPhase = project.currentPhase;
   const phaseConfig = PHASE_CONFIGS[currentPhase];
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+  const isYouTubeWorkflow = isYouTubeInputType(project.inputType);
   const masterPlanStage = project.plan.stage;
-
-  // Check if master plan file has content
   const masterPlanExists = planFileHasContent(project.plan.planFile, basePath);
 
   let instruction = `
+## Current State
+- **Phase**: ${phaseConfig.displayName}
+- **Phase Status**: ${phaseInfo?.status ?? 'pending'}
+- **Per-Item Approval Required**: ${phaseConfig.requiresPerItemApproval ? 'YES' : 'NO'}
+
+## What to Do Next
+`;
+
+  if (!isYouTubeWorkflow) {
+    instruction = `
 ## Current State
 - **Phase**: ${phaseConfig.displayName}
 - **Phase Status**: ${phaseInfo?.status ?? 'pending'}
@@ -2056,9 +2120,10 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
 
 ## What to Do Next
 `;
+  }
 
-  // Check if master plan needs to be created/approved first
-  if (masterPlanStage !== PlannerStage.COMPLETE) {
+  // Check if master plan needs to be created/approved first (legacy workflow only)
+  if (!isYouTubeWorkflow && masterPlanStage !== PlannerStage.COMPLETE) {
     switch (masterPlanStage) {
       case PlannerStage.PLANNING:
         if (masterPlanExists) {
@@ -2111,9 +2176,9 @@ Refine the master plan based on user feedback.
     return instruction.trim();
   }
 
-  // Master plan is approved - proceed with phase execution
+  // Proceed with phase execution
   instruction += `
-✅ **Master plan approved** - Executing phase: ${phaseConfig.displayName}
+✅ **${isYouTubeWorkflow ? 'Phase ready' : 'Master plan approved'}** - Executing phase: ${phaseConfig.displayName}
 
 `;
 

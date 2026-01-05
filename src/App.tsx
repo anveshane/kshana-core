@@ -515,7 +515,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
               <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} paddingY={1}>
                 <Text bold color="yellow">📁 {existingProject.title || 'Untitled Project'}</Text>
                 <Text dimColor>ID: {existingProject.id}</Text>
-                <Text dimColor>Phase: {existingProject.currentPhase}</Text>
+                <Text dimColor>Phase: {PHASE_CONFIGS[getCurrentPhase(existingProject)]?.displayName ?? getCurrentPhase(existingProject)}</Text>
                 <Text dimColor>Characters: {existingProject.characters.length}</Text>
                 <Text dimColor>Scenes: {existingProject.scenes.length}</Text>
               </Box>
@@ -643,7 +643,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
 
   // Main agent view
   const phaseLabel = taskType === 'video' && existingProject
-    ? (PHASE_CONFIGS[existingProject.currentPhase]?.displayName ?? existingProject.currentPhase)
+    ? (PHASE_CONFIGS[getCurrentPhase(existingProject)]?.displayName ?? getCurrentPhase(existingProject))
     : undefined;
 
   return (

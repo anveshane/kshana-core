@@ -30,6 +30,7 @@ Raw transcript text with timestamps embedded in the text:
 - Parse entries into structured records: `{ index, startTime, endTime, text }`
 - Calculate total duration and total entries
 - Use the `parse_srt` tool which automatically handles both formats
+- The `parse_srt` tool writes `agent/content/transcript.md` for downstream phases
 
 ## Process
 

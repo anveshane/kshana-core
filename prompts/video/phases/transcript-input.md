@@ -1,5 +1,7 @@
 ### Transcript Input Phase
 
+**IMPORTANT: This is the FIRST phase in the YouTube workflow. You MUST parse the transcript before proceeding to planning.**
+
 Accept transcript text from the user (pasted directly in the initial prompt). Supports two formats:
 
 **Format 1: SRT Format**
@@ -15,10 +17,10 @@ Text content here
 4:00 all of it confirmed one thing. Racism is 4:04 a hallucination
 ```
 
-Steps:
+Steps (MUST be done in this order):
 1. Read `agent/original_input.md` to access the raw transcript text.
 2. The `parse_srt` tool automatically detects and handles both formats.
-3. Call the transcript parser subagent:
+3. **FIRST**: Call the transcript parser subagent to parse the transcript:
 ```
 Task(
   subagent_type: 'transcript-parser',
@@ -27,7 +29,20 @@ Task(
 )
 ```
 4. The transcript parser will use `parse_srt` tool which handles format detection automatically.
-5. Store parsed transcript entries in `project.json` and in the context store as `$transcript`.
-6. Mark this phase complete and transition to Planning.
+5. Store parsed transcript entries in `project.json`, write `agent/content/transcript.md`, and store in the context store as `$transcript`.
+6. **CRITICAL: After transcript parsing completes, IMMEDIATELY transition to Planning phase:**
+```
+update_project(
+  action: 'update_planner_stage',
+  data: { phase: 'transcript_input', stage: 'complete' }
+)
+update_project(
+  action: 'transition_phase',
+  data: { next_phase: 'planning' }
+)
+```
 
-Do NOT upload files. Work only with pasted text input.
+**DO NOT:**
+- Upload files. Work only with pasted text input.
+- Create or request a master plan for YouTube workflow.
+- Skip the phase transition - you MUST move to planning phase after parsing.

@@ -26,6 +26,17 @@ function formatSecondsToTimecode(seconds: number): string {
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
 }
 
+function formatTranscriptMarkdown(entries: TranscriptEntry[]): string {
+  const lines: string[] = ['# Transcript', ''];
+  for (const entry of entries) {
+    const start = formatSecondsToTimecode(entry.startTime);
+    const end = formatSecondsToTimecode(entry.endTime);
+    const text = entry.text.trim();
+    lines.push(`- ${entry.index} [${start} --> ${end}] ${text}`);
+  }
+  return lines.join('\n').trim() + '\n';
+}
+
 export function parseSrtText(srtText: string): TranscriptEntry[] {
   const blocks = srtText
     .split(/\r?\n\r?\n+/)
@@ -62,70 +73,78 @@ export function parseSrtText(srtText: string): TranscriptEntry[] {
 function parseRawTranscriptWithTimestamps(rawText: string): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   const lines = rawText.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  
+  const defaultDuration = 3;
+
   let currentEntry: { startTime?: number; text: string[] } | null = null;
   let entryIndex = 1;
 
-  for (const line of lines) {
-    // Match timestamps like "3:53", "4:00", "12:34" at the start of line
-    // Also handle formats like "│ 3:53" (with box drawing characters)
-    const timestampMatch = line.match(/^[│\s]*(\d{1,2}):(\d{2})(?:\s|$)/);
-    
-    if (timestampMatch) {
-      // Save previous entry if exists
-      if (currentEntry && currentEntry.startTime !== undefined && currentEntry.text.length > 0) {
-        const text = currentEntry.text.join(' ').trim();
-        if (text) {
-          // Estimate end time as start time + 3 seconds (default duration)
-          const endTime = currentEntry.startTime + 3;
-          entries.push({
-            index: entryIndex++,
-            startTime: currentEntry.startTime,
-            endTime,
-            text,
-          });
-        }
-      }
-      
-      // Start new entry
-      const minutes = Number(timestampMatch[1]);
-      const seconds = Number(timestampMatch[2]);
-      const startTime = minutes * 60 + seconds;
-      
-      // Extract text after timestamp
-      const textAfterTimestamp = line.replace(/^[│\s]*\d{1,2}:\d{2}\s*/, '').trim();
-      
-      currentEntry = {
-        startTime,
-        text: textAfterTimestamp ? [textAfterTimestamp] : [],
-      };
-    } else if (currentEntry) {
-      // Continue current entry with more text
-      const cleanLine = line.replace(/^[│\s]*/, '').trim();
-      if (cleanLine) {
-        currentEntry.text.push(cleanLine);
-      }
+  const flushCurrentEntry = () => {
+    if (!currentEntry || currentEntry.startTime === undefined) {
+      currentEntry = null;
+      return;
     }
-  }
-  
-  // Save last entry
-  if (currentEntry && currentEntry.startTime !== undefined && currentEntry.text.length > 0) {
     const text = currentEntry.text.join(' ').trim();
     if (text) {
-      const endTime = currentEntry.startTime + 3;
       entries.push({
         index: entryIndex++,
         startTime: currentEntry.startTime,
-        endTime,
+        endTime: currentEntry.startTime + defaultDuration,
         text,
       });
     }
+    currentEntry = null;
+  };
+
+  for (const line of lines) {
+    const cleanedLine = line.replace(/^[│\s]*/, '');
+    const matches = [...cleanedLine.matchAll(/(\d{1,2}):(\d{2})/g)];
+
+    if (matches.length === 0) {
+      if (currentEntry) {
+        const cleanLine = cleanedLine.trim();
+        if (cleanLine) {
+          currentEntry.text.push(cleanLine);
+        }
+      }
+      continue;
+    }
+
+    const firstMatch = matches[0];
+    if (currentEntry && firstMatch.index && firstMatch.index > 0) {
+      const leadingText = cleanedLine.slice(0, firstMatch.index).trim();
+      if (leadingText) {
+        currentEntry.text.push(leadingText);
+      }
+    }
+
+    for (let i = 0; i < matches.length; i++) {
+      const match = matches[i];
+      const nextMatch = matches[i + 1];
+      const minutes = Number(match[1]);
+      const seconds = Number(match[2]);
+      const startTime = minutes * 60 + seconds;
+      const textStart = (match.index ?? 0) + match[0].length;
+      const textEnd = nextMatch?.index ?? cleanedLine.length;
+      const segment = cleanedLine.slice(textStart, textEnd).trim();
+
+      flushCurrentEntry();
+      currentEntry = { startTime, text: segment ? [segment] : [] };
+
+      if (nextMatch) {
+        flushCurrentEntry();
+      }
+    }
   }
-  
-  // Adjust end times to not overlap with next start time
-  for (let i = 0; i < entries.length - 1; i++) {
-    if (entries[i].endTime > entries[i + 1].startTime) {
-      entries[i].endTime = entries[i + 1].startTime;
+
+  flushCurrentEntry();
+
+  // Adjust end times to align with next start time when possible
+  for (let i = 0; i < entries.length; i++) {
+    const nextEntry = entries[i + 1];
+    if (nextEntry && nextEntry.startTime > entries[i].startTime) {
+      entries[i].endTime = nextEntry.startTime;
+    } else {
+      entries[i].endTime = entries[i].startTime + defaultDuration;
     }
   }
   
@@ -142,8 +161,8 @@ function isRawTranscriptFormat(text: string): boolean {
     return false; // It's SRT format
   }
   
-  // Check for raw transcript format (timestamps like "3:53", "4:00" at start of lines)
-  const rawTranscriptPattern = /^[│\s]*\d{1,2}:\d{2}(?:\s|$)/m;
+  // Check for raw transcript format (timestamps like "3:53", "4:00" embedded in text)
+  const rawTranscriptPattern = /\b\d{1,2}:\d{2}\b/;
   return rawTranscriptPattern.test(text);
 }
 
@@ -195,12 +214,19 @@ export const parseSrtTool: ToolDefinition = createTool(
       saveProject(project);
     }
 
+    const transcriptPath = 'agent/content/transcript.md';
+    if (entries.length > 0) {
+      const transcriptContent = formatTranscriptMarkdown(entries);
+      writeProjectFile(transcriptPath, transcriptContent);
+    }
+
     return {
       status: 'success',
       total_entries: entries.length,
       total_duration: totalDuration,
       entries,
       format_detected: isRawTranscriptFormat(inputText) ? 'raw_transcript' : 'srt',
+      transcript_path: transcriptPath,
     };
   }
 );
