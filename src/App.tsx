@@ -20,6 +20,7 @@ import {
   buildWorkflowAgentPrompt,
   getCurrentPhase,
   loadProjectFilesAsContexts,
+  PHASE_CONFIGS,
 } from './tasks/video/index.js';
 import type { LLMClientConfig } from './core/llm/index.js';
 import type { AgentConfig } from './core/agent/index.js';
@@ -487,7 +488,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Show welcome screen if not started
   if (!started) {
     const subtitle = taskType === 'video'
-      ? 'Agentic Video Generation System'
+      ? 'YouTube Documentary Video Editor'
       : 'Generic CLI Agent Framework';
 
     if (taskType === 'video') {
@@ -586,10 +587,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             <Box flexDirection="column" marginBottom={1} paddingX={2}>
               <Text bold color="cyan">Welcome to Kshana!</Text>
               <Text dimColor>
-                Enter a story idea or paste a complete story/chapter.
+                Paste an SRT transcript or enter a documentary script.
               </Text>
               <Text dimColor>
-                The system will automatically detect what you've provided.
+                The system will detect SRT format automatically.
               </Text>
             </Box>
 
@@ -601,9 +602,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
               <Text bold color="yellow">Example prompts:</Text>
             </Box>
             <Box flexDirection="column" paddingX={4} marginBottom={1}>
-              <Text dimColor>"A story about a robot learning to dance"</Text>
-              <Text dimColor>"Create a video about a magical forest adventure"</Text>
-              <Text dimColor>"An epic tale of a knight and a dragon"</Text>
+              <Text dimColor>1 00:00:00,000 --&gt; 00:00:03,000 Welcome to the story of...</Text>
+              <Text dimColor>Paste a full SRT transcript to begin</Text>
+              <Text dimColor>A 10-minute documentary script about coral reefs</Text>
             </Box>
           </Box>
 
@@ -613,7 +614,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
               mode="text"
               onSubmit={handleTaskSubmit}
               prompt=">"
-              hint={'Enter your story idea and press Enter. Type "exit" to quit.'}
+              hint={'Paste SRT or script and press Enter. Type "exit" to quit.'}
             />
           </Box>
         </Box>
@@ -641,6 +642,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   }
 
   // Main agent view
+  const phaseLabel = taskType === 'video' && existingProject
+    ? (PHASE_CONFIGS[existingProject.currentPhase]?.displayName ?? existingProject.currentPhase)
+    : undefined;
+
   return (
     <Box flexDirection="column">
       {/* Main content area */}
@@ -648,6 +653,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         agentName={agentName}
         status={status}
         statusMessage={error}
+        phaseLabel={phaseLabel}
         todos={todos}
         streamingText={streamingText}
         isStreaming={isStreaming}

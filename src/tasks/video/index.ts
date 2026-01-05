@@ -13,6 +13,9 @@ import { contextStore } from '../../core/context/index.js';
 import { loadAndRenderMarkdown, loadMarkdown } from '../../core/prompts/loader.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
+import { getSrtTools } from './tools/srt.js';
+import { getPlacementTools } from './tools/placement.js';
+import { getVideoReplacementTools } from './tools/video-replacement.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
 
@@ -172,6 +175,18 @@ export function createWorkflowToolRegistry(): ToolRegistry {
     registry.register(tool);
   }
 
+  for (const tool of getSrtTools()) {
+    registry.register(tool);
+  }
+
+  for (const tool of getPlacementTools()) {
+    registry.register(tool);
+  }
+
+  for (const tool of getVideoReplacementTools()) {
+    registry.register(tool);
+  }
+
   return registry;
 }
 
@@ -192,6 +207,7 @@ export function loadProjectFilesAsContexts(basePath: string = process.cwd()): st
   const agentDir = join(projectDir, 'agent');
   const plansDir = join(agentDir, 'plans');
   const scriptDir = join(agentDir, 'script');
+  const project = loadProject(basePath);
   const loadedContexts: string[] = [];
   let totalChars = 0;
 
@@ -217,18 +233,41 @@ export function loadProjectFilesAsContexts(basePath: string = process.cwd()): st
     }
   }
 
+  if (project?.transcriptEntries && project.transcriptEntries.length > 0) {
+    const transcriptText = project.transcriptEntries
+      .map(entry => `#${entry.index} ${entry.startTime.toFixed(3)}-${entry.endTime.toFixed(3)} ${entry.text}`)
+      .join('\n');
+    const { variableName } = contextStore.store(transcriptText, 'Transcript Entries', {
+      source: 'tool',
+      variableBaseName: 'transcript',
+    });
+    loadedContexts.push(variableName);
+    contextSizes['transcript'] = transcriptText.length;
+    totalChars += transcriptText.length;
+  }
+
   // Files to load with their context labels
-  // Note: plot.md and story.md are now in script/ directory, not plans/
-  const contentFiles = [
-    { dir: scriptDir, file: 'plot.md', label: 'Plot Outline', varName: 'plot' },
-    { dir: plansDir, file: 'plot-plan.md', label: 'Plot Creation Plan', varName: 'plot_plan' },
-    { dir: scriptDir, file: 'story.md', label: 'Story', varName: 'story' },
-    { dir: plansDir, file: 'story-plan.md', label: 'Story Development Plan', varName: 'story_plan' },
-    { dir: plansDir, file: 'scenes.md', label: 'Scenes', varName: 'scenes' },
-    { dir: plansDir, file: 'characters.md', label: 'Characters', varName: 'characters' },
-    { dir: plansDir, file: 'settings.md', label: 'Settings', varName: 'settings' },
-    { dir: plansDir, file: 'images.md', label: 'Image Plan', varName: 'images' },
-  ];
+  // Load different files based on input type (YouTube vs Story workflow)
+  const isYouTubeWorkflow = project?.inputType === 'youtube_srt' || project?.inputType === 'script';
+  
+  const contentFiles = isYouTubeWorkflow
+    ? [
+        // YouTube workflow files
+        { dir: plansDir, file: 'master-plan.md', label: 'Master Plan', varName: 'master_plan' },
+        { dir: plansDir, file: 'image-placements.md', label: 'Image Placement Plan', varName: 'image_placements' },
+        { dir: scriptDir, file: 'subtitles_with_images.srt', label: 'SRT with Images', varName: 'srt_with_images' },
+      ]
+    : [
+        // Legacy story workflow files
+        { dir: scriptDir, file: 'plot.md', label: 'Plot Outline', varName: 'plot' },
+        { dir: plansDir, file: 'plot-plan.md', label: 'Plot Creation Plan', varName: 'plot_plan' },
+        { dir: scriptDir, file: 'story.md', label: 'Story', varName: 'story' },
+        { dir: plansDir, file: 'story-plan.md', label: 'Story Development Plan', varName: 'story_plan' },
+        { dir: plansDir, file: 'scenes.md', label: 'Scenes', varName: 'scenes' },
+        { dir: plansDir, file: 'characters.md', label: 'Characters', varName: 'characters' },
+        { dir: plansDir, file: 'settings.md', label: 'Settings', varName: 'settings' },
+        { dir: plansDir, file: 'images.md', label: 'Image Plan', varName: 'images' },
+      ];
 
   for (const { dir, file, label, varName } of contentFiles) {
     const filePath = join(dir, file);
@@ -322,6 +361,11 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
  * Map workflow phases to their prompt file paths.
  */
 const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
+  [WorkflowPhase.TRANSCRIPT_INPUT]: 'video/phases/transcript-input.md',
+  [WorkflowPhase.PLANNING]: 'video/phases/planning.md',
+  [WorkflowPhase.IMAGE_PLACEMENT]: 'video/phases/image-placement.md',
+  [WorkflowPhase.IMAGE_GENERATION]: 'video/phases/image-generation.md',
+  [WorkflowPhase.VIDEO_REPLACEMENT]: 'video/phases/video-replacement.md',
   [WorkflowPhase.PLOT]: 'video/phases/plot.md',
   [WorkflowPhase.STORY]: 'video/phases/story.md',
   [WorkflowPhase.CHARACTERS_SETTINGS]: 'video/phases/characters-settings.md',
@@ -351,7 +395,7 @@ export function buildWorkflowAgentPrompt(
 The following project files have been loaded as contexts:
 ${loadedContexts.map(c => `- ${c}`).join('\n')}
 
-Use the \`generate_content\` tool for creating content - it automatically injects the correct contexts.
+Use \`generate_content\` for legacy story phases, and \`Task\` with subagents for transcript-first phases.
 For example: \`generate_content(content_type: "plot")\` automatically uses \$original_input.`;
   }
 
@@ -397,6 +441,18 @@ export function getWorkflowToolNames(): string[] {
     'write_file',
     'read_project',
     'update_project',
+    // Transcript tools
+    'parse_srt',
+    'validate_srt',
+    'write_srt_with_images',
+    // Placement tools
+    'create_image_placement',
+    'update_image_placement',
+    'get_placements_by_time',
+    // Video replacement tools
+    'replace_video_segment',
+    'sync_audio_with_images',
+    'generate_replacement_plan',
     // Stitching
     'stitch_videos',
     // Plus all video tools

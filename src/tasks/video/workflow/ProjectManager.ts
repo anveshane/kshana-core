@@ -28,6 +28,8 @@ import {
   type SceneRoutingEntry,
   type EntityRoutingEntry,
   type ExecutionContext,
+  type TranscriptEntry,
+  type ImagePlacement,
   WorkflowPhase,
   PlannerStage,
   PHASE_CONFIGS,
@@ -316,6 +318,31 @@ function stripWrapperTags(content: string): string {
     .trim();
 }
 
+function looksLikeSrt(input: string): boolean {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  
+  // Check for proper SRT format (numbered entries with "00:00:00,000 --> 00:00:00,000" timestamps)
+  const srtTimestampPattern = /\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}/;
+  if (srtTimestampPattern.test(trimmed)) {
+    const firstLine = trimmed.split(/\r?\n/, 1)[0] || '';
+    if (/^\d+$/.test(firstLine.trim())) {
+      return true; // Proper SRT format
+    }
+  }
+  
+  // Check for raw transcript format (timestamps embedded in text like "3:53", "4:00")
+  // This indicates it's a transcript that should use YouTube workflow
+  const rawTranscriptPattern = /^[│\s]*\d{1,2}:\d{2}(?:\s|$)/m;
+  if (rawTranscriptPattern.test(trimmed)) {
+    return true; // Raw transcript format - treat as YouTube SRT workflow
+  }
+  
+  return false;
+}
+
 /**
  * Create a new project file with the given input.
  * Stores originalInput in a separate file, only reference in project.json.
@@ -365,17 +392,20 @@ export function createProject(
   // Generate plan ID
   const planId = `plan-${now}-${Math.random().toString(36).slice(2, 8)}`;
 
-  // Default to 'idea' input type - agent will analyze and update if it's a full story
+  const detectedInputType: InputType = looksLikeSrt(cleanInput) ? 'youtube_srt' : 'idea';
+  const inputTypeConfig = INPUT_TYPE_CONFIGS[detectedInputType];
+
+  // Default to detected input type; agent may update if it detects a full story/script
   const project: ProjectFile = {
     version: '2.0',
     id: projectId,
     title: generateProjectTitle(cleanInput),
     originalInputFile: inputFilePath,
     style,
-    inputType: 'idea',
+    inputType: detectedInputType,
     createdAt: now,
     updatedAt: now,
-    currentPhase: WorkflowPhase.PLOT,
+    currentPhase: inputTypeConfig.startPhase,
     // Project-level master plan - one plan for all phases
     plan: {
       planId,
@@ -386,6 +416,26 @@ export function createProject(
       approvedAt: null,
     },
     phases: {
+      transcript_input: {
+        status: 'pending',
+        completedAt: null,
+      },
+      planning: {
+        status: 'pending',
+        completedAt: null,
+      },
+      image_placement: {
+        status: 'pending',
+        completedAt: null,
+      },
+      image_generation: {
+        status: 'pending',
+        completedAt: null,
+      },
+      video_replacement: {
+        status: 'pending',
+        completedAt: null,
+      },
       plot: {
         status: 'pending',
         completedAt: null,
@@ -424,7 +474,19 @@ export function createProject(
     settings: [],
     scenes: [],
     assets: [],
+    transcriptEntries: [] as TranscriptEntry[],
+    imagePlacements: [] as ImagePlacement[],
   };
+
+  if (inputTypeConfig.skipPhases.length > 0) {
+    for (const skipPhase of inputTypeConfig.skipPhases) {
+      const phaseKey = skipPhase as keyof typeof project.phases;
+      if (project.phases[phaseKey]) {
+        project.phases[phaseKey].status = 'skipped';
+        project.phases[phaseKey].completedAt = now;
+      }
+    }
+  }
 
   // Save project file
   saveProject(project, basePath);
@@ -478,6 +540,17 @@ export function setProjectInputType(
       // Update content registry
       project.content.story.status = 'available';
     }
+  }
+
+  if (inputType === 'youtube_srt' || inputType === 'script') {
+    for (const skipPhase of inputTypeConfig.skipPhases) {
+      const phaseKey = skipPhase as keyof typeof project.phases;
+      if (project.phases[phaseKey]) {
+        project.phases[phaseKey].status = 'skipped';
+        project.phases[phaseKey].completedAt = now;
+      }
+    }
+    project.currentPhase = inputTypeConfig.startPhase;
   }
 
   saveProject(project, basePath);

@@ -13,6 +13,8 @@ export {
   type CharacterData,
   type SettingData,
   type SceneRef,
+  type TranscriptEntry,
+  type ImagePlacement,
   type AssetInfo,
   type ProjectFile,
   type PhaseConfig,
@@ -129,6 +131,8 @@ export {
   writeFileTool,
   readProjectTool,
   updateProjectTool,
+  readTranscriptTool,
+  writePlacementPlanTool,
   getWorkflowFileTools,
 } from './FileTools.js';
 

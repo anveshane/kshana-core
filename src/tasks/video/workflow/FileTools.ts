@@ -56,12 +56,29 @@ function expandContextRef(value: string): string {
   return value;
 }
 
+function looksLikeSrtInput(input: string): boolean {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const timestampPattern = /\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}/;
+  if (!timestampPattern.test(trimmed)) {
+    return false;
+  }
+  const firstLine = trimmed.split(/\r?\n/, 1)[0] || '';
+  return /^\d+$/.test(firstLine.trim());
+}
+
 /**
  * Validates if the input is a valid story idea using an LLM call.
  * Returns { valid: true } if valid, or { valid: false, reason: string } if invalid.
  */
 async function validateStoryInput(input: string): Promise<{ valid: boolean; reason?: string }> {
   const trimmed = input.trim();
+
+  if (looksLikeSrtInput(trimmed)) {
+    return { valid: true };
+  }
 
   // Too short to be a meaningful story idea
   if (trimmed.length < 10) {
@@ -307,6 +324,48 @@ For structured data (characters, settings, assets, scenes), prefer using update_
   }
 );
 
+export const readTranscriptTool: ToolDefinition = createTool(
+  'read_transcript',
+  'Read raw SRT transcript text from agent/original_input.md.',
+  {
+    type: 'object',
+    properties: {},
+    required: [],
+  },
+  async () => {
+    const content = readProjectFile('agent/original_input.md');
+    if (content === null) {
+      return { status: 'error', error: 'Transcript not found at agent/original_input.md' };
+    }
+    return { status: 'success', file_path: 'agent/original_input.md', content };
+  }
+);
+
+export const writePlacementPlanTool: ToolDefinition = createTool(
+  'write_placement_plan',
+  'Write image placement plan content to agent/plans/image-placements.md.',
+  {
+    type: 'object',
+    properties: {
+      content: { type: 'string', description: 'Placement plan content' },
+    },
+    required: ['content'],
+  },
+  async (args) => {
+    const content = args['content'] as string;
+    try {
+      writeProjectFile('agent/plans/image-placements.md', content);
+      return {
+        status: 'success',
+        file_path: 'agent/plans/image-placements.md',
+        bytes_written: content.length,
+      };
+    } catch (error) {
+      return { status: 'error', error: `Failed to write placement plan: ${String(error)}` };
+    }
+  }
+);
+
 /**
  * Read project tool - reads the project.json index file.
  */
@@ -412,7 +471,7 @@ Actions:
 - "update_scene_approval": Update scene approval. Data: { scene_number, approval_type: 'content'|'image'|'video', status, artifactId? }
 - "add_asset": Register a generated asset. Data: { id, type, path, metadata? }
 - "set_final_video": Set the final video info. Data: { artifactId, path, duration }
-- "set_input_type": Set the input type after analyzing user input. Data: { input_type: 'idea'|'story' }. Use 'story' if user provided a complete story/chapter (skips plot and story phases).`,
+- "set_input_type": Set the input type after analyzing user input. Data: { input_type: 'idea'|'story'|'youtube_srt'|'script' }. Use 'youtube_srt' when the user provides SRT content.`,
   {
     type: 'object',
     properties: {
@@ -978,8 +1037,9 @@ What story would you like to turn into a video?`,
 
         case 'set_input_type': {
           const inputType = data['input_type'] as InputType;
-          if (!inputType || !['idea', 'story'].includes(inputType)) {
-            return { status: 'error', error: 'input_type must be "idea" or "story"' };
+          const validInputTypes: InputType[] = ['idea', 'story', 'youtube_srt', 'script'];
+          if (!inputType || !validInputTypes.includes(inputType)) {
+            return { status: 'error', error: `input_type must be one of: ${validInputTypes.join(', ')}` };
           }
 
           const updatedProject = setProjectInputType(inputType);
@@ -992,15 +1052,21 @@ What story would you like to turn into a video?`,
             ? inputTypeConfig.skipPhases.join(', ')
             : 'none';
 
+          const note = inputType === 'story'
+            ? 'Plot and Story phases have been skipped. The story has been saved to script/story.md. Proceeding to Characters & Settings phase.'
+            : inputType === 'youtube_srt'
+              ? 'Transcript-first workflow enabled. Proceeding to Transcript Input phase.'
+              : inputType === 'script'
+                ? 'Transcript input skipped. Proceeding to Planning phase.'
+                : 'Starting from Plot phase.';
+
           return {
             status: 'success',
             message: `Input type set to "${inputTypeConfig.displayName}"`,
             input_type: inputType,
             current_phase: updatedProject.currentPhase,
             skipped_phases: skippedPhases,
-            note: inputType === 'story'
-              ? 'Plot and Story phases have been skipped. The story has been saved to script/story.md. Proceeding to Characters & Settings phase.'
-              : 'Starting from Plot phase.',
+            note,
           };
         }
 
@@ -1018,12 +1084,12 @@ What story would you like to turn into a video?`,
  * Only includes project state tools - content files are handled by subagents via Task.
  */
 export function getWorkflowFileTools(): ToolDefinition[] {
-  return [readProjectTool, updateProjectTool];
+  return [readProjectTool, updateProjectTool, readTranscriptTool, writePlacementPlanTool];
 }
 
 /**
  * Get all file tools including read_file/write_file (for subagents that need direct file access).
  */
 export function getAllFileTools(): ToolDefinition[] {
-  return [readFileTool, writeFileTool, readProjectTool, updateProjectTool];
+  return [readFileTool, writeFileTool, readProjectTool, updateProjectTool, readTranscriptTool, writePlacementPlanTool];
 }

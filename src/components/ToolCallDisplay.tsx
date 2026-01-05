@@ -398,7 +398,7 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
   const resultContent = React.useMemo(() => {
     if (isExecuting || streamingContent) return undefined;
     if (result && typeof result === 'object' && 'content' in result) {
-      const content = (result as Record<string, unknown>).content;
+      const content = (result as Record<string, unknown>)['content'];
       if (typeof content === 'string' && content.length > 0) {
         return content;
       }

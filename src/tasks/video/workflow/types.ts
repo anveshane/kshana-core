@@ -1,6 +1,6 @@
 /**
  * Type definitions for the state-based video generation workflow.
- * 8-phase workflow: plot → story → characters_settings → scenes → character_setting_images → scene_images → video → video_combine
+ * Workflow supports legacy story-first and new transcript-first pipelines.
  */
 
 /**
@@ -51,28 +51,43 @@ export const STYLE_CONFIGS: Record<ProjectStyle, StyleConfig> = {
  * 8-phase workflow matching Sequence.md specification.
  */
 export enum WorkflowPhase {
-  /** Phase 1: Analyze input and create plot outline */
+  /** Phase 1 (YouTube): Accept raw SRT text from user input */
+  TRANSCRIPT_INPUT = 'transcript_input',
+
+  /** Phase 2 (YouTube): Analyze transcript and plan image placements */
+  PLANNING = 'planning',
+
+  /** Phase 3 (YouTube): Map images to transcript timestamps */
+  IMAGE_PLACEMENT = 'image_placement',
+
+  /** Phase 4 (YouTube): Generate images for placements */
+  IMAGE_GENERATION = 'image_generation',
+
+  /** Phase 5 (YouTube): Replace video segments with images */
+  VIDEO_REPLACEMENT = 'video_replacement',
+
+  /** Legacy: Analyze input and create plot outline */
   PLOT = 'plot',
 
-  /** Phase 2: Generate full story from plot (or accept direct story input) */
+  /** Legacy: Generate full story from plot (or accept direct story input) */
   STORY = 'story',
 
-  /** Phase 3: Plan and create detailed descriptions for each character and setting */
+  /** Legacy: Plan and create detailed descriptions for each character and setting */
   CHARACTERS_SETTINGS = 'characters_settings',
 
-  /** Phase 4: Break story into individual visual scenes with descriptions */
+  /** Legacy: Break story into individual visual scenes with descriptions */
   SCENES = 'scenes',
 
-  /** Phase 5: Generate reference images for each character and setting (text-to-image) */
+  /** Legacy: Generate reference images for each character and setting (text-to-image) */
   CHARACTER_SETTING_IMAGES = 'character_setting_images',
 
-  /** Phase 6: Generate scene images using character/setting references (image+text-to-image) */
+  /** Legacy: Generate scene images using character/setting references (image+text-to-image) */
   SCENE_IMAGES = 'scene_images',
 
-  /** Phase 7: Generate video clip for each scene image */
+  /** Legacy: Generate video clip for each scene image */
   VIDEO = 'video',
 
-  /** Phase 8: Stitch all scene videos into final video */
+  /** Stitch all scene videos into final video */
   VIDEO_COMBINE = 'video_combine',
 
   /** Workflow complete */
@@ -83,7 +98,7 @@ export enum WorkflowPhase {
  * Type of input provided by the user.
  * This determines which phases can be skipped.
  */
-export type InputType = 'idea' | 'story';
+export type InputType = 'idea' | 'story' | 'youtube_srt' | 'script';
 
 /**
  * Input type configuration with display names and phase implications.
@@ -114,6 +129,35 @@ export const INPUT_TYPE_CONFIGS: Record<InputType, InputTypeConfig> = {
     description: 'A full story, chapter, or detailed narrative ready for visualization',
     startPhase: WorkflowPhase.CHARACTERS_SETTINGS,
     skipPhases: [WorkflowPhase.PLOT, WorkflowPhase.STORY],
+  },
+  youtube_srt: {
+    displayName: 'YouTube SRT Transcript',
+    description: 'Raw SRT subtitle content for a YouTube documentary workflow',
+    startPhase: WorkflowPhase.TRANSCRIPT_INPUT,
+    skipPhases: [
+      WorkflowPhase.PLOT,
+      WorkflowPhase.STORY,
+      WorkflowPhase.CHARACTERS_SETTINGS,
+      WorkflowPhase.SCENES,
+      WorkflowPhase.CHARACTER_SETTING_IMAGES,
+      WorkflowPhase.SCENE_IMAGES,
+      WorkflowPhase.VIDEO,
+    ],
+  },
+  script: {
+    displayName: 'Documentary Script',
+    description: 'A non-SRT documentary script that follows the YouTube workflow',
+    startPhase: WorkflowPhase.PLANNING,
+    skipPhases: [
+      WorkflowPhase.TRANSCRIPT_INPUT,
+      WorkflowPhase.PLOT,
+      WorkflowPhase.STORY,
+      WorkflowPhase.CHARACTERS_SETTINGS,
+      WorkflowPhase.SCENES,
+      WorkflowPhase.CHARACTER_SETTING_IMAGES,
+      WorkflowPhase.SCENE_IMAGES,
+      WorkflowPhase.VIDEO,
+    ],
   },
 };
 
@@ -300,6 +344,28 @@ export interface SceneRef {
 }
 
 /**
+ * Transcript entry parsed from SRT input.
+ */
+export interface TranscriptEntry {
+  index: number;
+  startTime: number; // seconds
+  endTime: number;
+  text: string;
+}
+
+/**
+ * Planned image placement aligned to transcript entries.
+ */
+export interface ImagePlacement {
+  transcriptIndex: number;
+  startTime: number;
+  endTime: number;
+  imagePrompt: string;
+  imagePath?: string;
+  imageArtifactId?: string;
+}
+
+/**
  * Asset metadata stored in agent/manifest.json.
  */
 export interface AssetInfo {
@@ -468,8 +534,13 @@ export interface ProjectFile {
    */
   plan: ProjectPlan;
 
-  /** Phase status tracking for all 8 phases */
+  /** Phase status tracking for transcript-first and legacy phases */
   phases: {
+    transcript_input: PhaseInfo;
+    planning: PhaseInfo;
+    image_placement: PhaseInfo;
+    image_generation: PhaseInfo;
+    video_replacement: PhaseInfo;
     plot: PhaseInfo;
     story: PhaseInfo;
     characters_settings: PhaseInfo;
@@ -494,6 +565,11 @@ export interface ProjectFile {
 
   /** Final video information (populated after VIDEO_COMBINE phase) */
   finalVideo?: FinalVideoInfo;
+
+  /** Parsed transcript entries from SRT */
+  transcriptEntries?: TranscriptEntry[];
+  /** Image placement plan aligned to transcript entries */
+  imagePlacements?: ImagePlacement[];
 }
 
 /**
@@ -516,7 +592,16 @@ export type ItemProcessMode =
 /**
  * Content type for content agent dispatch.
  */
-export type ContentType = 'plot' | 'story' | 'character' | 'setting' | 'scene' | 'narration';
+export type ContentType =
+  | 'plot'
+  | 'story'
+  | 'character'
+  | 'setting'
+  | 'scene'
+  | 'narration'
+  | 'transcript_analysis'
+  | 'image_placement_plan'
+  | 'image_prompt';
 
 /**
  * Configuration for each workflow phase.
@@ -552,6 +637,105 @@ export interface PhaseConfig {
  * Note: Planning is done at project level via ProjectPlan, not per-phase.
  */
 export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
+  [WorkflowPhase.TRANSCRIPT_INPUT]: {
+    phase: WorkflowPhase.TRANSCRIPT_INPUT,
+    displayName: 'Transcript Input',
+    nextPhase: WorkflowPhase.PLANNING,
+    promptFile: 'transcript-input',
+    agentType: 'content',
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'read_transcript',
+      'validate_srt',
+      'parse_srt',
+      'Task',
+    ],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: false,
+    description: 'Accept raw SRT text, validate and parse transcript entries',
+  },
+
+  [WorkflowPhase.PLANNING]: {
+    phase: WorkflowPhase.PLANNING,
+    displayName: 'Planning',
+    nextPhase: WorkflowPhase.IMAGE_PLACEMENT,
+    promptFile: 'planning',
+    agentType: 'planning',
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'Task'],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: false,
+    description: 'Analyze transcript and plan image placements',
+  },
+
+  [WorkflowPhase.IMAGE_PLACEMENT]: {
+    phase: WorkflowPhase.IMAGE_PLACEMENT,
+    displayName: 'Image Placement',
+    nextPhase: WorkflowPhase.IMAGE_GENERATION,
+    promptFile: 'image-placement',
+    agentType: 'content',
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'write_placement_plan',
+      'write_srt_with_images',
+      'create_image_placement',
+      'update_image_placement',
+      'Task',
+    ],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: false,
+    description: 'Map placements to transcript timestamps and prepare image prompts',
+  },
+
+  [WorkflowPhase.IMAGE_GENERATION]: {
+    phase: WorkflowPhase.IMAGE_GENERATION,
+    displayName: 'Image Generation',
+    nextPhase: WorkflowPhase.VIDEO_REPLACEMENT,
+    promptFile: 'image-generation',
+    agentType: 'image',
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: true,
+    description: 'Generate documentary-style images for planned placements',
+  },
+
+  [WorkflowPhase.VIDEO_REPLACEMENT]: {
+    phase: WorkflowPhase.VIDEO_REPLACEMENT,
+    displayName: 'Video Replacement',
+    nextPhase: WorkflowPhase.VIDEO_COMBINE,
+    promptFile: 'video-replacement',
+    agentType: 'video',
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'generate_replacement_plan',
+      'replace_video_segment',
+      'sync_audio_with_images',
+      'Task',
+    ],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: true,
+    description: 'Replace video segments with generated images',
+  },
+
   [WorkflowPhase.PLOT]: {
     phase: WorkflowPhase.PLOT,
     displayName: 'Plot Development',
@@ -677,6 +861,13 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
  * Order of phases for iteration (8-phase workflow).
  */
 export const PHASE_ORDER: WorkflowPhase[] = [
+  WorkflowPhase.TRANSCRIPT_INPUT,
+  WorkflowPhase.PLANNING,
+  WorkflowPhase.IMAGE_PLACEMENT,
+  WorkflowPhase.IMAGE_GENERATION,
+  WorkflowPhase.VIDEO_REPLACEMENT,
+  WorkflowPhase.VIDEO_COMBINE,
+  WorkflowPhase.COMPLETED,
   WorkflowPhase.PLOT,
   WorkflowPhase.STORY,
   WorkflowPhase.CHARACTERS_SETTINGS,
@@ -684,8 +875,6 @@ export const PHASE_ORDER: WorkflowPhase[] = [
   WorkflowPhase.CHARACTER_SETTING_IMAGES,
   WorkflowPhase.SCENE_IMAGES,
   WorkflowPhase.VIDEO,
-  WorkflowPhase.VIDEO_COMBINE,
-  WorkflowPhase.COMPLETED,
 ];
 
 /**
@@ -745,18 +934,56 @@ export interface StateTransitionResult {
 
 /**
  * Determine the next state based on current project state.
+ * Respects input type to ensure YouTube workflow phases are used for transcript input.
  */
 export function determineNextPhase(project: ProjectFile): StateTransitionResult {
   const currentPhase = project.currentPhase;
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+  const isYouTubeWorkflow = project.inputType === 'youtube_srt' || project.inputType === 'script';
 
   // If current phase is completed, move to next
   if (phaseInfo?.status === 'completed') {
     const config = PHASE_CONFIGS[currentPhase];
     if (config.nextPhase) {
+      // For YouTube workflow, ensure we don't transition to legacy phases
+      let nextPhase = config.nextPhase;
+      if (isYouTubeWorkflow) {
+        // If next phase is a legacy phase, find the next YouTube phase instead
+        const legacyPhases = [
+          WorkflowPhase.PLOT,
+          WorkflowPhase.STORY,
+          WorkflowPhase.CHARACTERS_SETTINGS,
+          WorkflowPhase.SCENES,
+          WorkflowPhase.CHARACTER_SETTING_IMAGES,
+          WorkflowPhase.SCENE_IMAGES,
+          WorkflowPhase.VIDEO,
+        ];
+        if (legacyPhases.includes(nextPhase)) {
+          // Skip to VIDEO_COMBINE if we're past VIDEO_REPLACEMENT
+          if (currentPhase === WorkflowPhase.VIDEO_REPLACEMENT) {
+            nextPhase = WorkflowPhase.VIDEO_COMBINE;
+          } else {
+            // Find next YouTube phase in order
+            const youtubePhases = [
+              WorkflowPhase.TRANSCRIPT_INPUT,
+              WorkflowPhase.PLANNING,
+              WorkflowPhase.IMAGE_PLACEMENT,
+              WorkflowPhase.IMAGE_GENERATION,
+              WorkflowPhase.VIDEO_REPLACEMENT,
+              WorkflowPhase.VIDEO_COMBINE,
+              WorkflowPhase.COMPLETED,
+            ];
+            const currentIndex = youtubePhases.indexOf(currentPhase);
+            if (currentIndex >= 0 && currentIndex < youtubePhases.length - 1) {
+              nextPhase = youtubePhases[currentIndex + 1];
+            }
+          }
+        }
+      }
+      
       return {
-        nextPhase: config.nextPhase,
-        reason: `${config.displayName} completed, moving to ${PHASE_CONFIGS[config.nextPhase].displayName}`,
+        nextPhase,
+        reason: `${config.displayName} completed, moving to ${PHASE_CONFIGS[nextPhase].displayName}`,
         isAutomatic: true,
       };
     }

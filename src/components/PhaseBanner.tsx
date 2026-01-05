@@ -16,6 +16,15 @@ interface PhaseBannerProps {
 
 /** Phase-specific colors and icons */
 const PHASE_STYLES: Record<string, { color: string; icon: string }> = {
+  // YouTube workflow phases (prioritized)
+  transcript_input: { color: 'cyan', icon: '📝' },
+  planning: { color: 'magenta', icon: '🧠' },
+  image_placement: { color: 'yellow', icon: '📍' },
+  image_generation: { color: 'yellow', icon: '🖼️' },
+  video_replacement: { color: 'red', icon: '🎬' },
+  video_combine: { color: 'magenta', icon: '🎞️' },
+  completed: { color: 'green', icon: '✅' },
+  // Legacy story workflow phases
   plot: { color: 'magenta', icon: '📝' },
   story: { color: 'blue', icon: '📖' },
   characters_settings: { color: 'cyan', icon: '👤' },
@@ -23,8 +32,6 @@ const PHASE_STYLES: Record<string, { color: string; icon: string }> = {
   character_setting_images: { color: 'yellow', icon: '🖼️' },
   scene_images: { color: 'yellow', icon: '🎨' },
   video: { color: 'red', icon: '🎥' },
-  video_combine: { color: 'magenta', icon: '🎞️' },
-  completed: { color: 'green', icon: '✅' },
 };
 
 const DEFAULT_STYLE = { color: 'white', icon: '▶' };

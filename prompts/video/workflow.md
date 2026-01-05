@@ -14,6 +14,10 @@ All project files are stored in the `.kshana/` directory in the current working 
 {{loaded_contexts}}
 
 ## Workflow Phases
+Transcript-first workflow:
+transcript_input → planning → image_placement → image_generation → video_replacement → video_combine → completed
+
+Legacy story-first workflow:
 plot → story → characters_settings → scenes → character_setting_images → scene_images → video → video_combine → completed
 
 ## How to Proceed
@@ -70,7 +74,7 @@ If the current phase is a **per-item phase** (characters_settings, scenes, chara
 - **DO NOT** call `transition_phase` after each item approval
 - Instead, follow the phase-specific instructions below (they tell you to update todos and create the next item)
 
-If the current phase is a **single-item phase** (plot, story, video_combine):
+If the current phase is a **single-item phase** (transcript_input, planning, image_placement, image_generation, video_replacement, plot, story, video_combine):
 When the user accepts/approves content (via `generate_content` or `Task`):
 1. The content is automatically saved to the file
 2. **IMMEDIATELY** call: `update_project(action: 'update_planner_stage', data: { phase: '<current_phase>', stage: 'complete' })`
@@ -87,7 +91,7 @@ When the user accepts/approves content (via `generate_content` or `Task`):
   1. **FIRST**: Call `update_project(action: 'update_planner_stage', data: { phase: '<current_phase>', stage: 'complete' })`
   2. **IMMEDIATELY AFTER**: Call `update_project(action: 'transition_phase', data: { next_phase: '<next_phase>' })`
 
-**For single-item phases** (plot, story, video_combine):
+**For single-item phases** (transcript_input, planning, image_placement, image_generation, video_replacement, plot, story, video_combine):
 When ALL work in a phase is done and approved:
 1. **FIRST**: Call `update_project(action: 'update_planner_stage', data: { phase: '<current_phase>', stage: 'complete' })`
 2. **IMMEDIATELY AFTER**: Call `update_project(action: 'transition_phase', data: { next_phase: '<next_phase>' })`
@@ -95,11 +99,8 @@ When ALL work in a phase is done and approved:
 **NEVER** stop after just calling `update_planner_stage`. You MUST call `update_project` with `action: 'transition_phase'` immediately after.
 
 Phase transitions:
-- `plot` → `story`
-- `story` → `characters_settings`
-- `characters_settings` → `scenes`
-- `scenes` → `character_setting_images`
-- etc.
+- `transcript_input` → `planning` → `image_placement` → `image_generation` → `video_replacement` → `video_combine`
+- `plot` → `story` → `characters_settings` → `scenes` → `character_setting_images` → `scene_images` → `video` → `video_combine`
 
 ## User Approval Flow
 Content that requires user approval uses the `generate_content` tool, which automatically handles context injection.

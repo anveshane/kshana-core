@@ -14,6 +14,10 @@ export const EXPLORE_AGENT_PROMPT = '';
 export const CONTENT_AGENT_PROMPT = '';
 export const IMAGE_GENERATION_AGENT_PROMPT = '';
 export const VIDEO_GENERATION_AGENT_PROMPT = '';
+export const TRANSCRIPT_PARSER_AGENT_PROMPT = '';
+export const PLACEMENT_PLANNER_AGENT_PROMPT = '';
+export const IMAGE_PLACER_AGENT_PROMPT = '';
+export const VIDEO_REPLACER_AGENT_PROMPT = '';
 
 export interface PromptRuntimeContext {
   working_directory?: string;
@@ -187,7 +191,16 @@ export function buildExplorePrompt(task: string, context?: string): string {
 /**
  * Content types supported by the content agent.
  */
-export type ContentType = 'plot' | 'story' | 'character' | 'setting' | 'scene' | 'narration';
+export type ContentType =
+  | 'plot'
+  | 'story'
+  | 'character'
+  | 'setting'
+  | 'scene'
+  | 'narration'
+  | 'transcript_analysis'
+  | 'image_placement_plan'
+  | 'image_prompt';
 
 /**
  * Build the content creation sub-agent system prompt.
@@ -240,6 +253,38 @@ export function buildImageGenerationPrompt(task: string, context?: string): stri
   const sub = loadAndRenderMarkdown('system/subagent.md', {});
   const img = loadAndRenderMarkdown('subagents/image-generator.md', {});
   return [base, sub, img, taskSection, contextSection].filter(Boolean).join('\n\n');
+}
+
+export function buildTranscriptParserPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const parser = loadAndRenderMarkdown('subagents/transcript-parser.md', {});
+  return [base, sub, parser, contextSection].filter(Boolean).join('\n\n');
+}
+
+export function buildPlacementPlannerPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const planner = loadAndRenderMarkdown('subagents/placement-planner.md', {});
+  return [base, sub, planner, contextSection].filter(Boolean).join('\n\n');
+}
+
+export function buildImagePlacerPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const placer = loadAndRenderMarkdown('subagents/image-placer.md', {});
+  return [base, sub, placer, contextSection].filter(Boolean).join('\n\n');
+}
+
+export function buildVideoReplacerPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const replacer = loadAndRenderMarkdown('subagents/video-replacer.md', {});
+  return [base, sub, replacer, contextSection].filter(Boolean).join('\n\n');
 }
 
 /**

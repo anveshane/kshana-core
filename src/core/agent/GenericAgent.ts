@@ -13,7 +13,19 @@ import * as path from 'path';
 import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
-import { buildSystemMessage, buildPlanningPrompt, buildExplorePrompt, buildContentPrompt, buildImageGenerationPrompt, wrapUserTask, type ContentType } from '../prompts/index.js';
+import {
+  buildSystemMessage,
+  buildPlanningPrompt,
+  buildExplorePrompt,
+  buildContentPrompt,
+  buildImageGenerationPrompt,
+  buildTranscriptParserPrompt,
+  buildPlacementPlannerPrompt,
+  buildImagePlacerPrompt,
+  buildVideoReplacerPrompt,
+  wrapUserTask,
+  type ContentType,
+} from '../prompts/index.js';
 import { loadAndRenderMarkdown } from '../prompts/loader.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
 import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, LONG_CONTENT_THRESHOLD } from '../context/index.js';
@@ -1574,6 +1586,34 @@ export class GenericAgent extends TypedEventEmitter {
       });
     }
 
+    if (subagentType === 'transcript-parser') {
+      return await this.handleDispatchTranscriptParser({
+        ...toolCall,
+        name: 'dispatch_transcript_parser',
+      });
+    }
+
+    if (subagentType === 'placement-planner') {
+      return await this.handleDispatchPlacementPlanner({
+        ...toolCall,
+        name: 'dispatch_placement_planner',
+      });
+    }
+
+    if (subagentType === 'image-placer') {
+      return await this.handleDispatchImagePlacer({
+        ...toolCall,
+        name: 'dispatch_image_placer',
+      });
+    }
+
+    if (subagentType === 'video-replacer') {
+      return await this.handleDispatchVideoReplacer({
+        ...toolCall,
+        name: 'dispatch_video_replacer',
+      });
+    }
+
     return { error: `Unsupported subagent_type: ${subagentType}` };
   }
 
@@ -1719,6 +1759,50 @@ export class GenericAgent extends TypedEventEmitter {
     };
     iterations: number;
     /** Tool call ID for streaming events */
+    toolCallId: string;
+  } | null = null;
+
+  // State for transcript parsing sub-agent
+  private transcriptParserState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentOutput: string;
+    iterations: number;
+    toolCallId: string;
+  } | null = null;
+
+  // State for placement planning sub-agent
+  private placementPlannerState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentOutput: string;
+    iterations: number;
+    toolCallId: string;
+  } | null = null;
+
+  // State for image placement sub-agent
+  private imagePlacerState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentOutput: string;
+    iterations: number;
+    toolCallId: string;
+  } | null = null;
+
+  // State for video replacement sub-agent
+  private videoReplacerState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentOutput: string;
+    iterations: number;
     toolCallId: string;
   } | null = null;
 
@@ -2438,6 +2522,46 @@ Respond in JSON format:
     return null;
   }
 
+  private buildContextFromRefs(contextRefs?: string[]): { context?: string; missingRefs: string[] } {
+    const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
+    const missingRefs: string[] = [];
+
+    if (contextRefs && contextRefs.length > 0) {
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push({
+            variableName: ref,
+            label: stored.label,
+            content: stored.content,
+          });
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          const projectFileContent = this.tryResolveFromProjectFiles(ref);
+          if (projectFileContent) {
+            contextParts.push({
+              variableName: ref,
+              label: projectFileContent.label,
+              content: projectFileContent.content,
+            });
+            debugLog(`[GenericAgent] Resolved context_ref ${ref} from project file: ${projectFileContent.file}`);
+          } else {
+            missingRefs.push(ref);
+          }
+        }
+      }
+    }
+
+    if (contextParts.length === 0) {
+      return { missingRefs, context: undefined };
+    }
+
+    const context = contextParts.map(part =>
+      `## ${part.variableName} (${part.label})\n\n${part.content}`
+    ).join('\n\n---\n\n');
+    return { missingRefs, context };
+  }
+
   /**
    * Handle dispatch_content_agent tool - spawns a sub-agent for creative content generation.
    * Unlike dispatch_agent (for technical planning), this creates actual creative content
@@ -2464,7 +2588,17 @@ Respond in JSON format:
     }
 
     // Validate content_type is one of the allowed types
-    const validContentTypes = ['plot', 'story', 'character', 'setting', 'scene', 'narration'];
+    const validContentTypes = [
+      'plot',
+      'story',
+      'character',
+      'setting',
+      'scene',
+      'narration',
+      'transcript_analysis',
+      'image_placement_plan',
+      'image_prompt',
+    ];
     if (!validContentTypes.includes(contentType)) {
       this.currentMode = 'orchestrator';
       return {
@@ -3063,6 +3197,215 @@ Respond in JSON format:
 
     // Continue the content loop
     return this.continueContentLoop();
+  }
+
+  private async runOneShotSubagent(
+    state: {
+      task: string;
+      messages: Message[];
+      toolCallId: string;
+      iterations: number;
+      currentOutput: string;
+    },
+    toolName: string,
+    temperature: number
+  ): Promise<unknown> {
+    let content = '';
+    let isFirstChunk = true;
+
+    for await (const chunk of this.llm.generateStream({
+      messages: state.messages,
+      temperature,
+    })) {
+      if (chunk.content) {
+        content += chunk.content;
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId: state.toolCallId,
+          chunk: chunk.content,
+          done: false,
+          agentName: this.getEffectiveAgentName(),
+          toolName,
+          reset: isFirstChunk,
+        });
+        isFirstChunk = false;
+      }
+      if (chunk.done) {
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId: state.toolCallId,
+          chunk: '',
+          done: true,
+          agentName: this.getEffectiveAgentName(),
+        });
+      }
+    }
+
+    state.currentOutput = content.trim() || 'No output generated';
+    this.currentMode = 'orchestrator';
+
+    return {
+      status: 'completed',
+      output: state.currentOutput,
+      task: state.task,
+      iterations: state.iterations,
+    };
+  }
+
+  private async handleDispatchTranscriptParser(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'content';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_transcript_parser' };
+    }
+
+    if (this.transcriptParserState?.active) {
+      return { error: 'Transcript parsing already in progress' };
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(contextRefs);
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] WARNING: Missing context_refs for transcript parser: ${missingRefs.join(', ')}`);
+    }
+
+    const systemPrompt = buildTranscriptParserPrompt(context);
+    this.transcriptParserState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `<request>\n${task}\n</request>` },
+      ],
+      currentOutput: '',
+      iterations: 1,
+      toolCallId: toolCall.id,
+    };
+
+    const result = await this.runOneShotSubagent(this.transcriptParserState, 'dispatch_transcript_parser', 0.3);
+    this.transcriptParserState = null;
+    return result;
+  }
+
+  private async handleDispatchPlacementPlanner(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'planning';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_placement_planner' };
+    }
+
+    if (this.placementPlannerState?.active) {
+      return { error: 'Placement planning already in progress' };
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(contextRefs);
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] WARNING: Missing context_refs for placement planner: ${missingRefs.join(', ')}`);
+    }
+
+    const systemPrompt = buildPlacementPlannerPrompt(context);
+    this.placementPlannerState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `<request>\n${task}\n</request>` },
+      ],
+      currentOutput: '',
+      iterations: 1,
+      toolCallId: toolCall.id,
+    };
+
+    const result = await this.runOneShotSubagent(this.placementPlannerState, 'dispatch_placement_planner', 0.4);
+    this.placementPlannerState = null;
+    return result;
+  }
+
+  private async handleDispatchImagePlacer(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'content';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_image_placer' };
+    }
+
+    if (this.imagePlacerState?.active) {
+      return { error: 'Image placement already in progress' };
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(contextRefs);
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] WARNING: Missing context_refs for image placer: ${missingRefs.join(', ')}`);
+    }
+
+    const systemPrompt = buildImagePlacerPrompt(context);
+    this.imagePlacerState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `<request>\n${task}\n</request>` },
+      ],
+      currentOutput: '',
+      iterations: 1,
+      toolCallId: toolCall.id,
+    };
+
+    const result = await this.runOneShotSubagent(this.imagePlacerState, 'dispatch_image_placer', 0.4);
+    this.imagePlacerState = null;
+    return result;
+  }
+
+  private async handleDispatchVideoReplacer(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'video';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_video_replacer' };
+    }
+
+    if (this.videoReplacerState?.active) {
+      return { error: 'Video replacement already in progress' };
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(contextRefs);
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] WARNING: Missing context_refs for video replacer: ${missingRefs.join(', ')}`);
+    }
+
+    const systemPrompt = buildVideoReplacerPrompt(context);
+    this.videoReplacerState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `<request>\n${task}\n</request>` },
+      ],
+      currentOutput: '',
+      iterations: 1,
+      toolCallId: toolCall.id,
+    };
+
+    const result = await this.runOneShotSubagent(this.videoReplacerState, 'dispatch_video_replacer', 0.3);
+    this.videoReplacerState = null;
+    return result;
   }
 
   /**
