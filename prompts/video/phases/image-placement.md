@@ -1,21 +1,16 @@
 ### Image Placement Phase
 
-**IMPORTANT: This phase runs AFTER the Planning phase has created a content plan.**
+**What this phase does**: Create detailed image placements with exact timestamps and enhanced image prompts based on the content plan.
 
-**Prerequisites:**
+**Prerequisites**:
 - Content plan must exist at `agent/plans/content-plan.md` (created in Planning phase)
 - `$transcript` context variable must exist
+- `$content_plan` context variable must exist
 - `agent/content/transcript.md` file must exist
 
-**Steps:**
-1. Read the content plan from `agent/plans/content-plan.md`:
-```
-read_file(
-  file_path: 'agent/plans/content-plan.md'
-)
-```
+**Steps (execute in order)**:
 
-2. Call the image placer subagent to create detailed image placements:
+1. **Call the image placer subagent**:
 ```
 Task(
   subagent_type: 'image-placer',
@@ -24,22 +19,19 @@ Task(
 )
 ```
 
-3. Save the image placements to `agent/content/image-placements.md` using `write_placement_plan`:
+2. **Extract and save the image placements**:
+   - The Task result structure is: `{ status: 'completed', output: '<image placements text>', task: '...', iterations: 1 }`
+   - **The image placements text is in `result.output`** - extract this field
+   - Save it to `agent/content/image-placements.md`:
 ```
-write_placement_plan(
-  content: '[image placements from image-placer subagent]'
+write_file(
+  file_path: 'agent/content/image-placements.md',
+  content: '[use result.output from the Task result - this contains the image placements]'
 )
 ```
-This will be loaded into context as `$image_placements` for the next phase.
+   - The file will be automatically loaded as `$image_placements` context variable after saving
 
-4. Generate an SRT file with image tags and write it to `agent/script/subtitles_with_images.srt`:
-```
-write_srt_with_images(
-  placements: [array of placement objects from image-placer]
-)
-```
-
-5. Update the project to mark image-placement phase as completed:
+3. **Mark phase as completed**:
 ```
 update_project(
   action: 'update_phase',
@@ -47,7 +39,7 @@ update_project(
 )
 ```
 
-6. Transition to the next phase (Image Generation):
+4. **Transition to next phase (Image Generation)**:
 ```
 update_project(
   action: 'transition_phase'
@@ -58,3 +50,8 @@ update_project(
 - This phase creates actual IMAGE PLACEMENTS (not just a plan)
 - Image placements are saved to `agent/content/image-placements.md`
 - The content plan from Planning phase is used as reference, but this phase creates the actual placements
+
+**DO NOT:**
+- Create placements for video items (those stay as original footage)
+- Skip saving the placements - you MUST save to the file
+- Stop after just saving - you MUST mark phase complete and transition

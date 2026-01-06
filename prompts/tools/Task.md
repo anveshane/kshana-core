@@ -8,7 +8,7 @@ Launch a specialized subagent to handle a specific task in the story-to-video pi
 - **image-generator**: Image generation specialist. Crafts prompts and generates images.
 - **video-assembler**: Video generation specialist. Creates video clips and stitches them together.
 - **transcript-parser**: Parse SRT text and extract structured transcript data.
-- **placement-planner**: Analyze transcript and plan comprehensive visual placements (images, infographics, video).
+- **content-planner**: Analyze transcript and plan comprehensive visual placements (images, infographics, video).
 - **image-placer**: Create detailed placement plan with timestamps and enhanced prompts.
 - **video-replacer**: Handle video segment replacement with images.
 

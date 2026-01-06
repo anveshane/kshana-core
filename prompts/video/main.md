@@ -43,13 +43,12 @@ Task(
 - Call:
 ```
 Task(
-  subagent_type: 'placement-planner',
+  subagent_type: 'content-planner',
   task: 'Create a comprehensive visual placement plan across the transcript',
   context_refs: ['$transcript']
 )
 ```
-- Save the content plan to `agent/plans/content-plan.md` using `write_file`.
-- Write the plan to `agent/content/image-placements.md` using `write_placement_plan` so it loads as `$image_placements`.
+- Save the content plan to `agent/plans/content-plan.md` using `write_file` so it loads as `$content_plan`.
 
 ### IMAGE_PLACEMENT
 - Convert the plan into precise placements with timestamps and enhanced prompts.
@@ -58,9 +57,10 @@ Task(
 Task(
   subagent_type: 'image-placer',
   task: 'Create detailed placement plan with timestamps and enhanced prompts',
-  context_refs: ['$transcript', '$image_placements']
+  context_refs: ['$transcript', '$content_plan']
 )
 ```
+- Save the placements to `agent/content/image-placements.md` using `write_placement_plan` so it loads as `$image_placements`.
 - Generate SRT with image tags and save to `agent/script/subtitles_with_images.srt`.
 
 ### IMAGE_GENERATION

@@ -1628,7 +1628,7 @@ export class GenericAgent extends TypedEventEmitter {
       });
     }
 
-    if (subagentType === 'placement-planner') {
+    if (subagentType === 'content-planner') {
       return await this.handleDispatchPlacementPlanner({
         ...toolCall,
         name: 'dispatch_placement_planner',
@@ -3310,13 +3310,24 @@ Respond in JSON format:
       debugLog(`[GenericAgent] WARNING: Missing context_refs for transcript parser: ${missingRefs.join(', ')}`);
     }
 
+    // Build system prompt with tools available
     const systemPrompt = buildTranscriptParserPrompt(context);
+    
+    // Create a temporary tool registry with parse_srt tool for the subagent
+    const subagentTools = new Map<string, ToolDefinition>();
+    const parseSrtTool = this.tools.get('parse_srt');
+    if (parseSrtTool) {
+      subagentTools.set('parse_srt', parseSrtTool);
+    }
+    
+    const fullSystemPrompt = buildSystemMessage(true, subagentTools, systemPrompt);
+
     this.transcriptParserState = {
       active: true,
       task,
       context,
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: fullSystemPrompt },
         { role: 'user', content: `<request>\n${task}\n</request>` },
       ],
       currentOutput: '',
@@ -3324,9 +3335,97 @@ Respond in JSON format:
       toolCallId: toolCall.id,
     };
 
-    const result = await this.runOneShotSubagent(this.transcriptParserState, 'dispatch_transcript_parser', 0.3);
+    // Run subagent with tool calling support
+    const result = await this.runSubagentWithTools(this.transcriptParserState, 'dispatch_transcript_parser', 0.3, subagentTools);
     this.transcriptParserState = null;
     return result;
+  }
+
+  /**
+   * Run a subagent that supports tool calls (unlike runOneShotSubagent which only streams text).
+   */
+  private async runSubagentWithTools(
+    state: {
+      task: string;
+      messages: Message[];
+      toolCallId: string;
+      iterations: number;
+      currentOutput: string;
+    },
+    toolName: string,
+    temperature: number,
+    tools: Map<string, ToolDefinition>
+  ): Promise<unknown> {
+    const maxIterations = 5;
+    let iterations = 0;
+
+    while (iterations < maxIterations) {
+      iterations++;
+      
+      // Generate response with tool calling support
+      const response = await this.llm.generate({
+        messages: state.messages,
+        temperature,
+        tools: Array.from(tools.values()),
+      });
+
+      // Add assistant message to history
+      state.messages.push({
+        role: 'assistant',
+        content: response.content || '',
+        toolCalls: response.toolCalls,
+      });
+
+      // If no tool calls, we're done - return the output
+      if (!response.toolCalls || response.toolCalls.length === 0) {
+        state.currentOutput = response.content?.trim() || 'No output generated';
+        this.currentMode = 'orchestrator';
+        return {
+          status: 'completed',
+          output: state.currentOutput,
+          task: state.task,
+          iterations: iterations,
+        };
+      }
+
+      // Execute tool calls
+      for (const toolCall of response.toolCalls) {
+        const tool = tools.get(toolCall.name);
+        if (!tool?.handler) {
+          state.messages.push({
+            role: 'tool',
+            toolCallId: toolCall.id,
+            content: JSON.stringify({ error: `Unknown tool: ${toolCall.name}` }),
+          });
+          continue;
+        }
+
+        try {
+          const toolResult = await Promise.resolve(tool.handler(toolCall.arguments));
+          state.messages.push({
+            role: 'tool',
+            toolCallId: toolCall.id,
+            content: typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult),
+          });
+        } catch (error) {
+          state.messages.push({
+            role: 'tool',
+            toolCallId: toolCall.id,
+            content: JSON.stringify({ error: String(error) }),
+          });
+        }
+      }
+    }
+
+    // Max iterations reached
+    state.currentOutput = state.messages[state.messages.length - 1]?.content || 'Max iterations reached';
+    this.currentMode = 'orchestrator';
+    return {
+      status: 'completed',
+      output: state.currentOutput,
+      task: state.task,
+      iterations: iterations,
+    };
   }
 
   private async handleDispatchPlacementPlanner(toolCall: ToolCall): Promise<unknown> {

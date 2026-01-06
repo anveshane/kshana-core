@@ -54,7 +54,7 @@ export enum WorkflowPhase {
   /** Phase 1 (YouTube): Accept raw SRT text from user input */
   TRANSCRIPT_INPUT = 'transcript_input',
 
-  /** Phase 2 (YouTube): Analyze transcript and plan image placements */
+  /** Phase 2 (YouTube): Create content plan for visual placements */
   PLANNING = 'planning',
 
   /** Phase 3 (YouTube): Map images to transcript timestamps */
@@ -671,7 +671,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     itemProcessMode: 'single',
     requiresPerItemApproval: false,
     isExpensive: false,
-    description: 'Analyze transcript and plan image placements',
+    description: 'Create content plan for visual placements',
   },
 
   [WorkflowPhase.IMAGE_PLACEMENT]: {

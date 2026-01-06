@@ -1,48 +1,43 @@
 ### Transcript Input Phase
 
-**IMPORTANT: This is the FIRST phase in the YouTube workflow. You MUST parse the transcript before proceeding to planning.**
+**What this phase does**: Parse the raw transcript text into structured transcript entries with timestamps.
 
-Accept transcript text from the user (pasted directly in the initial prompt). Supports two formats:
+**Prerequisites**:
+- Raw transcript text exists in `agent/original_input.md`
+- `$original_input` context variable is available
 
-**Format 1: SRT Format**
-```
-1
-00:00:00,000 --> 00:00:03,000
-Text content here
-```
+**Steps (execute in order)**:
 
-**Format 2: Raw Transcript Format**
-```
-3:53 of brown and tracing that led me to the 3:56 story
-4:00 all of it confirmed one thing. Racism is 4:04 a hallucination
-```
-
-Steps (MUST be done in this order):
-1. Read `agent/original_input.md` to access the raw transcript text.
-2. The `parse_srt` tool automatically detects and handles both formats.
-3. **FIRST**: Call the transcript parser subagent to parse the transcript:
+1. **Call the transcript parser subagent**:
 ```
 Task(
   subagent_type: 'transcript-parser',
-  task: 'Parse transcript text from original_input into transcript entries (handles both SRT and raw transcript formats)',
+  task: 'Parse the transcript text from original_input into structured transcript entries. Handle both SRT format and raw transcript format with embedded timestamps.',
   context_refs: ['$original_input']
 )
 ```
-4. The transcript parser will use `parse_srt` tool which handles format detection automatically.
-5. Store parsed transcript entries in `project.json`, write `agent/content/transcript.md`, and store in the context store as `$transcript`.
-6. **CRITICAL: After transcript parsing completes, IMMEDIATELY transition to Planning phase:**
+
+2. **The Task result contains the parsed transcript**:
+   - The subagent automatically saves the parsed transcript to `agent/content/transcript.md`
+   - The transcript entries are stored in `project.json` (transcriptEntries array)
+   - The file is automatically loaded as `$transcript` context variable
+
+3. **Mark phase as completed**:
 ```
 update_project(
-  action: 'update_planner_stage',
-  data: { phase: 'transcript_input', stage: 'complete' }
-)
-update_project(
-  action: 'transition_phase',
-  data: { next_phase: 'planning' }
+  action: 'update_phase',
+  data: { phase: 'transcript_input', status: 'completed' }
 )
 ```
 
-**DO NOT:**
-- Upload files. Work only with pasted text input.
-- Create or request a master plan for YouTube workflow.
-- Skip the phase transition - you MUST move to planning phase after parsing.
+4. **Transition to next phase (Planning)**:
+```
+update_project(
+  action: 'transition_phase'
+)
+```
+
+**DO NOT**:
+- Call `EnterPlanMode` or create a master plan (YouTube workflow doesn't use master plans)
+- Skip the phase transition - you MUST move to planning phase after parsing
+- Manually parse the transcript - use the transcript-parser subagent

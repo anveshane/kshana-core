@@ -37,13 +37,107 @@ function formatTranscriptMarkdown(entries: TranscriptEntry[]): string {
   return lines.join('\n').trim() + '\n';
 }
 
+/**
+ * Merge transcript entries into 10-15 second segments with full sentences.
+ */
+function mergeEntriesIntoSentences(entries: TranscriptEntry[]): TranscriptEntry[] {
+  if (entries.length === 0) {
+    return entries;
+  }
+
+  const minDuration = 10; // Minimum 10 seconds per entry
+  const maxDuration = 15; // Maximum 15 seconds per entry
+  const merged: TranscriptEntry[] = [];
+  let currentEntry: { startTime: number; texts: string[]; lastEndTime: number } | null = null;
+  let entryIndex = 1;
+
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const nextEntry = entries[i + 1];
+
+    if (!currentEntry) {
+      // Start a new merged entry
+      currentEntry = {
+        startTime: entry.startTime,
+        texts: [entry.text],
+        lastEndTime: entry.endTime,
+      };
+      continue;
+    }
+
+    // Add this entry to the current merged entry
+    currentEntry.texts.push(entry.text);
+    currentEntry.lastEndTime = entry.endTime;
+
+    // Calculate duration from start to the end of the current entry
+    const duration = currentEntry.lastEndTime - currentEntry.startTime;
+    const combinedText = currentEntry.texts.join(' ').trim();
+    const endsWithSentence = /[.!?]\s*$/.test(combinedText);
+
+    // Determine end time: use next entry's start time if available, otherwise use current entry's end time
+    const endTime = nextEntry 
+      ? Math.min(currentEntry.lastEndTime, nextEntry.startTime)
+      : currentEntry.lastEndTime;
+
+    // Create merged entry if: reached min duration AND ends with sentence, OR exceeded max duration
+    if ((duration >= minDuration && endsWithSentence) || duration >= maxDuration) {
+      merged.push({
+        index: entryIndex++,
+        startTime: currentEntry.startTime,
+        endTime: Math.max(endTime, currentEntry.startTime + minDuration),
+        text: combinedText,
+      });
+      // Start a new merged entry with the next entry
+      currentEntry = null;
+    }
+  }
+
+  // Flush remaining entry
+  if (currentEntry) {
+    const finalText = currentEntry.texts.join(' ').trim();
+    if (finalText) {
+      merged.push({
+        index: entryIndex++,
+        startTime: currentEntry.startTime,
+        endTime: Math.max(currentEntry.lastEndTime, currentEntry.startTime + minDuration),
+        text: finalText,
+      });
+    }
+  }
+
+  // Final pass: ensure end times don't overlap with next start times and enforce minimum duration
+  for (let i = 0; i < merged.length; i++) {
+    const entry = merged[i];
+    if (!entry) continue;
+    const nextEntry = merged[i + 1];
+    
+    // Adjust end time to prevent overlap
+    if (nextEntry && nextEntry.startTime > entry.startTime) {
+      entry.endTime = Math.min(entry.endTime, nextEntry.startTime);
+    }
+    
+    // Ensure minimum duration
+    const actualDuration = entry.endTime - entry.startTime;
+    if (actualDuration < minDuration) {
+      entry.endTime = entry.startTime + minDuration;
+      // If this causes overlap with next entry, adjust next entry's start time
+      if (nextEntry && entry.endTime > nextEntry.startTime) {
+        nextEntry.startTime = entry.endTime;
+      }
+    }
+  }
+
+  return merged;
+}
+
 export function parseSrtText(srtText: string): TranscriptEntry[] {
   const blocks = srtText
     .split(/\r?\n\r?\n+/)
     .map(block => block.trim())
     .filter(Boolean);
 
-  const entries: TranscriptEntry[] = [];
+  const rawEntries: TranscriptEntry[] = [];
 
   for (const [i, block] of blocks.entries()) {
     const lines = block.split(/\r?\n/).map(line => line.trim());
@@ -60,39 +154,39 @@ export function parseSrtText(srtText: string): TranscriptEntry[] {
     const startTime = parseTimecodeToSeconds(match[1]);
     const endTime = parseTimecodeToSeconds(match[2]);
     const text = lines.slice(2).join(' ').trim();
-    entries.push({ index, startTime, endTime, text });
+    rawEntries.push({ index, startTime, endTime, text });
   }
 
-  return entries;
+  // Merge entries into 10-15 second segments with full sentences
+  return mergeEntriesIntoSentences(rawEntries);
 }
 
 /**
  * Parse raw transcript text with embedded timestamps (e.g., "3:53 of brown", "4:00 all of it")
- * into SRT format entries.
+ * into SRT format entries. Groups segments into full sentences with 10-15 second duration.
  */
 function parseRawTranscriptWithTimestamps(rawText: string): TranscriptEntry[] {
-  const entries: TranscriptEntry[] = [];
   const lines = rawText.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const defaultDuration = 3;
+  const minDuration = 10; // Minimum 10 seconds per entry
+  const maxDuration = 15; // Maximum 15 seconds per entry
 
-  let currentEntry: { startTime?: number; text: string[] } | null = null;
-  let entryIndex = 1;
+  // First pass: collect all timestamp-text pairs
+  const segments: Array<{ startTime: number; text: string }> = [];
+  let currentSegment: { startTime?: number; text: string[] } | null = null;
 
-  const flushCurrentEntry = () => {
-    if (!currentEntry || currentEntry.startTime === undefined) {
-      currentEntry = null;
+  const flushCurrentSegment = () => {
+    if (!currentSegment || currentSegment.startTime === undefined) {
+      currentSegment = null;
       return;
     }
-    const text = currentEntry.text.join(' ').trim();
-    if (text) {
-      entries.push({
-        index: entryIndex++,
-        startTime: currentEntry.startTime,
-        endTime: currentEntry.startTime + defaultDuration,
+    const text = currentSegment.text.join(' ').trim();
+    if (text && currentSegment.startTime !== undefined) {
+      segments.push({
+        startTime: currentSegment.startTime,
         text,
       });
     }
-    currentEntry = null;
+    currentSegment = null;
   };
 
   for (const line of lines) {
@@ -100,25 +194,26 @@ function parseRawTranscriptWithTimestamps(rawText: string): TranscriptEntry[] {
     const matches = [...cleanedLine.matchAll(/(\d{1,2}):(\d{2})/g)];
 
     if (matches.length === 0) {
-      if (currentEntry) {
+      if (currentSegment) {
         const cleanLine = cleanedLine.trim();
         if (cleanLine) {
-          currentEntry.text.push(cleanLine);
+          currentSegment.text.push(cleanLine);
         }
       }
       continue;
     }
 
     const firstMatch = matches[0];
-    if (currentEntry && firstMatch.index && firstMatch.index > 0) {
+    if (currentSegment && firstMatch && firstMatch.index !== undefined && firstMatch.index > 0) {
       const leadingText = cleanedLine.slice(0, firstMatch.index).trim();
       if (leadingText) {
-        currentEntry.text.push(leadingText);
+        currentSegment.text.push(leadingText);
       }
     }
 
     for (let i = 0; i < matches.length; i++) {
       const match = matches[i];
+      if (!match) continue;
       const nextMatch = matches[i + 1];
       const minutes = Number(match[1]);
       const seconds = Number(match[2]);
@@ -127,27 +222,83 @@ function parseRawTranscriptWithTimestamps(rawText: string): TranscriptEntry[] {
       const textEnd = nextMatch?.index ?? cleanedLine.length;
       const segment = cleanedLine.slice(textStart, textEnd).trim();
 
-      flushCurrentEntry();
-      currentEntry = { startTime, text: segment ? [segment] : [] };
+      flushCurrentSegment();
+      currentSegment = { startTime, text: segment ? [segment] : [] };
 
       if (nextMatch) {
-        flushCurrentEntry();
+        flushCurrentSegment();
       }
     }
   }
 
-  flushCurrentEntry();
+  flushCurrentSegment();
 
-  // Adjust end times to align with next start time when possible
-  for (let i = 0; i < entries.length; i++) {
-    const nextEntry = entries[i + 1];
-    if (nextEntry && nextEntry.startTime > entries[i].startTime) {
-      entries[i].endTime = nextEntry.startTime;
+  // Second pass: merge segments into full sentences with 10-15 second duration
+  const entries: TranscriptEntry[] = [];
+  let currentEntry: { startTime: number; texts: string[] } | null = null;
+  let entryIndex = 1;
+
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    if (!segment) continue;
+    const nextSegment = segments[i + 1];
+
+    if (!currentEntry) {
+      currentEntry = { startTime: segment.startTime, texts: [segment.text] };
+      continue;
+    }
+
+    const duration = segment.startTime - currentEntry.startTime;
+    const combinedText = [...currentEntry.texts, segment.text].join(' ');
+    const endsWithSentence = /[.!?]\s*$/.test(combinedText.trim());
+
+    // Determine end time: use next segment's start time if available, otherwise estimate
+    const estimatedEndTime = nextSegment ? nextSegment.startTime : segment.startTime + minDuration;
+
+    // Create entry if: reached min duration AND ends with sentence, OR exceeded max duration
+    if ((duration >= minDuration && endsWithSentence) || duration >= maxDuration) {
+      entries.push({
+        index: entryIndex++,
+        startTime: currentEntry.startTime,
+        endTime: estimatedEndTime,
+        text: combinedText.trim(),
+      });
+      currentEntry = { startTime: segment.startTime, texts: [segment.text] };
     } else {
-      entries[i].endTime = entries[i].startTime + defaultDuration;
+      currentEntry.texts.push(segment.text);
     }
   }
-  
+
+  // Flush remaining entry
+  if (currentEntry) {
+    const finalText = currentEntry.texts.join(' ').trim();
+    if (finalText) {
+      // Use the last segment's time + minDuration as end time
+      const lastSegment = segments[segments.length - 1];
+      const endTime = lastSegment ? lastSegment.startTime + minDuration : currentEntry.startTime + minDuration;
+      entries.push({
+        index: entryIndex++,
+        startTime: currentEntry.startTime,
+        endTime,
+        text: finalText,
+      });
+    }
+  }
+
+  // Final pass: ensure end times don't overlap with next start times
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const nextEntry = entries[i + 1];
+    if (nextEntry && nextEntry.startTime > entry.startTime) {
+      entry.endTime = Math.min(entry.endTime, nextEntry.startTime);
+    }
+    // Ensure minimum duration
+    if (entry.endTime - entry.startTime < minDuration) {
+      entry.endTime = entry.startTime + minDuration;
+    }
+  }
+
   return entries;
 }
 
@@ -227,6 +378,8 @@ export const parseSrtTool: ToolDefinition = createTool(
       entries,
       format_detected: isRawTranscriptFormat(inputText) ? 'raw_transcript' : 'srt',
       transcript_path: transcriptPath,
+      transcript_preview: formatTranscriptMarkdown(entries.slice(0, 10)), // Show first 10 entries
+      message: `Successfully parsed ${entries.length} transcript entries. Saved to ${transcriptPath}`,
     };
   }
 );
