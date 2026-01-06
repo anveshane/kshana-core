@@ -3,8 +3,30 @@
  */
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
-import { loadProject, saveProject, writeProjectFile } from '../workflow/ProjectManager.js';
+import { loadProject, saveProject, writeProjectFile, readProjectFile } from '../workflow/ProjectManager.js';
 import type { TranscriptEntry, ImagePlacement } from '../workflow/types.js';
+import { contextStore } from '../../../core/context/index.js';
+
+/**
+ * Expand context references (e.g., $original_input) to their actual stored content.
+ * Returns the original string if it's not a context reference.
+ */
+function expandContextRef(value: string): string {
+  if (value.startsWith('$') && value.length > 1) {
+    const stored = contextStore.get(value);
+    if (stored) {
+      return stored.content;
+    }
+    // If not found in context store, try reading from project file
+    if (value === '$original_input') {
+      const content = readProjectFile('agent/original_input.md');
+      if (content !== null) {
+        return content;
+      }
+    }
+  }
+  return value;
+}
 
 function parseTimecodeToSeconds(timecode: string): number {
   const match = timecode.match(/(\d{2}):(\d{2}):(\d{2}),(\d{3})/);
@@ -345,7 +367,10 @@ export const parseSrtTool: ToolDefinition = createTool(
     required: ['srt_text'],
   },
   async (args: Record<string, unknown>) => {
-    const inputText = args['srt_text'] as string;
+    let inputText = args['srt_text'] as string;
+    
+    // Expand context references (e.g., $original_input -> actual content)
+    inputText = expandContextRef(inputText);
     
     // Detect format and parse accordingly
     let entries: TranscriptEntry[];
