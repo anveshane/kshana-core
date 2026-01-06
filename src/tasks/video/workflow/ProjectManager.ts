@@ -259,6 +259,7 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
     projectDir,
     agentDir,
     join(agentDir, 'plans'),
+    join(agentDir, 'content'),
     join(agentDir, 'script'), // Unified directory for plot, story, and narration
     join(agentDir, 'characters'),
     join(agentDir, 'settings'),
@@ -333,14 +334,55 @@ function looksLikeSrt(input: string): boolean {
     }
   }
   
-  // Check for raw transcript format (timestamps embedded in text like "3:53", "4:00")
-  // This indicates it's a transcript that should use YouTube workflow
-  const rawTranscriptPattern = /^[│\s]*\d{1,2}:\d{2}(?:\s|$)/m;
-  if (rawTranscriptPattern.test(trimmed)) {
+  // Check for raw transcript format (timestamps embedded in text like "3:53", "4:00", "0:17")
+  // Patterns to match:
+  // - "Transcript 0:00" or "0:17" at start
+  // - Timestamps like "1:23", "12:34" anywhere in text
+  // - Multiple timestamps indicate it's a transcript
+  const rawTranscriptPattern = /\d{1,2}:\d{2}(?:\s|$)/;
+  const timestampMatches = trimmed.match(rawTranscriptPattern);
+  // If we find 3+ timestamps, it's likely a transcript
+  if (timestampMatches && timestampMatches.length >= 3) {
     return true; // Raw transcript format - treat as YouTube SRT workflow
   }
   
+  // Also check for common transcript prefixes
+  if (/^(Transcript|transcript)\s*\d{1,2}:\d{2}/i.test(trimmed)) {
+    return true;
+  }
+  
   return false;
+}
+
+function isYouTubeInputType(inputType: InputType): boolean {
+  return inputType === 'youtube_srt' || inputType === 'script';
+}
+
+const LEGACY_PHASES = new Set<WorkflowPhase>([
+  WorkflowPhase.PLOT,
+  WorkflowPhase.STORY,
+  WorkflowPhase.CHARACTERS_SETTINGS,
+  WorkflowPhase.SCENES,
+  WorkflowPhase.CHARACTER_SETTING_IMAGES,
+  WorkflowPhase.SCENE_IMAGES,
+  WorkflowPhase.VIDEO,
+]);
+
+function normalizeCurrentPhaseForInputType(project: ProjectFile): { phase: WorkflowPhase; changed: boolean } {
+  const inputTypeConfig = INPUT_TYPE_CONFIGS[project.inputType] ?? INPUT_TYPE_CONFIGS.idea;
+  const currentPhase = project.currentPhase;
+  const invalidPhase = !PHASE_CONFIGS[currentPhase];
+  const legacyPhase = LEGACY_PHASES.has(currentPhase);
+
+  if (isYouTubeInputType(project.inputType) && (legacyPhase || invalidPhase)) {
+    return { phase: inputTypeConfig.startPhase, changed: true };
+  }
+
+  if (invalidPhase) {
+    return { phase: inputTypeConfig.startPhase, changed: true };
+  }
+
+  return { phase: currentPhase, changed: false };
 }
 
 /**
@@ -833,8 +875,15 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
       return null;
     }
 
+    const { phase: normalizedPhase, changed } = normalizeCurrentPhaseForInputType(project);
+    if (changed) {
+      project.currentPhase = normalizedPhase;
+    }
+
     // Sync content registry for backward compatibility
-    if (syncContentRegistry(project, basePath)) {
+    const syncChanged = syncContentRegistry(project, basePath);
+
+    if (changed || syncChanged) {
       saveProject(project, basePath);
     }
 
@@ -1203,6 +1252,20 @@ export function getOrCreateProject(
 ): ProjectFile {
   const existing = loadProject(basePath);
   if (existing) {
+    // CRITICAL: If originalInput looks like a transcript but project has wrong inputType, fix it
+    if (originalInput && looksLikeSrt(originalInput) && existing.inputType !== 'youtube_srt' && existing.inputType !== 'script') {
+      // Update input type to youtube_srt and normalize phase
+      const updated = setProjectInputType('youtube_srt', basePath);
+      if (updated) {
+        return updated;
+      }
+    }
+    // Normalize phase for existing project (handles legacy phases)
+    const normalized = normalizeCurrentPhaseForInputType(existing);
+    if (normalized.changed) {
+      existing.currentPhase = normalized.phase;
+      saveProject(existing, basePath);
+    }
     return existing;
   }
   return createProject(originalInput, style, basePath);
@@ -1212,7 +1275,7 @@ export function getOrCreateProject(
  * Get the current workflow phase from the project.
  */
 export function getCurrentPhase(project: ProjectFile): WorkflowPhase {
-  return project.currentPhase;
+  return normalizeCurrentPhaseForInputType(project).phase;
 }
 
 /**
@@ -1301,8 +1364,10 @@ export function transitionToNextPhase(
   project: ProjectFile,
   basePath: string = process.cwd()
 ): { project: ProjectFile; transitioned: boolean; reason: string } {
-  // Check if master plan is approved
-  if (project.plan.stage !== PlannerStage.COMPLETE) {
+  const isYouTubeWorkflow = isYouTubeInputType(project.inputType);
+
+  // Check if master plan is approved (legacy workflow only)
+  if (!isYouTubeWorkflow && project.plan.stage !== PlannerStage.COMPLETE) {
     return {
       project,
       transitioned: false,
@@ -2039,11 +2104,79 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
   const currentPhase = project.currentPhase;
   const phaseConfig = PHASE_CONFIGS[currentPhase];
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+  const isYouTubeWorkflow = isYouTubeInputType(project.inputType);
   const masterPlanStage = project.plan.stage;
-
-  // Check if master plan file has content
   const masterPlanExists = planFileHasContent(project.plan.planFile, basePath);
 
+  // For YouTube workflow, skip all master plan logic
+  if (isYouTubeWorkflow) {
+    let instruction = `
+## Current State
+- **Phase**: ${phaseConfig.displayName}
+- **Phase Status**: ${phaseInfo?.status ?? 'pending'}
+- **Per-Item Approval Required**: ${phaseConfig.requiresPerItemApproval ? 'YES' : 'NO'}
+
+## What to Do Next
+`;
+
+    // For YouTube workflow, transcript_input should transition to planning immediately
+    if (currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+      if (phaseInfo?.status === 'completed' || phaseInfo?.status === 'skipped') {
+        instruction += `
+Transcript parsing is complete. Transition to planning phase.
+1. Call update_project with action "transition_phase" to move to "planning"
+`;
+        return instruction.trim();
+      }
+    }
+
+    // Proceed with phase execution for YouTube workflow
+    instruction += `
+✅ **Phase ready** - Executing phase: ${phaseConfig.displayName}
+
+Follow the phase-specific instructions. Each phase should:
+1. Call the appropriate subagent via Task()
+2. Extract result.output and save to the correct file
+3. Mark phase as completed
+4. Transition to next phase
+`;
+
+    // For phases requiring per-item approval, provide specific instructions
+    if (phaseConfig.requiresPerItemApproval) {
+      instruction += getPerItemPhaseInstructions(project, phaseConfig, basePath);
+    } else {
+      // Standard single-item phase flow
+      const phaseStatus = phaseInfo?.status ?? 'pending';
+
+      if (phaseStatus === 'completed') {
+        if (currentPhase === WorkflowPhase.IMAGE_PLACEMENT) {
+          instruction += `
+The Image Placement phase is complete.
+1. Ask the user if they want to proceed with Image Generation.
+2. Only if they approve, call update_project with action "transition_phase".
+`;
+        } else {
+          instruction += `
+The ${phaseConfig.displayName} phase is complete.
+1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+`;
+        }
+      } else {
+        // For YouTube workflow phases, they use Task() with subagents
+        instruction += `
+Execute the ${phaseConfig.displayName} phase.
+1. Follow the phase-specific instructions below
+2. Call the appropriate subagent via Task()
+3. Save the result to the correct file
+4. Mark phase as complete and transition to next phase
+`;
+      }
+    }
+
+    return instruction.trim();
+  }
+
+  // Legacy workflow (non-YouTube) - includes master plan logic
   let instruction = `
 ## Current State
 - **Phase**: ${phaseConfig.displayName}
@@ -2057,7 +2190,7 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
 ## What to Do Next
 `;
 
-  // Check if master plan needs to be created/approved first
+  // Check if master plan needs to be created/approved first (legacy workflow only)
   if (masterPlanStage !== PlannerStage.COMPLETE) {
     switch (masterPlanStage) {
       case PlannerStage.PLANNING:
@@ -2111,7 +2244,7 @@ Refine the master plan based on user feedback.
     return instruction.trim();
   }
 
-  // Master plan is approved - proceed with phase execution
+  // Proceed with phase execution for legacy workflow
   instruction += `
 ✅ **Master plan approved** - Executing phase: ${phaseConfig.displayName}
 

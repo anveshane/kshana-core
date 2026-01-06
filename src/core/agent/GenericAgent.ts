@@ -753,13 +753,26 @@ export class GenericAgent extends TypedEventEmitter {
         finalOutput = response.content ?? '';
 
         // Special case: if we're in plan mode but haven't created a plan yet, continue
+        // BUT: Skip this for YouTube workflow - check if we're in a YouTube workflow context
         if (this.planModeActive && this.iteration < this.maxIterations - 1) {
-          debugLog(`[GenericAgent] In plan mode but no tool calls. Prompting to create plan.`);
-          this.messages.push({
-            role: 'user',
-            content: 'You are in plan mode. Create the master plan using the Task tool with subagent_type="Plan". The plan should include plot summary, key story beats, main characters, and settings.',
-          });
-          continue;
+          // Check if this is a YouTube workflow by checking the custom prompt or project state
+          const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') || 
+                                     this.customPrompt?.includes('transcript') ||
+                                     this.customPrompt?.includes('YouTube');
+          
+          if (!isYouTubeWorkflow) {
+            debugLog(`[GenericAgent] In plan mode but no tool calls. Prompting to create plan.`);
+            this.messages.push({
+              role: 'user',
+              content: 'You are in plan mode. Create the master plan using the Task tool with subagent_type="Plan". The plan should include plot summary, key story beats, main characters, and settings.',
+            });
+            continue;
+          } else {
+            debugLog(`[GenericAgent] In plan mode but this is YouTube workflow. Exiting plan mode.`);
+            this.planModeActive = false;
+            this.currentMode = 'orchestrator';
+            // Don't continue - let the agent proceed with normal workflow
+          }
         }
 
         // Check if there are pending or in-progress todos - if so, continue working
@@ -814,7 +827,29 @@ export class GenericAgent extends TypedEventEmitter {
 
         // Special handling for EnterPlanMode - after entering plan mode, continue the loop
         // so the agent can actually create the plan
+        // BUT: Skip this for YouTube workflow
         if (toolCall.name === 'EnterPlanMode' && resultObj['status'] === 'entered_plan_mode') {
+          // Check if this is a YouTube workflow
+          const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') || 
+                                     this.customPrompt?.includes('transcript') ||
+                                     this.customPrompt?.includes('YouTube');
+          
+          if (isYouTubeWorkflow) {
+            debugLog(`[GenericAgent] EnterPlanMode called for YouTube workflow - this should not happen. Exiting plan mode.`);
+            this.planModeActive = false;
+            this.currentMode = 'orchestrator';
+            // Add tool result but don't prompt for Plan subagent
+            const resultWithWarning = result as Record<string, unknown>;
+            this.messages.push({
+              role: 'tool',
+              content: JSON.stringify({ ...resultWithWarning, warning: 'EnterPlanMode not needed for YouTube workflow. Proceed directly to TRANSCRIPT_INPUT phase.' }),
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+            });
+            // Continue without prompting for Plan subagent
+            continue;
+          }
+          
           debugLog(`[GenericAgent] Entered plan mode. Adding tool result and continuing to create plan.`);
           // Add tool result to messages
           this.messages.push({
@@ -1555,6 +1590,16 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Incremental compatibility mapping onto existing sub-agent handlers.
     if (subagentType === 'Plan') {
+      const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') ||
+        this.customPrompt?.includes('transcript') ||
+        this.customPrompt?.includes('YouTube');
+
+      if (isYouTubeWorkflow) {
+        return {
+          error: 'Plan subagent is disabled for YouTube transcript workflows.',
+          suggestion: 'Use Task with subagent_type="content-planner" to create the strategic content plan.',
+        };
+      }
       return await this.handleDispatchAgent({
         ...toolCall,
         name: 'dispatch_agent',
@@ -1593,7 +1638,7 @@ export class GenericAgent extends TypedEventEmitter {
       });
     }
 
-    if (subagentType === 'placement-planner') {
+    if (subagentType === 'content-planner') {
       return await this.handleDispatchPlacementPlanner({
         ...toolCall,
         name: 'dispatch_placement_planner',
@@ -1782,6 +1827,7 @@ export class GenericAgent extends TypedEventEmitter {
     currentOutput: string;
     iterations: number;
     toolCallId: string;
+    outputFile?: string;
   } | null = null;
 
   // State for image placement sub-agent
@@ -1793,6 +1839,7 @@ export class GenericAgent extends TypedEventEmitter {
     currentOutput: string;
     iterations: number;
     toolCallId: string;
+    outputFile?: string;
   } | null = null;
 
   // State for video replacement sub-agent
@@ -2467,6 +2514,9 @@ Respond in JSON format:
       '$images': { file: 'agent/plans/images.md', label: 'Images Plan' },
       '$video': { file: 'agent/plans/video.md', label: 'Video Plan' },
       '$original_input': { file: 'agent/original_input.md', label: 'Original Input' },
+      '$transcript': { file: 'agent/content/transcript.md', label: 'Transcript' },
+      '$content_plan': { file: 'agent/plans/content-plan.md', label: 'Content Plan' },
+      '$image_placements': { file: 'agent/content/image-placements.md', label: 'Image Placement Plan' },
     };
 
     const projectDir = path.join(process.cwd(), '.kshana');
@@ -3272,13 +3322,24 @@ Respond in JSON format:
       debugLog(`[GenericAgent] WARNING: Missing context_refs for transcript parser: ${missingRefs.join(', ')}`);
     }
 
+    // Build system prompt with tools available
     const systemPrompt = buildTranscriptParserPrompt(context);
+    
+    // Create a temporary tool registry with parse_srt tool for the subagent
+    const subagentTools = new Map<string, ToolDefinition>();
+    const parseSrtTool = this.tools.get('parse_srt');
+    if (parseSrtTool) {
+      subagentTools.set('parse_srt', parseSrtTool);
+    }
+    
+    const fullSystemPrompt = buildSystemMessage(true, subagentTools, systemPrompt);
+
     this.transcriptParserState = {
       active: true,
       task,
       context,
       messages: [
-        { role: 'system', content: systemPrompt },
+        { role: 'system', content: fullSystemPrompt },
         { role: 'user', content: `<request>\n${task}\n</request>` },
       ],
       currentOutput: '',
@@ -3286,9 +3347,97 @@ Respond in JSON format:
       toolCallId: toolCall.id,
     };
 
-    const result = await this.runOneShotSubagent(this.transcriptParserState, 'dispatch_transcript_parser', 0.3);
+    // Run subagent with tool calling support
+    const result = await this.runSubagentWithTools(this.transcriptParserState, 'dispatch_transcript_parser', 0.3, subagentTools);
     this.transcriptParserState = null;
     return result;
+  }
+
+  /**
+   * Run a subagent that supports tool calls (unlike runOneShotSubagent which only streams text).
+   */
+  private async runSubagentWithTools(
+    state: {
+      task: string;
+      messages: Message[];
+      toolCallId: string;
+      iterations: number;
+      currentOutput: string;
+    },
+    toolName: string,
+    temperature: number,
+    tools: Map<string, ToolDefinition>
+  ): Promise<unknown> {
+    const maxIterations = 5;
+    let iterations = 0;
+
+    while (iterations < maxIterations) {
+      iterations++;
+      
+      // Generate response with tool calling support
+      const response = await this.llm.generate({
+        messages: state.messages,
+        temperature,
+        tools: Array.from(tools.values()),
+      });
+
+      // Add assistant message to history
+      state.messages.push({
+        role: 'assistant',
+        content: response.content || '',
+        toolCalls: response.toolCalls,
+      });
+
+      // If no tool calls, we're done - return the output
+      if (!response.toolCalls || response.toolCalls.length === 0) {
+        state.currentOutput = response.content?.trim() || 'No output generated';
+        this.currentMode = 'orchestrator';
+        return {
+          status: 'completed',
+          output: state.currentOutput,
+          task: state.task,
+          iterations: iterations,
+        };
+      }
+
+      // Execute tool calls
+      for (const toolCall of response.toolCalls) {
+        const tool = tools.get(toolCall.name);
+        if (!tool?.handler) {
+          state.messages.push({
+            role: 'tool',
+            toolCallId: toolCall.id,
+            content: JSON.stringify({ error: `Unknown tool: ${toolCall.name}` }),
+          });
+          continue;
+        }
+
+        try {
+          const toolResult = await Promise.resolve(tool.handler(toolCall.arguments));
+          state.messages.push({
+            role: 'tool',
+            toolCallId: toolCall.id,
+            content: typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult),
+          });
+        } catch (error) {
+          state.messages.push({
+            role: 'tool',
+            toolCallId: toolCall.id,
+            content: JSON.stringify({ error: String(error) }),
+          });
+        }
+      }
+    }
+
+    // Max iterations reached
+    state.currentOutput = state.messages[state.messages.length - 1]?.content || 'Max iterations reached';
+    this.currentMode = 'orchestrator';
+    return {
+      status: 'completed',
+      output: state.currentOutput,
+      task: state.task,
+      iterations: iterations,
+    };
   }
 
   private async handleDispatchPlacementPlanner(toolCall: ToolCall): Promise<unknown> {
@@ -3296,6 +3445,7 @@ Respond in JSON format:
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
 
     if (!task) {
       this.currentMode = 'orchestrator';
@@ -3311,6 +3461,15 @@ Respond in JSON format:
       debugLog(`[GenericAgent] WARNING: Missing context_refs for placement planner: ${missingRefs.join(', ')}`);
     }
 
+      // Default output file if not provided
+      let outputFileToUse = outputFile || 'agent/plans/content-plan.md';
+      // If orchestrator mistakenly passes image-placements path to content-planner, fix it
+      if (outputFileToUse.includes('image-placement')) {
+        debugLog('[GenericAgent] WARNING: content-planner received image-placements path. Overriding to agent/plans/content-plan.md');
+        outputFileToUse = 'agent/plans/content-plan.md';
+      }
+      debugLog(`[GenericAgent] handleDispatchPlacementPlanner: outputFile=${outputFileToUse}`);
+
     const systemPrompt = buildPlacementPlannerPrompt(context);
     this.placementPlannerState = {
       active: true,
@@ -3323,9 +3482,66 @@ Respond in JSON format:
       currentOutput: '',
       iterations: 1,
       toolCallId: toolCall.id,
+      outputFile: outputFileToUse,
     };
 
     const result = await this.runOneShotSubagent(this.placementPlannerState, 'dispatch_placement_planner', 0.4);
+    
+    // Save the output to file if we have output
+    const resultObj = result as Record<string, unknown>;
+    if (resultObj['status'] === 'completed' && resultObj['output']) {
+      const output = resultObj['output'] as string;
+      let fileSaved = false;
+      let normalizedPath: string | undefined;
+
+      // Normalize path
+      normalizedPath = outputFileToUse;
+      if (normalizedPath.startsWith('plans/') && !normalizedPath.startsWith('agent/plans/')) {
+        normalizedPath = `agent/${normalizedPath}`;
+      } else if (!normalizedPath.startsWith('agent/')) {
+        if (!normalizedPath.includes('/')) {
+          normalizedPath = `agent/plans/${normalizedPath}`;
+        } else {
+          normalizedPath = `agent/${normalizedPath}`;
+        }
+      }
+
+      try {
+        const projectDir = path.join(process.cwd(), '.kshana');
+        const filePath = path.join(projectDir, normalizedPath);
+        debugLog(`[GenericAgent] Attempting to save content plan to: ${filePath} (normalized from: ${outputFileToUse})`);
+
+        // Ensure parent directory exists
+        const parentDir = path.dirname(filePath);
+        if (!fs.existsSync(parentDir)) {
+          debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, output, 'utf-8');
+        fileSaved = true;
+        debugLog(`[GenericAgent] Successfully saved content plan to ${normalizedPath}`);
+
+        // Store reference in context store
+        const variableName = contextStore.storeReference(
+          normalizedPath,
+          'Content Plan',
+          undefined,
+          'tool'
+        ).variableName;
+        debugLog(`[GenericAgent] Stored reference to content plan file in context store as ${variableName}`);
+
+        // Update result with file info
+        resultObj['output_file'] = normalizedPath;
+        resultObj['file_saved'] = fileSaved;
+        resultObj['content_plan_ref'] = variableName;
+      } catch (err) {
+        debugLog(`[GenericAgent] ERROR: Failed to save content plan to ${outputFileToUse}: ${err}`);
+        resultObj['file_saved'] = false;
+        resultObj['error'] = `Failed to save content plan: ${String(err)}`;
+      }
+    }
+
     this.placementPlannerState = null;
     return result;
   }
@@ -3335,6 +3551,7 @@ Respond in JSON format:
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
 
     if (!task) {
       this.currentMode = 'orchestrator';
@@ -3345,10 +3562,26 @@ Respond in JSON format:
       return { error: 'Image placement already in progress' };
     }
 
-    const { context, missingRefs } = this.buildContextFromRefs(contextRefs);
+    // Image-placer ALWAYS needs $transcript - ensure it's included even if not passed
+    const requiredRefs = contextRefs || [];
+    if (!requiredRefs.includes('$transcript')) {
+      debugLog(`[GenericAgent] Auto-adding $transcript to context_refs for image-placer (required but not provided)`);
+      requiredRefs.push('$transcript');
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(requiredRefs);
     if (missingRefs.length > 0) {
       debugLog(`[GenericAgent] WARNING: Missing context_refs for image placer: ${missingRefs.join(', ')}`);
     }
+
+      // Default output file if not provided
+      let outputFileToUse = outputFile || 'agent/content/image-placements.md';
+      // If orchestrator mistakenly passes content-plan path to image-placer, fix it
+      if (outputFileToUse.includes('content-plan')) {
+        debugLog('[GenericAgent] WARNING: image-placer received content-plan path. Overriding to agent/content/image-placements.md');
+        outputFileToUse = 'agent/content/image-placements.md';
+      }
+      debugLog(`[GenericAgent] handleDispatchImagePlacer: outputFile=${outputFileToUse}`);
 
     const systemPrompt = buildImagePlacerPrompt(context);
     this.imagePlacerState = {
@@ -3362,9 +3595,66 @@ Respond in JSON format:
       currentOutput: '',
       iterations: 1,
       toolCallId: toolCall.id,
+      outputFile: outputFileToUse,
     };
 
     const result = await this.runOneShotSubagent(this.imagePlacerState, 'dispatch_image_placer', 0.4);
+    
+    // Save the output to file if we have output
+    const resultObj = result as Record<string, unknown>;
+    if (resultObj['status'] === 'completed' && resultObj['output']) {
+      const output = resultObj['output'] as string;
+      let fileSaved = false;
+      let normalizedPath: string | undefined;
+
+      // Normalize path
+      normalizedPath = outputFileToUse;
+      if (normalizedPath.startsWith('content/') && !normalizedPath.startsWith('agent/content/')) {
+        normalizedPath = `agent/${normalizedPath}`;
+      } else if (!normalizedPath.startsWith('agent/')) {
+        if (!normalizedPath.includes('/')) {
+          normalizedPath = `agent/content/${normalizedPath}`;
+        } else {
+          normalizedPath = `agent/${normalizedPath}`;
+        }
+      }
+
+      try {
+        const projectDir = path.join(process.cwd(), '.kshana');
+        const filePath = path.join(projectDir, normalizedPath);
+        debugLog(`[GenericAgent] Attempting to save image placement plan to: ${filePath} (normalized from: ${outputFileToUse})`);
+
+        // Ensure parent directory exists
+        const parentDir = path.dirname(filePath);
+        if (!fs.existsSync(parentDir)) {
+          debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, output, 'utf-8');
+        fileSaved = true;
+        debugLog(`[GenericAgent] Successfully saved image placement plan to ${normalizedPath}`);
+
+        // Store reference in context store
+        const variableName = contextStore.storeReference(
+          normalizedPath,
+          'Image Placement Plan',
+          undefined,
+          'tool'
+        ).variableName;
+        debugLog(`[GenericAgent] Stored reference to image placement plan file in context store as ${variableName}`);
+
+        // Update result with file info
+        resultObj['output_file'] = normalizedPath;
+        resultObj['file_saved'] = fileSaved;
+        resultObj['image_placements_ref'] = variableName;
+      } catch (err) {
+        debugLog(`[GenericAgent] ERROR: Failed to save image placement plan to ${outputFileToUse}: ${err}`);
+        resultObj['file_saved'] = false;
+        resultObj['error'] = `Failed to save image placement plan: ${String(err)}`;
+      }
+    }
+
     this.imagePlacerState = null;
     return result;
   }

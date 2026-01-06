@@ -19,7 +19,7 @@ Available subagent types:
 - image-generator: Image generation specialist. Crafts prompts and generates images for characters, settings, and scenes.
 - video-assembler: Video generation specialist. Creates video clips from scene images and stitches them into final video.
 - transcript-parser: Parses SRT text input into structured transcript entries.
-- placement-planner: Analyzes transcript and plans strategic image placements.
+- content-planner: Analyzes transcript and plans comprehensive visual placements (images, infographics, video).
 - image-placer: Creates detailed placement plan with timestamps and enhanced prompts.
 - video-replacer: Coordinates video segment replacement with images.
 
@@ -44,7 +44,7 @@ Content Type (for content-creator):
     properties: {
       subagent_type: {
         type: 'string',
-        description: 'Which subagent to use: "Plan", "Explore", "content-creator", "image-generator", "video-assembler", "transcript-parser", "placement-planner", "image-placer", "video-replacer"',
+        description: 'Which subagent to use: "Plan", "Explore", "content-creator", "image-generator", "video-assembler", "transcript-parser", "content-planner", "image-placer", "video-replacer"',
       },
       task: {
         type: 'string',

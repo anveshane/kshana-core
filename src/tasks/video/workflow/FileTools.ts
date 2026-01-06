@@ -309,11 +309,18 @@ For structured data (characters, settings, assets, scenes), prefer using update_
         }
       }
 
+      // Generate a preview of the saved content (first 500 chars)
+      const preview = content.length > 500 ? content.substring(0, 500) + '...' : content;
+      const previewLines = preview.split('\n').slice(0, 10).join('\n');
+      const truncatedPreview = previewLines.length < preview.length ? previewLines + '\n...' : previewLines;
+
       return {
         status: 'success',
         message: `File written successfully: ${filePath}`,
         file_path: filePath,
         bytes_written: content.length,
+        preview: truncatedPreview,
+        total_lines: content.split('\n').length,
       };
     } catch (error) {
       return {
@@ -343,7 +350,7 @@ export const readTranscriptTool: ToolDefinition = createTool(
 
 export const writePlacementPlanTool: ToolDefinition = createTool(
   'write_placement_plan',
-  'Write image placement plan content to agent/plans/image-placements.md.',
+  'Write image placement plan content to agent/content/image-placements.md.',
   {
     type: 'object',
     properties: {
@@ -354,10 +361,10 @@ export const writePlacementPlanTool: ToolDefinition = createTool(
   async (args) => {
     const content = args['content'] as string;
     try {
-      writeProjectFile('agent/plans/image-placements.md', content);
+      writeProjectFile('agent/content/image-placements.md', content);
       return {
         status: 'success',
-        file_path: 'agent/plans/image-placements.md',
+        file_path: 'agent/content/image-placements.md',
         bytes_written: content.length,
       };
     } catch (error) {
@@ -583,8 +590,22 @@ What story would you like to turn into a video?`,
           if (!phase || !status) {
             return { status: 'error', error: 'phase (or phase_name) and status are required' };
           }
+          const phaseConfig = PHASE_CONFIGS[phase as WorkflowPhase];
+          const phaseDisplayName = phaseConfig?.displayName || phase;
           updatePhaseStatus(project, phase, status);
-          return { status: 'success', message: `Phase ${phase} updated to ${status}`, current_phase: project.currentPhase };
+          
+          // Get project summary for context
+          const summary = getProjectSummary(project);
+          
+          return { 
+            status: 'success', 
+            message: `Phase "${phaseDisplayName}" updated to ${status}`, 
+            phase: phase,
+            phase_display_name: phaseDisplayName,
+            status: status,
+            current_phase: project.currentPhase,
+            project_summary: summary,
+          };
         }
 
         case 'update_plan_stage': {
@@ -695,12 +716,18 @@ What story would you like to turn into a video?`,
           // Get the new phase config for the next action instruction
           const newPhaseConfig = PHASE_CONFIGS[result.project.currentPhase as WorkflowPhase];
 
+          // Get project summary for context
+          const summary = getProjectSummary(result.project);
+          
           return {
             status: 'success',
             transitioned: result.transitioned,
             reason: result.reason,
             current_phase: result.project.currentPhase,
             new_phase_name: newPhaseConfig?.displayName ?? result.project.currentPhase,
+            previous_phase: beforePhase,
+            previous_phase_status: beforeStatus,
+            project_summary: summary,
             next_action: result.transitioned
               ? `IMPORTANT: You have transitioned to a new phase. Update your todo list (mark the previous phase complete, mark the new phase in_progress), then call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
               : 'Phase transition not needed. Call read_project to check current state.',
@@ -1042,6 +1069,27 @@ What story would you like to turn into a video?`,
             return { status: 'error', error: `input_type must be one of: ${validInputTypes.join(', ')}` };
           }
 
+          // Check if input type is already set to the same value to prevent loops
+          const currentProject = loadProject();
+          if (!currentProject) {
+            return { status: 'error', error: 'No project found' };
+          }
+
+          if (currentProject.inputType === inputType) {
+            // Input type is already set to the requested value - return success without updating
+            const inputTypeConfig = INPUT_TYPE_CONFIGS[inputType];
+            const summary = getProjectSummary(currentProject);
+            return {
+              status: 'success',
+              message: `Input type is already set to "${inputTypeConfig.displayName}"`,
+              input_type: inputType,
+              current_phase: currentProject.currentPhase,
+              project_summary: summary,
+              skipped: true,
+              note: 'Input type was already set to this value. No update needed.',
+            };
+          }
+
           const updatedProject = setProjectInputType(inputType);
           if (!updatedProject) {
             return { status: 'error', error: 'No project found' };
@@ -1060,11 +1108,15 @@ What story would you like to turn into a video?`,
                 ? 'Transcript input skipped. Proceeding to Planning phase.'
                 : 'Starting from Plot phase.';
 
+          // Get project summary for context
+          const summary = getProjectSummary(updatedProject);
+          
           return {
             status: 'success',
             message: `Input type set to "${inputTypeConfig.displayName}"`,
             input_type: inputType,
             current_phase: updatedProject.currentPhase,
+            project_summary: summary,
             skipped_phases: skippedPhases,
             note,
           };

@@ -21,7 +21,10 @@ TRANSCRIPT_INPUT → PLANNING → IMAGE_PLACEMENT → IMAGE_GENERATION → VIDEO
 
 ## Phase Guidance
 
-### TRANSCRIPT_INPUT
+**CRITICAL: Phases must execute in this exact order. Do NOT skip transcript parsing.**
+
+### TRANSCRIPT_INPUT (FIRST PHASE - REQUIRED)
+- **This MUST be the first phase executed. Do NOT proceed to planning without parsing the transcript.**
 - Validate the SRT structure.
 - Call:
 ```
@@ -31,19 +34,21 @@ Task(
   context_refs: ['$original_input']
 )
 ```
-- Store parsed entries in project.json and context store as `$transcript`.
+- Store parsed entries in project.json, write `agent/content/transcript.md`, and store in context as `$transcript`.
 
-### PLANNING
-- Analyze transcript for visual opportunities.
+### PLANNING (SECOND PHASE - AFTER TRANSCRIPT PARSING)
+- **This phase runs AFTER transcript parsing is complete. Ensure `$transcript` exists before proceeding.**
+- **CRITICAL: This is a YouTube workflow. DO NOT generate articles, stories, or any creative content. Only plan visual placements.**
+- Analyze transcript for visual opportunities (image, infographic, or video) across the full workflow.
 - Call:
 ```
 Task(
-  subagent_type: 'placement-planner',
-  task: 'Plan strategic image placements across the transcript',
+  subagent_type: 'content-planner',
+  task: 'Create a comprehensive visual placement plan across the transcript',
   context_refs: ['$transcript']
 )
 ```
-- Store placement plan in project state.
+- Save the content plan to `agent/plans/content-plan.md` using `write_file` so it loads as `$content_plan`.
 
 ### IMAGE_PLACEMENT
 - Convert the plan into precise placements with timestamps and enhanced prompts.
@@ -52,9 +57,10 @@ Task(
 Task(
   subagent_type: 'image-placer',
   task: 'Create detailed placement plan with timestamps and enhanced prompts',
-  context_refs: ['$transcript', '$placement_plan']
+  context_refs: ['$transcript', '$content_plan']
 )
 ```
+- Save the placements to `agent/content/image-placements.md` using `write_placement_plan` so it loads as `$image_placements`.
 - Generate SRT with image tags and save to `agent/script/subtitles_with_images.srt`.
 
 ### IMAGE_GENERATION
@@ -78,3 +84,4 @@ Task(
 ## Backward Compatibility
 
 Legacy story-first workflows (plot/story/characters/scenes) remain supported for existing projects.
+Master plans are only used for legacy story workflows, not YouTube transcript workflows.

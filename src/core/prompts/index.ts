@@ -267,7 +267,7 @@ export function buildPlacementPlannerPrompt(context?: string): string {
   const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
   const base = loadAndRenderMarkdown('system/base.md', {});
   const sub = loadAndRenderMarkdown('system/subagent.md', {});
-  const planner = loadAndRenderMarkdown('subagents/placement-planner.md', {});
+  const planner = loadAndRenderMarkdown('subagents/content-planner.md', {});
   return [base, sub, planner, contextSection].filter(Boolean).join('\n\n');
 }
 
