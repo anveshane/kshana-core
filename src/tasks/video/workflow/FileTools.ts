@@ -6,6 +6,7 @@
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
 import { getWorkflowLogger } from './WorkflowLogger.js';
+import { getPhaseLogger } from '../../../utils/phaseLogger.js';
 import { loadAndRenderMarkdown } from '../../../core/prompts/loader.js';
 import {
   loadProject,
@@ -18,6 +19,8 @@ import {
   createProject,
   saveCharacter,
   saveSetting,
+  loadCharacterMarkdown,
+  loadSettingMarkdown,
   addAsset,
   addScene,
   addNewScene,
@@ -32,6 +35,7 @@ import {
   updateScene,
   setProjectInputType,
   updateContentStatus,
+  updatePlanStage,
 } from './ProjectManager.js';
 import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus, InputType, ContentTypeName } from './types.js';
 import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase, INPUT_TYPE_CONFIGS } from './types.js';
@@ -52,12 +56,29 @@ function expandContextRef(value: string): string {
   return value;
 }
 
+function looksLikeSrtInput(input: string): boolean {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const timestampPattern = /\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}/;
+  if (!timestampPattern.test(trimmed)) {
+    return false;
+  }
+  const firstLine = trimmed.split(/\r?\n/, 1)[0] || '';
+  return /^\d+$/.test(firstLine.trim());
+}
+
 /**
  * Validates if the input is a valid story idea using an LLM call.
  * Returns { valid: true } if valid, or { valid: false, reason: string } if invalid.
  */
 async function validateStoryInput(input: string): Promise<{ valid: boolean; reason?: string }> {
   const trimmed = input.trim();
+
+  if (looksLikeSrtInput(trimmed)) {
+    return { valid: true };
+  }
 
   // Too short to be a meaningful story idea
   if (trimmed.length < 10) {
@@ -97,7 +118,21 @@ async function validateStoryInput(input: string): Promise<{ valid: boolean; reas
     console.warn('Could not parse LLM validation response, rejecting input:', result);
     return { valid: false, reason: 'Unable to validate - please provide a clearer story idea' };
   } catch (error) {
-    // If LLM validation fails, reject to be safe rather than allowing garbage through
+    // If validation fails due to connection/API errors, allow workflow to continue
+    // The basic heuristics (length, garbage detection) already passed, so it's likely valid
+    // Connection errors shouldn't block the entire workflow
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const isConnectionError = errorMessage.toLowerCase().includes('connection') || 
+                              errorMessage.toLowerCase().includes('econnrefused') ||
+                              errorMessage.toLowerCase().includes('network');
+    
+    if (isConnectionError) {
+      console.warn('Story input validation failed due to connection error, allowing workflow to continue:', error);
+      // Allow workflow to proceed - basic heuristics already passed
+      return { valid: true };
+    }
+    
+    // For other errors, still reject to be safe
     console.warn('Story input validation failed:', error);
     return { valid: false, reason: 'Validation service unavailable - please try again' };
   }
@@ -163,11 +198,13 @@ export const readFileTool: ToolDefinition = createTool(
   `Read content from a project file within the .kshana directory.
 
 Use this to read:
-- Plan files: plans/plot.md, plans/story.md, plans/scenes.md, plans/images.md, plans/video.md
-- Character files: characters/[name].md
-- Setting files: settings/[name].md
-- Original input: original_input.md
-- Asset manifest: assets/manifest.json
+- Narrative content: agent/script/plot.md, agent/script/story.md, agent/script/narration.md
+- Plan files: agent/plans/plot-plan.md, agent/plans/story-plan.md, agent/plans/scenes-plan.md, etc.
+- Character files: agent/characters/[name].md
+- Setting files: agent/settings/[name].md
+- Scene files: agent/scenes/scene-XXX/scene.md
+- Original input: agent/original_input.md
+- Asset manifest: agent/manifest.json
 
 Returns the file content as a string, or an error if file doesn't exist.`,
   {
@@ -175,7 +212,7 @@ Returns the file content as a string, or an error if file doesn't exist.`,
     properties: {
       file_path: {
         type: 'string',
-        description: 'Relative path within .kshana directory (e.g., "plans/plot.md")',
+        description: 'Relative path within .kshana directory (e.g., "agent/script/plot.md" or "agent/plans/plot-plan.md")',
       },
     },
     required: ['file_path'],
@@ -217,7 +254,9 @@ export const writeFileTool: ToolDefinition = createTool(
   `Write content to a project file within the .kshana directory.
 
 Use this to write:
-- Plan files: plans/plot.md, plans/story.md, plans/scenes.md, etc.
+- Narrative content: agent/script/plot.md, agent/script/story.md, agent/script/narration.md
+- Plan files: agent/plans/plot-plan.md, agent/plans/story-plan.md, agent/plans/scenes-plan.md, etc.
+- Scene files: agent/scenes/scene-XXX/scene.md
 - Any other text files within the project
 
 For structured data (characters, settings, assets, scenes), prefer using update_project instead.`,
@@ -226,7 +265,7 @@ For structured data (characters, settings, assets, scenes), prefer using update_
     properties: {
       file_path: {
         type: 'string',
-        description: 'Relative path within .kshana directory (e.g., "plans/plot.md")',
+        description: 'Relative path within .kshana directory (e.g., "agent/script/plot.md" or "agent/plans/plot-plan.md")',
       },
       content: {
         type: 'string',
@@ -255,26 +294,81 @@ For structured data (characters, settings, assets, scenes), prefer using update_
       if (project) {
         // Map file paths to content types
         const fileToContentType: Record<string, ContentTypeName> = {
-          'plans/plot.md': 'plot',
-          'plans/story.md': 'story',
+          'agent/script/plot.md': 'plot',
+          'script/plot.md': 'plot',
+          'agent/plans/plot.md': 'plot', // Backward compatibility
+          'plans/plot.md': 'plot', // Backward compatibility
+          'agent/script/story.md': 'story',
+          'script/story.md': 'story',
+          'agent/plans/story.md': 'story', // Backward compatibility
+          'plans/story.md': 'story', // Backward compatibility
         };
         const contentType = fileToContentType[filePath];
         if (contentType) {
-          updateContentStatus(project, contentType, 'complete');
+          updateContentStatus(project, contentType, 'available');
         }
       }
+
+      // Generate a preview of the saved content (first 500 chars)
+      const preview = content.length > 500 ? content.substring(0, 500) + '...' : content;
+      const previewLines = preview.split('\n').slice(0, 10).join('\n');
+      const truncatedPreview = previewLines.length < preview.length ? previewLines + '\n...' : previewLines;
 
       return {
         status: 'success',
         message: `File written successfully: ${filePath}`,
         file_path: filePath,
         bytes_written: content.length,
+        preview: truncatedPreview,
+        total_lines: content.split('\n').length,
       };
     } catch (error) {
       return {
         status: 'error',
         error: `Failed to write file: ${String(error)}`,
       };
+    }
+  }
+);
+
+export const readTranscriptTool: ToolDefinition = createTool(
+  'read_transcript',
+  'Read raw SRT transcript text from agent/original_input.md.',
+  {
+    type: 'object',
+    properties: {},
+    required: [],
+  },
+  async () => {
+    const content = readProjectFile('agent/original_input.md');
+    if (content === null) {
+      return { status: 'error', error: 'Transcript not found at agent/original_input.md' };
+    }
+    return { status: 'success', file_path: 'agent/original_input.md', content };
+  }
+);
+
+export const writePlacementPlanTool: ToolDefinition = createTool(
+  'write_placement_plan',
+  'Write image placement plan content to agent/content/image-placements.md.',
+  {
+    type: 'object',
+    properties: {
+      content: { type: 'string', description: 'Placement plan content' },
+    },
+    required: ['content'],
+  },
+  async (args) => {
+    const content = args['content'] as string;
+    try {
+      writeProjectFile('agent/content/image-placements.md', content);
+      return {
+        status: 'success',
+        file_path: 'agent/content/image-placements.md',
+        bytes_written: content.length,
+      };
+    } catch (error) {
+      return { status: 'error', error: `Failed to write placement plan: ${String(error)}` };
     }
   }
 );
@@ -329,6 +423,14 @@ Use this at the start of each turn to understand the project state and what acti
       };
     }
 
+    // Set phase context in phaseLogger for all subsequent logs
+    const phaseLogger = getPhaseLogger();
+    phaseLogger.setContext({
+      phase: project.currentPhase,
+      stage: project.plan.stage,
+      projectId: project.id,
+    });
+
     const result: Record<string, unknown> = {
       status: 'success',
       project: project,
@@ -361,9 +463,10 @@ Note: project.json is an INDEX file. Content should be in .md files:
 Actions:
 - "create": Create a new project with the given original_input
 - "set_title": Set the project title
+- "update_plan_stage": Update the project-level master plan stage. Data: { stage: 'planning'|'verify'|'refining'|'complete' }
 - "update_phase": Update a phase status. Data: { phase: string, status: 'pending'|'in_progress'|'completed' }
-- "update_planner_stage": Update planner stage. Data: { phase: string, stage: 'planning'|'verify'|'refining'|'complete' }
-- "transition_phase": Automatically transition to next phase if current is complete
+- "update_planner_stage": DEPRECATED - redirects to update_plan_stage
+- "transition_phase": Automatically transition to next phase if master plan is approved and current phase is complete
 - "add_character": Register a character. Data: { name, description?, visual_description?, approval_status? }
 - "update_character": Update an existing character. Data: { name, updates: { ... } }
 - "update_character_approval": Update character approval. Data: { name, status, approval_type?: 'content'|'image', contentArtifactId?, referenceImageId? }
@@ -375,7 +478,7 @@ Actions:
 - "update_scene_approval": Update scene approval. Data: { scene_number, approval_type: 'content'|'image'|'video', status, artifactId? }
 - "add_asset": Register a generated asset. Data: { id, type, path, metadata? }
 - "set_final_video": Set the final video info. Data: { artifactId, path, duration }
-- "set_input_type": Set the input type after analyzing user input. Data: { input_type: 'idea'|'story' }. Use 'story' if user provided a complete story/chapter (skips plot and story phases).`,
+- "set_input_type": Set the input type after analyzing user input. Data: { input_type: 'idea'|'story'|'youtube_srt'|'script' }. Use 'youtube_srt' when the user provides SRT content.`,
   {
     type: 'object',
     properties: {
@@ -384,8 +487,9 @@ Actions:
         enum: [
           'create',
           'set_title',
+          'update_plan_stage',
           'update_phase',
-          'update_planner_stage',
+          'update_planner_stage', // Deprecated - redirects to update_plan_stage
           'transition_phase',
           'add_character',
           'update_character',
@@ -419,6 +523,17 @@ Actions:
           let originalInput = data['original_input'] as string;
           if (!originalInput) {
             return { status: 'error', error: 'original_input is required for create action' };
+          }
+
+          // Check if project already exists - don't overwrite it
+          const existingProject = loadProject();
+          if (existingProject) {
+            return {
+              status: 'error',
+              error: 'Project already exists. Use a different action to update the project.',
+              existing_project_id: existingProject.id,
+              message: 'A project already exists. To start a new project, you must first delete or complete the existing one.',
+            };
           }
 
           // Expand context references (e.g., $wakes -> actual content)
@@ -475,58 +590,101 @@ What story would you like to turn into a video?`,
           if (!phase || !status) {
             return { status: 'error', error: 'phase (or phase_name) and status are required' };
           }
+          const phaseConfig = PHASE_CONFIGS[phase as WorkflowPhase];
+          const phaseDisplayName = phaseConfig?.displayName || phase;
           updatePhaseStatus(project, phase, status);
-          return { status: 'success', message: `Phase ${phase} updated to ${status}`, current_phase: project.currentPhase };
+          
+          // Get project summary for context
+          const summary = getProjectSummary(project);
+          
+          return { 
+            status: 'success', 
+            message: `Phase "${phaseDisplayName}" updated to ${status}`, 
+            phase: phase,
+            phase_display_name: phaseDisplayName,
+            status: status,
+            current_phase: project.currentPhase,
+            project_summary: summary,
+          };
         }
 
-        case 'update_planner_stage': {
+        case 'update_plan_stage': {
+          // Update the project-level master plan stage
           const logger = getWorkflowLogger();
+          const phaseLogger = getPhaseLogger();
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
-          // Accept both 'phase' and 'phase_name' for compatibility
-          const phase = (data['phase'] || data['phase_name']) as keyof ProjectFile['phases'];
           const stage = data['stage'] as PlannerStage;
-          if (!phase || !stage) {
-            return { status: 'error', error: 'phase (or phase_name) and stage are required' };
+          if (!stage) {
+            return { status: 'error', error: 'stage is required' };
           }
           const validStages = ['planning', 'verify', 'refining', 'complete'];
           if (!validStages.includes(stage)) {
             return { status: 'error', error: `Invalid stage. Must be one of: ${validStages.join(', ')}` };
           }
-          updatePlannerStage(project, phase, stage);
+          
+          updatePlanStage(project, stage);
+          
+          const planApproved = stage === 'complete';
+          logger.logPlannerStage('master_plan', stage, planApproved);
+          phaseLogger.stageTransition(stage, `Master plan entered ${stage} stage`);
 
-          // Check if this is a per-item phase
-          const phaseConfig = PHASE_CONFIGS[phase as WorkflowPhase];
-          const isPerItemPhase = phaseConfig?.requiresPerItemApproval ?? false;
-
-          // For per-item phases, phase is NOT complete when planner stage is complete
-          // The phase is only complete when all items are approved
-          const phaseCompleted = stage === 'complete' && !isPerItemPhase;
-          logger.logPlannerStage(phase, stage, phaseCompleted);
-
-          if (stage === 'complete' && isPerItemPhase) {
+          if (planApproved) {
             return {
               status: 'success',
-              message: `Planning for ${phase} is complete. Now you must process each item individually. Generate content/images/videos for each item, get approval, then mark the phase complete when ALL items are approved.`,
+              message: `Master plan approved! You can now execute phases. Current phase: ${project.currentPhase}`,
+              plan_id: project.plan.planId,
+              plan_stage: project.plan.stage,
               current_phase: project.currentPhase,
-              phase_status: project.phases[phase]?.status,
-              phase_completed: false,
-              requires_per_item_processing: true,
-              next_action: 'Process each item one by one, get individual approvals, then transition when all items are approved.',
+              next_action: 'Start executing the current phase based on the approved master plan.',
             };
           }
 
           return {
             status: 'success',
-            message: phaseCompleted
-              ? `Planner stage for ${phase} updated to ${stage}. Phase ${phase} is now completed.`
-              : `Planner stage for ${phase} updated to ${stage}`,
+            message: `Master plan stage updated to ${stage}`,
+            plan_id: project.plan.planId,
+            plan_stage: project.plan.stage,
             current_phase: project.currentPhase,
-            phase_status: project.phases[phase]?.status,
-            phase_completed: phaseCompleted,
-            next_action: phaseCompleted
+          };
+        }
+
+        case 'update_planner_stage': {
+          // DEPRECATED: Redirect to update_plan_stage for backward compatibility
+          const logger = getWorkflowLogger();
+          const phaseLogger = getPhaseLogger();
+          const project = loadProject();
+          if (!project) {
+            return { status: 'error', error: 'No project found' };
+          }
+          const stage = data['stage'] as PlannerStage;
+          if (!stage) {
+            return { status: 'error', error: 'stage is required' };
+          }
+          const validStages = ['planning', 'verify', 'refining', 'complete'];
+          if (!validStages.includes(stage)) {
+            return { status: 'error', error: `Invalid stage. Must be one of: ${validStages.join(', ')}` };
+          }
+          
+          // Redirect to project-level plan update
+          updatePlanStage(project, stage);
+          
+          const planApproved = stage === 'complete';
+          logger.logPlannerStage('master_plan', stage, planApproved);
+          phaseLogger.stageTransition(stage, `Master plan entered ${stage} stage (via deprecated update_planner_stage)`);
+
+          return {
+            status: 'success',
+            message: planApproved
+              ? `Master plan approved! Now execute the current phase: ${project.currentPhase}`
+              : `Master plan stage updated to ${stage}`,
+            plan_id: project.plan.planId,
+            plan_stage: project.plan.stage,
+            current_phase: project.currentPhase,
+            deprecated_notice: 'update_planner_stage is deprecated. Use update_plan_stage instead.',
+            next_action: planApproved
               ? 'IMPORTANT: Phase is complete. Call transition_phase immediately to move to the next phase, then continue working. Do NOT stop or ask the user what to do.'
               : 'Continue with the current phase work.',
           };
@@ -534,6 +692,7 @@ What story would you like to turn into a video?`,
 
         case 'transition_phase': {
           const logger = getWorkflowLogger();
+          const phaseLogger = getPhaseLogger();
           const project = loadProject();
           if (!project) {
             return { status: 'error', error: 'No project found' };
@@ -549,23 +708,43 @@ What story would you like to turn into a video?`,
             result.transitioned
           );
 
+          // Update phase logger context on successful transition
+          if (result.transitioned) {
+            phaseLogger.phaseTransition(beforePhase, result.project.currentPhase, result.reason);
+          }
+
           // Get the new phase config for the next action instruction
           const newPhaseConfig = PHASE_CONFIGS[result.project.currentPhase as WorkflowPhase];
 
+          // Get project summary for context
+          const summary = getProjectSummary(result.project);
+          
           return {
             status: 'success',
             transitioned: result.transitioned,
             reason: result.reason,
             current_phase: result.project.currentPhase,
             new_phase_name: newPhaseConfig?.displayName ?? result.project.currentPhase,
+            previous_phase: beforePhase,
+            previous_phase_status: beforeStatus,
+            project_summary: summary,
             next_action: result.transitioned
-              ? `IMPORTANT: You have transitioned to a new phase. Do NOT stop or ask the user what to do next. Call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
+              ? `IMPORTANT: You have transitioned to a new phase. Update your todo list (mark the previous phase complete, mark the new phase in_progress), then call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
               : 'Phase transition not needed. Call read_project to check current state.',
             debug: {
               before_phase: beforePhase,
               before_status: beforeStatus,
               after_phase: result.project.currentPhase,
             },
+            // Include phase transition data for UI banner display
+            ...(result.transitioned && {
+              _phaseTransition: {
+                fromPhase: beforePhase,
+                toPhase: result.project.currentPhase,
+                displayName: newPhaseConfig?.displayName,
+                description: `Working on ${newPhaseConfig?.displayName ?? result.project.currentPhase}`,
+              },
+            }),
           };
         }
 
@@ -574,16 +753,43 @@ What story would you like to turn into a video?`,
           if (!name) {
             return { status: 'error', error: 'name is required for add_character' };
           }
+          
+          // Check if the character file already exists (created by Task tool)
+          // If so, DON'T overwrite it - just update project.json registry
+          const existingContent = loadCharacterMarkdown(name);
+          const fileAlreadyExists = existingContent !== null && existingContent.trim().length > 0;
+          
+          // Check if description is a variable reference (starts with $)
+          const rawDescription = (data['description'] as string) || '';
+          const isVariableRef = rawDescription.startsWith('$');
+          
           // Create character with defaults and provided data
           const character: CharacterData = {
             ...createDefaultCharacterData(name),
-            description: (data['description'] as string) || '',
+            description: isVariableRef ? '' : rawDescription, // Don't store variable refs as content
             visualDescription: (data['visual_description'] as string) || '',
             approvalStatus: (data['approval_status'] as ItemApprovalStatus) || 'pending',
             referenceImageId: data['reference_image_id'] as string | undefined,
             referenceImagePath: data['reference_image_path'] as string | undefined,
           };
-          saveCharacter(character);
+          
+          // NEVER overwrite existing files - Task tool already created the .md file with full content
+          // Only create new file if it doesn't exist and we have non-variable-ref content
+          if (!fileAlreadyExists && !isVariableRef && (character.description || character.visualDescription)) {
+            saveCharacter(character);
+          } else {
+            // Just update project.json registry without creating/overwriting file
+            const project = loadProject();
+            if (project) {
+              const existingIndex = project.characters.findIndex(c => c.name === character.name);
+              if (existingIndex >= 0) {
+                project.characters[existingIndex] = character;
+              } else {
+                project.characters.push(character);
+              }
+              saveProject(project);
+            }
+          }
           return { status: 'success', message: `Character "${character.name}" added` };
         }
 
@@ -640,16 +846,43 @@ What story would you like to turn into a video?`,
           if (!name) {
             return { status: 'error', error: 'name is required for add_setting' };
           }
+          
+          // Check if the setting file already exists (created by Task tool)
+          // If so, DON'T overwrite it - just update project.json registry
+          const existingContent = loadSettingMarkdown(name);
+          const fileAlreadyExists = existingContent !== null && existingContent.trim().length > 0;
+          
+          // Check if description is a variable reference (starts with $)
+          const rawDescription = (data['description'] as string) || '';
+          const isVariableRef = rawDescription.startsWith('$');
+          
           // Create setting with defaults and provided data
           const setting: SettingData = {
             ...createDefaultSettingData(name),
-            description: (data['description'] as string) || '',
+            description: isVariableRef ? '' : rawDescription, // Don't store variable refs as content
             visualDescription: (data['visual_description'] as string) || '',
             approvalStatus: (data['approval_status'] as ItemApprovalStatus) || 'pending',
             referenceImageId: data['reference_image_id'] as string | undefined,
             referenceImagePath: data['reference_image_path'] as string | undefined,
           };
-          saveSetting(setting);
+          
+          // NEVER overwrite existing files - Task tool already created the .md file with full content
+          // Only create new file if it doesn't exist and we have non-variable-ref content
+          if (!fileAlreadyExists && !isVariableRef && (setting.description || setting.visualDescription)) {
+            saveSetting(setting);
+          } else {
+            // Just update project.json registry without creating/overwriting file
+            const project = loadProject();
+            if (project) {
+              const existingIndex = project.settings.findIndex(s => s.name === setting.name);
+              if (existingIndex >= 0) {
+                project.settings[existingIndex] = setting;
+              } else {
+                project.settings.push(setting);
+              }
+              saveProject(project);
+            }
+          }
           return { status: 'success', message: `Setting "${setting.name}" added` };
         }
 
@@ -706,6 +939,19 @@ What story would you like to turn into a video?`,
           if (sceneNumber === undefined) {
             return { status: 'error', error: 'scene_number is required for add_scene' };
           }
+
+          // HARD LIMIT: Maximum 12 scenes allowed
+          const MAX_SCENES = 12;
+          if (sceneNumber > MAX_SCENES) {
+            return {
+              status: 'error',
+              error: `⛔ SCENE LIMIT EXCEEDED: Maximum ${MAX_SCENES} scenes allowed. You are trying to create scene ${sceneNumber}. STOP creating scenes and transition to the next phase immediately using update_project(action: 'transition_phase', data: { next_phase: 'character_setting_images' })`,
+              limit_exceeded: true,
+              max_scenes: MAX_SCENES,
+              attempted_scene: sceneNumber,
+            };
+          }
+
           const title = data['title'] as string | undefined;
           const sceneRef = addNewScene(sceneNumber, title);
           // Also update with any additional data if provided
@@ -719,6 +965,16 @@ What story would you like to turn into a video?`,
           if (Object.keys(additionalUpdates).length > 0) {
             updateScene(sceneNumber, additionalUpdates);
           }
+
+          // Warn if approaching limit
+          if (sceneNumber >= MAX_SCENES - 2) {
+            return {
+              status: 'success',
+              message: `Scene ${sceneRef.sceneNumber} reference added`,
+              warning: `⚠️ You have created ${sceneNumber} scenes. Maximum is ${MAX_SCENES}. Consider wrapping up the scene phase soon.`,
+            };
+          }
+
           return { status: 'success', message: `Scene ${sceneRef.sceneNumber} reference added` };
         }
 
@@ -808,8 +1064,30 @@ What story would you like to turn into a video?`,
 
         case 'set_input_type': {
           const inputType = data['input_type'] as InputType;
-          if (!inputType || !['idea', 'story'].includes(inputType)) {
-            return { status: 'error', error: 'input_type must be "idea" or "story"' };
+          const validInputTypes: InputType[] = ['idea', 'story', 'youtube_srt', 'script'];
+          if (!inputType || !validInputTypes.includes(inputType)) {
+            return { status: 'error', error: `input_type must be one of: ${validInputTypes.join(', ')}` };
+          }
+
+          // Check if input type is already set to the same value to prevent loops
+          const currentProject = loadProject();
+          if (!currentProject) {
+            return { status: 'error', error: 'No project found' };
+          }
+
+          if (currentProject.inputType === inputType) {
+            // Input type is already set to the requested value - return success without updating
+            const inputTypeConfig = INPUT_TYPE_CONFIGS[inputType];
+            const summary = getProjectSummary(currentProject);
+            return {
+              status: 'success',
+              message: `Input type is already set to "${inputTypeConfig.displayName}"`,
+              input_type: inputType,
+              current_phase: currentProject.currentPhase,
+              project_summary: summary,
+              skipped: true,
+              note: 'Input type was already set to this value. No update needed.',
+            };
           }
 
           const updatedProject = setProjectInputType(inputType);
@@ -822,15 +1100,25 @@ What story would you like to turn into a video?`,
             ? inputTypeConfig.skipPhases.join(', ')
             : 'none';
 
+          const note = inputType === 'story'
+            ? 'Plot and Story phases have been skipped. The story has been saved to script/story.md. Proceeding to Characters & Settings phase.'
+            : inputType === 'youtube_srt'
+              ? 'Transcript-first workflow enabled. Proceeding to Transcript Input phase.'
+              : inputType === 'script'
+                ? 'Transcript input skipped. Proceeding to Planning phase.'
+                : 'Starting from Plot phase.';
+
+          // Get project summary for context
+          const summary = getProjectSummary(updatedProject);
+          
           return {
             status: 'success',
             message: `Input type set to "${inputTypeConfig.displayName}"`,
             input_type: inputType,
             current_phase: updatedProject.currentPhase,
+            project_summary: summary,
             skipped_phases: skippedPhases,
-            note: inputType === 'story'
-              ? 'Plot and Story phases have been skipped. The story has been saved to plans/story.md. Proceeding to Characters & Settings phase.'
-              : 'Starting from Plot phase.',
+            note,
           };
         }
 
@@ -844,8 +1132,16 @@ What story would you like to turn into a video?`,
 );
 
 /**
- * Get all workflow file tools.
+ * Get workflow file tools for the orchestrator.
+ * Only includes project state tools - content files are handled by subagents via Task.
  */
 export function getWorkflowFileTools(): ToolDefinition[] {
-  return [readFileTool, writeFileTool, readProjectTool, updateProjectTool];
+  return [readProjectTool, updateProjectTool, readTranscriptTool, writePlacementPlanTool];
+}
+
+/**
+ * Get all file tools including read_file/write_file (for subagents that need direct file access).
+ */
+export function getAllFileTools(): ToolDefinition[] {
+  return [readFileTool, writeFileTool, readProjectTool, updateProjectTool, readTranscriptTool, writePlacementPlanTool];
 }

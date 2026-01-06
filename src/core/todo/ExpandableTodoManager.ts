@@ -5,6 +5,19 @@
 import type { ExpandableTodoItem, TodoManagerResult, TodoStatus } from './ExpandableTodoItem.js';
 import { createTodoItem } from './ExpandableTodoItem.js';
 
+/** Valid status values */
+const VALID_STATUSES = new Set<TodoStatus>(['pending', 'in_progress', 'completed', 'cancelled', 'expanded']);
+
+/**
+ * Normalize a status value to lowercase and validate it.
+ * Returns 'pending' for invalid values.
+ */
+function normalizeStatus(status: unknown): TodoStatus {
+  if (typeof status !== 'string') return 'pending';
+  const normalized = status.toLowerCase() as TodoStatus;
+  return VALID_STATUSES.has(normalized) ? normalized : 'pending';
+}
+
 export class ExpandableTodoManager {
   private todos: ExpandableTodoItem[] = [];
 
@@ -210,7 +223,7 @@ export class ExpandableTodoManager {
     // Create new todos from input
     const newTodos = todos.map(t => {
       const content = (t['content'] as string | undefined) ?? '';
-      const status = (t['status'] as TodoStatus | undefined) ?? 'pending';
+      const status = normalizeStatus(t['status']);
       const activeForm = t['activeForm'] as string | undefined;
 
       // Preserve explicit IDs if provided (Claude SDK-style TodoWrite), otherwise generate.
@@ -248,46 +261,80 @@ export class ExpandableTodoManager {
    * - Updates existing items if id matches
    * - Adds new items if id is new
    * - Leaves unspecified items unchanged
+   *
+   * IMPORTANT: Creates new objects to ensure React re-renders (React.memo compares by reference)
    */
   mergeTodosById(updates: Array<Record<string, unknown>>): TodoManagerResult {
-    const byId = new Map(this.todos.map(t => [t.id, t] as const));
-
+    // Build update map
+    const updateMap = new Map<string, Record<string, unknown>>();
     for (const u of updates) {
       const id = u['id'] as string | undefined;
+      if (id) updateMap.set(id, u);
+    }
+
+    // Track which IDs we've seen (for adding new items)
+    const existingIds = new Set(this.todos.map(t => t.id));
+
+    // Create new array with updated items (immutable update pattern)
+    let newTodos = this.todos.map(todo => {
+      const update = updateMap.get(todo.id);
+      if (!update) return todo; // No update for this item, keep as-is
+
+      const content = update['content'] as string | undefined;
+      const status = update['status'] !== undefined ? normalizeStatus(update['status']) : undefined;
+      const activeForm = update['activeForm'] as string | undefined;
+
+      // Create a NEW object with updated properties (for React.memo to detect change)
+      return {
+        ...todo,
+        ...(typeof content === 'string' ? { content } : {}),
+        ...(typeof activeForm === 'string' ? { activeForm } : {}),
+        ...(status ? { status } : {}),
+      };
+    });
+
+    // Add new items that don't exist yet
+    for (const u of updates) {
+      const id = u['id'] as string | undefined;
+      if (!id || existingIds.has(id)) continue;
+
       const content = u['content'] as string | undefined;
-      const status = u['status'] as TodoStatus | undefined;
+      const status = u['status'] !== undefined ? normalizeStatus(u['status']) : 'pending';
       const activeForm = u['activeForm'] as string | undefined;
 
-      if (!id) continue;
-
-      const existing = byId.get(id);
-      if (existing) {
-        if (typeof content === 'string') existing.content = content;
-        if (typeof activeForm === 'string') existing.activeForm = activeForm;
-        if (status) existing.status = status;
-      } else {
-        const item = createTodoItem(content ?? '', {
-          status: status ?? 'pending',
-          activeForm,
-          depth: 0,
-        });
-        item.id = id;
-        this.todos.push(item);
-        byId.set(id, item);
-      }
+      const item = createTodoItem(content ?? '', {
+        status,
+        activeForm,
+        depth: 0,
+      });
+      item.id = id;
+      newTodos.push(item);
     }
 
     // Ensure exactly one in_progress if possible (auto-heal)
-    const inProgress = this.todos.filter(t => t.status === 'in_progress');
-    if (inProgress.length === 0) {
-      const nextPending = this.todos.find(t => t.status === 'pending');
-      if (nextPending) nextPending.status = 'in_progress';
-    } else if (inProgress.length > 1) {
-      // Keep first, demote the rest to pending to enforce rule
-      for (let i = 1; i < inProgress.length; i++) {
-        inProgress[i]!.status = 'pending';
+    // Also use immutable updates here
+    const inProgressIndices = newTodos
+      .map((t, i) => (t.status === 'in_progress' ? i : -1))
+      .filter(i => i !== -1);
+
+    if (inProgressIndices.length === 0) {
+      const pendingIdx = newTodos.findIndex(t => t.status === 'pending');
+      if (pendingIdx !== -1) {
+        newTodos = newTodos.map((t, i) =>
+          i === pendingIdx ? { ...t, status: 'in_progress' as const } : t
+        );
       }
+    } else if (inProgressIndices.length > 1) {
+      // Keep first, demote the rest to pending
+      const toKeep = inProgressIndices[0];
+      newTodos = newTodos.map((t, i) =>
+        inProgressIndices.includes(i) && i !== toKeep
+          ? { ...t, status: 'pending' as const }
+          : t
+      );
     }
+
+    this.todos = newTodos;
 
     return {
       status: 'success',

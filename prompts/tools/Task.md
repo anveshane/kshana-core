@@ -2,11 +2,20 @@ Launch a specialized subagent to handle a specific task in the story-to-video pi
 
 ## Available Subagent Types
 
-- **Plan**: Read-only planning specialist. Analyzes project state and designs execution plans. Does NOT generate content.
+- **Plan**: **ONLY for initial project planning (EnterPlanMode).** Read-only planning specialist. Analyzes project state and designs execution plans. Does NOT generate content. **DO NOT use for phase-level planning - use generate_content instead.**
 - **Explore**: Read-only project explorer. Reads and summarizes existing project content.
 - **content-creator**: Creative content generator. Creates plot, story, characters, settings, scenes, narration.
 - **image-generator**: Image generation specialist. Crafts prompts and generates images.
 - **video-assembler**: Video generation specialist. Creates video clips and stitches them together.
+- **transcript-parser**: Parse SRT text and extract structured transcript data.
+- **content-planner**: Analyze transcript and plan comprehensive visual placements (images, infographics, video).
+- **image-placer**: Create detailed placement plan with timestamps and enhanced prompts.
+- **video-replacer**: Handle video segment replacement with images.
+
+**IMPORTANT: After Task completes and user approves:**
+- If using Plan subagent: Call `ExitPlanMode` after approval (only for initial project setup)
+- If using content-creator: IMMEDIATELY call `update_project` to update planner stage and transition phase
+- DO NOT enter feedback loops after approval
 
 ## Parameters
 
@@ -41,6 +50,12 @@ The subagent receives the full content of each referenced variable.
 
 ## Content Types (for content-creator)
 
+**YouTube Workflow (Preferred):**
+- **transcript_analysis**: Analyze transcript structure and visual opportunities
+- **image_placement_plan**: Plan image placements with timestamps
+- **image_prompt**: Documentary-style image prompt for a segment
+
+**Legacy Story Workflow (Supported):**
 - **plot**: High-level story outline
 - **story**: Full narrative with dialogue
 - **character**: Character profile (appearance, personality, background)

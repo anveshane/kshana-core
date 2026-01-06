@@ -64,7 +64,17 @@ export async function compressMessages(
   }
 
   // 2. Calculate how many messages to preserve at the end
-  const preserveCount = MESSAGES_TO_PRESERVE * 2; // Roughly pairs
+  let preserveCount = MESSAGES_TO_PRESERVE * 2; // Roughly pairs
+
+  // Ensure we don't split a tool call chain (Assistant call -> Tool result)
+  // If the first message to preserve is a 'tool' result, we must also preserve the preceding assistant message
+  while (
+    messages.length > preserveCount &&
+    messages[messages.length - preserveCount]?.role === 'tool'
+  ) {
+    preserveCount++;
+  }
+
   const toPreserve = messages.slice(-preserveCount);
 
   // 3. Get messages to summarize (between system and preserved)

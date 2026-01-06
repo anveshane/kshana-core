@@ -1,17 +1,37 @@
 ### Plot Development Phase
 
-IMPORTANT: The plot requires user approval before proceeding.
+**⚠️ PREREQUISITE: Master plan must be approved before executing this phase!**
 
-1. Read the user's original input from `read_project`
-2. Use Task(subagent_type: 'content-creator', content_type: 'plot') to generate the plot
-3. The content-creator will show the plot and ask for user approval
-4. After approval, the plot is automatically saved to `plans/plot.md`
-5. Update planner stage to 'complete' and transition to the next phase
+Check that the master plan is approved by calling `read_project()`. If `plan.stage` is not "complete", you must first create and get approval for the master plan.
 
-The plot should include:
-- Main story beats and structure
+**Step-by-step instructions:**
+
+1. **IMMEDIATELY generate the plot content** (master plan guides this):
+```
+generate_content(content_type: "plot")
+```
+
+The tool automatically:
+- Fetches the user's original input from the context store
+- Uses the approved master plan for guidance
+- Passes it to the content-creator agent
+- Handles user approval flow
+- Saves approved content to `agent/script/plot.md`
+
+2. Wait for user approval of the plot.
+
+3. **CRITICAL: After plot approval, IMMEDIATELY update project state and transition to story phase:**
+```
+update_project(action: 'update_phase', data: { phase: 'plot', status: 'completed' })
+update_project(action: 'transition_phase', data: {})
+```
+
+**❌ DO NOT create per-phase plans - the master plan governs all phases.**
+**❌ DO NOT enter a feedback loop after approval.**
+**✅ After the user accepts the plot, IMMEDIATELY mark phase complete and transition.**
+
+**The plot should include:**
+- Main story beats and structure based on user's input and master plan
 - Key turning points
 - Character arcs overview
 - Beginning, middle, and end
-
-Wait for user approval before marking the phase complete.

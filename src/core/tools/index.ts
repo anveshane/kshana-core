@@ -27,6 +27,9 @@ export {
   fetchContextTool,
   listContextsTool,
   deleteContextTool,
+  generateContentTool,
+  CONTENT_TYPE_CONTEXTS,
+  CONTENT_TYPE_OUTPUT_FILES,
 } from './builtin/index.js';
 
 // Re-export for convenience
@@ -42,6 +45,7 @@ import {
   legacyTodoWriteTool,
   storeContextTool,
   fetchContextTool,
+  generateContentTool,
 } from './builtin/index.js';
 
 /**
@@ -53,17 +57,13 @@ export function createDefaultToolRegistry(): ToolRegistry {
   // Register built-in tools
   registry.register(thinkTool);
   registry.register(askUserQuestionTool);
-  // Keep legacy ask_user during migration
-  registry.register(askUserTool);
   registry.register(taskTool);
-  // TaskOutput is NOT implemented - tasks run synchronously and return directly
   registry.register(enterPlanModeTool);
   registry.register(exitPlanModeTool);
   registry.register(todoWriteTool);
-  // Keep legacy todo_write during migration
-  registry.register(legacyTodoWriteTool);
   registry.register(storeContextTool);
   registry.register(fetchContextTool);
+  registry.register(generateContentTool);
 
   return registry;
 }

@@ -224,7 +224,7 @@ export function parameterizeQwenEditWorkflow(
         const imageName = allImages[nodeIndex];
         if (node.widgets_values && imageName) {
           node.widgets_values[0] = imageName;
-          node.mode = 0; // Enable
+          (node as { mode?: number }).mode = 0; // Enable
         }
       } else if (nodeIndex !== -1) {
         // No image for this slot - mark for removal

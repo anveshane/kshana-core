@@ -81,6 +81,12 @@ export interface ToolStreamingEvent {
   done: boolean;
   /** Name of the agent */
   agentName?: string;
+  /** Tool name (for resuming display after feedback) */
+  toolName?: string;
+  /** Tool arguments (for resuming display after feedback) */
+  toolArgs?: Record<string, unknown>;
+  /** If true, reset streaming content before appending (used when regenerating after feedback) */
+  reset?: boolean;
 }
 
 /**
@@ -112,6 +118,8 @@ export interface QuestionEvent {
   data?: Record<string, unknown>;
   /** Auto-approve timeout in milliseconds (for countdown display) */
   autoApproveTimeoutMs?: number;
+  /** Context content to display with the question (e.g., image prompt being approved) */
+  context?: string;
 }
 
 /**
@@ -133,6 +141,17 @@ export interface UserInputInjectedEvent {
 }
 
 /**
+ * Phase transition event when workflow transitions to a new phase.
+ */
+export interface PhaseTransitionEvent {
+  type: 'phase_transition';
+  fromPhase: string;
+  toPhase: string;
+  displayName?: string;
+  description?: string;
+}
+
+/**
  * Union of all agent events.
  */
 export type AgentEvent =
@@ -146,7 +165,8 @@ export type AgentEvent =
   | NotificationEvent
   | QuestionEvent
   | AgentStatusEvent
-  | UserInputInjectedEvent;
+  | UserInputInjectedEvent
+  | PhaseTransitionEvent;
 
 /**
  * Event type names for type-safe event handling.

@@ -52,6 +52,7 @@ interface AgentViewProps {
   agentName?: string;
   status: AgentStatus;
   statusMessage?: string;
+  phaseLabel?: string;
   todos: ExpandableTodoItem[];
   streamingText?: string;
   isStreaming?: boolean;
@@ -65,6 +66,8 @@ interface AgentViewProps {
   autoApproveTimeoutMs?: number;
   /** Callback when auto-approve timeout expires */
   onAutoApproveTimeout?: () => void;
+  /** Context content to display with questions (e.g., image prompt being approved) */
+  questionContext?: string;
   showTodos?: boolean;
   history?: HistoryEntry[];
   currentAction?: CurrentAction | null;
@@ -79,6 +82,7 @@ export function AgentView({
   agentName = 'Agent',
   status,
   statusMessage,
+  phaseLabel,
   todos,
   streamingText,
   isStreaming = false,
@@ -89,6 +93,7 @@ export function AgentView({
   selectedOptionIndex = 0,
   autoApproveTimeoutMs,
   onAutoApproveTimeout,
+  questionContext,
   showTodos = true,
   history = [],
   currentAction = null,
@@ -100,7 +105,7 @@ export function AgentView({
   return (
     <Box flexDirection="column" paddingX={1}>
       {/* Status Bar */}
-      <StatusBar agentName={agentName} status={status} message={statusMessage} />
+      <StatusBar agentName={agentName} status={status} message={statusMessage} phaseLabel={phaseLabel} />
 
       {/* Scrollable History (includes user messages, tool calls, agent text) */}
       <ScrollableHistory
@@ -119,7 +124,7 @@ export function AgentView({
               {currentAction.agentName && <Text color="cyan" dimColor> [{currentAction.agentName}]</Text>}
             </Box>
           )}
-          {currentAction.type === 'tool_executing' && currentAction.toolName && (
+          {currentAction.type === 'tool_executing' && currentAction.toolName && currentAction.toolCallId && (
             <ToolCallDisplay
               toolName={currentAction.toolName}
               args={currentAction.toolArgs}
@@ -153,6 +158,7 @@ export function AgentView({
           selectedIndex={selectedOptionIndex}
           autoApproveTimeoutMs={autoApproveTimeoutMs}
           onTimeout={onAutoApproveTimeout}
+          context={questionContext}
         />
       )}
 

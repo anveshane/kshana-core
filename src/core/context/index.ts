@@ -2,7 +2,7 @@
  * Context store module for passing large content between agents by reference.
  */
 export { ContextStore, contextStore } from './ContextStore.js';
-export type { StoredContext } from './ContextStore.js';
+export type { StoredContext, StoredContextMeta } from './ContextStore.js';
 
 export {
   condenseContent,

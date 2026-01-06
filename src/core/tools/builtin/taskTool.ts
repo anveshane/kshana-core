@@ -18,25 +18,33 @@ Available subagent types:
 - content-creator: Creative content generator. Creates plot, story, characters, settings, scenes, narration. Iterates with user until approved.
 - image-generator: Image generation specialist. Crafts prompts and generates images for characters, settings, and scenes.
 - video-assembler: Video generation specialist. Creates video clips from scene images and stitches them into final video.
+- transcript-parser: Parses SRT text input into structured transcript entries.
+- content-planner: Analyzes transcript and plans comprehensive visual placements (images, infographics, video).
+- image-placer: Creates detailed placement plan with timestamps and enhanced prompts.
+- video-replacer: Coordinates video segment replacement with images.
 
-Context Passing:
-- Use context_refs to pass stored context variables (e.g., ["$story", "$character_daniel"])
-- The subagent will receive the full content of each referenced variable
-- Use store_context to store content before passing it
+⚠️ CRITICAL - Context Passing for content-creator:
+- YOU MUST ALWAYS PASS context_refs when using content-creator!
+- Without context_refs, the subagent has NO ACCESS to the user's story and will generate random content!
+- For plot phase: context_refs: ["$original_input"]
+  - NOTE: $original_input is automatically loaded from agent/original_input.md when the project is created
+  - Do NOT use $user_input - that variable doesn't exist. Always use $original_input.
+- For other phases: include relevant contexts like ["$plot", "$story", "$character_name"]
+- The subagent receives ONLY what you pass in context_refs - nothing else!
 
 Content Type (for content-creator):
-- plot: High-level story outline
-- story: Full narrative with dialogue
-- character: Character profile
-- setting: Location description
-- scene: Visual scene description
+- plot: High-level story outline (REQUIRES context_refs: ["$original_input"])
+- story: Full narrative with dialogue (REQUIRES context_refs: ["$plot"])
+- character: Character profile (REQUIRES context_refs: ["$story"])
+- setting: Location description (REQUIRES context_refs: ["$story"])
+- scene: Visual scene description (REQUIRES context_refs: ["$story", "$characters"])
 - narration: Voice-over text`,
   {
     type: 'object',
     properties: {
       subagent_type: {
         type: 'string',
-        description: 'Which subagent to use: "Plan", "Explore", "content-creator", "image-generator", "video-assembler"',
+        description: 'Which subagent to use: "Plan", "Explore", "content-creator", "image-generator", "video-assembler", "transcript-parser", "content-planner", "image-placer", "video-replacer"',
       },
       task: {
         type: 'string',
@@ -53,7 +61,7 @@ Content Type (for content-creator):
       },
       output_file: {
         type: 'string',
-        description: 'Optional file path to save the output (e.g., "plans/story.md")',
+        description: 'Optional file path to save the output (e.g., "script/story.md" for content or "plans/story-plan.md" for plans)',
       },
     },
     required: ['subagent_type', 'task'],

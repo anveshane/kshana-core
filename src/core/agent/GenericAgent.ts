@@ -13,21 +13,39 @@ import * as path from 'path';
 import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
-import { buildSystemMessage, buildPlanningPrompt, buildContentPrompt, buildImageGenerationPrompt, wrapUserTask, type ContentType } from '../prompts/index.js';
+import {
+  buildSystemMessage,
+  buildPlanningPrompt,
+  buildExplorePrompt,
+  buildContentPrompt,
+  buildImageGenerationPrompt,
+  buildTranscriptParserPrompt,
+  buildPlacementPlannerPrompt,
+  buildImagePlacerPrompt,
+  buildVideoReplacerPrompt,
+  wrapUserTask,
+  type ContentType,
+} from '../prompts/index.js';
 import { loadAndRenderMarkdown } from '../prompts/loader.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
 import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, LONG_CONTENT_THRESHOLD } from '../context/index.js';
+import { CONTENT_TYPE_CONTEXTS, CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
+import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
-// Debug logging to file
-const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+// Get the phase logger instance
+const phaseLogger = getPhaseLogger();
+
+// Legacy debug logging (wraps phaseLogger for backward compatibility during migration)
 function debugLog(message: string) {
-  try {
-    const timestamp = new Date().toISOString();
-    const logLine = `[${timestamp}] ${message}\n`;
-    fs.appendFileSync(DEBUG_LOG_PATH, logLine);
-  } catch {
-    // Ignore logging errors
+  // Parse the message to extract component and content
+  const match = message.match(/^\[([^\]]+)\]\s*(.*)$/);
+  if (match && match[1] && match[2] !== undefined) {
+    const component: string = match[1];
+    const content: string = match[2];
+    phaseLogger.debug(component, 'legacy', content);
+  } else {
+    phaseLogger.debug('GenericAgent', 'legacy', message);
   }
 }
 
@@ -42,6 +60,7 @@ const SIMPLE_TOOLS = new Set([
   'dispatch_content_agent',
   'dispatch_image_agent',
   'dispatch_video_agent',
+  'generate_content', // Deterministic content generation
   'wait_for_job',
   'TodoWrite',
   'todo_write', // back-compat during migration
@@ -90,6 +109,7 @@ export class GenericAgent extends TypedEventEmitter {
 
   // Loop detection state
   private recentToolCalls: string[] = [];
+  private contentGenerationHistory: string[] = [];
   private consecutiveLoopWarnings = 0;
   private static readonly LOOP_DETECTION_WINDOW = 6;
   private static readonly LOOP_THRESHOLD = 3; // Same tool called 3+ times in window
@@ -111,6 +131,10 @@ export class GenericAgent extends TypedEventEmitter {
   // Claude SDK-style plan mode state
   private planModeActive = false;
 
+  // Project isolation: track current project ID to detect project changes
+  private projectId: string | null = null;
+  private lastProjectId: string | null = null;
+
   constructor(
     tools: Map<string, ToolDefinition>,
     llm: LLMClient,
@@ -123,6 +147,29 @@ export class GenericAgent extends TypedEventEmitter {
     this.maxIterations = config.maxIterations ?? 100;
     this.name = config.name ?? `agent-${nanoid(6)}`;
     this.customPrompt = config.customPrompt;
+    this.projectId = config.projectId ?? null;
+    this.projectId = config.projectId ?? null;
+    this.lastProjectId = this.projectId;
+  }
+
+  /**
+   * Update the custom prompt (instructions) for the agent.
+   * This rebuilds the system message immediately.
+   * Useful for phase transitions in workflow agents.
+   */
+  updateCustomPrompt(prompt: string): void {
+    this.customPrompt = prompt;
+    this.rebuildSystemMessage();
+  }
+
+  /**
+   * Rebuild the system message in the messages history.
+   */
+  private rebuildSystemMessage(): void {
+    if (this.messages.length > 0 && this.messages[0] && this.messages[0].role === 'system') {
+      this.messages[0].content = this.buildSystemMessage();
+      debugLog(`[GenericAgent] Updated system message (custom prompt length: ${this.customPrompt?.length ?? 0})`);
+    }
   }
 
   /**
@@ -141,6 +188,8 @@ export class GenericAgent extends TypedEventEmitter {
    */
   private getEffectiveAgentName(): string {
     switch (this.currentMode) {
+      case 'orchestrator':
+        return 'Orchestrator';
       case 'content':
         return 'Content Agent';
       case 'image':
@@ -160,6 +209,14 @@ export class GenericAgent extends TypedEventEmitter {
   stop(): void {
     this.aborted = true;
     this.emit({ type: 'agent_status', status: 'interrupted', agentName: this.getEffectiveAgentName() });
+  }
+
+  /**
+   * Update the project ID. This will trigger a state reset on the next run() call
+   * if the project ID has changed.
+   */
+  setProjectId(projectId: string | null): void {
+    this.projectId = projectId;
   }
 
   /**
@@ -286,7 +343,11 @@ export class GenericAgent extends TypedEventEmitter {
     // Resume from user question or start fresh
     if (userResponse && this.waitingForUser) {
       // Check if there's an active planning session (from dispatch_agent)
+      // Check if there's an active planning session (from dispatch_agent)
       if (this.planningState?.active) {
+        // Capture toolCallId BEFORE handling response (which might clear the state)
+        const toolCallId = this.planningState.toolCallId;
+
         // Handle the planning response
         const planResult = await this.handlePlanningResponse(userResponse);
         const planResultObj = planResult as Record<string, unknown>;
@@ -321,18 +382,40 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
-        // Find the dispatch_agent tool call and add its result
-        // The main agent will continue processing
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(planResult),
-          toolCallId: 'planning-result',
-          name: 'dispatch_agent',
-        });
+        // Find the dispatch_agent tool call and add/update its result
+        // Check if a tool message with this toolCallId already exists (from awaiting_verification)
+        const existingPlanToolMsgIndex = this.messages.findIndex(
+          msg => msg.role === 'tool' && msg.toolCallId === toolCallId
+        );
+        if (existingPlanToolMsgIndex >= 0) {
+          // Update existing message instead of adding duplicate
+          this.messages[existingPlanToolMsgIndex] = {
+            role: 'tool',
+            content: JSON.stringify(planResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_agent',
+          };
+          debugLog(`[GenericAgent] Updated existing tool message at index ${existingPlanToolMsgIndex} for dispatch_agent`);
+        } else {
+          // Add new tool message
+          this.messages.push({
+            role: 'tool',
+            content: JSON.stringify(planResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_agent',
+          });
+        }
 
         // Emit status change back to thinking
         this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
+
+        debugLog(`[GenericAgent] Plan approved, continuing main loop. Planning state cleared: ${this.planningState === null}`);
+        // Continue the main execution loop to process the approved plan
+        // Don't return here - let the loop continue (fall through to main loop at line 544)
       } else if (this.contentState?.active) {
+        // Capture toolCallId BEFORE handling response
+        const toolCallId = this.contentState.toolCallId;
+
         // Handle the content creation response
         const contentResult = await this.handleContentResponse(userResponse);
         const contentResultObj = contentResult as Record<string, unknown>;
@@ -367,17 +450,40 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
-        // Add the dispatch_content_agent result to messages
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(contentResult),
-          toolCallId: 'content-result',
-          name: 'dispatch_content_agent',
-        });
+        // Add/update the dispatch_content_agent result to messages
+        // Check if a tool message with this toolCallId already exists (from awaiting_verification)
+        const existingContentToolMsgIndex = this.messages.findIndex(
+          msg => msg.role === 'tool' && msg.toolCallId === toolCallId
+        );
+        if (existingContentToolMsgIndex >= 0) {
+          // Update existing message instead of adding duplicate
+          this.messages[existingContentToolMsgIndex] = {
+            role: 'tool',
+            content: JSON.stringify(contentResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_content_agent',
+          };
+          debugLog(`[GenericAgent] Updated existing tool message at index ${existingContentToolMsgIndex} for dispatch_content_agent`);
+        } else {
+          // Add new tool message
+          this.messages.push({
+            role: 'tool',
+            content: JSON.stringify(contentResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_content_agent',
+          });
+        }
 
         // Emit status change back to thinking
         this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
+
+        // Continue main loop - don't reset messages since we're continuing from a tool result
+        // Skip the "start fresh" logic below since we already have messages
+        debugLog(`[GenericAgent] Content approved, continuing main loop with existing messages (${this.messages.length} messages)`);
       } else if (this.imageGenState?.active) {
+        // Capture toolCallId BEFORE handling response
+        const toolCallId = this.imageGenState.toolCallId;
+
         // Handle the image generation response
         const imageResult = await this.handleImageGenResponse(userResponse);
         const imageResultObj = imageResult as Record<string, unknown>;
@@ -394,9 +500,10 @@ export class GenericAgent extends TypedEventEmitter {
             isConfirmation: false,
             options: imageResultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: imageResultObj['autoApproveTimeoutMs'] as number | undefined,
+            context: imageResultObj['prompt'] as string,
           });
 
-          // Prompt is shown via ToolCallDisplay
+          // Prompt is shown in QuestionPrompt context
           return {
             status: 'waiting_for_user',
             output: '',
@@ -412,17 +519,36 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
-        // Add the dispatch_image_agent result to messages
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(imageResult),
-          toolCallId: 'image-gen-result',
-          name: 'dispatch_image_agent',
-        });
+        // Add/update the dispatch_image_agent result to messages
+        // Check if a tool message with this toolCallId already exists (from awaiting_prompt_approval)
+        const existingImageToolMsgIndex = this.messages.findIndex(
+          msg => msg.role === 'tool' && msg.toolCallId === toolCallId
+        );
+        if (existingImageToolMsgIndex >= 0) {
+          // Update existing message instead of adding duplicate
+          this.messages[existingImageToolMsgIndex] = {
+            role: 'tool',
+            content: JSON.stringify(imageResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_image_agent',
+          };
+          debugLog(`[GenericAgent] Updated existing tool message at index ${existingImageToolMsgIndex} for dispatch_image_agent`);
+        } else {
+          // Add new tool message
+          this.messages.push({
+            role: 'tool',
+            content: JSON.stringify(imageResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_image_agent',
+          });
+        }
 
         // Emit status change back to thinking
         this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
       } else if (this.videoGenState?.active) {
+        // Capture toolCallId BEFORE handling response
+        const toolCallId = this.videoGenState.toolCallId;
+
         // Handle the video generation response
         const videoResult = await this.handleVideoGenResponse(userResponse);
         const videoResultObj = videoResult as Record<string, unknown>;
@@ -456,13 +582,29 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
-        // Add the dispatch_video_agent result to messages
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(videoResult),
-          toolCallId: 'video-gen-result',
-          name: 'dispatch_video_agent',
-        });
+        // Add/update the dispatch_video_agent result to messages
+        // Check if a tool message with this toolCallId already exists (from awaiting_approval)
+        const existingVideoToolMsgIndex = this.messages.findIndex(
+          msg => msg.role === 'tool' && msg.toolCallId === toolCallId
+        );
+        if (existingVideoToolMsgIndex >= 0) {
+          // Update existing message instead of adding duplicate
+          this.messages[existingVideoToolMsgIndex] = {
+            role: 'tool',
+            content: JSON.stringify(videoResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_video_agent',
+          };
+          debugLog(`[GenericAgent] Updated existing tool message at index ${existingVideoToolMsgIndex} for dispatch_video_agent`);
+        } else {
+          // Add new tool message
+          this.messages.push({
+            role: 'tool',
+            content: JSON.stringify(videoResult),
+            toolCallId: toolCallId,
+            name: 'dispatch_video_agent',
+          });
+        }
 
         // Emit status change back to thinking
         this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
@@ -472,7 +614,34 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
       }
-    } else if (!this.waitingForUser) {
+
+      // After handling user response (content/plan/image/video approval), continue main loop
+      // Don't reset messages - we're continuing with existing conversation
+      // The tool result has already been added to messages above
+      if (this.messages.length === 0) {
+        debugLog(`[GenericAgent] WARNING: No messages after handling user response. This should not happen.`);
+        // Fallback: if somehow messages are empty, we need to initialize
+        // But this shouldn't happen in normal flow
+      }
+    } else if (!this.waitingForUser && task && task.trim().length > 0) {
+      // Only start fresh if we have a non-empty task AND we're not waiting for user
+      // If task is empty, we're continuing from a previous state (e.g., after content approval)
+      // Don't reset messages in that case - continue with existing conversation
+      // Check if project ID changed - if so, reset all state to ensure isolation
+      if (this.projectId !== this.lastProjectId) {
+        debugLog(`[GenericAgent] Project ID changed from ${this.lastProjectId} to ${this.projectId}. Resetting agent state.`);
+        this.messages = [];
+        this.activeContextVariables = [];
+        this.todoManager = new ExpandableTodoManager();
+        this.iteration = 0;
+
+        this.recentToolCalls = [];
+        this.contentGenerationHistory = [];
+        // Reload context store for the new project to ensure isolation
+        contextStore.reload(this.projectId);
+        this.lastProjectId = this.projectId;
+      }
+
       // Start fresh - check if task is long and should be condensed
       let taskContent = task;
       if (shouldCondense(task)) {
@@ -567,6 +736,9 @@ export class GenericAgent extends TypedEventEmitter {
         this.tokenUsage.lastPromptTokens = response.usage.promptTokens;
         this.tokenUsage.lastCompletionTokens = response.usage.completionTokens;
         debugLog(`[GenericAgent] Token usage: prompt=${response.usage.promptTokens}, completion=${response.usage.completionTokens}, total=${response.usage.totalTokens}`);
+
+        // Log context usage for phase-aware monitoring
+        phaseLogger.contextUsage('GenericAgent', response.usage.promptTokens, this.maxContextTokens);
       }
 
       // Add assistant message to history
@@ -576,9 +748,50 @@ export class GenericAgent extends TypedEventEmitter {
         toolCalls: response.toolCalls,
       });
 
-      // If no tool calls, we're done
+      // If no tool calls, check if we should continue or finish
       if (response.toolCalls.length === 0) {
         finalOutput = response.content ?? '';
+
+        // Special case: if we're in plan mode but haven't created a plan yet, continue
+        // BUT: Skip this for YouTube workflow - check if we're in a YouTube workflow context
+        if (this.planModeActive && this.iteration < this.maxIterations - 1) {
+          // Check if this is a YouTube workflow by checking the custom prompt or project state
+          const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') || 
+                                     this.customPrompt?.includes('transcript') ||
+                                     this.customPrompt?.includes('YouTube');
+          
+          if (!isYouTubeWorkflow) {
+            debugLog(`[GenericAgent] In plan mode but no tool calls. Prompting to create plan.`);
+            this.messages.push({
+              role: 'user',
+              content: 'You are in plan mode. Create the master plan using the Task tool with subagent_type="Plan". The plan should include plot summary, key story beats, main characters, and settings.',
+            });
+            continue;
+          } else {
+            debugLog(`[GenericAgent] In plan mode but this is YouTube workflow. Exiting plan mode.`);
+            this.planModeActive = false;
+            this.currentMode = 'orchestrator';
+            // Don't continue - let the agent proceed with normal workflow
+          }
+        }
+
+        // Check if there are pending or in-progress todos - if so, continue working
+        const todos = this.todoManager.getTodos();
+        const hasPendingWork = todos.some(t => t.status === 'pending' || t.status === 'in_progress');
+
+        if (hasPendingWork && this.iteration < this.maxIterations - 1) {
+          // There's still work to do - add a reminder and continue
+          // But only if we haven't reached max iterations yet
+          debugLog(`[GenericAgent] No tool calls but pending todos found. Adding reminder and continuing.`);
+          this.messages.push({
+            role: 'user',
+            content: `You have pending tasks in your todo list. Please continue working on them. Use the appropriate tools to complete the remaining tasks.`,
+          });
+          // Continue the loop instead of breaking
+          continue;
+        }
+
+        // No pending work or reached max iterations - we're done
         break;
       }
 
@@ -610,6 +823,48 @@ export class GenericAgent extends TypedEventEmitter {
             options: resultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
           };
+        }
+
+        // Special handling for EnterPlanMode - after entering plan mode, continue the loop
+        // so the agent can actually create the plan
+        // BUT: Skip this for YouTube workflow
+        if (toolCall.name === 'EnterPlanMode' && resultObj['status'] === 'entered_plan_mode') {
+          // Check if this is a YouTube workflow
+          const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') || 
+                                     this.customPrompt?.includes('transcript') ||
+                                     this.customPrompt?.includes('YouTube');
+          
+          if (isYouTubeWorkflow) {
+            debugLog(`[GenericAgent] EnterPlanMode called for YouTube workflow - this should not happen. Exiting plan mode.`);
+            this.planModeActive = false;
+            this.currentMode = 'orchestrator';
+            // Add tool result but don't prompt for Plan subagent
+            const resultWithWarning = result as Record<string, unknown>;
+            this.messages.push({
+              role: 'tool',
+              content: JSON.stringify({ ...resultWithWarning, warning: 'EnterPlanMode not needed for YouTube workflow. Proceed directly to TRANSCRIPT_INPUT phase.' }),
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+            });
+            // Continue without prompting for Plan subagent
+            continue;
+          }
+          
+          debugLog(`[GenericAgent] Entered plan mode. Adding tool result and continuing to create plan.`);
+          // Add tool result to messages
+          this.messages.push({
+            role: 'tool',
+            content: JSON.stringify(result),
+            toolCallId: toolCall.id,
+            name: toolCall.name,
+          });
+          // Add a prompt to encourage the agent to create the plan
+          this.messages.push({
+            role: 'user',
+            content: 'You have entered plan mode. Now create the master plan using the Task tool with subagent_type="Plan". The plan should include plot summary, key story beats, main characters, and settings.',
+          });
+          // Continue the loop so the agent can create the plan
+          continue;
         }
 
         // Add tool result to messages
@@ -804,6 +1059,48 @@ export class GenericAgent extends TypedEventEmitter {
     // Handle Task tool specially - unified subagent entrypoint (Claude SDK style)
     if (isTaskTool(toolCall.name)) {
       const result = await this.handleTask(toolCall);
+      const resultObj = result as Record<string, unknown>;
+
+      // Check if subagent needs user verification (same as dispatch_agent)
+      if (resultObj['status'] === 'awaiting_verification' || resultObj['status'] === 'awaiting_approval' || resultObj['status'] === 'awaiting_prompt_approval') {
+        // Emit tool result first
+        this.emit({
+          type: 'tool_result',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          result,
+          isError: false,
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        // Set up waiting state for user input
+        this.waitingForUser = true;
+        this.pendingQuestion = resultObj['question'] as string;
+
+        // Emit question event with options and auto-approve timeout
+        const questionOptions = resultObj['options'] as Array<{ label: string; description?: string }>;
+        const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
+
+        this.emit({
+          type: 'question',
+          question: resultObj['question'] as string,
+          isConfirmation: false,
+          options: questionOptions,
+          autoApproveTimeoutMs: questionTimeout,
+          context: resultObj['prompt'] as string, // Handle prompt context for image/video agents
+        });
+
+        // Emit status change
+        this.emit({
+          type: 'agent_status',
+          status: 'waiting',
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        // Return special marker to indicate we're pausing for user input
+        return { __awaiting_user_input: true, ...resultObj };
+      }
+
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -867,6 +1164,163 @@ export class GenericAgent extends TypedEventEmitter {
           ? { __awaiting_user_input: true, ...result }
           : { __awaiting_user_input: true, result };
         return markedResult;
+      }
+
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
+      return result;
+    }
+
+    // Handle generate_content - deterministic content generation with automatic context injection
+    if (toolCall.name === 'generate_content') {
+      const args = toolCall.arguments;
+      const contentType = args['content_type'] as string;
+      const name = args['name'] as string | undefined;
+      const sceneNumber = args['scene_number'] as number | undefined;
+      const taskDescription = args['task_description'] as string | undefined;
+
+      if (!contentType) {
+        return { error: 'content_type is required for generate_content' };
+      }
+
+      // Loop detection: prevent repeated calls for the same character/setting
+      if ((contentType === 'character' || contentType === 'setting') && name) {
+        const callKey = `${contentType}:${name.toLowerCase()}`;
+        const recentCalls = this.contentGenerationHistory.filter(call => call === callKey);
+
+        // Strict threshold for content generation - 2 calls is suspicious, 3 is a hard stop
+        if (recentCalls.length >= 2) {
+          debugLog(`[GenericAgent] LOOP DETECTED: generate_content called ${recentCalls.length + 1} times for ${callKey}. Stopping to prevent infinite loop.`);
+          return {
+            error: `Loop detected: ${contentType} "${name}" has been generated ${recentCalls.length + 1} times. Check if it already exists using read_project() and skip if it does.`,
+            suggestion: `Call read_project() to check if "${name}" already exists in project.${contentType === 'character' ? 'characters' : 'settings'}. If it exists, skip generation and move to the next item.`,
+          };
+        }
+
+        this.contentGenerationHistory.push(callKey);
+        // Keep history manageable but long enough to catch loops across many steps
+        if (this.contentGenerationHistory.length > 50) {
+          this.contentGenerationHistory.shift();
+        }
+      }
+
+      // Get the required contexts for this content type
+      const requiredContexts = CONTENT_TYPE_CONTEXTS[contentType] || [];
+      debugLog(`[GenericAgent] generate_content: content_type=${contentType}, required_contexts=${requiredContexts.join(', ')}`);
+
+      // Build the output file path
+      let outputFile = CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
+      if ((contentType === 'character' || contentType === 'setting') && name) {
+        // For characters and settings, use flat structure: agent/characters/max.md or agent/settings/dusty-village.md
+        const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.md`;
+      } else if (contentType === 'scene' && sceneNumber !== undefined) {
+        // For scenes, save to individual scene folders: agent/scenes/scene-XXX/scene.md
+        const sceneFolder = `scene-${String(sceneNumber).padStart(3, '0')}`;
+        outputFile = `agent/scenes/${sceneFolder}/scene.md`;
+      } else if (contentType === 'scene') {
+        // If scene_number not provided, still use the default (for backward compatibility)
+        // But warn that scene_number should be provided
+        debugLog(`[GenericAgent] WARNING: generate_content for scene without scene_number. Using default path: ${outputFile}`);
+      }
+
+      // Build the task description
+      const task = taskDescription ||
+        (name ? `Create ${contentType} profile for: ${name}` : `Create ${contentType} content`);
+
+      // Create a synthetic tool call for handleDispatchContentAgent
+      const syntheticToolCall: ToolCall = {
+        id: toolCall.id,
+        name: 'dispatch_content_agent',
+        arguments: {
+          task,
+          content_type: contentType,
+          context_refs: requiredContexts,
+          output_file: outputFile,
+        },
+      };
+
+      debugLog(`[GenericAgent] generate_content dispatching with context_refs: ${JSON.stringify(requiredContexts)}`);
+
+      // For character/setting generation, check if it already exists first
+      if ((contentType === 'character' || contentType === 'setting') && name) {
+        try {
+          const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+          const project = loadProject();
+          if (project) {
+            const items = contentType === 'character' ? project.characters : project.settings;
+            const existing = items.find(item =>
+              item.name.toLowerCase() === name.toLowerCase()
+            );
+            if (existing) {
+              debugLog(`[GenericAgent] ${contentType} "${name}" already exists in project. Skipping generation.`);
+              return {
+                status: 'skipped',
+                message: `${contentType} "${name}" already exists in project`,
+                content_type: contentType,
+                name: name,
+                suggestion: `Use read_project() to see existing ${contentType}s. Skip generating ${contentType}s that already exist.`,
+              };
+            }
+          }
+        } catch (err) {
+          debugLog(`[GenericAgent] WARNING: Failed to check for existing ${contentType}: ${err}. Proceeding with generation.`);
+        }
+      }
+
+      const result = await this.handleDispatchContentAgent(syntheticToolCall);
+      const resultObj = result as Record<string, unknown>;
+
+      // Check if content creation failed with an error
+      if (resultObj['error']) {
+        debugLog(`[GenericAgent] generate_content failed: ${resultObj['error']}`);
+        // For character/setting errors, suggest checking if it already exists
+        if ((contentType === 'character' || contentType === 'setting') && name) {
+          return {
+            ...resultObj,
+            suggestion: `The ${contentType} "${name}" could not be generated. Check if it already exists using read_project(), or verify the name is correct in the story context.`,
+          };
+        }
+        return result; // Return error directly to orchestrator
+      }
+
+      // Check if content needs user verification
+      if (resultObj['status'] === 'awaiting_verification') {
+        this.emit({
+          type: 'tool_result',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          result,
+          isError: false,
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        this.waitingForUser = true;
+        this.pendingQuestion = resultObj['question'] as string;
+
+        const questionOptions = resultObj['options'] as Array<{ label: string; description?: string }>;
+        const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
+        this.emit({
+          type: 'question',
+          question: resultObj['question'] as string,
+          isConfirmation: false,
+          options: questionOptions,
+          autoApproveTimeoutMs: questionTimeout,
+        });
+
+        this.emit({
+          type: 'agent_status',
+          status: 'waiting',
+          agentName: this.getEffectiveAgentName(),
+        });
+
+        return { __awaiting_user_input: true, ...resultObj };
       }
 
       this.emit({
@@ -963,6 +1417,7 @@ export class GenericAgent extends TypedEventEmitter {
           isConfirmation: false,
           options: resultObj['options'] as Array<{ label: string; description?: string }>,
           autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
+          context: resultObj['prompt'] as string,
         });
 
         // Emit status change
@@ -1085,6 +1540,25 @@ export class GenericAgent extends TypedEventEmitter {
     // Execute the tool handler
     try {
       const result = await Promise.resolve(tool.handler(toolCall.arguments));
+
+      // Check for phase transition info in result and emit event
+      const resultObj = result as Record<string, unknown> | null;
+      if (resultObj && typeof resultObj === 'object' && '_phaseTransition' in resultObj) {
+        const phaseTransition = resultObj['_phaseTransition'] as {
+          fromPhase: string;
+          toPhase: string;
+          displayName?: string;
+          description?: string;
+        };
+        this.emit({
+          type: 'phase_transition',
+          fromPhase: phaseTransition.fromPhase,
+          toPhase: phaseTransition.toPhase,
+          displayName: phaseTransition.displayName,
+          description: phaseTransition.description,
+        });
+      }
+
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -1122,10 +1596,24 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Incremental compatibility mapping onto existing sub-agent handlers.
     if (subagentType === 'Plan') {
+      const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') ||
+        this.customPrompt?.includes('transcript') ||
+        this.customPrompt?.includes('YouTube');
+
+      if (isYouTubeWorkflow) {
+        return {
+          error: 'Plan subagent is disabled for YouTube transcript workflows.',
+          suggestion: 'Use Task with subagent_type="content-planner" to create the strategic content plan.',
+        };
+      }
       return await this.handleDispatchAgent({
         ...toolCall,
         name: 'dispatch_agent',
       });
+    }
+
+    if (subagentType === 'Explore') {
+      return await this.handleDispatchExploreAgent(toolCall);
     }
 
     if (subagentType === 'content-creator') {
@@ -1146,6 +1634,34 @@ export class GenericAgent extends TypedEventEmitter {
       return await this.handleDispatchVideoAgent({
         ...toolCall,
         name: 'dispatch_video_agent',
+      });
+    }
+
+    if (subagentType === 'transcript-parser') {
+      return await this.handleDispatchTranscriptParser({
+        ...toolCall,
+        name: 'dispatch_transcript_parser',
+      });
+    }
+
+    if (subagentType === 'content-planner') {
+      return await this.handleDispatchPlacementPlanner({
+        ...toolCall,
+        name: 'dispatch_placement_planner',
+      });
+    }
+
+    if (subagentType === 'image-placer') {
+      return await this.handleDispatchImagePlacer({
+        ...toolCall,
+        name: 'dispatch_image_placer',
+      });
+    }
+
+    if (subagentType === 'video-replacer') {
+      return await this.handleDispatchVideoReplacer({
+        ...toolCall,
+        name: 'dispatch_video_replacer',
       });
     }
 
@@ -1231,6 +1747,8 @@ export class GenericAgent extends TypedEventEmitter {
     iterations: number;
     /** Tool call ID for streaming events */
     toolCallId: string;
+    /** Output file path for saving the plan */
+    outputFile?: string;
   } | null = null;
 
   // State for dispatch_content_agent sub-agent (creative content generation)
@@ -1291,6 +1809,54 @@ export class GenericAgent extends TypedEventEmitter {
       motionStrength: number;
     };
     iterations: number;
+    /** Tool call ID for streaming events */
+    toolCallId: string;
+  } | null = null;
+
+  // State for transcript parsing sub-agent
+  private transcriptParserState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentOutput: string;
+    iterations: number;
+    toolCallId: string;
+  } | null = null;
+
+  // State for placement planning sub-agent
+  private placementPlannerState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentOutput: string;
+    iterations: number;
+    toolCallId: string;
+    outputFile?: string;
+  } | null = null;
+
+  // State for image placement sub-agent
+  private imagePlacerState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentOutput: string;
+    iterations: number;
+    toolCallId: string;
+    outputFile?: string;
+  } | null = null;
+
+  // State for video replacement sub-agent
+  private videoReplacerState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentOutput: string;
+    iterations: number;
+    toolCallId: string;
   } | null = null;
 
   /**
@@ -1305,6 +1871,7 @@ export class GenericAgent extends TypedEventEmitter {
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
 
     if (!task) {
       this.currentMode = 'orchestrator';
@@ -1348,6 +1915,8 @@ export class GenericAgent extends TypedEventEmitter {
     // Initialize planning state with imported prompt
     const planningSystemPrompt = buildPlanningPrompt(task, context);
 
+    debugLog(`[GenericAgent] handleDispatchAgent: outputFile=${outputFile || 'undefined'}`);
+
     this.planningState = {
       active: true,
       task,
@@ -1359,10 +1928,144 @@ export class GenericAgent extends TypedEventEmitter {
       currentPlan: '',
       iterations: 0,
       toolCallId: toolCall.id,
+      outputFile,
     };
 
     // Generate the initial plan
     return this.continuePlanningLoop();
+  }
+
+  /**
+   * Handle dispatch_explore_agent tool - spawns a sub-agent for read-only exploration.
+   * Returns a summary of existing project content for the requested task.
+   */
+  private async handleDispatchExploreAgent(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'content';
+
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_explore_agent' };
+    }
+
+    const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
+    const missingRefs: string[] = [];
+
+    if (contextRefs && contextRefs.length > 0) {
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push({
+            variableName: ref,
+            label: stored.label,
+            content: stored.content,
+          });
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} for explore agent (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          const projectFileContent = this.tryResolveFromProjectFiles(ref);
+          if (projectFileContent) {
+            contextParts.push({
+              variableName: ref,
+              label: projectFileContent.label,
+              content: projectFileContent.content,
+            });
+            debugLog(`[GenericAgent] Resolved context_ref ${ref} from project file for explore agent: ${projectFileContent.file}`);
+          } else {
+            debugLog(`[GenericAgent] WARNING: Context reference not found for explore agent: ${ref}`);
+            missingRefs.push(ref);
+          }
+        }
+      }
+    } else {
+      const autoRefs = ['$story', '$plot', '$original_input'];
+      for (const ref of autoRefs) {
+        const projectFileContent = this.tryResolveFromProjectFiles(ref);
+        if (projectFileContent) {
+          contextParts.push({
+            variableName: ref,
+            label: projectFileContent.label,
+            content: projectFileContent.content,
+          });
+          debugLog(`[GenericAgent] Auto-loaded ${ref} for explore agent from project file: ${projectFileContent.file}`);
+        }
+      }
+    }
+
+    let context: string | undefined;
+    if (contextParts.length > 0) {
+      context = contextParts.map(part =>
+        `## ${part.variableName} (${part.label})\n\n${part.content}`
+      ).join('\n\n---\n\n');
+      debugLog(`[GenericAgent] Combined ${contextParts.length} contexts for explore agent (${context.length} chars total)`);
+    } else {
+      debugLog(`[GenericAgent] WARNING: No context available for explore agent`);
+    }
+
+    const exploreSystemPrompt = buildExplorePrompt(task, context);
+    const messages: Message[] = [
+      { role: 'system', content: exploreSystemPrompt },
+      { role: 'user', content: '<request>\nSummarize existing project content for this task.\n</request>' },
+    ];
+
+    try {
+      let content = '';
+
+      for await (const chunk of this.llm.generateStream({
+        messages,
+        temperature: 0.2,
+      })) {
+        if (chunk.content) {
+          content += chunk.content;
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: toolCall.id,
+            chunk: chunk.content,
+            done: false,
+            agentName: this.getEffectiveAgentName(),
+            toolName: 'dispatch_explore_agent',
+          });
+        }
+        if (chunk.done) {
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: toolCall.id,
+            chunk: '',
+            done: true,
+            agentName: this.getEffectiveAgentName(),
+          });
+        }
+      }
+
+      const trimmed = content.trim() || 'No content generated';
+      const result: Record<string, unknown> = {
+        status: 'success',
+        content: trimmed,
+        task,
+      };
+
+      if (missingRefs.length > 0) {
+        result['warning'] = `Could not resolve context_refs: ${missingRefs.join(', ')}`;
+      }
+
+      if (outputFile) {
+        result['warning'] = result['warning']
+          ? `${result['warning']} | Explore subagent is read-only; output_file ignored: ${outputFile}`
+          : `Explore subagent is read-only; output_file ignored: ${outputFile}`;
+      }
+
+      this.currentMode = 'orchestrator';
+      return result;
+    } catch (error) {
+      this.currentMode = 'orchestrator';
+      return {
+        error: `Explore failed: ${String(error)}`,
+        task,
+      };
+    }
   }
 
   /**
@@ -1392,7 +2095,11 @@ export class GenericAgent extends TypedEventEmitter {
     try {
       // Generate or refine the plan with streaming
       let planContent = '';
+      let isFirstChunk = true;
       debugLog(`[GenericAgent] continuePlanningLoop starting generation, toolCallId=${this.planningState.toolCallId}`);
+
+      // If this is a subsequent iteration (after feedback), we need to reset the streaming display
+      const shouldReset = this.planningState.iterations > 1;
 
       for await (const chunk of this.llm.generateStream({
         messages: this.planningState.messages,
@@ -1402,13 +2109,17 @@ export class GenericAgent extends TypedEventEmitter {
           planContent += chunk.content;
           debugLog(`[GenericAgent] tool_streaming emit: chunk=${chunk.content.length} chars, total=${planContent.length} chars`);
           // Emit tool_streaming to show content inside the ToolCallDisplay
+          // On first chunk of a regeneration, include reset flag to clear old content and show display
           this.emit({
             type: 'tool_streaming',
             toolCallId: this.planningState.toolCallId,
             chunk: chunk.content,
             done: false,
             agentName: this.getEffectiveAgentName(),
+            toolName: 'dispatch_agent',
+            reset: shouldReset && isFirstChunk,
           });
+          isFirstChunk = false;
         }
         if (chunk.done) {
           debugLog(`[GenericAgent] tool_streaming DONE: total planContent=${planContent.length} chars`);
@@ -1449,14 +2160,13 @@ export class GenericAgent extends TypedEventEmitter {
           { label: 'Accept plan', description: 'Proceed with this plan and start execution' },
           { label: 'Provide feedback', description: 'Modify the plan with your input' },
         ],
-        autoApproveTimeoutMs: 15000, // 15 seconds countdown for plan approval
       };
+
       debugLog(`[GenericAgent] continuePlanningLoop returning: ${JSON.stringify({
         status: verificationResult.status,
         question: verificationResult.question?.slice(0, 50),
         optionsCount: verificationResult.options.length,
         options: verificationResult.options,
-        autoApproveTimeoutMs: verificationResult.autoApproveTimeoutMs,
       }, null, 2)}`);
       return verificationResult;
     } catch (error) {
@@ -1479,22 +2189,129 @@ export class GenericAgent extends TypedEventEmitter {
       return { error: 'No active planning session' };
     }
 
+    // Normalize user response - trim and remove extra whitespace
+    const normalizedResponse = userResponse.trim().replace(/\s+/g, ' ');
+    debugLog(`[GenericAgent] handlePlanningResponse: normalized="${normalizedResponse}", original="${userResponse}"`);
+
     // Use LLM to classify the user's intent
-    const isApproval = await this.classifyPlanResponse(userResponse);
+    const isApproval = await this.classifyPlanResponse(normalizedResponse);
+    debugLog(`[GenericAgent] handlePlanningResponse: isApproval=${isApproval}`);
 
     if (isApproval) {
-      // Generate plan name and summary using LLM
-      const { name, summary } = await this.generatePlanMetadata(
-        this.planningState.task,
-        this.planningState.currentPlan
-      );
+      // Write plan to output file
+      let fileSaved = false;
+      let normalizedPath: string | undefined;
 
-      // Store full plan in external context file
-      const { variableName } = contextStore.store(
-        this.planningState.currentPlan,
-        name,
-        { source: 'tool', variableBaseName: 'plan' }
-      );
+      // Always ensure outputFile is set - use default if not provided
+      let outputFileToUse = this.planningState.outputFile;
+      if (!outputFileToUse) {
+        // Try to infer from task or use default
+        const taskLower = this.planningState.task.toLowerCase();
+        if (taskLower.includes('plot') && !taskLower.includes('character') && !taskLower.includes('setting')) {
+          outputFileToUse = 'agent/plans/plot-plan.md';
+        } else if (taskLower.includes('story') && !taskLower.includes('character') && !taskLower.includes('setting')) {
+          outputFileToUse = 'agent/plans/story-plan.md';
+        } else if (taskLower.includes('character') || taskLower.includes('setting') || taskLower.includes('characters') || taskLower.includes('settings')) {
+          outputFileToUse = 'agent/plans/characters-settings-plan.md';
+        } else if (taskLower.includes('scene')) {
+          outputFileToUse = 'agent/plans/scenes-plan.md';
+        } else {
+          outputFileToUse = 'agent/plans/plan.md';
+        }
+        debugLog(`[GenericAgent] No outputFile specified, using inferred default: ${outputFileToUse} (task: ${this.planningState.task.substring(0, 100)})`);
+      } else {
+        debugLog(`[GenericAgent] Using provided outputFile: ${outputFileToUse}`);
+      }
+
+      debugLog(`[GenericAgent] handlePlanningResponse: isApproval=true, outputFile=${outputFileToUse}, planLength=${this.planningState.currentPlan.length}`);
+
+      // Normalize path to ensure plans are saved to agent/plans/ directory with hyphenated names
+      normalizedPath = outputFileToUse;
+
+      // If path starts with just "plans/", add "agent/" prefix
+      if (normalizedPath.startsWith('plans/') && !normalizedPath.startsWith('agent/plans/')) {
+        normalizedPath = `agent/${normalizedPath}`;
+      }
+      // If path doesn't start with "agent/", assume it should be in agent/plans/
+      else if (!normalizedPath.startsWith('agent/')) {
+        // If it's just a filename, put it in agent/plans/
+        if (!normalizedPath.includes('/')) {
+          normalizedPath = `agent/plans/${normalizedPath}`;
+        } else {
+          // If it has a path but no agent/ prefix, add it
+          normalizedPath = `agent/${normalizedPath}`;
+        }
+      }
+
+      // For project-level planning, always save to master-plan.md
+      // This is the single source of truth for the entire workflow
+      if (normalizedPath.startsWith('agent/plans/') && !normalizedPath.includes('master-plan')) {
+        // Redirect all plan files to the master plan
+        normalizedPath = 'agent/plans/master-plan.md';
+        debugLog(`[GenericAgent] Redirecting plan to master-plan.md (project-level planning)`);
+      }
+
+      try {
+        const projectDir = path.join(process.cwd(), '.kshana');
+        const filePath = path.join(projectDir, normalizedPath);
+        debugLog(`[GenericAgent] Attempting to save plan to: ${filePath} (normalized from: ${outputFileToUse})`);
+
+        // Ensure parent directory exists
+        const parentDir = path.dirname(filePath);
+        if (!fs.existsSync(parentDir)) {
+          debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, this.planningState.currentPlan, 'utf-8');
+        fileSaved = true;
+        debugLog(`[GenericAgent] Successfully saved plan to ${normalizedPath}`);
+      } catch (err) {
+        debugLog(`[GenericAgent] ERROR: Failed to save plan to ${outputFileToUse}: ${err}`);
+      }
+
+      // Generate plan name and summary using LLM
+      // If this fails, we still want to save the plan, so wrap in try-catch
+      let name: string;
+      let summary: string;
+      try {
+        const metadata = await this.generatePlanMetadata(
+          this.planningState.task,
+          this.planningState.currentPlan
+        );
+        name = metadata.name;
+        summary = metadata.summary;
+      } catch (err) {
+        debugLog(`[GenericAgent] WARNING: Failed to generate plan metadata: ${err}. Using fallback.`);
+        // Fallback metadata if LLM call fails
+        name = this.planningState.task.slice(0, 50);
+        summary = `Plan for: ${this.planningState.task}`;
+      }
+
+      // Store reference to the saved plan file instead of duplicating content
+      // This prevents duplicate storage - plan is already in agent/plans/ file
+      // IMPORTANT: Always store reference in context store, even if metadata generation failed
+      let variableName: string;
+      if (fileSaved && normalizedPath) {
+        // Store reference to the file instead of duplicating content
+        variableName = contextStore.storeReference(
+          normalizedPath,
+          name,
+          undefined,
+          'tool'
+        ).variableName;
+        debugLog(`[GenericAgent] Stored reference to plan file in context store as ${variableName} (file: ${normalizedPath})`);
+      } else {
+        // Fallback: store plan content if file wasn't saved (shouldn't happen in normal flow)
+        variableName = contextStore.store(
+          this.planningState.currentPlan,
+          name,
+          { source: 'tool', variableBaseName: 'plan' }
+        ).variableName;
+        debugLog(`[GenericAgent] Stored plan content in context store as ${variableName} (no file saved)`);
+      }
+
+      debugLog(`[GenericAgent] Stored plan in context store as ${variableName}`);
 
       const result = {
         status: 'approved',
@@ -1503,8 +2320,12 @@ export class GenericAgent extends TypedEventEmitter {
         plan_ref: variableName,
         task: this.planningState.task,
         iterations: this.planningState.iterations,
-        message: `Plan "${name}" approved. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`,
-        next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
+        output_file: normalizedPath || outputFileToUse,
+        file_saved: fileSaved,
+        message: fileSaved
+          ? `Master plan "${name}" approved and saved to ${normalizedPath || outputFileToUse}. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`
+          : `Master plan "${name}" approved. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`,
+        next_steps: 'IMPORTANT: Master plan approved! Call update_project with action "update_plan_stage" and stage "complete" to mark the plan as approved, then start executing phases based on the master plan.',
       };
       this.planningState = null;
       this.currentMode = 'orchestrator';
@@ -1525,6 +2346,38 @@ export class GenericAgent extends TypedEventEmitter {
    * Use LLM to classify whether user response indicates approval or feedback.
    */
   private async classifyPlanResponse(userResponse: string): Promise<boolean> {
+    // Explicitly check for common approval phrases first - FAST PATH
+    // This prevents LLM hallucination and infinite loops where "Accept content" is treated as feedback
+    const lower = userResponse.toLowerCase().trim();
+
+    // Check for exact matches and variations (case-insensitive, trimmed)
+    const approvalExact = [
+      'accept content',
+      'accept plan',
+      'accept',
+      '1',
+      'accept plan and proceed',
+      'proceed with plan',
+      'approve plan',
+      'yes, accept plan',
+      'yes accept plan',
+      'accept and proceed',
+    ];
+    // Check exact match first
+    if (approvalExact.includes(lower)) {
+      return true;
+    }
+    // Check if starts with any approval phrase
+    if (approvalExact.some(phrase => lower.startsWith(phrase))) {
+      return true;
+    }
+
+    // Check for exact matches of common short words
+    const exactApprovalPatterns = ['yes', 'ok', 'okay', 'proceed', 'approve', 'go', 'start', 'continue', 'lgtm', 'y'];
+    if (exactApprovalPatterns.some(p => lower === p)) {
+      return true;
+    }
+
     // Load classification prompt from file
     const classificationPrompt = loadAndRenderMarkdown('system/classification/plan-approval.md', {
       user_response: userResponse,
@@ -1543,9 +2396,15 @@ export class GenericAgent extends TypedEventEmitter {
       return result.includes('APPROVE');
     } catch {
       // On error, fall back to simple pattern matching
-      const lower = userResponse.toLowerCase().trim();
-      const approvalPatterns = ['yes', 'ok', 'okay', 'proceed', 'accept', 'approve', 'go', 'start', 'continue', 'lgtm', 'y', '1'];
-      return approvalPatterns.some(p => lower === p || lower.includes(p));
+
+      // Check for partial matches (but exclude feedback-related phrases)
+      if (lower.includes('feedback') || lower.includes('change') || lower.includes('modify') || lower.includes('revise') || lower.includes('update') || lower.includes('edit')) {
+        return false;
+      }
+
+      // Check for approval keywords
+      const approvalKeywords = ['accept', 'approve', 'proceed', 'yes', 'ok'];
+      return approvalKeywords.some(p => lower.includes(p));
     }
   }
 
@@ -1612,13 +2471,24 @@ Respond in JSON format:
         maxTokens: 200,
       });
 
-      return JSON.parse(response.content ?? '{}');
-    } catch {
-      return {
-        name: `${contentType}: ${task.slice(0, 30)}`,
-        summary: `${contentType} content for: ${task.slice(0, 100)}`,
-      };
+      const parsed = JSON.parse(response.content ?? '{}');
+      // Validate that we got both name and summary
+      if (parsed.name && parsed.summary) {
+        return parsed;
+      }
+      // If JSON is invalid or missing fields, fall through to fallback
+      debugLog(`[GenericAgent] WARNING: Metadata response missing fields: ${JSON.stringify(parsed)}`);
+    } catch (err) {
+      debugLog(`[GenericAgent] ERROR: Failed to generate content metadata: ${err}`);
+      // Re-throw so caller can handle it
+      throw err;
     }
+
+    // Fallback if JSON parsing failed or missing fields
+    return {
+      name: `${contentType}: ${task.slice(0, 30)}`,
+      summary: `${contentType} content for: ${task.slice(0, 100)}`,
+    };
   }
 
   /**
@@ -1638,23 +2508,26 @@ Respond in JSON format:
   /**
    * Try to resolve a context reference from project files.
    * This is a fallback when the context isn't found in the context store.
-   * Supports both variable names ($plan) and direct file paths (plans/story.md).
+   * Supports both variable names ($plan) and direct file paths (script/story.md or plans/story-plan.md).
    */
   private tryResolveFromProjectFiles(ref: string): { label: string; content: string; file: string } | null {
-    // Map of context ref patterns to project file paths
+    // Map of context ref patterns to project file paths (relative to .kshana directory)
     const projectFileMap: Record<string, { file: string; label: string }> = {
-      '$plan': { file: 'plans/story.md', label: 'Story Plan' },
-      '$plot': { file: 'plans/plot.md', label: 'Plot' },
-      '$story': { file: 'plans/story.md', label: 'Story' },
-      '$scenes': { file: 'plans/scenes.md', label: 'Scenes' },
-      '$images': { file: 'plans/images.md', label: 'Images Plan' },
-      '$video': { file: 'plans/video.md', label: 'Video Plan' },
-      '$original_input': { file: 'original_input.md', label: 'Original Input' },
+      '$plan': { file: 'agent/plans/story-plan.md', label: 'Story Plan' },
+      '$plot': { file: 'agent/script/plot.md', label: 'Plot' },
+      '$story': { file: 'agent/script/story.md', label: 'Story' },
+      '$scenes': { file: 'agent/plans/scenes-plan.md', label: 'Scenes Plan' },
+      '$images': { file: 'agent/plans/images.md', label: 'Images Plan' },
+      '$video': { file: 'agent/plans/video.md', label: 'Video Plan' },
+      '$original_input': { file: 'agent/original_input.md', label: 'Original Input' },
+      '$transcript': { file: 'agent/content/transcript.md', label: 'Transcript' },
+      '$content_plan': { file: 'agent/plans/content-plan.md', label: 'Content Plan' },
+      '$image_placements': { file: 'agent/content/image-placements.md', label: 'Image Placement Plan' },
     };
 
     const projectDir = path.join(process.cwd(), '.kshana');
 
-    // Check if ref is a direct file path (e.g., "plans/story.md")
+    // Check if ref is a direct file path (e.g., "script/story.md" or "plans/story-plan.md")
     if (ref.includes('/') || ref.endsWith('.md')) {
       const filePath = path.join(projectDir, ref);
       try {
@@ -1705,6 +2578,46 @@ Respond in JSON format:
     return null;
   }
 
+  private buildContextFromRefs(contextRefs?: string[]): { context?: string; missingRefs: string[] } {
+    const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
+    const missingRefs: string[] = [];
+
+    if (contextRefs && contextRefs.length > 0) {
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push({
+            variableName: ref,
+            label: stored.label,
+            content: stored.content,
+          });
+          debugLog(`[GenericAgent] Resolved context_ref ${ref} (${stored.label}, ${stored.content.length} chars)`);
+        } else {
+          const projectFileContent = this.tryResolveFromProjectFiles(ref);
+          if (projectFileContent) {
+            contextParts.push({
+              variableName: ref,
+              label: projectFileContent.label,
+              content: projectFileContent.content,
+            });
+            debugLog(`[GenericAgent] Resolved context_ref ${ref} from project file: ${projectFileContent.file}`);
+          } else {
+            missingRefs.push(ref);
+          }
+        }
+      }
+    }
+
+    if (contextParts.length === 0) {
+      return { missingRefs, context: undefined };
+    }
+
+    const context = contextParts.map(part =>
+      `## ${part.variableName} (${part.label})\n\n${part.content}`
+    ).join('\n\n---\n\n');
+    return { missingRefs, context };
+  }
+
   /**
    * Handle dispatch_content_agent tool - spawns a sub-agent for creative content generation.
    * Unlike dispatch_agent (for technical planning), this creates actual creative content
@@ -1731,12 +2644,34 @@ Respond in JSON format:
     }
 
     // Validate content_type is one of the allowed types
-    const validContentTypes = ['plot', 'story', 'character', 'setting', 'scene', 'narration'];
+    const validContentTypes = [
+      'plot',
+      'story',
+      'character',
+      'setting',
+      'scene',
+      'narration',
+      'transcript_analysis',
+      'image_placement_plan',
+      'image_prompt',
+    ];
     if (!validContentTypes.includes(contentType)) {
       this.currentMode = 'orchestrator';
       return {
         error: `Invalid content_type "${contentType}". Must be one of: ${validContentTypes.join(', ')}`,
         suggestion: 'Use the appropriate content_type for your task. For example, use "character" for character profiles, "scene" for scene descriptions.',
+      };
+    }
+
+    const taskLower = task.toLowerCase();
+    const isMasterPlanRequest =
+      taskLower.includes('master plan') ||
+      (outputFile ? outputFile.toLowerCase().includes('master-plan.md') : false);
+    if (isMasterPlanRequest && (contentType === 'plot' || contentType === 'story' || contentType === 'narration')) {
+      this.currentMode = 'orchestrator';
+      return {
+        error: 'Master plans must be created by the Plan subagent, not the content-creator.',
+        suggestion: 'Use Task with subagent_type="Plan" and output_file="agent/plans/master-plan.md" in plan mode.',
       };
     }
 
@@ -1756,7 +2691,7 @@ Respond in JSON format:
           debugLog(`[GenericAgent] Resolved context_ref ${ref} for content agent (${stored.label}, ${stored.content.length} chars)`);
         } else {
           // Try to resolve from project files if this looks like a plan reference
-          // e.g., $plan -> plans/plot.md or plans/story.md
+          // e.g., $plan -> script/plot.md or script/story.md
           const projectFileContent = this.tryResolveFromProjectFiles(ref);
           if (projectFileContent) {
             contextParts.push({
@@ -1773,10 +2708,91 @@ Respond in JSON format:
       }
     }
 
+    // FALLBACK: Auto-inject $original_input for plot phase if no context was provided or if wrong context_ref was used
+    // This ensures the content agent always has access to the user's story idea
+    if (contentType === 'plot') {
+      // Check if $original_input is already in contextParts
+      const hasOriginalInput = contextParts.some(part => part.variableName === '$original_input');
+
+      if (!hasOriginalInput) {
+        // First, try to get it from context store
+        let originalInput = contextStore.get('$original_input');
+
+        // If not in context store, try to load from project files
+        if (!originalInput) {
+          const projectFileContent = this.tryResolveFromProjectFiles('$original_input');
+          if (projectFileContent) {
+            // Store it in context store for future use
+            const stored = contextStore.store(
+              projectFileContent.content,
+              projectFileContent.label,
+              { source: 'manual', variableBaseName: 'original_input' }
+            );
+            // Get the stored item to get the full object
+            const storedItem = contextStore.get(stored.variableName);
+            if (storedItem) {
+              originalInput = storedItem;
+              debugLog(`[GenericAgent] Loaded $original_input from project file and stored in context store as ${stored.variableName}`);
+            }
+          }
+        }
+
+        if (originalInput) {
+          contextParts.push({
+            variableName: '$original_input',
+            label: originalInput.label,
+            content: originalInput.content,
+          });
+          if (contextRefs && contextRefs.length > 0) {
+            debugLog(`[GenericAgent] WARNING: Plot phase requested context_refs: ${contextRefs.join(', ')}, but $original_input was missing. AUTO-INJECTED $original_input (${originalInput.content.length} chars)`);
+          } else {
+            debugLog(`[GenericAgent] AUTO-INJECTED $original_input for plot phase (${originalInput.content.length} chars)`);
+          }
+        } else {
+          debugLog(`[GenericAgent] ERROR: No context_refs provided for plot and $original_input not found in context store or project files`);
+        }
+      }
+    }
+
     // Log error for missing refs to help debug
     if (missingRefs.length > 0) {
       debugLog(`[GenericAgent] ERROR: Could not resolve context_refs: ${missingRefs.join(', ')}`);
-      debugLog(`[GenericAgent] Available context variables: ${contextStore.list().map(c => c.variableName).join(', ') || 'none'}`);
+      const availableContexts = contextStore.list().map(c => c.variableName);
+      debugLog(`[GenericAgent] Available context variables: ${availableContexts.join(', ') || 'none'}`);
+
+      // For plot phase, provide helpful error message
+      if (contentType === 'plot' && missingRefs.length > 0) {
+        debugLog(`[GenericAgent] ERROR: Plot generation requires $original_input. Make sure to use context_refs: ["$original_input"] (not $user_input)`);
+      }
+    }
+
+    // Validate that we have context before proceeding (critical for plot phase)
+    if (contextParts.length === 0) {
+      const errorMsg = contentType === 'plot'
+        ? 'Plot generation requires $original_input context, but it was not found. Ensure the project has original_input.md file.'
+        : `Content generation requires context, but none was provided or resolved.`;
+      debugLog(`[GenericAgent] ERROR: ${errorMsg}`);
+      this.currentMode = 'orchestrator';
+      return {
+        error: errorMsg,
+        suggestion: contentType === 'plot'
+          ? 'Use context_refs: ["$original_input"] when calling Task for plot generation. The $original_input is automatically loaded from agent/original_input.md.'
+          : 'Provide valid context_refs when calling Task for content generation.',
+      };
+    }
+
+    // Validate context usage: warn if $original_input is used for characters/settings
+    // The approved $story should be used instead for consistency
+    // NOTE: This is now just a soft warning - execution continues regardless
+    const usesOriginalInput = contextRefs?.some(ref => ref === '$original_input');
+    const isCharacterOrSetting = contentType === 'character' || contentType === 'setting';
+    if (usesOriginalInput && isCharacterOrSetting) {
+      debugLog(`[GenericAgent] WARNING: Using $original_input for ${contentType} creation. Consider using $story instead for approved content.`);
+      // Log warning but continue execution - don't block content generation
+      const storyAvailable = contextStore.get('$story') || this.tryResolveFromProjectFiles('$story');
+      if (storyAvailable) {
+        debugLog(`[GenericAgent] NOTE: $story is available and would be preferred for ${contentType} creation.`);
+      }
     }
 
     // Build combined context with clear sections
@@ -1786,6 +2802,9 @@ Respond in JSON format:
         `## ${part.variableName} (${part.label})\n\n${part.content}`
       ).join('\n\n---\n\n');
       debugLog(`[GenericAgent] Combined ${contextParts.length} contexts for content agent (${context.length} chars total)`);
+      debugLog(`[GenericAgent] Context variables used: ${contextParts.map(p => p.variableName).join(', ')}`);
+    } else {
+      debugLog(`[GenericAgent] WARNING: No context available for content generation`);
     }
 
     // Check if we're resuming an existing content session
@@ -1844,6 +2863,10 @@ Respond in JSON format:
     try {
       // Generate or refine the content with streaming
       let content = '';
+      let isFirstChunk = true;
+
+      // If this is a subsequent iteration (after feedback), we need to reset the streaming display
+      const shouldReset = this.contentState.iterations > 1;
 
       for await (const chunk of this.llm.generateStream({
         messages: this.contentState.messages,
@@ -1852,13 +2875,17 @@ Respond in JSON format:
         if (chunk.content) {
           content += chunk.content;
           // Emit tool_streaming to show content inside the ToolCallDisplay
+          // On first chunk of a regeneration, include reset flag to clear old content and show display
           this.emit({
             type: 'tool_streaming',
             toolCallId: this.contentState.toolCallId,
             chunk: chunk.content,
             done: false,
             agentName: this.getEffectiveAgentName(),
+            toolName: 'dispatch_content_agent',
+            reset: shouldReset && isFirstChunk,
           });
+          isFirstChunk = false;
         }
         if (chunk.done) {
           this.emit({
@@ -1873,6 +2900,36 @@ Respond in JSON format:
 
       this.contentState.currentContent = content.trim() || 'No content generated';
 
+      // Check if the content is actually an error message instead of valid content
+      const contentLower = this.contentState.currentContent.toLowerCase();
+      const isErrorResponse =
+        contentLower.includes('cannot create') ||
+        contentLower.includes('cannot generate') ||
+        contentLower.includes('not mentioned') ||
+        contentLower.includes('not found') ||
+        contentLower.includes('not present') ||
+        contentLower.includes('not available') ||
+        contentLower.includes('does not exist') ||
+        contentLower.includes('unable to') ||
+        (contentLower.includes('error') && contentLower.length < 200) ||
+        (contentLower.startsWith('i cannot') || contentLower.startsWith('i cannot'));
+
+      if (isErrorResponse) {
+        // This is an error message, not actual content
+        const errorMessage = this.contentState.currentContent;
+        const failedTask = this.contentState.task;
+        const contentType = this.contentState.contentType;
+        debugLog(`[GenericAgent] Content Agent returned error message instead of content: ${errorMessage.slice(0, 100)}`);
+        this.contentState = null;
+        this.currentMode = 'orchestrator';
+        return {
+          error: `Content creation failed: ${errorMessage}`,
+          content_type: contentType,
+          task: failedTask,
+          suggestion: 'The requested content could not be generated. Please check if the character/setting exists in the story context.',
+        };
+      }
+
       // Add assistant response to history
       this.contentState.messages.push({
         role: 'assistant',
@@ -1880,6 +2937,10 @@ Respond in JSON format:
       });
 
       // Return status indicating we need user verification
+      // The main agent will pause and wait for user input
+      // NOTE: This uses the same "awaiting_verification" status as planning, which is
+      // handled by the patched executeTool to trigger a question event.
+
       const verificationQuestion = this.contentState.iterations === 1
         ? `I've created the ${this.contentState.contentType} content. Would you like to accept it or provide feedback?`
         : `I've updated the ${this.contentState.contentType} content based on your feedback. Would you like to accept it or provide more feedback?`;
@@ -1889,20 +2950,20 @@ Respond in JSON format:
         content: this.contentState.currentContent,
         content_type: this.contentState.contentType,
         task: this.contentState.task,
-        output_file: this.contentState.outputFile,
         iterations: this.contentState.iterations,
         question: verificationQuestion,
         options: [
-          { label: 'Accept content', description: 'Approve this content and proceed' },
-          { label: 'Provide feedback', description: 'Request changes to the content' },
+          { label: 'Accept content', description: 'Save and proceed to next step' },
+          { label: 'Provide feedback', description: 'Modify the content with your input' },
         ],
-        autoApproveTimeoutMs: 15000, // 15 seconds countdown for content approval
+        // Context for the UI to display (using the content we just generated)
+        prompt: this.contentState.currentContent,
       };
+
       debugLog(`[GenericAgent] continueContentLoop returning: ${JSON.stringify({
         status: verificationResult.status,
-        contentType: verificationResult.content_type,
         question: verificationResult.question?.slice(0, 50),
-        optionsCount: verificationResult.options.length,
+        contentType: verificationResult.content_type,
       }, null, 2)}`);
       return verificationResult;
     } catch (error) {
@@ -1926,44 +2987,242 @@ Respond in JSON format:
     }
 
     // Use LLM to classify the user's intent (reuse same classification logic as planning)
-    const isApproval = await this.classifyPlanResponse(userResponse);
+    // Wrap in try-catch to handle potential API errors
+    let isApproval: boolean;
+    try {
+      isApproval = await this.classifyPlanResponse(userResponse);
+    } catch (err) {
+      debugLog(`[GenericAgent] ERROR: Failed to classify content response: ${err}. Assuming approval based on response pattern.`);
+      // Fallback: check for common approval patterns
+      const lower = userResponse.toLowerCase().trim();
+      isApproval = ['accept', 'yes', 'ok', 'proceed', 'approve', '1'].some(word => lower.includes(word)) &&
+        !['feedback', 'change', 'modify', 'revise'].some(word => lower.includes(word));
+    }
 
     if (isApproval) {
+      const cleanedContent = this.contentState.currentContent
+        .replace(/<think>[\s\S]*?<\/think>/g, '')
+        .trim();
+      if (cleanedContent.length > 0) {
+        this.contentState.currentContent = cleanedContent;
+      }
+
       // Write content to output file if specified
       let fileSaved = false;
-      if (this.contentState.outputFile) {
-        try {
-          const projectDir = path.join(process.cwd(), '.kshana');
-          const filePath = path.join(projectDir, this.contentState.outputFile);
-
-          // Ensure parent directory exists
-          const parentDir = path.dirname(filePath);
-          if (!fs.existsSync(parentDir)) {
-            fs.mkdirSync(parentDir, { recursive: true });
-          }
-
-          fs.writeFileSync(filePath, this.contentState.currentContent, 'utf-8');
-          fileSaved = true;
-          debugLog(`[GenericAgent] Saved content to ${this.contentState.outputFile}`);
-        } catch (err) {
-          debugLog(`[GenericAgent] ERROR: Failed to save content to ${this.contentState.outputFile}: ${err}`);
+      let normalizedContentPath: string | undefined;
+      // Always ensure outputFile is set for plot/story/narration content types
+      let outputFileToUse = this.contentState.outputFile;
+      if (!outputFileToUse) {
+        if (this.contentState.contentType === 'plot' || this.contentState.contentType === 'story' || this.contentState.contentType === 'narration') {
+          // Fallback: use default path from CONTENT_TYPE_OUTPUT_FILES
+          outputFileToUse = CONTENT_TYPE_OUTPUT_FILES[this.contentState.contentType] || `agent/script/${this.contentState.contentType}.md`;
+          debugLog(`[GenericAgent] No outputFile specified, using default: ${outputFileToUse}`);
+        } else if (this.contentState.contentType === 'character' || this.contentState.contentType === 'setting') {
+          // For character/setting, use directory path - name will be extracted from task
+          outputFileToUse = CONTENT_TYPE_OUTPUT_FILES[this.contentState.contentType] || `agent/${this.contentState.contentType}s/`;
+          debugLog(`[GenericAgent] No outputFile specified for ${this.contentState.contentType}, using default directory: ${outputFileToUse}`);
         }
       }
 
-      // Generate content name and summary using LLM (similar to planning)
-      const { name, summary } = await this.generateContentMetadata(
-        this.contentState.task,
-        this.contentState.contentType,
-        this.contentState.currentContent
-      );
+      // Normalize filename separators for character/setting files
+      // Convert underscores to hyphens in the filename to match saveSetting/saveCharacter conventions
+      if (outputFileToUse && (this.contentState.contentType === 'character' || this.contentState.contentType === 'setting')) {
+        // Extract directory and filename parts
+        const lastSlashIndex = outputFileToUse.lastIndexOf('/');
+        if (lastSlashIndex >= 0 && !outputFileToUse.endsWith('/')) {
+          const dir = outputFileToUse.substring(0, lastSlashIndex + 1);
+          const filename = outputFileToUse.substring(lastSlashIndex + 1);
+          // Normalize filename: replace underscores with hyphens
+          const normalizedFilename = filename.replace(/_/g, '-');
+          if (normalizedFilename !== filename) {
+            outputFileToUse = dir + normalizedFilename;
+            debugLog(`[GenericAgent] Normalized filename from ${filename} to ${normalizedFilename}`);
+          }
+        }
+      }
 
-      // Store full content in external context store (NOT in messages)
-      // This prevents context bloat from large content being repeatedly passed
-      const { variableName } = contextStore.store(
-        this.contentState.currentContent,
-        name,
-        { source: 'tool', variableBaseName: this.contentState.contentType }
-      );
+      if (outputFileToUse) {
+        try {
+          // Normalize path to ensure content is saved to correct location
+          // For plot/story/narration, ensure they go to agent/script/
+          normalizedContentPath = outputFileToUse;
+
+          // If path starts with just "plans/", add "agent/" prefix
+          if (normalizedContentPath.startsWith('plans/') && !normalizedContentPath.startsWith('agent/plans/')) {
+            normalizedContentPath = `agent/${normalizedContentPath}`;
+          }
+          // If path doesn't start with "agent/", normalize based on content type
+          else if (!normalizedContentPath.startsWith('agent/')) {
+            // For plot/story/narration content types, put in agent/script/
+            if (this.contentState.contentType === 'plot' || this.contentState.contentType === 'story' || this.contentState.contentType === 'narration') {
+              if (!normalizedContentPath.includes('/')) {
+                normalizedContentPath = `agent/script/${normalizedContentPath}`;
+              } else {
+                normalizedContentPath = `agent/${normalizedContentPath}`;
+              }
+            }
+            // For other content types (character/setting), they already have proper paths from generateContentTool
+          }
+          // If path already starts with "agent/plans/" but is plot/story/narration, redirect to agent/script/
+          else if (normalizedContentPath.startsWith('agent/plans/') &&
+            (this.contentState.contentType === 'plot' || this.contentState.contentType === 'story' || this.contentState.contentType === 'narration')) {
+            const filename = normalizedContentPath.replace('agent/plans/', '');
+            normalizedContentPath = `agent/script/${filename}`;
+          }
+          // If path already starts with "agent/script/", use it as-is (no normalization needed)
+
+          // Check if path ends with '/' (directory path) for character/setting content types
+          // If so, extract name from task and append it
+          if (normalizedContentPath.endsWith('/') &&
+            (this.contentState.contentType === 'character' || this.contentState.contentType === 'setting')) {
+            // Extract name from task (e.g., "Create character profile for: Joy" -> "Joy")
+            // Try to find name after common patterns
+            let name = '';
+            const taskLower = this.contentState.task.toLowerCase();
+            const patterns = [
+              /(?:for|named|called|:)\s+([a-z0-9\s'-]+?)(?:\s|$|\.|,)/i,
+              /(?:create|generate|write).*?(?:character|setting).*?(?:for|named|called|:)\s+([a-z0-9\s'-]+?)(?:\s|$|\.|,)/i,
+            ];
+
+            for (const pattern of patterns) {
+              const match = this.contentState.task.match(pattern);
+              if (match && match[1]) {
+                name = match[1].trim();
+                break;
+              }
+            }
+
+            // Fallback: try to extract from task by splitting on common delimiters
+            if (!name) {
+              const parts = this.contentState.task.split(/[:,\-]/);
+              if (parts.length > 1) {
+                const lastPart = parts[parts.length - 1];
+                if (lastPart) {
+                  name = lastPart.trim();
+                }
+              } else {
+                // Last resort: use first few words after "for" or similar
+                const words = this.contentState.task.split(/\s+/);
+                const forIndex = words.findIndex(w => /^(for|named|called|:)$/i.test(w));
+                if (forIndex >= 0 && forIndex < words.length - 1) {
+                  name = words.slice(forIndex + 1, forIndex + 4).join(' ').trim();
+                }
+              }
+            }
+
+            // If still no name, use a fallback based on content type
+            if (!name || name.length === 0) {
+              name = `unnamed-${this.contentState.contentType}`;
+            }
+
+            // Create safe filename (same logic as in generateContentTool)
+            const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            normalizedContentPath = `${normalizedContentPath}${safeName}.md`;
+            debugLog(`[GenericAgent] Extracted name "${name}" from task, using filename: ${safeName}.md`);
+          }
+
+          const projectDir = path.join(process.cwd(), '.kshana');
+          const filePath = path.join(projectDir, normalizedContentPath);
+          debugLog(`[GenericAgent] Attempting to save content to: ${filePath} (normalized from: ${outputFileToUse}, contentType: ${this.contentState.contentType})`);
+
+          // Validate content before saving (especially for character/setting)
+          const content = this.contentState.currentContent.trim();
+          const isCharacterOrSetting = this.contentState.contentType === 'character' || this.contentState.contentType === 'setting';
+
+          if (isCharacterOrSetting) {
+            // Check if content is truncated or incomplete
+            const isVariableRef = content.startsWith('$') || /^\$\w+/.test(content);
+            const isEmpty = content.length < 100; // Very short content likely incomplete
+            // Check if there's actual content after headers (not just headers)
+            const hasActualContent = /##\s+\w+[\s\S]{30,}/.test(content) || content.split('\n').filter(line => line.trim() && !line.trim().startsWith('#')).length > 3;
+
+            // Check if file already exists with content - don't overwrite with truncated content
+            if (fs.existsSync(filePath)) {
+              const existingContent = fs.readFileSync(filePath, 'utf-8').trim();
+              if (existingContent.length > content.length && existingContent.length > 100) {
+                debugLog(`[GenericAgent] WARNING: Existing file has more content (${existingContent.length} vs ${content.length} bytes). Skipping save to prevent truncation.`);
+                fileSaved = false;
+              } else if (isVariableRef || isEmpty || !hasActualContent) {
+                debugLog(`[GenericAgent] WARNING: Content appears truncated or incomplete (variableRef: ${isVariableRef}, empty: ${isEmpty}, hasActualContent: ${hasActualContent}). Skipping save.`);
+                fileSaved = false;
+              } else {
+                // Content looks good, proceed with save
+                fileSaved = true;
+              }
+            } else if (isVariableRef || isEmpty || !hasActualContent) {
+              debugLog(`[GenericAgent] WARNING: Content appears truncated or incomplete (variableRef: ${isVariableRef}, empty: ${isEmpty}, hasActualContent: ${hasActualContent}). Skipping save.`);
+              fileSaved = false;
+            } else {
+              // Content looks good, proceed with save
+              fileSaved = true;
+            }
+          } else {
+            // For other content types, always save
+            fileSaved = true;
+          }
+
+          if (fileSaved) {
+            // Ensure parent directory exists
+            const parentDir = path.dirname(filePath);
+            if (!fs.existsSync(parentDir)) {
+              debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+              fs.mkdirSync(parentDir, { recursive: true });
+            }
+
+            fs.writeFileSync(filePath, content, 'utf-8');
+            debugLog(`[GenericAgent] Successfully saved content to ${normalizedContentPath} (${content.length} bytes)`);
+          } else {
+            debugLog(`[GenericAgent] Skipped saving truncated/incomplete content to ${normalizedContentPath}`);
+          }
+        } catch (err) {
+          debugLog(`[GenericAgent] ERROR: Failed to save content to ${outputFileToUse}: ${err}`);
+          console.error(`[GenericAgent] File save error:`, err);
+        }
+      } else {
+        debugLog(`[GenericAgent] WARNING: No outputFile specified for ${this.contentState.contentType}, content will not be saved to disk`);
+      }
+
+      // Generate content name and summary using LLM (similar to planning)
+      // If this fails, we still want to save the content, so wrap in try-catch
+      let name: string;
+      let summary: string;
+      try {
+        const metadata = await this.generateContentMetadata(
+          this.contentState.task,
+          this.contentState.contentType,
+          this.contentState.currentContent
+        );
+        name = metadata.name;
+        summary = metadata.summary;
+      } catch (err) {
+        debugLog(`[GenericAgent] WARNING: Failed to generate content metadata: ${err}. Using fallback.`);
+        // Fallback metadata if LLM call fails
+        name = `${this.contentState.contentType}: ${this.contentState.task.slice(0, 30)}`;
+        summary = `${this.contentState.contentType} content for: ${this.contentState.task.slice(0, 100)}`;
+      }
+
+      // Store reference to the saved file instead of duplicating content
+      // This prevents duplicate storage - content is already in agent/ files
+      // IMPORTANT: Always store reference in context store, even if metadata generation failed
+      let variableName: string;
+      if (fileSaved && normalizedContentPath) {
+        // Store reference to the file instead of duplicating content
+        variableName = contextStore.storeReference(
+          normalizedContentPath,
+          name,
+          undefined,
+          'tool'
+        ).variableName;
+        debugLog(`[GenericAgent] Stored reference to ${this.contentState.contentType} file in context store as ${variableName} (file: ${normalizedContentPath})`);
+      } else {
+        // Fallback: store content if file wasn't saved (shouldn't happen in normal flow)
+        variableName = contextStore.store(
+          this.contentState.currentContent,
+          name,
+          { source: 'tool', variableBaseName: this.contentState.contentType }
+        ).variableName;
+        debugLog(`[GenericAgent] Stored ${this.contentState.contentType} content in context store as ${variableName} (no file saved)`);
+      }
 
       const result = {
         status: 'approved',
@@ -1972,13 +3231,13 @@ Respond in JSON format:
         content_ref: variableName,
         content_type: this.contentState.contentType,
         task: this.contentState.task,
-        output_file: this.contentState.outputFile,
+        output_file: normalizedContentPath || this.contentState.outputFile,
         file_saved: fileSaved,
         iterations: this.contentState.iterations,
         message: fileSaved
-          ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`
+          ? `${this.contentState.contentType} content "${name}" approved and saved to ${normalizedContentPath || this.contentState.outputFile}. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`
           : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`,
-        next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
+        next_steps: 'IMPORTANT: Now update the project state - call update_project with action "update_phase" to mark the current phase as "completed", then use "transition_phase" to move to the next phase.',
       };
       this.contentState = null;
       // Reset mode back to orchestrator
@@ -1994,6 +3253,455 @@ Respond in JSON format:
 
     // Continue the content loop
     return this.continueContentLoop();
+  }
+
+  private async runOneShotSubagent(
+    state: {
+      task: string;
+      messages: Message[];
+      toolCallId: string;
+      iterations: number;
+      currentOutput: string;
+    },
+    toolName: string,
+    temperature: number
+  ): Promise<unknown> {
+    let content = '';
+    let isFirstChunk = true;
+
+    for await (const chunk of this.llm.generateStream({
+      messages: state.messages,
+      temperature,
+    })) {
+      if (chunk.content) {
+        content += chunk.content;
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId: state.toolCallId,
+          chunk: chunk.content,
+          done: false,
+          agentName: this.getEffectiveAgentName(),
+          toolName,
+          reset: isFirstChunk,
+        });
+        isFirstChunk = false;
+      }
+      if (chunk.done) {
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId: state.toolCallId,
+          chunk: '',
+          done: true,
+          agentName: this.getEffectiveAgentName(),
+        });
+      }
+    }
+
+    state.currentOutput = content.trim() || 'No output generated';
+    this.currentMode = 'orchestrator';
+
+    return {
+      status: 'completed',
+      output: state.currentOutput,
+      task: state.task,
+      iterations: state.iterations,
+    };
+  }
+
+  private async handleDispatchTranscriptParser(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'content';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_transcript_parser' };
+    }
+
+    if (this.transcriptParserState?.active) {
+      return { error: 'Transcript parsing already in progress' };
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(contextRefs);
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] WARNING: Missing context_refs for transcript parser: ${missingRefs.join(', ')}`);
+    }
+
+    // Build system prompt with tools available
+    const systemPrompt = buildTranscriptParserPrompt(context);
+    
+    // Create a temporary tool registry with parse_srt tool for the subagent
+    const subagentTools = new Map<string, ToolDefinition>();
+    const parseSrtTool = this.tools.get('parse_srt');
+    if (parseSrtTool) {
+      subagentTools.set('parse_srt', parseSrtTool);
+    }
+    
+    const fullSystemPrompt = buildSystemMessage(true, subagentTools, systemPrompt);
+
+    this.transcriptParserState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: fullSystemPrompt },
+        { role: 'user', content: `<request>\n${task}\n</request>` },
+      ],
+      currentOutput: '',
+      iterations: 1,
+      toolCallId: toolCall.id,
+    };
+
+    // Run subagent with tool calling support
+    const result = await this.runSubagentWithTools(this.transcriptParserState, 'dispatch_transcript_parser', 0.3, subagentTools);
+    this.transcriptParserState = null;
+    return result;
+  }
+
+  /**
+   * Run a subagent that supports tool calls (unlike runOneShotSubagent which only streams text).
+   */
+  private async runSubagentWithTools(
+    state: {
+      task: string;
+      messages: Message[];
+      toolCallId: string;
+      iterations: number;
+      currentOutput: string;
+    },
+    toolName: string,
+    temperature: number,
+    tools: Map<string, ToolDefinition>
+  ): Promise<unknown> {
+    const maxIterations = 5;
+    let iterations = 0;
+
+    while (iterations < maxIterations) {
+      iterations++;
+      
+      // Generate response with tool calling support
+      const response = await this.llm.generate({
+        messages: state.messages,
+        temperature,
+        tools: Array.from(tools.values()),
+      });
+
+      // Add assistant message to history
+      state.messages.push({
+        role: 'assistant',
+        content: response.content || '',
+        toolCalls: response.toolCalls,
+      });
+
+      // If no tool calls, we're done - return the output
+      if (!response.toolCalls || response.toolCalls.length === 0) {
+        state.currentOutput = response.content?.trim() || 'No output generated';
+        this.currentMode = 'orchestrator';
+        return {
+          status: 'completed',
+          output: state.currentOutput,
+          task: state.task,
+          iterations: iterations,
+        };
+      }
+
+      // Execute tool calls
+      for (const toolCall of response.toolCalls) {
+        const tool = tools.get(toolCall.name);
+        if (!tool?.handler) {
+          state.messages.push({
+            role: 'tool',
+            toolCallId: toolCall.id,
+            content: JSON.stringify({ error: `Unknown tool: ${toolCall.name}` }),
+          });
+          continue;
+        }
+
+        try {
+          const toolResult = await Promise.resolve(tool.handler(toolCall.arguments));
+          state.messages.push({
+            role: 'tool',
+            toolCallId: toolCall.id,
+            content: typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult),
+          });
+        } catch (error) {
+          state.messages.push({
+            role: 'tool',
+            toolCallId: toolCall.id,
+            content: JSON.stringify({ error: String(error) }),
+          });
+        }
+      }
+    }
+
+    // Max iterations reached
+    state.currentOutput = state.messages[state.messages.length - 1]?.content || 'Max iterations reached';
+    this.currentMode = 'orchestrator';
+    return {
+      status: 'completed',
+      output: state.currentOutput,
+      task: state.task,
+      iterations: iterations,
+    };
+  }
+
+  private async handleDispatchPlacementPlanner(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'planning';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_placement_planner' };
+    }
+
+    if (this.placementPlannerState?.active) {
+      return { error: 'Placement planning already in progress' };
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(contextRefs);
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] WARNING: Missing context_refs for placement planner: ${missingRefs.join(', ')}`);
+    }
+
+      // Default output file if not provided
+      let outputFileToUse = outputFile || 'agent/plans/content-plan.md';
+      // If orchestrator mistakenly passes image-placements path to content-planner, fix it
+      if (outputFileToUse.includes('image-placement')) {
+        debugLog('[GenericAgent] WARNING: content-planner received image-placements path. Overriding to agent/plans/content-plan.md');
+        outputFileToUse = 'agent/plans/content-plan.md';
+      }
+      debugLog(`[GenericAgent] handleDispatchPlacementPlanner: outputFile=${outputFileToUse}`);
+
+    const systemPrompt = buildPlacementPlannerPrompt(context);
+    this.placementPlannerState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `<request>\n${task}\n</request>` },
+      ],
+      currentOutput: '',
+      iterations: 1,
+      toolCallId: toolCall.id,
+      outputFile: outputFileToUse,
+    };
+
+    const result = await this.runOneShotSubagent(this.placementPlannerState, 'dispatch_placement_planner', 0.4);
+    
+    // Save the output to file if we have output
+    const resultObj = result as Record<string, unknown>;
+    if (resultObj['status'] === 'completed' && resultObj['output']) {
+      const output = resultObj['output'] as string;
+      let fileSaved = false;
+      let normalizedPath: string | undefined;
+
+      // Normalize path
+      normalizedPath = outputFileToUse;
+      if (normalizedPath.startsWith('plans/') && !normalizedPath.startsWith('agent/plans/')) {
+        normalizedPath = `agent/${normalizedPath}`;
+      } else if (!normalizedPath.startsWith('agent/')) {
+        if (!normalizedPath.includes('/')) {
+          normalizedPath = `agent/plans/${normalizedPath}`;
+        } else {
+          normalizedPath = `agent/${normalizedPath}`;
+        }
+      }
+
+      try {
+        const projectDir = path.join(process.cwd(), '.kshana');
+        const filePath = path.join(projectDir, normalizedPath);
+        debugLog(`[GenericAgent] Attempting to save content plan to: ${filePath} (normalized from: ${outputFileToUse})`);
+
+        // Ensure parent directory exists
+        const parentDir = path.dirname(filePath);
+        if (!fs.existsSync(parentDir)) {
+          debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, output, 'utf-8');
+        fileSaved = true;
+        debugLog(`[GenericAgent] Successfully saved content plan to ${normalizedPath}`);
+
+        // Store reference in context store
+        const variableName = contextStore.storeReference(
+          normalizedPath,
+          'Content Plan',
+          undefined,
+          'tool'
+        ).variableName;
+        debugLog(`[GenericAgent] Stored reference to content plan file in context store as ${variableName}`);
+
+        // Update result with file info
+        resultObj['output_file'] = normalizedPath;
+        resultObj['file_saved'] = fileSaved;
+        resultObj['content_plan_ref'] = variableName;
+      } catch (err) {
+        debugLog(`[GenericAgent] ERROR: Failed to save content plan to ${outputFileToUse}: ${err}`);
+        resultObj['file_saved'] = false;
+        resultObj['error'] = `Failed to save content plan: ${String(err)}`;
+      }
+    }
+
+    this.placementPlannerState = null;
+    return result;
+  }
+
+  private async handleDispatchImagePlacer(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'content';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_image_placer' };
+    }
+
+    if (this.imagePlacerState?.active) {
+      return { error: 'Image placement already in progress' };
+    }
+
+    // Image-placer ALWAYS needs $transcript - ensure it's included even if not passed
+    const requiredRefs = contextRefs || [];
+    if (!requiredRefs.includes('$transcript')) {
+      debugLog(`[GenericAgent] Auto-adding $transcript to context_refs for image-placer (required but not provided)`);
+      requiredRefs.push('$transcript');
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(requiredRefs);
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] WARNING: Missing context_refs for image placer: ${missingRefs.join(', ')}`);
+    }
+
+      // Default output file if not provided
+      let outputFileToUse = outputFile || 'agent/content/image-placements.md';
+      // If orchestrator mistakenly passes content-plan path to image-placer, fix it
+      if (outputFileToUse.includes('content-plan')) {
+        debugLog('[GenericAgent] WARNING: image-placer received content-plan path. Overriding to agent/content/image-placements.md');
+        outputFileToUse = 'agent/content/image-placements.md';
+      }
+      debugLog(`[GenericAgent] handleDispatchImagePlacer: outputFile=${outputFileToUse}`);
+
+    const systemPrompt = buildImagePlacerPrompt(context);
+    this.imagePlacerState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `<request>\n${task}\n</request>` },
+      ],
+      currentOutput: '',
+      iterations: 1,
+      toolCallId: toolCall.id,
+      outputFile: outputFileToUse,
+    };
+
+    const result = await this.runOneShotSubagent(this.imagePlacerState, 'dispatch_image_placer', 0.4);
+    
+    // Save the output to file if we have output
+    const resultObj = result as Record<string, unknown>;
+    if (resultObj['status'] === 'completed' && resultObj['output']) {
+      const output = resultObj['output'] as string;
+      let fileSaved = false;
+      let normalizedPath: string | undefined;
+
+      // Normalize path
+      normalizedPath = outputFileToUse;
+      if (normalizedPath.startsWith('content/') && !normalizedPath.startsWith('agent/content/')) {
+        normalizedPath = `agent/${normalizedPath}`;
+      } else if (!normalizedPath.startsWith('agent/')) {
+        if (!normalizedPath.includes('/')) {
+          normalizedPath = `agent/content/${normalizedPath}`;
+        } else {
+          normalizedPath = `agent/${normalizedPath}`;
+        }
+      }
+
+      try {
+        const projectDir = path.join(process.cwd(), '.kshana');
+        const filePath = path.join(projectDir, normalizedPath);
+        debugLog(`[GenericAgent] Attempting to save image placement plan to: ${filePath} (normalized from: ${outputFileToUse})`);
+
+        // Ensure parent directory exists
+        const parentDir = path.dirname(filePath);
+        if (!fs.existsSync(parentDir)) {
+          debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, output, 'utf-8');
+        fileSaved = true;
+        debugLog(`[GenericAgent] Successfully saved image placement plan to ${normalizedPath}`);
+
+        // Store reference in context store
+        const variableName = contextStore.storeReference(
+          normalizedPath,
+          'Image Placement Plan',
+          undefined,
+          'tool'
+        ).variableName;
+        debugLog(`[GenericAgent] Stored reference to image placement plan file in context store as ${variableName}`);
+
+        // Update result with file info
+        resultObj['output_file'] = normalizedPath;
+        resultObj['file_saved'] = fileSaved;
+        resultObj['image_placements_ref'] = variableName;
+      } catch (err) {
+        debugLog(`[GenericAgent] ERROR: Failed to save image placement plan to ${outputFileToUse}: ${err}`);
+        resultObj['file_saved'] = false;
+        resultObj['error'] = `Failed to save image placement plan: ${String(err)}`;
+      }
+    }
+
+    this.imagePlacerState = null;
+    return result;
+  }
+
+  private async handleDispatchVideoReplacer(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'video';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_video_replacer' };
+    }
+
+    if (this.videoReplacerState?.active) {
+      return { error: 'Video replacement already in progress' };
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(contextRefs);
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] WARNING: Missing context_refs for video replacer: ${missingRefs.join(', ')}`);
+    }
+
+    const systemPrompt = buildVideoReplacerPrompt(context);
+    this.videoReplacerState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `<request>\n${task}\n</request>` },
+      ],
+      currentOutput: '',
+      iterations: 1,
+      toolCallId: toolCall.id,
+    };
+
+    const result = await this.runOneShotSubagent(this.videoReplacerState, 'dispatch_video_replacer', 0.3);
+    this.videoReplacerState = null;
+    return result;
   }
 
   /**
@@ -2155,6 +3863,10 @@ Respond in JSON format:
     try {
       // Generate or refine the prompt with streaming
       let promptContent = '';
+      let isFirstChunk = true;
+
+      // If this is a subsequent iteration (after feedback), we need to reset the streaming display
+      const shouldReset = this.imageGenState.iterations > 1;
 
       for await (const chunk of this.llm.generateStream({
         messages: this.imageGenState.messages,
@@ -2163,13 +3875,17 @@ Respond in JSON format:
         if (chunk.content) {
           promptContent += chunk.content;
           // Emit tool_streaming to show content inside the ToolCallDisplay
+          // On first chunk of a regeneration, include reset flag to clear old content and show display
           this.emit({
             type: 'tool_streaming',
             toolCallId: this.imageGenState.toolCallId,
             chunk: chunk.content,
             done: false,
             agentName: this.getEffectiveAgentName(),
+            toolName: 'dispatch_image_agent',
+            reset: shouldReset && isFirstChunk,
           });
+          isFirstChunk = false;
         }
         if (chunk.done) {
           this.emit({
@@ -2516,6 +4232,11 @@ Respond in JSON format:
     const contextRefs = args['context_refs'] as string[] | undefined;
     const duration = (args['duration'] as number) ?? 4;
 
+    // Validate required parameters
+    if (!sceneImageArtifactId) {
+      return { error: 'scene_image_artifact_id is required for video generation' };
+    }
+
     if (!task) {
       this.currentMode = 'orchestrator';
       return { error: 'No task provided for dispatch_video_agent' };
@@ -2562,12 +4283,12 @@ Respond in JSON format:
       return { error: 'Video generation already in progress' };
     }
 
-    // Initialize video gen state
+    // Initialize video gen state (sceneImageArtifactId is guaranteed to be defined after validation above)
     this.videoGenState = {
       active: true,
       task,
       sceneNumber,
-      sceneImageArtifactId,
+      sceneImageArtifactId: sceneImageArtifactId,
       motionDescription,
       context,
       messages: [],
@@ -2577,6 +4298,7 @@ Respond in JSON format:
         motionStrength: 0.7,
       },
       iterations: 0,
+      toolCallId: toolCall.id,
     };
 
     // Build a summary for user approval
@@ -2588,6 +4310,10 @@ Respond in JSON format:
 - Task: ${task}`;
 
     // Return status indicating we need user approval
+    // videoGenState is guaranteed to be set after initialization above
+    if (!this.videoGenState) {
+      return { error: 'Video generation state not initialized' };
+    }
     return {
       status: 'awaiting_approval',
       params: this.videoGenState.currentParams,
@@ -3086,6 +4812,13 @@ Respond in JSON format:
     if (result.wasCompressed) {
       this.messages = result.messages;
       debugLog(`[GenericAgent] Compressed ${result.removedCount} messages. New count: ${this.messages.length}`);
+
+      // Log compression with phase context
+      phaseLogger.info('GenericAgent', 'context_compression', 'Conversation history compressed', {
+        removedCount: result.removedCount,
+        newMessageCount: this.messages.length,
+        maxContextTokens: this.maxContextTokens,
+      });
 
       // Emit event so UI can show compression occurred
       this.emit({

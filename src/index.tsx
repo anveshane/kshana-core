@@ -7,6 +7,7 @@ import React from 'react';
 import { render } from 'ink';
 import { App } from './App.js';
 import { getLLMConfig, getLLMProvider, validateLLMConfig, resetLLMLogger, type LLMClientConfig } from './core/llm/index.js';
+import { resetPhaseLogger } from './utils/phaseLogger.js';
 
 // Task type for agent specialization
 type TaskType = 'generic' | 'video';
@@ -215,11 +216,18 @@ if (server) {
   });
 } else {
   // CLI mode - clear screen and render the React Ink app
+  // 
+  // Execution Context: CLI
+  // The CLI manages .kshana/agent/* in its own project directory (where kshana-ink is installed).
+  // All project operations use process.cwd() as the default basePath, which is the CLI's directory.
+  // This allows the CLI to maintain its own agent workspace for development/testing.
+  
   // Clear the screen
   process.stdout.write('\x1B[2J\x1B[0f');
 
-  // Reset LLM logger (creates fresh log file for this session)
+  // Reset loggers (creates fresh log files for this session)
   resetLLMLogger();
+  resetPhaseLogger();
 
   // Render with fullscreen mode enabled
   render(<App llmConfig={llmConfig} initialTask={task} taskType={taskType} />);

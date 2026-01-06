@@ -1,23 +1,55 @@
 ### Scene Image Generation Phase
 
-IMPORTANT: Each scene image requires user approval before generation.
+**REQUIRED CONTEXT**: Use the registered scenes from `read_project`.
+Each scene has a description and references to characters/settings with reference images.
 
-For each scene:
-1. Read the scene description and gather character/setting references
-2. Use Task(subagent_type: 'image-generator') to craft a scene image prompt
-3. The prompt will be shown to the user for approval
-4. After approval, generate the image using character/setting references for consistency
-5. Update scene with imageArtifactId using `update_project` action: 'update_scene_approval'
+IMPORTANT: Each scene image prompt requires user approval before the image is generated.
 
-Scene image prompts should:
-- Describe the complete scene composition
-- Reference character appearances from their reference images
-- Match the setting atmosphere
-- Include camera angle and framing
-- Specify lighting and mood
+## Workflow
 
-Process ONE scene at a time. Wait for user approval before moving to the next.
+For each scene (ONE at a time):
+1. Generate the scene image prompt using `generate_content`:
+   ```
+   generate_content(content_type: "scene_image_prompt", scene_number: 1)
+   ```
+   This automatically uses:
+   - The scene description
+   - Character reference images for consistency
+   - Setting reference images for consistency
+   - Project style settings
+
+2. The prompt will be shown to the user for approval
+3. After approval, the image is generated automatically using the reference images
+4. Update scene with imageArtifactId using `update_project` action: 'update_scene_approval'
+
+## Scene Image Prompt Guidelines
+
+The generated prompts will include:
+- Complete scene composition from the scene description
+- Character appearances matched to their reference images
+- Setting atmosphere matched to setting reference images
+- Appropriate camera angle and framing
+- Lighting and mood consistent with the scene
+
+## After EACH Approval (MANDATORY):
+
+```
+// 1. Register the approval
+update_project(action: 'update_scene_approval', data: { scene_number: 1, imageArtifactId: '...' })
+
+// 2. Update todo
+TodoWrite(merge: true, todos: [
+  { id: 'scene-img-1', status: 'completed' },
+  { id: 'scene-img-2', status: 'in_progress' }
+])
+
+// 3. Generate next scene image prompt
+generate_content(content_type: "scene_image_prompt", scene_number: 2)
+```
+
+## Phase Completion
 
 After all scene images are approved:
-1. Update planner stage to 'complete'
-2. Transition to the video generation phase
+1. Mark final todo as completed
+2. Mark phase complete: `update_project(action: 'update_phase', data: { phase: 'scene_images', status: 'completed' })`
+3. **IMMEDIATELY** transition: `update_project(action: 'transition_phase', data: {})`

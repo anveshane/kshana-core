@@ -1,0 +1,196 @@
+{
+  "name": "Characters & Settings Phase - Individual File Creation",
+  "description": "Tests that characters and settings are created individually using generate_content. Each character/setting gets its own file automatically.",
+  "promptPath": "video/workflow.md",
+  "temperature": 0,
+  "maxTokens": 1500,
+  "systemPrompt": "You are a video generation orchestrator. You must process characters and settings ONE AT A TIME using generate_content. Each character and setting is saved to its own file automatically.",
+  "tools": [
+    {
+      "name": "generate_content",
+      "description": "Generate creative content with automatic context injection and file saving",
+      "parameters": {
+        "content_type": {
+          "type": "string",
+          "description": "Type of content: character, setting"
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the character or setting"
+        },
+        "task_description": {
+          "type": "string",
+          "description": "Optional additional instructions"
+        }
+      }
+    },
+    {
+      "name": "TodoWrite",
+      "description": "Create or update the todo list",
+      "parameters": {
+        "merge": {
+          "type": "boolean",
+          "description": "Whether to merge with existing todos"
+        },
+        "todos": {
+          "type": "array",
+          "description": "Array of todo items"
+        }
+      }
+    },
+    {
+      "name": "read_project",
+      "description": "Read the current project state",
+      "parameters": {}
+    },
+    {
+      "name": "update_project",
+      "description": "Update the project state",
+      "parameters": {
+        "action": { "type": "string" },
+        "data": { "type": "object" }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "Should create individual character using generate_content with name",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Epic Fantasy",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create detailed character profile for Kira. Use generate_content(content_type: \"character\", name: \"Kira\"). Process ONE character at a time.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "character" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "name", "value": "Kira" }
+      ],
+      "tags": ["character", "individual-file", "output-path"]
+    },
+    {
+      "name": "Should create individual setting using generate_content with name",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Epic Fantasy",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create detailed setting description for the Ancient Forest. Use generate_content(content_type: \"setting\", name: \"Ancient Forest\"). Process ONE setting at a time.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "setting" },
+        { "type": "tool_arg_contains", "toolName": "generate_content", "argPath": "name", "value": "Forest" }
+      ],
+      "tags": ["setting", "individual-file", "output-path"]
+    },
+    {
+      "name": "Should use generate_content for character (not bundled file)",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create character profile for Daniel. Use generate_content - it automatically saves to individual file characters/daniel.md.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "character" }
+      ],
+      "tags": ["character", "negative", "no-bundled-file"]
+    },
+    {
+      "name": "Should use generate_content for setting (not bundled file)",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create setting description for the Train Station. Use generate_content - it automatically saves to individual file settings/train_station.md.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "setting" }
+      ],
+      "tags": ["setting", "negative", "no-bundled-file"]
+    },
+    {
+      "name": "generate_content should be for single character, not multiple",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Create detailed character profile for Sarah. Use generate_content(content_type: \"character\", name: \"Sarah\"). This is one character only.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "name", "value": "Sarah" }
+      ],
+      "tags": ["character", "single-item", "no-batch"]
+    },
+    {
+      "name": "Should create TodoWrite with individual items before processing",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Fantasy Adventure",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Story has characters: Alice, Bob, Charlie. Create a todo for each character, then process them one at a time. Start by creating the TodoWrite.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "TodoWrite" },
+        { "type": "tool_arg_equals", "toolName": "TodoWrite", "argPath": "merge", "value": false }
+      ],
+      "tags": ["todo", "planning", "individual-items"]
+    },
+    {
+      "name": "Should use generate_content with character name (context auto-injected)",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story, $plot, $original_input",
+        "phase_instructions": "Create character profile for Elena. Use generate_content(content_type: \"character\", name: \"Elena\"). Context is automatically injected.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "character" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "name", "value": "Elena" }
+      ],
+      "tags": ["character", "context-source", "story-source"]
+    },
+    {
+      "name": "Should use generate_content with setting name (context auto-injected)",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story, $plot, $original_input",
+        "phase_instructions": "Create setting description for the Castle. Use generate_content(content_type: \"setting\", name: \"Castle\"). Context is automatically injected.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "setting" }
+      ],
+      "tags": ["setting", "context-source", "story-source"]
+    }
+  ]
+}

@@ -1,0 +1,206 @@
+{
+  "name": "Context Usage Across All Phases",
+  "description": "Tests that the orchestrator uses generate_content for content creation phases (which automatically handles context injection) and read_project for image/video phases.",
+  "promptPath": "video/workflow.md",
+  "temperature": 0,
+  "maxTokens": 1000,
+  "systemPrompt": "You are a video generation orchestrator. You must use generate_content to create content. It automatically handles context injection. Always follow the phase instructions exactly.",
+  "tools": [
+    {
+      "name": "generate_content",
+      "description": "Generate creative content with automatic context injection",
+      "parameters": {
+        "content_type": {
+          "type": "string",
+          "description": "Type of content: plot, story, character, setting, scene, narration"
+        },
+        "name": {
+          "type": "string",
+          "description": "For character/setting: the name of the character or setting"
+        },
+        "task_description": {
+          "type": "string",
+          "description": "Optional additional instructions"
+        }
+      }
+    },
+    {
+      "name": "Task",
+      "description": "Dispatch a subagent (used for images/videos, not content)",
+      "parameters": {
+        "subagent_type": {
+          "type": "string",
+          "description": "Type of subagent: image-generator, video-assembler"
+        },
+        "task": {
+          "type": "string",
+          "description": "The task description"
+        }
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Read a file from the project",
+      "parameters": {
+        "file_path": {
+          "type": "string",
+          "description": "Path to the file"
+        }
+      }
+    },
+    {
+      "name": "read_project",
+      "description": "Read the current project state",
+      "parameters": {}
+    },
+    {
+      "name": "update_project",
+      "description": "Update the project state",
+      "parameters": {
+        "action": {
+          "type": "string",
+          "description": "Action to perform"
+        },
+        "data": {
+          "type": "object",
+          "description": "Action data"
+        }
+      }
+    }
+  ],
+  "cases": [
+    {
+      "name": "PLOT phase: should use generate_content",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "plot",
+        "phase_display_name": "Plot Development",
+        "loaded_contexts": "$original_input",
+        "phase_instructions": "Call generate_content(content_type: \"plot\") to create the plot. It automatically uses $original_input.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "plot" }
+      ],
+      "tags": ["context", "plot", "original-input"]
+    },
+    {
+      "name": "STORY phase: should use generate_content",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "story",
+        "phase_display_name": "Story Development",
+        "loaded_contexts": "$plot, $original_input",
+        "phase_instructions": "Call generate_content(content_type: \"story\") to create the full story. It automatically uses $plot.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "story" }
+      ],
+      "tags": ["context", "story", "plot-source"]
+    },
+    {
+      "name": "CHARACTERS_SETTINGS phase: character should use generate_content",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story, $plot, $original_input",
+        "phase_instructions": "Call generate_content(content_type: \"character\", name: \"Alice\") to create a character profile. It automatically uses $story.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "character" }
+      ],
+      "tags": ["context", "character", "story-source"]
+    },
+    {
+      "name": "CHARACTERS_SETTINGS phase: setting should use generate_content",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "characters_settings",
+        "phase_display_name": "Character & Setting Descriptions",
+        "loaded_contexts": "$story, $plot, $original_input",
+        "phase_instructions": "Call generate_content(content_type: \"setting\", name: \"Forest\") to create a setting description. It automatically uses $story.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "setting" }
+      ],
+      "tags": ["context", "setting", "story-source"]
+    },
+    {
+      "name": "SCENES phase: should use generate_content",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scenes",
+        "phase_display_name": "Scene Breakdown",
+        "loaded_contexts": "$story, $plot, $original_input",
+        "phase_instructions": "Call generate_content(content_type: \"scene\") to create a scene description. It automatically uses $story.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "generate_content" },
+        { "type": "tool_arg_equals", "toolName": "generate_content", "argPath": "content_type", "value": "scene" }
+      ],
+      "tags": ["context", "scene", "story-source"]
+    },
+    {
+      "name": "CHARACTER_SETTING_IMAGES phase: should use read_project (not generate_content)",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "character_setting_images",
+        "phase_display_name": "Reference Images",
+        "loaded_contexts": "$story, $plot",
+        "phase_instructions": "Call read_project to get character data for generating reference images.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "read_project" }
+      ],
+      "tags": ["context", "image", "project-data"]
+    },
+    {
+      "name": "SCENE_IMAGES phase: should use read_project for scene data",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "scene_images",
+        "phase_display_name": "Scene Image Generation",
+        "loaded_contexts": "$story",
+        "phase_instructions": "Call read_project to get scene data for generating scene images.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "read_project" }
+      ],
+      "tags": ["context", "scene-image", "project-data"]
+    },
+    {
+      "name": "VIDEO phase: should use read_project for scene images",
+      "context": {
+        "project_id": "proj-123",
+        "project_title": "Test Story",
+        "current_phase": "video",
+        "phase_display_name": "Video Generation",
+        "loaded_contexts": "",
+        "phase_instructions": "Call read_project to get scene images for generating video clips.",
+        "expensive_checkpoint": ""
+      },
+      "assertions": [
+        { "type": "tool_called", "value": "read_project" }
+      ],
+      "tags": ["context", "video", "project-data"]
+    }
+  ]
+}

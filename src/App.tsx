@@ -17,10 +17,15 @@ import {
   createProject,
   STYLE_CONFIGS,
   type ProjectStyle,
+  buildWorkflowAgentPrompt,
+  getCurrentPhase,
+  loadProjectFilesAsContexts,
+  PHASE_CONFIGS,
 } from './tasks/video/index.js';
 import type { LLMClientConfig } from './core/llm/index.js';
 import type { AgentConfig } from './core/agent/index.js';
 import * as uiLogger from './utils/uiLogger.js';
+import { contextStore } from './core/context/ContextStore.js';
 
 type TaskType = 'generic' | 'video';
 
@@ -41,6 +46,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   const [selectedOptionIndex, setSelectedOptionIndex] = React.useState(0);
   // Track when user selected "Provide feedback" and needs to enter actual feedback
   const [awaitingFeedbackText, setAwaitingFeedbackText] = React.useState(false);
+  // Track when user pressed any key to pause the countdown timer
+  const [timerPaused, setTimerPaused] = React.useState(false);
 
   // Startup flow state for video mode
   const [startupMode, setStartupMode] = React.useState<StartupMode>('checking');
@@ -63,6 +70,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       if (projectExists()) {
         const project = loadProject();
         setExistingProject(project);
+        // Reload context store for the existing project
+        if (project) {
+          contextStore.reload(project.id);
+        }
         setStartupMode('select_action');
       } else {
         // No existing project - go to style selection first
@@ -81,18 +92,26 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   }, [taskType]);
 
   // Get custom prompt based on task type
+  // For video mode, we build it dynamically based on the current project state
   const customPrompt = React.useMemo(() => {
     if (taskType === 'video') {
+      if (existingProject) {
+        // Use dynamic workflow prompt if project exists
+        const currentPhase = getCurrentPhase(existingProject);
+        const loadedContexts = loadProjectFilesAsContexts();
+        return buildWorkflowAgentPrompt(existingProject, currentPhase, loadedContexts);
+      }
+      // Fallback to static prompt only if no project yet (initial creation)
       return VIDEO_CREATION_SYSTEM_PROMPT;
     }
     return agentConfig?.customPrompt;
-  }, [taskType, agentConfig?.customPrompt]);
+  }, [taskType, agentConfig?.customPrompt, existingProject]);
 
   // Compute effective agent name based on task type
   const agentName = agentConfig?.name ?? (taskType === 'video' ? 'kshana-video' : 'kshana-ink');
 
-  // Event handler for UI logging
-  const handleAgentEvent = React.useCallback((event: import('./events/index.js').AgentEvent) => {
+  // Event handler for UI logger (kept separate to avoid recursion in useAgent)
+  const handleAgentEventsForLogger = React.useCallback((event: import('./events/index.js').AgentEvent) => {
     switch (event.type) {
       case 'agent_status':
         uiLogger.logStatusChange(event.status, event.agentName);
@@ -103,9 +122,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         }
         break;
       case 'streaming_text':
-        if (event.done && event.chunk !== undefined) {
-          // Log completed streaming text - but we'll handle this via state change instead
-        }
+        // Log handled by state change
         break;
       case 'tool_call':
         uiLogger.logToolStart(event.toolName, event.arguments);
@@ -132,6 +149,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     isConfirmation,
     questionOptions,
     autoApproveTimeoutMs,
+    questionContext,
     error,
     recentTools,
     history,
@@ -140,6 +158,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     respond,
     stop,
     injectInput,
+    reset,
+    setProjectId,
+    updateCustomPrompt,
   } = useAgent({
     tools,
     llmConfig,
@@ -148,8 +169,33 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       name: agentName,
       customPrompt,
     },
-    onEvent: handleAgentEvent,
+    onEvent: handleAgentEventsForLogger,
+    projectId: existingProject?.id ?? null,
   });
+
+  // Handle phase transitions to update the prompt dynamically
+  // Listen to history updates because useAgent adds phase transitions to history
+  React.useEffect(() => {
+    if (history.length > 0) {
+      const lastEntry = history[history.length - 1];
+      if (lastEntry && lastEntry.type === 'phase_transition' && taskType === 'video') {
+        // Reload project to get fresh state
+        const project = loadProject();
+        if (project) {
+          // Update existingProject state
+          setExistingProject(project);
+
+          // Rebuild prompt with new phase
+          const currentPhase = getCurrentPhase(project);
+          const loadedContexts = loadProjectFilesAsContexts();
+          const newPrompt = buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
+
+          // Update the running agent's prompt
+          updateCustomPrompt(newPrompt);
+        }
+      }
+    }
+  }, [history, taskType, updateCustomPrompt]);
 
   // Handle global keyboard shortcuts
   useInput((input, key) => {
@@ -183,16 +229,22 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       // For video mode with a new project, create the project with the selected style
       // Input type will be determined by the agent based on the content
       if (taskType === 'video' && !existingProject) {
-        createProject(task, selectedStyle);
+        const newProject = createProject(task, selectedStyle);
+        // Set projectId directly to bypass React state update delay
+        // This ensures the agent is immediately reset with the new projectId
+        setProjectId(newProject.id);
+        // Update existingProject state for UI consistency
+        setExistingProject(newProject);
         uiLogger.logUserInput(`Starting new project with style: ${STYLE_CONFIGS[selectedStyle].displayName}`);
       }
 
       setStarted(true);
       uiLogger.logUserInput(task);
       // Task is added to history by useAgent
+      // Note: run() will create a new agent with the updated projectId from existingProject
       void run(task);
     },
-    [run, exit, taskType, existingProject, selectedStyle]
+    [run, exit, taskType, existingProject, selectedStyle, setProjectId]
   );
 
   // Handle user response (when agent is waiting for input)
@@ -226,13 +278,24 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         return;
       }
 
+      // Store feedback in context store with context about what was reviewed
+      const feedbackWithContext = questionContext
+        ? `## Context Being Reviewed\n${questionContext}\n\n## User Feedback\n${feedbackText}`
+        : feedbackText;
+
+      contextStore.store(
+        feedbackWithContext,
+        `User feedback for: ${question?.slice(0, 50) ?? 'content review'}`,
+        { source: 'user_input', variableBaseName: 'feedback' }
+      );
+
       // Clear feedback mode and send the feedback
       setAwaitingFeedbackText(false);
       uiLogger.logUserInput(feedbackText);
       // Send the actual feedback text to the agent
       void respond(feedbackText);
     },
-    [respond, exit]
+    [respond, exit, question, questionContext]
   );
 
   // Handle auto-approve timeout
@@ -247,6 +310,13 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     uiLogger.logAutoApprove(selectedOption);
     void respond(selectedOption);
   }, [respond, isConfirmation, questionOptions]);
+
+  // Pause countdown timer when user presses any key
+  const handleAnyKeyPress = React.useCallback(() => {
+    if (autoApproveTimeoutMs && !timerPaused) {
+      setTimerPaused(true);
+    }
+  }, [autoApproveTimeoutMs, timerPaused]);
 
   // Handle user input during execution (inject into running agent)
   const handleInjectedInput = React.useCallback(
@@ -273,10 +343,11 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     [handleTaskSubmit, exit]
   );
 
-  // Reset selection and feedback mode when options change - MUST be before any conditional returns
+  // Reset selection, feedback mode, and timer pause when options change - MUST be before any conditional returns
   React.useEffect(() => {
     setSelectedOptionIndex(0);
     setAwaitingFeedbackText(false);
+    setTimerPaused(false);
   }, [questionOptions]);
 
   // Track previous streaming state to log when streaming completes
@@ -352,6 +423,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     if (startupMode === 'select_action') {
       if (index === 0) {
         // Continue existing project
+        if (existingProject) {
+          // Reload context store for the existing project
+          contextStore.reload(existingProject.id);
+        }
         setStarted(true);
         uiLogger.logUserInput('Continue existing project');
         void run('Continue working on the existing project. Call read_project to see current state.');
@@ -361,10 +436,12 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           deleteProject();
           setExistingProject(null);
         }
+        // Reset agent state and clear projectId to ensure complete isolation
+        setProjectId(null);
         setStartupMode('select_style');
       }
     }
-  }, [startupMode, existingProject, run]);
+  }, [startupMode, existingProject, run, setProjectId]);
 
   // Handle style selection
   const handleStyleSelect = React.useCallback((index: number) => {
@@ -411,7 +488,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Show welcome screen if not started
   if (!started) {
     const subtitle = taskType === 'video'
-      ? 'Agentic Video Generation System'
+      ? 'YouTube Documentary Video Editor'
       : 'Generic CLI Agent Framework';
 
     if (taskType === 'video') {
@@ -438,7 +515,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
               <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} paddingY={1}>
                 <Text bold color="yellow">📁 {existingProject.title || 'Untitled Project'}</Text>
                 <Text dimColor>ID: {existingProject.id}</Text>
-                <Text dimColor>Phase: {existingProject.currentPhase}</Text>
+                <Text dimColor>Phase: {PHASE_CONFIGS[getCurrentPhase(existingProject)]?.displayName ?? getCurrentPhase(existingProject)}</Text>
                 <Text dimColor>Characters: {existingProject.characters.length}</Text>
                 <Text dimColor>Scenes: {existingProject.scenes.length}</Text>
               </Box>
@@ -510,10 +587,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             <Box flexDirection="column" marginBottom={1} paddingX={2}>
               <Text bold color="cyan">Welcome to Kshana!</Text>
               <Text dimColor>
-                Enter a story idea or paste a complete story/chapter.
+                Paste an SRT transcript or enter a documentary script.
               </Text>
               <Text dimColor>
-                The system will automatically detect what you've provided.
+                The system will detect SRT format automatically.
               </Text>
             </Box>
 
@@ -525,9 +602,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
               <Text bold color="yellow">Example prompts:</Text>
             </Box>
             <Box flexDirection="column" paddingX={4} marginBottom={1}>
-              <Text dimColor>"A story about a robot learning to dance"</Text>
-              <Text dimColor>"Create a video about a magical forest adventure"</Text>
-              <Text dimColor>"An epic tale of a knight and a dragon"</Text>
+              <Text dimColor>1 00:00:00,000 --&gt; 00:00:03,000 Welcome to the story of...</Text>
+              <Text dimColor>Paste a full SRT transcript to begin</Text>
+              <Text dimColor>A 10-minute documentary script about coral reefs</Text>
             </Box>
           </Box>
 
@@ -537,7 +614,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
               mode="text"
               onSubmit={handleTaskSubmit}
               prompt=">"
-              hint={'Enter your story idea and press Enter. Type "exit" to quit.'}
+              hint={'Paste SRT or script and press Enter. Type "exit" to quit.'}
             />
           </Box>
         </Box>
@@ -565,6 +642,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   }
 
   // Main agent view
+  const phaseLabel = taskType === 'video' && existingProject
+    ? (PHASE_CONFIGS[getCurrentPhase(existingProject)]?.displayName ?? getCurrentPhase(existingProject))
+    : undefined;
+
   return (
     <Box flexDirection="column">
       {/* Main content area */}
@@ -572,6 +653,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         agentName={agentName}
         status={status}
         statusMessage={error}
+        phaseLabel={phaseLabel}
         todos={todos}
         streamingText={streamingText}
         isStreaming={isStreaming}
@@ -580,8 +662,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         isConfirmation={isConfirmation}
         questionOptions={awaitingFeedbackText ? undefined : questionOptions}
         selectedOptionIndex={selectedOptionIndex}
-        autoApproveTimeoutMs={awaitingFeedbackText ? undefined : autoApproveTimeoutMs}
+        autoApproveTimeoutMs={awaitingFeedbackText || timerPaused ? undefined : autoApproveTimeoutMs}
         onAutoApproveTimeout={handleAutoApproveTimeout}
+        questionContext={awaitingFeedbackText ? undefined : questionContext}
         showTodos
         history={history}
         currentAction={currentAction}
@@ -597,6 +680,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           prompt={status === 'waiting' || awaitingFeedbackText ? '?' : '>'}
           hint={inputConfig.hint}
           onSelectionChange={setSelectedOptionIndex}
+          onAnyKeyPress={handleAnyKeyPress}
         />
       </Box>
     </Box>
