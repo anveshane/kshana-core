@@ -2149,10 +2149,18 @@ Follow the phase-specific instructions. Each phase should:
       const phaseStatus = phaseInfo?.status ?? 'pending';
 
       if (phaseStatus === 'completed') {
-        instruction += `
+        if (currentPhase === WorkflowPhase.IMAGE_PLACEMENT) {
+          instruction += `
+The Image Placement phase is complete.
+1. Ask the user if they want to proceed with Image Generation.
+2. Only if they approve, call update_project with action "transition_phase".
+`;
+        } else {
+          instruction += `
 The ${phaseConfig.displayName} phase is complete.
 1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
 `;
+        }
       } else {
         // For YouTube workflow phases, they use Task() with subagents
         instruction += `

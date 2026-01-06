@@ -1590,6 +1590,16 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Incremental compatibility mapping onto existing sub-agent handlers.
     if (subagentType === 'Plan') {
+      const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') ||
+        this.customPrompt?.includes('transcript') ||
+        this.customPrompt?.includes('YouTube');
+
+      if (isYouTubeWorkflow) {
+        return {
+          error: 'Plan subagent is disabled for YouTube transcript workflows.',
+          suggestion: 'Use Task with subagent_type="content-planner" to create the strategic content plan.',
+        };
+      }
       return await this.handleDispatchAgent({
         ...toolCall,
         name: 'dispatch_agent',
@@ -1817,6 +1827,7 @@ export class GenericAgent extends TypedEventEmitter {
     currentOutput: string;
     iterations: number;
     toolCallId: string;
+    outputFile?: string;
   } | null = null;
 
   // State for image placement sub-agent
@@ -1828,6 +1839,7 @@ export class GenericAgent extends TypedEventEmitter {
     currentOutput: string;
     iterations: number;
     toolCallId: string;
+    outputFile?: string;
   } | null = null;
 
   // State for video replacement sub-agent
@@ -3433,6 +3445,7 @@ Respond in JSON format:
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
 
     if (!task) {
       this.currentMode = 'orchestrator';
@@ -3448,6 +3461,15 @@ Respond in JSON format:
       debugLog(`[GenericAgent] WARNING: Missing context_refs for placement planner: ${missingRefs.join(', ')}`);
     }
 
+      // Default output file if not provided
+      let outputFileToUse = outputFile || 'agent/plans/content-plan.md';
+      // If orchestrator mistakenly passes image-placements path to content-planner, fix it
+      if (outputFileToUse.includes('image-placement')) {
+        debugLog('[GenericAgent] WARNING: content-planner received image-placements path. Overriding to agent/plans/content-plan.md');
+        outputFileToUse = 'agent/plans/content-plan.md';
+      }
+      debugLog(`[GenericAgent] handleDispatchPlacementPlanner: outputFile=${outputFileToUse}`);
+
     const systemPrompt = buildPlacementPlannerPrompt(context);
     this.placementPlannerState = {
       active: true,
@@ -3460,9 +3482,66 @@ Respond in JSON format:
       currentOutput: '',
       iterations: 1,
       toolCallId: toolCall.id,
+      outputFile: outputFileToUse,
     };
 
     const result = await this.runOneShotSubagent(this.placementPlannerState, 'dispatch_placement_planner', 0.4);
+    
+    // Save the output to file if we have output
+    const resultObj = result as Record<string, unknown>;
+    if (resultObj['status'] === 'completed' && resultObj['output']) {
+      const output = resultObj['output'] as string;
+      let fileSaved = false;
+      let normalizedPath: string | undefined;
+
+      // Normalize path
+      normalizedPath = outputFileToUse;
+      if (normalizedPath.startsWith('plans/') && !normalizedPath.startsWith('agent/plans/')) {
+        normalizedPath = `agent/${normalizedPath}`;
+      } else if (!normalizedPath.startsWith('agent/')) {
+        if (!normalizedPath.includes('/')) {
+          normalizedPath = `agent/plans/${normalizedPath}`;
+        } else {
+          normalizedPath = `agent/${normalizedPath}`;
+        }
+      }
+
+      try {
+        const projectDir = path.join(process.cwd(), '.kshana');
+        const filePath = path.join(projectDir, normalizedPath);
+        debugLog(`[GenericAgent] Attempting to save content plan to: ${filePath} (normalized from: ${outputFileToUse})`);
+
+        // Ensure parent directory exists
+        const parentDir = path.dirname(filePath);
+        if (!fs.existsSync(parentDir)) {
+          debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, output, 'utf-8');
+        fileSaved = true;
+        debugLog(`[GenericAgent] Successfully saved content plan to ${normalizedPath}`);
+
+        // Store reference in context store
+        const variableName = contextStore.storeReference(
+          normalizedPath,
+          'Content Plan',
+          undefined,
+          'tool'
+        ).variableName;
+        debugLog(`[GenericAgent] Stored reference to content plan file in context store as ${variableName}`);
+
+        // Update result with file info
+        resultObj['output_file'] = normalizedPath;
+        resultObj['file_saved'] = fileSaved;
+        resultObj['content_plan_ref'] = variableName;
+      } catch (err) {
+        debugLog(`[GenericAgent] ERROR: Failed to save content plan to ${outputFileToUse}: ${err}`);
+        resultObj['file_saved'] = false;
+        resultObj['error'] = `Failed to save content plan: ${String(err)}`;
+      }
+    }
+
     this.placementPlannerState = null;
     return result;
   }
@@ -3472,6 +3551,7 @@ Respond in JSON format:
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
 
     if (!task) {
       this.currentMode = 'orchestrator';
@@ -3482,10 +3562,26 @@ Respond in JSON format:
       return { error: 'Image placement already in progress' };
     }
 
-    const { context, missingRefs } = this.buildContextFromRefs(contextRefs);
+    // Image-placer ALWAYS needs $transcript - ensure it's included even if not passed
+    const requiredRefs = contextRefs || [];
+    if (!requiredRefs.includes('$transcript')) {
+      debugLog(`[GenericAgent] Auto-adding $transcript to context_refs for image-placer (required but not provided)`);
+      requiredRefs.push('$transcript');
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(requiredRefs);
     if (missingRefs.length > 0) {
       debugLog(`[GenericAgent] WARNING: Missing context_refs for image placer: ${missingRefs.join(', ')}`);
     }
+
+      // Default output file if not provided
+      let outputFileToUse = outputFile || 'agent/content/image-placements.md';
+      // If orchestrator mistakenly passes content-plan path to image-placer, fix it
+      if (outputFileToUse.includes('content-plan')) {
+        debugLog('[GenericAgent] WARNING: image-placer received content-plan path. Overriding to agent/content/image-placements.md');
+        outputFileToUse = 'agent/content/image-placements.md';
+      }
+      debugLog(`[GenericAgent] handleDispatchImagePlacer: outputFile=${outputFileToUse}`);
 
     const systemPrompt = buildImagePlacerPrompt(context);
     this.imagePlacerState = {
@@ -3499,9 +3595,66 @@ Respond in JSON format:
       currentOutput: '',
       iterations: 1,
       toolCallId: toolCall.id,
+      outputFile: outputFileToUse,
     };
 
     const result = await this.runOneShotSubagent(this.imagePlacerState, 'dispatch_image_placer', 0.4);
+    
+    // Save the output to file if we have output
+    const resultObj = result as Record<string, unknown>;
+    if (resultObj['status'] === 'completed' && resultObj['output']) {
+      const output = resultObj['output'] as string;
+      let fileSaved = false;
+      let normalizedPath: string | undefined;
+
+      // Normalize path
+      normalizedPath = outputFileToUse;
+      if (normalizedPath.startsWith('content/') && !normalizedPath.startsWith('agent/content/')) {
+        normalizedPath = `agent/${normalizedPath}`;
+      } else if (!normalizedPath.startsWith('agent/')) {
+        if (!normalizedPath.includes('/')) {
+          normalizedPath = `agent/content/${normalizedPath}`;
+        } else {
+          normalizedPath = `agent/${normalizedPath}`;
+        }
+      }
+
+      try {
+        const projectDir = path.join(process.cwd(), '.kshana');
+        const filePath = path.join(projectDir, normalizedPath);
+        debugLog(`[GenericAgent] Attempting to save image placement plan to: ${filePath} (normalized from: ${outputFileToUse})`);
+
+        // Ensure parent directory exists
+        const parentDir = path.dirname(filePath);
+        if (!fs.existsSync(parentDir)) {
+          debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, output, 'utf-8');
+        fileSaved = true;
+        debugLog(`[GenericAgent] Successfully saved image placement plan to ${normalizedPath}`);
+
+        // Store reference in context store
+        const variableName = contextStore.storeReference(
+          normalizedPath,
+          'Image Placement Plan',
+          undefined,
+          'tool'
+        ).variableName;
+        debugLog(`[GenericAgent] Stored reference to image placement plan file in context store as ${variableName}`);
+
+        // Update result with file info
+        resultObj['output_file'] = normalizedPath;
+        resultObj['file_saved'] = fileSaved;
+        resultObj['image_placements_ref'] = variableName;
+      } catch (err) {
+        debugLog(`[GenericAgent] ERROR: Failed to save image placement plan to ${outputFileToUse}: ${err}`);
+        resultObj['file_saved'] = false;
+        resultObj['error'] = `Failed to save image placement plan: ${String(err)}`;
+      }
+    }
+
     this.imagePlacerState = null;
     return result;
   }

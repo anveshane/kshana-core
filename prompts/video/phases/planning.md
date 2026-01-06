@@ -10,6 +10,7 @@
 **If `$transcript` is not available, go back to TRANSCRIPT_INPUT phase and parse the transcript first.**
 
 **CRITICAL: This is a YouTube workflow. DO NOT generate articles, stories, or any creative content. Only create a STRATEGIC CONTENT PLAN that plans for all upcoming phases.**
+**CRITICAL: Do NOT call Task with subagent_type="Plan" or write to master-plan.md. Use the content-planner subagent only.**
 
 **Steps (execute in order)**:
 

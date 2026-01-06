@@ -1069,6 +1069,27 @@ What story would you like to turn into a video?`,
             return { status: 'error', error: `input_type must be one of: ${validInputTypes.join(', ')}` };
           }
 
+          // Check if input type is already set to the same value to prevent loops
+          const currentProject = loadProject();
+          if (!currentProject) {
+            return { status: 'error', error: 'No project found' };
+          }
+
+          if (currentProject.inputType === inputType) {
+            // Input type is already set to the requested value - return success without updating
+            const inputTypeConfig = INPUT_TYPE_CONFIGS[inputType];
+            const summary = getProjectSummary(currentProject);
+            return {
+              status: 'success',
+              message: `Input type is already set to "${inputTypeConfig.displayName}"`,
+              input_type: inputType,
+              current_phase: currentProject.currentPhase,
+              project_summary: summary,
+              skipped: true,
+              note: 'Input type was already set to this value. No update needed.',
+            };
+          }
+
           const updatedProject = setProjectInputType(inputType);
           if (!updatedProject) {
             return { status: 'error', error: 'No project found' };
