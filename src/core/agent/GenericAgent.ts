@@ -3531,10 +3531,22 @@ Respond in JSON format:
         ).variableName;
         debugLog(`[GenericAgent] Stored reference to content plan file in context store as ${variableName}`);
 
-        // Update result with file info
+        // Generate preview for display (clean markdown, no code fences)
+        let preview = output.length > 800 ? output.substring(0, 800) + '...' : output;
+        // Remove markdown code fences if present
+        preview = preview.replace(/^```[\w]*\n/gm, '').replace(/^```$/gm, '');
+        const previewLines = preview.split('\n').slice(0, 20).join('\n');
+        const truncatedPreview = previewLines.length < preview.length ? previewLines + '\n...' : previewLines;
+
+        // Update result with file info and preview
         resultObj['output_file'] = normalizedPath;
         resultObj['file_saved'] = fileSaved;
         resultObj['content_plan_ref'] = variableName;
+        resultObj['file_path'] = normalizedPath; // For compatibility with write_file format
+        resultObj['bytes_written'] = output.length;
+        resultObj['total_lines'] = output.split('\n').length;
+        resultObj['preview'] = truncatedPreview;
+        resultObj['content'] = output; // Also add to content for display
       } catch (err) {
         debugLog(`[GenericAgent] ERROR: Failed to save content plan to ${outputFileToUse}: ${err}`);
         resultObj['file_saved'] = false;
@@ -3644,10 +3656,22 @@ Respond in JSON format:
         ).variableName;
         debugLog(`[GenericAgent] Stored reference to image placement plan file in context store as ${variableName}`);
 
-        // Update result with file info
+        // Generate preview for display (clean markdown, no code fences)
+        let preview = output.length > 800 ? output.substring(0, 800) + '...' : output;
+        // Remove markdown code fences if present
+        preview = preview.replace(/^```[\w]*\n/gm, '').replace(/^```$/gm, '');
+        const previewLines = preview.split('\n').slice(0, 20).join('\n');
+        const truncatedPreview = previewLines.length < preview.length ? previewLines + '\n...' : previewLines;
+
+        // Update result with file info and preview
         resultObj['output_file'] = normalizedPath;
         resultObj['file_saved'] = fileSaved;
         resultObj['image_placements_ref'] = variableName;
+        resultObj['file_path'] = normalizedPath; // For compatibility with write_file format
+        resultObj['bytes_written'] = output.length;
+        resultObj['total_lines'] = output.split('\n').length;
+        resultObj['preview'] = truncatedPreview;
+        resultObj['content'] = output; // Also add to content for display
       } catch (err) {
         debugLog(`[GenericAgent] ERROR: Failed to save image placement plan to ${outputFileToUse}: ${err}`);
         resultObj['file_saved'] = false;

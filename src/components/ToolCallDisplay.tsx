@@ -395,16 +395,67 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
 
   // For completed tools, extract content from result if available (used by Task tools)
   // This allows streaming content to show during execution, and result.content after completion
+  // Also check for result.output (used by subagents) and file previews
   const resultContent = React.useMemo(() => {
     if (isExecuting || streamingContent) return undefined;
-    if (result && typeof result === 'object' && 'content' in result) {
-      const content = (result as Record<string, unknown>)['content'];
-      if (typeof content === 'string' && content.length > 0) {
-        return content;
+    if (result && typeof result === 'object') {
+      const resultObj = result as Record<string, unknown>;
+      
+      // Check for content field (Task tools)
+      if ('content' in resultObj) {
+        const content = resultObj['content'];
+        if (typeof content === 'string' && content.length > 0) {
+          return content;
+        }
+      }
+      
+      // Check for output field (subagents like placement-planner, image-placer)
+      if ('output' in resultObj && resultObj['status'] === 'completed') {
+        const output = resultObj['output'];
+        if (typeof output === 'string' && output.length > 0) {
+          // If file was saved, show preview; otherwise show full output
+          if (resultObj['file_saved'] && resultObj['preview']) {
+            return resultObj['preview'] as string;
+          }
+          return output;
+        }
+      }
+      
+      // Check for preview field (when file was saved)
+      if ('preview' in resultObj && resultObj['file_saved']) {
+        const preview = resultObj['preview'];
+        if (typeof preview === 'string' && preview.length > 0) {
+          return preview;
+        }
+      }
+      
+      // Check for transcript_preview (parse_srt tool)
+      if ('transcript_preview' in resultObj && resultObj['status'] === 'success') {
+        const preview = resultObj['transcript_preview'];
+        if (typeof preview === 'string' && preview.length > 0) {
+          return preview;
+        }
       }
     }
     return undefined;
   }, [isExecuting, streamingContent, result]);
+  
+  // Extract file save info for display
+  const fileSaveInfo = React.useMemo(() => {
+    if (isExecuting || !result || typeof result !== 'object') return undefined;
+    const resultObj = result as Record<string, unknown>;
+    
+    // Check if this is a file save result
+    if (resultObj['file_saved'] || resultObj['file_path'] || resultObj['output_file'] || resultObj['transcript_path']) {
+      return {
+        filePath: (resultObj['file_path'] || resultObj['output_file'] || resultObj['transcript_path']) as string | undefined,
+        bytesWritten: resultObj['bytes_written'] as number | undefined,
+        totalLines: resultObj['total_lines'] as number | undefined,
+        saved: resultObj['file_saved'] as boolean | undefined ?? (resultObj['transcript_path'] ? true : true),
+      };
+    }
+    return undefined;
+  }, [isExecuting, result]);
 
   if (compact) {
     return (
@@ -449,9 +500,30 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
             <MarkdownText text={streamingContent} />
           </Box>
         )}
+        
+        {/* Show file save info if file was saved */}
+        {fileSaveInfo && fileSaveInfo.saved && (
+          <Box marginLeft={2} marginTop={1} flexDirection="column">
+            {fileSaveInfo.filePath && (
+              <Text color="cyan">📄 {fileSaveInfo.filePath}</Text>
+            )}
+            {fileSaveInfo.bytesWritten !== undefined && (
+              <Text dimColor>
+                Size: {fileSaveInfo.bytesWritten.toLocaleString()} bytes
+                {fileSaveInfo.totalLines !== undefined && ` (${fileSaveInfo.totalLines} lines)`}
+              </Text>
+            )}
+          </Box>
+        )}
+        
         {resultContent && (
           <Box marginLeft={2} marginTop={1} flexDirection="column">
-            <MarkdownText text={resultContent} />
+            {fileSaveInfo && fileSaveInfo.saved && (
+              <Text dimColor marginBottom={1}>Preview:</Text>
+            )}
+            <Box marginLeft={fileSaveInfo && fileSaveInfo.saved ? 1 : 0} marginTop={fileSaveInfo && fileSaveInfo.saved ? 0 : 0} flexDirection="column">
+              <MarkdownText text={resultContent} />
+            </Box>
           </Box>
         )}
       </Box>
@@ -504,9 +576,30 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
           <MarkdownText text={streamingContent} />
         </Box>
       )}
+      
+      {/* Show file save info if file was saved */}
+      {fileSaveInfo && fileSaveInfo.saved && (
+        <Box marginLeft={2} marginTop={1} flexDirection="column">
+          {fileSaveInfo.filePath && (
+            <Text color="cyan">📄 {fileSaveInfo.filePath}</Text>
+          )}
+          {fileSaveInfo.bytesWritten !== undefined && (
+            <Text dimColor>
+              Size: {fileSaveInfo.bytesWritten.toLocaleString()} bytes
+              {fileSaveInfo.totalLines !== undefined && ` (${fileSaveInfo.totalLines} lines)`}
+            </Text>
+          )}
+        </Box>
+      )}
+      
       {resultContent && (
         <Box marginLeft={2} marginTop={1} flexDirection="column">
-          <MarkdownText text={resultContent} />
+          {fileSaveInfo && fileSaveInfo.saved && (
+            <Text dimColor marginBottom={1}>Preview:</Text>
+          )}
+          <Box marginLeft={fileSaveInfo && fileSaveInfo.saved ? 1 : 0} marginTop={fileSaveInfo && fileSaveInfo.saved ? 0 : 0} flexDirection="column">
+            <MarkdownText text={resultContent} />
+          </Box>
         </Box>
       )}
     </Box>
