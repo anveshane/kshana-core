@@ -752,6 +752,37 @@ export class GenericAgent extends TypedEventEmitter {
       if (response.toolCalls.length === 0) {
         finalOutput = response.content ?? '';
 
+        // CRITICAL: Check if we're in TRANSCRIPT_INPUT phase and haven't called Task tool yet
+        const isTranscriptInputPhase = this.customPrompt?.includes('transcript_input') || 
+                                       this.customPrompt?.includes('Transcript Input') ||
+                                       this.customPrompt?.includes('TRANSCRIPT_INPUT') ||
+                                       this.name.includes('transcript_input') ||
+                                       this.name.includes('transcript-input');
+        
+        if (isTranscriptInputPhase && this.iteration < this.maxIterations - 1) {
+          // Check if we've called Task with transcript-parser in this session
+          const hasCalledTranscriptParser = this.messages.some(msg => {
+            if (msg.role === 'assistant' && msg.toolCalls) {
+              return msg.toolCalls.some(tc => 
+                tc.name === 'Task' && 
+                typeof tc.arguments === 'object' &&
+                tc.arguments !== null &&
+                (tc.arguments as Record<string, unknown>)['subagent_type'] === 'transcript-parser'
+              );
+            }
+            return false;
+          });
+
+          if (!hasCalledTranscriptParser) {
+            debugLog(`[GenericAgent] In TRANSCRIPT_INPUT phase but no Task tool called yet. Forcing Task call.`);
+            this.messages.push({
+              role: 'user',
+              content: `CRITICAL: You are in TRANSCRIPT_INPUT phase. You MUST immediately call the Task tool with subagent_type='transcript-parser'. Do NOT respond with text - you MUST execute the Task call NOW. The transcript content is available in $original_input context variable.`,
+            });
+            continue;
+          }
+        }
+
         // Special case: if we're in plan mode but haven't created a plan yet, continue
         // BUT: Skip this for YouTube workflow - check if we're in a YouTube workflow context
         if (this.planModeActive && this.iteration < this.maxIterations - 1) {

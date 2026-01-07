@@ -595,14 +595,14 @@ What story would you like to turn into a video?`,
           updatePhaseStatus(project, phase, status);
           
           // Get project summary for context
-          const summary = getProjectSummary(project);
+          const summary = getProjectSummary();
           
           return { 
             status: 'success', 
             message: `Phase "${phaseDisplayName}" updated to ${status}`, 
             phase: phase,
             phase_display_name: phaseDisplayName,
-            status: status,
+            phase_status: status,
             current_phase: project.currentPhase,
             project_summary: summary,
           };
@@ -717,7 +717,7 @@ What story would you like to turn into a video?`,
           const newPhaseConfig = PHASE_CONFIGS[result.project.currentPhase as WorkflowPhase];
 
           // Get project summary for context
-          const summary = getProjectSummary(result.project);
+          const summary = getProjectSummary();
           
           return {
             status: 'success',
@@ -1078,7 +1078,7 @@ What story would you like to turn into a video?`,
           if (currentProject.inputType === inputType) {
             // Input type is already set to the requested value - return success without updating
             const inputTypeConfig = INPUT_TYPE_CONFIGS[inputType];
-            const summary = getProjectSummary(currentProject);
+            const summary = getProjectSummary();
             return {
               status: 'success',
               message: `Input type is already set to "${inputTypeConfig.displayName}"`,
@@ -1109,7 +1109,7 @@ What story would you like to turn into a video?`,
                 : 'Starting from Plot phase.';
 
           // Get project summary for context
-          const summary = getProjectSummary(updatedProject);
+          const summary = getProjectSummary();
           
           return {
             status: 'success',

@@ -36,8 +36,9 @@ transcript_input → planning → image_placement → image_generation → video
 
 ## Your Job
 1. Read the phase-specific instructions below
-2. Execute them exactly as written
+2. **Execute them IMMEDIATELY - do NOT just acknowledge or respond with text**
 3. Each phase calls ONE subagent, saves the result, and transitions to next phase
+4. **CRITICAL: If you are in TRANSCRIPT_INPUT phase and receive transcript content, you MUST immediately call the Task tool. Do NOT respond with text first.**
 
 ## Available Context Variables
 {{loaded_contexts}}
