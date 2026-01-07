@@ -76,8 +76,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         }
         setStartupMode('select_action');
       } else {
-        // No existing project - go to style selection first
-        setStartupMode('select_style');
+        // No existing project - automatically use cinematic_realism and skip to new_story
+        setSelectedStyle('cinematic_realism');
+        setStartupMode('new_story');
       }
     }
   }, [taskType, started]);
@@ -431,14 +432,15 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         uiLogger.logUserInput('Continue existing project');
         void run('Continue working on the existing project. Call read_project to see current state.');
       } else if (index === 1) {
-        // Start new project - show warning and switch to style selection
+        // Start new project - automatically use cinematic_realism and skip to new_story
         if (existingProject) {
           deleteProject();
           setExistingProject(null);
         }
         // Reset agent state and clear projectId to ensure complete isolation
         setProjectId(null);
-        setStartupMode('select_style');
+        setSelectedStyle('cinematic_realism');
+        setStartupMode('new_story');
       }
     }
   }, [startupMode, existingProject, run, setProjectId]);
