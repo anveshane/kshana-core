@@ -44,6 +44,8 @@ import {
   fetchContextTool,
 } from './builtin/index.js';
 
+import { fetchYouTubeTranscriptTool } from '../../services/youtube/index.js';
+
 /**
  * Create a registry with the default built-in tools.
  */
@@ -59,6 +61,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   registry.register(todoWriteTool);
   registry.register(storeContextTool);
   registry.register(fetchContextTool);
+  registry.register(fetchYouTubeTranscriptTool);
 
   return registry;
 }

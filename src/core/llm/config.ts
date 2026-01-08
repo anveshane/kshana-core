@@ -31,11 +31,15 @@ export function getLLMProvider(): LLMProvider {
  * Get Gemini configuration from environment.
  */
 function getGeminiConfig(): LLMClientConfig {
+  // Parse thinking level from env
+  const thinkingLevel = process.env['GEMINI_THINKING_LEVEL'] as LLMClientConfig['thinkingLevel'] | undefined;
+
   return {
     // Gemini uses OpenAI-compatible endpoint
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
     apiKey: process.env['GOOGLE_API_KEY'] ?? '',
-    model: process.env['GEMINI_MODEL'] ?? 'gemini-2.0-flash',
+    model: process.env['GEMINI_MODEL'] ?? 'gemini-3-flash-preview',
+    thinkingLevel: thinkingLevel ?? 'low',
   };
 }
 
@@ -127,6 +131,7 @@ export function getLLMConfig(overrides?: Partial<LLMClientConfig>): LLMClientCon
     if (overrides.baseUrl) config.baseUrl = overrides.baseUrl;
     if (overrides.apiKey) config.apiKey = overrides.apiKey;
     if (overrides.model) config.model = overrides.model;
+    if (overrides.thinkingLevel) config.thinkingLevel = overrides.thinkingLevel;
   }
 
   return config;

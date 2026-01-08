@@ -50,7 +50,7 @@ export const STYLE_CONFIGS: Record<ProjectStyle, StyleConfig> = {
  * Type of input provided by the user.
  * This determines which phases can be skipped.
  */
-export type InputType = 'idea' | 'story';
+export type InputType = 'idea' | 'story' | 'youtube';
 
 /**
  * Input type configuration with display names and phase implications.
@@ -79,6 +79,12 @@ export const INPUT_TYPE_CONFIGS: Record<InputType, InputTypeConfig> = {
   story: {
     displayName: 'Complete Story',
     description: 'A full story, chapter, or detailed narrative ready for visualization',
+    startPhase: WorkflowPhase.CHARACTERS_SETTINGS,
+    skipPhases: [WorkflowPhase.PLOT, WorkflowPhase.STORY],
+  },
+  youtube: {
+    displayName: 'YouTube Transcript',
+    description: 'A transcript extracted from a YouTube video with visual highlights',
     startPhase: WorkflowPhase.CHARACTERS_SETTINGS,
     skipPhases: [WorkflowPhase.PLOT, WorkflowPhase.STORY],
   },
@@ -363,8 +369,10 @@ export interface ProjectFile {
   originalInputFile: string;
   /** Visual style for the project (cinematic_realism or anime) */
   style: ProjectStyle;
-  /** Type of input provided (idea or story) - determines which phases to skip */
+  /** Type of input provided (idea, story, or youtube) - determines which phases to skip */
   inputType: InputType;
+  /** YouTube URL if this project was created from a YouTube video */
+  youtubeUrl?: string;
   /** Creation timestamp */
   createdAt: number;
   /** Last update timestamp */

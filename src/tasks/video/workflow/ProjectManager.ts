@@ -267,8 +267,8 @@ export function setProjectInputType(
   // Update the input type
   project.inputType = inputType;
 
-  // If it's a full story, skip plot and story phases
-  if (inputType === 'story') {
+  // If input type has phases to skip (story or youtube), skip them
+  if (inputTypeConfig.skipPhases.length > 0) {
     // Mark skipped phases
     for (const skipPhase of inputTypeConfig.skipPhases) {
       const phaseKey = skipPhase as keyof typeof project.phases;

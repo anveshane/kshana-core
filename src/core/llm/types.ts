@@ -99,4 +99,6 @@ export interface LLMClientConfig {
   baseUrl?: string;
   apiKey?: string;
   model?: string;
+  /** Gemini thinking level: 'none', 'low', 'medium', 'high' */
+  thinkingLevel?: 'none' | 'low' | 'medium' | 'high';
 }

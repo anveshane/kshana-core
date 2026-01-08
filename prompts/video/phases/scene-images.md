@@ -4,6 +4,15 @@
 Each scene has a description and references to characters/settings with reference images.
 DO NOT re-read $story or earlier phase outputs - use the approved scene descriptions and reference images.
 
+**OPTIONAL CONTEXT**: `$highlights` - If available (from YouTube transcript workflow), use the extracted visual highlights to enhance image prompts with:
+- **Camera angles**: wide shot, close-up, over-the-shoulder, bird's eye, etc.
+- **Composition**: rule of thirds, centered subject, leading lines, depth layers
+- **Lighting**: soft morning light, dramatic shadows, natural daylight, warm interior
+- **Color palette**: warm earth tones, cool blues, high contrast, desaturated
+- **Emotional tone**: for mood and atmosphere guidance
+
+Match each scene to its corresponding highlight (if available) for consistent visual direction.
+
 IMPORTANT: Each scene image requires user approval before generation.
 
 For each scene:
@@ -18,8 +27,9 @@ Scene image prompts should:
 - Describe the complete scene composition
 - Reference character appearances from their reference images
 - Match the setting atmosphere
-- Include camera angle and framing
-- Specify lighting and mood
+- Include camera angle and framing (use `$highlights` visual hints if available)
+- Specify lighting and mood (use `$highlights` emotional tone if available)
+- Include color palette suggestions from highlights when present
 
 Process ONE scene at a time. Wait for user approval before moving to the next.
 

@@ -18,8 +18,9 @@ import {
   STYLE_CONFIGS,
   type ProjectStyle,
 } from './tasks/video/index.js';
-import type { LLMClientConfig } from './core/llm/index.js';
-import type { AgentConfig } from './core/agent/index.js';
+import { VideoAgent } from './agents/VideoAgent.js';
+import type { LLMClientConfig, ToolDefinition, LLMClient } from './core/llm/index.js';
+import type { AgentConfig, GenericAgent } from './core/agent/index.js';
 import * as uiLogger from './utils/uiLogger.js';
 
 type TaskType = 'generic' | 'video';
@@ -32,7 +33,7 @@ interface AppProps {
 }
 
 // Startup mode for video task type
-type StartupMode = 'checking' | 'select_action' | 'select_style' | 'new_story' | 'ready';
+type StartupMode = 'checking' | 'select_action' | 'select_style' | 'new_story' | 'youtube_url' | 'ready';
 
 export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' }: AppProps) {
   const { exit } = useApp();
@@ -90,6 +91,20 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
 
   // Compute effective agent name based on task type
   const agentName = agentConfig?.name ?? (taskType === 'video' ? 'kshana-video' : 'kshana-ink');
+
+  // Create agent factory for video mode (uses VideoAgent with transcript/highlights support)
+  const agentFactory = React.useMemo(() => {
+    if (taskType === 'video') {
+      return (tools: Map<string, ToolDefinition>, llm: LLMClient, config?: AgentConfig): GenericAgent => {
+        return new VideoAgent(tools, llm, {
+          ...config,
+          enableTranscriptExtraction: true,
+          enableHighlightsExtraction: true,
+        });
+      };
+    }
+    return undefined; // Use default GenericAgent
+  }, [taskType]);
 
   // Event handler for UI logging
   const handleAgentEvent = React.useCallback((event: import('./events/index.js').AgentEvent) => {
@@ -149,6 +164,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       customPrompt,
     },
     onEvent: handleAgentEvent,
+    agentFactory, // Use VideoAgent for video mode
   });
 
   // Handle global keyboard shortcuts
@@ -369,9 +385,14 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Handle style selection
   const handleStyleSelect = React.useCallback((index: number) => {
     const styles: ProjectStyle[] = ['cinematic_realism', 'anime'];
-    const style = styles[index] ?? 'cinematic_realism';
-    setSelectedStyle(style);
-    setStartupMode('new_story');
+    if (index === 2) {
+      // YouTube transcript option
+      setStartupMode('youtube_url');
+    } else {
+      const style = styles[index] ?? 'cinematic_realism';
+      setSelectedStyle(style);
+      setStartupMode('new_story');
+    }
   }, []);
 
   // Handle keyboard for startup selection
@@ -397,13 +418,15 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       if (key.upArrow) {
         setStyleSelectedIndex(prev => Math.max(0, prev - 1));
       } else if (key.downArrow) {
-        setStyleSelectedIndex(prev => Math.min(1, prev + 1));
+        setStyleSelectedIndex(prev => Math.min(2, prev + 1));
       } else if (key.return) {
         handleStyleSelect(styleSelectedIndex);
       } else if (input === '1') {
         handleStyleSelect(0);
       } else if (input === '2') {
         handleStyleSelect(1);
+      } else if (input === '3') {
+        handleStyleSelect(2);
       }
     }
   }, { isActive: !started && taskType === 'video' && startupMode === 'select_style' });
@@ -467,34 +490,85 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       // Style selection mode
       if (startupMode === 'select_style') {
         const styles: ProjectStyle[] = ['cinematic_realism', 'anime'];
+        const menuOptions = [
+          ...styles.map(style => ({
+            type: 'style' as const,
+            style,
+            ...STYLE_CONFIGS[style],
+          })),
+          {
+            type: 'youtube' as const,
+            displayName: 'Load YouTube Transcript',
+            description: 'Extract transcript from a YouTube video to use as source content',
+          },
+        ];
+
         return (
           <Box flexDirection="column" padding={1}>
             <Banner subtitle={subtitle} />
 
             <Box flexDirection="column" marginBottom={1} paddingX={2}>
-              <Text bold color="cyan">Choose Your Visual Style</Text>
+              <Text bold color="cyan">Choose Your Starting Point</Text>
               <Text dimColor>
-                Select the visual style for your video project. This will determine the aesthetic of all generated images.
+                Select a visual style for a new project, or load content from YouTube.
               </Text>
             </Box>
 
             <Box flexDirection="column" marginBottom={1} paddingX={2}>
-              {styles.map((style, index) => {
-                const config = STYLE_CONFIGS[style];
+              {menuOptions.map((option, index) => {
                 const isSelected = styleSelectedIndex === index;
                 return (
-                  <Box key={style} flexDirection="column" marginBottom={1}>
+                  <Box key={option.displayName} flexDirection="column" marginBottom={1}>
                     <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
-                      {isSelected ? '>' : ' '} {index + 1}. {config.displayName}
+                      {isSelected ? '>' : ' '} {index + 1}. {option.displayName}
                     </Text>
-                    <Text dimColor>     {config.description}</Text>
+                    <Text dimColor>     {option.description}</Text>
                   </Box>
                 );
               })}
             </Box>
 
             <Box paddingX={2}>
-              <Text dimColor>Use ↑↓ or 1-2 to select, Enter to confirm. Type "exit" to quit.</Text>
+              <Text dimColor>Use ↑↓ or 1-3 to select, Enter to confirm. Type "exit" to quit.</Text>
+            </Box>
+          </Box>
+        );
+      }
+
+      // YouTube URL input mode
+      if (startupMode === 'youtube_url') {
+        return (
+          <Box flexDirection="column">
+            <Box flexDirection="column" padding={1}>
+              <Banner subtitle={subtitle} />
+
+              <Box flexDirection="column" marginBottom={1} paddingX={2}>
+                <Text bold color="cyan">Load YouTube Transcript</Text>
+                <Text dimColor>
+                  Enter a YouTube URL to extract its transcript for video generation.
+                </Text>
+              </Box>
+
+              <Box marginBottom={1} paddingX={2}>
+                <Text bold color="yellow">Example:</Text>
+              </Box>
+              <Box flexDirection="column" paddingX={4} marginBottom={1}>
+                <Text dimColor>https://www.youtube.com/watch?v=VIDEO_ID</Text>
+                <Text dimColor>https://youtu.be/VIDEO_ID</Text>
+              </Box>
+            </Box>
+
+            <Box paddingX={1} paddingY={1} borderStyle="round" borderColor="cyan">
+              <UnifiedInput
+                mode="text"
+                onSubmit={(url) => {
+                  setStarted(true);
+                  uiLogger.logUserInput(`Loading YouTube transcript: ${url}`);
+                  void run(`Extract the transcript from this YouTube video and use it to create a video project: ${url}`);
+                }}
+                prompt=">"
+                hint={'Paste YouTube URL and press Enter. Type "exit" to quit.'}
+              />
             </Box>
           </Box>
         );

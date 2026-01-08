@@ -23,6 +23,8 @@ import {
   getProjectStyleConfig,
   STYLE_CONFIGS,
 } from './workflow/index.js';
+import { getYouTubeClient, extractVideoId, fetchYouTubeTranscriptTool } from '../../services/youtube/index.js';
+export { fetchYouTubeTranscriptTool };
 
 /**
  * Context for linking artifacts to project entities.
@@ -208,8 +210,8 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
       // Limit to 3 images total for qwen_edit workflow
       const imagesToUpload = reference_images.slice(0, 3);
 
-      for (let i = 0; i < imagesToUpload.length; i++) {
-        const refImage = imagesToUpload[i];
+      let first = true;
+      for (const refImage of imagesToUpload) {
         const refImagePath = findImagePathFromArtifactId(refImage.image_id);
 
         if (!refImagePath || !fs.existsSync(refImagePath)) {
@@ -218,9 +220,10 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
 
         const uploadResult = await client.uploadImage(refImagePath);
 
-        if (i === 0) {
+        if (first) {
           // First image is the primary input (base image to edit)
           inputImageFilename = uploadResult.name;
+          first = false;
         } else {
           // Additional images are stored separately
           referenceImageFilenames.push(uploadResult.name);
@@ -1306,6 +1309,8 @@ Returns an array of job IDs that can be tracked with wait_for_job.`,
   }
 );
 
+
+
 /**
  * Get all video generation tools.
  */
@@ -1317,6 +1322,7 @@ export function getVideoGenerationTools(): ToolDefinition[] {
     editImageTool,
     generateStoryboardTool,
     waitForJobTool,
+    fetchYouTubeTranscriptTool,
   ];
 }
 

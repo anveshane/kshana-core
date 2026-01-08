@@ -28,8 +28,8 @@ function debugLog(message: string) {
   // Parse the message to extract component and content
   const match = message.match(/^\[([^\]]+)\]\s*(.*)$/);
   if (match) {
-    const component = match[1];
-    const content = match[2];
+    const component = match[1] || 'Unknown';
+    const content = match[2] || '';
     phaseLogger.debug(component, 'legacy', content);
   } else {
     phaseLogger.debug('GenericAgent', 'legacy', message);
@@ -62,6 +62,15 @@ function isBuiltinTodoTool(name: string): boolean {
   return name === 'TodoWrite' || name === 'todo_write';
 }
 
+/**
+ * Tools that are legitimately called multiple times in sequence with different arguments.
+ * These are excluded from the "rapid repetition" check (same tool 4+ times in a row)
+ * but still subject to the "exact signature" check (same tool + same args).
+ */
+function isFrequentlyCalledTool(name: string): boolean {
+  return name === 'update_project' || name === 'read_project' || name === 'store_context';
+}
+
 function isTaskTool(name: string): boolean {
   return name === 'Task';
 }
@@ -71,16 +80,16 @@ function isPlanModeTool(name: string): boolean {
 }
 
 export class GenericAgent extends TypedEventEmitter {
-  private tools: Map<string, ToolDefinition>;
-  private llm: LLMClient;
+  protected tools: Map<string, ToolDefinition>;
+  protected llm: LLMClient;
   private isSubAgent: boolean;
   private maxIterations: number;
-  private name: string;
+  protected name: string;
   private customPrompt?: string;
 
   // State
   private todoManager = new ExpandableTodoManager();
-  private messages: Message[] = [];
+  protected messages: Message[] = [];
   private iteration = 0;
   private waitingForUser = false;
   private pendingQuestion?: string;
@@ -238,10 +247,41 @@ export class GenericAgent extends TypedEventEmitter {
         }
       }
     } catch (error) {
-      // On error, emit done and re-throw
+      // On error, emit done and provide better diagnostics
       this.emit({ type: 'streaming_text', chunk: '', done: true });
+      
+      // Estimate context size for error message
+      const estimatedContentTokens = messages.reduce((sum, msg) => {
+        return sum + Math.ceil((msg.content?.length ?? 0) / 3) + 10;
+      }, 0);
+      const estimatedToolTokens = tools.length * 250;
+      const estimatedTotal = estimatedContentTokens + estimatedToolTokens;
+      
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      
+      // Check for 400 errors which usually indicate request issues
+      if (errorMessage.includes('400')) {
+        const contextInfo = `Estimated context: ~${estimatedTotal} tokens (${messages.length} messages, ${tools.length} tools)`;
+        debugLog(`[GenericAgent] 400 error from LLM API. ${contextInfo}`);
+        
+        // If context is large, this is likely a context overflow
+        if (estimatedTotal > this.maxContextTokens * 0.8) {
+          throw new Error(
+            `LLM request failed (400): Context overflow likely. ${contextInfo}, max: ${this.maxContextTokens}. ` +
+            `Try reducing conversation length or use a model with larger context.`
+          );
+        }
+        
+        // Otherwise, might be malformed request
+        throw new Error(
+          `LLM request failed (400): ${errorMessage}. ${contextInfo}. ` +
+          `This may indicate a malformed request or API issue.`
+        );
+      }
+      
       throw error;
     }
+
 
     // Convert accumulated tool calls to final format
     for (const [, acc] of toolCallAccumulators) {
@@ -328,13 +368,16 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
+        // Use the original tool call ID from when the orchestrator called Task
+        const originalToolCallId = (planResultObj as any)['toolCallId'] || 'planning-result';
+
         // Find the dispatch_agent tool call and add its result
         // The main agent will continue processing
         this.messages.push({
           role: 'tool',
           content: JSON.stringify(planResult),
-          toolCallId: 'planning-result',
-          name: 'dispatch_agent',
+          toolCallId: originalToolCallId,
+          name: 'Task',
         });
 
         // Emit status change back to thinking
@@ -374,12 +417,15 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
+        // Use the original tool call ID from when the orchestrator called Task
+        const originalToolCallId = (contentResultObj as any)['toolCallId'] || 'content-result';
+
         // Add the dispatch_content_agent result to messages
         this.messages.push({
           role: 'tool',
           content: JSON.stringify(contentResult),
-          toolCallId: 'content-result',
-          name: 'dispatch_content_agent',
+          toolCallId: originalToolCallId,
+          name: 'Task',
         });
 
         // Emit status change back to thinking
@@ -419,12 +465,15 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
+        // Use the original tool call ID from when the orchestrator called Task
+        const originalImageToolCallId = (imageResultObj as any)['toolCallId'] || 'image-gen-result';
+
         // Add the dispatch_image_agent result to messages
         this.messages.push({
           role: 'tool',
           content: JSON.stringify(imageResult),
-          toolCallId: 'image-gen-result',
-          name: 'dispatch_image_agent',
+          toolCallId: originalImageToolCallId,
+          name: 'Task',
         });
 
         // Emit status change back to thinking
@@ -463,12 +512,15 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
+        // Use the original tool call ID from when the orchestrator called Task
+        const originalVideoToolCallId = (videoResultObj as any)['toolCallId'] || 'video-gen-result';
+
         // Add the dispatch_video_agent result to messages
         this.messages.push({
           role: 'tool',
           content: JSON.stringify(videoResult),
-          toolCallId: 'video-gen-result',
-          name: 'dispatch_video_agent',
+          toolCallId: originalVideoToolCallId,
+          name: 'Task',
         });
 
         // Emit status change back to thinking
@@ -586,9 +638,50 @@ export class GenericAgent extends TypedEventEmitter {
         toolCalls: response.toolCalls,
       });
 
-      // If no tool calls, we're done
+      // If no tool calls and no content, this is an error/glitch from the model
+      if (response.toolCalls.length === 0 && !response.content) {
+        debugLog('[GenericAgent] Empty response from LLM (no content, no tool calls). Retrying once...');
+        // Retry logic: Append a system message asking for a response
+        this.messages.push({
+          role: 'system',
+          content: 'You returned an empty response. Please try again and ensure you either generate content or call a tool.',
+        });
+        
+        // Retry generation
+        const retryResponse = await this.generateWithStreaming(
+          this.messages, // Don't re-inject reminder, messages already has it
+          Array.from(this.tools.values())
+        );
+        
+        // Update response with retry result
+        response.content = retryResponse.content;
+        response.toolCalls = retryResponse.toolCalls;
+        response.usage = retryResponse.usage;
+        response.finishReason = retryResponse.finishReason;
+        
+        // Add assistant message to history only if successful
+        if (response.content || response.toolCalls.length > 0) {
+           this.messages.push({
+            role: 'assistant',
+            content: response.content,
+            toolCalls: response.toolCalls,
+          });
+        }
+      }
+
+      // If STILL no tool calls, we're done
       if (response.toolCalls.length === 0) {
         finalOutput = response.content ?? '';
+        
+        // If final output is empty, report error instead of silent completion
+        if (!finalOutput) {
+           return {
+            status: 'error',
+            output: '',
+            todos: this.todoManager.getTodos(),
+            error: 'LLM returned empty response. Please check your model configuration or try again.',
+          };
+        }
         break;
       }
 
@@ -721,25 +814,28 @@ export class GenericAgent extends TypedEventEmitter {
     }
 
     // Also check for rapid tool repetition (same tool called consecutively)
-    const lastFew = this.recentToolCalls.slice(-4);
-    const sameToolCount = lastFew.filter(s => s.startsWith(toolName + ':')).length;
-    if (sameToolCount >= 4) {
-      this.consecutiveLoopWarnings++;
+    // Skip this check for tools that are legitimately called multiple times with different args
+    if (!isFrequentlyCalledTool(toolName)) {
+      const lastFew = this.recentToolCalls.slice(-4);
+      const sameToolCount = lastFew.filter(s => s.startsWith(toolName + ':')).length;
+      if (sameToolCount >= 4) {
+        this.consecutiveLoopWarnings++;
 
-      if (this.consecutiveLoopWarnings >= GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS) {
+        if (this.consecutiveLoopWarnings >= GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS) {
+          return {
+            message: `LOOP BLOCKED: You've called ${toolName} 4+ times in a row and ignored warnings. ` +
+              `This tool call is being blocked. Provide a final response to the user.`,
+            isHardError: true,
+          };
+        }
+
         return {
-          message: `LOOP BLOCKED: You've called ${toolName} 4+ times in a row and ignored warnings. ` +
-            `This tool call is being blocked. Provide a final response to the user.`,
-          isHardError: true,
+          message: `WARNING (${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
+            `You've called ${toolName} 4 times in a row. ` +
+            `If you're done with the task, stop calling tools and provide a final response.`,
+          isHardError: false,
         };
       }
-
-      return {
-        message: `WARNING (${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
-          `You've called ${toolName} 4 times in a row. ` +
-          `If you're done with the task, stop calling tools and provide a final response.`,
-        isHardError: false,
-      };
     }
 
     // Reset consecutive warnings if this call is not triggering a loop
@@ -814,6 +910,38 @@ export class GenericAgent extends TypedEventEmitter {
     // Handle Task tool specially - unified subagent entrypoint (Claude SDK style)
     if (isTaskTool(toolCall.name)) {
       const result = await this.handleTask(toolCall);
+      
+      // Check for awaiting verification (transcript subagent)
+      const resultObj = result as Record<string, unknown>;
+      if (resultObj && resultObj['status'] === 'awaiting_verification') {
+         // Emit tool result first to show the content!
+         this.emit({
+            type: 'tool_result',
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            result,
+            isError: false,
+            agentName: this.getEffectiveAgentName(),
+         });
+
+         // Set waiting state
+         this.waitingForUser = true;
+         this.pendingQuestion = resultObj['question'] as string;
+
+         // Emit question
+         this.emit({
+            type: 'question',
+            question: resultObj['question'] as string,
+            isConfirmation: false,
+            options: resultObj['options'] as any,
+            autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number,
+         });
+         
+         this.emit({ type: 'agent_status', status: 'waiting', agentName: this.getEffectiveAgentName() });
+         
+         return { __awaiting_user_input: true, ...resultObj };
+      }
+
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -1135,7 +1263,7 @@ export class GenericAgent extends TypedEventEmitter {
    * Handle Task tool - launches a subagent by subagent_type.
    * For now, maps to existing internal sub-agent handlers so we can migrate incrementally.
    */
-  private async handleTask(toolCall: ToolCall): Promise<unknown> {
+  protected async handleTask(toolCall: ToolCall): Promise<unknown> {
     const args = toolCall.arguments;
     const subagentType = args['subagent_type'] as string | undefined;
 
@@ -1314,6 +1442,8 @@ export class GenericAgent extends TypedEventEmitter {
       motionStrength: number;
     };
     iterations: number;
+    /** Tool call ID for streaming events */
+    toolCallId: string;
   } | null = null;
 
   /**
@@ -1526,6 +1656,7 @@ export class GenericAgent extends TypedEventEmitter {
         plan_ref: variableName,
         task: this.planningState.task,
         iterations: this.planningState.iterations,
+        toolCallId: this.planningState.toolCallId,
         message: `Plan "${name}" approved. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`,
         next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
@@ -1548,7 +1679,17 @@ export class GenericAgent extends TypedEventEmitter {
    * Use LLM to classify whether user response indicates approval or feedback.
    */
   private async classifyPlanResponse(userResponse: string): Promise<boolean> {
-    // Load classification prompt from file
+    // Quick pattern matching first - if it clearly matches, skip LLM
+    const lower = userResponse.toLowerCase().trim();
+    const approvalPatterns = ['yes', 'ok', 'okay', 'proceed', 'accept', 'approve', 'go', 'start', 'continue', 'lgtm', 'y', '1'];
+    const quickMatch = approvalPatterns.some(p => lower === p || lower.includes(p));
+
+    if (quickMatch) {
+      debugLog(`[GenericAgent] classifyPlanResponse quick match: "${userResponse}" -> APPROVE`);
+      return true;
+    }
+
+    // Load classification prompt from file for ambiguous cases
     const classificationPrompt = loadAndRenderMarkdown('system/classification/plan-approval.md', {
       user_response: userResponse,
     });
@@ -1563,12 +1704,12 @@ export class GenericAgent extends TypedEventEmitter {
       });
 
       const result = (response.content ?? '').trim().toUpperCase();
-      return result.includes('APPROVE');
-    } catch {
-      // On error, fall back to simple pattern matching
-      const lower = userResponse.toLowerCase().trim();
-      const approvalPatterns = ['yes', 'ok', 'okay', 'proceed', 'accept', 'approve', 'go', 'start', 'continue', 'lgtm', 'y', '1'];
-      return approvalPatterns.some(p => lower === p || lower.includes(p));
+      const isApproval = result.includes('APPROVE');
+      debugLog(`[GenericAgent] classifyPlanResponse LLM result: "${result}" -> ${isApproval ? 'APPROVE' : 'FEEDBACK'}`);
+      return isApproval;
+    } catch (err) {
+      debugLog(`[GenericAgent] classifyPlanResponse error: ${err}, falling back to FEEDBACK`);
+      return false;
     }
   }
 
@@ -2014,6 +2155,7 @@ Respond in JSON format:
         output_file: this.contentState.outputFile,
         file_saved: fileSaved,
         iterations: this.contentState.iterations,
+        toolCallId: this.contentState.toolCallId,
         message: fileSaved
           ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`
           : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`,
@@ -2522,6 +2664,7 @@ Respond in JSON format:
         aspect_ratio: finalState.aspectRatio,
         task: finalState.task,
         iterations: finalState.iterations,
+        toolCallId: finalState.toolCallId,
         job_id: jobId,
         artifact_id: waitResultObj['artifact_id'],
         file_path: waitResultObj['file_path'],
@@ -2606,7 +2749,7 @@ Respond in JSON format:
       active: true,
       task,
       sceneNumber,
-      sceneImageArtifactId,
+      sceneImageArtifactId: sceneImageArtifactId || '',
       motionDescription,
       context,
       messages: [],
@@ -2616,6 +2759,7 @@ Respond in JSON format:
         motionStrength: 0.7,
       },
       iterations: 0,
+      toolCallId: toolCall.id,
     };
 
     // Build a summary for user approval
@@ -2663,10 +2807,11 @@ Respond in JSON format:
 
     // User wants to provide feedback
     this.videoGenState.iterations++;
+    const currentParams = this.videoGenState.currentParams;
     if (this.videoGenState.iterations >= 5) {
       const result = {
         status: 'max_iterations',
-        params: this.videoGenState.currentParams,
+        params: currentParams,
         task: this.videoGenState.task,
         message: 'Reached maximum iterations for parameter refinement. Using the last version.',
       };
@@ -2838,6 +2983,7 @@ Respond in JSON format:
         params: finalState.currentParams,
         task: finalState.task,
         iterations: finalState.iterations,
+        toolCallId: finalState.toolCallId,
         job_id: jobId,
         artifact_id: waitResultObj['artifact_id'],
         file_path: waitResultObj['file_path'],

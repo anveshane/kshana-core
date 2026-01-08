@@ -6,12 +6,13 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { GenericAgent } from '../../core/agent/index.js';
+import { VideoAgent as VideoAgentClass } from '../../agents/VideoAgent.js';
 import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
 import { loadAndRenderMarkdown, loadMarkdown } from '../../core/prompts/loader.js';
-import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
+import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS, fetchYouTubeTranscriptTool } from './tools.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
 
@@ -97,7 +98,7 @@ export function createVideoToolRegistry(): ToolRegistry {
  * Create a GenericAgent configured for video creation tasks.
  * This injects the video-specific prompt and tools into the generic agent.
  */
-export function createVideoAgent(config: VideoAgentConfig): GenericAgent {
+export function createVideoAgent(config: VideoAgentConfig): VideoAgentClass {
   const { llmConfig, maxIterations = 100, includeCharacterGuidelines, includeStoryboardGuidelines } = config;
 
   // Create tool registry with video tools
@@ -112,11 +113,12 @@ export function createVideoAgent(config: VideoAgentConfig): GenericAgent {
     includeStoryboardGuidelines,
   });
 
-  // Create the generic agent with video customization
-  const agent = new GenericAgent(registry.getAll(), llm, {
+  // Create the VideoAgent with video customization
+  const agent = new VideoAgentClass(registry.getAll(), llm, {
     maxIterations,
     customPrompt,
     name: 'video-agent',
+    enableTranscriptExtraction: true,
   });
 
   return agent;
@@ -171,6 +173,9 @@ export function createWorkflowToolRegistry(): ToolRegistry {
     registry.register(tool);
   }
 
+  // Add YouTube transcript tool for loading content from YouTube videos
+  registry.register(fetchYouTubeTranscriptTool);
+
   return registry;
 }
 
@@ -186,7 +191,7 @@ export function createWorkflowToolRegistry(): ToolRegistry {
  * - images: characters, scenes
  * - video: scenes, images
  */
-function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
+export function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
   const projectDir = getProjectDir(basePath);
   const plansDir = join(projectDir, 'plans');
   const loadedContexts: string[] = [];
@@ -245,7 +250,7 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
  * Create a GenericAgent configured for workflow-based video creation.
  * Uses state-based approach with project files in .kshana/ directory.
  */
-export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): GenericAgent {
+export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): VideoAgentClass {
   const {
     llmConfig,
     maxIterations = 100,
@@ -254,7 +259,7 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
   } = config;
 
   // Initialize or load project
-  const project = getOrCreateProject(originalInput, basePath);
+  const project = getOrCreateProject(originalInput, 'cinematic_realism', basePath);
   const currentPhase = getCurrentPhase(project);
   const phaseConfig = PHASE_CONFIGS[currentPhase];
 
@@ -271,11 +276,12 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
   // Build custom prompt with workflow context (include loaded contexts info)
   const customPrompt = buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
 
-  // Create the generic agent with workflow customization
-  const agent = new GenericAgent(registry.getAll(), llm, {
+  // Create the VideoAgent with workflow customization
+  const agent = new VideoAgentClass(registry.getAll(), llm, {
     maxIterations,
     customPrompt,
     name: `workflow-video-agent-${currentPhase}`,
+    enableTranscriptExtraction: true,
   });
 
   return agent;

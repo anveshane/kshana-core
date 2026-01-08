@@ -24,11 +24,16 @@ function debugLog(message: string) {
 
 type AgentStatus = 'idle' | 'thinking' | 'waiting' | 'completed' | 'error';
 
+// Factory function type for creating custom agents
+type AgentFactory = (tools: Map<string, ToolDefinition>, llm: LLMClient, config?: AgentConfig) => GenericAgent;
+
 interface UseAgentOptions {
   tools: Map<string, ToolDefinition>;
   llmConfig?: LLMClientConfig;
   agentConfig?: AgentConfig;
   onEvent?: (event: AgentEvent) => void;
+  /** Custom agent factory for using specialized agents like VideoAgent */
+  agentFactory?: AgentFactory;
 }
 
 export interface ToolCallHistoryItem {
@@ -428,7 +433,7 @@ interface UseAgentReturn {
 }
 
 export function useAgent(options: UseAgentOptions): UseAgentReturn {
-  const { tools, llmConfig, agentConfig, onEvent } = options;
+  const { tools, llmConfig, agentConfig, onEvent, agentFactory } = options;
 
   const [state, dispatch] = React.useReducer(agentReducer, initialState);
   const agentRef = React.useRef<GenericAgent | null>(null);
@@ -445,7 +450,10 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
   // Create agent
   const createAgent = React.useCallback(() => {
     const llm = getLLM();
-    const agent = new GenericAgent(tools, llm, agentConfig);
+    // Use custom factory if provided, otherwise create GenericAgent
+    const agent = agentFactory
+      ? agentFactory(tools, llm, agentConfig)
+      : new GenericAgent(tools, llm, agentConfig);
 
     // Subscribe to events
     agent.on('agent_status', event => {
@@ -561,7 +569,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
 
     agentRef.current = agent;
     return agent;
-  }, [tools, agentConfig, getLLM, onEvent]);
+  }, [tools, agentConfig, getLLM, onEvent, agentFactory]);
 
   // Run agent on a task
   const run = React.useCallback(

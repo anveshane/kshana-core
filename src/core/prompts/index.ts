@@ -13,6 +13,7 @@ export const PLANNING_AGENT_PROMPT = '';
 export const CONTENT_AGENT_PROMPT = '';
 export const IMAGE_GENERATION_AGENT_PROMPT = '';
 export const VIDEO_GENERATION_AGENT_PROMPT = '';
+export const TRANSCRIPT_AGENT_PROMPT = '';
 
 export interface PromptRuntimeContext {
   working_directory?: string;
@@ -257,4 +258,44 @@ export function buildVideoGenerationPrompt(options: VideoGenerationPromptOptions
   const sceneSection = `<scene>\n<scene_number>\n${sceneNumberStr}\n</scene_number>\n<scene_image_artifact_id>\n${sceneImageArtifactId}\n</scene_image_artifact_id>\n<motion_description>\n${motionStr}\n</motion_description>\n</scene>`;
 
   return [base, sub, vid, taskSection, contextSection, sceneSection].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Transcript extraction prompt options.
+ */
+export interface TranscriptPromptOptions {
+  youtubeUrl: string;
+  task?: string;
+  context?: string;
+  tools?: Map<string, ToolDefinition>;
+}
+
+/**
+ * Build the transcript extraction sub-agent system prompt.
+ * Used for extracting and processing YouTube video transcripts.
+ *
+ * @param options - Transcript extraction options including YouTube URL and task
+ * @returns The complete transcript agent system prompt
+ */
+export function buildTranscriptPrompt(options: TranscriptPromptOptions): string {
+  const { youtubeUrl, task, context, tools } = options;
+
+  const taskSection = task
+    ? `<task>\n${task}\n</task>`
+    : `<task>\nExtract and process the transcript from the YouTube video.\n</task>`;
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const urlSection = `<youtube_url>\n${youtubeUrl}\n</youtube_url>`;
+
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const transcript = loadAndRenderMarkdown('subagents/transcript-extractor.md', {});
+
+  let prompt = [base, sub, transcript, taskSection, urlSection, contextSection].filter(Boolean).join('\n\n');
+
+  // Add tool descriptions if tools are provided
+  if (tools) {
+    prompt += '\n\n<tools>\n' + buildToolDescriptions(tools) + '\n</tools>';
+  }
+
+  return prompt;
 }

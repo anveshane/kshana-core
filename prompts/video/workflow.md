@@ -29,10 +29,21 @@ You are in the initial planning phase for an existing project.
 - Do NOT call `EnterPlanMode` - you are already in planning mode
 {{else}}
 ### NEW PROJECT - Initial Setup Required
-This is a brand new project. Call `EnterPlanMode` to begin initial project planning.
+This is a brand new project.
+
+**IF the user provided a YouTube URL:**
+1. Call `Task(subagent_type: 'transcript-extractor', task: 'Extract transcript', youtube_url: '<url>')` to get the content.
+2. **Identify the Video ID** from the URL or the extraction result.
+3. Save the extracted transcript to `transcripts/<VIDEO_ID>.md` using `write_file`.
+4. **Present the extracted transcript to the user** using `AskUserQuestion` and ask for approval.
+5. Once approved, use the transcript as the input for your project planning.
+6. Call `EnterPlanMode` to begin initial project planning based on the transcript.
+
+**IF the user provided a text story/idea:**
+Call `EnterPlanMode` to begin initial project planning.
 
 After entering plan mode, you will:
-1. Analyze the user's input and create an execution plan
+1. Analyze the user's input (or transcript) and create an execution plan
 2. Present the plan to the user via `AskUserQuestion` for approval
 3. After user approval, call `ExitPlanMode` to start the workflow
 {{/if}}

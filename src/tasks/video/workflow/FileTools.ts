@@ -72,7 +72,12 @@ async function validateStoryInput(input: string): Promise<{ valid: boolean; reas
   }
 
   try {
-    const client = new LLMClient();
+    // Use Gemini 2.5 Flash for fast, cheap validation
+    const client = new LLMClient({
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+      apiKey: process.env['GOOGLE_API_KEY'] ?? '',
+      model: 'gemini-2.5-flash',
+    });
 
     // Load validation prompt from file
     const validationPrompt = loadAndRenderMarkdown('video/validation.md', {
@@ -384,7 +389,7 @@ Actions:
 - "update_scene_approval": Update scene approval. Data: { scene_number, approval_type: 'content'|'image'|'video', status, artifactId? }
 - "add_asset": Register a generated asset. Data: { id, type, path, metadata? }
 - "set_final_video": Set the final video info. Data: { artifactId, path, duration }
-- "set_input_type": Set the input type after analyzing user input. Data: { input_type: 'idea'|'story' }. Use 'story' if user provided a complete story/chapter (skips plot and story phases).`,
+- "set_input_type": Set the input type after analyzing user input. Data: { input_type: 'idea'|'story'|'youtube' }. Use 'story' if user provided a complete story/chapter, 'youtube' if input is from a YouTube transcript (both skip plot and story phases).`,
   {
     type: 'object',
     properties: {
@@ -433,15 +438,19 @@ Actions:
           // Expand context references (e.g., $wakes -> actual content)
           originalInput = expandContextRef(originalInput);
 
-          // Validate that the input is actually a story idea
-          const validation = await validateStoryInput(originalInput);
-          if (!validation.valid) {
-            return {
-              status: 'invalid_input',
-              rejected: true,
-              error: validation.reason,
-              action_required: 'STOP - Do not proceed with the workflow. Display the message below to the user and wait for them to provide a valid story idea.',
-              message: `I'd love to help you create a video, but I need a story to work with.
+          // Check if this is a YouTube workflow (skip validation for transcripts)
+          const isYoutubeWorkflow = !!(data['youtube_url'] || data['is_youtube_transcript']);
+
+          // Validate that the input is actually a story idea (skip for YouTube transcripts)
+          if (!isYoutubeWorkflow) {
+            const validation = await validateStoryInput(originalInput);
+            if (!validation.valid) {
+              return {
+                status: 'invalid_input',
+                rejected: true,
+                error: validation.reason,
+                action_required: 'STOP - Do not proceed with the workflow. Display the message below to the user and wait for them to provide a valid story idea.',
+                message: `I'd love to help you create a video, but I need a story to work with.
 
 What you shared appears to be: ${validation.reason}
 
@@ -451,15 +460,24 @@ Please share:
 - A script or outline to adapt
 
 What story would you like to turn into a video?`,
-            };
+              };
+            }
           }
 
           const project = createProject(originalInput);
+
+          // Store youtube_url in project if provided
+          if (data['youtube_url']) {
+            project.youtubeUrl = data['youtube_url'] as string;
+            saveProject(project);
+          }
+
           return {
             status: 'success',
-            message: 'Project created',
+            message: isYoutubeWorkflow ? 'Project created from YouTube transcript' : 'Project created',
             project_id: project.id,
             current_phase: project.currentPhase,
+            is_youtube_workflow: isYoutubeWorkflow,
           };
         }
 
@@ -836,8 +854,8 @@ What story would you like to turn into a video?`,
 
         case 'set_input_type': {
           const inputType = data['input_type'] as InputType;
-          if (!inputType || !['idea', 'story'].includes(inputType)) {
-            return { status: 'error', error: 'input_type must be "idea" or "story"' };
+          if (!inputType || !['idea', 'story', 'youtube'].includes(inputType)) {
+            return { status: 'error', error: 'input_type must be "idea", "story", or "youtube"' };
           }
 
           const updatedProject = setProjectInputType(inputType);
@@ -850,15 +868,22 @@ What story would you like to turn into a video?`,
             ? inputTypeConfig.skipPhases.join(', ')
             : 'none';
 
+          let note: string;
+          if (inputType === 'youtube') {
+            note = 'Plot and Story phases have been skipped. Using YouTube transcript as story content. Proceeding to Characters & Settings phase. Use $highlights context for visual direction.';
+          } else if (inputType === 'story') {
+            note = 'Plot and Story phases have been skipped. The story has been saved to plans/story.md. Proceeding to Characters & Settings phase.';
+          } else {
+            note = 'Starting from Plot phase.';
+          }
+
           return {
             status: 'success',
             message: `Input type set to "${inputTypeConfig.displayName}"`,
             input_type: inputType,
             current_phase: updatedProject.currentPhase,
             skipped_phases: skippedPhases,
-            note: inputType === 'story'
-              ? 'Plot and Story phases have been skipped. The story has been saved to plans/story.md. Proceeding to Characters & Settings phase.'
-              : 'Starting from Plot phase.',
+            note,
           };
         }
 

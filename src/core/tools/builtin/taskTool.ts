@@ -18,6 +18,7 @@ Available subagent types:
 - content-creator: Creative content generator. Creates plot, story, characters, settings, scenes, narration. Iterates with user until approved.
 - image-generator: Image generation specialist. Crafts prompts and generates images for characters, settings, and scenes.
 - video-assembler: Video generation specialist. Creates video clips from scene images and stitches them into final video.
+- transcript-extractor: YouTube transcript extraction specialist. Extracts and processes transcripts from YouTube videos. **USE THIS FIRST if the user provides a YouTube URL.**
 
 Context Passing:
 - Use context_refs to pass stored context variables (e.g., ["$story", "$character_daniel"])
@@ -36,11 +37,15 @@ Content Type (for content-creator):
     properties: {
       subagent_type: {
         type: 'string',
-        description: 'Which subagent to use: "Plan", "Explore", "content-creator", "image-generator", "video-assembler"',
+        description: 'Which subagent to use: "Plan", "Explore", "content-creator", "image-generator", "video-assembler", "transcript-extractor"',
       },
       task: {
         type: 'string',
         description: 'Detailed task description for the subagent',
+      },
+      youtube_url: {
+        type: 'string',
+        description: 'For transcript-extractor: The YouTube URL to extract from',
       },
       context_refs: {
         type: 'array',

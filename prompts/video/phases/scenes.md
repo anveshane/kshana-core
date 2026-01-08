@@ -3,6 +3,13 @@
 **REQUIRED CONTEXT**: `$story` - Use the APPROVED STORY to break down into scenes.
 Also reference the registered characters and settings from `read_project`.
 
+**OPTIONAL CONTEXT**: `$highlights` - If available (from YouTube transcript workflow), use the extracted visual highlights to guide scene breakdown. Each highlight contains:
+- Visual composition hints (camera angle, lighting, key elements)
+- Emotional/narrative context (tone, story beat, thematic weight)
+- Source quotes from the original content
+
+When `$highlights` is available, prioritize creating scenes that capture these key visual moments.
+
 ## CRITICAL: Scene Limits
 
 **For short videos (1-3 minutes)**: Create 5-8 scenes maximum.
@@ -45,7 +52,7 @@ Task(
   content_type: "scene",
   task: "Create scene 1: <SCENE_TITLE> - <brief description>",
   output_file: "scenes/scene_01.md",
-  context_refs: ["$story"]
+  context_refs: ["$story", "$highlights"]  // Include $highlights if available for visual direction
 )
 ```
 

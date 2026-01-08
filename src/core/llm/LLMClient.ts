@@ -18,6 +18,7 @@ export class LLMClient {
   private model: string;
   private baseUrl: string;
   private cachedContextLength: number | null = null;
+  private thinkingLevel: string | undefined;
 
   constructor(config: LLMClientConfig = {}) {
     this.baseUrl = config.baseUrl ?? process.env['LLM_BASE_URL'] ?? 'http://127.0.0.1:1234/v1';
@@ -26,6 +27,7 @@ export class LLMClient {
       apiKey: config.apiKey ?? process.env['LLM_API_KEY'] ?? 'not-needed',
     });
     this.model = config.model ?? process.env['LLM_MODEL'] ?? 'local-model';
+    this.thinkingLevel = config.thinkingLevel ?? process.env['LLM_THINKING_LEVEL'];
   }
 
   /**
@@ -157,14 +159,29 @@ export class LLMClient {
     // Log request
     logger.logRequest(messages, tools, { temperature });
 
-    const stream = await this.client.chat.completions.create({
+    // Build request with optional Gemini thinking config
+    const requestParams: Parameters<typeof this.client.chat.completions.create>[0] = {
       model: this.model,
       messages: this.convertMessages(messages),
       tools: tools ? this.convertTools(tools) : undefined,
       temperature,
       stream: true,
       stream_options: { include_usage: true },
-    });
+    };
+
+    // Add Gemini thinking level if configured (via extra body params)
+    // Note: Disabled for now as Gemini OpenAI-compatible API may not support this yet
+    // if (this.thinkingLevel && this.isGeminiModel()) {
+    //   (requestParams as Record<string, unknown>)['extra_body'] = {
+    //     generation_config: {
+    //       thinking_config: {
+    //         thinking_budget: this.getThinkingBudget(this.thinkingLevel),
+    //       },
+    //     },
+    //   };
+    // }
+
+    const stream = await this.client.chat.completions.create(requestParams);
 
     // Accumulate for final logging
     let fullContent = '';
@@ -345,5 +362,26 @@ export class LLMClient {
     if (!content) return null;
     // Remove <think> tags from reasoning models
     return content.replace(/<think>.*?<\/think>/gs, '').trim();
+  }
+
+  /**
+   * Check if current model is a Gemini model.
+   */
+  private isGeminiModel(): boolean {
+    return this.model.toLowerCase().includes('gemini') ||
+           this.baseUrl.includes('generativelanguage.googleapis.com');
+  }
+
+  /**
+   * Convert thinking level to token budget for Gemini.
+   */
+  private getThinkingBudget(level: string): number {
+    switch (level) {
+      case 'none': return 0;
+      case 'low': return 1024;
+      case 'medium': return 8192;
+      case 'high': return 24576;
+      default: return 1024;
+    }
   }
 }
