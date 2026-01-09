@@ -319,7 +319,7 @@ function stripWrapperTags(content: string): string {
     .trim();
 }
 
-function looksLikeSrt(input: string): boolean {
+export function looksLikeSrt(input: string): boolean {
   const trimmed = input.trim();
   if (trimmed.length === 0) {
     return false;
@@ -334,20 +334,26 @@ function looksLikeSrt(input: string): boolean {
     }
   }
   
-  // Check for raw transcript format (timestamps embedded in text like "3:53", "4:00", "0:17")
+  // Check for raw transcript format (timestamps embedded in text like "3:53", "4:00", "0:17", "0:00", "0:03")
   // Patterns to match:
   // - "Transcript 0:00" or "0:17" at start
-  // - Timestamps like "1:23", "12:34" anywhere in text
+  // - Timestamps like "1:23", "12:34", "0:00", "0:03" anywhere in text
   // - Multiple timestamps indicate it's a transcript
-  const rawTranscriptPattern = /\d{1,2}:\d{2}(?:\s|$)/;
+  // Updated pattern to better match timestamps with optional newlines: /\d{1,2}:\d{2}/ matches "0:00", "0:03", "3:53", etc.
+  const rawTranscriptPattern = /\d{1,2}:\d{2}/g;
   const timestampMatches = trimmed.match(rawTranscriptPattern);
-  // If we find 3+ timestamps, it's likely a transcript
-  if (timestampMatches && timestampMatches.length >= 3) {
+  // If we find 3+ timestamps, it's likely a transcript (reduced threshold to catch shorter transcripts)
+  if (timestampMatches && timestampMatches.length >= 2) {
     return true; // Raw transcript format - treat as YouTube SRT workflow
   }
   
-  // Also check for common transcript prefixes
+  // Also check for common transcript prefixes or timestamps at start of lines
   if (/^(Transcript|transcript)\s*\d{1,2}:\d{2}/i.test(trimmed)) {
+    return true;
+  }
+  
+  // Check if starts with timestamp pattern (like "0:00\nSo, in 2024...")
+  if (/^\d{1,2}:\d{2}(\s|$)/m.test(trimmed)) {
     return true;
   }
   
@@ -368,11 +374,18 @@ const LEGACY_PHASES = new Set<WorkflowPhase>([
   WorkflowPhase.VIDEO,
 ]);
 
-function normalizeCurrentPhaseForInputType(project: ProjectFile): { phase: WorkflowPhase; changed: boolean } {
+export function normalizeCurrentPhaseForInputType(project: ProjectFile): { phase: WorkflowPhase; changed: boolean } {
   const inputTypeConfig = INPUT_TYPE_CONFIGS[project.inputType] ?? INPUT_TYPE_CONFIGS.idea;
   const currentPhase = project.currentPhase;
   const invalidPhase = !PHASE_CONFIGS[currentPhase];
   const legacyPhase = LEGACY_PHASES.has(currentPhase);
+
+  // For YouTube workflows, explicitly prevent PLOT or STORY phases
+  if (isYouTubeInputType(project.inputType)) {
+    if (currentPhase === 'plot' || currentPhase === 'story' || legacyPhase || invalidPhase) {
+      return { phase: inputTypeConfig.startPhase, changed: true };
+    }
+  }
 
   if (isYouTubeInputType(project.inputType) && (legacyPhase || invalidPhase)) {
     return { phase: inputTypeConfig.startPhase, changed: true };
@@ -434,7 +447,20 @@ export function createProject(
   // Generate plan ID
   const planId = `plan-${now}-${Math.random().toString(36).slice(2, 8)}`;
 
-  const detectedInputType: InputType = looksLikeSrt(cleanInput) ? 'youtube_srt' : 'idea';
+  // Detect input type - check for transcript patterns
+  let detectedInputType: InputType = looksLikeSrt(cleanInput) ? 'youtube_srt' : 'idea';
+  
+  // Double-check: if input has timestamps but wasn't detected, fix it
+  if (detectedInputType === 'idea' && /\d{1,2}:\d{2}/.test(cleanInput)) {
+    // Count timestamp patterns - if 2+, it's likely a transcript (lowered threshold)
+    const timestampMatches = cleanInput.match(/\d{1,2}:\d{2}/g);
+    if (timestampMatches && timestampMatches.length >= 2) {
+      detectedInputType = 'youtube_srt';
+      console.log(`[ProjectManager] Corrected inputType to youtube_srt based on timestamp count: ${timestampMatches.length}`);
+    }
+  }
+  
+  console.log(`[ProjectManager] Detected inputType: ${detectedInputType} for project creation`);
   const inputTypeConfig = INPUT_TYPE_CONFIGS[detectedInputType];
 
   // Default to detected input type; agent may update if it detects a full story/script
@@ -1377,6 +1403,25 @@ export function transitionToNextPhase(
 
   const result = determineNextPhase(project);
 
+  // Safeguard: Prevent YouTube workflows from transitioning to PLOT or STORY phases
+  if (isYouTubeWorkflow && (result.nextPhase === WorkflowPhase.PLOT || result.nextPhase === WorkflowPhase.STORY)) {
+    // For YouTube workflows, these phases should be skipped - force to correct next phase
+    const inputTypeConfig = INPUT_TYPE_CONFIGS[project.inputType];
+    const correctNextPhase = inputTypeConfig.startPhase; // Should be TRANSCRIPT_INPUT
+    console.warn(`[ProjectManager] Blocked transition to ${result.nextPhase} for YouTube workflow. Correcting to ${correctNextPhase}`);
+    project.currentPhase = correctNextPhase;
+    const phaseKey = correctNextPhase as keyof typeof project.phases;
+    if (project.phases[phaseKey]) {
+      project.phases[phaseKey].status = 'in_progress';
+    }
+    saveProject(project, basePath);
+    return {
+      project,
+      transitioned: true,
+      reason: `Blocked invalid transition to ${result.nextPhase} for YouTube workflow. Corrected to ${correctNextPhase}`
+    };
+  }
+
   if (result.nextPhase !== project.currentPhase) {
     project.currentPhase = result.nextPhase;
 
@@ -1407,6 +1452,22 @@ export function planFileHasContent(planFile: string, basePath: string = process.
 
   const content = readFileSync(filePath, 'utf-8').trim();
   return content.length > 0;
+}
+
+/**
+ * Check if Planning phase deliverables exist (content plan and image placements).
+ * Used to determine if Planning phase can be marked as completed.
+ */
+export function checkPlanningDeliverables(project: ProjectFile, basePath: string = process.cwd()): boolean {
+  const contentPlanPath = join(getProjectDir(basePath), 'agent', 'plans', 'content-plan.md');
+  const imagePlacementsPath = join(getProjectDir(basePath), 'agent', 'content', 'image-placements.md');
+  
+  const contentPlanExists = existsSync(contentPlanPath) && 
+    readFileSync(contentPlanPath, 'utf-8').trim().length > 0;
+  const imagePlacementsExist = existsSync(imagePlacementsPath) && 
+    readFileSync(imagePlacementsPath, 'utf-8').trim().length > 0;
+  
+  return contentPlanExists && imagePlacementsExist;
 }
 
 /**
@@ -2127,6 +2188,22 @@ Transcript parsing is complete. Transition to planning phase.
 1. Call update_project with action "transition_phase" to move to "planning"
 `;
         return instruction.trim();
+      }
+    }
+
+    // Check if Planning phase deliverables exist but phase isn't completed
+    if (currentPhase === WorkflowPhase.PLANNING) {
+      const phaseStatus = phaseInfo?.status ?? 'pending';
+      if (phaseStatus === 'in_progress') {
+        const planningDeliverablesExist = checkPlanningDeliverables(project, basePath);
+        if (planningDeliverablesExist) {
+          instruction += `
+The Planning phase deliverables are complete (content plan and image placements exist).
+1. Call update_project with action "update_phase" to mark "planning" as "completed"
+2. Then call update_project with action "transition_phase" to move to the next phase
+`;
+          return instruction.trim();
+        }
       }
     }
 

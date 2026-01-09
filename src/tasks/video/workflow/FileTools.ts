@@ -36,6 +36,7 @@ import {
   setProjectInputType,
   updateContentStatus,
   updatePlanStage,
+  checkPlanningDeliverables,
 } from './ProjectManager.js';
 import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus, InputType, ContentTypeName } from './types.js';
 import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase, INPUT_TYPE_CONFIGS } from './types.js';
@@ -719,18 +720,34 @@ What story would you like to turn into a video?`,
           // Get project summary for context
           const summary = getProjectSummary();
           
+          // Check if Planning phase deliverables exist but phase isn't completed
+          let nextAction = result.transitioned
+            ? `IMPORTANT: You have transitioned to a new phase. Update your todo list (mark the previous phase complete, mark the new phase in_progress), then call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
+            : 'Phase transition not needed. Call read_project to check current state.';
+          
+          let reason = result.reason;
+          
+          // Enhanced guidance for Planning phase when deliverables exist but phase isn't completed
+          if (!result.transitioned && result.reason.includes('in progress')) {
+            if (project.currentPhase === WorkflowPhase.PLANNING) {
+              const planningDeliverablesExist = checkPlanningDeliverables(project);
+              if (planningDeliverablesExist) {
+                nextAction = `Planning phase deliverables exist but phase is not marked as completed. First call update_project(action='update_phase', data={phase: 'planning', status: 'completed'}), then call transition_phase again.`;
+                reason = `Planning phase is in progress. Mark as completed first.`;
+              }
+            }
+          }
+          
           return {
             status: 'success',
             transitioned: result.transitioned,
-            reason: result.reason,
+            reason: reason,
             current_phase: result.project.currentPhase,
             new_phase_name: newPhaseConfig?.displayName ?? result.project.currentPhase,
             previous_phase: beforePhase,
             previous_phase_status: beforeStatus,
             project_summary: summary,
-            next_action: result.transitioned
-              ? `IMPORTANT: You have transitioned to a new phase. Update your todo list (mark the previous phase complete, mark the new phase in_progress), then call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
-              : 'Phase transition not needed. Call read_project to check current state.',
+            next_action: nextAction,
             debug: {
               before_phase: beforePhase,
               before_status: beforeStatus,

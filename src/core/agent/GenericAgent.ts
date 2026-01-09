@@ -340,6 +340,39 @@ export class GenericAgent extends TypedEventEmitter {
     // Emit started status
     this.emit({ type: 'agent_status', status: 'started', agentName: this.getEffectiveAgentName() });
 
+    // IMMEDIATE phase correction - do this FIRST before any processing
+    // This ensures YouTube workflows always start with TRANSCRIPT_INPUT phase
+    try {
+      const { loadProject, setProjectInputType, normalizeCurrentPhaseForInputType, looksLikeSrt, saveProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+      let project = loadProject();
+      if (project) {
+        // Check if input looks like transcript but project has wrong inputType
+        if (task && (project.inputType === 'idea' || project.inputType === undefined)) {
+          // Re-check input if project inputType is not set or is 'idea'
+          if (looksLikeSrt(task)) {
+            const corrected = setProjectInputType('youtube_srt');
+            if (corrected) {
+              debugLog(`[GenericAgent] Corrected project inputType to youtube_srt based on task content`);
+              project = corrected;
+            }
+          }
+        }
+        
+        // For YouTube workflows, force correct phase (must be TRANSCRIPT_INPUT, not PLOT/STORY)
+        if (project.inputType === 'youtube_srt' || project.inputType === 'script') {
+          const normalized = normalizeCurrentPhaseForInputType(project);
+          if (normalized.changed || project.currentPhase === 'plot' || project.currentPhase === 'story') {
+            const oldPhase = project.currentPhase;
+            project.currentPhase = normalized.phase;
+            saveProject(project);
+            debugLog(`[GenericAgent] IMMEDIATELY corrected phase from ${oldPhase} to ${normalized.phase} for YouTube workflow`);
+          }
+        }
+      }
+    } catch (err) {
+      debugLog(`[GenericAgent] Failed to correct project phase at start: ${err}`);
+    }
+
     // Resume from user question or start fresh
     if (userResponse && this.waitingForUser) {
       // Check if there's an active planning session (from dispatch_agent)
@@ -753,13 +786,68 @@ export class GenericAgent extends TypedEventEmitter {
         finalOutput = response.content ?? '';
 
         // CRITICAL: Check if we're in TRANSCRIPT_INPUT phase and haven't called Task tool yet
-        const isTranscriptInputPhase = this.customPrompt?.includes('transcript_input') || 
-                                       this.customPrompt?.includes('Transcript Input') ||
-                                       this.customPrompt?.includes('TRANSCRIPT_INPUT') ||
-                                       this.name.includes('transcript_input') ||
-                                       this.name.includes('transcript-input');
+        // Check actual project state first (more reliable than prompt content)
+        let isTranscriptInputPhase = false;
+        let projectInputType: string | undefined;
+        try {
+          const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+          const project = loadProject();
+          if (project) {
+            projectInputType = project.inputType;
+            // For YouTube workflows, check if we're in transcript_input phase
+            if (project.inputType === 'youtube_srt' || project.inputType === 'script') {
+              isTranscriptInputPhase = project.currentPhase === 'transcript_input';
+            }
+          }
+        } catch (err) {
+          debugLog(`[GenericAgent] Failed to check project state: ${err}`);
+        }
+
+        // Fallback: Check prompt content if project doesn't exist or isn't YouTube workflow
+        if (!isTranscriptInputPhase) {
+          isTranscriptInputPhase = this.customPrompt?.includes('transcript_input') || 
+                                   this.customPrompt?.includes('Transcript Input') ||
+                                   this.customPrompt?.includes('TRANSCRIPT_INPUT') ||
+                                   this.name.includes('transcript_input') ||
+                                   this.name.includes('transcript-input');
+        }
         
         if (isTranscriptInputPhase && this.iteration < this.maxIterations - 1) {
+          // First, check the actual project state to see if transcript is already parsed
+          let transcriptAlreadyParsed = false;
+          let phaseAlreadyCompleted = false;
+          try {
+            const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+            const project = loadProject();
+            if (project) {
+              // Check if transcript entries already exist
+              transcriptAlreadyParsed = Boolean(project.transcriptEntries && project.transcriptEntries.length > 0);
+              // Check if phase is already completed
+              const phaseInfo = project.phases?.transcript_input;
+              phaseAlreadyCompleted = Boolean(phaseInfo?.status === 'completed' || phaseInfo?.status === 'skipped');
+            }
+          } catch (err) {
+            debugLog(`[GenericAgent] Failed to check project state: ${err}`);
+          }
+
+          // If transcript is already parsed or phase is completed, prompt to transition phase
+          if (transcriptAlreadyParsed || phaseAlreadyCompleted) {
+            if (phaseAlreadyCompleted) {
+              debugLog(`[GenericAgent] TRANSCRIPT_INPUT phase already completed. Prompting to transition phase.`);
+              this.messages.push({
+                role: 'user',
+                content: `The TRANSCRIPT_INPUT phase is already completed. You MUST call update_project with action='transition_phase' to move to the next phase (Planning). Do NOT re-parse the transcript.`,
+              });
+            } else {
+              debugLog(`[GenericAgent] Transcript already parsed but phase not marked complete. Prompting to complete phase and transition.`);
+              this.messages.push({
+                role: 'user',
+                content: `The transcript has already been parsed (${transcriptAlreadyParsed ? 'transcriptEntries exist in project' : 'transcript file exists'}). Mark the phase as completed and transition to the next phase. Call: 1) update_project(action='update_phase', data={phase: 'transcript_input', status: 'completed'}), then 2) update_project(action='transition_phase', data={}).`,
+              });
+            }
+            continue;
+          }
+
           // Check if we've called Task with transcript-parser in this session
           const hasCalledTranscriptParser = this.messages.some(msg => {
             if (msg.role === 'assistant' && msg.toolCalls) {
@@ -905,6 +993,87 @@ export class GenericAgent extends TypedEventEmitter {
           toolCallId: toolCall.id,
           name: toolCall.name,
         });
+
+        // Special handling: After transcript-parser Task completes, automatically check if parsing succeeded
+        // and complete the phase if transcriptEntries exist
+        const subagentType = (toolCall.arguments as Record<string, unknown>)?.['subagent_type'] as string | undefined;
+        if (toolCall.name === 'Task' && subagentType === 'transcript-parser' && resultObj['status'] === 'completed') {
+          try {
+            const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+            const project = loadProject();
+            if (project && project.transcriptEntries && project.transcriptEntries.length > 0) {
+              // Transcript parsing succeeded - automatically complete phase and transition
+              debugLog(`[GenericAgent] Transcript parsing succeeded (${project.transcriptEntries.length} entries). Automatically completing phase.`);
+              
+              // Check if phase is already completed
+              const phaseInfo = project.phases?.transcript_input;
+              const isPhaseCompleted = phaseInfo?.status === 'completed' || phaseInfo?.status === 'skipped';
+              
+              if (!isPhaseCompleted) {
+                // Automatically mark phase as completed and transition
+                this.messages.push({
+                  role: 'user',
+                  content: `CRITICAL: Transcript parsing completed successfully with ${project.transcriptEntries.length} entries. You MUST immediately: 1) Call update_project(action='update_phase', data={phase: 'transcript_input', status: 'completed'}), then 2) Call update_project(action='transition_phase', data={}) to move to Planning phase. Do NOT ask the user anything - complete the phase transition automatically.`,
+                });
+                // Continue loop to process these update_project calls
+                continue;
+              } else {
+                // Phase already marked complete, just transition
+                debugLog(`[GenericAgent] Transcript parsing completed. Phase already marked complete. Prompting to transition.`);
+                this.messages.push({
+                  role: 'user',
+                  content: `Transcript parsing completed. Phase is already marked complete. You MUST call update_project(action='transition_phase', data={}) to move to Planning phase. Do NOT ask the user anything.`,
+                });
+                continue;
+              }
+            } else {
+              // Parsing may have failed - check the output for clues
+              const output = resultObj['output'] as string | undefined;
+              if (output && output.includes('No output generated')) {
+                debugLog(`[GenericAgent] WARNING: Transcript parsing returned "No output generated". This may indicate the parse_srt tool was not called by the subagent. Checking if parse_srt tool is available.`);
+                // Check if parse_srt tool exists
+                const parseSrtTool = this.tools.get('parse_srt');
+                if (!parseSrtTool) {
+                  debugLog(`[GenericAgent] ERROR: parse_srt tool is not registered in orchestrator tools!`);
+                } else {
+                  debugLog(`[GenericAgent] parse_srt tool is registered. Subagent may not have called it.`);
+                }
+              }
+            }
+          } catch (err) {
+            debugLog(`[GenericAgent] Failed to check transcript parsing result: ${err}`);
+          }
+        }
+
+        // Special handling: After transition_phase tool call, check if transition failed
+        // due to Planning phase being in_progress but deliverables exist
+        if (toolCall.name === 'update_project' && 
+            (toolCall.arguments as Record<string, unknown>)?.['action'] === 'transition_phase') {
+          const resultObj = result as Record<string, unknown>;
+          if (resultObj['transitioned'] === false && 
+              typeof resultObj['next_action'] === 'string' &&
+              resultObj['next_action'].includes('Phase transition not needed')) {
+            try {
+              const { loadProject, checkPlanningDeliverables } = await import('../../tasks/video/workflow/ProjectManager.js');
+              const project = loadProject();
+              if (project?.currentPhase === 'planning') {
+                const planningDeliverablesExist = checkPlanningDeliverables(project);
+                const phaseStatus = project.phases?.planning?.status;
+                if (planningDeliverablesExist && phaseStatus !== 'completed' && phaseStatus !== 'skipped') {
+                  // Planning phase deliverables are complete but phase is not marked as completed
+                  debugLog(`[GenericAgent] Planning phase deliverables exist but phase is not marked as completed. Prompting to mark phase as completed first.`);
+                  this.messages.push({
+                    role: 'user',
+                    content: `Planning phase deliverables are complete but phase is not marked as completed. You MUST first call update_project(action='update_phase', data={phase: 'planning', status: 'completed'}), then call transition_phase.`,
+                  });
+                  continue;
+                }
+              }
+            } catch (err) {
+              debugLog(`[GenericAgent] Failed to check Planning phase deliverables: ${err}`);
+            }
+          }
+        }
       }
     }
 
