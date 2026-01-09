@@ -34,10 +34,12 @@ Raw transcript text with timestamps embedded in the text:
 
 ## Process
 
-1. Read the transcript content from the provided context
-2. Use the `parse_srt` tool with the transcript text
-3. The tool will automatically detect the format and parse accordingly
-4. Store the parsed entries in project state
+1. **CRITICAL**: Check if the transcript content is available as a context variable (e.g., `$original_input`).
+2. **IF CONTEXT EXISTS**: Call `parse_srt(srt_text="$original_input")` or whichever variable contains the content.
+3. **DO NOT** copy the full transcript text into the `srt_text` argument if a context variable is available. The tool will resolve the variable automatically.
+4. **IF NO CONTEXT**: Only then pass the actual text content.
+5. The tool will automatically detect the format and parse accordingly.
+6. Store the parsed entries in project state
 
 ## Output Format (plain text only)
 
@@ -59,5 +61,6 @@ ENTRIES:
 ## Constraints
 
 - Use the `parse_srt` tool - it handles both formats automatically
-- Output plain text summary after tool execution
+- **CRITICAL**: If the input starts with a header like "Transcript Search" or similar, IGNORE the header and parse the timestamps in the content.
+- **CRITICAL**: You MUST output the plain text summary below AFTER the tool execution. Do NOT end the conversation without outputting this summary.
 - Keep entry text intact, preserving meaning

@@ -937,9 +937,21 @@ export interface StateTransitionResult {
  * Respects input type to ensure YouTube workflow phases are used for transcript input.
  */
 export function determineNextPhase(project: ProjectFile): StateTransitionResult {
+  const isYouTubeWorkflow = project.inputType === 'youtube_srt' || project.inputType === 'script';
+  
+  // Safeguard: For YouTube workflows, never allow PLOT or STORY phases
+  if (isYouTubeWorkflow && (project.currentPhase === WorkflowPhase.PLOT || project.currentPhase === WorkflowPhase.STORY)) {
+    // Force to TRANSCRIPT_INPUT if somehow in wrong phase
+    const inputTypeConfig = INPUT_TYPE_CONFIGS[project.inputType];
+    return {
+      nextPhase: inputTypeConfig.startPhase, // Should be TRANSCRIPT_INPUT
+      reason: `Invalid phase ${project.currentPhase} for YouTube workflow. Correcting to ${inputTypeConfig.startPhase}`,
+      isAutomatic: true,
+    };
+  }
+  
   const currentPhase = project.currentPhase;
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
-  const isYouTubeWorkflow = project.inputType === 'youtube_srt' || project.inputType === 'script';
 
   // If current phase is completed, move to next
   if (phaseInfo?.status === 'completed') {

@@ -98,7 +98,7 @@ function mergeEntriesIntoSentences(entries: TranscriptEntry[]): TranscriptEntry[
     const endsWithSentence = /[.!?]\s*$/.test(combinedText);
 
     // Determine end time: use next entry's start time if available, otherwise use current entry's end time
-    const endTime = nextEntry 
+    const endTime = nextEntry
       ? Math.min(currentEntry.lastEndTime, nextEntry.startTime)
       : currentEntry.lastEndTime;
 
@@ -133,12 +133,12 @@ function mergeEntriesIntoSentences(entries: TranscriptEntry[]): TranscriptEntry[
     const entry = merged[i];
     if (!entry) continue;
     const nextEntry = merged[i + 1];
-    
+
     // Adjust end time to prevent overlap
     if (nextEntry && nextEntry.startTime > entry.startTime) {
       entry.endTime = Math.min(entry.endTime, nextEntry.startTime);
     }
-    
+
     // Ensure minimum duration
     const actualDuration = entry.endTime - entry.startTime;
     if (actualDuration < minDuration) {
@@ -333,7 +333,7 @@ function isRawTranscriptFormat(text: string): boolean {
   if (srtPattern.test(text)) {
     return false; // It's SRT format
   }
-  
+
   // Check for raw transcript format (timestamps like "3:53", "4:00" embedded in text)
   const rawTranscriptPattern = /\b\d{1,2}:\d{2}\b/;
   return rawTranscriptPattern.test(text);
@@ -367,41 +367,57 @@ export const parseSrtTool: ToolDefinition = createTool(
     required: ['srt_text'],
   },
   async (args: Record<string, unknown>) => {
+    console.log('[DEBUG] parseSrtTool called');
     let inputText = args['srt_text'] as string;
-    
+    console.log(`[DEBUG] Input text length: ${inputText?.length}`);
+
     // Expand context references (e.g., $original_input -> actual content)
     inputText = expandContextRef(inputText);
-    
+    console.log(`[DEBUG] Expanded text length: ${inputText?.length}`);
+    if (inputText && inputText.length > 50) {
+      console.log(`[DEBUG] Input preview: ${inputText.slice(0, 50)}...`);
+    } else {
+      console.log(`[DEBUG] Input preview: ${inputText}`);
+    }
+
     // Detect format and parse accordingly
     let entries: TranscriptEntry[];
-    if (isRawTranscriptFormat(inputText)) {
+    const isRaw = isRawTranscriptFormat(inputText);
+    console.log(`[DEBUG] Detected raw format: ${isRaw}`);
+
+    if (isRaw) {
       // Convert raw transcript to entries
       entries = parseRawTranscriptWithTimestamps(inputText);
     } else {
       // Parse as SRT format
       entries = parseSrtText(inputText);
     }
-    
+    console.log(`[DEBUG] Parsed entries count: ${entries.length}`);
+
     const totalDuration = entries.length > 0 ? entries[entries.length - 1]?.endTime ?? 0 : 0;
 
     const project = loadProject();
     if (project) {
       project.transcriptEntries = entries;
       saveProject(project);
+      console.log('[DEBUG] Saved entries to project');
+    } else {
+      console.log('[DEBUG] Failed to load project');
     }
 
     const transcriptPath = 'agent/content/transcript.md';
     if (entries.length > 0) {
       const transcriptContent = formatTranscriptMarkdown(entries);
       writeProjectFile(transcriptPath, transcriptContent);
+      console.log(`[DEBUG] Wrote transcript content to ${transcriptPath}`);
     }
 
     return {
       status: 'success',
       total_entries: entries.length,
       total_duration: totalDuration,
-      entries,
-      format_detected: isRawTranscriptFormat(inputText) ? 'raw_transcript' : 'srt',
+      // entries: entries, // Too large for context, do not return full array
+      format_detected: isRaw ? 'raw_transcript' : 'srt',
       transcript_path: transcriptPath,
       transcript_preview: formatTranscriptMarkdown(entries.slice(0, 10)), // Show first 10 entries
       message: `Successfully parsed ${entries.length} transcript entries. Saved to ${transcriptPath}`,

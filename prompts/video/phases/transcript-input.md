@@ -17,6 +17,10 @@ Task(
 )
 ```
 
+**IMPORTANT**:
+- If the text starts with "Transcript Search" or similar headers (common from YouTube copies), **IGNORE THE HEADER** and process the content if it contains timestamps (e.g., `0:00`, `1:23`).
+- **DO NOT** ask the user what they want to search for. The presence of timestamps means it is a transcript to be parsed.
+
 2. **The Task result contains the parsed transcript**:
    - The subagent automatically saves the parsed transcript to `agent/content/transcript.md`
    - The transcript entries are stored in `project.json` (transcriptEntries array)
