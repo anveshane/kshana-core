@@ -151,6 +151,17 @@ export {
   type VideoTransition,
 } from './StitchVideoTool.js';
 
+// Placement Parsers
+export {
+  parseImagePlacements,
+  type ParsedImagePlacement,
+} from './imagePlacementsParser.js';
+
+export {
+  parseVideoPlacements,
+  type ParsedVideoPlacement,
+} from './videoPlacementsParser.js';
+
 // Combined tool getter
 import { getWorkflowFileTools } from './FileTools.js';
 import { getStitchingTools } from './StitchVideoTool.js';

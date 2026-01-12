@@ -271,6 +271,12 @@ export class LLMClient {
     const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> = new Map();
 
     for await (const chunk of stream) {
+      // Add safety check for stream chunks
+      if (!chunk.choices || !Array.isArray(chunk.choices) || chunk.choices.length === 0) {
+        console.warn('[LLMClient] Stream chunk missing choices array or empty, skipping chunk');
+        continue;
+      }
+
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
@@ -328,7 +334,7 @@ export class LLMClient {
         logger.logStreamComplete({
           content: fullContent || null,
           toolCalls,
-          finishReason: chunk.choices[0].finish_reason,
+          finishReason: chunk.choices[0]?.finish_reason ?? null,
         });
 
         // Include usage if available (requires stream_options: { include_usage: true })
@@ -402,9 +408,75 @@ export class LLMClient {
    * Parse OpenAI response to internal format.
    */
   private parseResponse(response: OpenAI.ChatCompletion): LLMResponse {
+    // Validate response structure
+    if (!response || !response.choices || !Array.isArray(response.choices)) {
+      // Check for Gemini content filtering (indicated by completion_tokens: 0)
+      const isContentFiltered = response?.usage?.completion_tokens === 0 && 
+                                 response?.usage?.prompt_tokens > 0 &&
+                                 this.isGeminiProvider;
+      
+      if (isContentFiltered) {
+        console.error('[LLMClient] Gemini API blocked response due to content filtering. The prompt may have triggered safety filters.');
+        console.error('[LLMClient] Response structure:', JSON.stringify(response, null, 2));
+        console.error('[LLMClient] Suggestion: Try rephrasing the prompt or adjusting safety settings in Gemini API.');
+      } else {
+        console.error('[LLMClient] Invalid API response structure:', JSON.stringify(response, null, 2));
+      }
+      
+      return {
+        content: null,
+        toolCalls: [],
+        finishReason: null,
+        usage: response?.usage
+          ? {
+            promptTokens: response.usage.prompt_tokens,
+            completionTokens: response.usage.completion_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
+          : undefined,
+      };
+    }
+
+    if (response.choices.length === 0) {
+      // Check for Gemini content filtering
+      const isContentFiltered = response.usage?.completion_tokens === 0 && 
+                                 response.usage?.prompt_tokens > 0 &&
+                                 this.isGeminiProvider;
+      
+      if (isContentFiltered) {
+        console.warn('[LLMClient] Gemini API returned empty choices array - likely content filtering. completion_tokens: 0 indicates response was blocked.');
+      } else {
+        console.warn('[LLMClient] API returned empty choices array');
+      }
+      
+      return {
+        content: null,
+        toolCalls: [],
+        finishReason: null,
+        usage: response.usage
+          ? {
+            promptTokens: response.usage.prompt_tokens,
+            completionTokens: response.usage.completion_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
+          : undefined,
+      };
+    }
+
     const choice = response.choices[0];
     if (!choice) {
-      return { content: null, toolCalls: [], finishReason: null };
+      return {
+        content: null,
+        toolCalls: [],
+        finishReason: null,
+        usage: response.usage
+          ? {
+            promptTokens: response.usage.prompt_tokens,
+            completionTokens: response.usage.completion_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
+          : undefined,
+      };
     }
 
     const toolCalls: ToolCall[] = (choice.message.tool_calls ?? []).map(tc => ({

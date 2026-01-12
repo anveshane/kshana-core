@@ -22,6 +22,7 @@ import {
   buildTranscriptParserPrompt,
   buildPlacementPlannerPrompt,
   buildImagePlacerPrompt,
+  buildVideoPlacerPrompt,
   buildVideoReplacerPrompt,
   wrapUserTask,
   type ContentType,
@@ -288,7 +289,10 @@ export class GenericAgent extends TypedEventEmitter {
         }
       }
     } catch (error) {
-      // On error, emit done and re-throw
+      // On error, emit done and log context before re-throwing
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const agentName = this.getEffectiveAgentName();
+      console.error(`[GenericAgent] Streaming LLM call failed in ${agentName}:`, errorMessage);
       this.emit({ type: 'streaming_text', chunk: '', done: true });
       throw error;
     }
@@ -1851,6 +1855,13 @@ export class GenericAgent extends TypedEventEmitter {
       });
     }
 
+    if (subagentType === 'video-placer') {
+      return await this.handleDispatchVideoPlacer({
+        ...toolCall,
+        name: 'dispatch_video_placer',
+      });
+    }
+
     if (subagentType === 'video-replacer') {
       return await this.handleDispatchVideoReplacer({
         ...toolCall,
@@ -2031,6 +2042,18 @@ export class GenericAgent extends TypedEventEmitter {
 
   // State for image placement sub-agent
   private imagePlacerState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentOutput: string;
+    iterations: number;
+    toolCallId: string;
+    outputFile?: string;
+  } | null = null;
+
+  // State for video placement sub-agent
+  private videoPlacerState: {
     active: boolean;
     task: string;
     context?: string;
@@ -3649,11 +3672,50 @@ Respond in JSON format:
       iterations++;
       
       // Generate response with tool calling support
-      const response = await this.llm.generate({
-        messages: state.messages,
-        temperature,
-        tools: Array.from(tools.values()),
-      });
+      let response;
+      try {
+        response = await this.llm.generate({
+          messages: state.messages,
+          temperature,
+          tools: Array.from(tools.values()),
+        });
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        const subagentName = this.getEffectiveAgentName();
+        console.error(`[GenericAgent] LLM API call failed in ${subagentName} (${toolName}):`, errorMessage);
+        console.error(`[GenericAgent] Context: task="${state.task}", iteration=${iterations}/${maxIterations}`);
+        
+        // Return error with context
+        this.currentMode = 'orchestrator';
+        return {
+          status: 'error',
+          error: `LLM API call failed: ${errorMessage}`,
+          task: state.task,
+          subagent: subagentName,
+          tool: toolName,
+          iteration: iterations,
+          suggestion: 'Check LLM API connection and response format. The API may have returned an unexpected response structure.',
+        };
+      }
+
+      // Check for empty response (likely content filtering)
+      if (!response.content && (!response.toolCalls || response.toolCalls.length === 0)) {
+        const subagentName = this.getEffectiveAgentName();
+        console.warn(`[GenericAgent] Empty response received in ${subagentName} (${toolName}) - likely content filtering`);
+        console.warn(`[GenericAgent] Context: task="${state.task}", iteration=${iterations}/${maxIterations}`);
+        
+        // Return error indicating content filtering
+        this.currentMode = 'orchestrator';
+        return {
+          status: 'error',
+          error: 'LLM API returned empty response - content may have been filtered by safety settings',
+          task: state.task,
+          subagent: subagentName,
+          tool: toolName,
+          iteration: iterations,
+          suggestion: 'The prompt may have triggered content safety filters. Try rephrasing the prompt or adjusting API safety settings.',
+        };
+      }
 
       // Add assistant message to history
       state.messages.push({
@@ -3954,6 +4016,135 @@ Respond in JSON format:
     }
 
     this.imagePlacerState = null;
+    return result;
+  }
+
+  private async handleDispatchVideoPlacer(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'content';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_video_placer' };
+    }
+
+    if (this.videoPlacerState?.active) {
+      return { error: 'Video placement already in progress' };
+    }
+
+    // Video-placer needs $transcript and $image_placements (to avoid collisions)
+    const requiredRefs = contextRefs || [];
+    if (!requiredRefs.includes('$transcript')) {
+      debugLog(`[GenericAgent] Auto-adding $transcript to context_refs for video-placer (required but not provided)`);
+      requiredRefs.push('$transcript');
+    }
+    if (!requiredRefs.includes('$image_placements')) {
+      debugLog(`[GenericAgent] Auto-adding $image_placements to context_refs for video-placer (required but not provided)`);
+      requiredRefs.push('$image_placements');
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(requiredRefs);
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] WARNING: Missing context_refs for video placer: ${missingRefs.join(', ')}`);
+    }
+
+    // Default output file if not provided
+    let outputFileToUse = outputFile || 'agent/content/video-placements.md';
+    // If orchestrator mistakenly passes content-plan path to video-placer, fix it
+    if (outputFileToUse.includes('content-plan')) {
+      debugLog('[GenericAgent] WARNING: video-placer received content-plan path. Overriding to agent/content/video-placements.md');
+      outputFileToUse = 'agent/content/video-placements.md';
+    }
+    debugLog(`[GenericAgent] handleDispatchVideoPlacer: outputFile=${outputFileToUse}`);
+
+    const systemPrompt = buildVideoPlacerPrompt(context);
+    this.videoPlacerState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `<request>\n${task}\n</request>` },
+      ],
+      currentOutput: '',
+      iterations: 1,
+      toolCallId: toolCall.id,
+      outputFile: outputFileToUse,
+    };
+
+    const result = await this.runOneShotSubagent(this.videoPlacerState, 'dispatch_video_placer', 0.4);
+    
+    // Save the output to file if we have output
+    const resultObj = result as Record<string, unknown>;
+    if (resultObj['status'] === 'completed' && resultObj['output']) {
+      const output = resultObj['output'] as string;
+      let fileSaved = false;
+      let normalizedPath: string | undefined;
+
+      // Normalize path
+      normalizedPath = outputFileToUse;
+      if (normalizedPath.startsWith('content/') && !normalizedPath.startsWith('agent/content/')) {
+        normalizedPath = `agent/${normalizedPath}`;
+      } else if (!normalizedPath.startsWith('agent/')) {
+        if (!normalizedPath.includes('/')) {
+          normalizedPath = `agent/content/${normalizedPath}`;
+        } else {
+          normalizedPath = `agent/${normalizedPath}`;
+        }
+      }
+
+      try {
+        const projectDir = path.join(process.cwd(), '.kshana');
+        const filePath = path.join(projectDir, normalizedPath);
+        debugLog(`[GenericAgent] Attempting to save video placement plan to: ${filePath} (normalized from: ${outputFileToUse})`);
+
+        // Ensure parent directory exists
+        const parentDir = path.dirname(filePath);
+        if (!fs.existsSync(parentDir)) {
+          debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+
+        fs.writeFileSync(filePath, output, 'utf-8');
+        fileSaved = true;
+        debugLog(`[GenericAgent] Successfully saved video placement plan to ${normalizedPath}`);
+
+        // Store reference in context store
+        const variableName = contextStore.storeReference(
+          normalizedPath,
+          'Video Placement Plan',
+          undefined,
+          'tool'
+        ).variableName;
+        debugLog(`[GenericAgent] Stored reference to video placement plan file in context store as ${variableName}`);
+
+        // Generate preview for display (clean markdown, no code fences)
+        let preview = output.length > 800 ? output.substring(0, 800) + '...' : output;
+        // Remove markdown code fences if present
+        preview = preview.replace(/^```[\w]*\n/gm, '').replace(/^```$/gm, '');
+        const previewLines = preview.split('\n').slice(0, 20).join('\n');
+        const truncatedPreview = previewLines.length < preview.length ? previewLines + '\n...' : previewLines;
+
+        // Update result with file info and preview
+        resultObj['output_file'] = normalizedPath;
+        resultObj['file_saved'] = fileSaved;
+        resultObj['video_placements_ref'] = variableName;
+        resultObj['file_path'] = normalizedPath; // For compatibility with write_file format
+        resultObj['bytes_written'] = output.length;
+        resultObj['total_lines'] = output.split('\n').length;
+        resultObj['preview'] = truncatedPreview;
+        resultObj['content'] = output; // Also add to content for display
+      } catch (err) {
+        debugLog(`[GenericAgent] ERROR: Failed to save video placement plan to ${outputFileToUse}: ${err}`);
+        resultObj['file_saved'] = false;
+        resultObj['error'] = `Failed to save video placement plan: ${String(err)}`;
+      }
+    }
+
+    this.videoPlacerState = null;
     return result;
   }
 
@@ -4444,6 +4635,16 @@ Respond in JSON format:
         throw new Error('No job_id returned from generate_image');
       }
 
+      // Emit tool result for generate_image with job_id prominently displayed
+      this.emit({
+        type: 'tool_result',
+        toolCallId,
+        toolName: 'generate_image',
+        result: submitResult,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
+
       // Emit that we're waiting for the job
       const waitToolCallId = `wait-job-${Date.now()}`;
       this.emit({
@@ -4769,6 +4970,16 @@ Respond in JSON format:
       if (!jobId) {
         throw new Error('No job_id returned from generate_video');
       }
+
+      // Emit tool result for generate_video with job_id prominently displayed
+      this.emit({
+        type: 'tool_result',
+        toolCallId,
+        toolName: 'generate_video',
+        result: submitResult,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
 
       // Emit that we're waiting for the job
       const waitToolCallId = `wait-job-${Date.now()}`;

@@ -365,6 +365,45 @@ function formatResult(result: unknown, isError: boolean): string {
     return lines.join('\n');
   }
 
+  // Special handling for generate_image/generate_video results with job_id
+  if (resultObj['job_id']) {
+    const lines: string[] = [];
+    const jobId = String(resultObj['job_id']);
+    
+    // Prominently display job_id
+    lines.push(`Job ID: ${jobId}`);
+    
+    // Show status if available
+    if (resultObj['status']) {
+      lines.push(`Status: ${resultObj['status']}`);
+    }
+    
+    // Show message if available
+    if (resultObj['message']) {
+      lines.push(`Message: ${resultObj['message']}`);
+    }
+    
+    // Show additional fields (but not job_id again)
+    const otherFields: string[] = [];
+    for (const [key, value] of Object.entries(resultObj)) {
+      if (key !== 'job_id' && key !== 'status' && key !== 'message') {
+        if (value !== null && value !== undefined) {
+          if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            otherFields.push(`${key}: ${value}`);
+          }
+        }
+      }
+    }
+    
+    if (otherFields.length > 0) {
+      lines.push('');
+      lines.push('Additional info:');
+      otherFields.forEach(field => lines.push(`  ${field}`));
+    }
+    
+    return lines.join('\n');
+  }
+
   // For simple status results
   if (resultObj['status'] === 'success' && resultObj['message']) {
     return String(resultObj['message']);

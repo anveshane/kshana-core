@@ -1,75 +1,57 @@
 ### Image Generation Phase
 
-Generate documentary-style images for each planned placement, **ONE AT A TIME, SEQUENTIALLY**.
+Generate images for each placement identified in the previous phase.
 
-**Prerequisites**:
-- Image placements must exist at `agent/content/image-placements.md` (created in Image Placement phase)
+**SIMPLE WORKFLOW:**
+1. Call the `generate_all_images` tool to process all placements automatically
+2. The tool will:
+   - Read and parse `agent/content/image-placements.md`
+   - Extract all placements (Placement 1, 2, 3, etc.)
+   - Generate images sequentially, one at a time
+   - Wait for each image to complete before moving to the next
+   - Continue even if some images fail (logs failures but doesn't stop)
+   - Return a summary of successful and failed placements
+3. After the tool completes, mark phase complete and STOP
 
-**CRITICAL WORKFLOW - Execute steps in this exact order:**
+**NEVER:**
+- Manually parse the image-placements.md file
+- Call `Task` with image-generator subagent for individual placements
+- Call `generate_image` directly
+- Create todos
+- Call `update_image_placement` manually
+- Generate more images than placements in the file
 
-**STEP 1: Read the image placements file**
+**STEP 1: Call generate_all_images tool**
 
-Use `read_file` to get the placements:
+Simply call the `generate_all_images` tool. It handles everything automatically:
 
 ```
-read_file(file_path: 'agent/content/image-placements.md')
-```
-
-The file contains markdown with sections like this:
-```markdown
-# Image Placement Plan
-
-## Placement 1
-*   **Start Time:** 0:08
-*   **End Time:** 0:12
-*   **Transcript Index:** 1
-*   **Image Prompt:** A cinematic depiction of the river Ganga...
-
-## Placement 2
-*   **Start Time:** 0:38
-*   **End Time:** 0:45
-*   **Transcript Index:** 2
-*   **Image Prompt:** A photorealistic aerial view...
-```
-
-**STEP 2: Process each placement sequentially**
-
-For EACH placement in the file (Placement 1, Placement 2, etc.):
-
-a. Extract the placement number and image prompt from the file:
-   - Placement number: The number after "Placement" in the heading (e.g., "Placement 1" = 1)
-   - Image prompt: The text after `**Image Prompt:**` in that placement's section
-
-b. Call the image-generator subagent:
-```
-Task(
-  subagent_type: 'image-generator',
-  task: 'Generate image for Placement [NUMBER]. Prompt: [paste exact prompt from file]. Use placement number as scene_number.'
+generate_all_images(
+  file_path: 'agent/content/image-placements.md'
 )
 ```
 
-**EXAMPLE for Placement 1:**
-If the file shows:
-```markdown
-## Placement 1
-*   **Image Prompt:** A cinematic depiction of the river Ganga descending from the heavens, received by Lord Shiva.
-```
+The tool will:
+- Read and parse the image-placements.md file
+- Extract all placement entries (Placement 1, 2, 3, etc.)
+- Generate images sequentially, one at a time
+- Wait for each image to complete before moving to the next
+- Continue even if some images fail (logs failures but doesn't stop)
+- Return a summary with successful and failed placements
 
-Then call:
-```
-Task(
-  subagent_type: 'image-generator',
-  task: 'Generate image for Placement 1. Prompt: A cinematic depiction of the river Ganga descending from the heavens, received by Lord Shiva. Use placement number as scene_number.'
-)
-```
+**WAIT for the tool to complete** - It will process ALL placements before returning.
 
-c. **WAIT for the Task to complete** - The subagent will generate the image and return a result. Only after this completes, proceed to the next placement.
+**STEP 2: Check results and mark phase complete**
 
-d. Move to the next placement - Only after Placement 1 is complete, process Placement 2, then Placement 3, and so on.
+After the `generate_all_images` tool completes:
 
-**STEP 3: Mark phase complete**
+1. **Check the result summary** - The tool returns:
+   - `total_placements`: Total number of placements found
+   - `successful`: Number of successfully generated images
+   - `failed`: Number of failed image generations
+   - `results`: Array with details for each placement
 
-After ALL placements have been processed (all images generated), mark the phase complete:
+2. **Mark the phase complete:**
 ```
 update_project(
   action: 'update_phase',
@@ -77,15 +59,23 @@ update_project(
 )
 ```
 
+3. **STOP here** - The image generation phase ends after marking it as completed. Do NOT transition to the next phase automatically.
+
 **DO NOT:**
-- Skip reading the file - you MUST read `agent/content/image-placements.md` first
-- Process multiple placements at once - work on ONE at a time, sequentially
-- Move to the next placement before the current one completes
-- Mark the phase complete until ALL placements are processed
+- Manually parse the image-placements.md file
+- Call `Task` with image-generator subagent for individual placements
+- Call `generate_image` directly
+- Call `update_image_placement` manually
+- Create todos or task lists
+- Try to manage image placement state manually
+- Retry failed placements manually
+- Transition to the next phase - the phase ends after marking it as completed
 
 **IMPORTANT:**
-- **Read the file FIRST** using `read_file(file_path: 'agent/content/image-placements.md')`
-- **Process placements SEQUENTIALLY** - Placement 1, wait for completion, then Placement 2, etc.
-- **The image-generator subagent handles everything** - it crafts the prompt, calls generate_image, waits for completion, and registers the image
+- **Use the `generate_all_images` tool** - It handles all parsing, sequential generation, and error handling
+- **The tool processes ALL placements automatically** - No need to count or iterate manually
+- **Sequential execution is guaranteed** - The tool enforces one-at-a-time generation in code
+- **Failed placements are logged but don't stop the process** - The tool continues with remaining placements
+- **After the tool completes** - Mark phase complete and STOP. The phase ends here.
 - Generated images are automatically stored in `agent/image-placements/` directory
 - Images are automatically registered in the manifest

@@ -279,6 +279,14 @@ export function buildImagePlacerPrompt(context?: string): string {
   return [base, sub, placer, contextSection].filter(Boolean).join('\n\n');
 }
 
+export function buildVideoPlacerPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const placer = loadAndRenderMarkdown('subagents/video-placer.md', {});
+  return [base, sub, placer, contextSection].filter(Boolean).join('\n\n');
+}
+
 export function buildVideoReplacerPrompt(context?: string): string {
   const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
   const base = loadAndRenderMarkdown('system/base.md', {});

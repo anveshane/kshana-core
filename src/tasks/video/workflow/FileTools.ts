@@ -1150,10 +1150,10 @@ What story would you like to turn into a video?`,
 
 /**
  * Get workflow file tools for the orchestrator.
- * Only includes project state tools - content files are handled by subagents via Task.
+ * Includes file read/write tools needed for saving plans and content files.
  */
 export function getWorkflowFileTools(): ToolDefinition[] {
-  return [readFileTool, readProjectTool, updateProjectTool, readTranscriptTool, writePlacementPlanTool];
+  return [readFileTool, writeFileTool, readProjectTool, updateProjectTool, readTranscriptTool, writePlacementPlanTool];
 }
 
 /**

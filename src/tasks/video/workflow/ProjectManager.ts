@@ -500,6 +500,14 @@ export function createProject(
         status: 'pending',
         completedAt: null,
       },
+      video_placement: {
+        status: 'pending',
+        completedAt: null,
+      },
+      video_generation: {
+        status: 'pending',
+        completedAt: null,
+      },
       video_replacement: {
         status: 'pending',
         completedAt: null,

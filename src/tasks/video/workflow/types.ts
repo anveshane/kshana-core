@@ -63,7 +63,13 @@ export enum WorkflowPhase {
   /** Phase 4 (YouTube): Generate images for placements */
   IMAGE_GENERATION = 'image_generation',
 
-  /** Phase 5 (YouTube): Replace video segments with images */
+  /** Phase 4.5 (YouTube): Map videos to transcript timestamps */
+  VIDEO_PLACEMENT = 'video_placement',
+
+  /** Phase 5 (YouTube): Generate videos for placements */
+  VIDEO_GENERATION = 'video_generation',
+
+  /** Phase 6 (YouTube): Replace video segments with images */
   VIDEO_REPLACEMENT = 'video_replacement',
 
   /** Legacy: Analyze input and create plot outline */
@@ -366,6 +372,21 @@ export interface ImagePlacement {
 }
 
 /**
+ * Planned video placement aligned to transcript entries.
+ * Videos complement images in different time segments.
+ */
+export interface VideoPlacement {
+  transcriptIndex: number;
+  startTime: number;
+  endTime: number;
+  videoPrompt: string;
+  videoType: 'animation' | 'stock_footage' | 'motion_graphics'; // Based on content needs
+  videoDuration: number; // Calculated from endTime - startTime
+  videoPath?: string;
+  videoArtifactId?: string;
+}
+
+/**
  * Asset metadata stored in agent/manifest.json.
  */
 export interface AssetInfo {
@@ -540,6 +561,8 @@ export interface ProjectFile {
     planning: PhaseInfo;
     image_placement: PhaseInfo;
     image_generation: PhaseInfo;
+    video_placement: PhaseInfo;
+    video_generation: PhaseInfo;
     video_replacement: PhaseInfo;
     plot: PhaseInfo;
     story: PhaseInfo;
@@ -570,6 +593,8 @@ export interface ProjectFile {
   transcriptEntries?: TranscriptEntry[];
   /** Image placement plan aligned to transcript entries */
   imagePlacements?: ImagePlacement[];
+  /** Video placement plan aligned to transcript entries */
+  videoPlacements?: VideoPlacement[];
 }
 
 /**
@@ -701,7 +726,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
   [WorkflowPhase.IMAGE_GENERATION]: {
     phase: WorkflowPhase.IMAGE_GENERATION,
     displayName: 'Image Generation',
-    nextPhase: WorkflowPhase.VIDEO_REPLACEMENT,
+    nextPhase: WorkflowPhase.VIDEO_PLACEMENT,
     promptFile: 'image-generation',
     agentType: 'image',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
@@ -709,6 +734,32 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     requiresPerItemApproval: false,
     isExpensive: true,
     description: 'Generate documentary-style images for planned placements',
+  },
+
+  [WorkflowPhase.VIDEO_PLACEMENT]: {
+    phase: WorkflowPhase.VIDEO_PLACEMENT,
+    displayName: 'Video Placement',
+    nextPhase: WorkflowPhase.VIDEO_GENERATION,
+    promptFile: 'video-placement',
+    agentType: 'video',
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'Task', 'todo_write'],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: false,
+    description: 'Identify moments for video generation (distinct from image placements)',
+  },
+
+  [WorkflowPhase.VIDEO_GENERATION]: {
+    phase: WorkflowPhase.VIDEO_GENERATION,
+    displayName: 'Video Generation',
+    nextPhase: WorkflowPhase.VIDEO_REPLACEMENT,
+    promptFile: 'video-generation',
+    agentType: 'video',
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_video', 'wait_for_job', 'todo_write'],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: true,
+    description: 'Generate AI videos for planned placements',
   },
 
   [WorkflowPhase.VIDEO_REPLACEMENT]: {
@@ -980,6 +1031,8 @@ export function determineNextPhase(project: ProjectFile): StateTransitionResult 
               WorkflowPhase.PLANNING,
               WorkflowPhase.IMAGE_PLACEMENT,
               WorkflowPhase.IMAGE_GENERATION,
+              WorkflowPhase.VIDEO_PLACEMENT,
+              WorkflowPhase.VIDEO_GENERATION,
               WorkflowPhase.VIDEO_REPLACEMENT,
               WorkflowPhase.VIDEO_COMBINE,
               WorkflowPhase.COMPLETED,

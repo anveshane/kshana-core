@@ -15,6 +15,7 @@ import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
 import { getSrtTools } from './tools/srt.js';
 import { getPlacementTools } from './tools/placement.js';
+import { getVideoPlacementTools } from './tools/videoPlacement.js';
 import { getVideoReplacementTools } from './tools/video-replacement.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
@@ -183,20 +184,34 @@ export function createWorkflowToolRegistry(): ToolRegistry {
     registry.register(tool);
   }
 
+  for (const tool of getVideoPlacementTools()) {
+    registry.register(tool);
+  }
+
   for (const tool of getVideoReplacementTools()) {
     registry.register(tool);
   }
 
-  // Add generate_image and wait_for_job tools so subagent handlers can access them
-  // These are needed by the image-generator subagent via Task tool
+  // Add generate_image, wait_for_job, generate_all_images, and generate_all_videos tools
+  // generate_image and wait_for_job are needed by the image-generator subagent via Task tool
+  // generate_all_images is used by the orchestrator during image_generation phase
+  // generate_all_videos is used by the orchestrator during video_generation phase
   const videoGenerationTools = getVideoGenerationTools();
   const generateImageTool = videoGenerationTools.find(t => t.name === 'generate_image');
   const waitForJobTool = videoGenerationTools.find(t => t.name === 'wait_for_job');
+  const generateAllImagesTool = videoGenerationTools.find(t => t.name === 'generate_all_images');
+  const generateAllVideosTool = videoGenerationTools.find(t => t.name === 'generate_all_videos');
   if (generateImageTool) {
     registry.register(generateImageTool);
   }
   if (waitForJobTool) {
     registry.register(waitForJobTool);
+  }
+  if (generateAllImagesTool) {
+    registry.register(generateAllImagesTool);
+  }
+  if (generateAllVideosTool) {
+    registry.register(generateAllVideosTool);
   }
 
   return registry;
@@ -379,6 +394,8 @@ const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
   [WorkflowPhase.PLANNING]: 'video/phases/planning.md',
   [WorkflowPhase.IMAGE_PLACEMENT]: 'video/phases/image-placement.md',
   [WorkflowPhase.IMAGE_GENERATION]: 'video/phases/image-generation.md',
+  [WorkflowPhase.VIDEO_PLACEMENT]: 'video/phases/video-placement.md',
+  [WorkflowPhase.VIDEO_GENERATION]: 'video/phases/video-generation.md',
   [WorkflowPhase.VIDEO_REPLACEMENT]: 'video/phases/video-replacement.md',
   [WorkflowPhase.PLOT]: 'video/phases/plot.md',
   [WorkflowPhase.STORY]: 'video/phases/story.md',

@@ -25,7 +25,10 @@ import {
   STYLE_CONFIGS,
   getAgentDir,
   getAssets,
+  readProjectFile,
 } from './workflow/index.js';
+import { parseImagePlacements, type ParsedImagePlacement } from './workflow/imagePlacementsParser.js';
+import { parseVideoPlacements, type ParsedVideoPlacement } from './workflow/videoPlacementsParser.js';
 
 /**
  * Context for linking artifacts to project entities.
@@ -135,6 +138,25 @@ function getImagePlacementsDir(): string {
     fs.mkdirSync(imagePlacementsDir, { recursive: true });
   }
   return imagePlacementsDir;
+}
+
+// Get the video-placements directory for placement videos
+function getVideoPlacementsDir(): string {
+  const videoPlacementsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'video-placements');
+  if (!fs.existsSync(videoPlacementsDir)) {
+    fs.mkdirSync(videoPlacementsDir, { recursive: true });
+  }
+  return videoPlacementsDir;
+}
+
+/**
+ * Generate a filename for placement images.
+ * Format: image{number}_{nanoid(8)}.png
+ * Example: image1_aB3cD4eF.png, image2_xY9zW2vU.png
+ */
+function generatePlacementFilename(placementNumber: number): string {
+  const id = nanoid(8);
+  return `image${placementNumber}_${id}.png`;
 }
 
 /**
@@ -351,8 +373,18 @@ async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<
   }
 
   try {
-    // Use image-placements directory for scene images (placement images), assets/images for reference images
-    const outputDir = job.context?.entityType === 'scene' ? getImagePlacementsDir() : getAssetsDir();
+    // Determine output directory based on job type and context
+    let outputDir: string;
+    if (job.type === 'video' && job.context?.artifactType === 'video') {
+      // Video jobs use video-placements directory
+      outputDir = getVideoPlacementsDir();
+    } else if (job.context?.entityType === 'scene') {
+      // Scene images use image-placements directory
+      outputDir = getImagePlacementsDir();
+    } else {
+      // Reference images use assets directory
+      outputDir = getAssetsDir();
+    }
     const client = new ComfyUIClient({
       outputDir,
       timeout,
@@ -371,27 +403,42 @@ async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<
       return { status: 'failed', error: 'Job did not complete' };
     }
 
-    // Get output images
-    const images = await client.getOutputImages(job.promptId);
-    if (!images.length) {
+    // Get output files (images or videos)
+    const outputs = await client.getOutputImages(job.promptId);
+    if (!outputs.length) {
       job.status = 'failed';
-      job.error = 'No output images found';
+      const errorMsg = job.type === 'video' ? 'No output videos found' : 'No output images found';
+      job.error = errorMsg;
       job.updatedAt = Date.now();
-      return { status: 'failed', error: 'No output images found' };
+      return { status: 'failed', error: errorMsg };
     }
 
-    // Download first image
-    const firstImage = images[0]!;
-    const outputFilename = `${nanoid(8)}_${firstImage.filename}`;
+    // Download first output file (image or video)
+    const firstOutput = outputs[0]!;
+    
+    // Generate descriptive filename
+    let outputFilename: string;
+    if (job.type === 'video' && job.context?.entityType === 'scene' && job.context.sceneNumber) {
+      // Video naming: video{number}_{nanoid(8)}.mp4
+      const ext = firstOutput.filename.split('.').pop() || 'mp4';
+      outputFilename = `video${job.context.sceneNumber}_${nanoid(8)}.${ext}`;
+    } else if (job.context?.entityType === 'scene' && job.context.sceneNumber) {
+      // Image naming: image{number}_{nanoid(8)}.png
+      outputFilename = generatePlacementFilename(job.context.sceneNumber);
+    } else {
+      // For non-placement files, use original naming with nanoid prefix
+      outputFilename = `${nanoid(8)}_${firstOutput.filename}`;
+    }
+    
     const savedPath = await client.downloadImage(
-      firstImage.filename,
-      firstImage.subfolder,
-      firstImage.type,
+      firstOutput.filename,
+      firstOutput.subfolder,
+      firstOutput.type,
       outputFilename
     );
 
-    // Create artifact ID
-    const artifactId = `img_${nanoid(8)}`;
+    // Create artifact ID (use vid_ for videos, img_ for images)
+    const artifactId = job.type === 'video' ? `vid_${nanoid(8)}` : `img_${nanoid(8)}`;
 
     // Get relative path for storage (relative to .kshana/)
     const projectDir = path.join(process.cwd(), PROJECT_DIR);
@@ -472,10 +519,14 @@ async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<
     };
     job.updatedAt = Date.now();
 
+    // Return full absolute path for immediate use
+    // savedPath should already be absolute from downloadImage, but ensure it is
+    const absolutePath = path.isAbsolute(savedPath) ? savedPath : path.resolve(savedPath);
+
     return {
       status: 'completed',
       artifactId,
-      filePath: relativePath,
+      filePath: absolutePath, // Return full absolute path for immediate use
     };
   } catch (error) {
     job.status = 'failed';
@@ -637,6 +688,236 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         generation_mode: generationMode,
         reference_count: params.reference_images?.length ?? 0,
         references: params.reference_images?.map(r => `${r.type}:${r.name}`) ?? [],
+      },
+    };
+  }
+);
+
+/**
+ * Video generation parameters for placement videos.
+ */
+export interface VideoPlacementGenerationParams {
+  scene_number: number;
+  prompt: string;
+  duration: number; // Duration in seconds (5, 10, or 15)
+  video_type: 'animation' | 'stock_footage' | 'motion_graphics';
+}
+
+/**
+ * Submit a video generation job for placement videos.
+ * Since ComfyUI workflows require a base image, this implements a two-step process:
+ * 1. Generate an image from the text prompt
+ * 2. Use that image to generate a video with motion
+ */
+async function submitVideoPlacementGeneration(params: VideoPlacementGenerationParams): Promise<{
+  jobId: string;
+  status: string;
+  error?: string;
+}> {
+  const {
+    scene_number,
+    prompt,
+    duration,
+    video_type,
+  } = params;
+
+  // Create job for tracking
+  const jobId = `vid-${Date.now()}-${nanoid(6)}`;
+  const job: GenerationJob = {
+    id: jobId,
+    type: 'video',
+    status: 'pending',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    context: {
+      entityType: 'scene',
+      sceneNumber: scene_number,
+      artifactType: 'video',
+    },
+  };
+  jobs.set(jobId, job);
+
+  try {
+    // Step 1: Generate an image from the text prompt
+    console.log(`[submitVideoPlacementGeneration] Step 1: Generating image from prompt for placement ${scene_number}...`);
+    
+    const imageJobResult = await submitImageGeneration({
+      scene_number,
+      prompt,
+      negative_prompt: 'blurry, low quality, text, watermark',
+      aspect_ratio: '16:9',
+      image_type: 'scene',
+      generation_mode: 'text_to_image',
+    });
+
+    if (imageJobResult.status !== 'submitted' || !imageJobResult.jobId) {
+      const errorMsg = imageJobResult.error || 'Failed to submit image generation';
+      throw new Error(`Image generation failed: ${errorMsg}`);
+    }
+
+    // Step 2: Wait for the image to complete
+    console.log(`[submitVideoPlacementGeneration] Step 2: Waiting for image generation to complete...`);
+    const imageWaitResult = await waitForComfyUIJob(imageJobResult.jobId, 300);
+
+    if (imageWaitResult.status !== 'completed' || !imageWaitResult.filePath) {
+      const errorMsg = imageWaitResult.error || 'Image generation did not complete';
+      throw new Error(`Image generation failed: ${errorMsg}`);
+    }
+
+    // Step 3: Use the generated image to create a video
+    console.log(`[submitVideoPlacementGeneration] Step 3: Generating video from image...`);
+    
+    // Construct full path - filePath should be absolute, but handle relative paths too
+    let imagePath = imageWaitResult.filePath;
+    if (!path.isAbsolute(imagePath)) {
+      // If relative, it's relative to .kshana/ directory
+      const projectDir = path.join(process.cwd(), PROJECT_DIR);
+      imagePath = path.join(projectDir, imagePath);
+    }
+
+    // Verify the image exists
+    if (!fs.existsSync(imagePath)) {
+      // Try to find the image by searching in image-placements directory
+      const imagePlacementsDir = getImagePlacementsDir();
+      const filename = path.basename(imagePath);
+      const altPath = path.join(imagePlacementsDir, filename);
+      
+      if (fs.existsSync(altPath)) {
+        imagePath = altPath;
+      } else {
+        // Try to find any image with the placement number pattern
+        const placementImagePattern = new RegExp(`^image${scene_number}_`);
+        try {
+          const files = fs.readdirSync(imagePlacementsDir);
+          const matchingFile = files.find(f => placementImagePattern.test(f));
+          if (matchingFile) {
+            imagePath = path.join(imagePlacementsDir, matchingFile);
+          } else {
+            throw new Error(`Generated image not found. Checked: ${imagePath}, ${altPath}, and searched in ${imagePlacementsDir}`);
+          }
+        } catch (dirError) {
+          throw new Error(`Generated image not found at: ${imageWaitResult.filePath}. Directory error: ${dirError}`);
+        }
+      }
+    }
+
+    const registry = getRegistry();
+    const workflowMetadata = registry.get('wan_single_image');
+
+    if (!workflowMetadata) {
+      throw new Error("Workflow 'wan_single_image' not found");
+    }
+
+    // Use video-placements directory for placement videos
+    const videoPlacementsDir = getVideoPlacementsDir();
+
+    const client = new ComfyUIClient({
+      outputDir: videoPlacementsDir,
+    });
+
+    // Upload the image to ComfyUI
+    const uploadResult = await client.uploadImage(imagePath, 'input', true);
+
+    // Create motion prompt based on video type and original prompt
+    // The prompt already describes the scene, so we enhance it with motion
+    const motionPrompt = `${prompt}. Smooth, natural motion and animation.`;
+
+    // Load and parameterize the workflow
+    const template = loadWorkflowTemplate(workflowMetadata.filename);
+    const workflow = parameterizeWorkflowByName('wan_single_image', template, {
+      sceneNumber: scene_number,
+      prompt: motionPrompt,
+      negativePrompt: 'blurry, low quality, text, watermark, static, no motion',
+      inputImageFilename: uploadResult.name,
+      filenamePrefix: `Placement${scene_number}_video`,
+    });
+
+    // Queue workflow
+    const promptId = await client.queueWorkflow(workflow as Record<string, unknown>);
+
+    // Update job with video prompt ID
+    job.promptId = promptId;
+    job.status = 'processing';
+    job.updatedAt = Date.now();
+
+    console.log(`[submitVideoPlacementGeneration] Video generation job submitted with prompt ID: ${promptId}`);
+
+    return {
+      jobId,
+      status: 'submitted',
+    };
+  } catch (error) {
+    job.status = 'failed';
+    job.error = String(error);
+    job.updatedAt = Date.now();
+
+    return {
+      jobId,
+      status: 'error',
+      error: String(error),
+    };
+  }
+}
+
+/**
+ * Generate a video for a placement using AI video generation.
+ * This tool generates videos from text prompts for video placements.
+ */
+export const generateVideoPlacementTool: ToolDefinition = createTool(
+  'generate_video',
+  `Generate an AI video for a video placement using text-to-video generation.
+
+This tool generates videos from text prompts for video placements identified in the transcript.
+The video will be saved to the video-placements directory.
+
+The tool will return a job ID. Use wait_for_job to check completion.`,
+  {
+    type: 'object',
+    properties: {
+      prompt: {
+        type: 'string',
+        description: 'Detailed video generation prompt describing the visual and motion',
+      },
+      duration: {
+        type: 'number',
+        description: 'Video duration in seconds (5, 10, or 15)',
+        enum: [5, 10, 15],
+      },
+      scene_number: {
+        type: 'number',
+        description: 'Scene/placement number for file naming',
+      },
+      video_type: {
+        type: 'string',
+        enum: ['animation', 'stock_footage', 'motion_graphics'],
+        description: 'Type of video to generate',
+      },
+    },
+    required: ['prompt', 'duration', 'scene_number', 'video_type'],
+  },
+  async (args) => {
+    const params = args as unknown as VideoPlacementGenerationParams;
+
+    // Submit video generation job
+    const result = await submitVideoPlacementGeneration(params);
+
+    if (result.status === 'error') {
+      return {
+        status: 'error',
+        error: result.error,
+        job_id: result.jobId,
+      };
+    }
+
+    return {
+      status: 'submitted',
+      job_id: result.jobId,
+      message: `Video generation job submitted. Use wait_for_job("${result.jobId}") to check status.`,
+      params: {
+        scene_number: params.scene_number,
+        video_type: params.video_type,
+        duration: params.duration,
+        prompt: params.prompt,
       },
     };
   }
@@ -1386,15 +1667,304 @@ Returns an array of job IDs that can be tracked with wait_for_job.`,
 );
 
 /**
+ * Generate all images for placements defined in image-placements.md.
+ * Parses the file, extracts all placements, and generates images sequentially.
+ * Each image is generated one at a time, waiting for completion before moving to the next.
+ */
+export const generateAllImagesTool: ToolDefinition = createTool(
+  'generate_all_images',
+  `Generate all images for placements defined in the image-placements.md file.
+
+This tool:
+1. Reads and parses agent/content/image-placements.md
+2. Extracts all placement entries (Placement 1, 2, 3, etc.)
+3. Generates images sequentially, one at a time
+4. Waits for each image to complete before moving to the next
+5. Continues even if some images fail (logs failures but doesn't stop)
+6. Returns a summary of successful and failed placements
+
+Use this tool during the image_generation phase to process all placements automatically.
+The tool handles all parsing, sequential generation, and error handling internally.`,
+  {
+    type: 'object',
+    properties: {
+      file_path: {
+        type: 'string',
+        description: 'Path to image-placements.md file (default: agent/content/image-placements.md)',
+      },
+    },
+    required: [],
+  },
+  async (args) => {
+    const filePath = (args['file_path'] as string | undefined) || 'agent/content/image-placements.md';
+    
+    // Read the image placements file
+    const content = readProjectFile(filePath);
+    if (!content) {
+      return {
+        status: 'error',
+        error: `Image placements file not found: ${filePath}`,
+      };
+    }
+    
+    // Parse placements
+    let placements: ParsedImagePlacement[];
+    try {
+      placements = parseImagePlacements(content);
+    } catch (error) {
+      return {
+        status: 'error',
+        error: `Failed to parse image placements: ${String(error)}`,
+      };
+    }
+    
+    if (placements.length === 0) {
+      return {
+        status: 'error',
+        error: 'No placements found in image-placements.md',
+      };
+    }
+    
+    console.log(`[generate_all_images] Found ${placements.length} placements to generate`);
+    
+    const results: Array<{
+      placementNumber: number;
+      status: 'success' | 'failed';
+      artifactId?: string;
+      filePath?: string;
+      error?: string;
+    }> = [];
+    
+    // Generate images sequentially
+    for (const placement of placements) {
+      console.log(`[generate_all_images] Generating image for Placement ${placement.placementNumber}...`);
+      
+      try {
+        // Submit image generation job
+        // Use placement number as scene_number for tracking
+        const submitResult = await submitImageGeneration({
+          scene_number: placement.placementNumber,
+          prompt: placement.prompt,
+          negative_prompt: 'blurry, low quality, text, watermark',
+          aspect_ratio: '16:9',
+          image_type: 'scene', // Placement images are scene type
+          generation_mode: 'text_to_image',
+        });
+        
+        if (submitResult.status !== 'submitted' || !submitResult.jobId) {
+          const errorMsg = submitResult.error || 'Failed to submit image generation';
+          console.error(`[generate_all_images] Placement ${placement.placementNumber} failed: ${errorMsg}`);
+          results.push({
+            placementNumber: placement.placementNumber,
+            status: 'failed',
+            error: errorMsg,
+          });
+          continue;
+        }
+        
+        // Wait for job completion
+        const waitResult = await waitForComfyUIJob(submitResult.jobId, 300);
+        
+        if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
+          console.log(`[generate_all_images] Placement ${placement.placementNumber} completed: ${waitResult.artifactId}`);
+          results.push({
+            placementNumber: placement.placementNumber,
+            status: 'success',
+            artifactId: waitResult.artifactId,
+            filePath: waitResult.filePath,
+          });
+        } else {
+          const errorMsg = waitResult.error || 'Image generation did not complete';
+          console.error(`[generate_all_images] Placement ${placement.placementNumber} failed: ${errorMsg}`);
+          results.push({
+            placementNumber: placement.placementNumber,
+            status: 'failed',
+            error: errorMsg,
+          });
+        }
+      } catch (error) {
+        const errorMsg = String(error);
+        console.error(`[generate_all_images] Placement ${placement.placementNumber} error: ${errorMsg}`);
+        results.push({
+          placementNumber: placement.placementNumber,
+          status: 'failed',
+          error: errorMsg,
+        });
+      }
+    }
+    
+    // Summary
+    const successful = results.filter(r => r.status === 'success');
+    const failed = results.filter(r => r.status === 'failed');
+    
+    console.log(`[generate_all_images] Completed: ${successful.length} successful, ${failed.length} failed`);
+    
+    return {
+      status: 'completed',
+      total_placements: placements.length,
+      successful: successful.length,
+      failed: failed.length,
+      results: results,
+      message: `Generated ${successful.length} out of ${placements.length} images. ${failed.length} failed.`,
+    };
+  }
+);
+
+/**
+ * Generate all videos for placements defined in video-placements.md.
+ * Parses the file, extracts all placements, and generates videos sequentially.
+ * Each video is generated one at a time, waiting for completion before moving to the next.
+ */
+export const generateAllVideosTool: ToolDefinition = createTool(
+  'generate_all_videos',
+  `Generate all videos for placements defined in the video-placements.md file.
+
+This tool:
+1. Reads and parses agent/content/video-placements.md
+2. Extracts all placement entries (Placement 1, 2, 3, etc.)
+3. Generates videos sequentially, one at a time
+4. Waits for each video to complete before moving to the next
+5. Continues even if some videos fail (logs failures but doesn't stop)
+6. Returns a summary of successful and failed placements
+
+Use this tool during the video_generation phase to process all placements automatically.
+The tool handles all parsing, sequential generation, and error handling internally.
+Videos are generated from text prompts (no scene_image_artifact_id required).`,
+  {
+    type: 'object',
+    properties: {
+      file_path: {
+        type: 'string',
+        description: 'Path to video-placements.md file (default: agent/content/video-placements.md)',
+      },
+    },
+    required: [],
+  },
+  async (args) => {
+    const filePath = (args['file_path'] as string | undefined) || 'agent/content/video-placements.md';
+    
+    // Read the video placements file
+    const content = readProjectFile(filePath);
+    if (!content) {
+      return {
+        status: 'error',
+        error: `Video placements file not found: ${filePath}`,
+      };
+    }
+    
+    // Parse placements
+    let placements: ParsedVideoPlacement[];
+    try {
+      placements = parseVideoPlacements(content);
+    } catch (error) {
+      return {
+        status: 'error',
+        error: `Failed to parse video placements: ${String(error)}`,
+      };
+    }
+    
+    if (placements.length === 0) {
+      return {
+        status: 'error',
+        error: 'No placements found in video-placements.md',
+      };
+    }
+    
+    console.log(`[generate_all_videos] Found ${placements.length} placements to generate`);
+    
+    const results: Array<{
+      placementNumber: number;
+      status: 'success' | 'failed';
+      artifactId?: string;
+      filePath?: string;
+      error?: string;
+    }> = [];
+    
+    // Generate videos sequentially
+    for (const placement of placements) {
+      console.log(`[generate_all_videos] Generating video for Placement ${placement.placementNumber}...`);
+      
+      try {
+        // Submit video generation job using the existing generateVideoPlacementTool handler
+        const submitResult = await submitVideoPlacementGeneration({
+          scene_number: placement.placementNumber,
+          prompt: placement.prompt,
+          duration: placement.duration,
+          video_type: placement.videoType,
+        });
+        
+        if (submitResult.status !== 'submitted' || !submitResult.jobId) {
+          const errorMsg = submitResult.error || 'Failed to submit video generation';
+          console.error(`[generate_all_videos] Placement ${placement.placementNumber} failed: ${errorMsg}`);
+          results.push({
+            placementNumber: placement.placementNumber,
+            status: 'failed',
+            error: errorMsg,
+          });
+          continue;
+        }
+        
+        // Wait for job completion
+        const waitResult = await waitForComfyUIJob(submitResult.jobId, 300);
+        
+        if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
+          console.log(`[generate_all_videos] Placement ${placement.placementNumber} completed: ${waitResult.artifactId}`);
+          results.push({
+            placementNumber: placement.placementNumber,
+            status: 'success',
+            artifactId: waitResult.artifactId,
+            filePath: waitResult.filePath,
+          });
+        } else {
+          const errorMsg = waitResult.error || 'Video generation did not complete';
+          console.error(`[generate_all_videos] Placement ${placement.placementNumber} failed: ${errorMsg}`);
+          results.push({
+            placementNumber: placement.placementNumber,
+            status: 'failed',
+            error: errorMsg,
+          });
+        }
+      } catch (error) {
+        const errorMsg = String(error);
+        console.error(`[generate_all_videos] Placement ${placement.placementNumber} error: ${errorMsg}`);
+        results.push({
+          placementNumber: placement.placementNumber,
+          status: 'failed',
+          error: errorMsg,
+        });
+      }
+    }
+    
+    // Summary
+    const successful = results.filter(r => r.status === 'success');
+    const failed = results.filter(r => r.status === 'failed');
+    
+    console.log(`[generate_all_videos] Completed: ${successful.length} successful, ${failed.length} failed`);
+    
+    return {
+      status: 'completed',
+      total_placements: placements.length,
+      successful: successful.length,
+      failed: failed.length,
+      results: results,
+      message: `Generated ${successful.length} out of ${placements.length} videos. ${failed.length} failed.`,
+    };
+  }
+);
+
+/**
  * Get all video generation tools.
  */
 export function getVideoGenerationTools(): ToolDefinition[] {
   return [
     generateImageTool,
+    generateVideoPlacementTool,
     generateVideoFromImageTool,
     generateVideoFromFramesTool,
     editImageTool,
     generateStoryboardTool,
+    generateAllImagesTool,
+    generateAllVideosTool,
     waitForJobTool,
   ];
 }
@@ -1409,4 +1979,6 @@ export const VIDEO_COMPLEX_TOOLS = new Set([
   'generate_video_from_frames',
   'edit_image',
   'generate_storyboard',
+  'generate_all_images',
+  'generate_all_videos',
 ]);
