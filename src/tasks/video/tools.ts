@@ -119,13 +119,67 @@ export interface ImageEditParams {
 // Job storage (in-memory for now, could be Redis/DB in production)
 const jobs = new Map<string, GenerationJob>();
 
-// Get the project assets directory for images
+// Get the project assets directory for images (legacy - still used for non-placement images)
 function getAssetsDir(): string {
   const assetsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'assets', 'images');
   if (!fs.existsSync(assetsDir)) {
     fs.mkdirSync(assetsDir, { recursive: true });
   }
   return assetsDir;
+}
+
+// Get the image-placements directory for placement images
+function getImagePlacementsDir(): string {
+  const imagePlacementsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'image-placements');
+  if (!fs.existsSync(imagePlacementsDir)) {
+    fs.mkdirSync(imagePlacementsDir, { recursive: true });
+  }
+  return imagePlacementsDir;
+}
+
+/**
+ * Check if an image already exists for a placement.
+ * Checks both the image-placements folder and the manifest.json.
+ */
+function checkImageExists(
+  placementIdentifier: string,
+  placementIndex?: number
+): { exists: boolean; artifactId?: string; filePath?: string } {
+  // Try to find by filename pattern
+  const imagePlacementsDir = getImagePlacementsDir();
+  const possibleFilenames = [
+    `placement-${placementIndex ?? 1}.png`,
+    `placement-${placementIndex ?? 1}.jpg`,
+    `${placementIdentifier}.png`,
+    `${placementIdentifier}.jpg`,
+  ];
+
+  for (const filename of possibleFilenames) {
+    const filePath = path.join(imagePlacementsDir, filename);
+    if (fs.existsSync(filePath)) {
+      // Check manifest for artifact ID
+      const assets = getAssets();
+      const relativePath = `agent/image-placements/${filename}`;
+      const asset = assets.find((a) => a.path === relativePath);
+      if (asset) {
+        return { exists: true, artifactId: asset.id, filePath: relativePath };
+      }
+      return { exists: true, filePath: relativePath };
+    }
+  }
+
+  // Check manifest for any asset with matching path pattern
+  const assets = getAssets();
+  const matchingAsset = assets.find((a) => 
+    a.path?.includes('image-placements') && 
+    (a.path.includes(placementIdentifier) || (placementIndex !== undefined && a.path.includes(`placement-${placementIndex}`)))
+  );
+
+  if (matchingAsset) {
+    return { exists: true, artifactId: matchingAsset.id, filePath: matchingAsset.path };
+  }
+
+  return { exists: false };
 }
 
 /**
@@ -190,8 +244,10 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
 
   try {
     const registry = getRegistry();
+    // Use image-placements directory for scene images (placement images), assets/images for reference images
+    const outputDir = image_type === 'scene' ? getImagePlacementsDir() : getAssetsDir();
     const client = new ComfyUIClient({
-      outputDir: getAssetsDir(),
+      outputDir,
     });
 
     // Determine which workflow to use based on generation mode and reference images
@@ -295,9 +351,10 @@ async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<
   }
 
   try {
-    const assetsDir = getAssetsDir();
+    // Use image-placements directory for scene images (placement images), assets/images for reference images
+    const outputDir = job.context?.entityType === 'scene' ? getImagePlacementsDir() : getAssetsDir();
     const client = new ComfyUIClient({
-      outputDir: assetsDir,
+      outputDir,
       timeout,
     });
 
@@ -525,6 +582,20 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
   },
   async (args) => {
     const params = args as unknown as ImageGenerationParams;
+
+    // Check for duplicates if this is a scene image (placement image)
+    if (params.image_type === 'scene' || !params.image_type) {
+      const duplicateCheck = checkImageExists(`scene-${params.scene_number}`, params.scene_number);
+      if (duplicateCheck.exists) {
+        return {
+          status: 'skipped',
+          message: 'Image already exists for this placement',
+          artifact_id: duplicateCheck.artifactId,
+          file_path: duplicateCheck.filePath,
+          duplicate: true,
+        };
+      }
+    }
 
     // Determine generation mode based on image_type and reference_images
     const generationMode = params.generation_mode ??

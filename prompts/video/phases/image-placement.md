@@ -36,18 +36,14 @@ write_file(
 ```
    - The file will be automatically loaded as `$image_placements` context variable after saving
 
-4. **Mark phase as completed**:
+4. **Mark phase as completed and transition to Image Generation**:
 ```
 update_project(
   action: 'update_phase',
   data: { phase: 'image_placement', status: 'completed' }
 )
 ```
-
-5. **Ask user before moving to Image Generation**:
-   - After saving and marking the phase complete, ask:
-     "Image placements are saved. Would you like to proceed with image generation?"
-   - **Only if the user approves**, then transition:
+   - After marking the phase complete, automatically transition to the next phase:
 ```
 update_project(
   action: 'transition_phase'
@@ -66,4 +62,4 @@ update_project(
 - Create placements for video segments or ad breaks (those stay as original footage)
 - Create more than 5-6 placements (be selective about which moments truly need images)
 - Skip saving the placements - you MUST save to the file
-- Skip user approval before image generation - you MUST ask and wait for confirmation
+- Skip transition to image generation - you MUST transition after marking phase complete

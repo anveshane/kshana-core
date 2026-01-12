@@ -688,7 +688,6 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
       'read_project',
       'update_project',
       'write_placement_plan',
-      'write_srt_with_images',
       'create_image_placement',
       'update_image_placement',
       'Task',

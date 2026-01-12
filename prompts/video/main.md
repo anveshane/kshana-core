@@ -67,7 +67,7 @@ Task(
 )
 ```
 - Save the placements to `agent/content/image-placements.md` using `write_placement_plan` so it loads as `$image_placements`.
-- Generate SRT with image tags and save to `agent/script/subtitles_with_images.srt`.
+- After saving placements, automatically transition to IMAGE_GENERATION phase.
 
 ### IMAGE_GENERATION
 - Use existing image-generator subagent for each placement.

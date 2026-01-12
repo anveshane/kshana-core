@@ -1153,7 +1153,7 @@ What story would you like to turn into a video?`,
  * Only includes project state tools - content files are handled by subagents via Task.
  */
 export function getWorkflowFileTools(): ToolDefinition[] {
-  return [readProjectTool, updateProjectTool, readTranscriptTool, writePlacementPlanTool];
+  return [readFileTool, readProjectTool, updateProjectTool, readTranscriptTool, writePlacementPlanTool];
 }
 
 /**

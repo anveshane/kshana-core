@@ -1818,10 +1818,9 @@ export class GenericAgent extends TypedEventEmitter {
     }
 
     if (subagentType === 'image-generator') {
-      return await this.handleDispatchImageAgent({
-        ...toolCall,
-        name: 'dispatch_image_agent',
-      });
+      // Image-generator needs generate_image and wait_for_job tools
+      // Pass the tools from the main registry to the subagent
+      return await this.handleDispatchImageGeneratorSubagent(toolCall);
     }
 
     if (subagentType === 'video-assembler') {
@@ -3550,6 +3549,81 @@ Respond in JSON format:
     // Run subagent with tool calling support
     const result = await this.runSubagentWithTools(this.transcriptParserState, 'dispatch_transcript_parser', 0.3, subagentTools);
     this.transcriptParserState = null;
+    return result;
+  }
+
+  /**
+   * Handle dispatch_image_generator tool - spawns a sub-agent for image generation.
+   * This is different from handleDispatchImageAgent which is for prompt crafting with user approval.
+   * This version directly generates images using generate_image and wait_for_job tools.
+   */
+  private async handleDispatchImageGeneratorSubagent(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'image';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_image_generator' };
+    }
+
+    // Check if we're already in a session (could reuse state if needed, but for now just check)
+    // Note: We don't maintain persistent state for this subagent - it's one-shot per call
+
+    // Extract placement number from task if available
+    // Task format: "Generate image for Placement [NUMBER]. Prompt: ..."
+    let placementNumber = 1;
+    const placementMatch = task.match(/Placement\s+(\d+)/i);
+    if (placementMatch && placementMatch[1]) {
+      placementNumber = parseInt(placementMatch[1], 10);
+    }
+
+    // Build system prompt for image generator
+    const systemPrompt = buildImageGenerationPrompt(task);
+
+    // Create a temporary tool registry with generate_image and wait_for_job tools for the subagent
+    const subagentTools = new Map<string, ToolDefinition>();
+    const generateImageTool = this.tools.get('generate_image');
+    const waitForJobTool = this.tools.get('wait_for_job');
+    
+    if (generateImageTool) {
+      subagentTools.set('generate_image', generateImageTool);
+    }
+    if (waitForJobTool) {
+      subagentTools.set('wait_for_job', waitForJobTool);
+    }
+
+    if (!generateImageTool || !waitForJobTool) {
+      this.currentMode = 'orchestrator';
+      return {
+        error: 'Image generation tools not available',
+        missing_tools: {
+          generate_image: !generateImageTool,
+          wait_for_job: !waitForJobTool,
+        },
+      };
+    }
+
+    // Build full system message with tools
+    const fullSystemPrompt = buildSystemMessage(true, subagentTools, systemPrompt);
+
+    // Create state for the subagent (matching runSubagentWithTools signature)
+    const imageGenSubagentState = {
+      task,
+      messages: [
+        { role: 'system' as const, content: fullSystemPrompt },
+        { role: 'user' as const, content: `<request>\n${task}\n</request>` },
+      ] as Message[],
+      currentOutput: '',
+      iterations: 0,
+      toolCallId: toolCall.id,
+    };
+
+    // Run subagent with tool calling support
+    // Use slightly higher temperature for creative prompt crafting
+    const result = await this.runSubagentWithTools(imageGenSubagentState, 'dispatch_image_generator', 0.7, subagentTools);
+    
+    this.currentMode = 'orchestrator';
     return result;
   }
 

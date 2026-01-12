@@ -164,13 +164,13 @@ export interface WorkflowVideoAgentConfig {
 /**
  * Create a tool registry with workflow tools for state-based video creation.
  * Orchestrator only needs file/project tools - generation is handled by subagents via Task.
+ * However, generate_image and wait_for_job must be registered so subagent handlers can access them.
  */
 export function createWorkflowToolRegistry(): ToolRegistry {
   // Start with default generic tools (think, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode, TodoWrite, context tools)
   const registry = createDefaultToolRegistry();
 
   // Add workflow file tools (read_file, write_file, read_project, update_project)
-  // Note: Generation tools (images, videos, stitch) are handled by subagents via Task tool
   for (const tool of getWorkflowFileTools()) {
     registry.register(tool);
   }
@@ -185,6 +185,18 @@ export function createWorkflowToolRegistry(): ToolRegistry {
 
   for (const tool of getVideoReplacementTools()) {
     registry.register(tool);
+  }
+
+  // Add generate_image and wait_for_job tools so subagent handlers can access them
+  // These are needed by the image-generator subagent via Task tool
+  const videoGenerationTools = getVideoGenerationTools();
+  const generateImageTool = videoGenerationTools.find(t => t.name === 'generate_image');
+  const waitForJobTool = videoGenerationTools.find(t => t.name === 'wait_for_job');
+  if (generateImageTool) {
+    registry.register(generateImageTool);
+  }
+  if (waitForJobTool) {
+    registry.register(waitForJobTool);
   }
 
   return registry;
