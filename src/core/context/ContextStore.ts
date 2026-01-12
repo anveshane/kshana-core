@@ -56,7 +56,12 @@ export class ContextStore {
    */
   private rebuildVariableCounter(): void {
     this.variableCounter.clear();
-    for (const meta of this.index.values()) {
+    for (const [key, meta] of this.index.entries()) {
+      // Skip malformed entries that are missing variableName
+      if (!meta?.variableName) {
+        this.index.delete(key);
+        continue;
+      }
       const match = meta.variableName.match(/^\$([a-z_]+)(?:_(\d+))?$/);
       if (match) {
         const baseName = match[1] as string;

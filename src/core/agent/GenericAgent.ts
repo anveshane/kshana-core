@@ -20,9 +20,11 @@ import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, 
 import { CONTENT_TYPE_CONTEXTS, CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
+import { getLoopLogger } from '../../utils/loopLogger.js';
 
-// Get the phase logger instance
+// Get logger instances
 const phaseLogger = getPhaseLogger();
+const loopLogger = getLoopLogger();
 
 // Legacy debug logging (wraps phaseLogger for backward compatibility during migration)
 function debugLog(message: string) {
@@ -107,9 +109,11 @@ export class GenericAgent extends TypedEventEmitter {
     lastPromptTokens: 0,
     lastCompletionTokens: 0,
   };
-  // Lower threshold (60%) to leave room for response generation
-  // llama.cpp servers often can't handle mid-generation overflow
-  private static readonly CONTEXT_THRESHOLD = 0.60;
+  // Very conservative threshold (45%) to leave room for:
+  // 1. Response generation (~2000-4000 tokens)
+  // 2. llama.cpp servers that can't handle mid-generation overflow
+  // 3. Inaccurate context length detection from local LLM servers
+  private static readonly CONTEXT_THRESHOLD = 0.45;
   private maxContextTokens: number = 16000; // Will be updated from LLM client
 
   // Current mode for more descriptive agent names in UI
@@ -140,7 +144,16 @@ export class GenericAgent extends TypedEventEmitter {
   async initialize(): Promise<void> {
     // Query context length from LLM provider (validates minimum requirements)
     this.maxContextTokens = await this.llm.getContextLength();
-    debugLog(`[GenericAgent] Initialized with context length: ${this.maxContextTokens} tokens`);
+    const compressionThreshold = Math.round(this.maxContextTokens * GenericAgent.CONTEXT_THRESHOLD);
+    debugLog(`[GenericAgent] Initialized - context: ${this.maxContextTokens} tokens, compression triggers at: ${compressionThreshold} tokens (${Math.round(GenericAgent.CONTEXT_THRESHOLD * 100)}%)`);
+
+    // Log warning for small context windows
+    if (this.maxContextTokens < 16000) {
+      debugLog(`[GenericAgent] WARNING: Small context window detected (${this.maxContextTokens}). Consider setting LLM_CONTEXT_TOKENS env var if this is incorrect.`);
+    }
+
+    // Set agent name for loop logger
+    loopLogger.setAgent(this.name);
   }
 
   /**
@@ -564,13 +577,47 @@ export class GenericAgent extends TypedEventEmitter {
       }
 
       // Build messages with todo reminder injected
-      const messagesWithReminder = this.injectTodoReminder();
+      let messagesWithReminder = this.injectTodoReminder();
 
-      // Stream LLM response
-      const response = await this.generateWithStreaming(
-        messagesWithReminder,
-        Array.from(this.tools.values())
-      );
+      // Stream LLM response with context overflow retry
+      let response: LLMResponse;
+      let retryCount = 0;
+      const MAX_CONTEXT_RETRIES = 2;
+
+      while (true) {
+        try {
+          response = await this.generateWithStreaming(
+            messagesWithReminder,
+            Array.from(this.tools.values())
+          );
+          break; // Success - exit retry loop
+        } catch (error) {
+          // Check if this is a context overflow error
+          if (this.isContextOverflowError(error) && retryCount < MAX_CONTEXT_RETRIES) {
+            retryCount++;
+            debugLog(`[GenericAgent] Context overflow detected (retry ${retryCount}/${MAX_CONTEXT_RETRIES}). Compressing and retrying...`);
+
+            // Emit notification so user knows what's happening
+            this.emit({
+              type: 'notification',
+              level: 'warning',
+              message: `Context limit reached. Compressing history and retrying... (attempt ${retryCount})`,
+            });
+
+            // Force compression
+            await this.compressConversationHistory();
+
+            // Rebuild messages after compression
+            messagesWithReminder = this.injectTodoReminder();
+
+            // Continue to retry
+            continue;
+          }
+
+          // Not a context error or max retries reached - rethrow
+          throw error;
+        }
+      }
 
       // Track token usage for context window management
       if (response.usage) {
@@ -580,6 +627,14 @@ export class GenericAgent extends TypedEventEmitter {
 
         // Log context usage for phase-aware monitoring
         phaseLogger.contextUsage('GenericAgent', response.usage.promptTokens, this.maxContextTokens);
+      }
+
+      // Log thinking/response to loop logger
+      if (response.content && response.toolCalls.length === 0) {
+        loopLogger.thinking(this.iteration, response.content, response.usage ? {
+          prompt: response.usage.promptTokens,
+          completion: response.usage.completionTokens,
+        } : undefined);
       }
 
       // Add assistant message to history
@@ -592,6 +647,7 @@ export class GenericAgent extends TypedEventEmitter {
       // If no tool calls, we're done
       if (response.toolCalls.length === 0) {
         finalOutput = response.content ?? '';
+        loopLogger.complete(this.iteration, finalOutput);
         break;
       }
 
@@ -601,6 +657,7 @@ export class GenericAgent extends TypedEventEmitter {
         if (toolCall.name === 'ask_user' || toolCall.name === 'AskUserQuestion') {
           const result = this.handleAskUser(toolCall);
           if (result) {
+            loopLogger.waiting(this.iteration, result.pendingQuestion ?? 'Awaiting user input');
             this.emit({ type: 'agent_status', status: 'waiting', agentName: this.getEffectiveAgentName() });
             return result;
           }
@@ -611,8 +668,13 @@ export class GenericAgent extends TypedEventEmitter {
         const result = await this.executeTool(toolCall);
         const resultObj = result as Record<string, unknown>;
 
+        // Determine if tool succeeded or errored
+        const isError = resultObj['error'] !== undefined || resultObj['status'] === 'error';
+        loopLogger.toolCall(this.iteration, toolCall.name, toolCall.arguments, isError ? 'error' : 'success');
+
         // Check if tool is waiting for user input (dispatch_agent planning)
         if (resultObj['__awaiting_user_input']) {
+          loopLogger.waiting(this.iteration, resultObj['question'] as string ?? 'Awaiting approval');
           // Return waiting status - the planning loop will handle user response
           // Note: Plan is shown via ToolCallDisplay, don't duplicate in output
           return {
@@ -3190,6 +3252,33 @@ Respond in JSON format:
   }
 
   /**
+   * Check if an error is a context overflow error from the LLM.
+   * Different providers report this differently.
+   */
+  private isContextOverflowError(error: unknown): boolean {
+    if (!error) return false;
+
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const lowerMessage = errorMessage.toLowerCase();
+
+    // Common context overflow error patterns from various LLM providers
+    const contextOverflowPatterns = [
+      'context length',           // "Reached context length of X tokens"
+      'context_length_exceeded',  // OpenAI style
+      'max_context_length',       // Some providers
+      'context window',           // "exceeds context window"
+      'token limit',              // "token limit exceeded"
+      'too many tokens',          // Generic
+      'maximum context',          // "exceeds maximum context"
+      'llama_memory_can_shift',   // llama.cpp specific
+      'prompt is too long',       // Some providers
+      'input too long',           // Generic
+    ];
+
+    return contextOverflowPatterns.some(pattern => lowerMessage.includes(pattern));
+  }
+
+  /**
    * Check if context window is approaching capacity.
    * Returns true if we should compress old messages.
    */
@@ -3222,8 +3311,8 @@ Respond in JSON format:
 
     // Method 3: Trigger compression if we have many messages regardless
     // This is a safety net for long conversations
-    // Lower threshold to be more aggressive with compression
-    const MESSAGE_COUNT_THRESHOLD = 20;
+    // Very aggressive for local LLMs with smaller context windows
+    const MESSAGE_COUNT_THRESHOLD = 12;
     if (this.messages.length > MESSAGE_COUNT_THRESHOLD) {
       debugLog(`[GenericAgent] Message count (${this.messages.length}) exceeds threshold (${MESSAGE_COUNT_THRESHOLD}) - compression needed`);
       return true;
@@ -3263,6 +3352,9 @@ Respond in JSON format:
         newMessageCount: this.messages.length,
         maxContextTokens: this.maxContextTokens,
       });
+
+      // Log to loop logger
+      loopLogger.compress(this.iteration, result.removedCount, this.messages.length);
 
       // Emit event so UI can show compression occurred
       this.emit({

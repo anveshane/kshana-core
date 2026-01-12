@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
 import { createDefaultToolRegistry } from '../core/tools/index.js';
-import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT } from '../tasks/video/index.js';
+import { VideoEditOrchestrator } from '../tasks/video-edit/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 
@@ -32,6 +32,7 @@ export interface ConversationEvents {
 interface ActiveSession {
   state: SessionState;
   agent: GenericAgent;
+  orchestrator?: VideoEditOrchestrator;
   abortController?: AbortController;
   initialized?: boolean;
 }
@@ -61,26 +62,25 @@ export class ConversationManager {
     const sessionId = uuidv4();
     const now = Date.now();
 
-    // Create agent with tools based on task type
-    let registry;
-    let customPrompt: string | undefined;
-    let agentName: string;
+    const llm = new LLMClient(this.llmConfig);
+    let agent: GenericAgent;
+    let orchestrator: VideoEditOrchestrator | undefined;
 
     if (this.taskType === 'video') {
-      registry = createVideoToolRegistry();
-      customPrompt = VIDEO_CREATION_SYSTEM_PROMPT;
-      agentName = 'kshana-video';
+      // Use VideoEditOrchestrator for video editing tasks
+      orchestrator = new VideoEditOrchestrator(llm, {
+        maxIterations: this.maxIterations,
+      });
+      // The orchestrator wraps a GenericAgent internally
+      // We'll get the agent reference after initialization
+      agent = null as unknown as GenericAgent; // Placeholder until initialized
     } else {
-      registry = createDefaultToolRegistry();
-      agentName = 'kshana-ink';
+      const registry = createDefaultToolRegistry();
+      agent = new GenericAgent(registry.getAll(), llm, {
+        maxIterations: this.maxIterations,
+        name: 'kshana-ink',
+      });
     }
-
-    const llm = new LLMClient(this.llmConfig);
-    const agent = new GenericAgent(registry.getAll(), llm, {
-      maxIterations: this.maxIterations,
-      customPrompt,
-      name: agentName,
-    });
 
     const state: SessionState = {
       id: sessionId,
@@ -90,7 +90,7 @@ export class ConversationManager {
       taskHistory: [],
     };
 
-    this.sessions.set(sessionId, { state, agent });
+    this.sessions.set(sessionId, { state, agent, orchestrator });
 
     return state;
   }
@@ -127,9 +127,15 @@ export class ConversationManager {
       throw new Error('Session already has a running task');
     }
 
-    // Initialize agent if not already done (queries model context length)
+    // Initialize agent or orchestrator if not already done
     if (!session.initialized) {
-      await session.agent.initialize();
+      if (session.orchestrator) {
+        await session.orchestrator.initialize();
+        // Get the underlying agent for event handling
+        session.agent = session.orchestrator.getAgent()!;
+      } else {
+        await session.agent.initialize();
+      }
       session.initialized = true;
     }
 
@@ -141,11 +147,16 @@ export class ConversationManager {
     // Create abort controller for cancellation
     session.abortController = new AbortController();
 
-    // Set up event listeners
-    this.setupEventListeners(sessionId, session.agent, events);
+    // Set up event listeners on the agent
+    if (session.agent) {
+      this.setupEventListeners(sessionId, session.agent, events);
+    }
 
     try {
-      const result = await session.agent.run(task);
+      // Run via orchestrator if available, otherwise direct agent
+      const result = session.orchestrator
+        ? await session.orchestrator.run(task)
+        : await session.agent.run(task);
 
       // Update session state based on result
       session.state.lastActivity = Date.now();
@@ -167,7 +178,11 @@ export class ConversationManager {
       throw error;
     } finally {
       // Clean up event listeners
-      session.agent.removeAllListeners();
+      if (session.orchestrator) {
+        session.orchestrator.removeAllListeners();
+      } else if (session.agent) {
+        session.agent.removeAllListeners();
+      }
       session.abortController = undefined;
     }
   }
@@ -197,10 +212,15 @@ export class ConversationManager {
     session.abortController = new AbortController();
 
     // Set up event listeners
-    this.setupEventListeners(sessionId, session.agent, events);
+    if (session.agent) {
+      this.setupEventListeners(sessionId, session.agent, events);
+    }
 
     try {
-      const result = await session.agent.run('', response);
+      // Continue via orchestrator if available, otherwise direct agent
+      const result = session.orchestrator
+        ? await session.orchestrator.continue(response)
+        : await session.agent.run('', response);
 
       // Update session state based on result
       session.state.lastActivity = Date.now();
@@ -222,7 +242,11 @@ export class ConversationManager {
       throw error;
     } finally {
       // Clean up event listeners
-      session.agent.removeAllListeners();
+      if (session.orchestrator) {
+        session.orchestrator.removeAllListeners();
+      } else if (session.agent) {
+        session.agent.removeAllListeners();
+      }
       session.abortController = undefined;
     }
   }
@@ -291,6 +315,12 @@ export class ConversationManager {
 
     if (session.abortController) {
       session.abortController.abort();
+      // Stop the orchestrator or agent
+      if (session.orchestrator) {
+        session.orchestrator.stop();
+      } else if (session.agent) {
+        session.agent.stop();
+      }
       session.state.status = 'idle';
       session.state.lastActivity = Date.now();
       return true;

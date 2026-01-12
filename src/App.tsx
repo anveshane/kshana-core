@@ -9,15 +9,13 @@ import { Banner } from './components/Banner.js';
 import { useAgent } from './hooks/useAgent.js';
 import { createDefaultToolRegistry } from './core/tools/index.js';
 import {
-  createWorkflowToolRegistry,
-  VIDEO_CREATION_SYSTEM_PROMPT,
-  projectExists,
-  loadProject,
-  deleteProject,
-  createProject,
-  STYLE_CONFIGS,
-  type ProjectStyle,
-} from './tasks/video/index.js';
+  createVideoEditToolRegistry,
+  VIDEO_EDIT_SYSTEM_PROMPT,
+  projectExists as videoEditProjectExists,
+  loadProject as loadVideoEditProject,
+  deleteProject as deleteVideoEditProject,
+  type EditWorkflowPhase,
+} from './tasks/video-edit/index.js';
 import type { LLMClientConfig } from './core/llm/index.js';
 import type { AgentConfig } from './core/agent/index.js';
 import * as uiLogger from './utils/uiLogger.js';
@@ -32,8 +30,8 @@ interface AppProps {
   taskType?: TaskType;
 }
 
-// Startup mode for video task type
-type StartupMode = 'checking' | 'select_action' | 'select_style' | 'new_story' | 'ready';
+// Startup mode for video task type (now video editing)
+type StartupMode = 'checking' | 'select_action' | 'ready';
 
 export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' }: AppProps) {
   const { exit } = useApp();
@@ -45,12 +43,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Track when user pressed any key to pause the countdown timer
   const [timerPaused, setTimerPaused] = React.useState(false);
 
-  // Startup flow state for video mode
+  // Startup flow state for video editing mode
   const [startupMode, setStartupMode] = React.useState<StartupMode>('checking');
-  const [existingProject, setExistingProject] = React.useState<ReturnType<typeof loadProject>>(null);
+  const [existingProject, setExistingProject] = React.useState<ReturnType<typeof loadVideoEditProject>>(null);
   const [startupSelectedIndex, setStartupSelectedIndex] = React.useState(0);
-  const [selectedStyle, setSelectedStyle] = React.useState<ProjectStyle>('cinematic_realism');
-  const [styleSelectedIndex, setStyleSelectedIndex] = React.useState(0);
 
   // Initialize UI logger on mount
   React.useEffect(() => {
@@ -60,16 +56,16 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     };
   }, []);
 
-  // Check for existing project on mount (video mode only)
+  // Check for existing project on mount (video editing mode)
   React.useEffect(() => {
     if (taskType === 'video' && !started) {
-      if (projectExists()) {
-        const project = loadProject();
+      if (videoEditProjectExists()) {
+        const project = loadVideoEditProject();
         setExistingProject(project);
         setStartupMode('select_action');
       } else {
-        // No existing project - go to style selection first
-        setStartupMode('select_style');
+        // No existing project - go directly to ready mode
+        setStartupMode('ready');
       }
     }
   }, [taskType, started]);
@@ -77,8 +73,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Create tool registry based on task type
   const tools = React.useMemo(() => {
     if (taskType === 'video') {
-      // Use workflow tool registry for state-based video creation
-      return createWorkflowToolRegistry().getAll();
+      // Use video editing tool registry
+      return createVideoEditToolRegistry().getAll();
     }
     return createDefaultToolRegistry().getAll();
   }, [taskType]);
@@ -86,13 +82,13 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Get custom prompt based on task type
   const customPrompt = React.useMemo(() => {
     if (taskType === 'video') {
-      return VIDEO_CREATION_SYSTEM_PROMPT;
+      return VIDEO_EDIT_SYSTEM_PROMPT;
     }
     return agentConfig?.customPrompt;
   }, [taskType, agentConfig?.customPrompt]);
 
   // Compute effective agent name based on task type
-  const agentName = agentConfig?.name ?? (taskType === 'video' ? 'kshana-video' : 'kshana-ink');
+  const agentName = agentConfig?.name ?? (taskType === 'video' ? 'kshana-edit' : 'kshana-ink');
 
   // Event handler for UI logging
   const handleAgentEvent = React.useCallback((event: import('./events/index.js').AgentEvent) => {
@@ -184,19 +180,12 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         return;
       }
 
-      // For video mode with a new project, create the project with the selected style
-      // Input type will be determined by the agent based on the content
-      if (taskType === 'video' && !existingProject) {
-        createProject(task, selectedStyle);
-        uiLogger.logUserInput(`Starting new project with style: ${STYLE_CONFIGS[selectedStyle].displayName}`);
-      }
-
       setStarted(true);
       uiLogger.logUserInput(task);
       // Task is added to history by useAgent
       void run(task);
     },
-    [run, exit, taskType, existingProject, selectedStyle]
+    [run, exit]
   );
 
   // Handle user response (when agent is waiting for input)
@@ -370,32 +359,24 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     }
   }, [status, questionOptions, isConfirmation, awaitingFeedbackText, handleInjectedInput, handleUserInput, handleFeedbackSubmit, handleNewTask]);
 
-  // Handle startup action selection for video mode
+  // Handle startup action selection for video editing mode
   const handleStartupSelect = React.useCallback((index: number) => {
     if (startupMode === 'select_action') {
       if (index === 0) {
         // Continue existing project
         setStarted(true);
         uiLogger.logUserInput('Continue existing project');
-        void run('Continue working on the existing project. Call read_project to see current state.');
+        void run('Continue working on the existing video editing project. Use read_project to see the current state and determine what phase we are in.');
       } else if (index === 1) {
-        // Start new project - show warning and switch to style selection
+        // Start new project - delete existing and go to ready mode
         if (existingProject) {
-          deleteProject();
+          deleteVideoEditProject();
           setExistingProject(null);
         }
-        setStartupMode('select_style');
+        setStartupMode('ready');
       }
     }
   }, [startupMode, existingProject, run]);
-
-  // Handle style selection
-  const handleStyleSelect = React.useCallback((index: number) => {
-    const styles: ProjectStyle[] = ['cinematic_realism', 'anime'];
-    const style = styles[index] ?? 'cinematic_realism';
-    setSelectedStyle(style);
-    setStartupMode('new_story');
-  }, []);
 
   // Handle keyboard for startup selection
   useInput((input, key) => {
@@ -414,27 +395,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     }
   }, { isActive: !started && taskType === 'video' && startupMode === 'select_action' });
 
-  // Handle keyboard for style selection
-  useInput((input, key) => {
-    if (!started && taskType === 'video' && startupMode === 'select_style') {
-      if (key.upArrow) {
-        setStyleSelectedIndex(prev => Math.max(0, prev - 1));
-      } else if (key.downArrow) {
-        setStyleSelectedIndex(prev => Math.min(1, prev + 1));
-      } else if (key.return) {
-        handleStyleSelect(styleSelectedIndex);
-      } else if (input === '1') {
-        handleStyleSelect(0);
-      } else if (input === '2') {
-        handleStyleSelect(1);
-      }
-    }
-  }, { isActive: !started && taskType === 'video' && startupMode === 'select_style' });
-
   // Show welcome screen if not started
   if (!started) {
     const subtitle = taskType === 'video'
-      ? 'Agentic Video Generation System'
+      ? 'AI-Powered Video Editing Assistant'
       : 'Generic CLI Agent Framework';
 
     if (taskType === 'video') {
@@ -452,6 +416,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
 
       // Existing project found - show selection
       if (startupMode === 'select_action' && existingProject) {
+        const phaseDisplay = (existingProject.currentPhase as string).replace(/_/g, ' ').toUpperCase();
+        const enhancementCount = existingProject.enhancements?.length ?? 0;
+        const segmentCount = existingProject.script?.segments?.length ?? 0;
+
         return (
           <Box flexDirection="column" padding={1}>
             <Banner subtitle={subtitle} />
@@ -459,11 +427,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             <Box flexDirection="column" marginBottom={1} paddingX={2}>
               <Text bold color="cyan">Existing Project Found!</Text>
               <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} paddingY={1}>
-                <Text bold color="yellow">📁 {existingProject.title || 'Untitled Project'}</Text>
-                <Text dimColor>ID: {existingProject.id}</Text>
-                <Text dimColor>Phase: {existingProject.currentPhase}</Text>
-                <Text dimColor>Characters: {existingProject.characters.length}</Text>
-                <Text dimColor>Scenes: {existingProject.scenes.length}</Text>
+                <Text bold color="yellow">📁 {existingProject.title || 'Video Editing Project'}</Text>
+                <Text dimColor>Phase: {phaseDisplay}</Text>
+                <Text dimColor>Script Segments: {segmentCount}</Text>
+                <Text dimColor>Enhancements: {enhancementCount}</Text>
               </Box>
             </Box>
 
@@ -487,70 +454,35 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         );
       }
 
-      // Style selection mode
-      if (startupMode === 'select_style') {
-        const styles: ProjectStyle[] = ['cinematic_realism', 'anime'];
-        return (
-          <Box flexDirection="column" padding={1}>
-            <Banner subtitle={subtitle} />
-
-            <Box flexDirection="column" marginBottom={1} paddingX={2}>
-              <Text bold color="cyan">Choose Your Visual Style</Text>
-              <Text dimColor>
-                Select the visual style for your video project. This will determine the aesthetic of all generated images.
-              </Text>
-            </Box>
-
-            <Box flexDirection="column" marginBottom={1} paddingX={2}>
-              {styles.map((style, index) => {
-                const config = STYLE_CONFIGS[style];
-                const isSelected = styleSelectedIndex === index;
-                return (
-                  <Box key={style} flexDirection="column" marginBottom={1}>
-                    <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
-                      {isSelected ? '>' : ' '} {index + 1}. {config.displayName}
-                    </Text>
-                    <Text dimColor>     {config.description}</Text>
-                  </Box>
-                );
-              })}
-            </Box>
-
-            <Box paddingX={2}>
-              <Text dimColor>Use ↑↓ or 1-2 to select, Enter to confirm. Type "exit" to quit.</Text>
-            </Box>
-          </Box>
-        );
-      }
-
-      // New story mode - show text input with same style as main agent view
-      const styleConfig = STYLE_CONFIGS[selectedStyle];
+      // Ready mode - show video editing welcome
       return (
         <Box flexDirection="column">
           <Box flexDirection="column" padding={1}>
             <Banner subtitle={subtitle} />
 
             <Box flexDirection="column" marginBottom={1} paddingX={2}>
-              <Text bold color="cyan">Welcome to Kshana!</Text>
+              <Text bold color="cyan">Welcome to Kshana Video Editor!</Text>
               <Text dimColor>
-                Enter a story idea or paste a complete story/chapter.
+                I help you enhance your videos with AI-generated content.
               </Text>
-              <Text dimColor>
-                The system will automatically detect what you've provided.
-              </Text>
-            </Box>
-
-            <Box marginBottom={1} paddingX={2} flexDirection="column">
-              <Text bold color="magenta">Style: {styleConfig.displayName}</Text>
             </Box>
 
             <Box marginBottom={1} paddingX={2}>
-              <Text bold color="yellow">Example prompts:</Text>
+              <Text bold color="yellow">To get started, provide your video:</Text>
             </Box>
             <Box flexDirection="column" paddingX={4} marginBottom={1}>
-              <Text dimColor>"A story about a robot learning to dance"</Text>
-              <Text dimColor>"Create a video about a magical forest adventure"</Text>
-              <Text dimColor>"An epic tale of a knight and a dragon"</Text>
+              <Text dimColor>• Local file path: <Text color="green">/path/to/video.mp4</Text></Text>
+              <Text dimColor>• YouTube URL: <Text color="green">https://youtube.com/watch?v=...</Text></Text>
+              <Text dimColor>• Or just describe what you want to do</Text>
+            </Box>
+
+            <Box marginBottom={1} paddingX={2}>
+              <Text bold color="magenta">Example commands:</Text>
+            </Box>
+            <Box flexDirection="column" paddingX={4} marginBottom={1}>
+              <Text dimColor>"Import video from /Users/me/video.mp4"</Text>
+              <Text dimColor>"Download and edit https://youtube.com/watch?v=abc123"</Text>
+              <Text dimColor>"Help me add B-roll to my tutorial video"</Text>
             </Box>
           </Box>
 
@@ -560,7 +492,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
               mode="text"
               onSubmit={handleTaskSubmit}
               prompt=">"
-              hint={'Enter your story idea and press Enter. Type "exit" to quit.'}
+              hint={'Enter a command or video path. Type "exit" to quit.'}
             />
           </Box>
         </Box>
