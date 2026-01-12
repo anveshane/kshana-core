@@ -337,21 +337,6 @@ export function parameterizeWanWorkflow(
         }
       }
     }
-    // UNETLoader - Override model name to use available models
-    // Replace unavailable models with compatible alternatives
-    else if (nodeType === 'UNETLoader' && node.widgets_values && Array.isArray(node.widgets_values)) {
-      const currentModel = node.widgets_values[0] as string;
-      // Map unavailable models to available alternatives
-      const modelMap: Record<string, string> = {
-        'wan2.2_i2v_low_noise_14B_fp8_scaled.safetensors': 'wan2.2_fun_inpaint_low_noise_14B_fp8_scaled.safetensors',
-        'wan2.2_i2v_high_noise_14B_fp8_scaled.safetensors': 'wan2.2_fun_inpaint_high_noise_14B_fp8_scaled.safetensors',
-      };
-      
-      if (modelMap[currentModel]) {
-        node.widgets_values[0] = modelMap[currentModel];
-        console.log(`[WanWorkflow] Replaced UNET model (node ${nodeId}): ${currentModel} -> ${modelMap[currentModel]}`);
-      }
-    }
   }
 
   // Convert to API format
