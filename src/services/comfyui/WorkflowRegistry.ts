@@ -198,6 +198,50 @@ class WorkflowRegistry {
       estimatedTimeSeconds: 120,
       qualityLevel: 'standard',
     });
+
+    // 7. LTX-2 Text to Video - High-quality text-to-video with audio
+    this.register({
+      name: 'ltx_t2v',
+      filename: 'video_ltx2_t2v-final.json',
+      workflowType: WorkflowType.VIDEO_GENERATION,
+      description: 'High-quality text-to-video generation using LTX-2 model with audio support. Generates video with synchronized audio from detailed text prompts describing scenes, actions, and sounds.',
+      capabilities: [
+        'text-to-video',
+        'audio-generation',
+        'high-quality-rendering',
+        'long-form-video',
+        'scene-description',
+      ],
+      displayName: 'LTX-2 Text to Video',
+      requiresBaseImage: false,
+      supportsTextPrompts: true,
+      supportsImageToImage: false,
+      outputFormat: 'video',
+      estimatedTimeSeconds: 180,
+      qualityLevel: 'high',
+    });
+
+    // 8. LTX-2 Image to Video - Animate static images with audio
+    this.register({
+      name: 'ltx_i2v',
+      filename: 'video_ltx2_i2v-final.json',
+      workflowType: WorkflowType.VIDEO_GENERATION,
+      description: 'High-quality image-to-video generation using LTX-2 model. Animates a static image based on motion prompt with synchronized audio generation. Best for bringing still images to life.',
+      capabilities: [
+        'image-to-video',
+        'audio-generation',
+        'motion-from-prompt',
+        'high-quality-rendering',
+        'image-animation',
+      ],
+      displayName: 'LTX-2 Image to Video',
+      requiresBaseImage: true,
+      supportsTextPrompts: true,
+      supportsImageToImage: true,
+      outputFormat: 'video',
+      estimatedTimeSeconds: 180,
+      qualityLevel: 'high',
+    });
   }
 
   /**
