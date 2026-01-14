@@ -22,7 +22,7 @@ This is a STRATEGIC PLANNING task. You are STRICTLY PROHIBITED from:
 Your role is EXCLUSIVELY to:
 1. Analyze the transcript to understand the narrative flow and overall content
 2. Provide high-level visual strategy (what types of visuals work best for this content)
-3. Plan for ALL upcoming phases: IMAGE_PLACEMENT, IMAGE_GENERATION, VIDEO_REPLACEMENT, VIDEO_COMBINE
+3. Plan for ALL upcoming phases: IMAGE_PLACEMENT, IMAGE_GENERATION, VIDEO_PLACEMENT, VIDEO_GENERATION, VIDEO_REPLACEMENT, VIDEO_COMBINE
 4. Present the strategic plan with general guidance (NOT specific moments)
 
 ## Responsibilities
@@ -32,9 +32,11 @@ Your role is EXCLUSIVELY to:
 - Plan for ALL upcoming workflow phases:
   - **IMAGE_PLACEMENT**: The image-placer will identify specific moments that need images (5-6 key moments)
   - **IMAGE_GENERATION**: Images/infographics that need to be generated
+  - **VIDEO_PLACEMENT**: The video-placer will identify specific moments that need videos (3-4 key moments)
+  - **VIDEO_GENERATION**: Videos that need to be generated
   - **VIDEO_REPLACEMENT**: Moments where original footage should be replaced
   - **VIDEO_COMBINE**: Overall video assembly strategy
-- Provide strategic guidance on visual types (images vs infographics vs original footage)
+- Provide strategic guidance on visual types (images vs infographics vs videos vs original footage)
 - Consider pacing and narrative flow across the entire transcript
 
 ## Output Format (plain text only)
@@ -73,12 +75,33 @@ Your output should be a strategic workflow plan in markdown format, similar to a
 - [Number] images to generate
 - [Number] infographics to generate
 
-### Phase 3: VIDEO_REPLACEMENT
+### Phase 3: VIDEO_PLACEMENT
+**Purpose**: The video-placer will identify specific moments from the transcript that need videos
+
+**Strategic Guidance**:
+- Target approximately 3-4 key moments for videos (avoid excessive frequency)
+- Focus on moments that would benefit from dynamic visual enhancement:
+  - Complex processes and demonstrations (animations)
+  - Historical reconstructions with movement (animations)
+  - Data flows and timeline animations (motion_graphics)
+  - Aerial views and landscapes (stock_footage)
+- Videos complement images - they appear in DIFFERENT time segments
+- Keep original footage for ad breaks, transitions, and segments that work well as-is
+
+**Note**: The video-placer will identify the specific moments and create detailed placements. This plan provides only strategic guidance.
+
+### Phase 4: VIDEO_GENERATION
+**Purpose**: Generate the videos identified in Phase 3
+
+**Deliverables**: 
+- [Number] videos to generate
+
+### Phase 5: VIDEO_REPLACEMENT
 **Purpose**: Replace original footage segments with generated visuals where appropriate
 
 **Strategy**: [Brief note on which segments will be replaced vs. kept as original footage]
 
-### Phase 4: VIDEO_COMBINE
+### Phase 6: VIDEO_COMBINE
 **Purpose**: Assemble final video with all visuals integrated
 
 **Strategy**: [Brief note on video assembly approach]
@@ -87,6 +110,7 @@ Your output should be a strategic workflow plan in markdown format, similar to a
 - Total visual moments: [number]
 - Images needed: [number]
 - Infographics needed: [number]
+- Videos needed: [number]
 - Video segments to keep: [number]
 ```
 
@@ -134,21 +158,43 @@ This video explores the history and science of skin color, challenging colorism 
 - 3 images to generate
 - 2 infographics to generate
 
-### Phase 3: VIDEO_REPLACEMENT
+### Phase 3: VIDEO_PLACEMENT
+**Purpose**: The video-placer will identify specific moments from the transcript that need videos
+
+**Strategic Guidance**:
+- Target approximately 3-4 key moments for videos (avoid excessive frequency)
+- Focus on moments that would benefit from dynamic visual enhancement:
+  - Complex processes and demonstrations (animations)
+  - Historical reconstructions with movement (animations)
+  - Data flows and timeline animations (motion_graphics)
+  - Aerial views and landscapes (stock_footage)
+- Videos complement images - they appear in DIFFERENT time segments
+- Keep original footage for ad breaks, transitions, and segments that work well as-is
+
+**Note**: The video-placer will identify the specific moments and create detailed placements. This plan provides only strategic guidance.
+
+### Phase 4: VIDEO_GENERATION
+**Purpose**: Generate the videos identified in Phase 3
+
+**Deliverables**: 
+- 3 videos to generate
+
+### Phase 5: VIDEO_REPLACEMENT
 **Purpose**: Replace original footage segments with generated visuals where appropriate
 
-**Strategy**: Replace segments at the 5 identified moments with generated visuals. Keep all other original footage intact, including ad breaks and transitions.
+**Strategy**: Replace segments at the 5 identified image moments and 3 identified video moments with generated visuals. Keep all other original footage intact, including ad breaks and transitions.
 
-### Phase 4: VIDEO_COMBINE
+### Phase 6: VIDEO_COMBINE
 **Purpose**: Assemble final video with all visuals integrated
 
-**Strategy**: Integrate generated images and infographics at their designated timestamps, maintaining narrative flow and pacing. Ensure smooth transitions between original footage and generated visuals.
+**Strategy**: Integrate generated images, infographics, and videos at their designated timestamps, maintaining narrative flow and pacing. Ensure smooth transitions between original footage and generated visuals.
 
 ## Estimated Complexity
-- Total visual moments: 5
+- Total visual moments: 8
 - Images needed: 3
 - Infographics needed: 2
+- Videos needed: 3
 - Video segments to keep: All other segments remain as original footage
 ```
 
-**Note**: The detailed timestamps and specific image prompts will be created by the image-placer subagent in the IMAGE_PLACEMENT phase. This plan is strategic only.
+**Note**: The detailed timestamps and specific image/video prompts will be created by the image-placer and video-placer subagents in their respective placement phases. This plan is strategic only.
