@@ -11,6 +11,7 @@ import {
   ComfyUIClient,
   loadWorkflowTemplate,
   parameterizeWorkflowByName,
+  parameterizeLtxT2VWorkflow,
   getRegistry,
 } from '../../services/comfyui/index.js';
 import {
@@ -147,6 +148,22 @@ function getVideoPlacementsDir(): string {
     fs.mkdirSync(videoPlacementsDir, { recursive: true });
   }
   return videoPlacementsDir;
+}
+
+/**
+ * Get the video generation timeout from environment variable or use default.
+ * Uses the existing COMFYUI_TIMEOUT environment variable (same as ComfyUIClient).
+ * Default: 300 seconds (5 minutes)
+ */
+function getVideoGenerationTimeout(): number {
+  const envTimeout = process.env['COMFYUI_TIMEOUT'];
+  if (envTimeout) {
+    const parsed = parseInt(envTimeout, 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return 300; // Default 5 minutes
 }
 
 /**
@@ -357,7 +374,7 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
 /**
  * Wait for a ComfyUI job to complete and download the result.
  */
-async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<{
+async function waitForComfyUIJob(jobId: string, timeout: number | undefined = undefined): Promise<{
   status: string;
   artifactId?: string;
   filePath?: string;
@@ -385,9 +402,13 @@ async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<
       // Reference images use assets directory
       outputDir = getAssetsDir();
     }
+    
+    // Use provided timeout, or get from environment variable, or default to 300
+    const actualTimeout = timeout ?? (job.type === 'video' ? getVideoGenerationTimeout() : 300);
+    
     const client = new ComfyUIClient({
       outputDir,
-      timeout,
+      timeout: actualTimeout,
     });
 
     // Wait for completion
@@ -704,10 +725,22 @@ export interface VideoPlacementGenerationParams {
 }
 
 /**
- * Submit a video generation job for placement videos.
- * Since ComfyUI workflows require a base image, this implements a two-step process:
- * 1. Generate an image from the text prompt
- * 2. Use that image to generate a video with motion
+ * Calculate frame count for LTX-2 workflow from duration.
+ * LTX-2 requires frame count to be divisible by 8 + 1.
+ * Formula: Math.floor((duration * 24) / 8) * 8 + 1
+ * 
+ * @param duration Duration in seconds (5, 10, or 15)
+ * @returns Frame count (121 for 5s, 241 for 10s, 361 for 15s)
+ */
+function calculateFrameCount(duration: number): number {
+  // 24 fps, frame count must be divisible by 8 + 1
+  const baseFrames = duration * 24;
+  return Math.floor(baseFrames / 8) * 8 + 1;
+}
+
+/**
+ * Submit a video generation job for placement videos using LTX-2 text-to-video.
+ * Generates videos directly from text prompts without requiring an intermediate image.
  */
 async function submitVideoPlacementGeneration(params: VideoPlacementGenerationParams): Promise<{
   jobId: string;
@@ -738,74 +771,13 @@ async function submitVideoPlacementGeneration(params: VideoPlacementGenerationPa
   jobs.set(jobId, job);
 
   try {
-    // Step 1: Generate an image from the text prompt
-    console.log(`[submitVideoPlacementGeneration] Step 1: Generating image from prompt for placement ${scene_number}...`);
-    
-    const imageJobResult = await submitImageGeneration({
-      scene_number,
-      prompt,
-      negative_prompt: 'blurry, low quality, text, watermark',
-      aspect_ratio: '16:9',
-      image_type: 'scene',
-      generation_mode: 'text_to_image',
-    });
-
-    if (imageJobResult.status !== 'submitted' || !imageJobResult.jobId) {
-      const errorMsg = imageJobResult.error || 'Failed to submit image generation';
-      throw new Error(`Image generation failed: ${errorMsg}`);
-    }
-
-    // Step 2: Wait for the image to complete
-    console.log(`[submitVideoPlacementGeneration] Step 2: Waiting for image generation to complete...`);
-    const imageWaitResult = await waitForComfyUIJob(imageJobResult.jobId, 300);
-
-    if (imageWaitResult.status !== 'completed' || !imageWaitResult.filePath) {
-      const errorMsg = imageWaitResult.error || 'Image generation did not complete';
-      throw new Error(`Image generation failed: ${errorMsg}`);
-    }
-
-    // Step 3: Use the generated image to create a video
-    console.log(`[submitVideoPlacementGeneration] Step 3: Generating video from image...`);
-    
-    // Construct full path - filePath should be absolute, but handle relative paths too
-    let imagePath = imageWaitResult.filePath;
-    if (!path.isAbsolute(imagePath)) {
-      // If relative, it's relative to .kshana/ directory
-      const projectDir = path.join(process.cwd(), PROJECT_DIR);
-      imagePath = path.join(projectDir, imagePath);
-    }
-
-    // Verify the image exists
-    if (!fs.existsSync(imagePath)) {
-      // Try to find the image by searching in image-placements directory
-      const imagePlacementsDir = getImagePlacementsDir();
-      const filename = path.basename(imagePath);
-      const altPath = path.join(imagePlacementsDir, filename);
-      
-      if (fs.existsSync(altPath)) {
-        imagePath = altPath;
-      } else {
-        // Try to find any image with the placement number pattern
-        const placementImagePattern = new RegExp(`^image${scene_number}_`);
-        try {
-          const files = fs.readdirSync(imagePlacementsDir);
-          const matchingFile = files.find(f => placementImagePattern.test(f));
-          if (matchingFile) {
-            imagePath = path.join(imagePlacementsDir, matchingFile);
-          } else {
-            throw new Error(`Generated image not found. Checked: ${imagePath}, ${altPath}, and searched in ${imagePlacementsDir}`);
-          }
-        } catch (dirError) {
-          throw new Error(`Generated image not found at: ${imageWaitResult.filePath}. Directory error: ${dirError}`);
-        }
-      }
-    }
+    console.log(`[submitVideoPlacementGeneration] Generating video from text prompt for placement ${scene_number}...`);
 
     const registry = getRegistry();
-    const workflowMetadata = registry.get('wan_single_image');
+    const workflowMetadata = registry.get('ltx_t2v');
 
     if (!workflowMetadata) {
-      throw new Error("Workflow 'wan_single_image' not found");
+      throw new Error("Workflow 'ltx_t2v' not found");
     }
 
     // Use video-placements directory for placement videos
@@ -815,21 +787,24 @@ async function submitVideoPlacementGeneration(params: VideoPlacementGenerationPa
       outputDir: videoPlacementsDir,
     });
 
-    // Upload the image to ComfyUI
-    const uploadResult = await client.uploadImage(imagePath, 'input', true);
+    // Calculate frame count from duration (LTX-2 requires divisible by 8 + 1)
+    const frameCount = calculateFrameCount(duration);
 
-    // Create motion prompt based on video type and original prompt
-    // The prompt already describes the scene, so we enhance it with motion
-    const motionPrompt = `${prompt}. Smooth, natural motion and animation.`;
+    // Get the project style configuration and enhance the prompt
+    const styleConfig = getProjectStyleConfig();
+    const enhancedPrompt = `${prompt}, ${styleConfig.promptModifier}`;
+    const negativePrompt = 'blurry, low quality, text, watermark, static, no motion, artifacts';
 
     // Load and parameterize the workflow
     const template = loadWorkflowTemplate(workflowMetadata.filename);
-    const workflow = parameterizeWorkflowByName('wan_single_image', template, {
-      sceneNumber: scene_number,
-      prompt: motionPrompt,
-      negativePrompt: 'blurry, low quality, text, watermark, static, no motion',
-      inputImageFilename: uploadResult.name,
+    const workflow = parameterizeLtxT2VWorkflow(template, {
+      prompt: enhancedPrompt,
+      negativePrompt,
+      seed: Math.floor(Math.random() * 2 ** 32),
       filenamePrefix: `Placement${scene_number}_video`,
+      width: 1280, // 16:9 aspect ratio
+      height: 720, // 16:9 aspect ratio
+      frameCount,
     });
 
     // Queue workflow
@@ -840,7 +815,7 @@ async function submitVideoPlacementGeneration(params: VideoPlacementGenerationPa
     job.status = 'processing';
     job.updatedAt = Date.now();
 
-    console.log(`[submitVideoPlacementGeneration] Video generation job submitted with prompt ID: ${promptId}`);
+    console.log(`[submitVideoPlacementGeneration] Video generation job submitted with prompt ID: ${promptId}, frame count: ${frameCount}`);
 
     return {
       jobId,
@@ -1763,7 +1738,8 @@ The tool handles all parsing, sequential generation, and error handling internal
         }
         
         // Wait for job completion
-        const waitResult = await waitForComfyUIJob(submitResult.jobId, 300);
+        const timeout = getVideoGenerationTimeout();
+        const waitResult = await waitForComfyUIJob(submitResult.jobId, timeout);
         
         if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
           console.log(`[generate_all_images] Placement ${placement.placementNumber} completed: ${waitResult.artifactId}`);
@@ -1905,7 +1881,8 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
         }
         
         // Wait for job completion
-        const waitResult = await waitForComfyUIJob(submitResult.jobId, 300);
+        const timeout = getVideoGenerationTimeout();
+        const waitResult = await waitForComfyUIJob(submitResult.jobId, timeout);
         
         if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
           console.log(`[generate_all_videos] Placement ${placement.placementNumber} completed: ${waitResult.artifactId}`);

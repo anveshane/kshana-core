@@ -339,13 +339,68 @@ export class ComfyUIClient {
 
   // Helper methods
 
+  /**
+   * Fetch with retry logic and timeout.
+   * Retries up to 3 times with exponential backoff for network failures.
+   */
+  private async fetchWithRetry(
+    url: string,
+    options: RequestInit = {},
+    maxRetries: number = 3,
+    retryDelay: number = 2
+  ): Promise<Response> {
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        // Add timeout to fetch request (30 seconds per request)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
+        
+        try {
+          const response = await fetch(url, {
+            ...options,
+            signal: controller.signal,
+          });
+          
+          clearTimeout(timeoutId);
+          return response;
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          throw fetchError;
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const isAborted = error instanceof Error && error.name === 'AbortError';
+        
+        // Don't retry on abort (timeout) or if it's the last attempt
+        if (isAborted || attempt === maxRetries) {
+          break;
+        }
+        
+        // Exponential backoff: 2s, 4s, 8s
+        const delay = retryDelay * Math.pow(2, attempt);
+        console.warn(`Fetch attempt ${attempt + 1} failed, retrying in ${delay}s: ${lastError.message}`);
+        await this.sleep(delay * 1000);
+      }
+    }
+    
+    throw lastError || new Error('Fetch failed after retries');
+  }
+
   private async getHistory(promptId: string): Promise<HistoryEntry | null> {
-    const response = await fetch(`${this.baseUrl}/history/${promptId}`);
-    if (!response.ok) {
+    try {
+      const response = await this.fetchWithRetry(`${this.baseUrl}/history/${promptId}`);
+      if (!response.ok) {
+        return null;
+      }
+      const history = await response.json() as Record<string, HistoryEntry>;
+      return history[promptId] || null;
+    } catch (error) {
+      // Return null on error to allow polling to continue
+      console.warn(`Failed to fetch history for ${promptId}: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
-    const history = await response.json() as Record<string, HistoryEntry>;
-    return history[promptId] || null;
   }
 
   private async callProgressCallback(callback: ProgressCallback, pct: number, msg: string): Promise<void> {
