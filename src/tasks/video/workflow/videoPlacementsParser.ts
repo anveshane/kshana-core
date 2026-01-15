@@ -28,12 +28,12 @@ function timeToSeconds(timeStr: string): number {
 }
 
 /**
- * Round duration to nearest valid value (5, 10, or 15 seconds).
+ * Round duration to nearest valid value (4 or 5 seconds for optimization).
  */
 function roundDuration(seconds: number): number {
-  if (seconds <= 7.5) return 5;
-  if (seconds <= 12.5) return 10;
-  return 15;
+  // Optimized for speed: prefer 4-5 seconds instead of longer durations
+  if (seconds <= 4.5) return 4;
+  return 5;
 }
 
 /**

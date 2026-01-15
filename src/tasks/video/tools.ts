@@ -720,7 +720,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
 export interface VideoPlacementGenerationParams {
   scene_number: number;
   prompt: string;
-  duration: number; // Duration in seconds (5, 10, or 15)
+  duration: number; // Duration in seconds (4 or 5 for optimization)
   video_type: 'animation' | 'stock_footage' | 'motion_graphics';
 }
 
@@ -729,8 +729,8 @@ export interface VideoPlacementGenerationParams {
  * LTX-2 requires frame count to be divisible by 8 + 1.
  * Formula: Math.floor((duration * 24) / 8) * 8 + 1
  * 
- * @param duration Duration in seconds (5, 10, or 15)
- * @returns Frame count (121 for 5s, 241 for 10s, 361 for 15s)
+ * @param duration Duration in seconds (4 or 5 for optimization)
+ * @returns Frame count (97 for 4s, 121 for 5s)
  */
 function calculateFrameCount(duration: number): number {
   // 24 fps, frame count must be divisible by 8 + 1
@@ -802,8 +802,8 @@ async function submitVideoPlacementGeneration(params: VideoPlacementGenerationPa
       negativePrompt,
       seed: Math.floor(Math.random() * 2 ** 32),
       filenamePrefix: `Placement${scene_number}_video`,
-      width: 1280, // 16:9 aspect ratio
-      height: 720, // 16:9 aspect ratio
+      width: 480, // Optimized for speed: 480x480 square
+      height: 480, // Optimized for speed: 480x480 square
       frameCount,
     });
 
@@ -855,8 +855,8 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       },
       duration: {
         type: 'number',
-        description: 'Video duration in seconds (5, 10, or 15)',
-        enum: [5, 10, 15],
+        description: 'Video duration in seconds (4 or 5 for optimization)',
+        enum: [4, 5],
       },
       scene_number: {
         type: 'number',

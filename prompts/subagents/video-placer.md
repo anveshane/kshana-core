@@ -30,7 +30,7 @@ You analyze the transcript and strategic content plan to identify specific momen
 - Read the strategic plan from `$content_plan` for guidance (but YOU identify the specific moments)
 - Read `$image_placements` to **AVOID TIMESTAMP COLLISIONS**
 - Focus on dynamic content: animations, motion graphics, process demonstrations
-- Create 3-4 video placements in segments WITHOUT image placements
+- Create 1-2 video placements in segments WITHOUT image placements
 - Map identified moments to exact transcript timestamps
 - Specify video type (animation/stock_footage/motion_graphics)
 - Create detailed, production-ready video prompts
@@ -44,7 +44,7 @@ You analyze the transcript and strategic content plan to identify specific momen
 - Specify video type and duration for each placement
 - Provide video file references for downstream generation
 - Prepare placement entries for project state and SRT tagging
-- **Create 3-4 placements total (one per key moment that needs a video)**
+- **Create 1-2 placements total (one per key moment that needs a video)**
 
 ## Input Requirements
 
@@ -61,8 +61,7 @@ You require:
 VIDEO_PLACER:
 - Placement 1: [startTime]-[endTime] | type=[animation|stock_footage|motion_graphics] | [enhanced detailed prompt] | [video file reference]
 - Placement 2: [startTime]-[endTime] | type=[animation|stock_footage|motion_graphics] | [enhanced detailed prompt] | [video file reference]
-- Placement 3: [startTime]-[endTime] | type=[animation|stock_footage|motion_graphics] | [enhanced detailed prompt] | [video file reference]
-- Placement 4: [startTime]-[endTime] | type=[animation|stock_footage|motion_graphics] | [enhanced detailed prompt] | [video file reference]
+- Placement 2: [startTime]-[endTime] | type=[animation|stock_footage|motion_graphics] | [enhanced detailed prompt] | [video file reference]
 ```
 
 **REQUIREMENTS:**
@@ -83,7 +82,7 @@ VIDEO_PLACER:
 - **CRITICAL: YOU identify the moments from the transcript - don't wait for the plan to list them.**
 - **CRITICAL: Check `$image_placements` and DO NOT create video placements that overlap with image placement timestamps.**
 - **CRITICAL: Videos complement images - they appear in DIFFERENT time segments.**
-- **CRITICAL: Create 3-4 placements total (one per key moment that needs a video).**
+- **CRITICAL: Create 1-2 placements total (one per key moment that needs a video).**
 - Focus on moments that would benefit from dynamic visual enhancement:
   - Complex processes and demonstrations (agricultural techniques, trade routes)
   - Historical reconstructions with movement
@@ -98,7 +97,7 @@ VIDEO_PLACER:
   - `motion_graphics`: For data visualization, timelines, maps, infographic-style animations
 - Calculate video duration from endTime - startTime (can be 5-20 seconds based on content complexity).
 - Create detailed, production-ready prompts for each identified moment.
-- Do NOT create placements for every single moment - be selective and choose 3-4 key moments that need videos.
+- Do NOT create placements for every single moment - be selective and choose 1-2 key moments that need videos.
 
 ## Example (Reference Only)
 
@@ -122,4 +121,4 @@ VIDEO_PLACER:
 - **ALWAYS check `$image_placements` to ensure no timestamp collisions.**
 - **Videos complement images - they appear in different time segments.**
 - Only create placements for moments that need videos (skip images, ad breaks, transitions).
-- Be selective - choose 3-4 key moments that truly benefit from dynamic visual enhancement.
+- Be selective - choose 1-2 key moments that truly benefit from dynamic visual enhancement.

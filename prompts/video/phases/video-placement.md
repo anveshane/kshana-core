@@ -22,7 +22,7 @@
 ```
 Task(
   subagent_type: 'video-placer',
-  task: 'Analyze the transcript ($transcript) to identify 3-4 key moments that need AI-generated videos. Check $image_placements to AVOID timestamp collisions. Use the content plan ($content_plan) for strategic guidance only. Create detailed video placement plan with exact timestamps, video types (animation/stock_footage/motion_graphics), and enhanced video prompts. Only create placements for moments that need videos (skip images, ad breaks, transitions). Create exactly 3-4 placements total, no more, no less.',
+  task: 'Analyze the transcript ($transcript) to identify 1-2 key moments that need AI-generated videos. Check $image_placements to AVOID timestamp collisions. Use the content plan ($content_plan) for strategic guidance only. Create detailed video placement plan with exact timestamps, video types (animation/stock_footage/motion_graphics), and enhanced video prompts. Only create placements for moments that need videos (skip images, ad breaks, transitions). Create exactly 1-2 placements total, no more, no less.',
   context_refs: ['$transcript', '$content_plan', '$image_placements']
 )
 ```
@@ -68,14 +68,14 @@ update_project(
 - **CRITICAL: Check `$image_placements` and DO NOT create video placements that overlap with image placement timestamps**
 - **CRITICAL: Videos complement images - they appear in DIFFERENT time segments**
 - Video placements are saved to `agent/content/video-placements.md`
-- Create exactly 3-4 placements total (one per key moment that needs a video)
+- Create exactly 1-2 placements total (one per key moment that needs a video)
 - Each placement must specify video type: animation, stock_footage, or motion_graphics
 
 **DO NOT:**
 - Create placements that overlap with image placement timestamps
 - Create placements for images (those are handled in Image Placement phase)
 - Create placements for ad breaks or transitions (those stay as original footage)
-- Create more than 3-4 placements (be selective about which moments truly need videos)
+- Create more than 1-2 placements (be selective about which moments truly need videos)
 - Skip saving the placements - you MUST save to the file
 - Skip validation - you MUST verify the output format before saving
 - Save planning comments or thinking - extract ONLY the VIDEO_PLACER section

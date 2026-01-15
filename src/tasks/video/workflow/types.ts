@@ -752,7 +752,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
   [WorkflowPhase.VIDEO_GENERATION]: {
     phase: WorkflowPhase.VIDEO_GENERATION,
     displayName: 'Video Generation',
-    nextPhase: WorkflowPhase.VIDEO_REPLACEMENT,
+    nextPhase: WorkflowPhase.COMPLETED,
     promptFile: 'video-generation',
     agentType: 'video',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_video', 'wait_for_job', 'todo_write'],
@@ -1039,17 +1039,23 @@ export function determineNextPhase(project: ProjectFile): StateTransitionResult 
             ];
             const currentIndex = youtubePhases.indexOf(currentPhase);
             if (currentIndex >= 0 && currentIndex < youtubePhases.length - 1) {
-              nextPhase = youtubePhases[currentIndex + 1];
+              const nextPhaseFromArray = youtubePhases[currentIndex + 1];
+              if (nextPhaseFromArray) {
+                nextPhase = nextPhaseFromArray;
+              }
             }
           }
         }
       }
       
-      return {
-        nextPhase,
-        reason: `${config.displayName} completed, moving to ${PHASE_CONFIGS[nextPhase].displayName}`,
-        isAutomatic: true,
-      };
+      // Ensure nextPhase is defined before using it
+      if (nextPhase) {
+        return {
+          nextPhase,
+          reason: `${config.displayName} completed, moving to ${PHASE_CONFIGS[nextPhase].displayName}`,
+          isAutomatic: true,
+        };
+      }
     }
   }
 

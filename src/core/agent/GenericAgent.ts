@@ -709,6 +709,23 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Main while(tool_use) loop
     while (this.iteration < this.maxIterations) {
+      // CRITICAL: Check COMPLETED phase FIRST - before any other work
+      try {
+        const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+        const project = loadProject();
+        if (project?.currentPhase === 'completed') {
+          debugLog(`[GenericAgent] COMPLETED phase detected at loop start. Stopping execution immediately.`);
+          return {
+            status: 'completed',
+            output: 'Workflow complete. All videos and images have been generated successfully.',
+            todos: this.todoManager.getTodos(),
+          };
+        }
+      } catch (err) {
+        debugLog(`[GenericAgent] Failed to check project phase at loop start: ${err}`);
+        // Continue if check fails
+      }
+
       // Check for abort
       if (this.aborted) {
         return {
@@ -750,6 +767,23 @@ export class GenericAgent extends TypedEventEmitter {
       }
 
       this.iteration++;
+
+      // CRITICAL: Stop immediately if we're in COMPLETED phase
+      try {
+        const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+        const project = loadProject();
+        if (project?.currentPhase === 'completed') {
+          debugLog(`[GenericAgent] COMPLETED phase detected. Stopping execution immediately.`);
+          return {
+            status: 'completed',
+            output: 'Workflow complete. All videos and images have been generated successfully.',
+            todos: this.todoManager.getTodos(),
+          };
+        }
+      } catch (err) {
+        debugLog(`[GenericAgent] Failed to check project phase: ${err}`);
+        // Continue if check fails
+      }
 
       // Emit thinking status
       this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
@@ -997,6 +1031,23 @@ export class GenericAgent extends TypedEventEmitter {
           toolCallId: toolCall.id,
           name: toolCall.name,
         });
+
+        // CRITICAL: Check if tool execution transitioned us to COMPLETED phase
+        try {
+          const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+          const project = loadProject();
+          if (project?.currentPhase === 'completed') {
+            debugLog(`[GenericAgent] COMPLETED phase detected after tool execution. Stopping immediately.`);
+            return {
+              status: 'completed',
+              output: 'Workflow complete. All videos and images have been generated successfully.',
+              todos: this.todoManager.getTodos(),
+            };
+          }
+        } catch (err) {
+          debugLog(`[GenericAgent] Failed to check project phase after tool execution: ${err}`);
+          // Continue if check fails
+        }
 
         // Special handling: After transcript-parser Task completes, automatically check if parsing succeeded
         // and complete the phase if transcriptEntries exist

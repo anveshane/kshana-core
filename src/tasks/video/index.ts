@@ -4,7 +4,7 @@
  * Supports both legacy mode and new state-based workflow mode.
  */
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, relative } from 'path';
 import { GenericAgent } from '../../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
@@ -243,7 +243,7 @@ export function loadProjectFilesAsContexts(basePath: string = process.cwd()): st
 
   // Load the original user input first - this is critical for content generation
   // Variable name MUST be $original_input to match phase prompts
-  // Only store if it doesn't already exist in context to prevent duplicates
+  // Use storeReference() to avoid duplicating content - file already exists in agent/
   const originalInputPath = join(agentDir, 'original_input.md');
   if (existsSync(originalInputPath)) {
     try {
@@ -252,10 +252,14 @@ export function loadProjectFilesAsContexts(basePath: string = process.cwd()): st
         // Check if $original_input already exists in context store
         const existing = contextStore.get('$original_input');
         if (!existing) {
-          const { variableName } = contextStore.store(content, 'Original User Input', {
-            source: 'user_input',
-            variableBaseName: 'original_input',
-          });
+          // Store reference to existing file instead of duplicating content
+          const relativePath = 'agent/original_input.md';
+          const { variableName } = contextStore.storeReference(
+            relativePath,
+            'Original User Input',
+            '$original_input',
+            'user_input'
+          );
           loadedContexts.push(variableName);
           contextSizes['original_input'] = content.length;
           totalChars += content.length;
@@ -304,10 +308,22 @@ export function loadProjectFilesAsContexts(basePath: string = process.cwd()): st
       try {
         const content = readFileSync(filePath, 'utf-8');
         if (content.trim().length > 0) {
-          const { variableName } = contextStore.store(content, label, {
-            source: 'tool',
-            variableBaseName: varName,
-          });
+          // Calculate relative path from .kshana/ directory
+          // filePath is absolute, projectDir is .kshana, so we get relative path from projectDir
+          const relativePath = relative(projectDir, filePath).replace(/\\/g, '/'); // Normalize path separators
+          
+          // Generate variable name from varName to match original behavior
+          // varName is already normalized (e.g., 'content_plan'), so we construct $varName
+          // The storeReference will handle counter logic if variable already exists
+          const variableNameBase = `$${varName}`;
+          
+          // Store reference to existing file instead of duplicating content
+          const { variableName } = contextStore.storeReference(
+            relativePath,
+            label,
+            variableNameBase, // Use varName to generate consistent variable names
+            'tool'
+          );
           loadedContexts.push(variableName);
           contextSizes[varName] = content.length;
           totalChars += content.length;

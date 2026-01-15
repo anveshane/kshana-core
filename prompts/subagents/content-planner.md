@@ -32,7 +32,7 @@ Your role is EXCLUSIVELY to:
 - Plan for ALL upcoming workflow phases:
   - **IMAGE_PLACEMENT**: The image-placer will identify specific moments that need images (5-6 key moments)
   - **IMAGE_GENERATION**: Images/infographics that need to be generated
-  - **VIDEO_PLACEMENT**: The video-placer will identify specific moments that need videos (3-4 key moments)
+  - **VIDEO_PLACEMENT**: The video-placer will identify specific moments that need videos (1-2 key moments)
   - **VIDEO_GENERATION**: Videos that need to be generated
   - **VIDEO_REPLACEMENT**: Moments where original footage should be replaced
   - **VIDEO_COMBINE**: Overall video assembly strategy
@@ -79,7 +79,7 @@ Your output should be a strategic workflow plan in markdown format, similar to a
 **Purpose**: The video-placer will identify specific moments from the transcript that need videos
 
 **Strategic Guidance**:
-- Target approximately 3-4 key moments for videos (avoid excessive frequency)
+- Target approximately 1-2 key moments for videos (avoid excessive frequency)
 - Focus on moments that would benefit from dynamic visual enhancement:
   - Complex processes and demonstrations (animations)
   - Historical reconstructions with movement (animations)
@@ -162,7 +162,7 @@ This video explores the history and science of skin color, challenging colorism 
 **Purpose**: The video-placer will identify specific moments from the transcript that need videos
 
 **Strategic Guidance**:
-- Target approximately 3-4 key moments for videos (avoid excessive frequency)
+- Target approximately 1-2 key moments for videos (avoid excessive frequency)
 - Focus on moments that would benefit from dynamic visual enhancement:
   - Complex processes and demonstrations (animations)
   - Historical reconstructions with movement (animations)
