@@ -1430,7 +1430,10 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...resultObj };
+        const markedResult = typeof result === 'object' && result !== null
+          ? { __awaiting_user_input: true, ...result }
+          : { __awaiting_user_input: true, result };
+        return markedResult;
       }
 
       this.emit({
@@ -1492,7 +1495,10 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...resultObj };
+        const markedResult = typeof result === 'object' && result !== null
+          ? { __awaiting_user_input: true, ...result }
+          : { __awaiting_user_input: true, result };
+        return markedResult;
       }
 
       this.emit({
@@ -1744,7 +1750,10 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...resultObj };
+        const markedResult = typeof result === 'object' && result !== null
+          ? { __awaiting_user_input: true, ...result }
+          : { __awaiting_user_input: true, result };
+        return markedResult;
       }
 
       this.emit({
@@ -1797,7 +1806,10 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...resultObj };
+        const markedResult = typeof result === 'object' && result !== null
+          ? { __awaiting_user_input: true, ...result }
+          : { __awaiting_user_input: true, result };
+        return markedResult;
       }
 
       this.emit({
@@ -1849,7 +1861,10 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
-        return { __awaiting_user_input: true, ...resultObj };
+        const markedResult = typeof result === 'object' && result !== null
+          ? { __awaiting_user_input: true, ...result }
+          : { __awaiting_user_input: true, result };
+        return markedResult;
       }
 
       this.emit({

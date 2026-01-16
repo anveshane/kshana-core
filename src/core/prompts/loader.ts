@@ -15,8 +15,57 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Get prompts directory - try multiple locations for flexibility
+// When running from dist/core/prompts/loader.js: __dirname = dist/core/prompts/ -> dist/prompts/
+// When running from source: src/core/prompts/loader.ts -> prompts/
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPTS_DIR = join(__dirname, '..', '..', '..', 'prompts');
+
+// Strategy: Find the package root by searching up for dist/prompts/ or prompts/
+// This works whether code is bundled or not
+function findPromptsDir(startDir: string): string | null {
+  let currentDir = startDir;
+  const maxDepth = 10; // Prevent infinite loops
+
+  for (let i = 0; i < maxDepth; i++) {
+    // Check if dist/prompts exists (indicates package root with built code)
+    const distPromptsPath = join(currentDir, 'dist', 'prompts');
+    if (existsSync(join(distPromptsPath, 'video', 'main.md'))) {
+      return distPromptsPath;
+    }
+
+    // Check if prompts exists directly (for source code)
+    const sourcePromptsPath = join(currentDir, 'prompts');
+    if (existsSync(join(sourcePromptsPath, 'video', 'main.md'))) {
+      return sourcePromptsPath;
+    }
+
+    // Check if package.json exists (indicates package root)
+    const packageJsonPath = join(currentDir, 'package.json');
+    if (existsSync(packageJsonPath)) {
+      // Try dist/prompts first, then prompts/
+      if (existsSync(join(currentDir, 'dist', 'prompts', 'video', 'main.md'))) {
+        return join(currentDir, 'dist', 'prompts');
+      }
+      if (existsSync(join(currentDir, 'prompts', 'video', 'main.md'))) {
+        return join(currentDir, 'prompts');
+      }
+    }
+
+    // Go up one level
+    const parentDir = dirname(currentDir);
+    if (parentDir === currentDir) {
+      // Reached filesystem root
+      break;
+    }
+    currentDir = parentDir;
+  }
+
+  return null;
+}
+
+// Find prompts directory
+const foundPromptsDir = findPromptsDir(__dirname);
+const PROMPTS_DIR = foundPromptsDir || join(__dirname, '..', '..', '..', 'prompts'); // Fallback
 
 const templateCache = new Map<string, string>();
 
@@ -25,7 +74,10 @@ export type PromptContext = Record<string, unknown>;
 export function loadMarkdown(relativePathFromPromptsDir: string): string {
   const filePath = join(PROMPTS_DIR, relativePathFromPromptsDir);
   if (!existsSync(filePath)) {
-    throw new Error(`Prompt file not found: ${filePath}`);
+    throw new Error(
+      `Prompt file not found: ${filePath}. PROMPTS_DIR=${PROMPTS_DIR}. ` +
+      `Please ensure prompts are copied to dist/prompts/ during build or available in prompts/ for development.`
+    );
   }
   const cached = templateCache.get(filePath);
   if (cached !== undefined) return cached;

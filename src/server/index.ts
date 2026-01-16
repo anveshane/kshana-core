@@ -43,18 +43,26 @@ export async function createServer(
   // Reset LLM logger (creates fresh log file for this session)
   resetLLMLogger();
 
+  // Configure logger - use pino-pretty in development, standard pino in production
+  const isDev = process.env['NODE_ENV'] !== 'production';
+  const loggerConfig = isDev
+    ? {
+        level: 'info',
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            translateTime: 'HH:MM:ss Z',
+            ignore: 'pid,hostname',
+          },
+        },
+      }
+    : {
+        level: 'info',
+      };
+
   // Create Fastify instance
   const app = Fastify({
-    logger: {
-      level: 'info',
-      transport: {
-        target: 'pino-pretty',
-        options: {
-          translateTime: 'HH:MM:ss Z',
-          ignore: 'pid,hostname',
-        },
-      },
-    },
+    logger: loggerConfig,
   });
 
   // Register plugins
