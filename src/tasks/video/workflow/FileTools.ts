@@ -428,7 +428,7 @@ Use this at the start of each turn to understand the project state and what acti
     const phaseLogger = getPhaseLogger();
     phaseLogger.setContext({
       phase: project.currentPhase,
-      stage: project.plan.stage,
+      stage: project.plan?.stage ?? 'NONE',
       projectId: project.id,
     });
 
@@ -636,8 +636,8 @@ What story would you like to turn into a video?`,
             return {
               status: 'success',
               message: `Master plan approved! You can now execute phases. Current phase: ${project.currentPhase}`,
-              plan_id: project.plan.planId,
-              plan_stage: project.plan.stage,
+              plan_id: project.plan?.planId ?? 'unknown',
+              plan_stage: project.plan?.stage ?? 'NONE',
               current_phase: project.currentPhase,
               next_action: 'Start executing the current phase based on the approved master plan.',
             };
@@ -646,8 +646,8 @@ What story would you like to turn into a video?`,
           return {
             status: 'success',
             message: `Master plan stage updated to ${stage}`,
-            plan_id: project.plan.planId,
-            plan_stage: project.plan.stage,
+            plan_id: project.plan?.planId ?? 'unknown',
+            plan_stage: project.plan?.stage ?? 'NONE',
             current_phase: project.currentPhase,
           };
         }
@@ -681,8 +681,8 @@ What story would you like to turn into a video?`,
             message: planApproved
               ? `Master plan approved! Now execute the current phase: ${project.currentPhase}`
               : `Master plan stage updated to ${stage}`,
-            plan_id: project.plan.planId,
-            plan_stage: project.plan.stage,
+            plan_id: project.plan?.planId ?? 'unknown',
+            plan_stage: project.plan?.stage ?? 'NONE',
             current_phase: project.currentPhase,
             deprecated_notice: 'update_planner_stage is deprecated. Use update_plan_stage instead.',
             next_action: planApproved

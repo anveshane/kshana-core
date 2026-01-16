@@ -60,6 +60,9 @@ export {
   getCLIProjectBasePath,
   getCLIAgentDir,
   getUserProjectAgentDir,
+  // Project base path management
+  setCurrentProjectBasePath,
+  getCurrentProjectBasePath,
   // Path utilities (context-aware)
   getProjectDir,
   getAgentDir,

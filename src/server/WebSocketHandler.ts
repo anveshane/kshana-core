@@ -62,10 +62,22 @@ export class WebSocketHandler {
 
   /**
    * Handle a new WebSocket connection.
+   * @param socket - The WebSocket connection
+   * @param request - The Fastify request object (for accessing query parameters)
    */
-  handleConnection(socket: WebSocket): void {
-    // Create a new session for this connection
-    const session = this.conversationManager.createSession();
+  handleConnection(socket: WebSocket, request?: { query?: { project_dir?: string } }): void {
+    // Extract project_dir from query parameters if available
+    const projectDir = request?.query?.project_dir;
+    
+    console.log('[WebSocketHandler] New connection:', {
+      hasRequest: !!request,
+      hasQuery: !!request?.query,
+      projectDir,
+      queryKeys: request?.query ? Object.keys(request.query) : [],
+    });
+    
+    // Create a new session for this connection with project directory
+    const session = this.conversationManager.createSession(projectDir);
     const sessionId = session.id;
 
     const connectionState: ConnectionState = {

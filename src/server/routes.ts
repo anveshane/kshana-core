@@ -167,8 +167,16 @@ export async function registerRoutes(
   app.get(
     `${apiPrefix}/ws/chat`,
     { websocket: true },
-    (socket: WebSocket, _request: FastifyRequest) => {
-      wsHandler.handleConnection(socket);
+    (socket: WebSocket, request: FastifyRequest) => {
+      // Extract query parameters from the request URL
+      console.log('[routes] WebSocket connection request:', {
+        url: request.url,
+        query: request.query,
+        queryType: typeof request.query,
+      });
+      const query = request.query as { project_dir?: string };
+      console.log('[routes] Extracted query:', query);
+      wsHandler.handleConnection(socket, { query });
     }
   );
 

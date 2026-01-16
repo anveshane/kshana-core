@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
 import { createDefaultToolRegistry } from '../core/tools/index.js';
-import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT } from '../tasks/video/index.js';
+import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT, createWorkflowVideoAgent } from '../tasks/video/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 
@@ -56,31 +56,51 @@ export class ConversationManager {
 
   /**
    * Create a new conversation session.
+   * @param basePath - Optional base path for the project directory (used for video tasks)
    */
-  createSession(): SessionState {
+  createSession(basePath?: string): SessionState {
     const sessionId = uuidv4();
     const now = Date.now();
 
+    console.log('[ConversationManager] Creating session:', {
+      sessionId,
+      taskType: this.taskType,
+      basePath,
+      hasBasePath: !!basePath,
+    });
+
     // Create agent with tools based on task type
-    let registry;
-    let customPrompt: string | undefined;
-    let agentName: string;
+    let agent: GenericAgent;
 
     if (this.taskType === 'video') {
-      registry = createVideoToolRegistry();
-      customPrompt = VIDEO_CREATION_SYSTEM_PROMPT;
-      agentName = 'kshana-video';
+      // For video tasks, use createWorkflowVideoAgent to ensure proper project path handling
+      if (basePath) {
+        console.log('[ConversationManager] Using createWorkflowVideoAgent with basePath:', basePath);
+        agent = createWorkflowVideoAgent({
+          llmConfig: this.llmConfig,
+          maxIterations: this.maxIterations,
+          originalInput: '',
+          basePath,
+        });
+      } else {
+        console.log('[ConversationManager] No basePath provided, using fallback GenericAgent');
+        // Fallback to generic agent creation if no basePath provided
+        const registry = createVideoToolRegistry();
+        const llm = new LLMClient(this.llmConfig);
+        agent = new GenericAgent(registry.getAll(), llm, {
+          maxIterations: this.maxIterations,
+          customPrompt: VIDEO_CREATION_SYSTEM_PROMPT,
+          name: 'kshana-video',
+        });
+      }
     } else {
-      registry = createDefaultToolRegistry();
-      agentName = 'kshana-ink';
+      const registry = createDefaultToolRegistry();
+      const llm = new LLMClient(this.llmConfig);
+      agent = new GenericAgent(registry.getAll(), llm, {
+        maxIterations: this.maxIterations,
+        name: 'kshana-ink',
+      });
     }
-
-    const llm = new LLMClient(this.llmConfig);
-    const agent = new GenericAgent(registry.getAll(), llm, {
-      maxIterations: this.maxIterations,
-      customPrompt,
-      name: agentName,
-    });
 
     const state: SessionState = {
       id: sessionId,

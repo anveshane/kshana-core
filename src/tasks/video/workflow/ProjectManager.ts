@@ -28,6 +28,7 @@ import {
   type SceneRoutingEntry,
   type EntityRoutingEntry,
   type ExecutionContext,
+  PlannerStage,
   type TranscriptEntry,
   type ImagePlacement,
   WorkflowPhase,
@@ -77,6 +78,34 @@ export function getExecutionContext(): ExecutionContext {
   }
   // Default to CLI context (Node.js)
   return 'cli';
+}
+
+/**
+ * Module-level storage for the current project base path.
+ * This allows tools to access the project directory without passing it through every call.
+ * Set by createWorkflowVideoAgent when the agent is initialized.
+ */
+let currentProjectBasePath: string | null = null;
+
+/**
+ * Set the current project base path.
+ * This should be called when creating a workflow video agent to ensure
+ * all subsequent tool calls use the correct project directory.
+ * 
+ * @param basePath - The base path for the current project
+ */
+export function setCurrentProjectBasePath(basePath: string): void {
+  currentProjectBasePath = basePath;
+}
+
+/**
+ * Get the current project base path.
+ * Returns the stored path if set, otherwise falls back to process.cwd().
+ * 
+ * @returns The current project base path
+ */
+export function getCurrentProjectBasePath(): string {
+  return currentProjectBasePath ?? process.cwd();
 }
 
 /**
@@ -884,7 +913,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
  * Load an existing project file.
  * Returns null if project doesn't exist or is incompatible (old version).
  */
-export function loadProject(basePath: string = process.cwd()): ProjectFile | null {
+export function loadProject(basePath: string = getCurrentProjectBasePath()): ProjectFile | null {
   const filePath = getProjectFilePath(basePath);
 
   if (!existsSync(filePath)) {
@@ -909,6 +938,21 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
       return null;
     }
 
+    // Migration: Add plan object if missing (for v2.0 projects created before plan was required)
+    let planMigrated = false;
+    if (!project.plan) {
+      console.warn('[ProjectManager] Project missing plan object. Adding default plan structure.');
+      project.plan = {
+        planId: `plan_${project.id}`,
+        planFile: 'agent/plans/master-plan.md',
+        stage: 'NONE' as PlannerStage,
+        refinementCount: 0,
+        createdAt: Date.now(),
+        approvedAt: null,
+      };
+      planMigrated = true;
+    }
+
     const { phase: normalizedPhase, changed } = normalizeCurrentPhaseForInputType(project);
     if (changed) {
       project.currentPhase = normalizedPhase;
@@ -917,7 +961,7 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
     // Sync content registry for backward compatibility
     const syncChanged = syncContentRegistry(project, basePath);
 
-    if (changed || syncChanged) {
+    if (changed || syncChanged || planMigrated) {
       saveProject(project, basePath);
     }
 
@@ -1252,7 +1296,7 @@ export function rebuildProjectIndex(basePath: string = process.cwd()): void {
 /**
  * Save the project file and regenerate the project index.
  */
-export function saveProject(project: ProjectFile, basePath: string = process.cwd()): void {
+export function saveProject(project: ProjectFile, basePath: string = getCurrentProjectBasePath()): void {
   const filePath = getProjectFilePath(basePath);
   project.updatedAt = Date.now();
   writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
@@ -1482,7 +1526,7 @@ export function checkPlanningDeliverables(project: ProjectFile, basePath: string
  * Read a file from the project directory.
  * Paths should be relative to .kshana/ (e.g., "agent/plans/plot.md" or "context/index.json").
  */
-export function readProjectFile(relativePath: string, basePath: string = process.cwd()): string | null {
+export function readProjectFile(relativePath: string, basePath: string = getCurrentProjectBasePath()): string | null {
   // If path doesn't start with agent/, context/, or index/, assume it's an agent file
   const normalizedPath = relativePath.startsWith('agent/') || relativePath.startsWith('context/') || relativePath.startsWith('index/')
     ? relativePath
@@ -1503,7 +1547,7 @@ export function readProjectFile(relativePath: string, basePath: string = process
 export function writeProjectFile(
   relativePath: string,
   content: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): void {
   // If path doesn't start with agent/, context/, or index/, assume it's an agent file
   const normalizedPath = relativePath.startsWith('agent/') || relativePath.startsWith('context/') || relativePath.startsWith('index/')
@@ -2136,9 +2180,9 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   }
 
   // Plan status
-  const planStatus = project.plan.stage === PlannerStage.COMPLETE
-    ? `✅ Approved (ID: ${project.plan.planId})`
-    : `⏳ ${project.plan.stage} (ID: ${project.plan.planId})`;
+  const planStatus = project.plan?.stage === PlannerStage.COMPLETE
+    ? `✅ Approved (ID: ${project.plan?.planId ?? 'unknown'})`
+    : `⏳ ${project.plan?.stage ?? 'NONE'} (ID: ${project.plan?.planId ?? 'unknown'})`;
 
   return `
 Project: ${project.title || '(untitled)'}
@@ -2174,8 +2218,8 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
   const phaseConfig = PHASE_CONFIGS[currentPhase];
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
   const isYouTubeWorkflow = isYouTubeInputType(project.inputType);
-  const masterPlanStage = project.plan.stage;
-  const masterPlanExists = planFileHasContent(project.plan.planFile, basePath);
+  const masterPlanStage = project.plan?.stage ?? 'NONE';
+  const masterPlanExists = project.plan?.planFile ? planFileHasContent(project.plan.planFile, basePath) : false;
 
   // For YouTube workflow, skip all master plan logic
   if (isYouTubeWorkflow) {
@@ -2266,8 +2310,8 @@ Execute the ${phaseConfig.displayName} phase.
 ## Current State
 - **Phase**: ${phaseConfig.displayName}
 - **Phase Status**: ${phaseInfo?.status ?? 'pending'}
-- **Master Plan**: ${project.plan.planFile}
-- **Master Plan ID**: ${project.plan.planId}
+- **Master Plan**: ${project.plan?.planFile ?? 'not set'}
+- **Master Plan ID**: ${project.plan?.planId ?? 'unknown'}
 - **Master Plan Stage**: ${masterPlanStage}
 - **Master Plan Has Content**: ${masterPlanExists ? 'YES' : 'NO'}
 - **Per-Item Approval Required**: ${phaseConfig.requiresPerItemApproval ? 'YES' : 'NO'}
@@ -2299,7 +2343,7 @@ Before executing any phase, you must create a master plan that covers the entire
    - Key settings/locations
    - Estimated number of scenes
    - Visual style approach
-3. Write the plan to ${project.plan.planFile}
+3. Write the plan to ${project.plan?.planFile ?? 'agent/plans/master-plan.md'}
 4. Present the plan to the user for approval
 `;
         }
@@ -2308,7 +2352,7 @@ Before executing any phase, you must create a master plan that covers the entire
       case PlannerStage.VERIFY:
         instruction += `
 The master plan is ready for verification. Present it to the user for approval.
-1. Read the plan from ${project.plan.planFile}
+1. Read the plan from ${project.plan?.planFile ?? 'agent/plans/master-plan.md'}
 2. Use ask_user to present a summary and ask for approval
 3. If approved, call update_project with action "update_plan_stage" and stage "complete"
 4. If feedback is given, call update_project with action "update_plan_stage" and stage "refining"
@@ -2318,9 +2362,9 @@ The master plan is ready for verification. Present it to the user for approval.
       case PlannerStage.REFINING:
         instruction += `
 Refine the master plan based on user feedback.
-1. Read the current plan from ${project.plan.planFile}
+1. Read the current plan from ${project.plan?.planFile ?? 'agent/plans/master-plan.md'}
 2. Apply user feedback
-3. Update the plan in ${project.plan.planFile}
+3. Update the plan in ${project.plan?.planFile ?? 'agent/plans/master-plan.md'}
 4. Call update_project with action "update_plan_stage" and stage "verify"
 `;
         break;

@@ -29,6 +29,7 @@ import {
   WorkflowPhase,
   PHASE_CONFIGS,
   getProjectDir,
+  setCurrentProjectBasePath,
 } from './workflow/index.js';
 
 // Re-export prompts
@@ -369,6 +370,10 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
     originalInput = '',
     basePath = process.cwd(), // CLI context: defaults to CLI's own directory
   } = config;
+
+  // Set the current project base path so tools can access it
+  // This ensures all tool calls use the correct project directory
+  setCurrentProjectBasePath(basePath);
 
   // Initialize or load project
   const project = getOrCreateProject(originalInput, 'cinematic_realism', basePath);
