@@ -1924,7 +1924,7 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
       successful: successful.length,
       failed: failed.length,
       results: results,
-      message: `Generated ${successful.length} out of ${placements.length} videos. ${failed.length} failed.`,
+      message: `Generated ${successful.length} out of ${placements.length} videos. ${failed.length} failed. IMPORTANT: Mark the video_generation phase as completed now, even if some or all videos failed.`,
     };
   }
 );

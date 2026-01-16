@@ -1100,6 +1100,41 @@ export class GenericAgent extends TypedEventEmitter {
           }
         }
 
+        // Special handling: After generate_all_videos completes, automatically mark video_generation phase as complete
+        // This ensures the phase is marked complete even if all videos failed
+        if (toolCall.name === 'generate_all_videos' && resultObj['status'] === 'completed') {
+          try {
+            const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+            const project = loadProject();
+            
+            // Check if we're in the video_generation phase
+            if (project?.currentPhase === 'video_generation') {
+              const phaseInfo = project.phases?.video_generation;
+              const isPhaseCompleted = phaseInfo?.status === 'completed' || phaseInfo?.status === 'skipped';
+              
+              if (!isPhaseCompleted) {
+                const successful = (resultObj['successful'] as number) ?? 0;
+                const failed = (resultObj['failed'] as number) ?? 0;
+                const total = (resultObj['total_placements'] as number) ?? 0;
+                
+                debugLog(`[GenericAgent] generate_all_videos completed (${successful} successful, ${failed} failed out of ${total}). Automatically marking video_generation phase as complete.`);
+                
+                // Automatically mark phase as completed
+                this.messages.push({
+                  role: 'user',
+                  content: `CRITICAL: generate_all_videos tool completed (${successful} successful, ${failed} failed out of ${total} placements). You MUST immediately call update_project(action='update_phase', data={phase: 'video_generation', status: 'completed'}) to mark the phase as complete. Do NOT retry failed placements. Do NOT try alternative workflows. Do NOT ask the user anything - mark the phase complete and STOP.`,
+                });
+                // Continue loop to process the update_project call
+                continue;
+              } else {
+                debugLog(`[GenericAgent] generate_all_videos completed. Phase already marked complete.`);
+              }
+            }
+          } catch (err) {
+            debugLog(`[GenericAgent] Failed to check generate_all_videos result: ${err}`);
+          }
+        }
+
         // Special handling: After transition_phase tool call, check if transition failed
         // due to Planning phase being in_progress but deliverables exist
         if (toolCall.name === 'update_project' && 
@@ -1313,6 +1348,48 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Handle Task tool specially - unified subagent entrypoint (Claude SDK style)
     if (isTaskTool(toolCall.name)) {
+      // CRITICAL: Block alternative workflows during video_generation phase
+      // Prevent Task calls that try to create scenes or other content when video generation should be complete
+      try {
+        const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+        const project = loadProject();
+        
+        if (project?.currentPhase === 'video_generation') {
+          const args = toolCall.arguments as Record<string, unknown>;
+          const subagentType = args['subagent_type'] as string | undefined;
+          const contentType = args['content_type'] as string | undefined;
+          
+          // Block content-creator with scene content_type during video_generation
+          // Also block other content creation workflows that shouldn't happen during video generation
+          if (subagentType === 'content-creator' && (contentType === 'scene' || contentType === 'plot' || contentType === 'story')) {
+            const errorMsg = `ERROR: Cannot use Task with content-creator and content_type="${contentType}" during video_generation phase. The video_generation phase should be marked as complete after generate_all_videos completes, not create new content. If generate_all_videos failed, mark the phase as complete anyway and do not try alternative workflows.`;
+            
+            debugLog(`[GenericAgent] ${errorMsg}`);
+            
+            const errorResult = {
+              status: 'error',
+              error: errorMsg,
+              toolCallId: toolCall.id,
+              message: 'Alternative workflow blocked during video_generation phase. Mark the phase as complete instead.',
+            };
+            
+            this.emit({
+              type: 'tool_result',
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              result: errorResult,
+              isError: true,
+              agentName: this.getEffectiveAgentName(),
+            });
+            
+            return errorResult;
+          }
+        }
+      } catch (err) {
+        debugLog(`[GenericAgent] Failed to check project phase for Task validation: ${err}`);
+        // Continue with Task execution if check fails (fail open to avoid breaking normal operation)
+      }
+      
       const result = await this.handleTask(toolCall);
       const resultObj = result as Record<string, unknown>;
 
@@ -1431,6 +1508,46 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Handle generate_content - deterministic content generation with automatic context injection
     if (toolCall.name === 'generate_content') {
+      // CRITICAL: Block alternative workflows during video_generation phase
+      // Prevent generate_content calls that try to create scenes or other content when video generation should be complete
+      try {
+        const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
+        const project = loadProject();
+        
+        if (project?.currentPhase === 'video_generation') {
+          const args = toolCall.arguments as Record<string, unknown>;
+          const contentType = args['content_type'] as string | undefined;
+          
+          // Block scene, plot, story content generation during video_generation
+          // These should not be created during video generation - the phase should just be marked complete
+          if (contentType === 'scene' || contentType === 'plot' || contentType === 'story' || contentType === 'character' || contentType === 'setting') {
+            const errorMsg = `ERROR: Cannot use generate_content with content_type="${contentType}" during video_generation phase. The video_generation phase should be marked as complete after generate_all_videos completes, not create new content. If generate_all_videos failed, mark the phase as complete anyway and do not try alternative workflows.`;
+            
+            debugLog(`[GenericAgent] ${errorMsg}`);
+            
+            const errorResult = {
+              status: 'error',
+              error: errorMsg,
+              toolCallId: toolCall.id,
+              message: 'Alternative workflow blocked during video_generation phase. Mark the phase as complete instead.',
+            };
+            
+            this.emit({
+              type: 'tool_result',
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              result: errorResult,
+              isError: true,
+              agentName: this.getEffectiveAgentName(),
+            });
+            
+            return errorResult;
+          }
+        }
+      } catch (err) {
+        debugLog(`[GenericAgent] Failed to check project phase for generate_content validation: ${err}`);
+        // Continue with generate_content execution if check fails (fail open to avoid breaking normal operation)
+      }
       const args = toolCall.arguments;
       const contentType = args['content_type'] as string;
       const name = args['name'] as string | undefined;

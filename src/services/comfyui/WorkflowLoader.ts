@@ -834,6 +834,8 @@ export function expandSubgraphs(workflow: WorkflowTemplate): WorkflowTemplate {
       if (newNode.inputs) {
         for (let inputIdx = 0; inputIdx < newNode.inputs.length; inputIdx++) {
           const input = newNode.inputs[inputIdx];
+          if (!input) continue;
+          
           const mapKey = `${oldId}:${inputIdx}`;
           const mappedValue = inputValueMap.get(mapKey);
 
@@ -860,8 +862,9 @@ export function expandSubgraphs(workflow: WorkflowTemplate): WorkflowTemplate {
       }
 
       // Update output links references
-      if (newNode.outputs) {
-        for (const output of newNode.outputs as Array<{ links?: number[] }>) {
+      const nodeOutputs = (newNode as { outputs?: Array<{ links?: number[] }> }).outputs;
+      if (nodeOutputs) {
+        for (const output of nodeOutputs) {
           if (output.links) {
             output.links = output.links
               .map(linkId => linkIdMap.get(linkId))
@@ -1094,7 +1097,7 @@ function removeUIOnlyNodes(workflow: WorkflowTemplate): WorkflowTemplate {
     if (value === undefined) continue;
 
     // Find output links from this primitive
-    const outputs = primNode.outputs as Array<{ links?: number[] }> | undefined;
+    const outputs = (primNode as { outputs?: Array<{ links?: number[] }> }).outputs;
     const outputLinks = outputs?.[0]?.links || [];
 
     for (const linkId of outputLinks) {
@@ -1463,9 +1466,20 @@ export function workflowToPrompt(workflow: WorkflowTemplate): Record<string, unk
       convertedInputs['ckpt_name'] = widgetValues[0];
     }
     // Special handling for LTXAVTextEncoderLoader
-    else if (nodeType === 'LTXAVTextEncoderLoader' && Array.isArray(widgetValues)) {
-      convertedInputs['text_encoder'] = widgetValues[0];
-      convertedInputs['ckpt_name'] = widgetValues[1];
+    else if (nodeType === 'LTXAVTextEncoderLoader') {
+      if (Array.isArray(widgetValues)) {
+        convertedInputs['text_encoder'] = widgetValues[0];
+        convertedInputs['ckpt_name'] = widgetValues[1];
+      }
+      // device is REQUIRED - always set it to ensure it's present
+      // Use widget value if available, otherwise default to "default"
+      // Only set if not already linked (linked inputs are handled above)
+      if (!('device' in convertedInputs) || convertedInputs['device'] === undefined || convertedInputs['device'] === null) {
+        const deviceValue = Array.isArray(widgetValues) && widgetValues[2] !== undefined 
+          ? widgetValues[2] 
+          : 'default';
+        convertedInputs['device'] = deviceValue;
+      }
     }
     // Special handling for EmptyImage
     else if (nodeType === 'EmptyImage' && Array.isArray(widgetValues)) {
