@@ -4,26 +4,42 @@
 
 **Prerequisites**:
 - Transcript must be parsed in TRANSCRIPT_INPUT phase first
-- `$transcript` context variable must exist
 - `agent/content/transcript.md` file must exist
 
-**If `$transcript` is not available, go back to TRANSCRIPT_INPUT phase and parse the transcript first.**
+**IMPORTANT: Before starting, check if the transcript file exists:**
+1. **First, read the transcript file** to verify it exists:
+```
+read_file(file_path: 'agent/content/transcript.md')
+```
+2. **If the file exists**, use it directly in the Task context_refs or read its content
+3. **If `$transcript` context variable is not available**, you can still use the transcript by:
+   - Reading the file: `read_file(file_path: 'agent/content/transcript.md')`
+   - Or using it in Task context_refs: The Task tool will automatically resolve `agent/content/transcript.md` when referenced
 
 **CRITICAL: This is a YouTube workflow. DO NOT generate articles, stories, or any creative content. Only create a STRATEGIC CONTENT PLAN that plans for all upcoming phases.**
 **CRITICAL: Do NOT call Task with subagent_type="Plan" or write to master-plan.md. Use the content-planner subagent only.**
 
-**Steps (execute in order)**:
+**CRITICAL WORKFLOW: You MUST complete steps 1-4 in order BEFORE attempting step 5 (transition). The system will block transitions if the phase is not marked as "completed".**
 
-1. **Call the content planner subagent**:
+**Steps (execute in order - DO NOT skip any step):**
+
+1. **Read the transcript file first** (if not already loaded):
+```
+read_file(file_path: 'agent/content/transcript.md')
+```
+   - This ensures you have the transcript content before calling the subagent
+   - The transcript file should exist from the TRANSCRIPT_INPUT phase
+
+2. **Call the content planner subagent**:
 ```
 Task(
   subagent_type: 'content-planner',
   task: 'Create a strategic workflow plan for ALL upcoming phases: IMAGE_PLACEMENT, IMAGE_GENERATION, VIDEO_REPLACEMENT, VIDEO_COMBINE. Identify which moments need visuals (images, infographics, or videos) and plan the execution strategy. This is a high-level strategic planning phase - do not create detailed image prompts.',
-  context_refs: ['$transcript']
+  context_refs: ['$transcript']  // If $transcript exists, use it. Otherwise, the Task tool will resolve 'agent/content/transcript.md' automatically
 )
 ```
 
-2. **Extract and save the content plan**:
+3. **Extract and save the content plan**:
    - The Task result structure is: `{ status: 'completed', output: '<content plan text>', task: '...', iterations: 1 }`
    - **The content plan text is in `result.output`** - extract this field
    - **CRITICAL: You MUST use `write_file` to save the content plan to a file. DO NOT use `store_context` - that only stores it in memory and does NOT create a file.**
@@ -37,20 +53,25 @@ write_file(
    - **After saving with `write_file`, the file will be automatically loaded as `$content_plan` context variable**
    - **VERIFY: The file `agent/plans/content-plan.md` must exist before proceeding to step 3. If it doesn't exist, the phase is NOT complete.**
 
-3. **Mark phase as completed**:
+4. **Mark phase as completed** (REQUIRED - do not skip this step):
 ```
 update_project(
   action: 'update_phase',
-  data: { phase: 'planning', status: 'completed' }
+  data: { phase: 'content_planning', status: 'completed' }
 )
 ```
+   - **CRITICAL**: You MUST mark the phase as "completed" before attempting to transition
+   - Use phase name 'content_planning' (not 'planning')
+   - **DO NOT attempt step 5 until step 4 succeeds**
 
-4. **Transition to next phase (Image Placement)**:
+5. **Transition to next phase (Image Placement)** - ONLY after step 4 succeeds:
 ```
 update_project(
   action: 'transition_phase'
 )
 ```
+   - **Only call this AFTER the phase is marked as "completed" in step 4**
+   - If transition fails, check that step 4 was successful first
 
 **IMPORTANT:**
 - This phase creates a STRATEGIC WORKFLOW PLAN (like a project execution plan)

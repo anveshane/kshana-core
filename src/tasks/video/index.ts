@@ -250,39 +250,51 @@ export function loadProjectFilesAsContexts(basePath: string = process.cwd()): st
     try {
       const content = readFileSync(originalInputPath, 'utf-8');
       if (content.trim().length > 0) {
-        // Check if $original_input already exists in context store
-        const existing = contextStore.get('$original_input');
-        if (!existing) {
-          // Store reference to existing file instead of duplicating content
-          const relativePath = 'agent/original_input.md';
-          const { variableName } = contextStore.storeReference(
-            relativePath,
-            'Original User Input',
-            '$original_input',
-            'user_input'
-          );
-          loadedContexts.push(variableName);
-          contextSizes['original_input'] = content.length;
-          totalChars += content.length;
-        } else {
-          // Already exists, just add to loaded contexts
-          loadedContexts.push('$original_input');
-          contextSizes['original_input'] = existing.content.length;
-          totalChars += existing.content.length;
-        }
+        // Always re-store reference to ensure it uses the correct basePath
+        // This is important after contextStore.reload() to ensure file paths are resolved correctly
+        const relativePath = 'agent/original_input.md';
+        const { variableName } = contextStore.storeReference(
+          relativePath,
+          'Original User Input',
+          '$original_input',
+          'user_input'
+        );
+        loadedContexts.push(variableName);
+        contextSizes['original_input'] = content.length;
+        totalChars += content.length;
       }
     } catch {
       // Skip if can't be read
     }
   }
 
-  // Transcript is already in agent/content/transcript.md - do NOT store in context directory
-  // $transcript will be resolved directly from agent/content/transcript.md when needed via context_refs
-  // This prevents duplication in the context directory
-
   // Files to load with their context labels
   // Load different files based on input type (YouTube vs Story workflow)
   const isYouTubeWorkflow = project?.inputType === 'youtube_srt' || project?.inputType === 'script';
+
+  // Load transcript for YouTube workflow phases that need it
+  // For CONTENT_PLANNING and later phases, load transcript as $transcript context
+  const transcriptPath = join(contentDir, 'transcript.md');
+  if (existsSync(transcriptPath) && isYouTubeWorkflow) {
+    try {
+      const transcriptContent = readFileSync(transcriptPath, 'utf-8');
+      if (transcriptContent.trim().length > 0) {
+        // Always re-store reference to ensure it uses the correct basePath
+        const relativePath = 'agent/content/transcript.md';
+        const { variableName } = contextStore.storeReference(
+          relativePath,
+          'Transcript',
+          '$transcript',
+          'tool'
+        );
+        loadedContexts.push(variableName);
+        contextSizes['transcript'] = transcriptContent.length;
+        totalChars += transcriptContent.length;
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
   
   const contentFiles = isYouTubeWorkflow
     ? [
@@ -385,7 +397,7 @@ export async function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig)
 
   // Reload context store for this project to ensure isolation
   // This must be done BEFORE loading project files into context store
-  contextStore.reload(project.id);
+  contextStore.reload(project.id, basePath);
 
   // Load existing project files into context store
   // This makes them available to dispatch_agent and dispatch_content_agent
@@ -416,6 +428,7 @@ export async function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig)
 const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
   [WorkflowPhase.TRANSCRIPT_INPUT]: 'video/phases/transcript-input.md',
   [WorkflowPhase.PLANNING]: 'video/phases/planning.md',
+  [WorkflowPhase.CONTENT_PLANNING]: 'video/phases/planning.md', // CONTENT_PLANNING uses same prompt as PLANNING
   [WorkflowPhase.IMAGE_PLACEMENT]: 'video/phases/image-placement.md',
   [WorkflowPhase.IMAGE_GENERATION]: 'video/phases/image-generation.md',
   [WorkflowPhase.VIDEO_PLACEMENT]: 'video/phases/video-placement.md',
@@ -441,9 +454,17 @@ export async function buildWorkflowAgentPrompt(
   currentPhase: WorkflowPhase,
   loadedContexts: string[] = []
 ): Promise<string> {
+  if (!project) {
+    throw new Error('Project is required to build workflow agent prompt');
+  }
+
   // Use workflow manager to get phase config
   const { getPhaseConfig } = await import('./workflow/workflows/workflow-manager.js');
   const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
+  
+  if (!phaseConfig) {
+    throw new Error(`No phase configuration found for phase: ${currentPhase}`);
+  }
 
   // Build loaded contexts section
   let loadedContextsSection = 'No existing project files loaded yet.';

@@ -55,6 +55,9 @@ export enum WorkflowPhase {
   TRANSCRIPT_INPUT = 'transcript_input',
 
   /** Phase 2 (YouTube): Create content plan for visual placements */
+  CONTENT_PLANNING = 'content_planning',
+  
+  /** Legacy: Keep PLANNING for backward compatibility (maps to CONTENT_PLANNING) */
   PLANNING = 'planning',
 
   /** Phase 3 (YouTube): Map images to transcript timestamps */
@@ -153,7 +156,7 @@ export const INPUT_TYPE_CONFIGS: Record<InputType, InputTypeConfig> = {
   script: {
     displayName: 'Documentary Script',
     description: 'A non-SRT documentary script that follows the YouTube workflow',
-    startPhase: WorkflowPhase.PLANNING,
+    startPhase: WorkflowPhase.CONTENT_PLANNING,
     skipPhases: [
       WorkflowPhase.TRANSCRIPT_INPUT,
       WorkflowPhase.PLOT,
@@ -667,11 +670,11 @@ export interface PhaseConfig {
  * Currently, this only contains YouTube workflow phases since that's the
  * only active workflow. Legacy phases are not included.
  */
-export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
+export const PHASE_CONFIGS: Partial<Record<WorkflowPhase, PhaseConfig>> = {
   [WorkflowPhase.TRANSCRIPT_INPUT]: {
     phase: WorkflowPhase.TRANSCRIPT_INPUT,
     displayName: 'Transcript Input',
-    nextPhase: WorkflowPhase.PLANNING,
+    nextPhase: WorkflowPhase.CONTENT_PLANNING,
     promptFile: 'transcript-input',
     agentType: 'content',
     allowedTools: [
@@ -692,11 +695,11 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     description: 'Accept raw SRT text, validate and parse transcript entries',
   },
 
-  [WorkflowPhase.PLANNING]: {
-    phase: WorkflowPhase.PLANNING,
-    displayName: 'Planning',
+  [WorkflowPhase.CONTENT_PLANNING]: {
+    phase: WorkflowPhase.CONTENT_PLANNING,
+    displayName: 'Content Planning',
     nextPhase: WorkflowPhase.IMAGE_PLACEMENT,
-    promptFile: 'planning',
+    promptFile: 'content-planning',
     agentType: 'planning',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'Task'],
     itemProcessMode: 'single',
@@ -918,7 +921,7 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
  */
 export const PHASE_ORDER: WorkflowPhase[] = [
   WorkflowPhase.TRANSCRIPT_INPUT,
-  WorkflowPhase.PLANNING,
+  WorkflowPhase.CONTENT_PLANNING,
   WorkflowPhase.IMAGE_PLACEMENT,
   WorkflowPhase.IMAGE_GENERATION,
   WorkflowPhase.VIDEO_REPLACEMENT,
@@ -1000,6 +1003,7 @@ export interface StateTransitionResult {
 export async function determineNextPhase(project: ProjectFile): Promise<StateTransitionResult> {
   // Dynamic import to avoid circular dependency
   const { getNextPhase, getPhaseConfig } = await import('./workflows/workflow-manager.js');
+  const { isYouTubePhase, getNextYouTubePhase } = await import('./workflows/youtube-workflow.js');
   
   const currentPhase = project.currentPhase;
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
@@ -1014,9 +1018,40 @@ export async function determineNextPhase(project: ProjectFile): Promise<StateTra
   }
   
   const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
+  if (!phaseConfig) {
+    return {
+      nextPhase: currentPhase,
+      reason: `No configuration found for phase ${currentPhase}`,
+      isAutomatic: false,
+    };
+  }
 
-  // If current phase is completed, move to next using workflow manager
+  // If current phase is completed, move to next phase in workflow order
   if (phaseInfo.status === 'completed') {
+    // For YouTube workflow, use strict sequence from youtube-workflow.ts
+    if (isYouTubePhase(currentPhase)) {
+      const nextPhase = getNextYouTubePhase(currentPhase);
+      
+      if (nextPhase) {
+        const nextPhaseConfig = getPhaseConfig(nextPhase, project.inputType);
+        if (nextPhaseConfig) {
+          return {
+            nextPhase,
+            reason: `${phaseConfig.displayName} completed, moving to ${nextPhaseConfig.displayName}`,
+            isAutomatic: true,
+          };
+        }
+      } else {
+        // Reached end of workflow
+        return {
+          nextPhase: WorkflowPhase.COMPLETED,
+          reason: 'Workflow complete',
+          isAutomatic: true,
+        };
+      }
+    }
+    
+    // Fallback to workflow manager for non-YouTube workflows
     const nextPhase = getNextPhase(currentPhase, project.inputType);
     
     if (nextPhase) {
@@ -1091,6 +1126,9 @@ export function canTransitionToNextPhase(project: ProjectFile, phase: WorkflowPh
  */
 export function getPhaseItems(project: ProjectFile, phase: WorkflowPhase): ItemApprovalEntry[] {
   const config = PHASE_CONFIGS[phase];
+  if (!config) {
+    return []; // No config, return empty array
+  }
 
   switch (config.itemProcessMode) {
     case 'single':
@@ -1209,6 +1247,9 @@ export function getNextUnapprovedItem(project: ProjectFile, phase: WorkflowPhase
  */
 export function areAllItemsApproved(project: ProjectFile, phase: WorkflowPhase): boolean {
   const config = PHASE_CONFIGS[phase];
+  if (!config) {
+    return false; // No config, can't determine approval status
+  }
 
   // Single-item phases don't have per-item approval
   if (config.itemProcessMode === 'single') {

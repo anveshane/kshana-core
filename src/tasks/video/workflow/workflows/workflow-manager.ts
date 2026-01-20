@@ -92,14 +92,14 @@ export function getPhaseConfig(phase: WorkflowPhase, inputType: InputType): Phas
 
 /**
  * Get the start phase for a given input type.
- * For YouTube workflow, this is TRANSCRIPT_INPUT (or PLANNING for script input).
+ * For YouTube workflow, this is TRANSCRIPT_INPUT (or CONTENT_PLANNING for script input).
  */
 export function getStartPhase(inputType: InputType): WorkflowPhase {
   const workflowType = getActiveWorkflowType(inputType);
   
   if (workflowType === 'youtube') {
     if (inputType === 'script') {
-      return WorkflowPhase.PLANNING; // Scripts skip transcript input
+      return WorkflowPhase.CONTENT_PLANNING; // Scripts skip transcript input
     }
     return WorkflowPhase.TRANSCRIPT_INPUT; // Default start for YouTube workflow
   }

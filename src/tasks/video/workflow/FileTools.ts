@@ -8,6 +8,8 @@ import type { ToolDefinition } from '../../../core/llm/index.js';
 import { getWorkflowLogger } from './WorkflowLogger.js';
 import { getPhaseLogger } from '../../../utils/phaseLogger.js';
 import { loadAndRenderMarkdown } from '../../../core/prompts/loader.js';
+import { existsSync } from 'fs';
+import { join } from 'path';
 import {
   loadProject,
   saveProject,
@@ -436,8 +438,8 @@ Use this at the start of each turn to understand the project state and what acti
           const transcriptPhaseInfo = project.phases?.transcript_input;
           if (transcriptPhaseInfo?.status === 'completed' && project.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
             // Transition to planning phase since transcript is already parsed
-            project.currentPhase = WorkflowPhase.PLANNING;
-            const planningPhaseKey = WorkflowPhase.PLANNING as keyof typeof project.phases;
+            project.currentPhase = WorkflowPhase.CONTENT_PLANNING;
+            const planningPhaseKey = WorkflowPhase.CONTENT_PLANNING as keyof typeof project.phases;
             if (project.phases[planningPhaseKey]) {
               project.phases[planningPhaseKey].status = 'in_progress';
             }
@@ -471,6 +473,37 @@ Use this at the start of each turn to understand the project state and what acti
     return result;
   }
 );
+
+/**
+ * Get required files for a phase that must exist before transitioning AWAY from it.
+ * This checks what deliverables the CURRENT phase should have produced.
+ */
+function getRequiredFilesForPhase(phase: WorkflowPhase, basePath: string): string[] {
+  const requiredFiles: string[] = [];
+  
+  switch (phase) {
+    case WorkflowPhase.IMAGE_PLACEMENT:
+      // Image placement phase must create image-placements.md before transitioning
+      requiredFiles.push('agent/content/image-placements.md');
+      break;
+    
+    case WorkflowPhase.CONTENT_PLANNING:
+      // Content planning phase must create content-plan.md before transitioning
+      requiredFiles.push('agent/plans/content-plan.md');
+      break;
+    
+    case WorkflowPhase.VIDEO_PLACEMENT:
+      // Video placement phase must create video-placements.md before transitioning
+      requiredFiles.push('agent/content/video-placements.md');
+      break;
+    
+    // Other phases don't have strict file requirements for transition
+    default:
+      break;
+  }
+  
+  return requiredFiles;
+}
 
 /**
  * Update project tool - updates the project.json file.
@@ -646,9 +679,9 @@ What story would you like to turn into a video?`,
             if (isYouTubeWorkflow) {
               // Check if we're still in transcript_input phase (should transition to planning)
               if (project.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
-                console.log(`[update_phase] Auto-transitioning from transcript_input to planning (YouTube workflow)`);
-                project.currentPhase = WorkflowPhase.PLANNING;
-                const planningPhaseKey = WorkflowPhase.PLANNING as keyof typeof project.phases;
+                console.log(`[update_phase] Auto-transitioning from transcript_input to content_planning (YouTube workflow)`);
+                project.currentPhase = WorkflowPhase.CONTENT_PLANNING;
+                const planningPhaseKey = WorkflowPhase.CONTENT_PLANNING as keyof typeof project.phases;
                 if (project.phases[planningPhaseKey]) {
                   project.phases[planningPhaseKey].status = 'in_progress';
                 }
@@ -767,42 +800,219 @@ What story would you like to turn into a video?`,
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
+          
+          const currentPhase = project.currentPhase;
+          const currentPhaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+          
+          // Track retry attempts to detect stuck loops
+          const retryCount = (args['_retry_count'] as number) ?? 0;
+          const maxRetries = 3;
+          
+          // VALIDATION: Check for required files before transition
+          const requiredFiles = getRequiredFilesForPhase(currentPhase, basePath);
+          const missingFiles = requiredFiles.filter(file => !existsSync(join(basePath, '.kshana', file)));
+          
+          if (missingFiles.length > 0) {
+            // If we've retried multiple times and files are still missing, provide recovery action
+            if (retryCount >= maxRetries) {
+              return {
+                status: 'validation_error',
+                error: `Cannot transition: Required files are missing after ${retryCount} attempts: ${missingFiles.join(', ')}`,
+                current_phase: currentPhase,
+                missing_files: missingFiles,
+                recovery_action: `The following files must be created before transition: ${missingFiles.map(f => `.kshana/${f}`).join(', ')}. Check if the phase work is actually complete. If files exist elsewhere, verify the project structure.`,
+                next_action: `Create the missing files or verify project structure, then mark phase as completed: update_project(action='update_phase', data={phase: '${currentPhase}', status: 'completed'})`
+              };
+            }
+            
+            return {
+              status: 'validation_error',
+              error: `Cannot transition: Required files are missing: ${missingFiles.join(', ')}`,
+              current_phase: currentPhase,
+              missing_files: missingFiles,
+              next_action: `Complete the current phase by creating the required files, then try transitioning again. Missing: ${missingFiles.map(f => `.kshana/${f}`).join(', ')}`,
+              _retry_count: retryCount + 1
+            };
+          }
+          
+          // VALIDATION: Current phase must be completed before transition
+          if (currentPhaseInfo?.status !== 'completed') {
+            // Check if phase work is actually done (auto-completion check)
+            let canAutoComplete = false;
+            let autoCompleteReason = '';
+            
+            // Phase-specific auto-completion checks
+            if (currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+              const hasTranscript = project.transcriptEntries && project.transcriptEntries.length > 0;
+              const transcriptContent = readProjectFile('agent/content/transcript.md', basePath);
+              const hasTranscriptFile = transcriptContent !== null && transcriptContent.trim().length > 0;
+              
+              if (hasTranscript && hasTranscriptFile) {
+                canAutoComplete = true;
+                autoCompleteReason = 'Transcript parsing is complete (entries and file exist)';
+              }
+            } else if (currentPhase === WorkflowPhase.CONTENT_PLANNING) {
+              const contentPlan = readProjectFile('agent/plans/content-plan.md', basePath);
+              if (contentPlan !== null && contentPlan.trim().length > 0) {
+                canAutoComplete = true;
+                autoCompleteReason = 'Content plan file exists and has content';
+              }
+            } else if (currentPhase === WorkflowPhase.IMAGE_PLACEMENT) {
+              const imagePlacements = readProjectFile('agent/content/image-placements.md', basePath);
+              if (imagePlacements !== null && imagePlacements.trim().length > 0) {
+                canAutoComplete = true;
+                autoCompleteReason = 'Image placements file exists and has content';
+              }
+            } else if (currentPhase === WorkflowPhase.VIDEO_PLACEMENT) {
+              const videoPlacements = readProjectFile('agent/content/video-placements.md', basePath);
+              if (videoPlacements !== null && videoPlacements.trim().length > 0) {
+                canAutoComplete = true;
+                autoCompleteReason = 'Video placements file exists and has content';
+              }
+            }
+            
+            // Auto-complete immediately if work is done (prevents loop detection from blocking)
+            // This allows smooth transitions without requiring manual phase status updates
+            if (canAutoComplete) {
+              // Auto-complete the phase immediately
+              const updatedProject = loadProject(basePath);
+              if (updatedProject) {
+                // Cast currentPhase to the expected type for updatePhaseStatus
+                const phaseKey = currentPhase as string as keyof ProjectFile['phases'];
+                updatePhaseStatus(updatedProject, phaseKey, 'completed', basePath);
+                saveProject(updatedProject, basePath);
+                
+                // Retry transition immediately
+                const retryResult = await transitionToNextPhase(updatedProject, basePath);
+                const finalProject = loadProject(basePath);
+                
+                if (finalProject && retryResult.transitioned) {
+                  const newPhaseConfig = PHASE_CONFIGS[finalProject.currentPhase as WorkflowPhase];
+                  return {
+                    status: 'success',
+                    transitioned: true,
+                    reason: `Auto-completed ${currentPhase} phase (${autoCompleteReason}) and transitioned to ${finalProject.currentPhase}`,
+                    current_phase: finalProject.currentPhase,
+                    new_phase_name: newPhaseConfig?.displayName ?? finalProject.currentPhase,
+                    previous_phase: currentPhase,
+                    auto_completed: true,
+                    next_action: `Phase transition successful. You are NOW in the ${newPhaseConfig?.displayName ?? finalProject.currentPhase} phase. Call read_project() to get current phase instructions.`,
+                    // Signal to agent that this was auto-recovered to help reset loop detection
+                    _auto_recovered: true
+                  };
+                }
+              }
+            }
+            
+            // If we reach here, auto-completion didn't work or work isn't complete
+            let nextAction = `Complete the current phase first by calling update_project(action='update_phase', data={phase: '${currentPhase}', status: 'completed'})`;
+            
+            // Phase-specific guidance for TRANSCRIPT_INPUT (has transcript-parser subphase)
+            if (currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+              const hasTranscript = project.transcriptEntries && project.transcriptEntries.length > 0;
+              const transcriptContent = readProjectFile('agent/content/transcript.md', basePath);
+              const hasTranscriptFile = transcriptContent !== null && transcriptContent.trim().length > 0;
+              
+              if (hasTranscript && hasTranscriptFile) {
+                // Work is done, but auto-completion failed - provide clear instruction
+                nextAction = `Transcript parsing is complete. Call update_project(action='update_phase', data={phase: 'transcript_input', status: 'completed'}) to mark the phase as completed, then call transition_phase again.`;
+              } else {
+                nextAction = `Complete transcript input phase: Parse the transcript using Task(subagent_type='transcript-parser', task='Parse the transcript text from original_input into structured transcript entries', context_refs=['$original_input']), then mark as completed.`;
+              }
+            } else if (canAutoComplete) {
+              // Work appears complete but auto-completion didn't work - provide manual instruction
+              nextAction = `Phase work appears complete (${autoCompleteReason}), but auto-completion failed. Manually mark it as completed: update_project(action='update_phase', data={phase: '${currentPhase}', status: 'completed'}), then call transition_phase again.`;
+            }
+            
+            // Provide recovery action for stuck loops
+            let recoveryAction = '';
+            if (retryCount >= maxRetries) {
+              recoveryAction = `You have attempted to transition ${retryCount} times. The phase status is "${currentPhaseInfo?.status}". STOP calling transition_phase repeatedly. Instead, call update_project(action='update_phase', data={phase: '${currentPhase}', status: 'completed'}) first, then call transition_phase once more.`;
+            } else if (retryCount > 0) {
+              recoveryAction = `This is attempt ${retryCount + 1}. If the phase work is complete, mark it as completed first: update_project(action='update_phase', data={phase: '${currentPhase}', status: 'completed'}).`;
+            }
+            
+            return {
+              status: 'validation_error',
+              error: `Cannot transition: current phase "${currentPhase}" is not completed (status: ${currentPhaseInfo?.status})`,
+              current_phase: currentPhase,
+              current_phase_status: currentPhaseInfo?.status,
+              next_action: nextAction,
+              recovery_action: recoveryAction,
+              can_auto_complete: canAutoComplete,
+              auto_complete_reason: canAutoComplete ? autoCompleteReason : undefined,
+              _retry_count: retryCount + 1,
+              _max_retries: maxRetries,
+              // Important: Tell agent to NOT call transition_phase again immediately
+              _do_not_retry_transition: retryCount >= 1
+            };
+          }
+          
           const beforePhase = project.currentPhase;
-          const beforeStatus = project.phases[beforePhase as keyof typeof project.phases]?.status;
+          const beforeStatus = currentPhaseInfo.status;
 
           const result = await transitionToNextPhase(project, basePath);
+          
+          // Reload project to ensure we have the latest state after transition
+          const updatedProject = loadProject(basePath);
+          if (!updatedProject) {
+            return { status: 'error', error: 'Failed to reload project after transition' };
+          }
+          
+          // VALIDATION: Prevent backward transitions
+          if (result.transitioned) {
+            const { isYouTubePhase, getNextYouTubePhase } = await import('./workflows/youtube-workflow.js');
+            if (isYouTubePhase(beforePhase)) {
+              const expectedNext = getNextYouTubePhase(beforePhase);
+              if (expectedNext && updatedProject.currentPhase !== expectedNext) {
+                // Rollback - restore previous state
+                updatedProject.currentPhase = beforePhase;
+                saveProject(updatedProject, basePath);
+                return {
+                  status: 'error',
+                  error: `Invalid phase transition: expected ${expectedNext}, got ${updatedProject.currentPhase}`,
+                  current_phase: beforePhase,
+                };
+              }
+            }
+          }
+          
           logger.logPhaseTransition(
             beforePhase,
-            result.project.currentPhase,
+            updatedProject.currentPhase,
             result.reason,
             result.transitioned
           );
 
           // Update phase logger context on successful transition
           if (result.transitioned) {
-            phaseLogger.phaseTransition(beforePhase, result.project.currentPhase, result.reason);
+            phaseLogger.phaseTransition(beforePhase, updatedProject.currentPhase, result.reason);
           }
 
           // Get the new phase config for the next action instruction
-          const newPhaseConfig = PHASE_CONFIGS[result.project.currentPhase as WorkflowPhase];
+          const newPhaseConfig = PHASE_CONFIGS[updatedProject.currentPhase as WorkflowPhase];
 
           // Get project summary for context
           const summary = getProjectSummary();
           
           // Check if Planning phase deliverables exist but phase isn't completed
           let nextAction = result.transitioned
-            ? `CRITICAL: Phase transition successful. You are NOW in the ${newPhaseConfig?.displayName ?? result.project.currentPhase} phase (${result.project.currentPhase}). IGNORE any old messages about previous phases. You MUST immediately call read_project() to get the current phase instructions. Do NOT generate text responses - call the tool now.`
-            : `Current phase: ${newPhaseConfig?.displayName ?? project.currentPhase} (${project.currentPhase}). Continue working on this phase. If unsure, call read_project() to get current state.`;
+            ? `CRITICAL: Phase transition successful. You are NOW in the ${newPhaseConfig?.displayName ?? updatedProject.currentPhase} phase (${updatedProject.currentPhase}). IGNORE any old messages about previous phases. You MUST immediately call read_project() to get the current phase instructions. Do NOT generate text responses - call the tool now.`
+            : `Current phase: ${newPhaseConfig?.displayName ?? updatedProject.currentPhase} (${updatedProject.currentPhase}). Continue working on this phase. If unsure, call read_project() to get current state.`;
 
           let reason = result.reason;
 
-          // Enhanced guidance for Planning phase when deliverables exist but phase isn't completed
+          // Enhanced guidance for phases with subphases when deliverables exist but phase isn't completed
           if (!result.transitioned && result.reason.includes('in progress')) {
-            if (project.currentPhase === WorkflowPhase.PLANNING) {
-              const planningDeliverablesExist = checkPlanningDeliverables(project, basePath);
-              if (planningDeliverablesExist) {
-                nextAction = `Planning phase work is complete. You MUST mark the phase as completed by calling update_project(action='update_phase', data={phase: 'planning', status: 'completed'}), then call transition_phase to move to the next phase. Do NOT generate text responses - call the tools now.`;
-                reason = `Planning phase work is complete. Ready to mark as completed and transition to next phase.`;
+            // Handle TRANSCRIPT_INPUT phase
+            if (updatedProject.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+              const hasTranscript = updatedProject.transcriptEntries && updatedProject.transcriptEntries.length > 0;
+              const transcriptContent = readProjectFile('agent/content/transcript.md', basePath);
+              const hasTranscriptFile = transcriptContent !== null && transcriptContent.trim().length > 0;
+              
+              if (hasTranscript && hasTranscriptFile) {
+                nextAction = `Transcript parsing is complete. Mark it as completed: update_project(action='update_phase', data={phase: 'transcript_input', status: 'completed'}), then call transition_phase again.`;
+                reason = `Transcript parsing is complete. Ready to mark as completed and transition to next phase.`;
               }
             }
           }
@@ -811,28 +1021,28 @@ What story would you like to turn into a video?`,
             status: 'success',
             transitioned: result.transitioned,
             reason: reason,
-            current_phase: result.project.currentPhase,
-            new_phase_name: newPhaseConfig?.displayName ?? result.project.currentPhase,
+            current_phase: updatedProject.currentPhase,
+            new_phase_name: newPhaseConfig?.displayName ?? updatedProject.currentPhase,
             previous_phase: beforePhase,
             previous_phase_status: beforeStatus,
             project_summary: summary,
             next_action: nextAction,
             // Include explicit current phase context to override old conversation history
             current_phase_context: result.transitioned 
-              ? `You have successfully transitioned from ${beforePhase} to ${result.project.currentPhase} (${newPhaseConfig?.displayName ?? result.project.currentPhase}). This is your CURRENT phase. Ignore any old messages about ${beforePhase} or other previous phases.`
-              : `You are currently in the ${project.currentPhase} phase (${newPhaseConfig?.displayName ?? project.currentPhase}).`,
+              ? `You have successfully transitioned from ${beforePhase} to ${updatedProject.currentPhase} (${newPhaseConfig?.displayName ?? updatedProject.currentPhase}). This is your CURRENT phase. Ignore any old messages about ${beforePhase} or other previous phases.`
+              : `You are currently in the ${updatedProject.currentPhase} phase (${newPhaseConfig?.displayName ?? updatedProject.currentPhase}).`,
             debug: {
               before_phase: beforePhase,
               before_status: beforeStatus,
-              after_phase: result.project.currentPhase,
+              after_phase: updatedProject.currentPhase,
             },
             // Include phase transition data for UI banner display
             ...(result.transitioned && {
               _phaseTransition: {
                 fromPhase: beforePhase,
-                toPhase: result.project.currentPhase,
+                toPhase: updatedProject.currentPhase,
                 displayName: newPhaseConfig?.displayName,
-                description: `Working on ${newPhaseConfig?.displayName ?? result.project.currentPhase}`,
+                description: `Working on ${newPhaseConfig?.displayName ?? updatedProject.currentPhase}`,
               },
             }),
           };

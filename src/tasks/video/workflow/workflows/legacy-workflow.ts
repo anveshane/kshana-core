@@ -54,11 +54,11 @@ export const LEGACY_PHASE_CONFIGS: Partial<Record<WorkflowPhase, PhaseConfig>> =
  */
 export function getNextLegacyPhase(currentPhase: WorkflowPhase): WorkflowPhase | null {
   const currentIndex = LEGACY_PHASES.indexOf(currentPhase);
-  
+
   if (currentIndex >= 0 && currentIndex < LEGACY_PHASES.length - 1) {
-    return LEGACY_PHASES[currentIndex + 1];
+    return LEGACY_PHASES[currentIndex + 1] ?? null;
   }
-  
+
   return null;
 }
 

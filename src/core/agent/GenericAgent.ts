@@ -33,7 +33,7 @@ import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, 
 import { CONTENT_TYPE_CONTEXTS, CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
-import { writeProjectFile } from '../../tasks/video/workflow/ProjectManager.js';
+import { writeProjectFile, getCurrentProjectBasePath } from '../../tasks/video/workflow/ProjectManager.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -93,6 +93,14 @@ export class GenericAgent extends TypedEventEmitter {
   private maxIterations: number;
   private name: string;
   private customPrompt?: string;
+
+  /**
+   * Safely check if customPrompt includes a string.
+   * Returns false if customPrompt is not a string.
+   */
+  private customPromptIncludes(searchString: string): boolean {
+    return typeof this.customPrompt === 'string' && this.customPrompt.includes(searchString);
+  }
 
   // State
   private todoManager = new ExpandableTodoManager();
@@ -676,7 +684,8 @@ export class GenericAgent extends TypedEventEmitter {
         this.recentToolCalls = [];
         this.contentGenerationHistory = [];
         // Reload context store for the new project to ensure isolation
-        contextStore.reload(this.projectId);
+        const basePath = getCurrentProjectBasePath();
+        contextStore.reload(this.projectId, basePath);
         this.lastProjectId = this.projectId;
       }
 
@@ -844,9 +853,9 @@ export class GenericAgent extends TypedEventEmitter {
 
         // Fallback: Check prompt content if project doesn't exist or isn't YouTube workflow
         if (!isTranscriptInputPhase) {
-          isTranscriptInputPhase = this.customPrompt?.includes('transcript_input') || 
-                                   this.customPrompt?.includes('Transcript Input') ||
-                                   this.customPrompt?.includes('TRANSCRIPT_INPUT') ||
+          isTranscriptInputPhase = this.customPromptIncludes('transcript_input') || 
+                                   this.customPromptIncludes('Transcript Input') ||
+                                   this.customPromptIncludes('TRANSCRIPT_INPUT') ||
                                    this.name.includes('transcript_input') ||
                                    this.name.includes('transcript-input');
         }
@@ -914,9 +923,9 @@ export class GenericAgent extends TypedEventEmitter {
         // BUT: Skip this for YouTube workflow - check if we're in a YouTube workflow context
         if (this.planModeActive && this.iteration < this.maxIterations - 1) {
           // Check if this is a YouTube workflow by checking the custom prompt or project state
-          const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') || 
-                                     this.customPrompt?.includes('transcript') ||
-                                     this.customPrompt?.includes('YouTube');
+          const isYouTubeWorkflow = this.customPromptIncludes('youtube_srt') || 
+                                     this.customPromptIncludes('transcript') ||
+                                     this.customPromptIncludes('YouTube');
           
           if (!isYouTubeWorkflow) {
             debugLog(`[GenericAgent] In plan mode but no tool calls. Prompting to create plan.`);
@@ -988,9 +997,9 @@ export class GenericAgent extends TypedEventEmitter {
         // BUT: Skip this for YouTube workflow
         if (toolCall.name === 'EnterPlanMode' && resultObj['status'] === 'entered_plan_mode') {
           // Check if this is a YouTube workflow
-          const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') || 
-                                     this.customPrompt?.includes('transcript') ||
-                                     this.customPrompt?.includes('YouTube');
+          const isYouTubeWorkflow = this.customPromptIncludes('youtube_srt') || 
+                                     this.customPromptIncludes('transcript') ||
+                                     this.customPromptIncludes('YouTube');
           
           if (isYouTubeWorkflow) {
             debugLog(`[GenericAgent] EnterPlanMode called for YouTube workflow - this should not happen. Exiting plan mode.`);
@@ -1317,6 +1326,10 @@ export class GenericAgent extends TypedEventEmitter {
         });
         return warningResult;
       }
+      
+      // If loop detection passed, reset warnings (tool call is proceeding)
+      // This allows the agent to break out of loops by using different tools or arguments
+      this.consecutiveLoopWarnings = 0;
     }
 
     // Handle built-in todo tools specially (no handler required)
@@ -1941,6 +1954,24 @@ export class GenericAgent extends TypedEventEmitter {
         });
       }
 
+      // Reset loop detection on successful tool execution
+      // This allows the agent to break out of loops by using different tools
+      const resultStatus = resultObj?.['status'] as string | undefined;
+      const isLoopBlocked = resultStatus === 'loop_blocked' || resultStatus === 'loop_warning';
+      if (!isLoopBlocked) {
+        // Successful tool call - reset loop detection to allow progress
+        this.consecutiveLoopWarnings = 0;
+        // Clear recent tool calls if this is a different tool or successful result
+        // This helps break out of loops when switching tools
+        if (this.recentToolCalls.length > 0) {
+          const lastTool = this.recentToolCalls[this.recentToolCalls.length - 1]?.split(':')[0];
+          if (lastTool !== toolCall.name || resultStatus === 'success') {
+            // Different tool or explicit success - clear recent calls to break loop
+            this.recentToolCalls = [];
+          }
+        }
+      }
+
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -1978,9 +2009,9 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Incremental compatibility mapping onto existing sub-agent handlers.
     if (subagentType === 'Plan') {
-      const isYouTubeWorkflow = this.customPrompt?.includes('youtube_srt') ||
-        this.customPrompt?.includes('transcript') ||
-        this.customPrompt?.includes('YouTube');
+      const isYouTubeWorkflow = this.customPromptIncludes('youtube_srt') ||
+        this.customPromptIncludes('transcript') ||
+        this.customPromptIncludes('YouTube');
 
       if (isYouTubeWorkflow) {
         return {
@@ -2652,7 +2683,9 @@ export class GenericAgent extends TypedEventEmitter {
       }
 
       try {
-        const projectDir = path.join(process.cwd(), '.kshana');
+        // Use getCurrentProjectBasePath() to get the correct project directory
+        const basePath = getCurrentProjectBasePath();
+        const projectDir = path.join(basePath, '.kshana');
         const filePath = path.join(projectDir, normalizedPath);
         debugLog(`[GenericAgent] Attempting to save plan to: ${filePath} (normalized from: ${outputFileToUse})`);
 
@@ -2925,7 +2958,10 @@ Respond in JSON format:
       '$image_placements': { file: 'agent/content/image-placements.md', label: 'Image Placement Plan' },
     };
 
-    const projectDir = path.join(process.cwd(), '.kshana');
+    // Use getCurrentProjectBasePath() to get the correct project directory
+    // This ensures we look in the user's project directory, not process.cwd()
+    const basePath = getCurrentProjectBasePath();
+    const projectDir = path.join(basePath, '.kshana');
 
     // Check if ref is a direct file path (e.g., "script/story.md" or "plans/story-plan.md")
     if (ref.includes('/') || ref.endsWith('.md')) {
@@ -3521,7 +3557,9 @@ Respond in JSON format:
             debugLog(`[GenericAgent] Extracted name "${name}" from task, using filename: ${safeName}.md`);
           }
 
-          const projectDir = path.join(process.cwd(), '.kshana');
+          // Use getCurrentProjectBasePath() to get the correct project directory
+          const basePath = getCurrentProjectBasePath();
+          const projectDir = path.join(basePath, '.kshana');
           const filePath = path.join(projectDir, normalizedContentPath);
           debugLog(`[GenericAgent] Attempting to save content to: ${filePath} (normalized from: ${outputFileToUse}, contentType: ${this.contentState.contentType})`);
 
@@ -4142,7 +4180,9 @@ Respond in JSON format:
       }
 
       try {
-        const projectDir = path.join(process.cwd(), '.kshana');
+        // Use getCurrentProjectBasePath() to get the correct project directory
+        const basePath = getCurrentProjectBasePath();
+        const projectDir = path.join(basePath, '.kshana');
         const filePath = path.join(projectDir, normalizedPath);
         debugLog(`[GenericAgent] Attempting to save image placement plan to: ${filePath} (normalized from: ${outputFileToUse})`);
 
@@ -4271,7 +4311,9 @@ Respond in JSON format:
       }
 
       try {
-        const projectDir = path.join(process.cwd(), '.kshana');
+        // Use getCurrentProjectBasePath() to get the correct project directory
+        const basePath = getCurrentProjectBasePath();
+        const projectDir = path.join(basePath, '.kshana');
         const filePath = path.join(projectDir, normalizedPath);
         debugLog(`[GenericAgent] Attempting to save video placement plan to: ${filePath} (normalized from: ${outputFileToUse})`);
 

@@ -70,10 +70,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       if (projectExists()) {
         const project = loadProject();
         setExistingProject(project);
-        // Reload context store for the existing project
-        if (project) {
-          contextStore.reload(project.id);
-        }
+        // loadProject() already reloads the context store with the correct basePath
         setStartupMode('select_action');
       } else {
         // No existing project - automatically use cinematic_realism and skip to new_story
@@ -94,18 +91,23 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
 
   // Get custom prompt based on task type
   // For video mode, we build it dynamically based on the current project state
-  const customPrompt = React.useMemo(() => {
+  const [customPrompt, setCustomPrompt] = React.useState<string | undefined>(agentConfig?.customPrompt);
+  
+  React.useEffect(() => {
     if (taskType === 'video') {
       if (existingProject) {
         // Use dynamic workflow prompt if project exists
         const currentPhase = getCurrentPhase(existingProject);
         const loadedContexts = loadProjectFilesAsContexts();
-        return buildWorkflowAgentPrompt(existingProject, currentPhase, loadedContexts);
+        // buildWorkflowAgentPrompt is async, so we need to await it
+        void buildWorkflowAgentPrompt(existingProject, currentPhase, loadedContexts).then(setCustomPrompt);
+      } else {
+        // Fallback to static prompt only if no project yet (initial creation)
+        setCustomPrompt(VIDEO_CREATION_SYSTEM_PROMPT);
       }
-      // Fallback to static prompt only if no project yet (initial creation)
-      return VIDEO_CREATION_SYSTEM_PROMPT;
+    } else {
+      setCustomPrompt(agentConfig?.customPrompt);
     }
-    return agentConfig?.customPrompt;
   }, [taskType, agentConfig?.customPrompt, existingProject]);
 
   // Compute effective agent name based on task type
@@ -189,10 +191,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           // Rebuild prompt with new phase
           const currentPhase = getCurrentPhase(project);
           const loadedContexts = loadProjectFilesAsContexts();
-          const newPrompt = buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
-
-          // Update the running agent's prompt
-          updateCustomPrompt(newPrompt);
+          // buildWorkflowAgentPrompt is async, so we need to await it
+          void buildWorkflowAgentPrompt(project, currentPhase, loadedContexts).then(updateCustomPrompt);
         }
       }
     }
@@ -424,10 +424,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     if (startupMode === 'select_action') {
       if (index === 0) {
         // Continue existing project
-        if (existingProject) {
-          // Reload context store for the existing project
-          contextStore.reload(existingProject.id);
-        }
+        // loadProject() already reloads the context store with the correct basePath
         setStarted(true);
         uiLogger.logUserInput('Continue existing project');
         void run('Continue working on the existing project. Call read_project to see current state.');

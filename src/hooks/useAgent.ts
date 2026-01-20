@@ -10,6 +10,7 @@ import { LLMClient, type LLMClientConfig, type ToolDefinition } from '../core/ll
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { AgentEvent } from '../events/index.js';
 import { contextStore } from '../core/context/ContextStore.js';
+import { getCurrentProjectBasePath } from '../tasks/video/workflow/ProjectManager.js';
 
 // Debug logging to file
 const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
@@ -704,7 +705,9 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
       dispatch({ type: 'RESET' });
       projectIdRef.current = projectId ?? null;
       // Reload context store for the new project
-      contextStore.reload(projectId ?? null);
+      // Use the same basePath that loadProject() uses (getCurrentProjectBasePath())
+      const basePath = getCurrentProjectBasePath();
+      contextStore.reload(projectId ?? null, basePath);
     }
   }, [projectId]);
 
@@ -738,7 +741,9 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
       agentRef.current = null;
       dispatch({ type: 'RESET' });
       // Reload context store for the new project
-      contextStore.reload(newProjectId);
+      // Use the same basePath that loadProject() uses (getCurrentProjectBasePath())
+      const basePath = getCurrentProjectBasePath();
+      contextStore.reload(newProjectId, basePath);
     }
   }, []);
 

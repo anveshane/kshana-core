@@ -52,6 +52,7 @@ import {
   createDefaultSceneRef,
 } from './types.js';
 import { getPhaseConfig, getNextPhase, getStartPhase, getWorkflowPhases, isValidPhaseForWorkflow, isYouTubeWorkflow as isYouTubeWorkflowType } from './workflows/workflow-manager.js';
+import { isYouTubePhase } from './workflows/youtube-workflow.js';
 import { generateProjectTitle, contextStore } from '../../../core/context/index.js';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -670,8 +671,8 @@ export function setProjectInputType(
       if (transcriptPhaseInfo && transcriptPhaseInfo.status === 'completed' || 
           (project.transcriptEntries && project.transcriptEntries.length > 0)) {
         // Transcript already parsed - go to planning phase
-        project.currentPhase = WorkflowPhase.PLANNING;
-        const planningPhaseKey = WorkflowPhase.PLANNING as keyof typeof project.phases;
+        project.currentPhase = WorkflowPhase.CONTENT_PLANNING;
+        const planningPhaseKey = WorkflowPhase.CONTENT_PLANNING as keyof typeof project.phases;
         if (project.phases[planningPhaseKey]) {
           project.phases[planningPhaseKey].status = 'in_progress';
         }
@@ -937,9 +938,89 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 }
 
 /**
- * Load an existing project file.
- * Returns null if project doesn't exist or is incompatible (old version).
+ * Reload project files into context store after context store reload.
+ * This ensures all file references ($transcript, $content_plan, etc.) are registered with the correct basePath.
+ * This is a simplified version of loadProjectFilesAsContexts() to avoid circular dependency.
  */
+function reloadProjectFilesAsContexts(basePath: string): void {
+  const projectDir = getProjectDir(basePath);
+  const agentDir = join(projectDir, 'agent');
+  const contentDir = join(agentDir, 'content');
+  const plansDir = join(agentDir, 'plans');
+  
+  // Load $original_input
+  const originalInputPath = join(agentDir, 'original_input.md');
+  if (existsSync(originalInputPath)) {
+    try {
+      const content = readFileSync(originalInputPath, 'utf-8');
+      if (content.trim().length > 0) {
+        contextStore.storeReference(
+          'agent/original_input.md',
+          'Original User Input',
+          '$original_input',
+          'user_input'
+        );
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
+  
+  // Load $transcript for YouTube workflow
+  const transcriptPath = join(contentDir, 'transcript.md');
+  if (existsSync(transcriptPath)) {
+    try {
+      const transcriptContent = readFileSync(transcriptPath, 'utf-8');
+      if (transcriptContent.trim().length > 0) {
+        contextStore.storeReference(
+          'agent/content/transcript.md',
+          'Transcript',
+          '$transcript',
+          'tool'
+        );
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
+  
+  // Load $content_plan
+  const contentPlanPath = join(plansDir, 'content-plan.md');
+  if (existsSync(contentPlanPath)) {
+    try {
+      const content = readFileSync(contentPlanPath, 'utf-8');
+      if (content.trim().length > 0) {
+        contextStore.storeReference(
+          'agent/plans/content-plan.md',
+          'Content Plan',
+          '$content_plan',
+          'tool'
+        );
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
+  
+  // Load $image_placements
+  const imagePlacementsPath = join(contentDir, 'image-placements.md');
+  if (existsSync(imagePlacementsPath)) {
+    try {
+      const content = readFileSync(imagePlacementsPath, 'utf-8');
+      if (content.trim().length > 0) {
+        contextStore.storeReference(
+          'agent/content/image-placements.md',
+          'Image Placement Plan',
+          '$image_placements',
+          'tool'
+        );
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
+}
+
 export function loadProject(basePath: string = getCurrentProjectBasePath()): ProjectFile | null {
   const filePath = getProjectFilePath(basePath);
 
@@ -985,14 +1066,48 @@ export function loadProject(basePath: string = getCurrentProjectBasePath()): Pro
       project.currentPhase = normalizedPhase;
     }
 
+    // Migration: Convert PLANNING phase to CONTENT_PLANNING for YouTube workflow
+    let phaseMigrated = false;
+    if (project.currentPhase === 'planning' || project.currentPhase === WorkflowPhase.PLANNING) {
+      console.log('[ProjectManager] Migrating PLANNING phase to CONTENT_PLANNING');
+      project.currentPhase = WorkflowPhase.CONTENT_PLANNING;
+      
+      // Migrate phase status
+      if (project.phases?.planning) {
+        project.phases.content_planning = project.phases.planning;
+        // Keep planning for backward compatibility but mark as skipped
+        project.phases.planning.status = 'skipped';
+      }
+      phaseMigrated = true;
+    }
+    
+    // Migrate phase status key if it exists
+    if (project.phases?.planning && !project.phases?.content_planning) {
+      project.phases.content_planning = project.phases.planning;
+      phaseMigrated = true;
+    }
+
     // Sync content registry for backward compatibility
     const syncChanged = syncContentRegistry(project, basePath);
 
-    if (changed || syncChanged || planMigrated) {
+    if (changed || syncChanged || planMigrated || phaseMigrated) {
       saveProject(project, basePath);
     }
 
-    return project as ProjectFile;
+    // Auto-fix inconsistent phase states
+    const cleanedProject = cleanupPhaseStates(project as ProjectFile, basePath);
+
+    // Reload context store for this project to ensure context isolation
+    // This ensures context references ($transcript, $content_plan, etc.) are loaded from the correct project directory
+    if (cleanedProject && cleanedProject.id) {
+      contextStore.reload(cleanedProject.id, basePath);
+      // Reload project files into context store after reloading the context store
+      // This re-registers all file references ($transcript, $content_plan, etc.) with the correct basePath
+      // We inline the critical parts here to avoid circular dependency
+      reloadProjectFilesAsContexts(basePath);
+    }
+
+    return cleanedProject;
   } catch {
     return null;
   }
@@ -1055,7 +1170,10 @@ export function generateProjectIndex(basePath: string = process.cwd()): void {
   // Detect blocking reasons
   const blockingReasons: string[] = [];
   const currentPhase = project.currentPhase;
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
+  if (!phaseConfig) {
+    return; // No config for this phase, no blocking reasons
+  }
 
   // Check for missing required content based on phase
   if (currentPhase === WorkflowPhase.VIDEO) {
@@ -1467,6 +1585,53 @@ export function updatePlannerStage(
 }
 
 /**
+ * Clean up inconsistent phase states.
+ * Ensures phases after current phase are reset to pending.
+ * Fixes issues like phases marked as completed before current phase completes.
+ */
+export function cleanupPhaseStates(
+  project: ProjectFile,
+  basePath: string = getCurrentProjectBasePath()
+): ProjectFile {
+  if (!isYouTubePhase(project.currentPhase)) {
+    return project; // Only clean YouTube workflow for now
+  }
+  
+  const phases = getWorkflowPhases(project.inputType);
+  const currentIndex = phases.indexOf(project.currentPhase);
+  
+  if (currentIndex === -1) return project;
+  
+  let needsSave = false;
+  
+  // Reset all phases after current phase to pending
+  for (let i = currentIndex + 1; i < phases.length; i++) {
+    const phase = phases[i];
+    const phaseKey = phase as keyof typeof project.phases;
+    const phaseInfo = project.phases[phaseKey];
+    
+    if (phaseInfo && phaseInfo.status !== 'pending' && phaseInfo.status !== 'skipped') {
+      phaseInfo.status = 'pending';
+      phaseInfo.completedAt = null;
+      needsSave = true;
+    }
+  }
+  
+  // Fix current phase if it has in_progress status but also a completedAt timestamp
+  const currentPhaseInfo = project.phases[project.currentPhase as keyof typeof project.phases];
+  if (currentPhaseInfo?.status === 'in_progress' && currentPhaseInfo.completedAt !== null) {
+    currentPhaseInfo.completedAt = null;
+    needsSave = true;
+  }
+  
+  if (needsSave) {
+    saveProject(project, basePath);
+  }
+  
+  return project;
+}
+
+/**
  * Transition to the next phase based on current state.
  * Requires project-level plan to be approved before phases can progress.
  */
@@ -1481,12 +1646,12 @@ export async function transitionToNextPhase(
       const corrected = setProjectInputType('youtube_srt', basePath);
       if (corrected) {
         project = corrected;
-        // If transcript_input phase is already completed, transition to planning
+        // If transcript_input phase is already completed, transition to content planning
         const transcriptPhaseInfo = project.phases?.transcript_input;
         if (transcriptPhaseInfo && transcriptPhaseInfo.status === 'completed' && project.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
-          // Transition to planning phase since transcript is already parsed
-          project.currentPhase = WorkflowPhase.PLANNING;
-          const planningPhaseKey = WorkflowPhase.PLANNING as keyof typeof project.phases;
+          // Transition to content planning phase since transcript is already parsed
+          project.currentPhase = WorkflowPhase.CONTENT_PLANNING;
+          const planningPhaseKey = WorkflowPhase.CONTENT_PLANNING as keyof typeof project.phases;
           if (project.phases[planningPhaseKey]) {
             project.phases[planningPhaseKey].status = 'in_progress';
           }
@@ -1508,18 +1673,33 @@ export async function transitionToNextPhase(
     };
   }
 
+  const currentPhase = project.currentPhase;
+  const currentPhaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+  
+  // VALIDATION: Current phase must be completed
+  if (currentPhaseInfo?.status !== 'completed') {
+    return {
+      project,
+      transitioned: false,
+      reason: `Cannot transition: ${currentPhase} is ${currentPhaseInfo?.status}, not completed`
+    };
+  }
+
   const result = await determineNextPhase(project);
 
   // No safeguard needed - workflow manager ensures YouTube workflows can never
   // transition to PLOT/STORY phases since they're not in the YouTube workflow
 
   if (result.nextPhase !== project.currentPhase) {
+    // Update to next phase
     project.currentPhase = result.nextPhase;
 
-    // Mark new phase as in_progress (no per-phase planning)
-    const phaseKey = result.nextPhase as keyof typeof project.phases;
-    if (project.phases[phaseKey]) {
-      project.phases[phaseKey].status = 'in_progress';
+    // Mark new phase as in_progress
+    const nextPhaseKey = result.nextPhase as keyof typeof project.phases;
+    if (project.phases[nextPhaseKey]) {
+      project.phases[nextPhaseKey].status = 'in_progress';
+      // Clear any stale completedAt timestamp
+      project.phases[nextPhaseKey].completedAt = null;
     }
 
     saveProject(project, basePath);
@@ -1546,19 +1726,17 @@ export function planFileHasContent(planFile: string, basePath: string = process.
 }
 
 /**
- * Check if Planning phase deliverables exist (content plan and image placements).
- * Used to determine if Planning phase can be marked as completed.
+ * Check if Content Planning phase deliverables exist (content plan only).
+ * Used to determine if Content Planning phase can be marked as completed.
+ * Note: Image placements are handled in IMAGE_PLACEMENT phase, not here.
  */
 export function checkPlanningDeliverables(project: ProjectFile, basePath: string = getCurrentProjectBasePath()): boolean {
   const contentPlanPath = join(getProjectDir(basePath), 'agent', 'plans', 'content-plan.md');
-  const imagePlacementsPath = join(getProjectDir(basePath), 'agent', 'content', 'image-placements.md');
   
   const contentPlanExists = existsSync(contentPlanPath) && 
     readFileSync(contentPlanPath, 'utf-8').trim().length > 0;
-  const imagePlacementsExist = existsSync(imagePlacementsPath) && 
-    readFileSync(imagePlacementsPath, 'utf-8').trim().length > 0;
   
-  return contentPlanExists && imagePlacementsExist;
+  return contentPlanExists;
 }
 
 /**
@@ -2175,7 +2353,10 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   }
 
   const currentPhase = project.currentPhase;
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
+  if (!phaseConfig) {
+    return `Project: ${project.id}\nPhase: ${currentPhase}\nStatus: Unknown phase configuration`;
+  }
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
 
   const completedPhases = Object.entries(project.phases)
@@ -2187,9 +2368,9 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   const settingNames = project.settings.map(s => s.name);
 
   // Get per-item approval status for current phase if applicable
-  const phaseConfig2 = PHASE_CONFIGS[currentPhase];
+  const phaseConfig2 = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
   let itemProgress = '';
-  if (phaseConfig2.requiresPerItemApproval) {
+  if (phaseConfig2?.requiresPerItemApproval) {
     const { approved, total } = countApprovedItems(project, currentPhase);
     itemProgress = `\nItem Progress: ${approved}/${total} approved`;
   }
@@ -2222,6 +2403,18 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   const planStatus = project.plan?.stage === PlannerStage.COMPLETE
     ? `✅ Approved (ID: ${project.plan?.planId ?? 'unknown'})`
     : `⏳ ${project.plan?.stage ?? 'NONE'} (ID: ${project.plan?.planId ?? 'unknown'})`;
+
+  if (!phaseConfig) {
+    return `
+Project: ${project.title || '(untitled)'}
+ID: ${project.id}
+Version: ${project.version}
+Style: ${styleDisplay}
+Input Type: ${inputTypeDisplay}
+Master Plan: ${planStatus}
+Current Phase: ${currentPhase} (no config)
+`;
+  }
 
   return `
 Project: ${project.title || '(untitled)'}
@@ -2260,12 +2453,12 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
       const corrected = setProjectInputType('youtube_srt', basePath);
       if (corrected) {
         project = corrected;
-        // If transcript_input phase is already completed, transition to planning
+        // If transcript_input phase is already completed, transition to content planning
         const transcriptPhaseInfo = project.phases?.transcript_input;
         if (transcriptPhaseInfo && transcriptPhaseInfo.status === 'completed' && project.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
-          // Transition to planning phase since transcript is already parsed
-          project.currentPhase = WorkflowPhase.PLANNING;
-          const planningPhaseKey = WorkflowPhase.PLANNING as keyof typeof project.phases;
+          // Transition to content planning phase since transcript is already parsed
+          project.currentPhase = WorkflowPhase.CONTENT_PLANNING;
+          const planningPhaseKey = WorkflowPhase.CONTENT_PLANNING as keyof typeof project.phases;
           if (project.phases[planningPhaseKey]) {
             project.phases[planningPhaseKey].status = 'in_progress';
           }
@@ -2285,6 +2478,10 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
 
   // For YouTube workflow, skip all master plan logic
   if (isYouTubeWorkflow) {
+    if (!phaseConfig) {
+      return `Error: No configuration found for phase ${currentPhase}`;
+    }
+    
     let instruction = `
 ## Current State
 - **Phase**: ${phaseConfig.displayName}
@@ -2298,22 +2495,22 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
     if (currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
       if (phaseInfo?.status === 'completed' || phaseInfo?.status === 'skipped') {
         instruction += `
-Transcript parsing is complete. Transition to planning phase.
-1. Call update_project with action "transition_phase" to move to "planning"
+Transcript parsing is complete. Transition to content planning phase.
+1. Call update_project with action "transition_phase" to move to "content_planning"
 `;
         return instruction.trim();
       }
     }
 
-    // Check if Planning phase deliverables exist but phase isn't completed
-    if (currentPhase === WorkflowPhase.PLANNING) {
+    // Check if Content Planning phase deliverables exist but phase isn't completed
+    if (currentPhase === WorkflowPhase.CONTENT_PLANNING) {
       const phaseStatus = phaseInfo?.status ?? 'pending';
       if (phaseStatus === 'in_progress') {
         const planningDeliverablesExist = checkPlanningDeliverables(project, basePath);
         if (planningDeliverablesExist) {
           instruction += `
-The Planning phase deliverables are complete (content plan and image placements exist).
-1. Call update_project with action "update_phase" to mark "planning" as "completed"
+The Content Planning phase deliverables are complete (content plan exists).
+1. Call update_project with action "update_phase" to mark "content_planning" as "completed"
 2. Then call update_project with action "transition_phase" to move to the next phase
 `;
           return instruction.trim();
@@ -2370,6 +2567,10 @@ Execute the ${phaseConfig.displayName} phase.
   }
 
   // Legacy workflow (non-YouTube) - includes master plan logic
+  if (!phaseConfig) {
+    return `Error: No configuration found for phase ${currentPhase}`;
+  }
+  
   let instruction = `
 ## Current State
 - **Phase**: ${phaseConfig.displayName}
@@ -2438,6 +2639,10 @@ Refine the master plan based on user feedback.
   }
 
   // Proceed with phase execution for legacy workflow
+  if (!phaseConfig) {
+    return `Error: No configuration found for phase ${currentPhase}`;
+  }
+  
   instruction += `
 ✅ **Master plan approved** - Executing phase: ${phaseConfig.displayName}
 

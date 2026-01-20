@@ -6,7 +6,7 @@
  * 
  * Phases:
  * 1. TRANSCRIPT_INPUT - Accept and parse SRT transcript
- * 2. PLANNING - Create content plan for visual placements
+ * 2. CONTENT_PLANNING - Create content plan for visual placements
  * 3. IMAGE_PLACEMENT - Map images to transcript timestamps
  * 4. IMAGE_GENERATION - Generate images for placements
  * 5. VIDEO_PLACEMENT - Map videos to transcript timestamps
@@ -24,7 +24,7 @@ import { WorkflowPhase, type PhaseConfig, type AgentType, type ItemProcessMode }
  */
 export const YOUTUBE_PHASES: WorkflowPhase[] = [
   WorkflowPhase.TRANSCRIPT_INPUT,
-  WorkflowPhase.PLANNING,
+  WorkflowPhase.CONTENT_PLANNING,
   WorkflowPhase.IMAGE_PLACEMENT,
   WorkflowPhase.IMAGE_GENERATION,
   WorkflowPhase.VIDEO_PLACEMENT,
@@ -42,7 +42,7 @@ export const YOUTUBE_PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
   [WorkflowPhase.TRANSCRIPT_INPUT]: {
     phase: WorkflowPhase.TRANSCRIPT_INPUT,
     displayName: 'Transcript Input',
-    nextPhase: WorkflowPhase.PLANNING,
+    nextPhase: WorkflowPhase.CONTENT_PLANNING,
     promptFile: 'transcript-input',
     agentType: 'content',
     allowedTools: [
@@ -63,11 +63,11 @@ export const YOUTUBE_PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     description: 'Accept raw SRT text, validate and parse transcript entries',
   },
 
-  [WorkflowPhase.PLANNING]: {
-    phase: WorkflowPhase.PLANNING,
-    displayName: 'Planning',
+  [WorkflowPhase.CONTENT_PLANNING]: {
+    phase: WorkflowPhase.CONTENT_PLANNING,
+    displayName: 'Content Planning',
     nextPhase: WorkflowPhase.IMAGE_PLACEMENT,
-    promptFile: 'planning',
+    promptFile: 'content-planning',
     agentType: 'planning',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'Task'],
     itemProcessMode: 'single',

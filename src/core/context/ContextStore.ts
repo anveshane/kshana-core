@@ -37,11 +37,25 @@ function variableToFilename(variableName: string): string {
 }
 
 /**
- * Get the context directory path.
- * Uses a single context/ directory (not subfolders per project).
- * Project ID is stored in index.json, not in folder structure.
+ * Get the context directory path for a given basePath.
+ * Each user project has its own context directory at {basePath}/.kshana/context/
+ * 
+ * Priority:
+ * 1. basePath/.kshana/context (if basePath provided - for user projects)
+ * 2. KSHANA_CONTEXT_DIR environment variable (for user workspace in desktop app)
+ * 3. process.cwd()/.kshana/context (fallback for CLI)
  */
-function getContextDir(): string {
+function getContextDir(basePath?: string | null): string {
+  // Use basePath if available (for each user project)
+  if (basePath) {
+    return join(basePath, '.kshana', 'context');
+  }
+  // Check for user workspace context directory (set by desktop app)
+  const contextDir = process.env['KSHANA_CONTEXT_DIR'];
+  if (contextDir) {
+    return contextDir;
+  }
+  // Fallback to project directory (CLI context)
   return join(process.cwd(), '.kshana', 'context');
 }
 
@@ -49,8 +63,8 @@ function getContextDir(): string {
  * Get the context index file path.
  * Index is stored at context/index.json (project_id is inside the file).
  */
-function getContextIndexFile(): string {
-  return join(getContextDir(), 'index.json');
+function getContextIndexFile(basePath?: string | null): string {
+  return join(getContextDir(basePath), 'index.json');
 }
 
 /**
@@ -62,9 +76,11 @@ export class ContextStore {
   private index: Map<string, StoredContextMeta> = new Map();
   private variableCounter: Map<string, number> = new Map();
   private projectId: string | null = null;
+  private basePath: string | null = null;
 
-  constructor(projectId?: string | null) {
+  constructor(projectId?: string | null, basePath?: string | null) {
     this.projectId = projectId ?? null;
+    this.basePath = basePath ?? null;
     // Only load index if we have a projectId to avoid loading stale data from default location
     if (this.projectId) {
       this.loadIndex();
@@ -80,13 +96,21 @@ export class ContextStore {
   }
 
   /**
+   * Get the current base path.
+   */
+  getBasePath(): string | null {
+    return this.basePath;
+  }
+
+  /**
    * Reload the context store for a different project.
    * This clears the current index and loads the new project's context.
    */
-  reload(projectId: string | null): void {
-    // Save current index if switching projects
-    if (this.projectId !== projectId) {
+  reload(projectId: string | null, basePath?: string | null): void {
+    // Save current index if switching projects or basePath
+    if (this.projectId !== projectId || this.basePath !== basePath) {
       this.projectId = projectId;
+      this.basePath = basePath ?? null;
       this.index.clear();
       this.variableCounter.clear();
       // Only load index if we have a projectId
@@ -135,7 +159,7 @@ export class ContextStore {
    * Loads context variables from context/index.json (not project-specific subfolders).
    */
   private loadIndex(): void {
-    const indexPath = getContextIndexFile();
+    const indexPath = getContextIndexFile(this.basePath);
     if (existsSync(indexPath)) {
       try {
         const fileContent = readFileSync(indexPath, 'utf-8');
@@ -166,11 +190,11 @@ export class ContextStore {
    * Note: The consolidated project index (with workflow, routing, stats) is managed separately.
    */
   private saveIndex(): void {
-    const contextDir = getContextDir();
+    const contextDir = getContextDir(this.basePath);
     if (!existsSync(contextDir)) {
       mkdirSync(contextDir, { recursive: true });
     }
-    const indexPath = getContextIndexFile();
+    const indexPath = getContextIndexFile(this.basePath);
     
     // Save only context variables (not the full consolidated index)
     // The consolidated index is managed by ProjectIndexManager
@@ -234,7 +258,7 @@ export class ContextStore {
       source,
     };
 
-    const contextDir = getContextDir();
+    const contextDir = getContextDir(this.basePath);
     if (!existsSync(contextDir)) {
       mkdirSync(contextDir, { recursive: true });
     }
@@ -268,8 +292,8 @@ export class ContextStore {
   ): { variableName: string } {
     const generatedName = variableName ?? this.generateVariableName(label);
     
-    // Read file to get char count
-    const projectDir = join(process.cwd(), '.kshana');
+    // Read file to get char count - use basePath if available, otherwise process.cwd()
+    const projectDir = this.basePath ? join(this.basePath, '.kshana') : join(process.cwd(), '.kshana');
     const fullPath = join(projectDir, filePath);
     let charCount = 0;
     if (existsSync(fullPath)) {
@@ -310,7 +334,8 @@ export class ContextStore {
 
     // If this is a reference to an existing file, read from that file
     if (meta.filePath) {
-      const projectDir = join(process.cwd(), '.kshana');
+      // Use basePath if available, otherwise process.cwd()
+      const projectDir = this.basePath ? join(this.basePath, '.kshana') : join(process.cwd(), '.kshana');
       const fullPath = join(projectDir, meta.filePath);
       if (existsSync(fullPath)) {
         try {
@@ -331,7 +356,7 @@ export class ContextStore {
     }
 
     // Otherwise, read from context directory
-    const contextDir = getContextDir();
+    const contextDir = getContextDir(this.basePath);
     const contentFile = join(contextDir, variableToFilename(variableName));
     if (!existsSync(contentFile)) {
       this.index.delete(variableName);
@@ -370,7 +395,7 @@ export class ContextStore {
   delete(variableName: string): boolean {
     if (!this.index.has(variableName)) return false;
 
-    const contextDir = getContextDir();
+    const contextDir = getContextDir(this.basePath);
     const contentFile = join(contextDir, variableToFilename(variableName));
     if (existsSync(contentFile)) {
       unlinkSync(contentFile);
@@ -414,7 +439,7 @@ export class ContextStore {
   clear(): number {
     const count = this.index.size;
 
-    const contextDir = getContextDir();
+    const contextDir = getContextDir(this.basePath);
     if (existsSync(contextDir)) {
       const files = readdirSync(contextDir);
       for (const file of files) {

@@ -1679,6 +1679,8 @@ The tool handles all parsing, sequential generation, and error handling internal
       return {
         status: 'error',
         error: `Image placements file not found: ${filePath}`,
+        suggestion: 'The image_placement phase must be completed first. Please run the image_placement phase to create the image-placements.md file, or call update_project with action: "update_phase" to return to the image_placement phase.',
+        next_action: 'Complete the image_placement phase by creating agent/content/image-placements.md, then try generating images again.',
       };
     }
     
@@ -1690,6 +1692,8 @@ The tool handles all parsing, sequential generation, and error handling internal
       return {
         status: 'error',
         error: `Failed to parse image placements: ${String(error)}`,
+        suggestion: 'The image-placements.md file may be corrupted or in an invalid format. Please check the file or re-run the image_placement phase to regenerate it.',
+        next_action: 'Review the image-placements.md file format, or re-run the image_placement phase to create a new placements file.',
       };
     }
     
@@ -1697,6 +1701,8 @@ The tool handles all parsing, sequential generation, and error handling internal
       return {
         status: 'error',
         error: 'No placements found in image-placements.md',
+        suggestion: 'The image-placements.md file exists but contains no valid placements. Please re-run the image_placement phase to create placements.',
+        next_action: 'Re-run the image_placement phase to identify and create image placements, then try generating images again.',
       };
     }
     
