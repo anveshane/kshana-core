@@ -106,7 +106,12 @@ export function setCurrentProjectBasePath(basePath: string): void {
  * @returns The current project base path
  */
 export function getCurrentProjectBasePath(): string {
-  return currentProjectBasePath ?? process.cwd();
+  const path = currentProjectBasePath ?? process.cwd();
+  // Log when falling back to cwd (indicates basePath wasn't set)
+  if (!currentProjectBasePath) {
+    console.warn(`[ProjectManager] getCurrentProjectBasePath() returning process.cwd() (${path}) - basePath not set!`);
+  }
+  return path;
 }
 
 /**
@@ -154,7 +159,7 @@ export function getCLIProjectBasePath(): string {
  * @param basePath - Base path for the project. In CLI context, defaults to CLI's own directory.
  *                   In Desktop context, should be the user's project workspace.
  */
-export function getProjectDir(basePath: string = process.cwd()): string {
+export function getProjectDir(basePath: string = getCurrentProjectBasePath()): string {
   return join(basePath, PROJECT_DIR);
 }
 
@@ -168,7 +173,7 @@ export function getProjectDir(basePath: string = process.cwd()): string {
  * @param basePath - Base path for the project. In CLI context, defaults to CLI's own directory.
  *                   In Desktop context, should be the user's project workspace.
  */
-export function getAgentDir(basePath: string = process.cwd()): string {
+export function getAgentDir(basePath: string = getCurrentProjectBasePath()): string {
   return join(getProjectDir(basePath), AGENT_DIR);
 }
 
@@ -203,7 +208,7 @@ export function getUserProjectAgentDir(userProjectPath: string): string {
  * 
  * @param basePath - Base path for the project
  */
-export function getIndexDir(basePath: string = process.cwd()): string {
+export function getIndexDir(basePath: string = getCurrentProjectBasePath()): string {
   return join(getProjectDir(basePath), INDEX_DIR);
 }
 
@@ -216,7 +221,7 @@ export function getIndexDir(basePath: string = process.cwd()): string {
  * 
  * @param basePath - Base path for the project
  */
-export function getProjectFilePath(basePath: string = process.cwd()): string {
+export function getProjectFilePath(basePath: string = getCurrentProjectBasePath()): string {
   return join(getAgentDir(basePath), PROJECT_FILE);
 }
 
@@ -229,7 +234,7 @@ export function getProjectFilePath(basePath: string = process.cwd()): string {
  * 
  * @param basePath - Base path for the project
  */
-export function getManifestFilePath(basePath: string = process.cwd()): string {
+export function getManifestFilePath(basePath: string = getCurrentProjectBasePath()): string {
   return join(getAgentDir(basePath), MANIFEST_FILE);
 }
 
@@ -245,7 +250,7 @@ export function getManifestFilePath(basePath: string = process.cwd()): string {
  * 
  * @param basePath - Base path for the project
  */
-export function getProjectIndexPath(basePath: string = process.cwd()): string {
+export function getProjectIndexPath(basePath: string = getCurrentProjectBasePath()): string {
   // Use consolidated index location: context/index.json (project_id is inside the file)
   return join(getProjectDir(basePath), 'context', 'index.json');
 }
@@ -253,7 +258,12 @@ export function getProjectIndexPath(basePath: string = process.cwd()): string {
 /**
  * Check if a project exists in the current directory.
  */
-export function projectExists(basePath: string = process.cwd()): boolean {
+export function projectExists(basePath: string = getCurrentProjectBasePath()): boolean {
+  // Defensive check: warn if basePath wasn't explicitly set (falling back to process.cwd())
+  if (!currentProjectBasePath) {
+    console.warn(`[ProjectManager] projectExists() called without basePath set. Using process.cwd() (${basePath}). This may point to the wrong directory in desktop app context.`);
+  }
+  
   return existsSync(getProjectFilePath(basePath));
 }
 
@@ -261,7 +271,7 @@ export function projectExists(basePath: string = process.cwd()): boolean {
  * Delete an existing project and all its files.
  * Use with caution - this permanently removes all project data.
  */
-export function deleteProject(basePath: string = process.cwd()): boolean {
+export function deleteProject(basePath: string = getCurrentProjectBasePath()): boolean {
   const projectDir = getProjectDir(basePath);
 
   if (!existsSync(projectDir)) {
@@ -280,7 +290,7 @@ export function deleteProject(basePath: string = process.cwd()): boolean {
  * Create the initial project directory structure.
  * Only creates directories - plan files are created on first write.
  */
-export function createProjectStructure(basePath: string = process.cwd()): void {
+export function createProjectStructure(basePath: string = getCurrentProjectBasePath()): void {
   const projectDir = getProjectDir(basePath);
   const agentDir = getAgentDir(basePath);
 
@@ -428,7 +438,7 @@ export function normalizeCurrentPhaseForInputType(project: ProjectFile): { phase
 export function createProject(
   originalInput: string,
   styleOrBasePath: ProjectStyle | string = 'cinematic_realism',
-  basePathMaybe: string = process.cwd()
+  basePathMaybe: string = getCurrentProjectBasePath()
 ): ProjectFile {
   // Back-compat:
   // - Old signature: createProject(originalInput, basePath)
@@ -1022,6 +1032,11 @@ function reloadProjectFilesAsContexts(basePath: string): void {
 }
 
 export function loadProject(basePath: string = getCurrentProjectBasePath()): ProjectFile | null {
+  // Defensive check: warn if basePath wasn't explicitly set (falling back to process.cwd())
+  if (!currentProjectBasePath) {
+    console.warn(`[ProjectManager] loadProject() called without basePath set. Using process.cwd() (${basePath}). This may point to the wrong directory in desktop app context.`);
+  }
+  
   const filePath = getProjectFilePath(basePath);
 
   if (!existsSync(filePath)) {
@@ -1116,7 +1131,7 @@ export function loadProject(basePath: string = getCurrentProjectBasePath()): Pro
 /**
  * Check if an existing project is compatible with the current workflow.
  */
-export function isProjectCompatible(basePath: string = process.cwd()): { compatible: boolean; version?: string; reason?: string } {
+export function isProjectCompatible(basePath: string = getCurrentProjectBasePath()): { compatible: boolean; version?: string; reason?: string } {
   const filePath = getProjectFilePath(basePath);
 
   if (!existsSync(filePath)) {
@@ -1150,7 +1165,7 @@ export function isProjectCompatible(basePath: string = process.cwd()): { compati
  * - Rule 3: Atomic updates (called after every project state change)
  * - Rule 4: Files win (filesystem is authoritative, index can be rebuilt)
  */
-export function generateProjectIndex(basePath: string = process.cwd()): void {
+export function generateProjectIndex(basePath: string = getCurrentProjectBasePath()): void {
   const project = loadProject(basePath);
   if (!project) {
     return;
@@ -1364,7 +1379,7 @@ export function generateProjectIndex(basePath: string = process.cwd()): void {
  * 1. context/{project_id}/index.json (old subfolder structure)
  * 2. index/project_index.json (very old location)
  */
-export function readProjectIndex(basePath: string = process.cwd()): ProjectIndex | null {
+export function readProjectIndex(basePath: string = getCurrentProjectBasePath()): ProjectIndex | null {
   const project = loadProject(basePath);
   if (!project) {
     return null;
@@ -1434,7 +1449,7 @@ export function readProjectIndex(basePath: string = process.cwd()): ProjectIndex
  * This enforces Rule 4: Files Win - if index is out of sync, rebuild it.
  * Should be called when index is missing or when filesystem changes are detected.
  */
-export function rebuildProjectIndex(basePath: string = process.cwd()): void {
+export function rebuildProjectIndex(basePath: string = getCurrentProjectBasePath()): void {
   generateProjectIndex(basePath);
 }
 
@@ -1444,6 +1459,10 @@ export function rebuildProjectIndex(basePath: string = process.cwd()): void {
 export function saveProject(project: ProjectFile, basePath: string = getCurrentProjectBasePath()): void {
   const filePath = getProjectFilePath(basePath);
   project.updatedAt = Date.now();
+  
+  // Log the save location for debugging
+  console.log(`[ProjectManager] Saving project to: ${filePath} (basePath: ${basePath})`);
+  
   writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
 
   // Regenerate project index after every save
@@ -1453,7 +1472,7 @@ export function saveProject(project: ProjectFile, basePath: string = getCurrentP
 /**
  * Read the original user input from its file.
  */
-export function getOriginalInput(project: ProjectFile, basePath: string = process.cwd()): string {
+export function getOriginalInput(project: ProjectFile, basePath: string = getCurrentProjectBasePath()): string {
   // Handle both old format (original_input.md) and new format (agent/original_input.md)
   const inputFile = project.originalInputFile.startsWith('agent/')
     ? project.originalInputFile
@@ -1471,7 +1490,7 @@ export function getOriginalInput(project: ProjectFile, basePath: string = proces
 export function getOrCreateProject(
   originalInput: string,
   style: ProjectStyle = 'cinematic_realism',
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   const existing = loadProject(basePath);
   if (existing) {
@@ -1504,7 +1523,7 @@ export function getCurrentPhase(project: ProjectFile): WorkflowPhase {
 /**
  * Get the project style.
  */
-export function getProjectStyle(basePath: string = process.cwd()): ProjectStyle {
+export function getProjectStyle(basePath: string = getCurrentProjectBasePath()): ProjectStyle {
   const project = loadProject(basePath);
   return project?.style ?? 'cinematic_realism';
 }
@@ -1512,7 +1531,7 @@ export function getProjectStyle(basePath: string = process.cwd()): ProjectStyle 
 /**
  * Get the style configuration for the current project.
  */
-export function getProjectStyleConfig(basePath: string = process.cwd()): StyleConfig {
+export function getProjectStyleConfig(basePath: string = getCurrentProjectBasePath()): StyleConfig {
   const style = getProjectStyle(basePath);
   return STYLE_CONFIGS[style];
 }
@@ -1550,7 +1569,7 @@ export function updatePhaseStatus(
 export function updatePlanStage(
   project: ProjectFile,
   stage: PlannerStage,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   project.plan.stage = stage;
 
@@ -1578,7 +1597,7 @@ export function updatePlannerStage(
   project: ProjectFile,
   _phase: keyof ProjectFile['phases'],
   stage: PlannerStage,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   // Redirect to project-level plan stage update
   return updatePlanStage(project, stage, basePath);
@@ -1712,7 +1731,7 @@ export async function transitionToNextPhase(
 /**
  * Check if a plan file has content.
  */
-export function planFileHasContent(planFile: string, basePath: string = process.cwd()): boolean {
+export function planFileHasContent(planFile: string, basePath: string = getCurrentProjectBasePath()): boolean {
   // Handle both old format (plans/...) and new format (agent/plans/...)
   const normalizedFile = planFile.startsWith('agent/') ? planFile : `agent/${planFile}`;
   const filePath = join(getProjectDir(basePath), normalizedFile);
@@ -1803,7 +1822,7 @@ function formatCharacterMarkdown(character: CharacterData): string {
  */
 export function saveCharacter(
   character: CharacterData,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): void {
   const safeName = character.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   const filePath = `agent/characters/${safeName}.md`;
@@ -1829,7 +1848,7 @@ export function saveCharacter(
  */
 export function addCharacter(
   name: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): CharacterData {
   const project = loadProject(basePath);
   if (!project) {
@@ -1856,7 +1875,7 @@ export function addCharacter(
 export function updateCharacter(
   name: string,
   updates: Partial<CharacterData>,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): CharacterData | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -1907,7 +1926,7 @@ export function updateCharacterApproval(
   status: ItemApprovalStatus,
   approvalType: 'content' | 'image' = 'content',
   feedback?: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): CharacterData | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -1944,7 +1963,7 @@ export function updateCharacterApproval(
  * Load character markdown from characters/[name].md.
  * Returns the raw markdown content (parsing not needed for index-only approach).
  */
-export function loadCharacterMarkdown(name: string, basePath: string = process.cwd()): string | null {
+export function loadCharacterMarkdown(name: string, basePath: string = getCurrentProjectBasePath()): string | null {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   return readProjectFile(`agent/characters/${safeName}.md`, basePath);
 }
@@ -1968,7 +1987,7 @@ function formatSettingMarkdown(setting: SettingData): string {
 /**
  * Save setting data to settings/[name].md and update project.
  */
-export function saveSetting(setting: SettingData, basePath: string = process.cwd()): void {
+export function saveSetting(setting: SettingData, basePath: string = getCurrentProjectBasePath()): void {
   const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   const filePath = `agent/settings/${safeName}.md`;
   writeProjectFile(filePath, formatSettingMarkdown(setting), basePath);
@@ -1993,7 +2012,7 @@ export function saveSetting(setting: SettingData, basePath: string = process.cwd
  */
 export function addSetting(
   name: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SettingData {
   const project = loadProject(basePath);
   if (!project) {
@@ -2020,7 +2039,7 @@ export function addSetting(
 export function updateSetting(
   name: string,
   updates: Partial<SettingData>,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SettingData | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -2071,7 +2090,7 @@ export function updateSettingApproval(
   status: ItemApprovalStatus,
   approvalType: 'content' | 'image' = 'content',
   feedback?: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SettingData | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -2108,7 +2127,7 @@ export function updateSettingApproval(
  * Load setting markdown from settings/[name].md.
  * Returns the raw markdown content.
  */
-export function loadSettingMarkdown(name: string, basePath: string = process.cwd()): string | null {
+export function loadSettingMarkdown(name: string, basePath: string = getCurrentProjectBasePath()): string | null {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   return readProjectFile(`agent/settings/${safeName}.md`, basePath);
 }
@@ -2117,7 +2136,7 @@ export function loadSettingMarkdown(name: string, basePath: string = process.cwd
  * Add a scene reference to the project.
  * Scene content is stored in agent/scenes/scene-XXX/scene.md files.
  */
-export function addScene(sceneRef: SceneRef, basePath: string = process.cwd()): void {
+export function addScene(sceneRef: SceneRef, basePath: string = getCurrentProjectBasePath()): void {
   const project = loadProject(basePath);
   if (!project) return;
 
@@ -2163,7 +2182,7 @@ export const MAX_SCENES = 12;
 export function addNewScene(
   sceneNumber: number,
   title?: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SceneRef {
   const project = loadProject(basePath);
   if (!project) {
@@ -2203,7 +2222,7 @@ export function addNewScene(
 export function updateScene(
   sceneNumber: number,
   updates: Partial<SceneRef>,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SceneRef | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -2229,7 +2248,7 @@ export function updateSceneApproval(
   phase: 'content' | 'image' | 'video',
   status: ItemApprovalStatus,
   feedback?: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SceneRef | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -2275,7 +2294,7 @@ export function updateSceneApproval(
 /**
  * Add an asset to the manifest.
  */
-export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): void {
+export function addAsset(asset: AssetInfo, basePath: string = getCurrentProjectBasePath()): void {
   const manifestPath = getManifestFilePath(basePath);
 
   let manifest: { schema_version?: string; assets: AssetInfo[] } = { assets: [] };
@@ -2327,7 +2346,7 @@ export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): vo
 /**
  * Get all assets from the manifest.
  */
-export function getAssets(basePath: string = process.cwd()): AssetInfo[] {
+export function getAssets(basePath: string = getCurrentProjectBasePath()): AssetInfo[] {
   const manifestPath = getManifestFilePath(basePath);
 
   if (!existsSync(manifestPath)) {
@@ -2345,7 +2364,7 @@ export function getAssets(basePath: string = process.cwd()): AssetInfo[] {
 /**
  * Get the project summary for the main agent.
  */
-export function getProjectSummary(basePath: string = process.cwd()): string {
+export function getProjectSummary(basePath: string = getCurrentProjectBasePath()): string {
   const project = loadProject(basePath);
 
   if (!project) {
@@ -2439,7 +2458,7 @@ Assets: ${project.assets.length}${itemProgress}${sceneLimitWarning}
  * This tells the agent what phase it's in and what to do next.
  * Planning is done at project level - all phases execute based on the approved master plan.
  */
-export function getStateTransitionPrompt(basePath: string = process.cwd()): string {
+export function getStateTransitionPrompt(basePath: string = getCurrentProjectBasePath()): string {
   let project = loadProject(basePath);
 
   if (!project) {
@@ -2950,7 +2969,7 @@ export function updateContentStatus(
   project: ProjectFile,
   contentType: ContentTypeName,
   status: ContentStatus,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   // Ensure content registry exists (for backwards compatibility)
   if (!project.content) {
@@ -2970,7 +2989,7 @@ export function addContentItem(
   contentType: ContentTypeName,
   itemName: string,
   itemFile?: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   // Ensure content registry exists
   if (!project.content) {
@@ -3108,7 +3127,7 @@ export function hasRequiredContent(
 export function markContentAvailable(
   project: ProjectFile,
   contentType: ContentTypeName,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   // Ensure content registry exists
   if (!project.content) {

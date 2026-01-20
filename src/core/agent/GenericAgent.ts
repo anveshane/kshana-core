@@ -121,6 +121,8 @@ export class GenericAgent extends TypedEventEmitter {
   private recentToolCalls: string[] = [];
   private contentGenerationHistory: string[] = [];
   private consecutiveLoopWarnings = 0;
+  private lastBlockedTool: string | null = null;
+  private lastBlockedSignature: string | null = null;
   private static readonly LOOP_DETECTION_WINDOW = 6;
   private static readonly LOOP_THRESHOLD = 3; // Same tool called 3+ times in window
   private static readonly MAX_CONSECUTIVE_LOOP_WARNINGS = 3; // Force stop after this many warnings
@@ -1229,6 +1231,14 @@ export class GenericAgent extends TypedEventEmitter {
     const argSignature = JSON.stringify(args).slice(0, 100); // Limit to prevent huge signatures
     const signature = `${toolName}:${argSignature}`;
 
+    // Special handling for transition_phase: allow more retries since it has auto-recovery logic
+    // transition_phase can auto-complete phases and retry transitions, so be more lenient
+    const isTransitionPhase = toolName === 'update_project' && args['action'] === 'transition_phase';
+    
+    // For transition_phase, use higher thresholds to allow auto-recovery to work
+    const threshold = isTransitionPhase ? 5 : GenericAgent.LOOP_THRESHOLD;
+    const maxWarnings = isTransitionPhase ? 5 : GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS;
+
     // Add to recent calls
     this.recentToolCalls.push(signature);
 
@@ -1240,11 +1250,11 @@ export class GenericAgent extends TypedEventEmitter {
     // Count occurrences of this exact call in the window
     const count = this.recentToolCalls.filter(s => s === signature).length;
 
-    if (count >= GenericAgent.LOOP_THRESHOLD) {
+    if (count >= threshold) {
       this.consecutiveLoopWarnings++;
 
       // After too many warnings, force stop
-      if (this.consecutiveLoopWarnings >= GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS) {
+      if (this.consecutiveLoopWarnings >= maxWarnings) {
         return {
           message: `LOOP BLOCKED: You've called ${toolName} with similar arguments ${count} times and ignored ` +
             `${this.consecutiveLoopWarnings} warnings. This tool call is being blocked. ` +
@@ -1254,34 +1264,36 @@ export class GenericAgent extends TypedEventEmitter {
       }
 
       return {
-        message: `LOOP DETECTED (warning ${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
+        message: `LOOP DETECTED (warning ${this.consecutiveLoopWarnings}/${maxWarnings}): ` +
           `You've called ${toolName} with similar arguments ${count} times recently. ` +
           `This suggests you're stuck in a loop. Please either:\n` +
           `1. Complete the current task and stop (no more tool calls)\n` +
           `2. Use ask_user to get clarification\n` +
           `3. Try a different approach\n` +
-          `After ${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS} warnings, the tool will be blocked.`,
+          `After ${maxWarnings} warnings, the tool will be blocked.`,
         isHardError: false,
       };
     }
 
     // Also check for rapid tool repetition (same tool called consecutively)
-    const lastFew = this.recentToolCalls.slice(-4);
+    // But be more lenient for transition_phase since it may need multiple attempts for auto-recovery
+    const consecutiveThreshold = isTransitionPhase ? 6 : 4;
+    const lastFew = this.recentToolCalls.slice(-consecutiveThreshold);
     const sameToolCount = lastFew.filter(s => s.startsWith(toolName + ':')).length;
-    if (sameToolCount >= 4) {
+    if (sameToolCount >= consecutiveThreshold) {
       this.consecutiveLoopWarnings++;
 
-      if (this.consecutiveLoopWarnings >= GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS) {
+      if (this.consecutiveLoopWarnings >= maxWarnings) {
         return {
-          message: `LOOP BLOCKED: You've called ${toolName} 4+ times in a row and ignored warnings. ` +
+          message: `LOOP BLOCKED: You've called ${toolName} ${consecutiveThreshold}+ times in a row and ignored warnings. ` +
             `This tool call is being blocked. Provide a final response to the user.`,
           isHardError: true,
         };
       }
 
       return {
-        message: `WARNING (${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
-          `You've called ${toolName} 4 times in a row. ` +
+        message: `WARNING (${this.consecutiveLoopWarnings}/${maxWarnings}): ` +
+          `You've called ${toolName} ${consecutiveThreshold} times in a row. ` +
           `If you're done with the task, stop calling tools and provide a final response.`,
         isHardError: false,
       };
@@ -1307,14 +1319,59 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Check for looping (skip for think + TodoWrite - these may be called frequently)
     if (toolCall.name !== 'think' && !isBuiltinTodoTool(toolCall.name)) {
+      // Reset loop detection if agent is trying a different tool or different arguments
+      // This allows recovery from blocked states
+      const argSignature = JSON.stringify(toolCall.arguments).slice(0, 100);
+      const currentSignature = `${toolCall.name}:${argSignature}`;
+      
+      if (this.lastBlockedTool && this.lastBlockedSignature) {
+        // If trying a different tool, reset blocked state
+        if (toolCall.name !== this.lastBlockedTool) {
+          debugLog(`[GenericAgent] Different tool detected (${toolCall.name} vs ${this.lastBlockedTool}), resetting loop detection`);
+          this.consecutiveLoopWarnings = 0;
+          this.lastBlockedTool = null;
+          this.lastBlockedSignature = null;
+          // Clear recent calls to give fresh start
+          this.recentToolCalls = [];
+        }
+        // If trying same tool but different arguments, allow it (might be recovery attempt)
+        else if (currentSignature !== this.lastBlockedSignature) {
+          debugLog(`[GenericAgent] Same tool (${toolCall.name}) but different arguments, allowing attempt`);
+          // Reduce warnings to allow recovery
+          this.consecutiveLoopWarnings = Math.max(0, this.consecutiveLoopWarnings - 1);
+        }
+      }
+      
       const loopResult = this.detectLoop(toolCall.name, toolCall.arguments);
       if (loopResult) {
         const resultStatus = loopResult.isHardError ? 'loop_blocked' : 'loop_warning';
+        
+        // Track blocked tool for recovery detection
+        if (loopResult.isHardError) {
+          this.lastBlockedTool = toolCall.name;
+          this.lastBlockedSignature = currentSignature;
+        }
+        
+        // Provide specific recovery hints for transition_phase
+        let recoveryHint: string | undefined;
+        if (loopResult.isHardError) {
+          if (toolCall.name === 'update_project' && toolCall.arguments['action'] === 'transition_phase') {
+            recoveryHint = 'CRITICAL: You are blocked from calling transition_phase. To recover:\n' +
+              '1. First call update_project with action="update_phase" and data={phase: "transcript_input", status: "completed"} to mark the phase as complete\n' +
+              '2. Then you can try transition_phase again, OR\n' +
+              '3. Simply proceed with the next phase work - the phase transition will happen automatically when needed.\n' +
+              'Do NOT keep calling transition_phase with the same arguments.';
+          } else {
+            recoveryHint = 'Try using a different tool or different arguments to reset loop detection.';
+          }
+        }
+        
         const warningResult = {
           status: resultStatus,
           warning: loopResult.message,
           tool: toolCall.name,
           blocked: loopResult.isHardError,
+          recovery_hint: recoveryHint,
         };
         this.emit({
           type: 'tool_result',
@@ -1327,9 +1384,11 @@ export class GenericAgent extends TypedEventEmitter {
         return warningResult;
       }
       
-      // If loop detection passed, reset warnings (tool call is proceeding)
+      // If loop detection passed, reset warnings and blocked state (tool call is proceeding)
       // This allows the agent to break out of loops by using different tools or arguments
       this.consecutiveLoopWarnings = 0;
+      this.lastBlockedTool = null;
+      this.lastBlockedSignature = null;
     }
 
     // Handle built-in todo tools specially (no handler required)
@@ -1958,16 +2017,30 @@ export class GenericAgent extends TypedEventEmitter {
       // This allows the agent to break out of loops by using different tools
       const resultStatus = resultObj?.['status'] as string | undefined;
       const isLoopBlocked = resultStatus === 'loop_blocked' || resultStatus === 'loop_warning';
+      const autoRecovered = resultObj?.['_auto_recovered'] as boolean | undefined;
+      
       if (!isLoopBlocked) {
         // Successful tool call - reset loop detection to allow progress
-        this.consecutiveLoopWarnings = 0;
-        // Clear recent tool calls if this is a different tool or successful result
-        // This helps break out of loops when switching tools
-        if (this.recentToolCalls.length > 0) {
-          const lastTool = this.recentToolCalls[this.recentToolCalls.length - 1]?.split(':')[0];
-          if (lastTool !== toolCall.name || resultStatus === 'success') {
-            // Different tool or explicit success - clear recent calls to break loop
-            this.recentToolCalls = [];
+        // Also reset if auto-recovery happened (indicates the tool fixed itself)
+        if (resultStatus === 'success' || autoRecovered) {
+          this.consecutiveLoopWarnings = 0;
+          // Clear recent tool calls on success or auto-recovery to break loop
+          this.recentToolCalls = [];
+          // Clear blocked state on success
+          this.lastBlockedTool = null;
+          this.lastBlockedSignature = null;
+        } else {
+          // Partial success - reduce warnings but don't clear history
+          this.consecutiveLoopWarnings = Math.max(0, this.consecutiveLoopWarnings - 1);
+          // Clear recent tool calls if this is a different tool (helps break loops when switching)
+          if (this.recentToolCalls.length > 0) {
+            const lastTool = this.recentToolCalls[this.recentToolCalls.length - 1]?.split(':')[0];
+            if (lastTool !== toolCall.name) {
+              // Different tool - clear recent calls and blocked state to break loop
+              this.recentToolCalls = [];
+              this.lastBlockedTool = null;
+              this.lastBlockedSignature = null;
+            }
           }
         }
       }

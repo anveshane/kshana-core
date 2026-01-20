@@ -16,6 +16,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { StoredContextMeta } from '../context/ContextStore.js';
+import { getCurrentProjectBasePath } from '../../tasks/video/workflow/ProjectManager.js';
 
 /**
  * Consolidated project index schema.
@@ -87,7 +88,7 @@ export interface EntityRoutingEntry {
  * Get the consolidated index file path.
  * Index is stored at context/index.json (project_id is inside the file, not in folder structure).
  */
-function getConsolidatedIndexPath(basePath: string = process.cwd()): string {
+function getConsolidatedIndexPath(basePath: string = getCurrentProjectBasePath()): string {
   return join(basePath, '.kshana', 'context', 'index.json');
 }
 
@@ -98,7 +99,7 @@ export class ProjectIndexManager {
   private projectId: string | null = null;
   private basePath: string;
 
-  constructor(projectId?: string | null, basePath: string = process.cwd()) {
+  constructor(projectId?: string | null, basePath: string = getCurrentProjectBasePath()) {
     this.projectId = projectId ?? null;
     this.basePath = basePath;
   }

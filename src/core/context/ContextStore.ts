@@ -7,6 +7,7 @@
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { getCurrentProjectBasePath } from '../../tasks/video/workflow/ProjectManager.js';
 
 /**
  * Metadata for stored context (stored in index.json)
@@ -56,7 +57,7 @@ function getContextDir(basePath?: string | null): string {
     return contextDir;
   }
   // Fallback to project directory (CLI context)
-  return join(process.cwd(), '.kshana', 'context');
+  return join(getCurrentProjectBasePath(), '.kshana', 'context');
 }
 
 /**
@@ -292,8 +293,8 @@ export class ContextStore {
   ): { variableName: string } {
     const generatedName = variableName ?? this.generateVariableName(label);
     
-    // Read file to get char count - use basePath if available, otherwise process.cwd()
-    const projectDir = this.basePath ? join(this.basePath, '.kshana') : join(process.cwd(), '.kshana');
+    // Read file to get char count - use basePath if available, otherwise getCurrentProjectBasePath()
+    const projectDir = this.basePath ? join(this.basePath, '.kshana') : join(getCurrentProjectBasePath(), '.kshana');
     const fullPath = join(projectDir, filePath);
     let charCount = 0;
     if (existsSync(fullPath)) {
@@ -334,8 +335,8 @@ export class ContextStore {
 
     // If this is a reference to an existing file, read from that file
     if (meta.filePath) {
-      // Use basePath if available, otherwise process.cwd()
-      const projectDir = this.basePath ? join(this.basePath, '.kshana') : join(process.cwd(), '.kshana');
+      // Use basePath if available, otherwise getCurrentProjectBasePath()
+      const projectDir = this.basePath ? join(this.basePath, '.kshana') : join(getCurrentProjectBasePath(), '.kshana');
       const fullPath = join(projectDir, meta.filePath);
       if (existsSync(fullPath)) {
         try {

@@ -6,7 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
 import { createDefaultToolRegistry } from '../core/tools/index.js';
-import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT, createWorkflowVideoAgent } from '../tasks/video/index.js';
+import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT, createWorkflowVideoAgent, setCurrentProjectBasePath } from '../tasks/video/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 
@@ -113,6 +113,13 @@ export class ConversationManager {
 
     this.sessions.set(sessionId, { state, agent, basePath });
 
+    // CRITICAL: Set the global basePath immediately when session is created
+    // This ensures tools use the correct project directory from the start
+    if (this.taskType === 'video' && basePath) {
+      setCurrentProjectBasePath(basePath);
+      console.log(`[ConversationManager] Set basePath to ${basePath} when creating session ${sessionId}`);
+    }
+
     return state;
   }
 
@@ -192,6 +199,13 @@ export class ConversationManager {
     this.setupEventListeners(sessionId, session.agent, events);
 
     try {
+      // CRITICAL: Reset the global basePath before each agent run to ensure correct project directory
+      // This is essential for servers where multiple sessions share the same process
+      if (this.taskType === 'video' && session.basePath) {
+        setCurrentProjectBasePath(session.basePath);
+        console.log(`[ConversationManager] Reset basePath to ${session.basePath} before runTask()`);
+      }
+
       const result = await session.agent.run(task);
 
       // Update session state based on result
@@ -247,6 +261,13 @@ export class ConversationManager {
     this.setupEventListeners(sessionId, session.agent, events);
 
     try {
+      // CRITICAL: Reset the global basePath before each agent run to ensure correct project directory
+      // This is essential for servers where multiple sessions share the same process
+      if (this.taskType === 'video' && session.basePath) {
+        setCurrentProjectBasePath(session.basePath);
+        console.log(`[ConversationManager] Reset basePath to ${session.basePath} before sendResponse()`);
+      }
+
       const result = await session.agent.run('', response);
 
       // Update session state based on result
@@ -316,10 +337,10 @@ export class ConversationManager {
       // Also handle streaming_text events for real-time streaming
       agent.on('streaming_text', (data) => {
         if (data.chunk !== undefined) {
-          console.log('[ConversationManager] streaming_text event:', { 
-            sessionId, 
-            chunkLength: data.chunk?.length ?? 0, 
-            done: data.done ?? false 
+          console.log('[ConversationManager] streaming_text event:', {
+            sessionId,
+            chunkLength: data.chunk?.length ?? 0,
+            done: data.done ?? false
           });
           events.onAgentText!(sessionId, data.chunk, data.done ?? false);
         }
@@ -329,11 +350,11 @@ export class ConversationManager {
       agent.on('tool_streaming', (data) => {
         // Always forward tool_streaming events (even empty chunks when done: true)
         const chunk = data.chunk ?? '';
-        console.log('[ConversationManager] tool_streaming event:', { 
-          sessionId, 
+        console.log('[ConversationManager] tool_streaming event:', {
+          sessionId,
           toolCallId: data.toolCallId,
-          chunkLength: chunk.length, 
-          done: data.done ?? false 
+          chunkLength: chunk.length,
+          done: data.done ?? false
         });
         // Forward tool_streaming as stream_chunk so it appears in chat
         events.onAgentText!(sessionId, chunk, data.done ?? false);

@@ -27,6 +27,7 @@ import {
   getAgentDir,
   getAssets,
   readProjectFile,
+  getCurrentProjectBasePath,
 } from './workflow/index.js';
 import { parseImagePlacements, type ParsedImagePlacement } from './workflow/imagePlacementsParser.js';
 import { parseVideoPlacements, type ParsedVideoPlacement } from './workflow/videoPlacementsParser.js';
@@ -125,7 +126,8 @@ const jobs = new Map<string, GenerationJob>();
 
 // Get the project assets directory for images (legacy - still used for non-placement images)
 function getAssetsDir(): string {
-  const assetsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'assets', 'images');
+  const basePath = getCurrentProjectBasePath();
+  const assetsDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'assets', 'images');
   if (!fs.existsSync(assetsDir)) {
     fs.mkdirSync(assetsDir, { recursive: true });
   }
@@ -134,7 +136,8 @@ function getAssetsDir(): string {
 
 // Get the image-placements directory for placement images
 function getImagePlacementsDir(): string {
-  const imagePlacementsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'image-placements');
+  const basePath = getCurrentProjectBasePath();
+  const imagePlacementsDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'image-placements');
   if (!fs.existsSync(imagePlacementsDir)) {
     fs.mkdirSync(imagePlacementsDir, { recursive: true });
   }
@@ -143,7 +146,8 @@ function getImagePlacementsDir(): string {
 
 // Get the video-placements directory for placement videos
 function getVideoPlacementsDir(): string {
-  const videoPlacementsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'video-placements');
+  const basePath = getCurrentProjectBasePath();
+  const videoPlacementsDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'video-placements');
   if (!fs.existsSync(videoPlacementsDir)) {
     fs.mkdirSync(videoPlacementsDir, { recursive: true });
   }
@@ -462,7 +466,8 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
     const artifactId = job.type === 'video' ? `vid_${nanoid(8)}` : `img_${nanoid(8)}`;
 
     // Get relative path for storage (relative to .kshana/)
-    const projectDir = path.join(process.cwd(), PROJECT_DIR);
+    const basePath = getCurrentProjectBasePath();
+    const projectDir = path.join(basePath, PROJECT_DIR);
     let relativePath: string;
     try {
       relativePath = path.relative(projectDir, savedPath);
@@ -907,10 +912,11 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
 
   // Check project assets manifest (now in agent/manifest.json)
   const assets = getAssets();
+  const basePath = getCurrentProjectBasePath();
   const asset = assets.find((a) => a.id === artifactId);
   if (asset) {
     // Asset path is relative to .kshana/, so join with project dir
-    return path.join(process.cwd(), PROJECT_DIR, asset.path);
+    return path.join(basePath, PROJECT_DIR, asset.path);
   }
 
   // Check scenes for matching artifact
@@ -919,7 +925,7 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
       // Try to find path from assets
       const foundAsset = assets.find((a) => a.id === artifactId);
       if (foundAsset) {
-        return path.join(process.cwd(), PROJECT_DIR, foundAsset.path);
+        return path.join(basePath, PROJECT_DIR, foundAsset.path);
       }
     }
   }
@@ -1021,7 +1027,8 @@ Returns a job ID. Use wait_for_job to check completion.`,
         throw new Error("Workflow 'wan_single_image' not found");
       }
 
-      const assetsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'assets', 'videos');
+      const basePath = getCurrentProjectBasePath();
+      const assetsDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'assets', 'videos');
       if (!fs.existsSync(assetsDir)) {
         fs.mkdirSync(assetsDir, { recursive: true });
       }
@@ -1186,7 +1193,8 @@ Returns a job ID. Use wait_for_job to check completion.`,
         throw new Error("Workflow 'wan_start_end' not found");
       }
 
-      const assetsDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'assets', 'videos');
+      const basePath = getCurrentProjectBasePath();
+      const assetsDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'assets', 'videos');
       if (!fs.existsSync(assetsDir)) {
         fs.mkdirSync(assetsDir, { recursive: true });
       }
@@ -1367,14 +1375,15 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       }
 
       // Resolve the image path
+      const basePath = getCurrentProjectBasePath();
       let imagePath = params.base_image_path;
       if (!path.isAbsolute(imagePath) && !imagePath.startsWith('.')) {
         // Assume it's relative to project
         // imagePath is already relative to .kshana/, just join
         if (!imagePath.startsWith(PROJECT_DIR)) {
-          imagePath = path.join(process.cwd(), PROJECT_DIR, imagePath);
+          imagePath = path.join(basePath, PROJECT_DIR, imagePath);
         } else {
-          imagePath = path.join(process.cwd(), imagePath);
+          imagePath = path.join(basePath, imagePath);
         }
       }
 
@@ -1520,7 +1529,8 @@ export interface StoryboardParams {
  * Get storyboard directory for storing preview images.
  */
 function getStoryboardDir(): string {
-  const storyboardDir = path.join(process.cwd(), PROJECT_DIR, AGENT_DIR, 'assets', 'storyboard');
+  const basePath = getCurrentProjectBasePath();
+  const storyboardDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'assets', 'storyboard');
   if (!fs.existsSync(storyboardDir)) {
     fs.mkdirSync(storyboardDir, { recursive: true });
   }

@@ -30,6 +30,7 @@ import {
   PHASE_CONFIGS,
   getProjectDir,
   setCurrentProjectBasePath,
+  getCurrentProjectBasePath,
 } from './workflow/index.js';
 
 // Re-export prompts
@@ -230,7 +231,7 @@ export function createWorkflowToolRegistry(): ToolRegistry {
  * - images: characters, scenes
  * - video: scenes, images
  */
-export function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
+export function loadProjectFilesAsContexts(basePath: string = getCurrentProjectBasePath()): string[] {
   const projectDir = getProjectDir(basePath);
   const agentDir = join(projectDir, 'agent');
   const plansDir = join(agentDir, 'plans');
