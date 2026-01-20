@@ -157,7 +157,7 @@ function getVideoPlacementsDir(): string {
 /**
  * Get the video generation timeout from environment variable or use default.
  * Uses the existing COMFYUI_TIMEOUT environment variable (same as ComfyUIClient).
- * Default: 300 seconds (5 minutes)
+ * Default: 1800 seconds (30 minutes)
  */
 function getVideoGenerationTimeout(): number {
   const envTimeout = process.env['COMFYUI_TIMEOUT'];
@@ -167,7 +167,7 @@ function getVideoGenerationTimeout(): number {
       return parsed;
     }
   }
-  return 300; // Default 5 minutes
+  return 1800; // Default 30 minutes
 }
 
 /**

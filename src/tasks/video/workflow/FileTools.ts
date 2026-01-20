@@ -850,91 +850,12 @@ What story would you like to turn into a video?`,
 
           // VALIDATION: Current phase must be completed before transition
           if (currentPhaseInfo?.status !== 'completed') {
-            // Check if phase work is actually done (auto-completion check)
-            let canAutoComplete = false;
-            let autoCompleteReason = '';
-
-            // Phase-specific auto-completion checks
-            if (currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
-              const hasTranscript = project.transcriptEntries && project.transcriptEntries.length > 0;
-              const transcriptContent = readProjectFile('agent/content/transcript.md', basePath);
-              const hasTranscriptFile = transcriptContent !== null && transcriptContent.trim().length > 0;
-
-              if (hasTranscript && hasTranscriptFile) {
-                canAutoComplete = true;
-                autoCompleteReason = 'Transcript parsing is complete (entries and file exist)';
-              }
-            } else if (currentPhase === WorkflowPhase.CONTENT_PLANNING) {
-              const contentPlan = readProjectFile('agent/plans/content-plan.md', basePath);
-              if (contentPlan !== null && contentPlan.trim().length > 0) {
-                canAutoComplete = true;
-                autoCompleteReason = 'Content plan file exists and has content';
-              }
-            } else if (currentPhase === WorkflowPhase.IMAGE_PLACEMENT) {
-              const imagePlacements = readProjectFile('agent/content/image-placements.md', basePath);
-              if (imagePlacements !== null && imagePlacements.trim().length > 0) {
-                canAutoComplete = true;
-                autoCompleteReason = 'Image placements file exists and has content';
-              }
-            } else if (currentPhase === WorkflowPhase.VIDEO_PLACEMENT) {
-              const videoPlacements = readProjectFile('agent/content/video-placements.md', basePath);
-              if (videoPlacements !== null && videoPlacements.trim().length > 0) {
-                canAutoComplete = true;
-                autoCompleteReason = 'Video placements file exists and has content';
-              }
-            }
-
-            // Auto-complete immediately if work is done (prevents loop detection from blocking)
-            // This allows smooth transitions without requiring manual phase status updates
-            if (canAutoComplete) {
-              // Auto-complete the phase immediately
-              const updatedProject = loadProject(basePath);
-              if (updatedProject) {
-                // Cast currentPhase to the expected type for updatePhaseStatus
-                const phaseKey = currentPhase as string as keyof ProjectFile['phases'];
-                updatePhaseStatus(updatedProject, phaseKey, 'completed', basePath);
-                saveProject(updatedProject, basePath);
-
-                // Retry transition immediately
-                const retryResult = await transitionToNextPhase(updatedProject, basePath);
-                const finalProject = loadProject(basePath);
-
-                if (finalProject && retryResult.transitioned) {
-                  const newPhaseConfig = PHASE_CONFIGS[finalProject.currentPhase as WorkflowPhase];
-                  return {
-                    status: 'success',
-                    transitioned: true,
-                    reason: `Auto-completed ${currentPhase} phase (${autoCompleteReason}) and transitioned to ${finalProject.currentPhase}`,
-                    current_phase: finalProject.currentPhase,
-                    new_phase_name: newPhaseConfig?.displayName ?? finalProject.currentPhase,
-                    previous_phase: currentPhase,
-                    auto_completed: true,
-                    next_action: `Phase transition successful. You are NOW in the ${newPhaseConfig?.displayName ?? finalProject.currentPhase} phase. Call read_project() to get current phase instructions.`,
-                    // Signal to agent that this was auto-recovered to help reset loop detection
-                    _auto_recovered: true
-                  };
-                }
-              }
-            }
-
-            // If we reach here, auto-completion didn't work or work isn't complete
+            // Provide clear error message telling agent to mark phase as completed first
             let nextAction = `Complete the current phase first by calling update_project(action='update_phase', data={phase: '${currentPhase}', status: 'completed'})`;
 
-            // Phase-specific guidance for TRANSCRIPT_INPUT (has transcript-parser subphase)
+            // Phase-specific guidance for TRANSCRIPT_INPUT
             if (currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
-              const hasTranscript = project.transcriptEntries && project.transcriptEntries.length > 0;
-              const transcriptContent = readProjectFile('agent/content/transcript.md', basePath);
-              const hasTranscriptFile = transcriptContent !== null && transcriptContent.trim().length > 0;
-
-              if (hasTranscript && hasTranscriptFile) {
-                // Work is done, but auto-completion failed - provide clear instruction
-                nextAction = `Transcript parsing is complete. Call update_project(action='update_phase', data={phase: 'transcript_input', status: 'completed'}) to mark the phase as completed, then call transition_phase again.`;
-              } else {
-                nextAction = `Complete transcript input phase: Parse the transcript using Task(subagent_type='transcript-parser', task='Parse the transcript text from original_input into structured transcript entries', context_refs=['$original_input']), then mark as completed.`;
-              }
-            } else if (canAutoComplete) {
-              // Work appears complete but auto-completion didn't work - provide manual instruction
-              nextAction = `Phase work appears complete (${autoCompleteReason}), but auto-completion failed. Manually mark it as completed: update_project(action='update_phase', data={phase: '${currentPhase}', status: 'completed'}), then call transition_phase again.`;
+              nextAction = `Complete transcript input phase: Parse the transcript using Task(subagent_type='transcript-parser', task='Parse the transcript text from original_input into structured transcript entries', context_refs=['$original_input']), then mark as completed: update_project(action='update_phase', data={phase: 'transcript_input', status: 'completed'})`;
             }
 
             // Provide recovery action for stuck loops
@@ -952,8 +873,6 @@ What story would you like to turn into a video?`,
               current_phase_status: currentPhaseInfo?.status,
               next_action: nextAction,
               recovery_action: recoveryAction,
-              can_auto_complete: canAutoComplete,
-              auto_complete_reason: canAutoComplete ? autoCompleteReason : undefined,
               _retry_count: retryCount + 1,
               _max_retries: maxRetries,
               // Important: Tell agent to NOT call transition_phase again immediately

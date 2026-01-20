@@ -1112,40 +1112,6 @@ export class GenericAgent extends TypedEventEmitter {
           }
         }
 
-        // Special handling: After generate_all_videos completes, automatically mark video_generation phase as complete
-        // This ensures the phase is marked complete even if all videos failed
-        if (toolCall.name === 'generate_all_videos' && resultObj['status'] === 'completed') {
-          try {
-            const { loadProject } = await import('../../tasks/video/workflow/ProjectManager.js');
-            const project = loadProject();
-            
-            // Check if we're in the video_generation phase
-            if (project?.currentPhase === 'video_generation') {
-              const phaseInfo = project.phases?.video_generation;
-              const isPhaseCompleted = phaseInfo?.status === 'completed' || phaseInfo?.status === 'skipped';
-              
-              if (!isPhaseCompleted) {
-                const successful = (resultObj['successful'] as number) ?? 0;
-                const failed = (resultObj['failed'] as number) ?? 0;
-                const total = (resultObj['total_placements'] as number) ?? 0;
-                
-                debugLog(`[GenericAgent] generate_all_videos completed (${successful} successful, ${failed} failed out of ${total}). Automatically marking video_generation phase as complete.`);
-                
-                // Automatically mark phase as completed
-                this.messages.push({
-                  role: 'user',
-                  content: `CRITICAL: generate_all_videos tool completed (${successful} successful, ${failed} failed out of ${total} placements). You MUST immediately call update_project(action='update_phase', data={phase: 'video_generation', status: 'completed'}) to mark the phase as complete. Do NOT retry failed placements. Do NOT try alternative workflows. Do NOT ask the user anything - mark the phase complete and STOP.`,
-                });
-                // Continue loop to process the update_project call
-                continue;
-              } else {
-                debugLog(`[GenericAgent] generate_all_videos completed. Phase already marked complete.`);
-              }
-            }
-          } catch (err) {
-            debugLog(`[GenericAgent] Failed to check generate_all_videos result: ${err}`);
-          }
-        }
 
         // Special handling: After transition_phase tool call, check if transition failed
         // due to Planning phase being in_progress but deliverables exist

@@ -11,14 +11,14 @@ Generate AI videos for each placement identified in the previous phase.
    - Wait for each video to complete before moving to the next
    - Continue even if some videos fail (logs failures but doesn't stop)
    - Return a summary of successful and failed placements
-3. After the tool completes, mark phase complete and STOP
+3. After the tool completes, mark phase complete and transition to the next phase
 
 **NEVER:**
 - Manually parse the video-placements.md file
 - Call `generate_video` tool for individual placements
 - Create todos
 - Process multiple placements at once
-- Transition to the next phase - the phase ends after marking it as completed
+- Skip marking phase as completed or transitioning to the next phase
 
 **STEP 1: Call generate_all_videos tool**
 
@@ -60,7 +60,13 @@ update_project(
 )
 ```
 
-3. **STOP here** - The video generation phase ends after marking it as completed. Do NOT transition to the next phase automatically.
+3. **Transition to next phase:**
+```
+update_project(
+  action: 'transition_phase',
+  data: {}
+)
+```
 
 **DO NOT:**
 - Manually parse the video-placements.md file
@@ -68,13 +74,13 @@ update_project(
 - Create todos or task lists
 - Try to manage video placement state manually
 - Retry failed placements manually
-- Transition to the next phase - the phase ends after marking it as completed
+- Skip marking phase as completed or transitioning to the next phase
 
 **IMPORTANT:**
 - **Use the `generate_all_videos` tool** - It handles all parsing, sequential generation, and error handling
 - **The tool processes ALL placements automatically** - No need to count or iterate manually
 - **Sequential execution is guaranteed** - The tool enforces one-at-a-time generation in code
 - **Failed placements are logged but don't stop the process** - The tool continues with remaining placements
-- **After the tool completes** - Mark phase complete and STOP. The phase ends here.
+- **After the tool completes** - Mark phase complete and transition to the next phase.
 - Generated videos are automatically stored in `agent/video-placements/` directory
 - Videos are automatically registered in the manifest
