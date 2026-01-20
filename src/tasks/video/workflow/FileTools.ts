@@ -37,6 +37,7 @@ import {
   updateContentStatus,
   updatePlanStage,
   checkPlanningDeliverables,
+  getCurrentProjectBasePath,
 } from './ProjectManager.js';
 import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus, InputType, ContentTypeName } from './types.js';
 import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase, INPUT_TYPE_CONFIGS } from './types.js';
@@ -415,13 +416,35 @@ Use this at the start of each turn to understand the project state and what acti
       };
     }
 
-    const project = loadProject();
+    let project = loadProject();
 
     if (!project) {
       return {
         status: 'error',
         error: 'Failed to load project file.',
       };
+    }
+
+    // CRITICAL: Auto-correct inputType if project has transcriptEntries but wrong inputType
+    if (project.transcriptEntries && project.transcriptEntries.length > 0) {
+      if (project.inputType !== 'youtube_srt' && project.inputType !== 'script') {
+        console.log(`[readProjectTool] Auto-correcting inputType from ${project.inputType} to youtube_srt (transcriptEntries exist)`);
+        const corrected = setProjectInputType('youtube_srt');
+        if (corrected) {
+          project = corrected;
+          // If transcript_input phase is already completed, transition to planning
+          const transcriptPhaseInfo = project.phases?.transcript_input;
+          if (transcriptPhaseInfo?.status === 'completed' && project.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+            // Transition to planning phase since transcript is already parsed
+            project.currentPhase = WorkflowPhase.PLANNING;
+            const planningPhaseKey = WorkflowPhase.PLANNING as keyof typeof project.phases;
+            if (project.phases[planningPhaseKey]) {
+              project.phases[planningPhaseKey].status = 'in_progress';
+            }
+            saveProject(project);
+          }
+        }
+      }
     }
 
     // Set phase context in phaseLogger for all subsequent logs
@@ -581,10 +604,13 @@ What story would you like to turn into a video?`,
         }
 
         case 'update_phase': {
-          const project = loadProject();
+          // Get basePath first to ensure consistent usage throughout
+          const basePath = getCurrentProjectBasePath();
+          let project = loadProject(basePath);
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
+
           // Accept both 'phase' and 'phase_name' for compatibility
           const phase = (data['phase'] || data['phase_name']) as keyof ProjectFile['phases'];
           const status = data['status'] as PhaseStatus;
@@ -593,10 +619,52 @@ What story would you like to turn into a video?`,
           }
           const phaseConfig = PHASE_CONFIGS[phase as WorkflowPhase];
           const phaseDisplayName = phaseConfig?.displayName || phase;
-          updatePhaseStatus(project, phase, status);
           
-          // Get project summary for context
-          const summary = getProjectSummary();
+          // Update phase status first - use getCurrentProjectBasePath to ensure correct project directory
+          updatePhaseStatus(project, phase, status, basePath);
+          
+          // Reload project to get updated state
+          project = loadProject(basePath);
+          if (!project) {
+            return { status: 'error', error: 'Failed to reload project after phase update' };
+          }
+
+          // CRITICAL: Auto-correct inputType if project has transcriptEntries but wrong inputType
+          if (project.transcriptEntries && project.transcriptEntries.length > 0) {
+            if (project.inputType !== 'youtube_srt' && project.inputType !== 'script') {
+              console.log(`[update_phase] Auto-correcting inputType from ${project.inputType} to youtube_srt (transcriptEntries exist)`);
+              const corrected = setProjectInputType('youtube_srt', basePath);
+              if (corrected) {
+                project = corrected;
+              }
+            }
+          }
+          
+          // If we just completed transcript_input in a YouTube workflow, auto-transition to planning
+          if (phase === 'transcript_input' && status === 'completed') {
+            const isYouTubeWorkflow = project.inputType === 'youtube_srt' || project.inputType === 'script';
+            if (isYouTubeWorkflow) {
+              // Check if we're still in transcript_input phase (should transition to planning)
+              if (project.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+                console.log(`[update_phase] Auto-transitioning from transcript_input to planning (YouTube workflow)`);
+                project.currentPhase = WorkflowPhase.PLANNING;
+                const planningPhaseKey = WorkflowPhase.PLANNING as keyof typeof project.phases;
+                if (project.phases[planningPhaseKey]) {
+                  project.phases[planningPhaseKey].status = 'in_progress';
+                }
+                saveProject(project, basePath);
+                // Reload to get updated state
+                project = loadProject(basePath);
+                if (!project) {
+                  return { status: 'error', error: 'Failed to reload project after phase transition' };
+                }
+              }
+            }
+          }
+          
+          // Get project summary for context (use fresh project state)
+          // Use getCurrentProjectBasePath() to ensure we're reading from the correct project directory
+          const summary = getProjectSummary(basePath);
           
           return { 
             status: 'success', 
@@ -694,14 +762,15 @@ What story would you like to turn into a video?`,
         case 'transition_phase': {
           const logger = getWorkflowLogger();
           const phaseLogger = getPhaseLogger();
-          const project = loadProject();
+          const basePath = getCurrentProjectBasePath();
+          const project = loadProject(basePath);
           if (!project) {
             return { status: 'error', error: 'No project found' };
           }
           const beforePhase = project.currentPhase;
           const beforeStatus = project.phases[beforePhase as keyof typeof project.phases]?.status;
 
-          const result = transitionToNextPhase(project);
+          const result = await transitionToNextPhase(project, basePath);
           logger.logPhaseTransition(
             beforePhase,
             result.project.currentPhase,
@@ -722,18 +791,18 @@ What story would you like to turn into a video?`,
           
           // Check if Planning phase deliverables exist but phase isn't completed
           let nextAction = result.transitioned
-            ? `IMPORTANT: You have transitioned to a new phase. Update your todo list (mark the previous phase complete, mark the new phase in_progress), then call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
-            : 'Phase transition not needed. Call read_project to check current state.';
-          
+            ? `CRITICAL: Phase transition successful. You are NOW in the ${newPhaseConfig?.displayName ?? result.project.currentPhase} phase (${result.project.currentPhase}). IGNORE any old messages about previous phases. You MUST immediately call read_project() to get the current phase instructions. Do NOT generate text responses - call the tool now.`
+            : `Current phase: ${newPhaseConfig?.displayName ?? project.currentPhase} (${project.currentPhase}). Continue working on this phase. If unsure, call read_project() to get current state.`;
+
           let reason = result.reason;
-          
+
           // Enhanced guidance for Planning phase when deliverables exist but phase isn't completed
           if (!result.transitioned && result.reason.includes('in progress')) {
             if (project.currentPhase === WorkflowPhase.PLANNING) {
-              const planningDeliverablesExist = checkPlanningDeliverables(project);
+              const planningDeliverablesExist = checkPlanningDeliverables(project, basePath);
               if (planningDeliverablesExist) {
-                nextAction = `Planning phase deliverables exist but phase is not marked as completed. First call update_project(action='update_phase', data={phase: 'planning', status: 'completed'}), then call transition_phase again.`;
-                reason = `Planning phase is in progress. Mark as completed first.`;
+                nextAction = `Planning phase work is complete. You MUST mark the phase as completed by calling update_project(action='update_phase', data={phase: 'planning', status: 'completed'}), then call transition_phase to move to the next phase. Do NOT generate text responses - call the tools now.`;
+                reason = `Planning phase work is complete. Ready to mark as completed and transition to next phase.`;
               }
             }
           }
@@ -748,6 +817,10 @@ What story would you like to turn into a video?`,
             previous_phase_status: beforeStatus,
             project_summary: summary,
             next_action: nextAction,
+            // Include explicit current phase context to override old conversation history
+            current_phase_context: result.transitioned 
+              ? `You have successfully transitioned from ${beforePhase} to ${result.project.currentPhase} (${newPhaseConfig?.displayName ?? result.project.currentPhase}). This is your CURRENT phase. Ignore any old messages about ${beforePhase} or other previous phases.`
+              : `You are currently in the ${project.currentPhase} phase (${newPhaseConfig?.displayName ?? project.currentPhase}).`,
             debug: {
               before_phase: beforePhase,
               before_status: beforeStatus,

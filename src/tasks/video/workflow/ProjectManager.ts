@@ -32,7 +32,6 @@ import {
   type TranscriptEntry,
   type ImagePlacement,
   WorkflowPhase,
-  PlannerStage,
   PHASE_CONFIGS,
   STYLE_CONFIGS,
   INPUT_TYPE_CONFIGS,
@@ -52,6 +51,7 @@ import {
   createDefaultSettingData,
   createDefaultSceneRef,
 } from './types.js';
+import { getPhaseConfig, getNextPhase, getStartPhase, getWorkflowPhases, isValidPhaseForWorkflow, isYouTubeWorkflow as isYouTubeWorkflowType } from './workflows/workflow-manager.js';
 import { generateProjectTitle, contextStore } from '../../../core/context/index.js';
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -404,26 +404,16 @@ const LEGACY_PHASES = new Set<WorkflowPhase>([
 ]);
 
 export function normalizeCurrentPhaseForInputType(project: ProjectFile): { phase: WorkflowPhase; changed: boolean } {
-  const inputTypeConfig = INPUT_TYPE_CONFIGS[project.inputType] ?? INPUT_TYPE_CONFIGS.idea;
+  // Use workflow manager to validate phase
   const currentPhase = project.currentPhase;
-  const invalidPhase = !PHASE_CONFIGS[currentPhase];
-  const legacyPhase = LEGACY_PHASES.has(currentPhase);
-
-  // For YouTube workflows, explicitly prevent PLOT or STORY phases
-  if (isYouTubeInputType(project.inputType)) {
-    if (currentPhase === 'plot' || currentPhase === 'story' || legacyPhase || invalidPhase) {
-      return { phase: inputTypeConfig.startPhase, changed: true };
-    }
+  const isValid = isValidPhaseForWorkflow(currentPhase, project.inputType);
+  
+  // If phase is invalid for this workflow, correct to start phase
+  if (!isValid) {
+    const startPhase = getStartPhase(project.inputType);
+    return { phase: startPhase, changed: true };
   }
-
-  if (isYouTubeInputType(project.inputType) && (legacyPhase || invalidPhase)) {
-    return { phase: inputTypeConfig.startPhase, changed: true };
-  }
-
-  if (invalidPhase) {
-    return { phase: inputTypeConfig.startPhase, changed: true };
-  }
-
+  
   return { phase: currentPhase, changed: false };
 }
 
@@ -492,6 +482,9 @@ export function createProject(
   console.log(`[ProjectManager] Detected inputType: ${detectedInputType} for project creation`);
   const inputTypeConfig = INPUT_TYPE_CONFIGS[detectedInputType];
 
+  // Use workflow manager to get start phase (ensures correct workflow is used)
+  const startPhase = getStartPhase(detectedInputType);
+  
   // Default to detected input type; agent may update if it detects a full story/script
   const project: ProjectFile = {
     version: '2.0',
@@ -502,7 +495,7 @@ export function createProject(
     inputType: detectedInputType,
     createdAt: now,
     updatedAt: now,
-    currentPhase: inputTypeConfig.startPhase,
+    currentPhase: startPhase,
     // Project-level master plan - one plan for all phases
     plan: {
       planId,
@@ -583,10 +576,25 @@ export function createProject(
     imagePlacements: [] as ImagePlacement[],
   };
 
+  // Mark phases as skipped based on input type
+  // For YouTube workflows, legacy phases (PLOT, STORY, etc.) are automatically skipped
+  // This is handled by INPUT_TYPE_CONFIGS.skipPhases, but we also use workflow manager
+  // to ensure consistency
+  const workflowPhases = getWorkflowPhases(detectedInputType);
+  
+  // Mark all phases not in the workflow as skipped
+  for (const phaseKey of Object.keys(project.phases) as WorkflowPhase[]) {
+    if (!isValidPhaseForWorkflow(phaseKey as WorkflowPhase, detectedInputType)) {
+      project.phases[phaseKey as keyof typeof project.phases].status = 'skipped';
+      project.phases[phaseKey as keyof typeof project.phases].completedAt = now;
+    }
+  }
+  
+  // Also apply skipPhases from INPUT_TYPE_CONFIGS for backward compatibility
   if (inputTypeConfig.skipPhases.length > 0) {
     for (const skipPhase of inputTypeConfig.skipPhases) {
       const phaseKey = skipPhase as keyof typeof project.phases;
-      if (project.phases[phaseKey]) {
+      if (project.phases[phaseKey] && project.phases[phaseKey].status !== 'skipped') {
         project.phases[phaseKey].status = 'skipped';
         project.phases[phaseKey].completedAt = now;
       }
@@ -607,7 +615,7 @@ export function createProject(
  */
 export function setProjectInputType(
   inputType: InputType,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -655,7 +663,26 @@ export function setProjectInputType(
         project.phases[phaseKey].completedAt = now;
       }
     }
-    project.currentPhase = inputTypeConfig.startPhase;
+    
+    // For youtube_srt, check if transcript_input is already completed
+    if (inputType === 'youtube_srt') {
+      const transcriptPhaseInfo = project.phases?.transcript_input;
+      if (transcriptPhaseInfo && transcriptPhaseInfo.status === 'completed' || 
+          (project.transcriptEntries && project.transcriptEntries.length > 0)) {
+        // Transcript already parsed - go to planning phase
+        project.currentPhase = WorkflowPhase.PLANNING;
+        const planningPhaseKey = WorkflowPhase.PLANNING as keyof typeof project.phases;
+        if (project.phases[planningPhaseKey]) {
+          project.phases[planningPhaseKey].status = 'in_progress';
+        }
+      } else {
+        // Start with transcript_input phase
+        project.currentPhase = inputTypeConfig.startPhase;
+      }
+    } else {
+      // For script type, start with planning (transcript_input is skipped)
+      project.currentPhase = inputTypeConfig.startPhase;
+    }
   }
 
   saveProject(project, basePath);
@@ -1380,9 +1407,14 @@ export function updatePhaseStatus(
   project: ProjectFile,
   phase: keyof ProjectFile['phases'],
   status: PhaseStatus,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   const phaseInfo = project.phases[phase];
+  if (!phaseInfo) {
+    console.warn(`[updatePhaseStatus] Phase ${phase} not found in project phases`);
+    return project;
+  }
+  
   phaseInfo.status = status;
 
   if (status === 'completed') {
@@ -1438,13 +1470,36 @@ export function updatePlannerStage(
  * Transition to the next phase based on current state.
  * Requires project-level plan to be approved before phases can progress.
  */
-export function transitionToNextPhase(
+export async function transitionToNextPhase(
   project: ProjectFile,
-  basePath: string = process.cwd()
-): { project: ProjectFile; transitioned: boolean; reason: string } {
-  const isYouTubeWorkflow = isYouTubeInputType(project.inputType);
+  basePath: string = getCurrentProjectBasePath()
+): Promise<{ project: ProjectFile; transitioned: boolean; reason: string }> {
+  // CRITICAL: Auto-correct inputType if project has transcriptEntries but wrong inputType
+  if (project.transcriptEntries && project.transcriptEntries.length > 0) {
+    if (project.inputType !== 'youtube_srt' && project.inputType !== 'script') {
+      console.log(`[ProjectManager] Auto-correcting inputType from ${project.inputType} to youtube_srt (transcriptEntries exist)`);
+      const corrected = setProjectInputType('youtube_srt', basePath);
+      if (corrected) {
+        project = corrected;
+        // If transcript_input phase is already completed, transition to planning
+        const transcriptPhaseInfo = project.phases?.transcript_input;
+        if (transcriptPhaseInfo && transcriptPhaseInfo.status === 'completed' && project.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+          // Transition to planning phase since transcript is already parsed
+          project.currentPhase = WorkflowPhase.PLANNING;
+          const planningPhaseKey = WorkflowPhase.PLANNING as keyof typeof project.phases;
+          if (project.phases[planningPhaseKey]) {
+            project.phases[planningPhaseKey].status = 'in_progress';
+          }
+          saveProject(project, basePath);
+        }
+      }
+    }
+  }
+
+  const isYouTubeWorkflow = isYouTubeWorkflowType(project.inputType);
 
   // Check if master plan is approved (legacy workflow only)
+  // Note: Currently only YouTube workflow is active, so this check is effectively disabled
   if (!isYouTubeWorkflow && project.plan.stage !== PlannerStage.COMPLETE) {
     return {
       project,
@@ -1453,26 +1508,10 @@ export function transitionToNextPhase(
     };
   }
 
-  const result = determineNextPhase(project);
+  const result = await determineNextPhase(project);
 
-  // Safeguard: Prevent YouTube workflows from transitioning to PLOT or STORY phases
-  if (isYouTubeWorkflow && (result.nextPhase === WorkflowPhase.PLOT || result.nextPhase === WorkflowPhase.STORY)) {
-    // For YouTube workflows, these phases should be skipped - force to correct next phase
-    const inputTypeConfig = INPUT_TYPE_CONFIGS[project.inputType];
-    const correctNextPhase = inputTypeConfig.startPhase; // Should be TRANSCRIPT_INPUT
-    console.warn(`[ProjectManager] Blocked transition to ${result.nextPhase} for YouTube workflow. Correcting to ${correctNextPhase}`);
-    project.currentPhase = correctNextPhase;
-    const phaseKey = correctNextPhase as keyof typeof project.phases;
-    if (project.phases[phaseKey]) {
-      project.phases[phaseKey].status = 'in_progress';
-    }
-    saveProject(project, basePath);
-    return {
-      project,
-      transitioned: true,
-      reason: `Blocked invalid transition to ${result.nextPhase} for YouTube workflow. Corrected to ${correctNextPhase}`
-    };
-  }
+  // No safeguard needed - workflow manager ensures YouTube workflows can never
+  // transition to PLOT/STORY phases since they're not in the YouTube workflow
 
   if (result.nextPhase !== project.currentPhase) {
     project.currentPhase = result.nextPhase;
@@ -1510,7 +1549,7 @@ export function planFileHasContent(planFile: string, basePath: string = process.
  * Check if Planning phase deliverables exist (content plan and image placements).
  * Used to determine if Planning phase can be marked as completed.
  */
-export function checkPlanningDeliverables(project: ProjectFile, basePath: string = process.cwd()): boolean {
+export function checkPlanningDeliverables(project: ProjectFile, basePath: string = getCurrentProjectBasePath()): boolean {
   const contentPlanPath = join(getProjectDir(basePath), 'agent', 'plans', 'content-plan.md');
   const imagePlacementsPath = join(getProjectDir(basePath), 'agent', 'content', 'image-placements.md');
   
@@ -2208,16 +2247,39 @@ Assets: ${project.assets.length}${itemProgress}${sceneLimitWarning}
  * Planning is done at project level - all phases execute based on the approved master plan.
  */
 export function getStateTransitionPrompt(basePath: string = process.cwd()): string {
-  const project = loadProject(basePath);
+  let project = loadProject(basePath);
 
   if (!project) {
     return 'No project exists. Create a new project first.';
   }
 
+  // CRITICAL: Auto-correct inputType if project has transcriptEntries but wrong inputType
+  if (project.transcriptEntries && project.transcriptEntries.length > 0) {
+    if (project.inputType !== 'youtube_srt' && project.inputType !== 'script') {
+      console.log(`[ProjectManager] Auto-correcting inputType from ${project.inputType} to youtube_srt (transcriptEntries exist)`);
+      const corrected = setProjectInputType('youtube_srt', basePath);
+      if (corrected) {
+        project = corrected;
+        // If transcript_input phase is already completed, transition to planning
+        const transcriptPhaseInfo = project.phases?.transcript_input;
+        if (transcriptPhaseInfo && transcriptPhaseInfo.status === 'completed' && project.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+          // Transition to planning phase since transcript is already parsed
+          project.currentPhase = WorkflowPhase.PLANNING;
+          const planningPhaseKey = WorkflowPhase.PLANNING as keyof typeof project.phases;
+          if (project.phases[planningPhaseKey]) {
+            project.phases[planningPhaseKey].status = 'in_progress';
+          }
+          saveProject(project, basePath);
+        }
+      }
+    }
+  }
+
   const currentPhase = project.currentPhase;
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
+  // Use workflow manager to get phase config (ensures correct workflow is used)
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
-  const isYouTubeWorkflow = isYouTubeInputType(project.inputType);
+  const isYouTubeWorkflow = isYouTubeWorkflowType(project.inputType);
   const masterPlanStage = project.plan?.stage ?? 'NONE';
   const masterPlanExists = project.plan?.planFile ? planFileHasContent(project.plan.planFile, basePath) : false;
 
@@ -2285,9 +2347,11 @@ The Image Placement phase is complete.
 2. Only if they approve, call update_project with action "transition_phase".
 `;
         } else {
+          const nextPhase = getNextPhase(currentPhase, project.inputType);
+          const nextPhaseConfig = nextPhase ? (getPhaseConfig(nextPhase, project.inputType) || (PHASE_CONFIGS[nextPhase] as PhaseConfig | undefined)) : null;
           instruction += `
 The ${phaseConfig.displayName} phase is complete.
-1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+1. Use transition_phase to move to the next phase: ${nextPhaseConfig ? nextPhaseConfig.displayName : 'DONE'}
 `;
         }
       } else {
@@ -2387,9 +2451,11 @@ Refine the master plan based on user feedback.
     const phaseStatus = phaseInfo?.status ?? 'pending';
 
     if (phaseStatus === 'completed') {
+      const nextPhase = getNextPhase(currentPhase, project.inputType);
+      const nextPhaseConfig = nextPhase ? (getPhaseConfig(nextPhase, project.inputType) || (PHASE_CONFIGS[nextPhase] as PhaseConfig | undefined)) : null;
       instruction += `
 The ${phaseConfig.displayName} phase is complete.
-1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+1. Use transition_phase to move to the next phase: ${nextPhaseConfig ? nextPhaseConfig.displayName : 'DONE'}
 `;
     } else {
       // Check if content exists for content phases
@@ -2657,7 +2723,11 @@ ${allItems
 ])
 \`\`\`
 
-Then mark this phase as complete and move to the next phase: **${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}**
+Then mark this phase as complete and move to the next phase: **${(() => {
+  const nextPhase = getNextPhase(project.currentPhase, project.inputType);
+  const nextPhaseConfig = nextPhase ? (getPhaseConfig(nextPhase, project.inputType) || (PHASE_CONFIGS[nextPhase] as PhaseConfig | undefined)) : null;
+  return nextPhaseConfig ? nextPhaseConfig.displayName : 'DONE';
+})()}**
 `;
   }
 

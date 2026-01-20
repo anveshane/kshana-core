@@ -65,7 +65,7 @@ export class WebSocketHandler {
    * @param socket - The WebSocket connection
    * @param request - The Fastify request object (for accessing query parameters)
    */
-  handleConnection(socket: WebSocket, request?: { query?: { project_dir?: string } }): void {
+  async handleConnection(socket: WebSocket, request?: { query?: { project_dir?: string } }): Promise<void> {
     // Extract project_dir from query parameters if available
     const projectDir = request?.query?.project_dir;
     
@@ -77,7 +77,7 @@ export class WebSocketHandler {
     });
     
     // Create a new session for this connection with project directory
-    const session = this.conversationManager.createSession(projectDir);
+    const session = await this.conversationManager.createSession(projectDir);
     const sessionId = session.id;
 
     const connectionState: ConnectionState = {
@@ -321,6 +321,43 @@ export class WebSocketHandler {
         this.sendMessage(socket, createServerMessage<AgentQuestionData>('agent_question', sid, {
           question,
           toolCallId: isConfirmation ? 'confirmation' : '',
+        }));
+      },
+
+      onAgentStatus: (sid, status, agentName) => {
+        // Map agent status to status message format
+        let statusType: StatusData['status'];
+        let message: string;
+        
+        switch (status) {
+          case 'started':
+          case 'thinking':
+            statusType = 'busy';
+            message = status === 'started' ? 'Starting...' : 'Thinking...';
+            break;
+          case 'waiting':
+          case 'waiting_for_user':
+            statusType = 'ready';
+            message = 'Waiting for input...';
+            break;
+          case 'completed':
+            statusType = 'completed';
+            message = 'Task completed';
+            break;
+          case 'error':
+          case 'interrupted':
+            statusType = 'error';
+            message = status === 'interrupted' ? 'Interrupted' : 'Error occurred';
+            break;
+          default:
+            statusType = 'busy';
+            message = 'Processing...';
+        }
+        
+        this.sendMessage(socket, createServerMessage<StatusData>('status', sid, {
+          status: statusType,
+          message,
+          agentName, // Include agent name if available
         }));
       },
     };

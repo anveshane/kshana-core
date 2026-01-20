@@ -658,8 +658,14 @@ export interface PhaseConfig {
 }
 
 /**
- * Phase configurations map for 8-phase workflow.
- * Note: Planning is done at project level via ProjectPlan, not per-phase.
+ * Phase configurations map.
+ * 
+ * NOTE: This is kept for backward compatibility. New code should use
+ * workflow manager (getPhaseConfig from workflows/workflow-manager.ts)
+ * which automatically selects the correct workflow based on input type.
+ * 
+ * Currently, this only contains YouTube workflow phases since that's the
+ * only active workflow. Legacy phases are not included.
  */
 export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
   [WorkflowPhase.TRANSCRIPT_INPUT]: {
@@ -984,86 +990,59 @@ export interface StateTransitionResult {
 
 /**
  * Determine the next state based on current project state.
- * Respects input type to ensure YouTube workflow phases are used for transcript input.
+ * Uses workflow manager to get the correct next phase based on input type.
+ * 
+ * NOTE: This function now uses the workflow manager, which ensures
+ * YouTube workflows can never transition to legacy phases (PLOT/STORY).
+ * 
+ * Uses dynamic import to avoid circular dependency (workflow-manager imports types).
  */
-export function determineNextPhase(project: ProjectFile): StateTransitionResult {
-  const isYouTubeWorkflow = project.inputType === 'youtube_srt' || project.inputType === 'script';
-  
-  // Safeguard: For YouTube workflows, never allow PLOT or STORY phases
-  if (isYouTubeWorkflow && (project.currentPhase === WorkflowPhase.PLOT || project.currentPhase === WorkflowPhase.STORY)) {
-    // Force to TRANSCRIPT_INPUT if somehow in wrong phase
-    const inputTypeConfig = INPUT_TYPE_CONFIGS[project.inputType];
-    return {
-      nextPhase: inputTypeConfig.startPhase, // Should be TRANSCRIPT_INPUT
-      reason: `Invalid phase ${project.currentPhase} for YouTube workflow. Correcting to ${inputTypeConfig.startPhase}`,
-      isAutomatic: true,
-    };
-  }
+export async function determineNextPhase(project: ProjectFile): Promise<StateTransitionResult> {
+  // Dynamic import to avoid circular dependency
+  const { getNextPhase, getPhaseConfig } = await import('./workflows/workflow-manager.js');
   
   const currentPhase = project.currentPhase;
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+  
+  // Defensive check: if phaseInfo doesn't exist, return no transition
+  if (!phaseInfo) {
+    return {
+      nextPhase: currentPhase,
+      reason: `Phase ${currentPhase} not found in project phases`,
+      isAutomatic: false,
+    };
+  }
+  
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
 
-  // If current phase is completed, move to next
-  if (phaseInfo?.status === 'completed') {
-    const config = PHASE_CONFIGS[currentPhase];
-    if (config.nextPhase) {
-      // For YouTube workflow, ensure we don't transition to legacy phases
-      let nextPhase = config.nextPhase;
-      if (isYouTubeWorkflow) {
-        // If next phase is a legacy phase, find the next YouTube phase instead
-        const legacyPhases = [
-          WorkflowPhase.PLOT,
-          WorkflowPhase.STORY,
-          WorkflowPhase.CHARACTERS_SETTINGS,
-          WorkflowPhase.SCENES,
-          WorkflowPhase.CHARACTER_SETTING_IMAGES,
-          WorkflowPhase.SCENE_IMAGES,
-          WorkflowPhase.VIDEO,
-        ];
-        if (legacyPhases.includes(nextPhase)) {
-          // Skip to VIDEO_COMBINE if we're past VIDEO_REPLACEMENT
-          if (currentPhase === WorkflowPhase.VIDEO_REPLACEMENT) {
-            nextPhase = WorkflowPhase.VIDEO_COMBINE;
-          } else {
-            // Find next YouTube phase in order
-            const youtubePhases = [
-              WorkflowPhase.TRANSCRIPT_INPUT,
-              WorkflowPhase.PLANNING,
-              WorkflowPhase.IMAGE_PLACEMENT,
-              WorkflowPhase.IMAGE_GENERATION,
-              WorkflowPhase.VIDEO_PLACEMENT,
-              WorkflowPhase.VIDEO_GENERATION,
-              WorkflowPhase.VIDEO_REPLACEMENT,
-              WorkflowPhase.VIDEO_COMBINE,
-              WorkflowPhase.COMPLETED,
-            ];
-            const currentIndex = youtubePhases.indexOf(currentPhase);
-            if (currentIndex >= 0 && currentIndex < youtubePhases.length - 1) {
-              const nextPhaseFromArray = youtubePhases[currentIndex + 1];
-              if (nextPhaseFromArray) {
-                nextPhase = nextPhaseFromArray;
-              }
-            }
-          }
-        }
-      }
-      
-      // Ensure nextPhase is defined before using it
-      if (nextPhase) {
+  // If current phase is completed, move to next using workflow manager
+  if (phaseInfo.status === 'completed') {
+    const nextPhase = getNextPhase(currentPhase, project.inputType);
+    
+    if (nextPhase) {
+      const nextPhaseConfig = getPhaseConfig(nextPhase, project.inputType) || (PHASE_CONFIGS[nextPhase] as PhaseConfig | undefined);
+      if (nextPhaseConfig) {
         return {
           nextPhase,
-          reason: `${config.displayName} completed, moving to ${PHASE_CONFIGS[nextPhase].displayName}`,
+          reason: `${phaseConfig.displayName} completed, moving to ${nextPhaseConfig.displayName}`,
           isAutomatic: true,
         };
       }
     }
+    
+    // No next phase - workflow complete
+    return {
+      nextPhase: currentPhase,
+      reason: 'Workflow complete',
+      isAutomatic: false,
+    };
   }
 
   // If current phase is in progress, stay in it
   if (phaseInfo?.status === 'in_progress') {
     return {
       nextPhase: currentPhase,
-      reason: `${PHASE_CONFIGS[currentPhase].displayName} is in progress`,
+      reason: `Continue working on ${phaseConfig.displayName}. Phase is in progress.`,
       isAutomatic: false,
     };
   }
@@ -1072,7 +1051,7 @@ export function determineNextPhase(project: ProjectFile): StateTransitionResult 
   if (phaseInfo?.status === 'pending') {
     return {
       nextPhase: currentPhase,
-      reason: `Starting ${PHASE_CONFIGS[currentPhase].displayName}`,
+      reason: `Starting ${phaseConfig.displayName}`,
       isAutomatic: true,
     };
   }

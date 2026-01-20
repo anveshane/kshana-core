@@ -26,7 +26,7 @@ export interface ConversationEvents {
   onTodoUpdate?: (sessionId: string, todos: ExpandableTodoItem[]) => void;
   onAgentText?: (sessionId: string, text: string, isFinal: boolean) => void;
   onQuestion?: (sessionId: string, question: string, isConfirmation: boolean) => void;
-  onAgentStatus?: (sessionId: string, status: string) => void;
+  onAgentStatus?: (sessionId: string, status: string, agentName?: string) => void;
 }
 
 interface ActiveSession {
@@ -34,6 +34,7 @@ interface ActiveSession {
   agent: GenericAgent;
   abortController?: AbortController;
   initialized?: boolean;
+  basePath?: string; // Store basePath for video tasks to save original input
 }
 
 export class ConversationManager {
@@ -58,7 +59,7 @@ export class ConversationManager {
    * Create a new conversation session.
    * @param basePath - Optional base path for the project directory (used for video tasks)
    */
-  createSession(basePath?: string): SessionState {
+  async createSession(basePath?: string): Promise<SessionState> {
     const sessionId = uuidv4();
     const now = Date.now();
 
@@ -76,7 +77,7 @@ export class ConversationManager {
       // For video tasks, use createWorkflowVideoAgent to ensure proper project path handling
       if (basePath) {
         console.log('[ConversationManager] Using createWorkflowVideoAgent with basePath:', basePath);
-        agent = createWorkflowVideoAgent({
+        agent = await createWorkflowVideoAgent({
           llmConfig: this.llmConfig,
           maxIterations: this.maxIterations,
           originalInput: '',
@@ -110,7 +111,7 @@ export class ConversationManager {
       taskHistory: [],
     };
 
-    this.sessions.set(sessionId, { state, agent });
+    this.sessions.set(sessionId, { state, agent, basePath });
 
     return state;
   }
@@ -151,6 +152,32 @@ export class ConversationManager {
     if (!session.initialized) {
       await session.agent.initialize();
       session.initialized = true;
+    }
+
+    // CRITICAL: For video tasks, save the task as original input if it's empty
+    // This ensures desktop saves the user's first message to agent/original_input.md
+    if (this.taskType === 'video') {
+      try {
+        const { loadProject, getOriginalInput, writeProjectFile, getCurrentProjectBasePath } = await import('../tasks/video/workflow/ProjectManager.js');
+        // Use session.basePath if available, otherwise use getCurrentProjectBasePath()
+        const basePath = session.basePath || getCurrentProjectBasePath();
+        const project = loadProject(basePath);
+        if (project) {
+          const existingOriginalInput = getOriginalInput(project, basePath);
+          // If original input is empty or doesn't exist, save the task
+          if (!existingOriginalInput || existingOriginalInput.trim().length === 0) {
+            writeProjectFile('agent/original_input.md', task, basePath);
+            console.log(`[ConversationManager] Saved task as original input to agent/original_input.md (basePath: ${basePath})`);
+          }
+        } else {
+          // Project doesn't exist yet - save original input anyway (will be used when project is created)
+          writeProjectFile('agent/original_input.md', task, basePath);
+          console.log(`[ConversationManager] Saved task as original input to agent/original_input.md (project doesn't exist yet, basePath: ${basePath})`);
+        }
+      } catch (error) {
+        console.error('[ConversationManager] Failed to save original input:', error);
+        // Don't fail the task if saving original input fails
+      }
     }
 
     // Update session state
@@ -315,7 +342,7 @@ export class ConversationManager {
 
     if (events.onAgentStatus) {
       agent.on('agent_status', (data) => {
-        events.onAgentStatus!(sessionId, data.status);
+        events.onAgentStatus!(sessionId, data.status, data.agentName);
       });
     }
 

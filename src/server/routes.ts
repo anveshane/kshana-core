@@ -84,7 +84,7 @@ export async function registerRoutes(
       const { task } = request.body;
 
       // Create a temporary session
-      const session = conversationManager.createSession();
+      const session = await conversationManager.createSession();
 
       try {
         const result = await conversationManager.runTask(session.id, task);
@@ -167,7 +167,7 @@ export async function registerRoutes(
   app.get(
     `${apiPrefix}/ws/chat`,
     { websocket: true },
-    (socket: WebSocket, request: FastifyRequest) => {
+    async (socket: WebSocket, request: FastifyRequest) => {
       // Extract query parameters from the request URL
       console.log('[routes] WebSocket connection request:', {
         url: request.url,
@@ -176,7 +176,7 @@ export async function registerRoutes(
       });
       const query = request.query as { project_dir?: string };
       console.log('[routes] Extracted query:', query);
-      wsHandler.handleConnection(socket, { query });
+      await wsHandler.handleConnection(socket, { query });
     }
   );
 

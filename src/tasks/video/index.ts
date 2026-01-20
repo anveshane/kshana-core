@@ -363,7 +363,7 @@ export function loadProjectFilesAsContexts(basePath: string = process.cwd()): st
  * @param config.basePath - Base path for the project. In CLI context, defaults to CLI's own directory.
  *                          In Desktop context, should be the user's project workspace.
  */
-export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): GenericAgent {
+export async function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Promise<GenericAgent> {
   const {
     llmConfig,
     maxIterations = 100,
@@ -378,7 +378,10 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
   // Initialize or load project
   const project = getOrCreateProject(originalInput, 'cinematic_realism', basePath);
   const currentPhase = getCurrentPhase(project);
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
+  
+  // Use workflow manager to get phase config (ensures correct workflow is used)
+  const { getPhaseConfig } = await import('./workflow/workflows/workflow-manager.js');
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
 
   // Reload context store for this project to ensure isolation
   // This must be done BEFORE loading project files into context store
@@ -395,7 +398,7 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
   const llm = new LLMClient(llmConfig);
 
   // Build custom prompt with workflow context (include loaded contexts info)
-  const customPrompt = buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
+  const customPrompt = await buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
 
   // Create the generic agent with workflow customization
   const agent = new GenericAgent(registry.getAll(), llm, {
@@ -433,12 +436,14 @@ const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
  * Build the custom prompt for the workflow agent based on current phase.
  * Loads prompts from markdown files for easier maintenance.
  */
-export function buildWorkflowAgentPrompt(
+export async function buildWorkflowAgentPrompt(
   project: ReturnType<typeof loadProject>,
   currentPhase: WorkflowPhase,
   loadedContexts: string[] = []
-): string {
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
+): Promise<string> {
+  // Use workflow manager to get phase config
+  const { getPhaseConfig } = await import('./workflow/workflows/workflow-manager.js');
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
 
   // Build loaded contexts section
   let loadedContextsSection = 'No existing project files loaded yet.';

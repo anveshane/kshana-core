@@ -33,6 +33,7 @@ import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, 
 import { CONTENT_TYPE_CONTEXTS, CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
+import { writeProjectFile } from '../../tasks/video/workflow/ProjectManager.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -4026,18 +4027,8 @@ Respond in JSON format:
       }
 
       try {
-        const projectDir = path.join(process.cwd(), '.kshana');
-        const filePath = path.join(projectDir, normalizedPath);
-        debugLog(`[GenericAgent] Attempting to save content plan to: ${filePath} (normalized from: ${outputFileToUse})`);
-
-        // Ensure parent directory exists
-        const parentDir = path.dirname(filePath);
-        if (!fs.existsSync(parentDir)) {
-          debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
-          fs.mkdirSync(parentDir, { recursive: true });
-        }
-
-        fs.writeFileSync(filePath, output, 'utf-8');
+        // Use writeProjectFile from ProjectManager to ensure correct base path (handles desktop vs CLI)
+        writeProjectFile(normalizedPath, output);
         fileSaved = true;
         debugLog(`[GenericAgent] Successfully saved content plan to ${normalizedPath}`);
 

@@ -396,13 +396,25 @@ export const parseSrtTool: ToolDefinition = createTool(
 
     const totalDuration = entries.length > 0 ? entries[entries.length - 1]?.endTime ?? 0 : 0;
 
+    // CRITICAL: Save original input text to agent/original_input.md if it doesn't exist or is empty
+    // Do this BEFORE loading project, so it works even if project doesn't exist yet (desktop scenario)
+    const originalInputPath = 'agent/original_input.md';
+    const existingOriginalInput = readProjectFile(originalInputPath);
+    if (!existingOriginalInput || existingOriginalInput.trim().length === 0) {
+      // Save the original input text (before parsing)
+      writeProjectFile(originalInputPath, inputText);
+      console.log(`[DEBUG] Saved original input to ${originalInputPath}`);
+    } else {
+      console.log(`[DEBUG] Original input already exists at ${originalInputPath}, preserving existing content`);
+    }
+
     const project = loadProject();
     if (project) {
       project.transcriptEntries = entries;
       saveProject(project);
       console.log('[DEBUG] Saved entries to project');
     } else {
-      console.log('[DEBUG] Failed to load project');
+      console.log('[DEBUG] Failed to load project - original input and transcript still saved');
     }
 
     const transcriptPath = 'agent/content/transcript.md';
