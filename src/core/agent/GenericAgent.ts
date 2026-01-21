@@ -33,7 +33,9 @@ import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, 
 import { CONTENT_TYPE_CONTEXTS, CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
-import { writeProjectFile, getCurrentProjectBasePath } from '../../tasks/video/workflow/ProjectManager.js';
+import { writeProjectFile, getCurrentProjectBasePath, loadProject } from '../../tasks/video/workflow/ProjectManager.js';
+import { WorkflowPhase } from '../../tasks/video/workflow/types.js';
+import { isYouTubeWorkflow } from '../../tasks/video/workflow/workflows/workflow-manager.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -126,6 +128,11 @@ export class GenericAgent extends TypedEventEmitter {
   private static readonly LOOP_DETECTION_WINDOW = 6;
   private static readonly LOOP_THRESHOLD = 3; // Same tool called 3+ times in window
   private static readonly MAX_CONSECUTIVE_LOOP_WARNINGS = 3; // Force stop after this many warnings
+
+  // Circuit breaker for transition_phase retry loop
+  private consecutiveNoToolCallAttempts = 0;
+  private lastPromptedAction: string | null = null;
+  private static readonly MAX_TRANSITION_RETRIES = 2; // Force transition after 2 failed attempts
 
   // Context window tracking
   private tokenUsage = {
@@ -882,11 +889,67 @@ export class GenericAgent extends TypedEventEmitter {
 
           // If transcript is already parsed or phase is completed, prompt to transition phase
           if (transcriptAlreadyParsed || phaseAlreadyCompleted) {
+            // Circuit breaker: If we've already prompted for transition_phase multiple times, force it
+            const isTransitionAction = phaseAlreadyCompleted;
+            if (isTransitionAction && this.lastPromptedAction === 'transition_phase') {
+              this.consecutiveNoToolCallAttempts++;
+            } else {
+              // Reset counter if this is a different action
+              this.consecutiveNoToolCallAttempts = 1;
+              this.lastPromptedAction = isTransitionAction ? 'transition_phase' : 'complete_and_transition';
+            }
+
+            // Force transition if we've exceeded retry limit
+            if (phaseAlreadyCompleted && this.consecutiveNoToolCallAttempts > GenericAgent.MAX_TRANSITION_RETRIES) {
+              debugLog(`[GenericAgent] Circuit breaker triggered: Forcing transition_phase after ${this.consecutiveNoToolCallAttempts} failed attempts`);
+              try {
+                const { transitionToNextPhase } = await import('../../tasks/video/workflow/ProjectManager.js');
+                const basePath = getCurrentProjectBasePath();
+                const project = loadProject(basePath);
+                if (project) {
+                  const oldPhase = project.currentPhase;
+                  const transitionResult = await transitionToNextPhase(project, basePath);
+                  if (transitionResult.transitioned) {
+                    const newPhase = transitionResult.project.currentPhase;
+                    debugLog(`[GenericAgent] Circuit breaker: Successfully forced phase transition from ${oldPhase} to ${newPhase}`);
+                    phaseLogger.phaseTransition(oldPhase, newPhase, `Circuit breaker: Auto-transitioned after ${this.consecutiveNoToolCallAttempts} retry attempts`);
+                    // Reset counters
+                    this.consecutiveNoToolCallAttempts = 0;
+                    this.lastPromptedAction = null;
+                    // Break out of the loop to continue with new phase
+                    break;
+                  } else {
+                    debugLog(`[GenericAgent] Circuit breaker: Transition failed: ${transitionResult.reason}`);
+                    // Fall through to normal prompt
+                  }
+                } else {
+                  debugLog(`[GenericAgent] Circuit breaker: No project found`);
+                  // Fall through to normal prompt
+                }
+              } catch (err) {
+                debugLog(`[GenericAgent] Circuit breaker: Error forcing transition: ${err}`);
+                // Fall through to normal prompt
+              }
+            }
+
             if (phaseAlreadyCompleted) {
-              debugLog(`[GenericAgent] TRANSCRIPT_INPUT phase already completed. Prompting to transition phase.`);
+              debugLog(`[GenericAgent] TRANSCRIPT_INPUT phase already completed. Prompting to transition phase (attempt ${this.consecutiveNoToolCallAttempts}).`);
               this.messages.push({
                 role: 'user',
-                content: `The TRANSCRIPT_INPUT phase is already completed. You MUST call update_project with action='transition_phase' to move to the next phase (Planning). Do NOT re-parse the transcript.`,
+                content: `CRITICAL INSTRUCTION: The TRANSCRIPT_INPUT phase is COMPLETED.
+
+You MUST execute this EXACT tool call RIGHT NOW:
+
+Tool: update_project
+Arguments: {"action": "transition_phase", "data": {}}
+
+DO NOT:
+- Write explanatory text
+- Say you are blocked
+- Ask questions
+- Generate any text response
+
+ONLY: Execute the update_project tool call with action="transition_phase" immediately.`,
               });
             } else {
               debugLog(`[GenericAgent] Transcript already parsed but phase not marked complete. Prompting to complete phase and transition.`);
@@ -962,6 +1025,12 @@ export class GenericAgent extends TypedEventEmitter {
 
         // No pending work or reached max iterations - we're done
         break;
+      }
+
+      // Reset circuit breaker counters when tool calls are made
+      if (response.toolCalls.length > 0) {
+        this.consecutiveNoToolCallAttempts = 0;
+        this.lastPromptedAction = null;
       }
 
       // Execute tool calls
@@ -2253,11 +2322,12 @@ export class GenericAgent extends TypedEventEmitter {
   } | null = null;
 
   // State for dispatch_video_agent sub-agent (video generation)
+  // Note: sceneImageArtifactId is optional for YouTube workflow (VIDEO_GENERATION phase)
   private videoGenState: {
     active: boolean;
     task: string;
     sceneNumber: number;
-    sceneImageArtifactId: string;
+    sceneImageArtifactId: string | undefined; // Optional for YouTube workflow
     motionDescription?: string;
     context?: string;
     messages: Message[];
@@ -4980,22 +5050,43 @@ Respond in JSON format:
     const contextRefs = args['context_refs'] as string[] | undefined;
     const duration = (args['duration'] as number) ?? 4;
 
-    // Validate required parameters
-    if (!sceneImageArtifactId) {
-      return { error: 'scene_image_artifact_id is required for video generation' };
-    }
-
     if (!task) {
       this.currentMode = 'orchestrator';
       return { error: 'No task provided for dispatch_video_agent' };
     }
 
-    // scene_image_artifact_id is optional for stitching operations
-    // But required for single scene video generation
+    // Check if we're in YouTube workflow (VIDEO_GENERATION phase) or legacy workflow (VIDEO phase)
+    // In YouTube workflow, scene_image_artifact_id is NOT required (videos are generated from text prompts)
+    // In legacy workflow, scene_image_artifact_id IS required (videos are generated from scene images)
+    let requiresSceneImage = true;
+    try {
+      const project = loadProject();
+      if (project) {
+        const isYouTube = isYouTubeWorkflow(project.inputType);
+        const isVideoGenerationPhase = project.currentPhase === WorkflowPhase.VIDEO_GENERATION;
+        const isLegacyVideoPhase = project.currentPhase === WorkflowPhase.VIDEO;
+        
+        // YouTube workflow's VIDEO_GENERATION phase doesn't require scene images
+        // Legacy workflow's VIDEO phase does require scene images
+        if (isYouTube && isVideoGenerationPhase) {
+          requiresSceneImage = false;
+          debugLog(`[GenericAgent] YouTube workflow VIDEO_GENERATION phase - scene_image_artifact_id not required`);
+        } else if (isLegacyVideoPhase) {
+          requiresSceneImage = true;
+          debugLog(`[GenericAgent] Legacy workflow VIDEO phase - scene_image_artifact_id required`);
+        }
+      }
+    } catch (err) {
+      debugLog(`[GenericAgent] Failed to check workflow type, defaulting to requiring scene_image_artifact_id: ${err}`);
+      // Default to requiring it if we can't determine
+      requiresSceneImage = true;
+    }
+
+    // Validate scene_image_artifact_id based on workflow requirements
     const isStitchOperation = task.toLowerCase().includes('stitch');
-    if (!sceneImageArtifactId && !isStitchOperation) {
+    if (requiresSceneImage && !sceneImageArtifactId && !isStitchOperation) {
       this.currentMode = 'orchestrator';
-      return { error: 'No scene_image_artifact_id provided for dispatch_video_agent' };
+      return { error: 'scene_image_artifact_id is required for video generation in this workflow' };
     }
 
     // Resolve context_refs (array) if provided - combines multiple contexts
@@ -5031,12 +5122,13 @@ Respond in JSON format:
       return { error: 'Video generation already in progress' };
     }
 
-    // Initialize video gen state (sceneImageArtifactId is guaranteed to be defined after validation above)
+    // Initialize video gen state
+    // Note: sceneImageArtifactId may be undefined for YouTube workflow (VIDEO_GENERATION phase)
     this.videoGenState = {
       active: true,
       task,
       sceneNumber,
-      sceneImageArtifactId: sceneImageArtifactId,
+      sceneImageArtifactId: sceneImageArtifactId ?? undefined,
       motionDescription,
       context,
       messages: [],
@@ -5050,9 +5142,12 @@ Respond in JSON format:
     };
 
     // Build a summary for user approval
+    const imageInfo = sceneImageArtifactId 
+      ? `- Source Image: ${sceneImageArtifactId}`
+      : `- Source: Text prompt (YouTube workflow)`;
     const paramSummary = `**Video Generation Parameters:**
 - Scene: #${sceneNumber}
-- Source Image: ${sceneImageArtifactId}
+${imageInfo}
 - Duration: ${duration} seconds
 - Motion: ${motionDescription ?? 'Auto-determined based on scene'}
 - Task: ${task}`;
@@ -5171,6 +5266,18 @@ Respond in JSON format:
       return {
         error: 'wait_for_job tool not available',
         task,
+      };
+    }
+
+    // For YouTube workflow, sceneImageArtifactId may be undefined
+    // In that case, we should not use generate_video (which requires scene images)
+    // Instead, YouTube workflow should use generate_all_videos tool
+    if (!sceneImageArtifactId) {
+      this.videoGenState = null;
+      this.currentMode = 'orchestrator';
+      return {
+        error: 'scene_image_artifact_id is required for generate_video tool. For YouTube workflow VIDEO_GENERATION phase, use generate_all_videos tool instead of dispatch_video_agent.',
+        suggestion: 'Use generate_all_videos tool to process all video placements from video-placements.md file',
       };
     }
 

@@ -106,12 +106,7 @@ export function setCurrentProjectBasePath(basePath: string): void {
  * @returns The current project base path
  */
 export function getCurrentProjectBasePath(): string {
-  const path = currentProjectBasePath ?? process.cwd();
-  // Log when falling back to cwd (indicates basePath wasn't set)
-  if (!currentProjectBasePath) {
-    console.warn(`[ProjectManager] getCurrentProjectBasePath() returning process.cwd() (${path}) - basePath not set!`);
-  }
-  return path;
+  return currentProjectBasePath ?? process.cwd();
 }
 
 /**
@@ -259,11 +254,6 @@ export function getProjectIndexPath(basePath: string = getCurrentProjectBasePath
  * Check if a project exists in the current directory.
  */
 export function projectExists(basePath: string = getCurrentProjectBasePath()): boolean {
-  // Defensive check: warn if basePath wasn't explicitly set (falling back to process.cwd())
-  if (!currentProjectBasePath) {
-    console.warn(`[ProjectManager] projectExists() called without basePath set. Using process.cwd() (${basePath}). This may point to the wrong directory in desktop app context.`);
-  }
-  
   return existsSync(getProjectFilePath(basePath));
 }
 
@@ -1032,11 +1022,6 @@ function reloadProjectFilesAsContexts(basePath: string): void {
 }
 
 export function loadProject(basePath: string = getCurrentProjectBasePath()): ProjectFile | null {
-  // Defensive check: warn if basePath wasn't explicitly set (falling back to process.cwd())
-  if (!currentProjectBasePath) {
-    console.warn(`[ProjectManager] loadProject() called without basePath set. Using process.cwd() (${basePath}). This may point to the wrong directory in desktop app context.`);
-  }
-  
   const filePath = getProjectFilePath(basePath);
 
   if (!existsSync(filePath)) {
@@ -1460,9 +1445,6 @@ export function saveProject(project: ProjectFile, basePath: string = getCurrentP
   const filePath = getProjectFilePath(basePath);
   project.updatedAt = Date.now();
   
-  // Log the save location for debugging
-  console.log(`[ProjectManager] Saving project to: ${filePath} (basePath: ${basePath})`);
-  
   writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
 
   // Regenerate project index after every save
@@ -1607,6 +1589,7 @@ export function updatePlannerStage(
  * Clean up inconsistent phase states.
  * Ensures phases after current phase are reset to pending.
  * Fixes issues like phases marked as completed before current phase completes.
+ * Also marks phases not in the current workflow as "skipped".
  */
 export function cleanupPhaseStates(
   project: ProjectFile,
@@ -1622,6 +1605,23 @@ export function cleanupPhaseStates(
   if (currentIndex === -1) return project;
   
   let needsSave = false;
+  
+  // CRITICAL: Mark phases that are NOT in the current workflow as "skipped"
+  // This prevents the agent from trying to complete phases that are not part of the workflow
+  for (const phaseKey in project.phases) {
+    const phase = phaseKey as WorkflowPhase;
+    const phaseInfo = project.phases[phaseKey as keyof typeof project.phases];
+    
+    if (!phaseInfo) continue;
+    
+    // If phase is not in the active workflow, mark it as skipped
+    if (!phases.includes(phase) && phaseInfo.status !== 'skipped') {
+      phaseInfo.status = 'skipped';
+      phaseInfo.completedAt = null;
+      needsSave = true;
+      console.log(`[ProjectManager] Cleanup: Auto-skipping phase ${phase} (not in current workflow)`);
+    }
+  }
   
   // Reset all phases after current phase to pending
   for (let i = currentIndex + 1; i < phases.length; i++) {
@@ -1692,16 +1692,52 @@ export async function transitionToNextPhase(
     };
   }
 
+  // CRITICAL: Automatically mark phases that are NOT in the current workflow as "skipped"
+  // This prevents the agent from trying to complete phases that are not part of the workflow
+  // (e.g., VIDEO_REPLACEMENT and VIDEO_COMBINE when they're skipped in YOUTUBE_PHASES)
+  const activePhases = getWorkflowPhases(project.inputType);
+  let needsSave = false;
+  
+  for (const phaseKey in project.phases) {
+    const phase = phaseKey as WorkflowPhase;
+    const phaseInfo = project.phases[phaseKey as keyof typeof project.phases];
+    
+    // Skip if phase is already skipped or completed
+    if (!phaseInfo || phaseInfo.status === 'skipped' || phaseInfo.status === 'completed') {
+      continue;
+    }
+    
+    // If phase is not in the active workflow, mark it as skipped
+    if (!activePhases.includes(phase)) {
+      phaseInfo.status = 'skipped';
+      phaseInfo.completedAt = null;
+      needsSave = true;
+      console.log(`[ProjectManager] Auto-skipping phase ${phase} (not in current workflow)`);
+    }
+  }
+  
+  if (needsSave) {
+    saveProject(project, basePath);
+  }
+
   const currentPhase = project.currentPhase;
   const currentPhaseInfo = project.phases[currentPhase as keyof typeof project.phases];
   
-  // VALIDATION: Current phase must be completed
+  // VALIDATION: Current phase must be completed (or skipped if not in workflow)
   if (currentPhaseInfo?.status !== 'completed') {
-    return {
-      project,
-      transitioned: false,
-      reason: `Cannot transition: ${currentPhase} is ${currentPhaseInfo?.status}, not completed`
-    };
+    // If current phase is not in the active workflow, mark it as skipped and transition
+    if (!activePhases.includes(currentPhase)) {
+      currentPhaseInfo.status = 'skipped';
+      currentPhaseInfo.completedAt = null;
+      saveProject(project, basePath);
+      // Continue to determine next phase
+    } else {
+      return {
+        project,
+        transitioned: false,
+        reason: `Cannot transition: ${currentPhase} is ${currentPhaseInfo?.status}, not completed`
+      };
+    }
   }
 
   const result = await determineNextPhase(project);

@@ -64,7 +64,7 @@ LLM_PROVIDER=lmstudio
 
 # Gemini (when LLM_PROVIDER=gemini)
 GOOGLE_API_KEY=your-google-api-key
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MODEL=gemini-2.5-flash
 
 # LM Studio (when LLM_PROVIDER=lmstudio)
 LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1

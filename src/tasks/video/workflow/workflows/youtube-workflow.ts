@@ -29,8 +29,7 @@ export const YOUTUBE_PHASES: WorkflowPhase[] = [
   WorkflowPhase.IMAGE_GENERATION,
   WorkflowPhase.VIDEO_PLACEMENT,
   WorkflowPhase.VIDEO_GENERATION,
-  WorkflowPhase.VIDEO_REPLACEMENT,
-  WorkflowPhase.VIDEO_COMBINE,
+  // VIDEO_REPLACEMENT and VIDEO_COMBINE skipped for now
   WorkflowPhase.COMPLETED,
 ];
 
@@ -129,10 +128,10 @@ export const YOUTUBE_PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
   [WorkflowPhase.VIDEO_GENERATION]: {
     phase: WorkflowPhase.VIDEO_GENERATION,
     displayName: 'Video Generation',
-    nextPhase: WorkflowPhase.VIDEO_REPLACEMENT,
+    nextPhase: WorkflowPhase.COMPLETED, // Skipping VIDEO_REPLACEMENT and VIDEO_COMBINE for now
     promptFile: 'video-generation',
     agentType: 'video',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_video', 'wait_for_job', 'todo_write'],
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_all_videos', 'generate_video', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'single',
     requiresPerItemApproval: false,
     isExpensive: true,

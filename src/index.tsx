@@ -129,7 +129,7 @@ Environment Variables:
 
   # Gemini (when LLM_PROVIDER=gemini)
   GOOGLE_API_KEY        Google API key for Gemini
-  GEMINI_MODEL          Model name (default: gemini-2.0-flash)
+  GEMINI_MODEL          Model name (default: gemini-2.5-flash)
 
   # LM Studio (when LLM_PROVIDER=lmstudio)
   LMSTUDIO_BASE_URL     LM Studio server URL (default: http://127.0.0.1:1234/v1)
