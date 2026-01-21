@@ -4,7 +4,7 @@
  */
 import type { LLMClientConfig } from './types.js';
 
-export type LLMProvider = 'gemini' | 'lmstudio' | 'llamacpp' | 'ollama' | 'openai' | 'custom';
+export type LLMProvider = 'gemini' | 'lmstudio' | 'llamacpp' | 'ollama' | 'openai' | 'openrouter' | 'custom';
 
 /**
  * Get the LLM provider from environment.
@@ -22,6 +22,8 @@ export function getLLMProvider(): LLMProvider {
       return 'ollama';
     case 'openai':
       return 'openai';
+    case 'openrouter':
+      return 'openrouter';
     default:
       return 'custom';
   }
@@ -84,6 +86,17 @@ function getOpenAIConfig(): LLMClientConfig {
 }
 
 /**
+ * Get OpenRouter configuration from environment.
+ */
+function getOpenRouterConfig(): LLMClientConfig {
+  return {
+    baseUrl: 'https://openrouter.ai/api/v1',
+    apiKey: process.env['OPENROUTER_API_KEY'] ?? '',
+    model: process.env['OPENROUTER_MODEL'] ?? 'z-ai/glm-4.7-flash',
+  };
+}
+
+/**
  * Get custom/fallback configuration from environment.
  */
 function getCustomConfig(): LLMClientConfig {
@@ -118,6 +131,9 @@ export function getLLMConfig(overrides?: Partial<LLMClientConfig>): LLMClientCon
     case 'openai':
       config = getOpenAIConfig();
       break;
+    case 'openrouter':
+      config = getOpenRouterConfig();
+      break;
     default:
       config = getCustomConfig();
   }
@@ -148,6 +164,11 @@ export function validateLLMConfig(): { valid: boolean; errors: string[] } {
     case 'openai':
       if (!process.env['OPENAI_API_KEY']) {
         errors.push('OPENAI_API_KEY is required for OpenAI provider');
+      }
+      break;
+    case 'openrouter':
+      if (!process.env['OPENROUTER_API_KEY']) {
+        errors.push('OPENROUTER_API_KEY is required for OpenRouter provider');
       }
       break;
     case 'lmstudio':

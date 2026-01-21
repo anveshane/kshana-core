@@ -61,7 +61,7 @@ Options:
   -h, --help            Show this help message
   --host <host>         Host to bind to (default: 127.0.0.1)
   -p, --port <port>     Port to listen on (default: 3000)
-  --provider <name>     LLM provider: gemini, lmstudio, openai, custom
+  --provider <name>     LLM provider: gemini, lmstudio, openai, openrouter, custom
 
 Environment Variables:
   LLM_PROVIDER          Provider to use (current: ${currentProvider})

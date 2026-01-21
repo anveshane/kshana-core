@@ -110,7 +110,7 @@ Usage:
 Options:
   -h, --help            Show this help message
   -t, --task <task>     Initial task to run
-  -p, --provider <name> LLM provider: gemini, lmstudio, openai, custom
+  -p, --provider <name> LLM provider: gemini, lmstudio, openai, openrouter, custom
   -m, --model <model>   LLM model name
   -u, --url <url>       LLM API base URL
   -k, --api-key <key>   LLM API key
@@ -125,7 +125,7 @@ Server Mode:
   --port <port>         Server port (default: 3000)
 
 Environment Variables:
-  LLM_PROVIDER          Provider to use: gemini, lmstudio, openai, custom (current: ${currentProvider})
+  LLM_PROVIDER          Provider to use: gemini, lmstudio, openai, openrouter, custom (current: ${currentProvider})
 
   # Gemini (when LLM_PROVIDER=gemini)
   GOOGLE_API_KEY        Google API key for Gemini
@@ -140,6 +140,10 @@ Environment Variables:
   OPENAI_API_KEY        OpenAI API key
   OPENAI_BASE_URL       Base URL (default: https://api.openai.com/v1)
   OPENAI_MODEL          Model name (default: gpt-4o)
+
+  # OpenRouter (when LLM_PROVIDER=openrouter)
+  OPENROUTER_API_KEY    OpenRouter API key
+  OPENROUTER_MODEL      Model name (default: z-ai/glm-4.7-flash)
 
   # Custom/Fallback
   LLM_BASE_URL          Base URL for OpenAI-compatible API
