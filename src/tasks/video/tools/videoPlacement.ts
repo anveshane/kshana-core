@@ -18,8 +18,8 @@ export const createVideoPlacementTool: ToolDefinition = createTool(
       video_prompt: { type: 'string', description: 'Prompt for the video' },
       video_type: { 
         type: 'string', 
-        enum: ['animation', 'stock_footage', 'motion_graphics'],
-        description: 'Type of video: animation, stock_footage, or motion_graphics'
+        enum: ['cinematic_realism', 'stock_footage', 'motion_graphics'],
+        description: 'Type of video: cinematic_realism, stock_footage, or motion_graphics'
       },
     },
     required: ['transcript_index', 'start_time', 'end_time', 'video_prompt', 'video_type'],

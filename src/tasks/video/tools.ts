@@ -726,7 +726,7 @@ export interface VideoPlacementGenerationParams {
   scene_number: number;
   prompt: string;
   duration: number; // Duration in seconds (4 or 5 for optimization)
-  video_type: 'animation' | 'stock_footage' | 'motion_graphics';
+  video_type: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
 }
 
 /**
@@ -869,7 +869,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       },
       video_type: {
         type: 'string',
-        enum: ['animation', 'stock_footage', 'motion_graphics'],
+        enum: ['cinematic_realism', 'stock_footage', 'motion_graphics'],
         description: 'Type of video to generate',
       },
     },

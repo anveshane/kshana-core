@@ -7,7 +7,7 @@ export interface ParsedVideoPlacement {
   placementNumber: number;
   startTime: string;
   endTime: string;
-  videoType: 'animation' | 'stock_footage' | 'motion_graphics';
+  videoType: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
   prompt: string;
   duration: number; // Calculated from timestamps, rounded to 5, 10, or 15
   filename: string;
@@ -19,8 +19,8 @@ export interface ParsedVideoPlacement {
 function timeToSeconds(timeStr: string): number {
   const parts = timeStr.split(':');
   if (parts.length === 2) {
-    const minutes = parseInt(parts[0], 10) || 0;
-    const seconds = parseInt(parts[1], 10) || 0;
+    const minutes = parseInt(parts[0] ?? '0', 10) || 0;
+    const seconds = parseInt(parts[1] ?? '0', 10) || 0;
     return minutes * 60 + seconds;
   }
   // If it's just seconds (e.g., "15")
@@ -90,16 +90,17 @@ export function parseVideoPlacements(content: string): ParsedVideoPlacement[] {
       
       // Normalize video type
       const normalizedType = videoTypeStr.toLowerCase().trim();
-      let videoType: 'animation' | 'stock_footage' | 'motion_graphics';
-      if (normalizedType === 'animation' || normalizedType === 'anim') {
-        videoType = 'animation';
+      let videoType: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
+      if (normalizedType === 'cinematic_realism' || normalizedType === 'cinematic-realism' || normalizedType === 'cinematic' || normalizedType === 'animation' || normalizedType === 'anim') {
+        // Accept 'animation' for backward compatibility, but map to 'cinematic_realism'
+        videoType = 'cinematic_realism';
       } else if (normalizedType === 'stock_footage' || normalizedType === 'stock') {
         videoType = 'stock_footage';
       } else if (normalizedType === 'motion_graphics' || normalizedType === 'motiongraphics' || normalizedType === 'motion') {
         videoType = 'motion_graphics';
       } else {
-        // Default to animation if unknown
-        videoType = 'animation';
+        // Default to cinematic_realism if unknown
+        videoType = 'cinematic_realism';
       }
       
       placements.push({
@@ -134,16 +135,17 @@ export function parseVideoPlacements(content: string): ParsedVideoPlacement[] {
     
     // Normalize video type
     const normalizedType = videoTypeStr.toLowerCase().trim();
-    let videoType: 'animation' | 'stock_footage' | 'motion_graphics';
-    if (normalizedType === 'animation' || normalizedType === 'anim') {
-      videoType = 'animation';
+    let videoType: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
+    if (normalizedType === 'cinematic_realism' || normalizedType === 'cinematic-realism' || normalizedType === 'cinematic' || normalizedType === 'animation' || normalizedType === 'anim') {
+      // Accept 'animation' for backward compatibility, but map to 'cinematic_realism'
+      videoType = 'cinematic_realism';
     } else if (normalizedType === 'stock_footage' || normalizedType === 'stock') {
       videoType = 'stock_footage';
     } else if (normalizedType === 'motion_graphics' || normalizedType === 'motiongraphics' || normalizedType === 'motion') {
       videoType = 'motion_graphics';
     } else {
-      // Default to animation if unknown
-      videoType = 'animation';
+      // Default to cinematic_realism if unknown
+      videoType = 'cinematic_realism';
     }
     
     placements.push({

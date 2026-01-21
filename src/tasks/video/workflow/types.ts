@@ -383,7 +383,7 @@ export interface VideoPlacement {
   startTime: number;
   endTime: number;
   videoPrompt: string;
-  videoType: 'animation' | 'stock_footage' | 'motion_graphics'; // Based on content needs
+  videoType: 'cinematic_realism' | 'stock_footage' | 'motion_graphics'; // Based on content needs
   videoDuration: number; // Calculated from endTime - startTime
   videoPath?: string;
   videoArtifactId?: string;

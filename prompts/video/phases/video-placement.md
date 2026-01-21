@@ -22,7 +22,7 @@
 ```
 Task(
   subagent_type: 'video-placer',
-  task: 'Analyze the transcript ($transcript) to identify 1-2 key moments that need AI-generated videos. Check $image_placements to AVOID timestamp collisions. Use the content plan ($content_plan) for strategic guidance only. Create detailed video placement plan with exact timestamps, video types (animation/stock_footage/motion_graphics), and enhanced video prompts. Only create placements for moments that need videos (skip images, ad breaks, transitions). Create exactly 1-2 placements total, no more, no less.',
+  task: 'Analyze the transcript ($transcript) to identify 1-2 key moments that need AI-generated videos. Check $image_placements to AVOID timestamp collisions. Use the content plan ($content_plan) for strategic guidance only. Create detailed video placement plan with exact timestamps, video types (cinematic_realism/stock_footage - AVOID motion_graphics, use stock_footage or cinematic_realism instead), and enhanced video prompts emphasizing cinematic realism style (not animation/infographic style). Only create placements for moments that need videos (skip images, ad breaks, transitions). Create exactly 1-2 placements total, no more, no less.',
   context_refs: ['$transcript', '$content_plan', '$image_placements']
 )
 ```
@@ -69,7 +69,7 @@ update_project(
 - **CRITICAL: Videos complement images - they appear in DIFFERENT time segments**
 - Video placements are saved to `agent/content/video-placements.md`
 - Create exactly 1-2 placements total (one per key moment that needs a video)
-- Each placement must specify video type: animation, stock_footage, or motion_graphics
+- Each placement must specify video type: cinematic_realism or stock_footage (AVOID motion_graphics - use stock_footage or cinematic_realism instead)
 
 **DO NOT:**
 - Create placements that overlap with image placement timestamps
