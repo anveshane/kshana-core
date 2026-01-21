@@ -28,6 +28,7 @@ import {
   getAssets,
   readProjectFile,
   getCurrentProjectBasePath,
+  getManifestFilePath,
 } from './workflow/index.js';
 import { parseImagePlacements, type ParsedImagePlacement } from './workflow/imagePlacementsParser.js';
 import { parseVideoPlacements, type ParsedVideoPlacement } from './workflow/videoPlacementsParser.js';
@@ -496,13 +497,62 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
 
     // Store artifact in project manifest
     try {
-      addAsset({
+      // Determine scene_number and placementNumber from job context
+      const sceneNumber = job.context?.sceneNumber;
+      const placementNumber = sceneNumber; // For placements, sceneNumber is actually placementNumber
+      
+      // Build metadata with placementNumber if available
+      const metadata: Record<string, unknown> = {
+        jobId: job.id,
+        promptId: job.promptId,
+        originalFilename: path.basename(savedPath),
+      };
+      
+      if (placementNumber !== undefined) {
+        metadata.placementNumber = placementNumber;
+      }
+      
+      // Calculate version number by finding existing assets for the same placement
+      let version = 1;
+      if (placementNumber !== undefined) {
+        const manifestPath = getManifestFilePath();
+        if (fs.existsSync(manifestPath)) {
+          try {
+            const manifestContent = fs.readFileSync(manifestPath, 'utf-8');
+            const manifest = JSON.parse(manifestContent) as { assets: Array<{ type?: string; scene_number?: number; metadata?: Record<string, unknown>; version?: number }> };
+            const existingAssets = manifest.assets?.filter((a) => 
+              a.type === assetType && (
+                a.metadata?.placementNumber === placementNumber ||
+                a.scene_number === placementNumber
+              )
+            ) || [];
+            if (existingAssets.length > 0) {
+              const maxVersion = Math.max(...existingAssets.map(a => a.version || 1));
+              version = maxVersion + 1;
+            }
+          } catch {
+            // If manifest read fails, default to version 1
+          }
+        }
+      }
+      
+      // Add asset with scene_number and metadata
+      // Note: scene_number is set for backward compatibility, placementNumber is in metadata
+      const assetData: any = {
         id: artifactId,
         type: assetType,
         path: relativePath,
         createdAt: Date.now(),
-        metadata: { jobId: job.id, promptId: job.promptId },
-      });
+        version,
+        metadata,
+      };
+      
+      // Add scene_number if available (for backward compatibility)
+      if (sceneNumber !== undefined) {
+        assetData.scene_number = sceneNumber;
+      }
+      
+      addAsset(assetData);
     } catch {
       // Project may not exist yet, that's OK
     }

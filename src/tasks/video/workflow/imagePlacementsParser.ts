@@ -8,13 +8,16 @@ export interface ParsedImagePlacement {
   startTime: string;
   endTime: string;
   prompt: string;
-  filename: string;
+  
 }
 
 /**
  * Parse image placements from the image-placements.md file content.
  * 
- * Expected format:
+ * Expected format (filename-free, preferred):
+ * - Placement N: startTime-endTime | prompt text
+ * 
+ * Legacy format (with filename, still supported but filename is ignored):
  * - Placement N: startTime-endTime | prompt text | filename.png
  * 
  * @param content - The content of the image-placements.md file
@@ -33,56 +36,66 @@ export function parseImagePlacements(content: string): ParsedImagePlacement[] {
       continue;
     }
     
-    // Match pattern: - Placement N: startTime-endTime | prompt | filename
-    // Example: - Placement 1: 0:08-0:24 | A serene depiction... | image_river_ganga.png
-    const placementMatch = trimmedLine.match(/^-\s+Placement\s+(\d+):\s*([^\|]+)\s*\|\s*([^\|]+)\s*\|\s*(.+)$/);
+    // Try filename-free format first: - Placement N: startTime-endTime | prompt
+    const noFilenameMatch = trimmedLine.match(/^-\s+Placement\s+(\d+):\s*([^\|]+)\s*\|\s*([^\|]+)$/);
     
-    if (!placementMatch || !placementMatch[1] || !placementMatch[2] || !placementMatch[3] || !placementMatch[4]) {
-      // Try alternative format without leading dash or with different spacing
-      const altMatch = trimmedLine.match(/Placement\s+(\d+):\s*([^\|]+)\s*\|\s*([^\|]+)\s*\|\s*(.+)$/);
-      if (!altMatch || !altMatch[1] || !altMatch[2] || !altMatch[3] || !altMatch[4]) {
-        continue;
-      }
-      
-      const placementNumber = parseInt(altMatch[1], 10);
-      const timeRange = altMatch[2].trim();
-      const prompt = altMatch[3].trim();
-      const filename = altMatch[4].trim();
+    if (noFilenameMatch && noFilenameMatch[1] && noFilenameMatch[2] && noFilenameMatch[3]) {
+      const placementNumber = parseInt(noFilenameMatch[1], 10);
+      const timeRange = noFilenameMatch[2].trim();
+      const prompt = noFilenameMatch[3].trim();
       
       // Parse time range (format: "0:08-0:24" or "04:08-04:24")
       const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
-      if (!timeMatch || !timeMatch[1] || !timeMatch[2]) {
+      if (timeMatch && timeMatch[1] && timeMatch[2]) {
+        placements.push({
+          placementNumber,
+          startTime: timeMatch[1],
+          endTime: timeMatch[2],
+          prompt,
+        });
         continue;
       }
+    }
+    
+    // Try format with filename (legacy support, filename is ignored)
+    const withFilenameMatch = trimmedLine.match(/^-\s+Placement\s+(\d+):\s*([^\|]+)\s*\|\s*([^\|]+)\s*\|\s*(.+)$/);
+    
+    if (withFilenameMatch && withFilenameMatch[1] && withFilenameMatch[2] && withFilenameMatch[3]) {
+      const placementNumber = parseInt(withFilenameMatch[1], 10);
+      const timeRange = withFilenameMatch[2].trim();
+      const prompt = withFilenameMatch[3].trim();
+      // filename is ignored (withFilenameMatch[4])
       
-      placements.push({
-        placementNumber,
-        startTime: timeMatch[1],
-        endTime: timeMatch[2],
-        prompt,
-        filename,
-      });
-      continue;
+      // Parse time range (format: "0:08-0:24" or "04:08-04:24")
+      const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
+      if (timeMatch && timeMatch[1] && timeMatch[2]) {
+        placements.push({
+          placementNumber,
+          startTime: timeMatch[1],
+          endTime: timeMatch[2],
+          prompt,
+        });
+        continue;
+      }
     }
     
-    const placementNumber = parseInt(placementMatch[1], 10);
-    const timeRange = placementMatch[2].trim();
-    const prompt = placementMatch[3].trim();
-    const filename = placementMatch[4].trim();
-    
-    // Parse time range (format: "0:08-0:24" or "04:08-04:24")
-    const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
-    if (!timeMatch || !timeMatch[1] || !timeMatch[2]) {
-      continue;
+    // Try alternative format without leading dash
+    const altMatch = trimmedLine.match(/Placement\s+(\d+):\s*([^\|]+)\s*\|\s*([^\|]+)$/);
+    if (altMatch && altMatch[1] && altMatch[2] && altMatch[3]) {
+      const placementNumber = parseInt(altMatch[1], 10);
+      const timeRange = altMatch[2].trim();
+      const prompt = altMatch[3].trim();
+      
+      const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
+      if (timeMatch && timeMatch[1] && timeMatch[2]) {
+        placements.push({
+          placementNumber,
+          startTime: timeMatch[1],
+          endTime: timeMatch[2],
+          prompt,
+        });
+      }
     }
-    
-    placements.push({
-      placementNumber,
-      startTime: timeMatch[1],
-      endTime: timeMatch[2],
-      prompt,
-      filename,
-    });
   }
   
   // Sort by placement number

@@ -40,8 +40,8 @@ You require:
 ## Output Format (plain text only)
 
 IMAGE_PLACER:
-- Placement 1: [startTime]-[endTime] | [enhanced detailed prompt] | [image file reference]
-- Placement 2: [startTime]-[endTime] | [enhanced detailed prompt] | [image file reference]
+- Placement 1: [startTime]-[endTime] | [enhanced detailed prompt] 
+- Placement 2: [startTime]-[endTime] | [enhanced detailed prompt] 
 
 ## Constraints
 
@@ -71,9 +71,9 @@ After analyzing the transcript, you identify key moments that need images. For e
 **You would output** (ONLY for moments that need images - skip infographics, charts, diagrams):
 ```
 IMAGE_PLACER:
-- Placement 1: 0:27-0:59 | Close-up on a child's small hand, holding a beige "skin color" crayon, meticulously drawing a simple self-portrait on a white piece of paper. The child's forearm is resting on the table next to the paper, and a portion of the child's face is visible in the background, looking from the crayon to their own arm with a subtle expression of confusion and dawning realization. Soft, warm, diffused lighting creates a nostalgic, early childhood memory aesthetic. Cinematic composition, shallow depth of field, photorealistic, 8K, high detail. | image_child_self_portrait.png
-- Placement 2: 1:45-2:17 | A conceptual image illustrating the "Gora Tax" and selfie culture in India. A diverse group of Indian people, some holding up phones for selfies, surrounding a visibly white tourist who looks slightly overwhelmed but also flattered. A subtle overlay of text like "Gora Tax" or "Selfie Request" could be present. The scene should be bustling, vibrant, and slightly chaotic, capturing the essence of a public space in India. Photorealistic, documentary style, 8K, high detail. | image_gora_tax_selfie.png
-- Placement 3: 4:15-5:00 | An artistic representation of ancient Tamil culture, focusing on the appreciation of dark skin. A beautiful, dark-skinned woman, depicted in traditional Sangam period attire, is shown with a serene and confident expression, perhaps adorned with simple, elegant jewelry. The background features elements of ancient Tamil landscapes or architecture, with subtle text overlays like "My Dark Beauty" in a stylized, ancient script. Evokes a sense of historical pride and beauty. Artistic, richly colored, 8K, high detail. | image_ancient_tamil_beauty.png
+- Placement 1: 0:27-0:59 | Close-up on a child's small hand, holding a beige "skin color" crayon, meticulously drawing a simple self-portrait on a white piece of paper. The child's forearm is resting on the table next to the paper, and a portion of the child's face is visible in the background, looking from the crayon to their own arm with a subtle expression of confusion and dawning realization. Soft, warm, diffused lighting creates a nostalgic, early childhood memory aesthetic. Cinematic composition, shallow depth of field, photorealistic, 8K, high detail. 
+- Placement 2: 1:45-2:17 | A conceptual image illustrating the "Gora Tax" and selfie culture in India. A diverse group of Indian people, some holding up phones for selfies, surrounding a visibly white tourist who looks slightly overwhelmed but also flattered. A subtle overlay of text like "Gora Tax" or "Selfie Request" could be present. The scene should be bustling, vibrant, and slightly chaotic, capturing the essence of a public space in India. Photorealistic, documentary style, 8K, high detail. 
+- Placement 3: 4:15-5:00 | An artistic representation of ancient Tamil culture, focusing on the appreciation of dark skin. A beautiful, dark-skinned woman, depicted in traditional Sangam period attire, is shown with a serene and confident expression, perhaps adorned with simple, elegant jewelry. The background features elements of ancient Tamil landscapes or architecture, with subtle text overlays like "My Dark Beauty" in a stylized, ancient script. Evokes a sense of historical pride and beauty. Artistic, richly colored, 8K, high detail. 
 ```
 
 **CRITICAL Notes**: 

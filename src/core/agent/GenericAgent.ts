@@ -3901,7 +3901,45 @@ Respond in JSON format:
     };
 
     // Run subagent with tool calling support
-    const result = await this.runSubagentWithTools(this.transcriptParserState, 'dispatch_transcript_parser', 0.3, subagentTools);
+    let result = await this.runSubagentWithTools(this.transcriptParserState, 'dispatch_transcript_parser', 0.3, subagentTools);
+    
+    // If content filtering occurred, try direct fallback: call parse_srt tool directly
+    const isContentFiltered = result && typeof result === 'object' && 'status' in result && result.status === 'error' && 
+        'error' in result && typeof result.error === 'string' && 
+        (result.error.includes('content may have been filtered') || result.error.includes('empty response'));
+    
+    if (isContentFiltered) {
+      console.warn('[GenericAgent] Content filtering detected for transcript parser, attempting direct tool call fallback');
+      
+      // Try to directly call parse_srt with context variable
+      if (parseSrtTool && parseSrtTool.handler && contextRefs && contextRefs.length > 0) {
+        try {
+          const handler = parseSrtTool.handler; // Store handler to help TypeScript narrow type
+          const contextVar = contextRefs[0]; // Use first context ref (usually $original_input)
+          const directToolCall: ToolCall = {
+            id: `fallback-${Date.now()}`,
+            name: 'parse_srt',
+            arguments: { srt_text: contextVar },
+          };
+          
+          const directResult = await Promise.resolve(handler(directToolCall.arguments));
+          
+          if (directResult && typeof directResult === 'object' && 'status' in directResult && directResult.status === 'success') {
+            console.log('[GenericAgent] Direct parse_srt tool call succeeded, bypassing content filter');
+            this.transcriptParserState = null;
+            return {
+              status: 'completed',
+              output: `Transcript parsed successfully using direct tool call (bypassed content filter).\nTRANSCRIPT_DURATION: ${(directResult as any).duration || 'unknown'}\nTOTAL_ENTRIES: ${(directResult as any).entryCount || 'unknown'}\nFORMAT: ${(directResult as any).format || 'unknown'}`,
+              task: task,
+              iterations: 1,
+            };
+          }
+        } catch (fallbackError) {
+          console.error('[GenericAgent] Direct tool call fallback failed:', fallbackError);
+        }
+      }
+    }
+    
     this.transcriptParserState = null;
     return result;
   }

@@ -397,7 +397,9 @@ export interface AssetInfo {
   type: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'final_video';
   path: string;
   createdAt: number;
-  metadata?: Record<string, unknown>;
+  scene_number?: number; // For scene-specific assets (also used as placementNumber for placements)
+  version?: number; // Version number of the asset (defaults to 1)
+  metadata?: Record<string, unknown>; // Can include placementNumber, jobId, promptId, etc.
 }
 
 /**
