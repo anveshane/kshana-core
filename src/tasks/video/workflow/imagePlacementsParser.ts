@@ -14,10 +14,10 @@ export interface ParsedImagePlacement {
 /**
  * Parse image placements from the image-placements.md file content.
  * 
- * Expected format (filename-free, preferred):
+ * Expected format:
  * - Placement N: startTime-endTime | prompt text
  * 
- * Legacy format (with filename, still supported but filename is ignored):
+ * Legacy format (filename is optional, for backward compatibility):
  * - Placement N: startTime-endTime | prompt text | filename.png
  * 
  * @param content - The content of the image-placements.md file
@@ -30,72 +30,61 @@ export function parseImagePlacements(content: string): ParsedImagePlacement[] {
   const lines = content.split('\n');
   
   for (const line of lines) {
-    // Look for lines that start with "- Placement"
+    // Look for lines that contain "Placement" (more flexible than startsWith)
     const trimmedLine = line.trim();
-    if (!trimmedLine.startsWith('- Placement')) {
+    if (!trimmedLine.includes('Placement')) {
       continue;
     }
     
-    // Try filename-free format first: - Placement N: startTime-endTime | prompt
-    const noFilenameMatch = trimmedLine.match(/^-\s+Placement\s+(\d+):\s*([^\|]+)\s*\|\s*([^\|]+)$/);
+    // Match pattern: - Placement N: startTime-endTime | prompt [| filename]
+    // Also handle: • Placement N: ... (bullet point)
+    // Filename is optional (for backward compatibility)
+    const placementMatch = trimmedLine.match(/^[•\-]\s*Placement\s+(\d+):\s*([^\|]+)\s*\|\s*([^\|]+)(?:\s*\|\s*(.+))?$/);
     
-    if (noFilenameMatch && noFilenameMatch[1] && noFilenameMatch[2] && noFilenameMatch[3]) {
-      const placementNumber = parseInt(noFilenameMatch[1], 10);
-      const timeRange = noFilenameMatch[2].trim();
-      const prompt = noFilenameMatch[3].trim();
-      
-      // Parse time range (format: "0:08-0:24" or "04:08-04:24")
-      const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
-      if (timeMatch && timeMatch[1] && timeMatch[2]) {
-        placements.push({
-          placementNumber,
-          startTime: timeMatch[1],
-          endTime: timeMatch[2],
-          prompt,
-        });
+    if (!placementMatch || !placementMatch[1] || !placementMatch[2] || !placementMatch[3]) {
+      // Try alternative format without leading dash/bullet
+      const altMatch = trimmedLine.match(/Placement\s+(\d+):\s*([^\|]+)\s*\|\s*([^\|]+)(?:\s*\|\s*(.+))?$/);
+      if (!altMatch || !altMatch[1] || !altMatch[2] || !altMatch[3]) {
         continue;
       }
-    }
-    
-    // Try format with filename (legacy support, filename is ignored)
-    const withFilenameMatch = trimmedLine.match(/^-\s+Placement\s+(\d+):\s*([^\|]+)\s*\|\s*([^\|]+)\s*\|\s*(.+)$/);
-    
-    if (withFilenameMatch && withFilenameMatch[1] && withFilenameMatch[2] && withFilenameMatch[3]) {
-      const placementNumber = parseInt(withFilenameMatch[1], 10);
-      const timeRange = withFilenameMatch[2].trim();
-      const prompt = withFilenameMatch[3].trim();
-      // filename is ignored (withFilenameMatch[4])
       
-      // Parse time range (format: "0:08-0:24" or "04:08-04:24")
-      const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
-      if (timeMatch && timeMatch[1] && timeMatch[2]) {
-        placements.push({
-          placementNumber,
-          startTime: timeMatch[1],
-          endTime: timeMatch[2],
-          prompt,
-        });
-        continue;
-      }
-    }
-    
-    // Try alternative format without leading dash
-    const altMatch = trimmedLine.match(/Placement\s+(\d+):\s*([^\|]+)\s*\|\s*([^\|]+)$/);
-    if (altMatch && altMatch[1] && altMatch[2] && altMatch[3]) {
       const placementNumber = parseInt(altMatch[1], 10);
       const timeRange = altMatch[2].trim();
       const prompt = altMatch[3].trim();
+      // filename is altMatch[4] but ignored (for backward compatibility)
       
+      // Parse time range (format: "0:49-1:06" or "04:08-04:24")
       const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
-      if (timeMatch && timeMatch[1] && timeMatch[2]) {
-        placements.push({
-          placementNumber,
-          startTime: timeMatch[1],
-          endTime: timeMatch[2],
-          prompt,
-        });
+      if (!timeMatch || !timeMatch[1] || !timeMatch[2]) {
+        continue;
       }
+      
+      placements.push({
+        placementNumber,
+        startTime: timeMatch[1],
+        endTime: timeMatch[2],
+        prompt,
+      });
+      continue;
     }
+    
+    const placementNumber = parseInt(placementMatch[1], 10);
+    const timeRange = placementMatch[2].trim();
+    const prompt = placementMatch[3].trim();
+    // filename is placementMatch[4] but ignored (for backward compatibility)
+    
+    // Parse time range (format: "0:49-1:06" or "04:08-04:24")
+    const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
+    if (!timeMatch || !timeMatch[1] || !timeMatch[2]) {
+      continue;
+    }
+    
+    placements.push({
+      placementNumber,
+      startTime: timeMatch[1],
+      endTime: timeMatch[2],
+      prompt,
+    });
   }
   
   // Sort by placement number
