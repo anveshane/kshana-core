@@ -7,9 +7,73 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 
-// Get the workflows directory (relative to project root)
-const WORKFLOWS_DIR = path.resolve(process.cwd(), 'workflows');
+// Get __dirname equivalent for ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+/**
+ * Get the workflows directory path.
+ * Priority:
+ * 1. KSHANA_WORKFLOWS_DIR environment variable (set by desktop app)
+ * 2. Check if kshana-desktop/workflows exists (sibling directory)
+ * 3. Check if kshana-ink/workflows exists (current package)
+ * 4. Fall back to process.cwd()/workflows (for CLI usage)
+ */
+function getWorkflowsDir(): string {
+  // 1. Check environment variable (set by desktop app)
+  const workflowsDirEnv = process.env['KSHANA_WORKFLOWS_DIR'];
+  if (workflowsDirEnv) {
+    const envPath = String(workflowsDirEnv).trim();
+    if (envPath && fs.existsSync(envPath)) {
+      return envPath;
+    }
+  }
+
+  // 2. Try to find kshana-desktop/workflows (sibling directory)
+  // This works when kshana-ink is a dependency of kshana-desktop
+  try {
+    // In node_modules, we might be at kshana-desktop/node_modules/kshana-ink
+    // or in a monorepo structure
+    let searchDir = __dirname;
+    for (let i = 0; i < 5; i++) {
+      const desktopWorkflows = path.join(searchDir, '..', '..', 'workflows');
+      if (fs.existsSync(desktopWorkflows)) {
+        const resolved = path.resolve(desktopWorkflows);
+        if (fs.existsSync(resolved)) {
+          return resolved;
+        }
+      }
+      // Also check if we're in kshana-desktop/node_modules/kshana-ink
+      const altDesktopWorkflows = path.join(searchDir, '..', '..', '..', 'workflows');
+      if (fs.existsSync(altDesktopWorkflows)) {
+        const resolved = path.resolve(altDesktopWorkflows);
+        if (fs.existsSync(resolved)) {
+          return resolved;
+        }
+      }
+      searchDir = path.dirname(searchDir);
+    }
+  } catch {
+    // Ignore errors during path resolution
+  }
+
+  // 3. Try kshana-ink/workflows (current package)
+  // When running from source: src/services/comfyui/WorkflowLoader.ts -> workflows/
+  // When running from dist: dist/services/comfyui/WorkflowLoader.js -> workflows/
+  const inkWorkflows = path.resolve(__dirname, '..', '..', 'workflows');
+  if (fs.existsSync(inkWorkflows)) {
+    return inkWorkflows;
+  }
+
+  // 4. Fall back to process.cwd()/workflows (for CLI usage in current directory)
+  // This allows CLI users to have workflows in their project directory
+  return path.resolve(process.cwd(), 'workflows');
+}
+
+// Get the workflows directory
+const WORKFLOWS_DIR = getWorkflowsDir();
 
 /**
  * Load a workflow JSON template from the workflows directory.

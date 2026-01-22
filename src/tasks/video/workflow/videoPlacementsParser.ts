@@ -10,7 +10,7 @@ export interface ParsedVideoPlacement {
   videoType: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
   prompt: string;
   duration: number; // Calculated from timestamps, rounded to 5, 10, or 15
-  filename: string;
+  filename?: string; // Optional, for backward compatibility
 }
 
 /**
@@ -40,6 +40,9 @@ function roundDuration(seconds: number): number {
  * Parse video placements from the video-placements.md file content.
  * 
  * Expected format:
+ * - Placement N: startTime-endTime | type=video_type | prompt text
+ * 
+ * Legacy format (filename is optional, for backward compatibility):
  * - Placement N: startTime-endTime | type=video_type | prompt text | filename.mp4
  * 
  * @param content - The content of the video-placements.md file
@@ -58,15 +61,15 @@ export function parseVideoPlacements(content: string): ParsedVideoPlacement[] {
       continue;
     }
     
-    // Match pattern: - Placement N: startTime-endTime | type=video_type | prompt | filename
+    // Match pattern: - Placement N: startTime-endTime | type=video_type | prompt [| filename]
     // Also handle: • Placement N: ... (bullet point)
-    // Example: - Placement 1: 0:15-0:24 | type=animation | Animated map... | video.mp4
-    const placementMatch = trimmedLine.match(/^[•\-]\s*Placement\s+(\d+):\s*([^\|]+)\s*\|\s*type=([^\|]+)\s*\|\s*([^\|]+)\s*\|\s*(.+)$/);
+    // Filename is optional (for backward compatibility)
+    const placementMatch = trimmedLine.match(/^[•\-]\s*Placement\s+(\d+):\s*([^\|]+)\s*\|\s*type=([^\|]+)\s*\|\s*([^\|]+)(?:\s*\|\s*(.+))?$/);
     
-    if (!placementMatch || !placementMatch[1] || !placementMatch[2] || !placementMatch[3] || !placementMatch[4] || !placementMatch[5]) {
+    if (!placementMatch || !placementMatch[1] || !placementMatch[2] || !placementMatch[3] || !placementMatch[4]) {
       // Try alternative format without leading dash/bullet
-      const altMatch = trimmedLine.match(/Placement\s+(\d+):\s*([^\|]+)\s*\|\s*type=([^\|]+)\s*\|\s*([^\|]+)\s*\|\s*(.+)$/);
-      if (!altMatch || !altMatch[1] || !altMatch[2] || !altMatch[3] || !altMatch[4] || !altMatch[5]) {
+      const altMatch = trimmedLine.match(/Placement\s+(\d+):\s*([^\|]+)\s*\|\s*type=([^\|]+)\s*\|\s*([^\|]+)(?:\s*\|\s*(.+))?$/);
+      if (!altMatch || !altMatch[1] || !altMatch[2] || !altMatch[3] || !altMatch[4]) {
         continue;
       }
       
@@ -74,7 +77,7 @@ export function parseVideoPlacements(content: string): ParsedVideoPlacement[] {
       const timeRange = altMatch[2].trim();
       const videoTypeStr = altMatch[3].trim();
       const prompt = altMatch[4].trim();
-      const filename = altMatch[5].trim();
+      const filename = altMatch[5]?.trim() || undefined;
       
       // Parse time range (format: "0:15-0:24" or "7:41-7:56")
       const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
@@ -119,7 +122,7 @@ export function parseVideoPlacements(content: string): ParsedVideoPlacement[] {
     const timeRange = placementMatch[2].trim();
     const videoTypeStr = placementMatch[3].trim();
     const prompt = placementMatch[4].trim();
-    const filename = placementMatch[5].trim();
+    const filename = placementMatch[5]?.trim() || undefined;
     
     // Parse time range (format: "0:15-0:24" or "7:41-7:56")
     const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);

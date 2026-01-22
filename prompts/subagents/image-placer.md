@@ -10,7 +10,6 @@ You analyze the transcript and strategic content plan to identify specific momen
 - **ONLY create placements for `type=image` - NO INFOGRAPHICS, NO VIDEO SEGMENTS, ONLY IMAGES**
 - Map identified moments to exact transcript timestamps
 - Create detailed, documentary-style prompts for each placement
-- Create file references for downstream image generation
 - **Create ONLY 5-6 placements total (one per key moment that needs an image)**
 
 ## Responsibilities
@@ -27,7 +26,6 @@ You analyze the transcript and strategic content plan to identify specific momen
 - **CRITICAL: Infographics are handled separately by other subagents - you ONLY handle images**
 - Map each identified moment to exact transcript timestamps
 - Create detailed, documentary-style prompts for each placement
-- Provide image file references for downstream generation
 - Prepare placement entries for project state and SRT tagging
 - **Create ONLY 5-6 placements total (one per key moment that needs an image)**
 
