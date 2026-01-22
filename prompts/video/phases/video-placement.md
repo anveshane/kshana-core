@@ -1,6 +1,6 @@
 ### Video Placement Phase
 
-**What this phase does**: Identify moments from the transcript that need AI-generated videos and create detailed video placements with exact timestamps and enhanced video prompts. Videos complement images by appearing in different time segments.
+**What this phase does**: Identify moments from the transcript that need AI-generated videos and create detailed video placements with exact timestamps and enhanced video prompts. Videos complement images by appearing in different time segments. **The goal is to cover the ENTIRE transcript duration with placements (images + videos), with no gaps.**
 
 **Prerequisites**:
 - Content plan must exist at `agent/plans/content-plan.md` (created in Planning phase)
@@ -22,7 +22,7 @@
 ```
 Task(
   subagent_type: 'video-placer',
-  task: 'Analyze the transcript ($transcript) to identify 1-2 key moments that need AI-generated videos. Check $image_placements to AVOID timestamp collisions. Use the content plan ($content_plan) for strategic guidance only. Create detailed video placement plan with exact timestamps, video types (cinematic_realism/stock_footage - AVOID motion_graphics, use stock_footage or cinematic_realism instead), and enhanced video prompts emphasizing cinematic realism style (not animation/infographic style). Only create placements for moments that need videos (skip images, ad breaks, transitions). Create exactly 1-2 placements total, no more, no less.',
+  task: 'Analyze the transcript ($transcript) to identify moments that need AI-generated videos. Check $image_placements to see what is already covered and fill ALL remaining gaps. Use the content plan ($content_plan) for strategic guidance only. Create detailed video placement plan with exact timestamps, video types (cinematic_realism/stock_footage - AVOID motion_graphics, use stock_footage or cinematic_realism instead), and enhanced video prompts emphasizing cinematic realism style (not animation/infographic style). The goal is to cover the ENTIRE transcript duration with placements (images + videos), with no gaps. Create as many placements as needed to fill all remaining segments.',
   context_refs: ['$transcript', '$content_plan', '$image_placements']
 )
 ```
@@ -68,14 +68,14 @@ update_project(
 - **CRITICAL: Check `$image_placements` and DO NOT create video placements that overlap with image placement timestamps**
 - **CRITICAL: Videos complement images - they appear in DIFFERENT time segments**
 - Video placements are saved to `agent/content/video-placements.md`
-- Create exactly 1-2 placements total (one per key moment that needs a video)
+- Create placements to cover all remaining transcript segments not covered by images. Ensure 100% coverage with no gaps.
 - Each placement must specify video type: cinematic_realism or stock_footage (AVOID motion_graphics - use stock_footage or cinematic_realism instead)
 
 **DO NOT:**
 - Create placements that overlap with image placement timestamps
 - Create placements for images (those are handled in Image Placement phase)
 - Create placements for ad breaks or transitions (those stay as original footage)
-- Create more than 1-2 placements (be selective about which moments truly need videos)
+- Leave any gaps in the transcript timeline - fill ALL remaining segments to ensure complete coverage
 - Skip saving the placements - you MUST save to the file
 - Skip validation - you MUST verify the output format before saving
 - Save planning comments or thinking - extract ONLY the VIDEO_PLACER section

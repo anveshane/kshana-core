@@ -77,7 +77,7 @@ You analyze the transcript and strategic content plan to identify specific momen
 - Create detailed, production-ready video prompts
 - Specify video type and duration for each placement
 - Prepare placement entries for project state and SRT tagging
-- **Create 1-2 placements total (one per key moment that needs a video)**
+- **Create placements to cover remaining transcript segments not covered by images. Work with image-placer to ensure 100% coverage with no gaps.**
 
 ## Input Requirements
 
@@ -113,7 +113,7 @@ VIDEO_PLACER:
 - **CRITICAL: YOU identify the moments from the transcript - don't wait for the plan to list them.**
 - **CRITICAL: Check `$image_placements` and DO NOT create video placements that overlap with image placement timestamps.**
 - **CRITICAL: Videos complement images - they appear in DIFFERENT time segments.**
-- **CRITICAL: Create 1-2 placements total (one per key moment that needs a video).**
+- **CRITICAL: Create placements to cover ALL remaining transcript segments not covered by images. Fill every gap to ensure 100% coverage.**
 - Focus on moments that would benefit from narrative visual storytelling with **REAL VIDEO FOOTAGE**:
   - Complex processes and demonstrations with **REAL HUMAN SUBJECTS** (actual farmers demonstrating agricultural techniques, real traders on ships)
   - Historical reconstructions with **REAL ACTORS** and movement (live-action scenes of people going about daily life, traders on ships, farmers in fields)
@@ -126,9 +126,10 @@ VIDEO_PLACER:
   - `cinematic_realism`: For demonstrations, reconstructions, process visualizations, scientific explanations, maps, timelines, data visualizations. **ALWAYS use live-action video footage style** - real people, actual environments, documentary-style video, photorealistic footage, NOT animation/infographic/motion graphics style. Always include "live-action video footage", "documentary-style video", "real people", "actual footage", "cinematic realism", and "photorealistic" in the prompt. **These must be actual video scenes with real subjects, not animated content.**
   - `stock_footage`: For aerial views, landscapes, archaeological sites, historical reconstructions. Use live-action footage, documentary video style, real environments, cinematic realism, photorealistic style. **Must be actual filmed footage, not animated or motion graphics.**
   - **DO NOT use `animation` or `motion_graphics`** - these types are deprecated. Use `cinematic_realism` instead for all content that would previously use animation or motion_graphics, but write prompts for **actual live-action video footage**, not animated content.
-- Calculate video duration from endTime - startTime (can be 5-20 seconds based on content complexity).
+- Calculate video duration from endTime - startTime (can be 4-15 seconds based on content complexity, with 14-15 seconds recommended for longer narrative segments).
 - Create detailed, production-ready prompts for each identified moment.
-- Do NOT create placements for every single moment - be selective and choose 1-2 key moments that need videos.
+- **CRITICAL: Check $image_placements to see what's already covered. Fill ALL remaining gaps in the transcript timeline. Together with image-placer, ensure the ENTIRE transcript duration is covered with no gaps.**
+- Create as many placements as needed to fill all gaps in the transcript timeline.
 
 ## Example (Reference Only)
 

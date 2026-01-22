@@ -1,6 +1,6 @@
 ### Image Placement Phase
 
-**What this phase does**: Identify moments from the transcript that need images and create detailed image placements with exact timestamps and enhanced image prompts.
+**What this phase does**: Identify moments from the transcript that need images and create detailed image placements with exact timestamps and enhanced image prompts. **The goal is to cover the ENTIRE transcript duration with placements (images + videos), with no gaps. Video-placer will fill remaining gaps to ensure 100% coverage.**
 
 **Prerequisites**:
 - Content plan must exist at `agent/plans/content-plan.md` (created in Planning phase)
@@ -19,7 +19,7 @@
 ```
 Task(
   subagent_type: 'image-placer',
-  task: 'Analyze the transcript ($transcript) to identify 5-6 key moments that need images. Use the content plan ($content_plan) for strategic guidance only. Create detailed image placement plan with exact timestamps and enhanced image prompts. Only create placements for moments that need images (skip infographics, video segments, ad breaks). Create exactly 5-6 placements total, no more, no less.',
+  task: 'Analyze the transcript ($transcript) to identify key moments that need images. Use the content plan ($content_plan) for strategic guidance only. Create detailed image placement plan with exact timestamps and enhanced image prompts. Only create placements for moments that need images (skip infographics, video segments, ad breaks). Video-placer will fill remaining gaps to ensure 100% coverage. The goal is to cover the ENTIRE transcript duration with placements (images + videos), with no gaps.',
   context_refs: ['$transcript', '$content_plan']
 )
 ```
@@ -55,11 +55,11 @@ update_project(
 - The image-placer identifies moments from the transcript itself (not from a list in the plan)
 - The content plan provides strategic guidance only (high-level visual strategy)
 - Image placements are saved to `agent/content/image-placements.md`
-- Create exactly 5-6 placements total (one per key moment that needs an image)
+- Create image placements to cover appropriate segments of the transcript. Video-placer will fill remaining gaps to ensure 100% coverage.
 
 **DO NOT:**
 - Create placements for infographics (those are handled separately)
 - Create placements for video segments or ad breaks (those stay as original footage)
-- Create more than 5-6 placements (be selective about which moments truly need images)
+- Worry about covering every segment - video-placer will fill remaining gaps to ensure complete coverage
 - Skip saving the placements - you MUST save to the file
 - Skip transition to image generation - you MUST transition after marking phase complete

@@ -30,7 +30,7 @@ import {
   getCurrentProjectBasePath,
   getManifestFilePath,
 } from './workflow/index.js';
-import { parseImagePlacements, type ParsedImagePlacement } from './workflow/imagePlacementsParser.js';
+import { parseImagePlacements, parseImagePlacementsWithErrors, type ParsedImagePlacement } from './workflow/imagePlacementsParser.js';
 import { parseVideoPlacements, type ParsedVideoPlacement } from './workflow/videoPlacementsParser.js';
 
 /**
@@ -775,7 +775,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
 export interface VideoPlacementGenerationParams {
   scene_number: number;
   prompt: string;
-  duration: number; // Duration in seconds (4 or 5 for optimization)
+  duration: number; // Duration in seconds (4-15 seconds)
   video_type: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
 }
 
@@ -784,8 +784,8 @@ export interface VideoPlacementGenerationParams {
  * LTX-2 requires frame count to be divisible by 8 + 1.
  * Formula: Math.floor((duration * 24) / 8) * 8 + 1
  * 
- * @param duration Duration in seconds (4 or 5 for optimization)
- * @returns Frame count (97 for 4s, 121 for 5s)
+ * @param duration Duration in seconds (4-15 seconds)
+ * @returns Frame count (97 for 4s, 121 for 5s, up to 361 for 15s)
  */
 function calculateFrameCount(duration: number): number {
   // 24 fps, frame count must be divisible by 8 + 1
@@ -910,8 +910,8 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       },
       duration: {
         type: 'number',
-        description: 'Video duration in seconds (4 or 5 for optimization)',
-        enum: [4, 5],
+        description: 'Video duration in seconds (4-15 seconds)',
+        enum: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
       },
       scene_number: {
         type: 'number',
@@ -1744,25 +1744,47 @@ The tool handles all parsing, sequential generation, and error handling internal
       };
     }
     
-    // Parse placements
+    // Parse placements with enhanced error reporting
     let placements: ParsedImagePlacement[];
     try {
-      placements = parseImagePlacements(content);
+      const parseResult = parseImagePlacementsWithErrors(content, false);
+      placements = parseResult.placements;
+
+      // Log warnings and errors for debugging
+      if (parseResult.warnings.length > 0) {
+        console.warn('[generate_all_images] Parser warnings:', parseResult.warnings);
+      }
+      if (parseResult.errors.length > 0) {
+        console.error('[generate_all_images] Parser errors (non-strict mode, continuing):', parseResult.errors);
+        // Include error details in response for user visibility
+        const errorDetails = parseResult.errors.map(e => 
+          `Line ${e.line}: ${e.reason}${e.suggestion ? ` (${e.suggestion})` : ''}`
+        ).join('; ');
+        console.error('[generate_all_images] Error details:', errorDetails);
+      }
+
+      if (placements.length === 0) {
+        // If we have errors, include them in the response
+        const errorMessages = parseResult.errors.length > 0
+          ? `\n\nParser found ${parseResult.errors.length} error(s):\n${parseResult.errors.map(e => 
+              `  Line ${e.line}: ${e.reason}${e.suggestion ? ` - ${e.suggestion}` : ''}`
+            ).join('\n')}`
+          : '';
+        
+        return {
+          status: 'error',
+          error: 'No placements found in image-placements.md',
+          suggestion: `The image-placements.md file exists but contains no valid placements.${errorMessages}\n\nPlease re-run the image_placement phase to create placements.`,
+          next_action: 'Re-run the image_placement phase to identify and create image placements, then try generating images again.',
+        };
+      }
     } catch (error) {
+      console.error('[generate_all_images] Unexpected error parsing placements:', error);
       return {
         status: 'error',
         error: `Failed to parse image placements: ${String(error)}`,
         suggestion: 'The image-placements.md file may be corrupted or in an invalid format. Please check the file or re-run the image_placement phase to regenerate it.',
         next_action: 'Review the image-placements.md file format, or re-run the image_placement phase to create a new placements file.',
-      };
-    }
-    
-    if (placements.length === 0) {
-      return {
-        status: 'error',
-        error: 'No placements found in image-placements.md',
-        suggestion: 'The image-placements.md file exists but contains no valid placements. Please re-run the image_placement phase to create placements.',
-        next_action: 'Re-run the image_placement phase to identify and create image placements, then try generating images again.',
       };
     }
     
