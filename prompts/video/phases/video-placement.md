@@ -51,6 +51,7 @@ write_file(
    - Read `agent/content/image-placements.md` and `agent/content/video-placements.md`
    - Read `agent/content/transcript.md` to get the total transcript duration
    - **Check that image placements + video placements together cover the ENTIRE transcript duration with NO GAPS**
+   - **CRITICAL: Check for gaps starting from 0:00. If the first placement doesn't start at 0:00, there is a gap that must be filled.**
    - **If gaps are found**:
      - Identify the exact time ranges that are not covered
      - Call the video-placer again with a specific task to fill those gaps:
@@ -92,6 +93,7 @@ update_project(
 - **CRITICAL: Video duration MUST NOT exceed 10 seconds - this is a hard limit due to hardware constraints. If transcript segments are longer than 10 seconds, split them into multiple placements or adjust timestamps to stay within the 10-second limit.**
 - Video placements are saved to `agent/content/video-placements.md`
 - Create placements to cover all remaining transcript segments not covered by images. Ensure 100% coverage with no gaps.
+- **CRITICAL: Ensure coverage starts from 0:00. If the first placement (image or video) doesn't start at 0:00, create a video placement starting at 0:00 to cover the gap.**
 - Each placement must specify video type: cinematic_realism or stock_footage (AVOID motion_graphics - use stock_footage or cinematic_realism instead)
 
 **DO NOT:**

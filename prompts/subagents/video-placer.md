@@ -131,6 +131,7 @@ VIDEO_PLACER:
 - **CRITICAL: Videos complement images - they appear in DIFFERENT time segments.**
 - **CRITICAL: Create placements to cover ALL remaining transcript segments not covered by images. Fill every gap to ensure 100% coverage.**
 - **CRITICAL: You MUST fill EVERY gap left by image-placer, including ad breaks, transitions, and any other segments. The goal is 100% coverage - no gaps allowed.**
+- **CRITICAL: Ensure coverage starts from 0:00. If image-placer's first placement doesn't start at 0:00, you MUST create a video placement starting at 0:00 to cover the gap from 0:00 to the first image placement.**
 - Focus on moments that would benefit from narrative visual storytelling with **REAL VIDEO FOOTAGE**:
   - Complex processes and demonstrations with **REAL HUMAN SUBJECTS** (actual farmers demonstrating agricultural techniques, real traders on ships)
   - Historical reconstructions with **REAL ACTORS** and movement (live-action scenes of people going about daily life, traders on ships, farmers in fields)
@@ -171,4 +172,5 @@ VIDEO_PLACER:
 - **Videos complement images - they appear in different time segments.**
 - **CRITICAL: You MUST create placements for ALL segments not covered by images, including ad breaks and transitions. The goal is 100% coverage with zero gaps.**
 - **CRITICAL: After checking image placements, identify ALL remaining time segments in the transcript and create video placements for each one, no matter how small.**
+- **CRITICAL: Check if coverage starts at 0:00. If the first placement (image or video) doesn't start at 0:00, you MUST create a video placement starting at 0:00.**
 - Create as many placements as needed to achieve complete coverage - do not skip any segments.
