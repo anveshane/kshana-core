@@ -95,7 +95,7 @@ Include:
 - Emotional tone
 - Camera angle suggestions
 - Motion description (for video)
-- Duration estimate (5-15 seconds)
+- Duration estimate (5-10 seconds maximum, hard limit of 10 seconds due to hardware constraints)
 
 ### For Narration
 

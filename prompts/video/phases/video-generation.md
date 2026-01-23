@@ -33,7 +33,7 @@ generate_all_videos(
 The tool will:
 - Read and parse the video-placements.md file
 - Extract all placement entries (Placement 1, 2, 3, etc.)
-- Calculate duration from timestamps (rounded to 5, 10, or 15 seconds)
+- Calculate duration from timestamps (rounded to 4-10 seconds maximum, hard limit of 10 seconds due to hardware constraints)
 - Extract video type (cinematic_realism, stock_footage, or motion_graphics)
 - Generate videos sequentially, one at a time
 - Wait for each video to complete before moving to the next

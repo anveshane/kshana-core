@@ -91,7 +91,6 @@ Each individual scene must include:
 - Action and movement
 - Emotional tone
 - Camera suggestions
-- Duration: 5-15 seconds
 
 ## Phase Completion - ONLY After ALL Scenes Done
 

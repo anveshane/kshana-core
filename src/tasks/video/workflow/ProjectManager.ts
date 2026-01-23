@@ -2333,13 +2333,27 @@ export function updateSceneApproval(
 export function addAsset(asset: AssetInfo, basePath: string = getCurrentProjectBasePath()): void {
   const manifestPath = getManifestFilePath(basePath);
 
+  console.log(`[addAsset] Registering asset:`, {
+    id: asset.id,
+    type: asset.type,
+    path: asset.path,
+    scene_number: asset.scene_number,
+    placementNumber: asset.metadata?.placementNumber,
+    manifestPath,
+    basePath,
+  });
+
   let manifest: { schema_version?: string; assets: AssetInfo[] } = { assets: [] };
   if (existsSync(manifestPath)) {
     try {
       manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-    } catch {
+      console.log(`[addAsset] Loaded existing manifest with ${manifest.assets?.length || 0} assets`);
+    } catch (error) {
+      console.error(`[addAsset] Failed to parse existing manifest:`, error);
       // Use empty manifest on parse error
     }
+  } else {
+    console.log(`[addAsset] Manifest file does not exist, creating new one: ${manifestPath}`);
   }
 
   // Ensure schema_version is set
@@ -2350,32 +2364,64 @@ export function addAsset(asset: AssetInfo, basePath: string = getCurrentProjectB
   // Check if asset already exists
   const existingIndex = manifest.assets.findIndex((a) => a.id === asset.id);
   if (existingIndex >= 0) {
+    console.log(`[addAsset] Updating existing asset at index ${existingIndex}`);
     manifest.assets[existingIndex] = asset;
   } else {
+    console.log(`[addAsset] Adding new asset (total will be ${manifest.assets.length + 1})`);
     manifest.assets.push(asset);
   }
 
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+  try {
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+    console.log(`[addAsset] ✓ Successfully wrote manifest with ${manifest.assets.length} assets to ${manifestPath}`);
+    
+    // Verify the write by reading it back
+    try {
+      const verifyManifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      const assetInManifest = verifyManifest.assets?.find((a: AssetInfo) => a.id === asset.id);
+      if (assetInManifest) {
+        console.log(`[addAsset] ✓ Verified asset ${asset.id} is in manifest`);
+      } else {
+        console.error(`[addAsset] ✗ CRITICAL: Asset ${asset.id} was not found in manifest after write!`);
+      }
+    } catch (verifyError) {
+      console.error(`[addAsset] Failed to verify manifest write:`, verifyError);
+    }
+  } catch (error) {
+    console.error(`[addAsset] ✗ CRITICAL: Failed to write manifest:`, {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+      manifestPath,
+      basePath,
+    });
+    throw error; // Re-throw so caller knows registration failed
+  }
 
   // Update project file's asset list
-  const project = loadProject(basePath);
-  if (project && !project.assets.includes(asset.id)) {
-    project.assets.push(asset.id);
+  try {
+    const project = loadProject(basePath);
+    if (project && !project.assets.includes(asset.id)) {
+      project.assets.push(asset.id);
 
-    // Also track in content registry for persistence across restarts
-    // Map asset types to content types
-    const contentType: ContentTypeName | null =
-      asset.type === 'scene_image' || asset.type === 'character_ref' || asset.type === 'setting_ref'
-        ? 'images'
-        : asset.type === 'scene_video' || asset.type === 'final_video'
-          ? 'videos'
-          : null;
+      // Also track in content registry for persistence across restarts
+      // Map asset types to content types
+      const contentType: ContentTypeName | null =
+        asset.type === 'scene_image' || asset.type === 'character_ref' || asset.type === 'setting_ref'
+          ? 'images'
+          : asset.type === 'scene_video' || asset.type === 'final_video'
+            ? 'videos'
+            : null;
 
-    if (contentType) {
-      addContentItem(project, contentType, asset.id, asset.path, basePath);
-    } else {
-      saveProject(project, basePath);
+      if (contentType) {
+        addContentItem(project, contentType, asset.id, asset.path, basePath);
+      } else {
+        saveProject(project, basePath);
+      }
+      console.log(`[addAsset] Updated project file with asset ${asset.id}`);
     }
+  } catch (error) {
+    console.warn(`[addAsset] Failed to update project file (non-critical):`, error);
+    // Don't throw - manifest write succeeded, project file update is secondary
   }
 }
 

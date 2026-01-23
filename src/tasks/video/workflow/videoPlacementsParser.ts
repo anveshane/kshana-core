@@ -9,7 +9,7 @@ export interface ParsedVideoPlacement {
   endTime: string;
   videoType: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
   prompt: string;
-  duration: number; // Calculated from timestamps, rounded to 4-15 seconds
+  duration: number; // Calculated from timestamps, rounded to 4-10 seconds
   filename?: string; // Optional, for backward compatibility
 }
 
@@ -36,11 +36,12 @@ function timeToSeconds(timeStr: string): number {
 }
 
 /**
- * Round duration to nearest valid value (4-15 seconds).
+ * Round duration to nearest valid value (4-10 seconds).
  * Rounds to the nearest valid duration that matches generation capability.
+ * Hard limit of 10 seconds due to hardware constraints.
  */
 function roundDuration(seconds: number): number {
-  // Round to nearest valid duration (4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, or 15)
+  // Round to nearest valid duration (4, 5, 6, 7, 8, 9, or 10)
   if (seconds <= 4.5) return 4;
   if (seconds <= 5.5) return 5;
   if (seconds <= 6.5) return 6;
@@ -48,11 +49,7 @@ function roundDuration(seconds: number): number {
   if (seconds <= 8.5) return 8;
   if (seconds <= 9.5) return 9;
   if (seconds <= 10.5) return 10;
-  if (seconds <= 11.5) return 11;
-  if (seconds <= 12.5) return 12;
-  if (seconds <= 13.5) return 13;
-  if (seconds <= 14.5) return 14;
-  return 15; // Cap at 15 seconds
+  return 10; // Cap at 10 seconds (hardware limitation)
 }
 
 /**

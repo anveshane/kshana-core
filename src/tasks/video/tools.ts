@@ -501,6 +501,15 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
       const sceneNumber = job.context?.sceneNumber;
       const placementNumber = sceneNumber; // For placements, sceneNumber is actually placementNumber
       
+      console.log(`[waitForComfyUIJob] Registering asset for job ${jobId}:`, {
+        artifactId,
+        assetType,
+        relativePath,
+        sceneNumber,
+        placementNumber,
+        savedPath,
+      });
+      
       // Build metadata with placementNumber if available
       const metadata: Record<string, unknown> = {
         jobId: job.id,
@@ -530,8 +539,9 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
               const maxVersion = Math.max(...existingAssets.map(a => a.version || 1));
               version = maxVersion + 1;
             }
-          } catch {
+          } catch (error) {
             // If manifest read fails, default to version 1
+            console.warn(`[waitForComfyUIJob] Failed to read manifest for version calculation:`, error);
           }
         }
       }
@@ -552,9 +562,31 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
         assetData.scene_number = sceneNumber;
       }
       
+      console.log(`[waitForComfyUIJob] Calling addAsset with:`, {
+        id: assetData.id,
+        type: assetData.type,
+        path: assetData.path,
+        scene_number: assetData.scene_number,
+        placementNumber: assetData.metadata?.placementNumber,
+        version: assetData.version,
+      });
+      
       addAsset(assetData);
-    } catch {
-      // Project may not exist yet, that's OK
+      
+      console.log(`[waitForComfyUIJob] Successfully registered asset ${artifactId} with placementNumber ${placementNumber}`);
+    } catch (error) {
+      // Log the error instead of silently swallowing it
+      console.error(`[waitForComfyUIJob] CRITICAL: Failed to register asset in manifest:`, {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        jobId,
+        artifactId,
+        relativePath,
+        placementNumber: job.context?.sceneNumber,
+        assetType,
+      });
+      // Don't throw - image was generated successfully, just not registered
+      // This allows the function to return success even if registration fails
     }
 
     // Link artifact to project entity (character, setting, or scene)
@@ -775,7 +807,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
 export interface VideoPlacementGenerationParams {
   scene_number: number;
   prompt: string;
-  duration: number; // Duration in seconds (4-15 seconds)
+  duration: number; // Duration in seconds (4-10 seconds maximum)
   video_type: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
 }
 
@@ -784,8 +816,8 @@ export interface VideoPlacementGenerationParams {
  * LTX-2 requires frame count to be divisible by 8 + 1.
  * Formula: Math.floor((duration * 24) / 8) * 8 + 1
  * 
- * @param duration Duration in seconds (4-15 seconds)
- * @returns Frame count (97 for 4s, 121 for 5s, up to 361 for 15s)
+ * @param duration Duration in seconds (4-10 seconds maximum)
+ * @returns Frame count (97 for 4s, 121 for 5s, up to 241 for 10s)
  */
 function calculateFrameCount(duration: number): number {
   // 24 fps, frame count must be divisible by 8 + 1
@@ -910,8 +942,8 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       },
       duration: {
         type: 'number',
-        description: 'Video duration in seconds (4-15 seconds)',
-        enum: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+        description: 'Video duration in seconds (4-10 seconds maximum)',
+        enum: [4, 5, 6, 7, 8, 9, 10],
       },
       scene_number: {
         type: 'number',
@@ -1800,11 +1832,17 @@ The tool handles all parsing, sequential generation, and error handling internal
     
     // Generate images sequentially
     for (const placement of placements) {
-      console.log(`[generate_all_images] Generating image for Placement ${placement.placementNumber}...`);
+      console.log(`[generate_all_images] Generating image for Placement ${placement.placementNumber}...`, {
+        placementNumber: placement.placementNumber,
+        startTime: placement.startTime,
+        endTime: placement.endTime,
+        promptLength: placement.prompt.length,
+      });
       
       try {
         // Submit image generation job
         // Use placement number as scene_number for tracking
+        console.log(`[generate_all_images] Submitting image generation for Placement ${placement.placementNumber} with scene_number=${placement.placementNumber}`);
         const submitResult = await submitImageGeneration({
           scene_number: placement.placementNumber,
           prompt: placement.prompt,
@@ -1816,7 +1854,7 @@ The tool handles all parsing, sequential generation, and error handling internal
         
         if (submitResult.status !== 'submitted' || !submitResult.jobId) {
           const errorMsg = submitResult.error || 'Failed to submit image generation';
-          console.error(`[generate_all_images] Placement ${placement.placementNumber} failed: ${errorMsg}`);
+          console.error(`[generate_all_images] Placement ${placement.placementNumber} failed to submit: ${errorMsg}`);
           results.push({
             placementNumber: placement.placementNumber,
             status: 'failed',
@@ -1825,12 +1863,26 @@ The tool handles all parsing, sequential generation, and error handling internal
           continue;
         }
         
+        console.log(`[generate_all_images] Job submitted for Placement ${placement.placementNumber}, jobId=${submitResult.jobId}`);
+        
         // Wait for job completion
         const timeout = getVideoGenerationTimeout();
+        console.log(`[generate_all_images] Waiting for job ${submitResult.jobId} to complete (timeout=${timeout}s)...`);
         const waitResult = await waitForComfyUIJob(submitResult.jobId, timeout);
         
+        console.log(`[generate_all_images] Job ${submitResult.jobId} completed with status:`, {
+          status: waitResult.status,
+          artifactId: waitResult.artifactId,
+          filePath: waitResult.filePath,
+          error: waitResult.error,
+        });
+        
         if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
-          console.log(`[generate_all_images] Placement ${placement.placementNumber} completed: ${waitResult.artifactId}`);
+          console.log(`[generate_all_images] ✓ Placement ${placement.placementNumber} completed successfully:`, {
+            artifactId: waitResult.artifactId,
+            filePath: waitResult.filePath,
+            placementNumber: placement.placementNumber,
+          });
           results.push({
             placementNumber: placement.placementNumber,
             status: 'success',
@@ -1839,7 +1891,7 @@ The tool handles all parsing, sequential generation, and error handling internal
           });
         } else {
           const errorMsg = waitResult.error || 'Image generation did not complete';
-          console.error(`[generate_all_images] Placement ${placement.placementNumber} failed: ${errorMsg}`);
+          console.error(`[generate_all_images] ✗ Placement ${placement.placementNumber} failed: ${errorMsg}`);
           results.push({
             placementNumber: placement.placementNumber,
             status: 'failed',
@@ -1848,7 +1900,10 @@ The tool handles all parsing, sequential generation, and error handling internal
         }
       } catch (error) {
         const errorMsg = String(error);
-        console.error(`[generate_all_images] Placement ${placement.placementNumber} error: ${errorMsg}`);
+        console.error(`[generate_all_images] ✗ Placement ${placement.placementNumber} threw error:`, {
+          error: errorMsg,
+          stack: error instanceof Error ? error.stack : undefined,
+        });
         results.push({
           placementNumber: placement.placementNumber,
           status: 'failed',

@@ -56,10 +56,11 @@ update_project(
 - The content plan provides strategic guidance only (high-level visual strategy)
 - Image placements are saved to `agent/content/image-placements.md`
 - Create image placements to cover appropriate segments of the transcript. Video-placer will fill remaining gaps to ensure 100% coverage.
+- **CRITICAL: Be thorough - create placements for all moments that benefit from images. Don't leave large gaps expecting video-placer to fill them.**
 
 **DO NOT:**
 - Create placements for infographics (those are handled separately)
-- Create placements for video segments or ad breaks (those stay as original footage)
-- Worry about covering every segment - video-placer will fill remaining gaps to ensure complete coverage
+- Create placements for charts, diagrams, or data visualizations (those are handled separately)
 - Skip saving the placements - you MUST save to the file
 - Skip transition to image generation - you MUST transition after marking phase complete
+- Leave unnecessarily large gaps - be thorough in identifying image-worthy moments

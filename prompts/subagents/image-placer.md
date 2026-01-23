@@ -50,7 +50,7 @@ IMAGE_PLACER:
 - **CRITICAL: If a moment needs an infographic, chart, or diagram, SKIP IT - those are handled by other subagents.**
 - **CRITICAL: Create placements to cover the transcript. Work with video-placer to ensure 100% coverage with no gaps.**
 - Focus on moments that would truly benefit from visual enhancement with images (personal stories, historical context, conceptual explanations).
-- Skip ad breaks, transitions, and segments that work well as original footage.
+- **CRITICAL: Only skip segments that video-placer will definitely cover (like ad breaks, transitions, or segments that clearly need video). However, if you're unsure, create an image placement - it's better to have slight overlap than gaps.**
 - Skip any moments that require infographics, charts, diagrams, or data visualizations.
 - Keep prompts specific and visually descriptive with documentary-style detail.
 - Use exact timestamps from the transcript, not approximate ranges.
@@ -79,5 +79,5 @@ IMAGE_PLACER:
 - YOU identify the moments from the transcript - don't wait for the plan to list them.
 - **ONLY create placements for `type=image` - NO INFOGRAPHICS, NO CHARTS, NO DIAGRAMS.**
 - If a moment requires an infographic (like a hierarchy chart, migration map, or scientific diagram), SKIP IT.
-- Only create placements for moments that need images (skip infographics, ad breaks, transitions).
-- Create placements for moments that truly benefit from visual enhancement with images. Video-placer will ensure complete coverage by filling remaining gaps.
+- Only create placements for moments that need images (skip infographics, charts, diagrams).
+- **CRITICAL: Create placements for moments that truly benefit from visual enhancement with images. Video-placer will fill ALL remaining gaps to ensure complete coverage, but you should be thorough - don't leave large gaps expecting video-placer to fill them.**
