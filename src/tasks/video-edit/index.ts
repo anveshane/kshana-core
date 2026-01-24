@@ -32,7 +32,10 @@ export * from './tools/index.js';
 export * from './agents/index.js';
 
 // Re-export orchestrator
-export { VideoEditOrchestrator, type VideoEditOrchestratorConfig } from './VideoEditOrchestrator.js';
+export {
+  VideoEditOrchestrator,
+  type VideoEditOrchestratorConfig,
+} from './VideoEditOrchestrator.js';
 
 // Import for internal use
 import { ToolRegistry } from '../../core/tools/index.js';
@@ -40,6 +43,7 @@ import {
   thinkTool,
   askUserQuestionTool,
   todoWriteTool,
+  fetchToolResultTool,
 } from '../../core/tools/builtin/index.js';
 import type { ToolDefinition } from '../../core/llm/index.js';
 import { allVideoEditTools, getToolsForPhase } from './tools/index.js';
@@ -58,6 +62,7 @@ export function createVideoEditToolRegistry(): ToolRegistry {
   registry.register(thinkTool);
   registry.register(askUserQuestionTool);
   registry.register(todoWriteTool);
+  registry.register(fetchToolResultTool);
 
   // Register shared tools (read_project, update_project)
   for (const tool of getSharedTools()) {
@@ -84,6 +89,7 @@ export function createPhaseToolRegistry(phase: EditWorkflowPhase): ToolRegistry 
   registry.register(thinkTool);
   registry.register(askUserQuestionTool);
   registry.register(todoWriteTool);
+  registry.register(fetchToolResultTool);
 
   // Always include shared tools (read_project, update_project)
   for (const tool of getSharedTools()) {

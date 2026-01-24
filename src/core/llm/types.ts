@@ -10,6 +10,12 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /**
+   * Optional short summary of why this tool is being called.
+   * Note: Most OpenAI-compatible providers won't populate this automatically.
+   * We keep it for forward-compat / structured prompting.
+   */
+  summary?: string;
 }
 
 /**

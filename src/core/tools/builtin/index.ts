@@ -18,4 +18,9 @@ export {
   listContextsTool,
   deleteContextTool,
 } from './contextTools.js';
-export { generateContentTool, CONTENT_TYPE_CONTEXTS, CONTENT_TYPE_OUTPUT_FILES } from './generateContentTool.js';
+export { fetchToolResultTool } from './fetchToolResult.js';
+export {
+  generateContentTool,
+  CONTENT_TYPE_CONTEXTS,
+  CONTENT_TYPE_OUTPUT_FILES,
+} from './generateContentTool.js';

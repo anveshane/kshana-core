@@ -4,6 +4,9 @@
 export { ContextStore, contextStore } from './ContextStore.js';
 export type { StoredContext } from './ContextStore.js';
 
+export { ToolResultStore, toolResultStore } from './ToolResultStore.js';
+export type { StoredToolResult } from './ToolResultStore.js';
+
 export {
   condenseContent,
   condenseUserInput,

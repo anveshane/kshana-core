@@ -20,6 +20,8 @@ export interface ToolCallEvent {
   toolCallId: string;
   toolName: string;
   arguments: Record<string, unknown>;
+  /** Optional short summary of why the tool is being called */
+  summary?: string;
   agentName?: string;
 }
 
@@ -31,6 +33,10 @@ export interface ToolResultEvent {
   toolCallId: string;
   toolName: string;
   result: unknown;
+  /** Short summary of the result (used for compact history/UI) */
+  summary?: string;
+  /** Reference ID for fetching full details from memory */
+  refId?: string;
   isError?: boolean;
   agentName?: string;
 }

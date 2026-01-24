@@ -25,6 +25,7 @@ export {
   expandTodoTool,
   storeContextTool,
   fetchContextTool,
+  fetchToolResultTool,
   listContextsTool,
   deleteContextTool,
   generateContentTool,
@@ -45,6 +46,7 @@ import {
   legacyTodoWriteTool,
   storeContextTool,
   fetchContextTool,
+  fetchToolResultTool,
   generateContentTool,
 } from './builtin/index.js';
 
@@ -63,6 +65,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   registry.register(todoWriteTool);
   registry.register(storeContextTool);
   registry.register(fetchContextTool);
+  registry.register(fetchToolResultTool);
   registry.register(generateContentTool);
 
   return registry;
