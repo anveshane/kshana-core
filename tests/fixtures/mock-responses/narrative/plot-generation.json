@@ -1,0 +1,19 @@
+[
+  {
+    "content": "I'll help you create a plot outline for this story.",
+    "toolCalls": []
+  },
+  {
+    "content": null,
+    "toolCalls": [
+      {
+        "id": "call_0",
+        "name": "dispatch_agent",
+        "arguments": {
+          "task": "create a detailed plot outline",
+          "context_refs": ["$original_input"]
+        }
+      }
+    ]
+  }
+]

@@ -69,6 +69,14 @@ export class MockLLMClient {
   }
 
   /**
+   * Get the model's context length.
+   * Returns a default value for testing.
+   */
+  async getContextLength(): Promise<number> {
+    return 16000; // Default context length for testing
+  }
+
+  /**
    * Generate a response (non-streaming).
    */
   async generate(options: GenerateOptions): Promise<LLMResponse> {

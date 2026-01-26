@@ -1,0 +1,5 @@
+This is a longer complete story for testing purposes. In a real scenario, this would be a full 2000+ word chapter with multiple scenes, dialogue exchanges, and detailed descriptions. For now, this placeholder represents a story that's long enough to be detected as 'complete story' input type rather than 'idea'.
+
+The story contains multiple paragraphs, dialogue markers like "said" and "asked," action verbs like "walked" and "looked," and time references like "morning" and "evening." These patterns help the input type detection system recognize it as a full story rather than a simple plot idea.
+
+In production tests, you would replace this with actual full narrative content that matches the template's requirements for complete story input.
