@@ -133,15 +133,20 @@ export function createDefaultContentRegistry(): ContentRegistry {
  * Strip XML-like tags from content (e.g., <user_task>, [STORED CONTENT:], etc.)
  */
 function stripWrapperTags(content: string): string {
-  return content
-    // Remove <user_task>...</user_task> tags
-    .replace(/<user_task>\s*/gi, '')
-    .replace(/\s*<\/user_task>/gi, '')
-    // Remove [user_task]... prefix
-    .replace(/^\[user_task\]\s*/i, '')
-    // Remove [STORED CONTENT: ...] blocks
-    .replace(/\[STORED CONTENT:[^\]]*\]\s*context_ref:[^\n]*\n[^\n]*\n\nPreview:[^\n]*\n\n[^\n]*\n[^\n]*/gi, '')
-    .trim();
+  return (
+    content
+      // Remove <user_task>...</user_task> tags
+      .replace(/<user_task>\s*/gi, '')
+      .replace(/\s*<\/user_task>/gi, '')
+      // Remove [user_task]... prefix
+      .replace(/^\[user_task\]\s*/i, '')
+      // Remove [STORED CONTENT: ...] blocks
+      .replace(
+        /\[STORED CONTENT:[^\]]*\]\s*context_ref:[^\n]*\n[^\n]*\n\nPreview:[^\n]*\n\n[^\n]*\n[^\n]*/gi,
+        ''
+      )
+      .trim()
+  );
 }
 
 /**
@@ -211,7 +216,7 @@ export function createProject(
       },
       scenes: {
         status: 'pending',
-        planFile: 'plans/scenes.md',
+        planFile: 'plans/scenes-outline.md',
         completedAt: null,
       },
       character_setting_images: {
@@ -392,7 +397,10 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     }
   }
 
-  if ((project.content.characters.items?.length ?? 0) > 0 && project.content.characters.status === 'missing') {
+  if (
+    (project.content.characters.items?.length ?? 0) > 0 &&
+    project.content.characters.status === 'missing'
+  ) {
     project.content.characters.status = 'partial';
     needsSave = true;
   }
@@ -458,7 +466,10 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     }
   }
 
-  if ((project.content.settings.items?.length ?? 0) > 0 && project.content.settings.status === 'missing') {
+  if (
+    (project.content.settings.items?.length ?? 0) > 0 &&
+    project.content.settings.status === 'missing'
+  ) {
     project.content.settings.status = 'partial';
     needsSave = true;
   }
@@ -474,7 +485,10 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       needsSave = true;
     }
   }
-  if ((project.content.scenes.items?.length ?? 0) > 0 && project.content.scenes.status === 'missing') {
+  if (
+    (project.content.scenes.items?.length ?? 0) > 0 &&
+    project.content.scenes.status === 'missing'
+  ) {
     project.content.scenes.status = 'partial';
     needsSave = true;
   }
@@ -541,7 +555,10 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         needsSave = true;
       }
     }
-    if ((project.content.scenes.items?.length ?? 0) > 0 && project.content.scenes.status === 'missing') {
+    if (
+      (project.content.scenes.items?.length ?? 0) > 0 &&
+      project.content.scenes.status === 'missing'
+    ) {
       project.content.scenes.status = 'partial';
       needsSave = true;
     }
@@ -567,7 +584,9 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
 
     // Check version - must be 2.0 for 8-phase workflow
     if (!project.version || project.version !== '2.0') {
-      console.warn(`[ProjectManager] Incompatible project version: ${project.version ?? 'unknown'}. Expected: 2.0`);
+      console.warn(
+        `[ProjectManager] Incompatible project version: ${project.version ?? 'unknown'}. Expected: 2.0`
+      );
       console.warn('[ProjectManager] Please delete the .kshana directory and start a new project.');
       return null;
     }
@@ -586,7 +605,11 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
 /**
  * Check if an existing project is compatible with the current workflow.
  */
-export function isProjectCompatible(basePath: string = process.cwd()): { compatible: boolean; version?: string; reason?: string } {
+export function isProjectCompatible(basePath: string = process.cwd()): {
+  compatible: boolean;
+  version?: string;
+  reason?: string;
+} {
   const filePath = getProjectFilePath(basePath);
 
   if (!existsSync(filePath)) {
@@ -598,11 +621,19 @@ export function isProjectCompatible(basePath: string = process.cwd()): { compati
     const project = JSON.parse(content);
 
     if (!project.version) {
-      return { compatible: false, version: 'unknown', reason: 'Old project without version (pre-2.0). Delete .kshana directory to start fresh.' };
+      return {
+        compatible: false,
+        version: 'unknown',
+        reason: 'Old project without version (pre-2.0). Delete .kshana directory to start fresh.',
+      };
     }
 
     if (project.version !== '2.0') {
-      return { compatible: false, version: project.version, reason: `Incompatible version ${project.version}. Expected 2.0. Delete .kshana directory to start fresh.` };
+      return {
+        compatible: false,
+        version: project.version,
+        reason: `Incompatible version ${project.version}. Expected 2.0. Delete .kshana directory to start fresh.`,
+      };
     }
 
     return { compatible: true, version: project.version };
@@ -771,7 +802,10 @@ export function planFileHasContent(planFile: string, basePath: string = process.
 /**
  * Read a file from the project directory.
  */
-export function readProjectFile(relativePath: string, basePath: string = process.cwd()): string | null {
+export function readProjectFile(
+  relativePath: string,
+  basePath: string = process.cwd()
+): string | null {
   const filePath = join(getProjectDir(basePath), relativePath);
 
   if (!existsSync(filePath)) {
@@ -820,10 +854,7 @@ function formatCharacterMarkdown(character: CharacterData): string {
 /**
  * Save character data to characters/[name].md and update project.
  */
-export function saveCharacter(
-  character: CharacterData,
-  basePath: string = process.cwd()
-): void {
+export function saveCharacter(character: CharacterData, basePath: string = process.cwd()): void {
   const safeName = character.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   const filePath = `characters/${safeName}.md`;
   writeProjectFile(filePath, formatCharacterMarkdown(character), basePath);
@@ -846,10 +877,7 @@ export function saveCharacter(
 /**
  * Add a character to the project (creates default entry if only name provided).
  */
-export function addCharacter(
-  name: string,
-  basePath: string = process.cwd()
-): CharacterData {
+export function addCharacter(name: string, basePath: string = process.cwd()): CharacterData {
   const project = loadProject(basePath);
   if (!project) {
     throw new Error('No project found');
@@ -944,7 +972,10 @@ export function updateCharacterApproval(
  * Load character markdown from characters/[name].md.
  * Returns the raw markdown content (parsing not needed for index-only approach).
  */
-export function loadCharacterMarkdown(name: string, basePath: string = process.cwd()): string | null {
+export function loadCharacterMarkdown(
+  name: string,
+  basePath: string = process.cwd()
+): string | null {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   return readProjectFile(`characters/${safeName}.md`, basePath);
 }
@@ -991,10 +1022,7 @@ export function saveSetting(setting: SettingData, basePath: string = process.cwd
 /**
  * Add a setting to the project (creates default entry if only name provided).
  */
-export function addSetting(
-  name: string,
-  basePath: string = process.cwd()
-): SettingData {
+export function addSetting(name: string, basePath: string = process.cwd()): SettingData {
   const project = loadProject(basePath);
   if (!project) {
     throw new Error('No project found');
@@ -1103,7 +1131,7 @@ export function addScene(sceneRef: SceneRef, basePath: string = process.cwd()): 
   if (!project) return;
 
   // Check if scene already exists
-  const existingIndex = project.scenes.findIndex((s) => s.sceneNumber === sceneRef.sceneNumber);
+  const existingIndex = project.scenes.findIndex(s => s.sceneNumber === sceneRef.sceneNumber);
   if (existingIndex >= 0) {
     project.scenes[existingIndex] = sceneRef;
   } else {
@@ -1139,7 +1167,9 @@ export function addNewScene(
 
   // HARD LIMIT: Prevent infinite scene creation
   if (sceneNumber > MAX_SCENES) {
-    throw new Error(`⛔ SCENE LIMIT EXCEEDED: Maximum ${MAX_SCENES} scenes allowed. Scene ${sceneNumber} cannot be created.`);
+    throw new Error(
+      `⛔ SCENE LIMIT EXCEEDED: Maximum ${MAX_SCENES} scenes allowed. Scene ${sceneNumber} cannot be created.`
+    );
   }
 
   // Check if scene already exists
@@ -1248,7 +1278,7 @@ export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): vo
   }
 
   // Check if asset already exists
-  const existingIndex = manifest.assets.findIndex((a) => a.id === asset.id);
+  const existingIndex = manifest.assets.findIndex(a => a.id === asset.id);
   if (existingIndex >= 0) {
     manifest.assets[existingIndex] = asset;
   } else {
@@ -1402,7 +1432,20 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
 
   // For phases requiring per-item approval, provide specific instructions
   if (phaseConfig.requiresPerItemApproval) {
-    instruction += getPerItemPhaseInstructions(project, phaseConfig, basePath);
+    if (
+      phaseConfig.phase === WorkflowPhase.CHARACTERS_SETTINGS ||
+      phaseConfig.phase === WorkflowPhase.SCENES
+    ) {
+      instruction += getPerItemPhasePlanningInstructions(
+        project,
+        phaseConfig,
+        plannerStage,
+        planFileExists,
+        basePath
+      );
+    } else {
+      instruction += getPerItemPhaseInstructions(project, phaseConfig, basePath);
+    }
   } else {
     // Standard single-approval phase flow
     switch (plannerStage) {
@@ -1473,6 +1516,99 @@ The ${phaseConfig.displayName} phase is complete.
 }
 
 /**
+ * Get planning instructions for per-item phases that require a breakdown approval step.
+ */
+function getPerItemPhasePlanningInstructions(
+  project: ProjectFile,
+  phaseConfig: PhaseConfig,
+  plannerStage: PlannerStage,
+  planFileExists: boolean,
+  _basePath: string
+): string {
+  const planFile = phaseConfig.planOutputFile ?? 'N/A';
+  const isCharacters = phaseConfig.phase === WorkflowPhase.CHARACTERS_SETTINGS;
+  const planLabel = isCharacters ? 'Character & Setting Breakdown' : 'Scene Outline';
+  const planSummary = isCharacters
+    ? 'Identify all characters and key settings from the chapter with short role notes.'
+    : 'Outline 5-8 key scenes with short titles and beats.';
+  const planNotes = isCharacters
+    ? 'Do NOT write full character/setting descriptions yet.'
+    : 'Do NOT write full scene descriptions yet.';
+
+  let instruction = `
+**IMPORTANT: This phase starts with a ${planLabel} that requires user approval before per-item generation.**
+
+## Planner Stage
+- **Stage**: ${plannerStage}
+- **Plan File**: ${planFile}
+- **Plan File Has Content**: ${planFileExists ? 'YES' : 'NO'}
+`;
+
+  switch (plannerStage) {
+    case PlannerStage.PLANNING:
+      if (planFileExists) {
+        instruction += `
+A ${planLabel} already exists at ${planFile}. Do NOT regenerate it.
+
+1. Read the plan from ${planFile}
+2. Move to VERIFY and present it for approval
+`;
+      } else {
+        instruction += `
+Create the ${planLabel}.
+1. Read the story
+2. ${planSummary}
+3. Save the breakdown to ${planFile}
+4. Move to VERIFY stage by updating the planner stage
+
+${planNotes}
+`;
+      }
+      break;
+
+    case PlannerStage.VERIFY:
+      if (planFileExists) {
+        instruction += `
+Present the ${planLabel} to the user for approval.
+1. Read the plan from ${planFile}
+2. Present a concise summary to the user using ask_user
+3. If approved, update planner stage to COMPLETE
+4. If feedback is given, move to REFINING stage
+
+${planNotes}
+`;
+      } else {
+        instruction += `
+No ${planLabel} found at ${planFile}.
+Return to PLANNING stage to create the breakdown before requesting approval.
+`;
+      }
+      break;
+
+    case PlannerStage.REFINING:
+      instruction += `
+Update the ${planLabel} based on user feedback.
+1. Read the current plan
+2. Apply feedback
+3. Update the plan in ${planFile}
+4. Move back to VERIFY stage
+
+${planNotes}
+`;
+      break;
+
+    case PlannerStage.COMPLETE:
+      instruction += `
+${planLabel} approved. Proceed with per-item generation.
+`;
+      instruction += getPerItemPhaseInstructions(project, phaseConfig, _basePath);
+      break;
+  }
+
+  return instruction.trim();
+}
+
+/**
  * Get per-item phase instructions for phases that require individual item approval.
  */
 function getPerItemPhaseInstructions(
@@ -1481,7 +1617,10 @@ function getPerItemPhaseInstructions(
   _basePath: string
 ): string {
   const nextItem = getNextUnapprovedItem(project, phaseConfig.phase);
-  const { approved: approvedCount, total: totalItems } = countApprovedItems(project, phaseConfig.phase);
+  const { approved: approvedCount, total: totalItems } = countApprovedItems(
+    project,
+    phaseConfig.phase
+  );
 
   // Get full item list for TODO reconstruction
   const allItems = getPhaseItems(project, phaseConfig.phase);
@@ -1519,7 +1658,12 @@ You are resuming this phase with ${approvedCount} of ${totalItems} items already
 TodoWrite(merge: false, todos: [
 ${allItems
   .map((item, idx) => {
-    const status = item.status === 'approved' ? 'completed' : idx === allItems.findIndex(i => i.status !== 'approved') ? 'in_progress' : 'pending';
+    const status =
+      item.status === 'approved'
+        ? 'completed'
+        : idx === allItems.findIndex(i => i.status !== 'approved')
+          ? 'in_progress'
+          : 'pending';
     return `  { id: "${item.id}", content: "Process ${item.name}", activeForm: "Processing ${item.name}", status: "${status}" },`;
   })
   .join('\n')}
@@ -1556,7 +1700,7 @@ TodoWrite(merge: false, todos: [
 `;
     switch (phaseConfig.phase) {
       case WorkflowPhase.CHARACTERS_SETTINGS:
-        instruction += `Read the story and identify all characters and settings mentioned. Register each one before creating their profiles.
+        instruction += `Use the approved Character & Setting Breakdown to register each character and setting, then create their profiles.
 `;
         break;
       case WorkflowPhase.CHARACTER_SETTING_IMAGES:
@@ -1564,7 +1708,7 @@ TodoWrite(merge: false, todos: [
 `;
         break;
       case WorkflowPhase.SCENES:
-        instruction += `Read the story and break it into individual scenes. Register each scene before creating detailed scene descriptions.
+        instruction += `Use the approved Scene Outline to register each scene, then create detailed scene descriptions.
 `;
         break;
       case WorkflowPhase.SCENE_IMAGES:

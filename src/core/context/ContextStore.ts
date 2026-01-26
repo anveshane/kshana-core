@@ -215,6 +215,46 @@ export class ContextStore {
   }
 
   /**
+   * Search for contexts by label pattern (case-insensitive).
+   * Returns contexts whose labels contain the given pattern.
+   *
+   * @param pattern - Text pattern to search for in labels
+   * @returns Array of matching context metadata
+   */
+  searchByLabel(pattern: string): StoredContextMeta[] {
+    const normalizedPattern = pattern.toLowerCase();
+    const results: StoredContextMeta[] = [];
+    for (const meta of this.index.values()) {
+      if (meta.label.toLowerCase().includes(normalizedPattern)) {
+        results.push(meta);
+      }
+    }
+    return results;
+  }
+
+  /**
+   * Search for contexts by label pattern and fetch their content.
+   * Returns full context data (metadata + content) for all matches.
+   *
+   * @param pattern - Text pattern to search for in labels
+   * @returns Array of matching contexts with content
+   */
+  searchByLabelWithContent(pattern: string): StoredContext[] {
+    const matches = this.searchByLabel(pattern);
+    const results: StoredContext[] = [];
+    for (const meta of matches) {
+      const data = this.get(meta.variableName);
+      if (data) {
+        results.push({
+          ...meta,
+          content: data.content,
+        });
+      }
+    }
+    return results;
+  }
+
+  /**
    * Clean up contexts older than specified days.
    */
   cleanup(olderThanDays: number = 7): number {

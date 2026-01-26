@@ -2,13 +2,29 @@
 
 ## CORRECT WORKFLOW
 
-### Step 1: YOU (Orchestrator) Identify Items
+### Step 0: Create and Approve the Breakdown
 
 **DO NOT dispatch a Task for this step.** YOU must read the `$story` context yourself and identify:
+
 - All character names mentioned in the story
 - All key locations/settings mentioned in the story
 
-After identifying them, create a TodoWrite list:
+Create a **Character & Setting Breakdown** and save it to `plans/characters-settings.md` for approval.
+
+Approval flow:
+
+1. Save the breakdown
+2. Move to VERIFY stage
+3. Present the breakdown for user approval
+4. If approved, update planner stage to COMPLETE
+5. If feedback is given, move to REFINING and update the breakdown
+
+**Do NOT generate full descriptions until the breakdown is approved.**
+
+### Step 1: Create Item Todos
+
+After breakdown approval, create a TodoWrite list:
+
 ```
 TodoWrite(merge: false, todos: [
   { id: "char-<name>", content: "Create character: <Name>", activeForm: "Creating character: <Name>", status: "in_progress" },
@@ -21,16 +37,19 @@ TodoWrite(merge: false, todos: [
 ### Step 2: Process EACH Item with generate_content
 
 For EACH character (ONE at a time - do not batch!):
+
 ```
 generate_content(content_type: "character", name: "<CHARACTER_NAME>")
 ```
 
 For EACH setting (ONE at a time - do not batch!):
+
 ```
 generate_content(content_type: "setting", name: "<SETTING_NAME>")
 ```
 
 The tool automatically:
+
 - Fetches the story and other required contexts
 - Creates the character/setting profile
 - Handles user approval flow
@@ -59,7 +78,9 @@ generate_content(content_type: "character", name: "Marcus")
 **DO NOT call `update_planner_stage(stage: 'complete')` until ALL items are done!**
 
 ## Character Profile Requirements
+
 Each character profile must include:
+
 - Name and role in the story
 - Physical appearance (detailed for image generation)
 - Personality traits
@@ -68,7 +89,9 @@ Each character profile must include:
 - Visual keywords for image generation
 
 ## Setting Description Requirements
+
 Each setting description must include:
+
 - Location name and type
 - Visual details (lighting, colors, atmosphere)
 - Key objects and props
@@ -78,10 +101,11 @@ Each setting description must include:
 
 ## Summary
 
-1. **Step 1**: YOU read $story and create TodoWrite (NO Task call)
-2. **Step 2**: ONE generate_content call per character/setting (individual files!)
-3. **Step 3**: Update todo and move to next
-4. **Step 4**: After ALL items done -> call `update_project(action: 'transition_phase', data: { next_phase: 'scenes' })`
+1. **Step 0**: Create and approve the breakdown (save to `plans/characters-settings.md`)
+2. **Step 1**: Create TodoWrite after approval
+3. **Step 2**: ONE generate_content call per character/setting (individual files!)
+4. **Step 3**: Update todo and move to next
+5. **Step 4**: After ALL items done -> call `update_project(action: 'transition_phase', data: { next_phase: 'scenes' })`
 
 **Remember**: Each character = separate generate_content + separate file. Each setting = separate generate_content + separate file.
 

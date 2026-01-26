@@ -24,6 +24,7 @@ export class LLMClient {
     this.client = new OpenAI({
       baseURL: this.baseUrl,
       apiKey: config.apiKey ?? process.env['LLM_API_KEY'] ?? 'not-needed',
+      timeout: 5 * 60 * 1000, // 5 minutes for thinking/reasoning models
     });
     this.model = config.model ?? process.env['LLM_MODEL'] ?? 'local-model';
   }

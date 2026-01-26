@@ -8,6 +8,7 @@ import { render } from 'ink';
 import { App } from './App.js';
 import { getLLMConfig, getLLMProvider, validateLLMConfig, resetLLMLogger, type LLMClientConfig } from './core/llm/index.js';
 import { resetPhaseLogger } from './utils/phaseLogger.js';
+import { resetDebugLog } from './hooks/useAgent.js';
 
 // Task type for agent specialization
 type TaskType = 'generic' | 'video';
@@ -222,6 +223,7 @@ if (server) {
   // Reset loggers (creates fresh log files for this session)
   resetLLMLogger();
   resetPhaseLogger();
+  resetDebugLog();
 
   // Render with fullscreen mode enabled
   render(<App llmConfig={llmConfig} initialTask={task} taskType={taskType} />);

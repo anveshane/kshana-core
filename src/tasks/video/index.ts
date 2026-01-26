@@ -14,6 +14,7 @@ import { loadAndRenderMarkdown, loadMarkdown } from '../../core/prompts/loader.j
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
+import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
 // Workflow imports
 import {
@@ -24,7 +25,20 @@ import {
   WorkflowPhase,
   PHASE_CONFIGS,
   getProjectDir,
+  // Generic template-aware imports
+  GenericProjectManager,
+  createProjectManager,
 } from './workflow/index.js';
+
+// Template system imports
+import {
+  initializeTemplates,
+  listTemplates,
+  detectTemplate,
+  getTemplateOrThrow,
+  TEMPLATE_IDS,
+} from '../../templates/index.js';
+import type { VideoTemplate, GenericProjectFile } from '../../core/templates/types.js';
 
 // Re-export prompts
 export { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
@@ -186,7 +200,7 @@ export function createWorkflowToolRegistry(): ToolRegistry {
  * - images: characters, scenes
  * - video: scenes, images
  */
-function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
+export function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
   const projectDir = getProjectDir(basePath);
   const plansDir = join(projectDir, 'plans');
   const loadedContexts: string[] = [];
@@ -246,7 +260,6 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
 
   // Log context loading metrics for phase-aware monitoring
   if (loadedContexts.length > 0) {
-    const { getPhaseLogger } = require('../../utils/phaseLogger.js');
     const phaseLogger = getPhaseLogger();
     // Estimate tokens: ~3 chars per token
     const estimatedTokens = Math.ceil(totalChars / 3);
@@ -274,7 +287,7 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
   } = config;
 
   // Initialize or load project
-  const project = getOrCreateProject(originalInput, basePath);
+  const project = getOrCreateProject(originalInput, undefined, basePath);
   const currentPhase = getCurrentPhase(project);
   const phaseConfig = PHASE_CONFIGS[currentPhase];
 
@@ -386,3 +399,265 @@ export function getWorkflowToolNames(): string[] {
     ...getVideoToolNames(),
   ];
 }
+
+// =============================================================================
+// TEMPLATE-BASED WORKFLOW (v3.0)
+// =============================================================================
+
+/**
+ * Configuration options for creating a template-based video agent.
+ */
+export interface TemplateVideoAgentConfig {
+  llmConfig: LLMClientConfig;
+  maxIterations?: number;
+  /** Template ID to use (auto-detected if not provided) */
+  templateId?: string;
+  /** Original user input/content */
+  originalInput?: string;
+  /** Project title */
+  title?: string;
+  /** Visual style ID */
+  style?: string;
+  /** Base path for project directory (defaults to cwd) */
+  basePath?: string;
+}
+
+/**
+ * Result of template detection
+ */
+export interface TemplateDetectionResult {
+  templateId: string;
+  templateName: string;
+  inputTypeId: string;
+  confidence: number;
+  alternatives: Array<{ id: string; displayName: string; description: string }>;
+}
+
+/**
+ * Initialize the template system.
+ * Must be called before using template-based workflow.
+ */
+export function initializeVideoTemplates(): void {
+  initializeTemplates();
+}
+
+/**
+ * Get available video templates.
+ */
+export function getAvailableTemplates(): Array<{ id: string; displayName: string; description: string }> {
+  initializeTemplates();
+  return listTemplates();
+}
+
+/**
+ * Detect the best template for given content.
+ */
+export function detectVideoTemplate(content: string): TemplateDetectionResult | null {
+  initializeTemplates();
+  const result = detectTemplate(content);
+
+  if (!result) {
+    return null;
+  }
+
+  const template = getTemplateOrThrow(result.templateId);
+  const alternatives = listTemplates().filter((t) => t.id !== result.templateId);
+
+  return {
+    templateId: result.templateId,
+    templateName: template.displayName,
+    inputTypeId: result.inputTypeId,
+    confidence: result.confidence,
+    alternatives,
+  };
+}
+
+/**
+ * Create a GenericAgent configured for template-based video creation.
+ * This is the v3.0 template-aware workflow.
+ */
+export async function createTemplateVideoAgent(
+  config: TemplateVideoAgentConfig
+): Promise<{
+  agent: GenericAgent;
+  projectManager: GenericProjectManager;
+  template: VideoTemplate;
+}> {
+  const {
+    llmConfig,
+    maxIterations = 100,
+    templateId,
+    originalInput = '',
+    title = 'Untitled Project',
+    style,
+    basePath = process.cwd(),
+  } = config;
+
+  // Initialize templates
+  initializeTemplates();
+
+  // Determine template
+  let finalTemplateId = templateId;
+  let inputTypeId: string | undefined;
+
+  if (!finalTemplateId && originalInput) {
+    // Auto-detect template
+    const detection = detectTemplate(originalInput);
+    if (detection) {
+      finalTemplateId = detection.templateId;
+      inputTypeId = detection.inputTypeId;
+    }
+  }
+
+  // Default to narrative if no template detected
+  finalTemplateId = finalTemplateId || TEMPLATE_IDS.NARRATIVE;
+  const template = getTemplateOrThrow(finalTemplateId);
+
+  // Create project manager
+  const projectManager = createProjectManager(basePath);
+
+  // Create or load project
+  let project;
+  if (projectManager.projectExists()) {
+    project = await projectManager.loadProject();
+  } else {
+    project = await projectManager.createProject({
+      title,
+      templateId: finalTemplateId,
+      style: style || template.defaultStyle,
+      inputType: inputTypeId,
+      inputContent: originalInput,
+    });
+  }
+
+  // Get current phase info
+  const currentPhase = projectManager.getCurrentPhase();
+  const phaseInfo = template.phases?.find((p: { id: string }) => p.id === currentPhase);
+
+  // Load contexts from disk
+  const contexts = loadProjectFilesAsContexts(basePath);
+
+  // Create tool registry
+  const registry = createWorkflowToolRegistry();
+
+  // Create LLM client
+  const llm = new LLMClient(llmConfig);
+
+  // Build template-aware prompt
+  const customPrompt = buildTemplateAgentPrompt(template, project, phaseInfo, contexts);
+
+  // Create the agent
+  const agent = new GenericAgent(registry.getAll(), llm, {
+    maxIterations,
+    customPrompt,
+    name: `template-video-agent-${finalTemplateId}`,
+  });
+
+  return { agent, projectManager, template };
+}
+
+/**
+ * Build the custom prompt for a template-based agent.
+ */
+function buildTemplateAgentPrompt(
+  template: VideoTemplate,
+  project: GenericProjectFile | null,
+  currentPhase: { id: string; displayName: string; description: string } | undefined,
+  loadedContexts: string[]
+): string {
+  // Build artifact types summary
+  const artifactsSummary = Object.entries(template.artifactTypes)
+    .map(([id, def]) => `- **${def.displayName}** (${def.category}): ${def.description}`)
+    .join('\n');
+
+  // Build phases summary if available
+  let phasesSummary = 'No phases defined - artifact-driven workflow.';
+  if (template.phases && template.phases.length > 0) {
+    phasesSummary = template.phases
+      .map((p, i) => `${i + 1}. **${p.displayName}**: ${p.description}`)
+      .join('\n');
+  }
+
+  // Build loaded contexts section
+  let loadedContextsSection = 'No existing project files loaded yet.';
+  if (loadedContexts.length > 0) {
+    loadedContextsSection = `## Available Contexts
+The following project files have been loaded as contexts:
+${loadedContexts.map((c) => `- ${c}`).join('\n')}
+
+Use the \`generate_content\` tool for creating content - it automatically injects the correct contexts.`;
+  }
+
+  // Current phase info
+  let currentPhaseSection = '';
+  if (currentPhase) {
+    currentPhaseSection = `
+## Current Phase: ${currentPhase.displayName}
+${currentPhase.description}
+`;
+  }
+
+  return `# ${template.displayName} - Video Creation Workflow
+
+${template.description}
+
+## Project Information
+- **Project ID**: ${project?.id ?? 'new'}
+- **Title**: ${project?.title || '(not set)'}
+- **Template**: ${template.displayName} (v${template.version})
+- **Style**: ${project?.style || template.defaultStyle}
+
+${currentPhaseSection}
+
+## Workflow Phases
+${phasesSummary}
+
+## Artifact Types
+${artifactsSummary}
+
+${loadedContextsSection}
+
+## Your Role
+
+You are an orchestrator guiding the user through the video creation process.
+
+### Guidelines
+
+1. **Follow the artifact dependency order** - Check dependencies before creating artifacts
+2. **Get approval for expensive operations** - Image and video generation require confirmation
+3. **Track progress** - Use update_project to track artifact status
+4. **Offer choices** - When multiple approaches are valid, present options to the user
+5. **Explain what you're doing** - Keep the user informed of progress
+
+### Available Tools
+
+- **read_project**: Read current project state
+- **update_project**: Update project state (artifacts, phases)
+- **read_file**: Read project files
+- **write_file**: Write project files
+- **generate_content**: Generate content using AI (with automatic context injection)
+- **ask_user**: Ask user for input or confirmation
+- **Task**: Dispatch subagents for complex tasks
+
+### Getting Started
+
+1. Read the current project state with read_project
+2. Determine what artifact to work on next based on dependencies
+3. Create or update artifacts as needed
+4. Get user approval for completed artifacts
+5. Proceed to the next artifact or phase
+`;
+}
+
+/**
+ * Get template by ID.
+ */
+export function getVideoTemplate(templateId: string): VideoTemplate {
+  initializeTemplates();
+  return getTemplateOrThrow(templateId);
+}
+
+/**
+ * Re-export template IDs for convenience.
+ */
+export { TEMPLATE_IDS } from '../../templates/index.js';

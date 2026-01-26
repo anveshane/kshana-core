@@ -12,6 +12,23 @@ import type { AgentEvent } from '../events/index.js';
 
 // Debug logging to file
 const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+
+/**
+ * Reset the debug log file (called on CLI start).
+ */
+export function resetDebugLog(): void {
+  try {
+    const dir = path.dirname(DEBUG_LOG_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const header = `=== Debug Log Started [${new Date().toISOString()}] ===\n`;
+    fs.writeFileSync(DEBUG_LOG_PATH, header);
+  } catch {
+    // Ignore errors
+  }
+}
+
 function debugLog(message: string) {
   try {
     const timestamp = new Date().toISOString();

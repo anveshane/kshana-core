@@ -129,6 +129,14 @@ export {
   type VideoTransition,
 } from './StitchVideoTool.js';
 
+// Generic Project Manager (v3.0 template-aware)
+export {
+  GenericProjectManager,
+  createProjectManager,
+  PROJECT_VERSION as GENERIC_PROJECT_VERSION,
+  type CreateProjectOptions,
+} from './GenericProjectManager.js';
+
 // Combined tool getter
 import { getWorkflowFileTools } from './FileTools.js';
 import { getStitchingTools } from './StitchVideoTool.js';

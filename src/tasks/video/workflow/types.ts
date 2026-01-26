@@ -35,13 +35,15 @@ export const STYLE_CONFIGS: Record<ProjectStyle, StyleConfig> = {
   cinematic_realism: {
     displayName: 'Cinematic Realism',
     description: 'Photorealistic, cinematic look with dramatic lighting and film-quality visuals',
-    promptModifier: 'cinematic, photorealistic, dramatic lighting, high detail, film quality, 8k, professional photography',
+    promptModifier:
+      'cinematic, photorealistic, dramatic lighting, high detail, film quality, 8k, professional photography',
     negativePromptModifier: 'anime, cartoon, illustration, drawing, sketch, 2d, cel shaded',
   },
   anime: {
     displayName: 'Anime',
     description: 'Japanese anime style with vibrant colors and expressive characters',
-    promptModifier: 'anime style, anime art, vibrant colors, detailed anime, studio quality anime, anime aesthetic',
+    promptModifier:
+      'anime style, anime art, vibrant colors, detailed anime, studio quality anime, anime aesthetic',
     negativePromptModifier: 'photorealistic, realistic, photograph, live action, 3d render',
   },
 };
@@ -297,7 +299,14 @@ export interface AssetInfo {
 /**
  * Content type supported by the content registry.
  */
-export type ContentTypeName = 'plot' | 'story' | 'characters' | 'settings' | 'scenes' | 'images' | 'videos';
+export type ContentTypeName =
+  | 'plot'
+  | 'story'
+  | 'characters'
+  | 'settings'
+  | 'scenes'
+  | 'images'
+  | 'videos';
 
 /**
  * Status of content availability.
@@ -411,11 +420,11 @@ export type AgentType = 'planning' | 'content' | 'image' | 'video';
  * Determines how items are iterated in per-item approval phases.
  */
 export type ItemProcessMode =
-  | 'single'             // Single item (plot, story, video_combine)
-  | 'list_characters'    // Process each character
-  | 'list_settings'      // Process each setting
-  | 'list_scenes'        // Process each scene
-  | 'list_all_refs'      // Process all character + setting refs
+  | 'single' // Single item (plot, story, video_combine)
+  | 'list_characters' // Process each character
+  | 'list_settings' // Process each setting
+  | 'list_scenes' // Process each scene
+  | 'list_all_refs' // Process all character + setting refs
   | 'list_scene_images'; // Process each scene for image generation
 
 /**
@@ -464,7 +473,15 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     promptFile: 'plot',
     planOutputFile: 'plans/plot.md',
     agentType: 'planning',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_agent'],
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'dispatch_agent',
+    ],
     itemProcessMode: 'single',
     requiresPerItemApproval: false,
     isExpensive: false,
@@ -479,7 +496,15 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     planOutputFile: 'plans/story.md',
     agentType: 'content',
     contentType: 'story',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_content_agent'],
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'dispatch_content_agent',
+    ],
     itemProcessMode: 'single',
     requiresPerItemApproval: false,
     isExpensive: false,
@@ -493,7 +518,17 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     promptFile: 'characters-settings',
     planOutputFile: 'plans/characters-settings.md',
     agentType: 'content',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_agent', 'dispatch_content_agent', 'todo_write'],
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'dispatch_agent',
+      'dispatch_content_agent',
+      'todo_write',
+    ],
     itemProcessMode: 'list_all_refs',
     requiresPerItemApproval: true,
     isExpensive: false,
@@ -505,10 +540,20 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     displayName: 'Scene Breakdown',
     nextPhase: WorkflowPhase.CHARACTER_SETTING_IMAGES,
     promptFile: 'scenes',
-    planOutputFile: 'plans/scenes.md',
+    planOutputFile: 'plans/scenes-outline.md',
     agentType: 'content',
     contentType: 'scene',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_agent', 'dispatch_content_agent', 'todo_write'],
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'dispatch_agent',
+      'dispatch_content_agent',
+      'todo_write',
+    ],
     itemProcessMode: 'list_scenes',
     requiresPerItemApproval: true,
     isExpensive: false,
@@ -522,7 +567,18 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     promptFile: 'character-setting-images',
     planOutputFile: 'plans/ref-images.md',
     agentType: 'image',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'dispatch_image_agent',
+      'generate_image',
+      'wait_for_job',
+      'todo_write',
+    ],
     itemProcessMode: 'list_all_refs',
     requiresPerItemApproval: true,
     isExpensive: true,
@@ -536,7 +592,18 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     promptFile: 'scene-images',
     planOutputFile: 'plans/scene-images.md',
     agentType: 'image',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'dispatch_image_agent',
+      'generate_image',
+      'wait_for_job',
+      'todo_write',
+    ],
     itemProcessMode: 'list_scene_images',
     requiresPerItemApproval: true,
     isExpensive: true,
@@ -550,7 +617,18 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     promptFile: 'video',
     planOutputFile: 'plans/video.md',
     agentType: 'video',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_video_agent', 'generate_video', 'wait_for_job', 'todo_write'],
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'dispatch_video_agent',
+      'generate_video',
+      'wait_for_job',
+      'todo_write',
+    ],
     itemProcessMode: 'list_scenes',
     requiresPerItemApproval: true,
     isExpensive: true,
@@ -564,7 +642,15 @@ export const PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     promptFile: 'video-combine',
     planOutputFile: 'plans/final-video.md',
     agentType: 'video',
-    allowedTools: ['think', 'ask_user', 'read_file', 'read_project', 'update_project', 'stitch_videos', 'wait_for_job'],
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'read_project',
+      'update_project',
+      'stitch_videos',
+      'wait_for_job',
+    ],
     itemProcessMode: 'single',
     requiresPerItemApproval: false,
     isExpensive: true,
@@ -737,9 +823,7 @@ export function getPhaseItems(project: ProjectFile, phase: WorkflowPhase): ItemA
         id: `char_${char.name.toLowerCase().replace(/\s+/g, '_')}`,
         type: 'character' as const,
         name: char.name,
-        status: isImagePhase
-          ? (char.referenceImageApprovalStatus || 'pending')
-          : char.approvalStatus,
+        status: isImagePhase ? char.referenceImageApprovalStatus || 'pending' : char.approvalStatus,
         regenerationCount: char.regenerationCount,
         contentArtifactId: char.contentArtifactId,
         imageArtifactId: char.referenceImageId,
@@ -750,7 +834,7 @@ export function getPhaseItems(project: ProjectFile, phase: WorkflowPhase): ItemA
         type: 'setting' as const,
         name: setting.name,
         status: isImagePhase
-          ? (setting.referenceImageApprovalStatus || 'pending')
+          ? setting.referenceImageApprovalStatus || 'pending'
           : setting.approvalStatus,
         regenerationCount: setting.regenerationCount,
         contentArtifactId: setting.contentArtifactId,
@@ -807,7 +891,10 @@ export function getPhaseItems(project: ProjectFile, phase: WorkflowPhase): ItemA
  * Get the next unapproved item for a given phase.
  * Returns null if all items are approved.
  */
-export function getNextUnapprovedItem(project: ProjectFile, phase: WorkflowPhase): ItemApprovalEntry | null {
+export function getNextUnapprovedItem(
+  project: ProjectFile,
+  phase: WorkflowPhase
+): ItemApprovalEntry | null {
   const items = getPhaseItems(project, phase);
   return items.find(item => item.status !== 'approved') || null;
 }
@@ -830,7 +917,10 @@ export function areAllItemsApproved(project: ProjectFile, phase: WorkflowPhase):
 /**
  * Count approved items in a phase.
  */
-export function countApprovedItems(project: ProjectFile, phase: WorkflowPhase): { approved: number; total: number } {
+export function countApprovedItems(
+  project: ProjectFile,
+  phase: WorkflowPhase
+): { approved: number; total: number } {
   const items = getPhaseItems(project, phase);
   const approved = items.filter(item => item.status === 'approved').length;
   return { approved, total: items.length };

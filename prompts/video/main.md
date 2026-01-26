@@ -10,7 +10,7 @@ When you receive user input, you MUST first determine its type:
 
 If ANY of the following are true, it's a complete story:
 
-- Multiple paragraphs of narrative text
+- Multiple paragraphs of narrative text (chapter-like input)
 - Contains dialogue between characters
 - Has a plot with beginning, middle, events unfolding
 - Character names and actions described in detail
@@ -21,14 +21,16 @@ If ANY of the following are true, it's a complete story:
 
 If ALL of the following are true, it's just an idea:
 
-- 1-3 sentences only
+- 1-3 sentences only (clearly not a chapter)
 - Just a concept, premise, or theme
 - No actual narrative or dialogue
 - Example: "A detective solves a mystery in space"
 
 ### Action Based on Input Type
 
-**If COMPLETE STORY:**
+**Default rule**: Assume the user is pasting a chapter and treat it as a COMPLETE STORY unless it clearly matches the IDEA indicators.
+
+**If COMPLETE STORY (default assumption for chapter input):**
 
 ```javascript
 update_project(action: 'set_input_type', data: { input_type: 'story' })
@@ -36,7 +38,7 @@ update_project(action: 'set_input_type', data: { input_type: 'story' })
 
 This automatically skips Plot and Story phases. Start from Characters/Settings phase.
 
-**If IDEA:**
+**If IDEA (only when clearly a short concept):**
 Proceed with normal workflow starting from Plot phase.
 
 ## Workflow Phases
@@ -106,6 +108,7 @@ Task(
 **⛔ DO NOT create all scenes at once. Create 5-8 scenes, ONE at a time.**
 
 First, YOU (orchestrator) plan the scenes with TodoWrite (NOT a Task):
+
 ```javascript
 // YOU identify 5-8 key moments from the story, then:
 TodoWrite(todos: [
@@ -116,6 +119,7 @@ TodoWrite(todos: [
 ```
 
 Then create EACH scene individually:
+
 ```javascript
 Task(
   subagent_type: 'content-creator',
@@ -128,6 +132,7 @@ Task(
 ```
 
 **❌ NEVER do this:**
+
 ```javascript
 Task(task: 'Break the story into visual scenes')  // WRONG - creates 30+ scenes!
 Task(output_file: 'plans/scenes.md')  // WRONG - bundles all scenes!
@@ -192,13 +197,13 @@ Task(
 
 ## Subagent Types
 
-| Type | Purpose | When to Use |
-|------|---------|-------------|
-| Plan | Read-only planning | Before starting complex work |
-| Explore | Read project content | When needing context |
-| content-creator | Creative content | Plot, story, characters, settings, scenes |
-| image-generator | Image generation | Character refs, setting refs, scene images |
-| video-assembler | Video generation | Scene videos, final stitching |
+| Type            | Purpose              | When to Use                                |
+| --------------- | -------------------- | ------------------------------------------ |
+| Plan            | Read-only planning   | Before starting complex work               |
+| Explore         | Read project content | When needing context                       |
+| content-creator | Creative content     | Plot, story, characters, settings, scenes  |
+| image-generator | Image generation     | Character refs, setting refs, scene images |
+| video-assembler | Video generation     | Scene videos, final stitching              |
 
 ## TodoWrite Integration
 
@@ -217,7 +222,9 @@ TodoWrite(todos: [
 Bad example (compound todos):
 
 ```javascript
-{ content: "Create character profiles for Daniel, Sarah, and Mike" }  // DON'T DO THIS
+{
+  content: 'Create character profiles for Daniel, Sarah, and Mike';
+} // DON'T DO THIS
 ```
 
 ## User Approval Checkpoints

@@ -15,9 +15,15 @@ import {
   loadProject,
   deleteProject,
   createProject,
-  STYLE_CONFIGS,
+  loadProjectFilesAsContexts,
   type ProjectStyle,
+  // Template system imports
+  initializeVideoTemplates,
+  getAvailableTemplates,
+  getVideoTemplate,
+  TEMPLATE_IDS,
 } from './tasks/video/index.js';
+import type { StyleConfig as TemplateStyleConfig } from './core/templates/types.js';
 import type { LLMClientConfig } from './core/llm/index.js';
 import type { AgentConfig } from './core/agent/index.js';
 import * as uiLogger from './utils/uiLogger.js';
@@ -33,7 +39,7 @@ interface AppProps {
 }
 
 // Startup mode for video task type
-type StartupMode = 'checking' | 'select_action' | 'select_style' | 'new_story' | 'ready';
+type StartupMode = 'checking' | 'select_action' | 'select_template' | 'select_style' | 'new_story' | 'ready';
 
 export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' }: AppProps) {
   const { exit } = useApp();
@@ -51,6 +57,11 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   const [startupSelectedIndex, setStartupSelectedIndex] = React.useState(0);
   const [selectedStyle, setSelectedStyle] = React.useState<ProjectStyle>('cinematic_realism');
   const [styleSelectedIndex, setStyleSelectedIndex] = React.useState(0);
+  // Template selection state
+  const [selectedTemplateId, setSelectedTemplateId] = React.useState<string>(TEMPLATE_IDS.NARRATIVE);
+  const [templateSelectedIndex, setTemplateSelectedIndex] = React.useState(0);
+  const [availableTemplates, setAvailableTemplates] = React.useState<{ id: string; displayName: string; description: string }[]>([]);
+  const [selectedTemplateStyles, setSelectedTemplateStyles] = React.useState<TemplateStyleConfig[]>([]);
 
   // Initialize UI logger on mount
   React.useEffect(() => {
@@ -63,16 +74,31 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Check for existing project on mount (video mode only)
   React.useEffect(() => {
     if (taskType === 'video' && !started) {
+      // Initialize templates first
+      initializeVideoTemplates();
+      const templates = getAvailableTemplates();
+      setAvailableTemplates(templates);
+
       if (projectExists()) {
         const project = loadProject();
         setExistingProject(project);
         setStartupMode('select_action');
       } else {
-        // No existing project - go to style selection first
-        setStartupMode('select_style');
+        // No existing project - go to template selection first
+        setStartupMode('select_template');
       }
     }
   }, [taskType, started]);
+
+  // Load project files into context store when in video mode with existing project
+  // This ensures $story, $plot, etc. are available for fetch_context calls
+  const contextsLoadedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (taskType === 'video' && projectExists() && !contextsLoadedRef.current) {
+      contextsLoadedRef.current = true;
+      loadProjectFilesAsContexts();
+    }
+  }, [taskType]);
 
   // Create tool registry based on task type
   const tools = React.useMemo(() => {
@@ -184,11 +210,14 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         return;
       }
 
-      // For video mode with a new project, create the project with the selected style
+      // For video mode with a new project, create the project with the selected template and style
       // Input type will be determined by the agent based on the content
       if (taskType === 'video' && !existingProject) {
+        // TODO: Update createProject to support templateId for full v3.0 template support
         createProject(task, selectedStyle);
-        uiLogger.logUserInput(`Starting new project with style: ${STYLE_CONFIGS[selectedStyle].displayName}`);
+        const templateName = availableTemplates.find(t => t.id === selectedTemplateId)?.displayName ?? selectedTemplateId;
+        const styleName = selectedTemplateStyles.find(s => s.id === selectedStyle)?.displayName ?? selectedStyle;
+        uiLogger.logUserInput(`Starting new ${templateName} project with ${styleName} style`);
       }
 
       setStarted(true);
@@ -379,23 +408,41 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         uiLogger.logUserInput('Continue existing project');
         void run('Continue working on the existing project. Call read_project to see current state.');
       } else if (index === 1) {
-        // Start new project - show warning and switch to style selection
+        // Start new project - show warning and switch to template selection
         if (existingProject) {
           deleteProject();
           setExistingProject(null);
         }
-        setStartupMode('select_style');
+        setStartupMode('select_template');
       }
     }
   }, [startupMode, existingProject, run]);
 
-  // Handle style selection
+  // Handle template selection
+  const handleTemplateSelect = React.useCallback((index: number) => {
+    const template = availableTemplates[index];
+    if (template) {
+      setSelectedTemplateId(template.id);
+      // Load template-specific styles
+      const fullTemplate = getVideoTemplate(template.id);
+      setSelectedTemplateStyles(fullTemplate.styles);
+      // Set default style from template
+      if (fullTemplate.styles.length > 0 && fullTemplate.styles[0]) {
+        setSelectedStyle(fullTemplate.defaultStyle as ProjectStyle);
+      }
+      setStyleSelectedIndex(0);
+      setStartupMode('select_style');
+    }
+  }, [availableTemplates]);
+
+  // Handle style selection (now uses template-specific styles)
   const handleStyleSelect = React.useCallback((index: number) => {
-    const styles: ProjectStyle[] = ['cinematic_realism', 'anime'];
-    const style = styles[index] ?? 'cinematic_realism';
-    setSelectedStyle(style);
-    setStartupMode('new_story');
-  }, []);
+    const style = selectedTemplateStyles[index];
+    if (style) {
+      setSelectedStyle(style.id as ProjectStyle);
+      setStartupMode('new_story');
+    }
+  }, [selectedTemplateStyles]);
 
   // Handle keyboard for startup selection
   useInput((input, key) => {
@@ -414,19 +461,34 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     }
   }, { isActive: !started && taskType === 'video' && startupMode === 'select_action' });
 
-  // Handle keyboard for style selection
+  // Handle keyboard for template selection
+  useInput((input, key) => {
+    if (!started && taskType === 'video' && startupMode === 'select_template') {
+      const maxIndex = availableTemplates.length - 1;
+      if (key.upArrow) {
+        setTemplateSelectedIndex(prev => Math.max(0, prev - 1));
+      } else if (key.downArrow) {
+        setTemplateSelectedIndex(prev => Math.min(maxIndex, prev + 1));
+      } else if (key.return) {
+        handleTemplateSelect(templateSelectedIndex);
+      } else if (input >= '1' && input <= String(availableTemplates.length)) {
+        handleTemplateSelect(parseInt(input, 10) - 1);
+      }
+    }
+  }, { isActive: !started && taskType === 'video' && startupMode === 'select_template' });
+
+  // Handle keyboard for style selection (template-specific styles)
   useInput((input, key) => {
     if (!started && taskType === 'video' && startupMode === 'select_style') {
+      const maxIndex = selectedTemplateStyles.length - 1;
       if (key.upArrow) {
         setStyleSelectedIndex(prev => Math.max(0, prev - 1));
       } else if (key.downArrow) {
-        setStyleSelectedIndex(prev => Math.min(1, prev + 1));
+        setStyleSelectedIndex(prev => Math.min(maxIndex, prev + 1));
       } else if (key.return) {
         handleStyleSelect(styleSelectedIndex);
-      } else if (input === '1') {
-        handleStyleSelect(0);
-      } else if (input === '2') {
-        handleStyleSelect(1);
+      } else if (input >= '1' && input <= String(selectedTemplateStyles.length)) {
+        handleStyleSelect(parseInt(input, 10) - 1);
       }
     }
   }, { isActive: !started && taskType === 'video' && startupMode === 'select_style' });
@@ -487,44 +549,104 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         );
       }
 
-      // Style selection mode
-      if (startupMode === 'select_style') {
-        const styles: ProjectStyle[] = ['cinematic_realism', 'anime'];
+      // Template selection mode
+      if (startupMode === 'select_template') {
         return (
           <Box flexDirection="column" padding={1}>
             <Banner subtitle={subtitle} />
 
             <Box flexDirection="column" marginBottom={1} paddingX={2}>
-              <Text bold color="cyan">Choose Your Visual Style</Text>
+              <Text bold color="cyan">Choose Your Video Type</Text>
               <Text dimColor>
-                Select the visual style for your video project. This will determine the aesthetic of all generated images.
+                Select the type of video you want to create. Each type has different workflows and artifacts.
               </Text>
             </Box>
 
             <Box flexDirection="column" marginBottom={1} paddingX={2}>
-              {styles.map((style, index) => {
-                const config = STYLE_CONFIGS[style];
-                const isSelected = styleSelectedIndex === index;
+              {availableTemplates.map((template, index) => {
+                const isSelected = templateSelectedIndex === index;
                 return (
-                  <Box key={style} flexDirection="column" marginBottom={1}>
+                  <Box key={template.id} flexDirection="column" marginBottom={1}>
                     <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
-                      {isSelected ? '>' : ' '} {index + 1}. {config.displayName}
+                      {isSelected ? '>' : ' '} {index + 1}. {template.displayName}
                     </Text>
-                    <Text dimColor>     {config.description}</Text>
+                    <Text dimColor>     {template.description}</Text>
                   </Box>
                 );
               })}
             </Box>
 
             <Box paddingX={2}>
-              <Text dimColor>Use ↑↓ or 1-2 to select, Enter to confirm. Type "exit" to quit.</Text>
+              <Text dimColor>Use ↑↓ or 1-{availableTemplates.length} to select, Enter to confirm. Type "exit" to quit.</Text>
+            </Box>
+          </Box>
+        );
+      }
+
+      // Style selection mode (template-specific styles)
+      if (startupMode === 'select_style') {
+        const templateName = availableTemplates.find(t => t.id === selectedTemplateId)?.displayName ?? 'Video';
+        return (
+          <Box flexDirection="column" padding={1}>
+            <Banner subtitle={subtitle} />
+
+            <Box flexDirection="column" marginBottom={1} paddingX={2}>
+              <Text bold color="cyan">Choose Your Visual Style for {templateName}</Text>
+              <Text dimColor>
+                Select the visual style for your video project. This will determine the aesthetic of all generated images.
+              </Text>
+            </Box>
+
+            <Box flexDirection="column" marginBottom={1} paddingX={2}>
+              {selectedTemplateStyles.map((style, index) => {
+                const isSelected = styleSelectedIndex === index;
+                return (
+                  <Box key={style.id} flexDirection="column" marginBottom={1}>
+                    <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
+                      {isSelected ? '>' : ' '} {index + 1}. {style.displayName}
+                    </Text>
+                    <Text dimColor>     {style.description}</Text>
+                  </Box>
+                );
+              })}
+            </Box>
+
+            <Box paddingX={2}>
+              <Text dimColor>Use ↑↓ or 1-{selectedTemplateStyles.length} to select, Enter to confirm. Type "exit" to quit.</Text>
             </Box>
           </Box>
         );
       }
 
       // New story mode - show text input with same style as main agent view
-      const styleConfig = STYLE_CONFIGS[selectedStyle];
+      const templateInfo = availableTemplates.find(t => t.id === selectedTemplateId);
+      const styleInfo = selectedTemplateStyles.find(s => s.id === selectedStyle);
+
+      // Template-specific example prompts
+      const examplePrompts: Record<string, string[]> = {
+        narrative: [
+          '"A story about a robot learning to dance"',
+          '"Create a video about a magical forest adventure"',
+          '"An epic tale of a knight and a dragon"',
+        ],
+        documentary: [
+          '"How does climate change affect coral reefs?"',
+          '"The history of artificial intelligence"',
+          '"Why do people believe in conspiracy theories?"',
+        ],
+        short: [
+          '"POV: You discover time travel is real"',
+          '"5 things you didn\'t know about coffee"',
+          '"This one trick changed my morning routine"',
+        ],
+        infomercial: [
+          '"A smart water bottle that tracks hydration"',
+          '"Ergonomic keyboard with customizable keys"',
+          '"Solar-powered phone charger for outdoor use"',
+        ],
+      };
+      const examples = examplePrompts[selectedTemplateId] ?? examplePrompts.narrative ?? [];
+
       return (
         <Box flexDirection="column">
           <Box flexDirection="column" padding={1}>
@@ -533,7 +655,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             <Box flexDirection="column" marginBottom={1} paddingX={2}>
               <Text bold color="cyan">Welcome to Kshana!</Text>
               <Text dimColor>
-                Enter a story idea or paste a complete story/chapter.
+                {selectedTemplateId === 'narrative' && 'Enter a story idea or paste a complete story/chapter.'}
+                {selectedTemplateId === 'documentary' && 'Enter a topic, question, or research outline.'}
+                {selectedTemplateId === 'short' && 'Enter a hook, idea, or script for your short video.'}
+                {selectedTemplateId === 'infomercial' && 'Enter product information or a marketing brief.'}
               </Text>
               <Text dimColor>
                 The system will automatically detect what you've provided.
@@ -541,16 +666,17 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             </Box>
 
             <Box marginBottom={1} paddingX={2} flexDirection="column">
-              <Text bold color="magenta">Style: {styleConfig.displayName}</Text>
+              <Text bold color="magenta">Template: {templateInfo?.displayName ?? 'Unknown'}</Text>
+              <Text bold color="magenta">Style: {styleInfo?.displayName ?? 'Unknown'}</Text>
             </Box>
 
             <Box marginBottom={1} paddingX={2}>
               <Text bold color="yellow">Example prompts:</Text>
             </Box>
             <Box flexDirection="column" paddingX={4} marginBottom={1}>
-              <Text dimColor>"A story about a robot learning to dance"</Text>
-              <Text dimColor>"Create a video about a magical forest adventure"</Text>
-              <Text dimColor>"An epic tale of a knight and a dragon"</Text>
+              {examples.map((example, i) => (
+                <Text key={i} dimColor>{example}</Text>
+              ))}
             </Box>
           </Box>
 

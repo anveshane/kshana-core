@@ -13,11 +13,27 @@ import * as path from 'path';
 import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
-import { buildSystemMessage, buildPlanningPrompt, buildContentPrompt, buildImageGenerationPrompt, wrapUserTask, type ContentType } from '../prompts/index.js';
+import {
+  buildSystemMessage,
+  buildPlanningPrompt,
+  buildContentPrompt,
+  buildImageGenerationPrompt,
+  wrapUserTask,
+  type ContentType,
+} from '../prompts/index.js';
 import { loadAndRenderMarkdown } from '../prompts/loader.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
-import { contextStore, condenseUserInput, generateContentLabel, shouldCondense, LONG_CONTENT_THRESHOLD } from '../context/index.js';
-import { CONTENT_TYPE_CONTEXTS, CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
+import {
+  contextStore,
+  condenseUserInput,
+  generateContentLabel,
+  shouldCondense,
+  LONG_CONTENT_THRESHOLD,
+} from '../context/index.js';
+import {
+  CONTENT_TYPE_CONTEXTS,
+  CONTENT_TYPE_OUTPUT_FILES,
+} from '../tools/builtin/generateContentTool.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
@@ -109,7 +125,7 @@ export class GenericAgent extends TypedEventEmitter {
   };
   // Lower threshold (60%) to leave room for response generation
   // llama.cpp servers often can't handle mid-generation overflow
-  private static readonly CONTEXT_THRESHOLD = 0.60;
+  private static readonly CONTEXT_THRESHOLD = 0.6;
   private maxContextTokens: number = 16000; // Will be updated from LLM client
 
   // Current mode for more descriptive agent names in UI
@@ -118,11 +134,7 @@ export class GenericAgent extends TypedEventEmitter {
   // Claude SDK-style plan mode state
   private planModeActive = false;
 
-  constructor(
-    tools: Map<string, ToolDefinition>,
-    llm: LLMClient,
-    config: AgentConfig = {}
-  ) {
+  constructor(tools: Map<string, ToolDefinition>, llm: LLMClient, config: AgentConfig = {}) {
     super();
     this.tools = tools;
     this.llm = llm;
@@ -168,7 +180,11 @@ export class GenericAgent extends TypedEventEmitter {
    */
   stop(): void {
     this.aborted = true;
-    this.emit({ type: 'agent_status', status: 'interrupted', agentName: this.getEffectiveAgentName() });
+    this.emit({
+      type: 'agent_status',
+      status: 'interrupted',
+      agentName: this.getEffectiveAgentName(),
+    });
   }
 
   /**
@@ -197,7 +213,8 @@ export class GenericAgent extends TypedEventEmitter {
   ): Promise<LLMResponse> {
     let content = '';
     const toolCalls: ToolCall[] = [];
-    const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> = new Map();
+    const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> =
+      new Map();
     let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
 
     try {
@@ -211,7 +228,9 @@ export class GenericAgent extends TypedEventEmitter {
         // Handle content chunks
         if (chunk.content) {
           content += chunk.content;
-          debugLog(`[GenericAgent] streaming_text emit: chunk=${chunk.content.length} chars, total=${content.length} chars`);
+          debugLog(
+            `[GenericAgent] streaming_text emit: chunk=${chunk.content.length} chars, total=${content.length} chars`
+          );
           this.emit({ type: 'streaming_text', chunk: chunk.content, done: false });
         }
 
@@ -232,7 +251,9 @@ export class GenericAgent extends TypedEventEmitter {
 
         // Handle stream completion and capture usage
         if (chunk.done) {
-          debugLog(`[GenericAgent] streaming_text DONE: total content=${content.length} chars, toolCallCount=${toolCallAccumulators.size}`);
+          debugLog(
+            `[GenericAgent] streaming_text DONE: total content=${content.length} chars, toolCallCount=${toolCallAccumulators.size}`
+          );
           this.emit({ type: 'streaming_text', chunk: '', done: true });
           if (chunk.usage) {
             usage = chunk.usage;
@@ -268,9 +289,13 @@ export class GenericAgent extends TypedEventEmitter {
     // Clean content (remove <think> tags)
     const cleanedContent = content ? content.replace(/<think>.*?<\/think>/gs, '').trim() : null;
 
-    debugLog(`[GenericAgent] generateWithStreaming result: rawContent=${content.length} chars, cleanedContent=${cleanedContent?.length ?? 0} chars, toolCalls=${toolCalls.length}`);
+    debugLog(
+      `[GenericAgent] generateWithStreaming result: rawContent=${content.length} chars, cleanedContent=${cleanedContent?.length ?? 0} chars, toolCalls=${toolCalls.length}`
+    );
     if (cleanedContent) {
-      debugLog(`[GenericAgent] generateWithStreaming content preview: "${cleanedContent.slice(0, 200)}${cleanedContent.length > 200 ? '...' : ''}"`);
+      debugLog(
+        `[GenericAgent] generateWithStreaming content preview: "${cleanedContent.slice(0, 200)}${cleanedContent.length > 200 ? '...' : ''}"`
+      );
     }
 
     return {
@@ -340,7 +365,11 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit status change back to thinking
-        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
+        this.emit({
+          type: 'agent_status',
+          status: 'thinking',
+          agentName: this.getEffectiveAgentName(),
+        });
       } else if (this.contentState?.active) {
         // Handle the content creation response
         const contentResult = await this.handleContentResponse(userResponse);
@@ -385,7 +414,11 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit status change back to thinking
-        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
+        this.emit({
+          type: 'agent_status',
+          status: 'thinking',
+          agentName: this.getEffectiveAgentName(),
+        });
       } else if (this.imageGenState?.active) {
         // Handle the image generation response
         const imageResult = await this.handleImageGenResponse(userResponse);
@@ -431,7 +464,11 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit status change back to thinking
-        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
+        this.emit({
+          type: 'agent_status',
+          status: 'thinking',
+          agentName: this.getEffectiveAgentName(),
+        });
       } else if (this.videoGenState?.active) {
         // Handle the video generation response
         const videoResult = await this.handleVideoGenResponse(userResponse);
@@ -475,7 +512,11 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit status change back to thinking
-        this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
+        this.emit({
+          type: 'agent_status',
+          status: 'thinking',
+          agentName: this.getEffectiveAgentName(),
+        });
       } else {
         // Regular ask_user response
         this.handleUserResponse(userResponse);
@@ -496,7 +537,9 @@ export class GenericAgent extends TypedEventEmitter {
             charCount: task.length,
           });
           taskContent = result.condensed;
-          debugLog(`[GenericAgent] Condensed long user input (${task.length} chars) to ${result.variableName}`);
+          debugLog(
+            `[GenericAgent] Condensed long user input (${task.length} chars) to ${result.variableName}`
+          );
         }
       }
 
@@ -550,13 +593,21 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Emit event
-        this.emit({ type: 'agent_text', text: `User: ${userInput.slice(0, 200)}${userInput.length > 200 ? '...' : ''}`, isFinal: false });
+        this.emit({
+          type: 'agent_text',
+          text: `User: ${userInput.slice(0, 200)}${userInput.length > 200 ? '...' : ''}`,
+          isFinal: false,
+        });
       }
 
       this.iteration++;
 
       // Emit thinking status
-      this.emit({ type: 'agent_status', status: 'thinking', agentName: this.getEffectiveAgentName() });
+      this.emit({
+        type: 'agent_status',
+        status: 'thinking',
+        agentName: this.getEffectiveAgentName(),
+      });
 
       // Check if we need to compress context before making LLM call
       if (this.shouldCompressContext()) {
@@ -576,10 +627,16 @@ export class GenericAgent extends TypedEventEmitter {
       if (response.usage) {
         this.tokenUsage.lastPromptTokens = response.usage.promptTokens;
         this.tokenUsage.lastCompletionTokens = response.usage.completionTokens;
-        debugLog(`[GenericAgent] Token usage: prompt=${response.usage.promptTokens}, completion=${response.usage.completionTokens}, total=${response.usage.totalTokens}`);
+        debugLog(
+          `[GenericAgent] Token usage: prompt=${response.usage.promptTokens}, completion=${response.usage.completionTokens}, total=${response.usage.totalTokens}`
+        );
 
         // Log context usage for phase-aware monitoring
-        phaseLogger.contextUsage('GenericAgent', response.usage.promptTokens, this.maxContextTokens);
+        phaseLogger.contextUsage(
+          'GenericAgent',
+          response.usage.promptTokens,
+          this.maxContextTokens
+        );
       }
 
       // Add assistant message to history
@@ -601,7 +658,11 @@ export class GenericAgent extends TypedEventEmitter {
         if (toolCall.name === 'ask_user' || toolCall.name === 'AskUserQuestion') {
           const result = this.handleAskUser(toolCall);
           if (result) {
-            this.emit({ type: 'agent_status', status: 'waiting', agentName: this.getEffectiveAgentName() });
+            this.emit({
+              type: 'agent_status',
+              status: 'waiting',
+              agentName: this.getEffectiveAgentName(),
+            });
             return result;
           }
           continue;
@@ -647,7 +708,11 @@ export class GenericAgent extends TypedEventEmitter {
     }
 
     // Emit completed status
-    this.emit({ type: 'agent_status', status: 'completed', agentName: this.getEffectiveAgentName() });
+    this.emit({
+      type: 'agent_status',
+      status: 'completed',
+      agentName: this.getEffectiveAgentName(),
+    });
     this.emit({ type: 'agent_text', text: finalOutput, isFinal: true });
 
     return {
@@ -682,7 +747,10 @@ export class GenericAgent extends TypedEventEmitter {
    * Detect if the agent is in a loop calling the same tool repeatedly.
    * Returns an object with warning message and severity if looping detected, null otherwise.
    */
-  private detectLoop(toolName: string, args: Record<string, unknown>): { message: string; isHardError: boolean } | null {
+  private detectLoop(
+    toolName: string,
+    args: Record<string, unknown>
+  ): { message: string; isHardError: boolean } | null {
     // Create a signature for this tool call (tool + key args)
     const argSignature = JSON.stringify(args).slice(0, 100); // Limit to prevent huge signatures
     const signature = `${toolName}:${argSignature}`;
@@ -704,7 +772,8 @@ export class GenericAgent extends TypedEventEmitter {
       // After too many warnings, force stop
       if (this.consecutiveLoopWarnings >= GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS) {
         return {
-          message: `LOOP BLOCKED: You've called ${toolName} with similar arguments ${count} times and ignored ` +
+          message:
+            `LOOP BLOCKED: You've called ${toolName} with similar arguments ${count} times and ignored ` +
             `${this.consecutiveLoopWarnings} warnings. This tool call is being blocked. ` +
             `You MUST stop calling tools and provide a final response to the user.`,
           isHardError: true,
@@ -712,7 +781,8 @@ export class GenericAgent extends TypedEventEmitter {
       }
 
       return {
-        message: `LOOP DETECTED (warning ${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
+        message:
+          `LOOP DETECTED (warning ${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
           `You've called ${toolName} with similar arguments ${count} times recently. ` +
           `This suggests you're stuck in a loop. Please either:\n` +
           `1. Complete the current task and stop (no more tool calls)\n` +
@@ -731,14 +801,16 @@ export class GenericAgent extends TypedEventEmitter {
 
       if (this.consecutiveLoopWarnings >= GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS) {
         return {
-          message: `LOOP BLOCKED: You've called ${toolName} 4+ times in a row and ignored warnings. ` +
+          message:
+            `LOOP BLOCKED: You've called ${toolName} 4+ times in a row and ignored warnings. ` +
             `This tool call is being blocked. Provide a final response to the user.`,
           isHardError: true,
         };
       }
 
       return {
-        message: `WARNING (${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
+        message:
+          `WARNING (${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
           `You've called ${toolName} 4 times in a row. ` +
           `If you're done with the task, stop calling tools and provide a final response.`,
         isHardError: false,
@@ -850,16 +922,27 @@ export class GenericAgent extends TypedEventEmitter {
         this.pendingQuestion = resultObj['question'] as string;
 
         // Emit question event with options and auto-approve timeout
-        const questionOptions = resultObj['options'] as Array<{ label: string; description?: string }>;
+        const questionOptions = resultObj['options'] as Array<{
+          label: string;
+          description?: string;
+        }>;
         const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
-        debugLog(`[GenericAgent] dispatch_agent result: ${JSON.stringify({
-          status: resultObj['status'],
-          question: (resultObj['question'] as string)?.slice(0, 50),
-          optionsCount: questionOptions?.length,
-          options: questionOptions,
-          autoApproveTimeoutMs: questionTimeout,
-        }, null, 2)}`);
-        debugLog(`[GenericAgent] dispatch_agent emitting question event with options: ${JSON.stringify(questionOptions)}`);
+        debugLog(
+          `[GenericAgent] dispatch_agent result: ${JSON.stringify(
+            {
+              status: resultObj['status'],
+              question: (resultObj['question'] as string)?.slice(0, 50),
+              optionsCount: questionOptions?.length,
+              options: questionOptions,
+              autoApproveTimeoutMs: questionTimeout,
+            },
+            null,
+            2
+          )}`
+        );
+        debugLog(
+          `[GenericAgent] dispatch_agent emitting question event with options: ${JSON.stringify(questionOptions)}`
+        );
         this.emit({
           type: 'question',
           question: resultObj['question'] as string,
@@ -903,7 +986,9 @@ export class GenericAgent extends TypedEventEmitter {
 
       // Get the required contexts for this content type
       const requiredContexts = CONTENT_TYPE_CONTEXTS[contentType] || [];
-      debugLog(`[GenericAgent] generate_content: content_type=${contentType}, required_contexts=${requiredContexts.join(', ')}`);
+      debugLog(
+        `[GenericAgent] generate_content: content_type=${contentType}, required_contexts=${requiredContexts.join(', ')}`
+      );
 
       // Build the output file path
       let outputFile = CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
@@ -914,7 +999,8 @@ export class GenericAgent extends TypedEventEmitter {
       }
 
       // Build the task description
-      const task = taskDescription ||
+      const task =
+        taskDescription ||
         (name ? `Create ${contentType} profile for: ${name}` : `Create ${contentType} content`);
 
       // Create a synthetic tool call for handleDispatchContentAgent
@@ -929,7 +1015,9 @@ export class GenericAgent extends TypedEventEmitter {
         },
       };
 
-      debugLog(`[GenericAgent] generate_content dispatching with context_refs: ${JSON.stringify(requiredContexts)}`);
+      debugLog(
+        `[GenericAgent] generate_content dispatching with context_refs: ${JSON.stringify(requiredContexts)}`
+      );
       const result = await this.handleDispatchContentAgent(syntheticToolCall);
       const resultObj = result as Record<string, unknown>;
 
@@ -947,7 +1035,10 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = true;
         this.pendingQuestion = resultObj['question'] as string;
 
-        const questionOptions = resultObj['options'] as Array<{ label: string; description?: string }>;
+        const questionOptions = resultObj['options'] as Array<{
+          label: string;
+          description?: string;
+        }>;
         const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
         this.emit({
           type: 'question',
@@ -999,9 +1090,14 @@ export class GenericAgent extends TypedEventEmitter {
         this.pendingQuestion = resultObj['question'] as string;
 
         // Emit question event with options and auto-approve timeout
-        const questionOptions = resultObj['options'] as Array<{ label: string; description?: string }>;
+        const questionOptions = resultObj['options'] as Array<{
+          label: string;
+          description?: string;
+        }>;
         const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
-        debugLog(`[GenericAgent] dispatch_content_agent emitting question event with options: ${JSON.stringify(questionOptions)}`);
+        debugLog(
+          `[GenericAgent] dispatch_content_agent emitting question event with options: ${JSON.stringify(questionOptions)}`
+        );
         this.emit({
           type: 'question',
           question: resultObj['question'] as string,
@@ -1290,7 +1386,8 @@ export class GenericAgent extends TypedEventEmitter {
     // Claude SDK guidance: never create single-item todo lists.
     if (todos.length < 2) {
       return {
-        error: 'Never create single-item todo lists. If you only have one task, just do it directly.',
+        error:
+          'Never create single-item todo lists. If you only have one task, just do it directly.',
       };
     }
 
@@ -1308,7 +1405,8 @@ export class GenericAgent extends TypedEventEmitter {
         if (pattern.test(content)) {
           return {
             error: `Todo "${content.slice(0, 50)}..." contains tool/function references. Todos should describe WHAT to accomplish, not HOW.`,
-            suggestion: 'Rewrite todos to be task-focused. Good: "Create character profile for Alice". Bad: "Use dispatch_content_agent to create Alice".',
+            suggestion:
+              'Rewrite todos to be task-focused. Good: "Create character profile for Alice". Bad: "Use dispatch_content_agent to create Alice".',
           };
         }
       }
@@ -1322,8 +1420,12 @@ export class GenericAgent extends TypedEventEmitter {
       : this.todoManager.writeTodos(todos);
 
     const updatedTodos = this.todoManager.getTodos();
-    debugLog(`[GenericAgent] handleTodoTool: merge=${merge}, inputTodos=${todos.length}, resultTodos=${updatedTodos.length}`);
-    debugLog(`[GenericAgent] handleTodoTool emitting todo_update with ${updatedTodos.length} todos: ${JSON.stringify(updatedTodos.map(t => ({ id: t.id, status: t.status, content: t.content?.slice(0, 30) })))}`);
+    debugLog(
+      `[GenericAgent] handleTodoTool: merge=${merge}, inputTodos=${todos.length}, resultTodos=${updatedTodos.length}`
+    );
+    debugLog(
+      `[GenericAgent] handleTodoTool emitting todo_update with ${updatedTodos.length} todos: ${JSON.stringify(updatedTodos.map(t => ({ id: t.id, status: t.status, content: t.content?.slice(0, 30) })))}`
+    );
 
     // Emit todo update event
     this.emit({
@@ -1437,7 +1539,9 @@ export class GenericAgent extends TypedEventEmitter {
             label: stored.label,
             content: stored.content,
           });
-          debugLog(`[GenericAgent] Resolved context_ref ${ref} for planning agent (${stored.label}, ${stored.content.length} chars)`);
+          debugLog(
+            `[GenericAgent] Resolved context_ref ${ref} for planning agent (${stored.label}, ${stored.content.length} chars)`
+          );
         } else {
           debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
         }
@@ -1447,10 +1551,12 @@ export class GenericAgent extends TypedEventEmitter {
     // Build combined context with clear sections
     let context: string | undefined;
     if (contextParts.length > 0) {
-      context = contextParts.map(part =>
-        `## ${part.variableName} (${part.label})\n\n${part.content}`
-      ).join('\n\n---\n\n');
-      debugLog(`[GenericAgent] Combined ${contextParts.length} contexts for planning agent (${context.length} chars total)`);
+      context = contextParts
+        .map(part => `## ${part.variableName} (${part.label})\n\n${part.content}`)
+        .join('\n\n---\n\n');
+      debugLog(
+        `[GenericAgent] Combined ${contextParts.length} contexts for planning agent (${context.length} chars total)`
+      );
     }
 
     // Check if we're resuming an existing planning session
@@ -1507,7 +1613,9 @@ export class GenericAgent extends TypedEventEmitter {
       // Generate or refine the plan with streaming
       let planContent = '';
       let isFirstChunk = true;
-      debugLog(`[GenericAgent] continuePlanningLoop starting generation, toolCallId=${this.planningState.toolCallId}`);
+      debugLog(
+        `[GenericAgent] continuePlanningLoop starting generation, toolCallId=${this.planningState.toolCallId}`
+      );
 
       // If this is a subsequent iteration (after feedback), we need to reset the streaming display
       const shouldReset = this.planningState.iterations > 1;
@@ -1518,7 +1626,9 @@ export class GenericAgent extends TypedEventEmitter {
       })) {
         if (chunk.content) {
           planContent += chunk.content;
-          debugLog(`[GenericAgent] tool_streaming emit: chunk=${chunk.content.length} chars, total=${planContent.length} chars`);
+          debugLog(
+            `[GenericAgent] tool_streaming emit: chunk=${chunk.content.length} chars, total=${planContent.length} chars`
+          );
           // Emit tool_streaming to show content inside the ToolCallDisplay
           // On first chunk of a regeneration, include reset flag to clear old content and show display
           this.emit({
@@ -1533,7 +1643,9 @@ export class GenericAgent extends TypedEventEmitter {
           isFirstChunk = false;
         }
         if (chunk.done) {
-          debugLog(`[GenericAgent] tool_streaming DONE: total planContent=${planContent.length} chars`);
+          debugLog(
+            `[GenericAgent] tool_streaming DONE: total planContent=${planContent.length} chars`
+          );
           this.emit({
             type: 'tool_streaming',
             toolCallId: this.planningState.toolCallId,
@@ -1557,9 +1669,10 @@ export class GenericAgent extends TypedEventEmitter {
 
       // Return status indicating we need user verification
       // The main agent will pause and wait for user input
-      const verificationQuestion = this.planningState.iterations === 1
-        ? 'I\'ve created a plan for this task. Would you like to proceed or provide feedback?'
-        : 'I\'ve updated the plan based on your feedback. Would you like to proceed or provide more feedback?';
+      const verificationQuestion =
+        this.planningState.iterations === 1
+          ? "I've created a plan for this task. Would you like to proceed or provide feedback?"
+          : "I've updated the plan based on your feedback. Would you like to proceed or provide more feedback?";
 
       const verificationResult = {
         status: 'awaiting_verification',
@@ -1573,13 +1686,19 @@ export class GenericAgent extends TypedEventEmitter {
         ],
         autoApproveTimeoutMs: 15000, // 15 seconds countdown for plan approval
       };
-      debugLog(`[GenericAgent] continuePlanningLoop returning: ${JSON.stringify({
-        status: verificationResult.status,
-        question: verificationResult.question?.slice(0, 50),
-        optionsCount: verificationResult.options.length,
-        options: verificationResult.options,
-        autoApproveTimeoutMs: verificationResult.autoApproveTimeoutMs,
-      }, null, 2)}`);
+      debugLog(
+        `[GenericAgent] continuePlanningLoop returning: ${JSON.stringify(
+          {
+            status: verificationResult.status,
+            question: verificationResult.question?.slice(0, 50),
+            optionsCount: verificationResult.options.length,
+            options: verificationResult.options,
+            autoApproveTimeoutMs: verificationResult.autoApproveTimeoutMs,
+          },
+          null,
+          2
+        )}`
+      );
       return verificationResult;
     } catch (error) {
       const failedTask = this.planningState?.task;
@@ -1612,11 +1731,10 @@ export class GenericAgent extends TypedEventEmitter {
       );
 
       // Store full plan in external context file
-      const { variableName } = contextStore.store(
-        this.planningState.currentPlan,
-        name,
-        { source: 'tool', variableBaseName: 'plan' }
-      );
+      const { variableName } = contextStore.store(this.planningState.currentPlan, name, {
+        source: 'tool',
+        variableBaseName: 'plan',
+      });
 
       const result = {
         status: 'approved',
@@ -1626,7 +1744,8 @@ export class GenericAgent extends TypedEventEmitter {
         task: this.planningState.task,
         iterations: this.planningState.iterations,
         message: `Plan "${name}" approved. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`,
-        next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
+        next_steps:
+          'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
       this.planningState = null;
       this.currentMode = 'orchestrator';
@@ -1647,6 +1766,30 @@ export class GenericAgent extends TypedEventEmitter {
    * Use LLM to classify whether user response indicates approval or feedback.
    */
   private async classifyPlanResponse(userResponse: string): Promise<boolean> {
+    const normalized = userResponse.toLowerCase().trim();
+    const directApprove = [
+      'accept',
+      'accept content',
+      'approve',
+      'approve content',
+      'yes',
+      'ok',
+      'okay',
+      'proceed',
+      'go ahead',
+      'start',
+      'continue',
+      'lgtm',
+      '1',
+    ];
+    if (directApprove.some(value => normalized === value)) {
+      return true;
+    }
+    const directFeedback = ['provide feedback', 'feedback', '2', 'no', 'not yet'];
+    if (directFeedback.some(value => normalized === value)) {
+      return false;
+    }
+
     // Load classification prompt from file
     const classificationPrompt = loadAndRenderMarkdown('system/classification/plan-approval.md', {
       user_response: userResponse,
@@ -1654,9 +1797,7 @@ export class GenericAgent extends TypedEventEmitter {
 
     try {
       const response = await this.llm.generate({
-        messages: [
-          { role: 'user', content: classificationPrompt },
-        ],
+        messages: [{ role: 'user', content: classificationPrompt }],
         temperature: 0,
         maxTokens: 10,
       });
@@ -1666,7 +1807,20 @@ export class GenericAgent extends TypedEventEmitter {
     } catch {
       // On error, fall back to simple pattern matching
       const lower = userResponse.toLowerCase().trim();
-      const approvalPatterns = ['yes', 'ok', 'okay', 'proceed', 'accept', 'approve', 'go', 'start', 'continue', 'lgtm', 'y', '1'];
+      const approvalPatterns = [
+        'yes',
+        'ok',
+        'okay',
+        'proceed',
+        'accept',
+        'approve',
+        'go',
+        'start',
+        'continue',
+        'lgtm',
+        'y',
+        '1',
+      ];
       return approvalPatterns.some(p => lower === p || lower.includes(p));
     }
   }
@@ -1762,16 +1916,18 @@ Respond in JSON format:
    * This is a fallback when the context isn't found in the context store.
    * Supports both variable names ($plan) and direct file paths (plans/story.md).
    */
-  private tryResolveFromProjectFiles(ref: string): { label: string; content: string; file: string } | null {
+  private tryResolveFromProjectFiles(
+    ref: string
+  ): { label: string; content: string; file: string } | null {
     // Map of context ref patterns to project file paths
     const projectFileMap: Record<string, { file: string; label: string }> = {
-      '$plan': { file: 'plans/story.md', label: 'Story Plan' },
-      '$plot': { file: 'plans/plot.md', label: 'Plot' },
-      '$story': { file: 'plans/story.md', label: 'Story' },
-      '$scenes': { file: 'plans/scenes.md', label: 'Scenes' },
-      '$images': { file: 'plans/images.md', label: 'Images Plan' },
-      '$video': { file: 'plans/video.md', label: 'Video Plan' },
-      '$original_input': { file: 'original_input.md', label: 'Original Input' },
+      $plan: { file: 'plans/story.md', label: 'Story Plan' },
+      $plot: { file: 'plans/plot.md', label: 'Plot' },
+      $story: { file: 'plans/story.md', label: 'Story' },
+      $scenes: { file: 'plans/scenes.md', label: 'Scenes' },
+      $images: { file: 'plans/images.md', label: 'Images Plan' },
+      $video: { file: 'plans/video.md', label: 'Video Plan' },
+      $original_input: { file: 'original_input.md', label: 'Original Input' },
     };
 
     const projectDir = path.join(process.cwd(), '.kshana');
@@ -1858,63 +2014,166 @@ Respond in JSON format:
       this.currentMode = 'orchestrator';
       return {
         error: `Invalid content_type "${contentType}". Must be one of: ${validContentTypes.join(', ')}`,
-        suggestion: 'Use the appropriate content_type for your task. For example, use "character" for character profiles, "scene" for scene descriptions.',
+        suggestion:
+          'Use the appropriate content_type for your task. For example, use "character" for character profiles, "scene" for scene descriptions.',
       };
     }
 
-    // Resolve all context_refs into a combined context
+    // ==========================================================================
+    // PULL-BASED CONTEXT DISCOVERY
+    // Instead of requiring exact variable names, we use label-based search
+    // to find relevant context. This prevents silent failures from name mismatches.
+    // ==========================================================================
+
     const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
     const missingRefs: string[] = [];
 
+    // Configuration for what context patterns are relevant to each content type
+    const CONTENT_TYPE_LABEL_PATTERNS: Record<string, { required: string[]; optional: string[] }> = {
+      plot: {
+        required: ['original', 'input', 'user'],
+        optional: [],
+      },
+      story: {
+        required: ['original', 'input', 'plot'],
+        optional: ['user'],
+      },
+      character: {
+        // Priority order: look for full story/chapter content first
+        required: ['full_story', 'full story', 'story', 'chapter', 'narrative'],
+        optional: ['plot', 'original'],
+      },
+      setting: {
+        // Priority order: look for full story/chapter content first
+        required: ['full_story', 'full story', 'story', 'chapter', 'narrative'],
+        optional: ['plot', 'original'],
+      },
+      scene: {
+        required: ['full_story', 'story', 'chapter'],
+        optional: ['character', 'setting', 'plot'],
+      },
+      narration: {
+        required: ['story', 'scene'],
+        optional: ['character', 'setting'],
+      },
+    };
+
+    // Helper function to add context without duplicates
+    const addContextPart = (variableName: string, label: string, content: string) => {
+      if (!contextParts.some(p => p.variableName === variableName)) {
+        contextParts.push({ variableName, label, content });
+        return true;
+      }
+      return false;
+    };
+
+    // STEP 1: Try to resolve explicitly provided context_refs (backward compatibility)
     if (contextRefs && contextRefs.length > 0) {
       for (const ref of contextRefs) {
+        // First try exact variable name match
         const stored = contextStore.get(ref);
         if (stored) {
-          contextParts.push({
-            variableName: ref,
-            label: stored.label,
-            content: stored.content,
-          });
-          debugLog(`[GenericAgent] Resolved context_ref ${ref} for content agent (${stored.label}, ${stored.content.length} chars)`);
+          if (addContextPart(ref, stored.label, stored.content)) {
+            debugLog(
+              `[GenericAgent] Resolved context_ref ${ref} by exact match (${stored.label}, ${stored.content.length} chars)`
+            );
+          }
         } else {
-          // Try to resolve from project files if this looks like a plan reference
-          // e.g., $plan -> plans/plot.md or plans/story.md
+          // Try to resolve from project files
           const projectFileContent = this.tryResolveFromProjectFiles(ref);
           if (projectFileContent) {
-            contextParts.push({
-              variableName: ref,
-              label: projectFileContent.label,
-              content: projectFileContent.content,
-            });
-            debugLog(`[GenericAgent] Resolved context_ref ${ref} from project file: ${projectFileContent.file}`);
+            if (addContextPart(ref, projectFileContent.label, projectFileContent.content)) {
+              debugLog(
+                `[GenericAgent] Resolved context_ref ${ref} from project file: ${projectFileContent.file}`
+              );
+            }
           } else {
-            debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
-            missingRefs.push(ref);
+            // FALLBACK: Try label-based search for this ref
+            // Extract search pattern from the ref (e.g., "$full_story" -> "story", "$chapter_1" -> "chapter")
+            const refPattern = ref.replace(/^\$/, '').replace(/_\d+$/, '').replace(/_/g, ' ');
+            const labelMatches = contextStore.searchByLabelWithContent(refPattern);
+            if (labelMatches.length > 0) {
+              const bestMatch = labelMatches[0]!;
+              if (addContextPart(bestMatch.variableName, bestMatch.label, bestMatch.content)) {
+                debugLog(
+                  `[GenericAgent] Resolved context_ref ${ref} via LABEL SEARCH (pattern: "${refPattern}") -> ${bestMatch.variableName} (${bestMatch.label})`
+                );
+              }
+            } else {
+              debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
+              missingRefs.push(ref);
+            }
           }
         }
       }
     }
 
-    // FALLBACK: Auto-inject $original_input for plot phase if no context was provided
-    // This ensures the content agent always has access to the user's story idea
-    if (contextParts.length === 0 && contentType === 'plot') {
-      const originalInput = contextStore.get('$original_input');
-      if (originalInput) {
-        contextParts.push({
-          variableName: '$original_input',
-          label: originalInput.label,
-          content: originalInput.content,
-        });
-        debugLog(`[GenericAgent] AUTO-INJECTED $original_input for plot phase (${originalInput.content.length} chars)`);
-      } else {
-        debugLog(`[GenericAgent] WARNING: No context_refs provided for plot and $original_input not found in context store`);
+    // STEP 2: Auto-discover relevant context if none was found or refs were incomplete
+    // This is the PULL model - we automatically find what the content agent needs
+    const patterns = CONTENT_TYPE_LABEL_PATTERNS[contentType];
+    if (patterns) {
+      // Search for required context patterns
+      for (const pattern of patterns.required) {
+        const matches = contextStore.searchByLabelWithContent(pattern);
+        for (const match of matches) {
+          if (addContextPart(match.variableName, match.label, match.content)) {
+            debugLog(
+              `[GenericAgent] AUTO-DISCOVERED context via required pattern "${pattern}": ${match.variableName} (${match.label})`
+            );
+          }
+        }
+      }
+
+      // Search for optional context patterns if we have few contexts
+      if (contextParts.length < 3) {
+        for (const pattern of patterns.optional) {
+          const matches = contextStore.searchByLabelWithContent(pattern);
+          for (const match of matches) {
+            if (addContextPart(match.variableName, match.label, match.content)) {
+              debugLog(
+                `[GenericAgent] AUTO-DISCOVERED context via optional pattern "${pattern}": ${match.variableName} (${match.label})`
+              );
+            }
+          }
+        }
       }
     }
 
-    // Log error for missing refs to help debug
+    // STEP 3: Legacy fallback for plot phase (kept for backward compatibility)
+    if (contextParts.length === 0 && contentType === 'plot') {
+      const originalInput = contextStore.get('$original_input');
+      if (originalInput) {
+        addContextPart('$original_input', originalInput.label, originalInput.content);
+        debugLog(
+          `[GenericAgent] LEGACY FALLBACK: Injected $original_input for plot phase (${originalInput.content.length} chars)`
+        );
+      } else {
+        debugLog(
+          `[GenericAgent] WARNING: No context found for plot creation`
+        );
+      }
+    }
+
+    // Log summary of context discovery
+    if (contextParts.length > 0) {
+      debugLog(
+        `[GenericAgent] Context discovery complete: found ${contextParts.length} contexts for ${contentType} creation: ${contextParts.map(p => `${p.variableName} (${p.label})`).join(', ')}`
+      );
+    } else {
+      debugLog(`[GenericAgent] WARNING: No context found for ${contentType} creation`);
+      debugLog(
+        `[GenericAgent] Available context variables: ${
+          contextStore
+            .list()
+            .map(c => `${c.variableName} (${c.label})`)
+            .join(', ') || 'none'
+        }`
+      );
+    }
+
+    // Log missing refs for debugging (but they may have been resolved via label search)
     if (missingRefs.length > 0) {
-      debugLog(`[GenericAgent] ERROR: Could not resolve context_refs: ${missingRefs.join(', ')}`);
-      debugLog(`[GenericAgent] Available context variables: ${contextStore.list().map(c => c.variableName).join(', ') || 'none'}`);
+      debugLog(`[GenericAgent] Note: Some context_refs were not found by exact match: ${missingRefs.join(', ')}`);
     }
 
     // Validate context usage: warn if $original_input is used for characters/settings
@@ -1922,13 +2181,17 @@ Respond in JSON format:
     const usesOriginalInput = contextRefs?.some(ref => ref === '$original_input');
     const isCharacterOrSetting = contentType === 'character' || contentType === 'setting';
     if (usesOriginalInput && isCharacterOrSetting) {
-      debugLog(`[GenericAgent] WARNING: Using $original_input for ${contentType} creation. Consider using $story instead for approved content.`);
+      debugLog(
+        `[GenericAgent] WARNING: Using $original_input for ${contentType} creation. Consider using $story instead for approved content.`
+      );
       // Return a warning but allow execution to continue (soft validation)
-      const storyAvailable = contextStore.get('$story') || this.tryResolveFromProjectFiles('$story');
+      const storyAvailable =
+        contextStore.get('$story') || this.tryResolveFromProjectFiles('$story');
       if (storyAvailable) {
         return {
           warning: `You are using $original_input for ${contentType} creation, but $story is available. Characters and settings should be extracted from the APPROVED STORY content, not the original input. Please use context_refs: ["$story"] instead.`,
-          suggestion: 'Update your Task call to use context_refs: ["$story"] for character and setting creation.',
+          suggestion:
+            'Update your Task call to use context_refs: ["$story"] for character and setting creation.',
         };
       }
     }
@@ -1936,10 +2199,12 @@ Respond in JSON format:
     // Build combined context with clear sections
     let context: string | undefined;
     if (contextParts.length > 0) {
-      context = contextParts.map(part =>
-        `## ${part.variableName} (${part.label})\n\n${part.content}`
-      ).join('\n\n---\n\n');
-      debugLog(`[GenericAgent] Combined ${contextParts.length} contexts for content agent (${context.length} chars total)`);
+      context = contextParts
+        .map(part => `## ${part.variableName} (${part.label})\n\n${part.content}`)
+        .join('\n\n---\n\n');
+      debugLog(
+        `[GenericAgent] Combined ${contextParts.length} contexts for content agent (${context.length} chars total)`
+      );
     }
 
     // Check if we're resuming an existing content session
@@ -1958,7 +2223,10 @@ Respond in JSON format:
       outputFile,
       messages: [
         { role: 'system', content: contentSystemPrompt },
-        { role: 'user', content: `<request>\nCreate the ${contentType} content for this task.\n</request>` },
+        {
+          role: 'user',
+          content: `<request>\nCreate the ${contentType} content for this task.\n</request>`,
+        },
       ],
       currentContent: '',
       iterations: 0,
@@ -2042,9 +2310,10 @@ Respond in JSON format:
       });
 
       // Return status indicating we need user verification
-      const verificationQuestion = this.contentState.iterations === 1
-        ? `I've created the ${this.contentState.contentType} content. Would you like to accept it or provide feedback?`
-        : `I've updated the ${this.contentState.contentType} content based on your feedback. Would you like to accept it or provide more feedback?`;
+      const verificationQuestion =
+        this.contentState.iterations === 1
+          ? `I've created the ${this.contentState.contentType} content. Would you like to accept it or provide feedback?`
+          : `I've updated the ${this.contentState.contentType} content based on your feedback. Would you like to accept it or provide more feedback?`;
 
       const verificationResult = {
         status: 'awaiting_verification',
@@ -2060,12 +2329,18 @@ Respond in JSON format:
         ],
         autoApproveTimeoutMs: 15000, // 15 seconds countdown for content approval
       };
-      debugLog(`[GenericAgent] continueContentLoop returning: ${JSON.stringify({
-        status: verificationResult.status,
-        contentType: verificationResult.content_type,
-        question: verificationResult.question?.slice(0, 50),
-        optionsCount: verificationResult.options.length,
-      }, null, 2)}`);
+      debugLog(
+        `[GenericAgent] continueContentLoop returning: ${JSON.stringify(
+          {
+            status: verificationResult.status,
+            contentType: verificationResult.content_type,
+            question: verificationResult.question?.slice(0, 50),
+            optionsCount: verificationResult.options.length,
+          },
+          null,
+          2
+        )}`
+      );
       return verificationResult;
     } catch (error) {
       const failedTask = this.contentState?.task;
@@ -2108,7 +2383,9 @@ Respond in JSON format:
           fileSaved = true;
           debugLog(`[GenericAgent] Saved content to ${this.contentState.outputFile}`);
         } catch (err) {
-          debugLog(`[GenericAgent] ERROR: Failed to save content to ${this.contentState.outputFile}: ${err}`);
+          debugLog(
+            `[GenericAgent] ERROR: Failed to save content to ${this.contentState.outputFile}: ${err}`
+          );
         }
       }
 
@@ -2121,11 +2398,10 @@ Respond in JSON format:
 
       // Store full content in external context store (NOT in messages)
       // This prevents context bloat from large content being repeatedly passed
-      const { variableName } = contextStore.store(
-        this.contentState.currentContent,
-        name,
-        { source: 'tool', variableBaseName: this.contentState.contentType }
-      );
+      const { variableName } = contextStore.store(this.contentState.currentContent, name, {
+        source: 'tool',
+        variableBaseName: this.contentState.contentType,
+      });
 
       const result = {
         status: 'approved',
@@ -2140,7 +2416,8 @@ Respond in JSON format:
         message: fileSaved
           ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`
           : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`,
-        next_steps: 'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
+        next_steps:
+          'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
       this.contentState = null;
       // Reset mode back to orchestrator
@@ -2186,11 +2463,13 @@ Respond in JSON format:
     const imageType = args['image_type'] as 'scene' | 'character_ref' | 'setting_ref' | undefined;
     const characterName = args['character_name'] as string | undefined;
     const settingName = args['setting_name'] as string | undefined;
-    const referenceImages = args['reference_images'] as Array<{
-      image_id: string;
-      type: 'character' | 'setting';
-      name: string;
-    }> | undefined;
+    const referenceImages = args['reference_images'] as
+      | Array<{
+          image_id: string;
+          type: 'character' | 'setting';
+          name: string;
+        }>
+      | undefined;
 
     if (!task) {
       this.currentMode = 'orchestrator';
@@ -2204,7 +2483,9 @@ Respond in JSON format:
         const stored = contextStore.get(ref);
         if (stored) {
           contextParts.push(`## ${ref} (${stored.label})\n\n${stored.content}`);
-          debugLog(`[GenericAgent] Resolved context_ref ${ref} for image agent (${stored.label}, ${stored.content.length} chars)`);
+          debugLog(
+            `[GenericAgent] Resolved context_ref ${ref} for image agent (${stored.label}, ${stored.content.length} chars)`
+          );
         } else {
           debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
         }
@@ -2218,7 +2499,9 @@ Respond in JSON format:
       const stored = contextStore.get(contextRef);
       if (stored) {
         context = stored.content;
-        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} for image agent (${stored.label}, ${stored.content.length} chars)`);
+        debugLog(
+          `[GenericAgent] Resolved context_ref ${contextRef} for image agent (${stored.label}, ${stored.content.length} chars)`
+        );
       } else {
         return { error: `Context reference not found: ${contextRef}` };
       }
@@ -2226,7 +2509,9 @@ Respond in JSON format:
 
     // Warn about long inline context that should use context_ref
     if (context && context.length > 500 && !contextRef && !contextRefs) {
-      debugLog(`[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_image_agent without context_ref. Consider using store_context.`);
+      debugLog(
+        `[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_image_agent without context_ref. Consider using store_context.`
+      );
     }
 
     // Check if we're resuming an existing session
@@ -2244,7 +2529,8 @@ Respond in JSON format:
     if (isSceneImage && !hasReferences) {
       return {
         error: 'Scene images require reference_images for character/setting consistency.',
-        suggestion: 'Please provide reference_images array with character and setting references, or generate reference images first using image_type "character_ref" or "setting_ref".',
+        suggestion:
+          'Please provide reference_images array with character and setting references, or generate reference images first using image_type "character_ref" or "setting_ref".',
         image_type: imageType,
       };
     }
@@ -2252,9 +2538,12 @@ Respond in JSON format:
     // Build enhanced context for image+text-to-image mode
     let enhancedContext = context ?? '';
     if (generationMode === 'image_text_to_image' && referenceImages) {
-      const refDescriptions = referenceImages.map(ref =>
-        `- ${ref.type === 'character' ? 'Character' : 'Setting'} "${ref.name}" (ref: ${ref.image_id})`
-      ).join('\n');
+      const refDescriptions = referenceImages
+        .map(
+          ref =>
+            `- ${ref.type === 'character' ? 'Character' : 'Setting'} "${ref.name}" (ref: ${ref.image_id})`
+        )
+        .join('\n');
       enhancedContext += `\n\n<reference_images>\nThe following reference images will be used for visual consistency:\n${refDescriptions}\n\nIMPORTANT: The generated image must maintain visual consistency with these references. Characters should look the same as in their reference images. Settings should match their reference style.\n</reference_images>`;
     }
 
@@ -2267,7 +2556,11 @@ Respond in JSON format:
       context: enhancedContext,
       messages: [
         { role: 'system', content: imageGenSystemPrompt },
-        { role: 'user', content: '<request>\nPlease craft a detailed image generation prompt for this task.\n</request>' },
+        {
+          role: 'user',
+          content:
+            '<request>\nPlease craft a detailed image generation prompt for this task.\n</request>',
+        },
       ],
       currentPrompt: '',
       negativePrompt: '',
@@ -2365,9 +2658,10 @@ Respond in JSON format:
       });
 
       // Return status indicating we need user approval
-      const verificationQuestion = this.imageGenState.iterations === 1
-        ? 'I\'ve crafted an image prompt. Would you like to generate the image or provide feedback?'
-        : 'I\'ve updated the prompt based on your feedback. Would you like to generate the image or provide more feedback?';
+      const verificationQuestion =
+        this.imageGenState.iterations === 1
+          ? "I've crafted an image prompt. Would you like to generate the image or provide feedback?"
+          : "I've updated the prompt based on your feedback. Would you like to generate the image or provide more feedback?";
 
       return {
         status: 'awaiting_prompt_approval',
@@ -2378,7 +2672,10 @@ Respond in JSON format:
         iterations: this.imageGenState.iterations,
         question: verificationQuestion,
         options: [
-          { label: 'Generate image', description: 'Proceed with this prompt and generate the image' },
+          {
+            label: 'Generate image',
+            description: 'Proceed with this prompt and generate the image',
+          },
           { label: 'Provide feedback', description: 'Modify the prompt with your input' },
         ],
         autoApproveTimeoutMs: 15000, // 15 seconds countdown for image prompt approval
@@ -2407,13 +2704,17 @@ Respond in JSON format:
     let aspectRatio = '16:9';
 
     // Try to extract Image Prompt section
-    const promptMatch = response.match(/\*\*Image Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i);
+    const promptMatch = response.match(
+      /\*\*Image Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i
+    );
     if (promptMatch?.[1]) {
       prompt = promptMatch[1].trim();
     }
 
     // Try to extract Negative Prompt section
-    const negativeMatch = response.match(/\*\*Negative Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i);
+    const negativeMatch = response.match(
+      /\*\*Negative Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i
+    );
     if (negativeMatch?.[1]) {
       negativePrompt = negativeMatch[1].trim();
     }
@@ -2431,11 +2732,12 @@ Respond in JSON format:
     // If no structured prompt found, use the whole response as the prompt
     if (!prompt) {
       // Remove markdown headers and rationale sections
-      prompt = response
-        .replace(/\*\*[^*]+\*\*/g, '')
-        .replace(/##[^\n]+\n/g, '')
-        .trim()
-        .split('\n')[0] || response.slice(0, 500);
+      prompt =
+        response
+          .replace(/\*\*[^*]+\*\*/g, '')
+          .replace(/##[^\n]+\n/g, '')
+          .trim()
+          .split('\n')[0] || response.slice(0, 500);
     }
 
     return { prompt, negativePrompt, aspectRatio };
@@ -2479,9 +2781,7 @@ Respond in JSON format:
 
     try {
       const response = await this.llm.generate({
-        messages: [
-          { role: 'user', content: classificationPrompt },
-        ],
+        messages: [{ role: 'user', content: classificationPrompt }],
         temperature: 0,
         maxTokens: 10,
       });
@@ -2491,7 +2791,19 @@ Respond in JSON format:
     } catch {
       // On error, fall back to simple pattern matching
       const lower = userResponse.toLowerCase().trim();
-      const approvalPatterns = ['yes', 'ok', 'okay', 'generate', 'go', 'create', 'make', 'proceed', 'lgtm', 'y', '1'];
+      const approvalPatterns = [
+        'yes',
+        'ok',
+        'okay',
+        'generate',
+        'go',
+        'create',
+        'make',
+        'proceed',
+        'lgtm',
+        'y',
+        '1',
+      ];
       return approvalPatterns.some(p => lower === p || lower.includes(p));
     }
   }
@@ -2639,7 +2951,7 @@ Respond in JSON format:
       if (waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed') {
         return {
           status: 'error',
-          error: waitResultObj['error'] as string || 'Job failed',
+          error: (waitResultObj['error'] as string) || 'Job failed',
           prompt: finalState.currentPrompt,
           task: finalState.task,
           job_id: jobId,
@@ -2707,7 +3019,9 @@ Respond in JSON format:
         const stored = contextStore.get(ref);
         if (stored) {
           contextParts.push(`## ${ref} (${stored.label})\n\n${stored.content}`);
-          debugLog(`[GenericAgent] Resolved context_ref ${ref} for video agent (${stored.label}, ${stored.content.length} chars)`);
+          debugLog(
+            `[GenericAgent] Resolved context_ref ${ref} for video agent (${stored.label}, ${stored.content.length} chars)`
+          );
         } else {
           debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
         }
@@ -2721,7 +3035,9 @@ Respond in JSON format:
       const stored = contextStore.get(contextRef);
       if (stored) {
         context = stored.content;
-        debugLog(`[GenericAgent] Resolved context_ref ${contextRef} for video agent (${stored.label}, ${stored.content.length} chars)`);
+        debugLog(
+          `[GenericAgent] Resolved context_ref ${contextRef} for video agent (${stored.label}, ${stored.content.length} chars)`
+        );
       } else {
         return { error: `Context reference not found: ${contextRef}` };
       }
@@ -2784,7 +3100,19 @@ Respond in JSON format:
 
     // Use simple pattern matching to classify response
     const lower = userResponse.toLowerCase().trim();
-    const approvalPatterns = ['yes', 'ok', 'okay', 'generate', 'go', 'proceed', 'create', 'make', 'lgtm', 'y', '1'];
+    const approvalPatterns = [
+      'yes',
+      'ok',
+      'okay',
+      'generate',
+      'go',
+      'proceed',
+      'create',
+      'make',
+      'lgtm',
+      'y',
+      '1',
+    ];
     const isApproval = approvalPatterns.some(p => lower === p || lower.startsWith(p));
 
     if (isApproval) {
@@ -2840,13 +3168,8 @@ Respond in JSON format:
       return { error: 'No active video generation session' };
     }
 
-    const {
-      task,
-      sceneNumber,
-      sceneImageArtifactId,
-      motionDescription,
-      currentParams,
-    } = this.videoGenState;
+    const { task, sceneNumber, sceneImageArtifactId, motionDescription, currentParams } =
+      this.videoGenState;
 
     // Get the generate_video tool
     const generateVideoTool = this.tools.get('generate_video');
@@ -2955,7 +3278,7 @@ Respond in JSON format:
       if (waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed') {
         return {
           status: 'error',
-          error: waitResultObj['error'] as string || 'Job failed',
+          error: (waitResultObj['error'] as string) || 'Job failed',
           scene_number: finalState.sceneNumber,
           task: finalState.task,
           job_id: jobId,
@@ -2995,13 +3318,14 @@ Respond in JSON format:
     const args = toolCall.arguments;
     // Support both legacy ask_user schema and Claude SDK-style AskUserQuestion schema.
     const question =
-      (args['question'] as string | undefined) ??
-      (args['prompt'] as string | undefined) ??
-      '';
+      (args['question'] as string | undefined) ?? (args['prompt'] as string | undefined) ?? '';
 
     // Legacy-only fields (kept for back-compat)
     const isConfirmation = (args['is_confirmation'] as boolean | undefined) ?? false;
-    const providedOptions = args['options'] as Array<{ label: string; description?: string }> | string[] | undefined;
+    const providedOptions = args['options'] as
+      | Array<{ label: string; description?: string }>
+      | string[]
+      | undefined;
     const providedTimeout = args['auto_approve_timeout_ms'] as number | undefined;
 
     // Claude SDK-style multiSelect (currently informational; UI supports single-select)
@@ -3028,12 +3352,16 @@ Respond in JSON format:
     if (!isConfirmation) {
       const opts = normalizedOptions ?? DEFAULT_OPTIONS;
       const hasOther = opts.some(o => o.label.toLowerCase() === 'other');
-      normalizedOptions = hasOther ? opts : [...opts, { label: 'Other', description: 'Provide custom input' }];
+      normalizedOptions = hasOther
+        ? opts
+        : [...opts, { label: 'Other', description: 'Provide custom input' }];
     }
 
     // Use provided options or defaults (only for non-confirmation questions)
     const options = isConfirmation ? undefined : (normalizedOptions ?? DEFAULT_OPTIONS);
-    const autoApproveTimeoutMs = isConfirmation ? undefined : (providedTimeout ?? DEFAULT_AUTO_APPROVE_TIMEOUT_MS);
+    const autoApproveTimeoutMs = isConfirmation
+      ? undefined
+      : (providedTimeout ?? DEFAULT_AUTO_APPROVE_TIMEOUT_MS);
 
     this.waitingForUser = true;
     this.pendingQuestion = question;
@@ -3055,13 +3383,19 @@ Respond in JSON format:
     });
 
     // Emit question event with options and timeout
-    debugLog(`[GenericAgent] ask_user emitting question: ${JSON.stringify({
-      question: question?.slice(0, 50),
-      optionsCount: options?.length,
-      options,
-      isConfirmation,
-      autoApproveTimeoutMs,
-    }, null, 2)}`);
+    debugLog(
+      `[GenericAgent] ask_user emitting question: ${JSON.stringify(
+        {
+          question: question?.slice(0, 50),
+          optionsCount: options?.length,
+          options,
+          isConfirmation,
+          autoApproveTimeoutMs,
+        },
+        null,
+        2
+      )}`
+    );
     this.emit({
       type: 'question',
       question,
@@ -3109,9 +3443,7 @@ Respond in JSON format:
                 'approved',
                 'confirm',
               ];
-              const approved = approvalKeywords.some(kw =>
-                response.toLowerCase().includes(kw)
-              );
+              const approved = approvalKeywords.some(kw => response.toLowerCase().includes(kw));
 
               this.messages[i] = {
                 ...msg,
@@ -3200,7 +3532,9 @@ Respond in JSON format:
     if (this.tokenUsage.lastPromptTokens > 0) {
       const shouldCompress = this.tokenUsage.lastPromptTokens > threshold;
       if (shouldCompress) {
-        debugLog(`[GenericAgent] Context at ${Math.round((this.tokenUsage.lastPromptTokens / this.maxContextTokens) * 100)}% (${this.tokenUsage.lastPromptTokens}/${this.maxContextTokens} tokens) - compression needed`);
+        debugLog(
+          `[GenericAgent] Context at ${Math.round((this.tokenUsage.lastPromptTokens / this.maxContextTokens) * 100)}% (${this.tokenUsage.lastPromptTokens}/${this.maxContextTokens} tokens) - compression needed`
+        );
         return true;
       }
     }
@@ -3216,7 +3550,9 @@ Respond in JSON format:
     const estimatedTotal = estimatedContentTokens + estimatedToolTokens;
 
     if (estimatedTotal > threshold) {
-      debugLog(`[GenericAgent] Estimated context at ${Math.round((estimatedTotal / this.maxContextTokens) * 100)}% (~${estimatedTotal}/${this.maxContextTokens} tokens) - compression needed`);
+      debugLog(
+        `[GenericAgent] Estimated context at ${Math.round((estimatedTotal / this.maxContextTokens) * 100)}% (~${estimatedTotal}/${this.maxContextTokens} tokens) - compression needed`
+      );
       return true;
     }
 
@@ -3225,7 +3561,9 @@ Respond in JSON format:
     // Lower threshold to be more aggressive with compression
     const MESSAGE_COUNT_THRESHOLD = 20;
     if (this.messages.length > MESSAGE_COUNT_THRESHOLD) {
-      debugLog(`[GenericAgent] Message count (${this.messages.length}) exceeds threshold (${MESSAGE_COUNT_THRESHOLD}) - compression needed`);
+      debugLog(
+        `[GenericAgent] Message count (${this.messages.length}) exceeds threshold (${MESSAGE_COUNT_THRESHOLD}) - compression needed`
+      );
       return true;
     }
 
@@ -3237,11 +3575,14 @@ Respond in JSON format:
    * Uses LLM to summarize old messages while preserving system + recent.
    */
   private async compressConversationHistory(): Promise<void> {
-    const { compressMessages, SUMMARIZER_SYSTEM_PROMPT } = await import('../context/MessageCompressor.js');
+    const { compressMessages, SUMMARIZER_SYSTEM_PROMPT } =
+      await import('../context/MessageCompressor.js');
 
-    debugLog(`[GenericAgent] Starting context compression. Current messages: ${this.messages.length}`);
+    debugLog(
+      `[GenericAgent] Starting context compression. Current messages: ${this.messages.length}`
+    );
 
-    const result = await compressMessages(this.messages, async (content) => {
+    const result = await compressMessages(this.messages, async content => {
       // Use LLM to summarize the conversation
       const summaryResponse = await this.llm.generate({
         messages: [
@@ -3255,7 +3596,9 @@ Respond in JSON format:
 
     if (result.wasCompressed) {
       this.messages = result.messages;
-      debugLog(`[GenericAgent] Compressed ${result.removedCount} messages. New count: ${this.messages.length}`);
+      debugLog(
+        `[GenericAgent] Compressed ${result.removedCount} messages. New count: ${this.messages.length}`
+      );
 
       // Log compression with phase context
       phaseLogger.info('GenericAgent', 'context_compression', 'Conversation history compressed', {

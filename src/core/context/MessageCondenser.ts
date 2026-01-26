@@ -85,6 +85,42 @@ export function condenseUserInput(content: string): CondenseResult {
 }
 
 /**
+ * Check if content appears to be a full narrative/story/chapter.
+ * Full narratives have: dialogue, multiple paragraphs, action verbs, scene progression.
+ */
+function isFullNarrative(content: string): boolean {
+  // Length heuristic - full narratives are typically >1000 chars
+  if (content.length < 800) {
+    return false;
+  }
+
+  // Count paragraphs (multiple newlines)
+  const paragraphs = content.split(/\n\s*\n/).filter(p => p.trim().length > 50);
+  const hasMultipleParagraphs = paragraphs.length >= 3;
+
+  // Check for dialogue (quoted text)
+  const dialogueMatches = content.match(/[""][^""]+[""]/g) || [];
+  const hasDialogue = dialogueMatches.length >= 2;
+
+  // Check for narrative action verbs (past tense storytelling)
+  const narrativeVerbs = ['said', 'asked', 'replied', 'walked', 'ran', 'looked', 'felt', 'thought', 'knew', 'saw', 'heard', 'turned', 'opened', 'closed', 'entered', 'left', 'stood', 'sat', 'reached', 'grabbed', 'pulled', 'pushed', 'moved', 'stopped', 'started', 'continued', 'began', 'ended', 'noticed', 'realized', 'wondered', 'whispered', 'shouted', 'smiled', 'frowned', 'nodded'];
+  const contentLower = content.toLowerCase();
+  const verbCount = narrativeVerbs.filter(verb => contentLower.includes(` ${verb} `) || contentLower.includes(` ${verb}.`) || contentLower.includes(` ${verb},`)).length;
+  const hasNarrativeVerbs = verbCount >= 5;
+
+  // Check for scene-setting phrases
+  const sceneSetters = ['the room', 'the door', 'the window', 'in the', 'at the', 'morning', 'afternoon', 'evening', 'night', 'sun', 'light', 'dark', 'silence', 'suddenly', 'moment', 'finally'];
+  const sceneCount = sceneSetters.filter(phrase => contentLower.includes(phrase)).length;
+  const hasSceneSetting = sceneCount >= 3;
+
+  // Require at least 2 of these narrative indicators
+  const indicators = [hasMultipleParagraphs, hasDialogue, hasNarrativeVerbs, hasSceneSetting];
+  const indicatorCount = indicators.filter(Boolean).length;
+
+  return indicatorCount >= 2;
+}
+
+/**
  * Generate a descriptive variable base name from content.
  * Analyzes the content to create a meaningful identifier.
  */
@@ -114,30 +150,46 @@ export function generateVariableBaseName(content: string): string {
     return `act_${actMatch[1]}`;
   }
 
-  // Check for story-related content
+  // PRIORITY CHECK: Detect full narratives/stories/chapters BEFORE checking for keywords
+  // This prevents misclassifying chapters as "character_desc" just because they mention "protagonist"
+  if (isFullNarrative(content)) {
+    // It's a full story/chapter - label it as such
+    return 'full_story';
+  }
+
+  // Check for story-related content (short story starters)
   if (contentLower.includes('once upon a time') || contentLower.includes('long ago')) {
     return 'story';
   }
 
-  // Check for character descriptions
-  if (firstLine.includes('character') || contentLower.slice(0, 200).includes('protagonist')) {
+  // Check for character descriptions (only if NOT a full narrative)
+  if (firstLine.includes('character') ||
+      (contentLower.slice(0, 200).includes('protagonist') && content.length < 800)) {
     return 'character_desc';
   }
 
   // Check for setting/location descriptions
   if (contentLower.slice(0, 200).includes('village') || contentLower.slice(0, 200).includes('town') ||
       contentLower.slice(0, 200).includes('city') || contentLower.slice(0, 200).includes('forest')) {
-    // Try to extract location name
-    const villageMatch = content.match(/(?:village|town|city)\s+(?:of\s+)?(\w+)/i);
-    if (villageMatch?.[1]) {
-      return `setting_${villageMatch[1].toLowerCase()}`;
+    // Only if it's a short description, not a full narrative
+    if (content.length < 1000) {
+      // Try to extract location name
+      const villageMatch = content.match(/(?:village|town|city)\s+(?:of\s+)?(\w+)/i);
+      if (villageMatch?.[1]) {
+        return `setting_${villageMatch[1].toLowerCase()}`;
+      }
+      return 'setting';
     }
-    return 'setting';
   }
 
   // Check for plot/outline
   if (firstLine.includes('plot') || firstLine.includes('outline') || firstLine.includes('synopsis')) {
     return 'plot';
+  }
+
+  // For longer content without clear markers, assume it's a story
+  if (content.length > 1500) {
+    return 'full_story';
   }
 
   // Extract a key noun from the first line as fallback
@@ -189,11 +241,23 @@ export function generateContentLabel(content: string): string {
   if (content.toLowerCase().slice(0, 200).includes('once upon a time')) {
     return `Story narrative: "${preview}${preview.length < firstLine.length ? '...' : ''}"`;
   }
-  if (firstLine.toLowerCase().includes('character')) {
+
+  // PRIORITY: Check if it's a full narrative BEFORE checking for keywords
+  if (isFullNarrative(content)) {
+    return `Full story/chapter: "${preview}${preview.length < firstLine.length ? '...' : ''}"`;
+  }
+
+  // Only label as character content if it's short (not a full narrative)
+  if (firstLine.toLowerCase().includes('character') && content.length < 800) {
     return `Character description: "${preview}${preview.length < firstLine.length ? '...' : ''}"`;
   }
-  if (content.toLowerCase().slice(0, 200).includes('protagonist')) {
+  if (content.toLowerCase().slice(0, 200).includes('protagonist') && content.length < 800) {
     return `Character content: "${preview}${preview.length < firstLine.length ? '...' : ''}"`;
+  }
+
+  // Longer content without explicit markers - likely a story
+  if (content.length > 1500) {
+    return `Story content: "${preview}${preview.length < firstLine.length ? '...' : ''}"`;
   }
 
   // Default: use quoted preview for context

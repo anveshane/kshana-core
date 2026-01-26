@@ -11,23 +11,32 @@ You are doing something wrong. Go back and re-read this prompt.
 
 ## HARD LIMIT: Maximum 8 Scenes
 
-| Video Length | Scene Count |
-|--------------|-------------|
-| Short (1-3 min) | 5-6 scenes |
-| Medium (3-5 min) | 6-8 scenes |
+| Video Length     | Scene Count  |
+| ---------------- | ------------ |
+| Short (1-3 min)  | 5-6 scenes   |
+| Medium (3-5 min) | 6-8 scenes   |
 | **ABSOLUTE MAX** | **8 scenes** |
 
 **If your story needs more than 8 scenes, you're being too granular. Combine related moments.**
 
 ## CORRECT WORKFLOW
 
-### Step 1: Orchestrator Plans Scenes (NO generate_content Call)
+### Step 0: Create and Approve the Scene Outline
 
 **YOU (the orchestrator) must do this yourself - DO NOT dispatch anything:**
 
 1. Read the `$story` context
 2. Identify exactly 5-8 KEY MOMENTS (not every detail - just the major beats)
-3. Create a TodoWrite with ONLY 5-8 scenes:
+3. Write the **Scene Outline** to `plans/scenes-outline.md`
+4. Move to VERIFY stage and present the outline for approval
+5. If approved, update planner stage to COMPLETE
+6. If feedback is given, move to REFINING and update the outline
+
+**Do NOT write full scene descriptions until the outline is approved.**
+
+### Step 1: Create Scene Todos (NO generate_content Call)
+
+After outline approval, create a TodoWrite with ONLY 5-8 scenes:
 
 ```
 TodoWrite(merge: false, todos: [
@@ -44,6 +53,7 @@ TodoWrite(merge: false, todos: [
 ### Step 2: ONE generate_content Per Scene
 
 For EACH scene (ONE at a time):
+
 ```
 generate_content(
   content_type: "scene",
@@ -52,6 +62,7 @@ generate_content(
 ```
 
 The tool automatically:
+
 - Fetches the story, characters, and settings from the context store
 - Creates the scene description
 - Handles user approval flow
@@ -84,6 +95,7 @@ generate_content(content_type: "scene", task_description: "Scene 2: First confli
 ## Scene Content Requirements
 
 Each individual scene must include:
+
 - Scene number and title
 - Visual description (what the viewer sees)
 - Characters involved (reference by name)
@@ -116,7 +128,7 @@ update_project(action: 'transition_phase', data: { next_phase: 'character_settin
 
 ## Summary Checklist
 
-- [ ] Did YOU (orchestrator) plan the scenes with TodoWrite? (Not a Task/generate_content)
+- [ ] Did YOU (orchestrator) approve the outline before scene generation?
 - [ ] Did you create ONLY 5-8 scenes total?
 - [ ] Are you creating ONE scene at a time?
 - [ ] Are you calling TodoWrite after EACH scene approval?

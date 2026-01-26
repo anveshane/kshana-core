@@ -17,5 +17,7 @@ export {
   fetchContextTool,
   listContextsTool,
   deleteContextTool,
+  fetchContextByLabelTool,
+  getRelevantContextTool,
 } from './contextTools.js';
 export { generateContentTool, CONTENT_TYPE_CONTEXTS, CONTENT_TYPE_OUTPUT_FILES } from './generateContentTool.js';
