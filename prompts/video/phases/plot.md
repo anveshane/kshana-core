@@ -1,6 +1,17 @@
 ### Plot Development Phase
 
-**Step-by-step instructions:**
+⛔ **CRITICAL: DO NOT create plot from a provided chapter**
+
+Plot is OPTIONAL and should ONLY be created/updated when:
+- The user provides a short story idea/concept (NOT a full chapter)
+- The user explicitly pastes plot content for updating
+
+**If the user provided a chapter:**
+- This phase should be SKIPPED
+- DO NOT generate a plot from the chapter
+- Move directly to the next phase
+
+**Step-by-step instructions (only for short ideas/concepts):**
 
 1. Generate the plot outline:
 ```

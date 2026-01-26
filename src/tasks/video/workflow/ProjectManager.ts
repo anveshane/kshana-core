@@ -702,6 +702,7 @@ export function getProjectStyleConfig(basePath: string = process.cwd()): StyleCo
 
 /**
  * Update a phase's status.
+ * Ensures status and plannerStage stay synchronized.
  */
 export function updatePhaseStatus(
   project: ProjectFile,
@@ -715,8 +716,17 @@ export function updatePhaseStatus(
   if (status === 'completed') {
     phaseInfo.completedAt = Date.now();
     phaseInfo.plannerStage = PlannerStage.COMPLETE;
-  } else if (status === 'in_progress' && !phaseInfo.plannerStage) {
-    phaseInfo.plannerStage = PlannerStage.PLANNING;
+  } else if (status === 'in_progress') {
+    // Ensure plannerStage is set when status becomes in_progress
+    if (!phaseInfo.plannerStage || phaseInfo.plannerStage === PlannerStage.COMPLETE) {
+      // If plannerStage is not set or is already complete (shouldn't happen),
+      // reset to PLANNING for consistency
+      phaseInfo.plannerStage = PlannerStage.PLANNING;
+    }
+    // Set startedAt if not already set
+    if (!phaseInfo.startedAt) {
+      phaseInfo.startedAt = Date.now();
+    }
   }
 
   saveProject(project, basePath);
@@ -751,8 +761,14 @@ export function updatePlannerStage(
       // Planning-only phases (plot, story, video_combine) are complete when plan is approved
       phaseInfo.status = 'completed';
       phaseInfo.completedAt = Date.now();
+    } else {
+      // For per-item phases, ensure status is 'in_progress' when planner stage is complete
+      // (not 'pending', since we're now actively creating items)
+      if (phaseInfo.status === 'pending') {
+        phaseInfo.status = 'in_progress';
+        phaseInfo.startedAt = Date.now();
+      }
     }
-    // For per-item phases, status remains 'in_progress' until all items are approved
   }
 
   saveProject(project, basePath);
@@ -1412,6 +1428,33 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
   const currentPhase = project.currentPhase;
   const phaseConfig = PHASE_CONFIGS[currentPhase];
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+
+  // Check if this phase was skipped
+  if (phaseInfo?.status === 'skipped') {
+    const nextPhase = phaseConfig.nextPhase;
+    if (nextPhase && PHASE_CONFIGS[nextPhase]) {
+      const nextPhaseConfig = PHASE_CONFIGS[nextPhase];
+      return `
+## Current State
+- **Phase**: ${phaseConfig.displayName}
+- **Status**: SKIPPED
+
+## What to Do Next
+
+This phase is SKIPPED (likely because the user provided a complete chapter).
+
+⛔ **DO NOT create any content for this phase**
+
+Immediately transition to the next phase:
+\`\`\`
+update_project(action: 'transition_phase', data: { next_phase: '${nextPhase}' })
+\`\`\`
+
+Next phase: **${nextPhaseConfig.displayName}**
+`;
+    }
+  }
+
   const plannerStage = phaseInfo?.plannerStage ?? PlannerStage.PLANNING;
 
   // Check if plan file already has content

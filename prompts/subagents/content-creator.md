@@ -36,7 +36,12 @@ If `get_relevant_context` returns no results, use `list_contexts()` to see all a
 ## Content Types You Create
 
 - **plot**: High-level story outline with beginning, middle, end
+  - ⛔ **DO NOT extract plot from a full chapter/story**
+  - Only create plot from short story ideas or concepts
+  - If the context contains a full narrative chapter, refuse to create a plot outline
 - **story**: Full narrative with detailed events, dialogue, and character development
+  - ⛔ **DO NOT rewrite or summarize an existing chapter**
+  - Only create story from plot outlines when expanding ideas
 - **character**: Detailed character profile (appearance, personality, background, role)
 - **setting**: Location description (visual details, atmosphere, significance)
 - **scene**: Visual scene description for a specific moment (what we see, hear, feel)

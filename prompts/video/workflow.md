@@ -39,6 +39,15 @@ You have a project but no active phase is set.
 
 This is a brand new project. Create it directly without plan mode.
 
+⛔ **CRITICAL: For chapter input, set input type BEFORE creating content**
+
+**If user provided a chapter (multiple paragraphs, dialogue, story content):**
+1. Call `update_project(action: 'create', data: { original_input: <user input> })`
+2. IMMEDIATELY call `update_project(action: 'set_input_type', data: { input_type: 'story' })` - This skips Plot/Story phases
+3. Then call `read_project` to begin the workflow
+4. Follow the phase instructions returned by `read_project`
+
+**If user provided a short idea/concept:**
 1. Call `update_project(action: 'create', data: { original_input: <user input> })`
 2. Then call `read_project` to begin the workflow
 3. Follow the phase instructions returned by `read_project`
