@@ -1,6 +1,6 @@
 ### Video Placement Phase
 
-**What this phase does**: Identify moments from the transcript that need AI-generated videos and create detailed video placements with exact timestamps and enhanced video prompts. Videos complement images by appearing in different time segments. **The goal is to cover the ENTIRE transcript duration with placements (images + videos), with no gaps.**
+**What this phase does**: Identify moments from the transcript that need AI-generated videos and create detailed video placements with exact timestamps and enhanced video prompts. Videos complement images by appearing in different time segments. Create as many video placements as needed based on transcript content.
 
 **Prerequisites**:
 - Content plan must exist at `agent/plans/content-plan.md` (created in Planning phase)
@@ -22,7 +22,7 @@
 ```
 Task(
   subagent_type: 'video-placer',
-  task: 'Analyze the transcript ($transcript) to identify moments that need AI-generated videos. Check $image_placements to see what is already covered and fill ALL remaining gaps. Use the content plan ($content_plan) for strategic guidance only. Create detailed video placement plan with exact timestamps, video types (cinematic_realism/stock_footage - AVOID motion_graphics, use stock_footage or cinematic_realism instead), and enhanced video prompts emphasizing cinematic realism style (not animation/infographic style). CRITICAL: Video duration MUST NOT exceed 10 seconds - this is a hard limit due to hardware constraints. If transcript segments are longer than 10 seconds, split them into multiple placements or adjust timestamps. The goal is to cover the ENTIRE transcript duration with placements (images + videos), with no gaps. Create as many placements as needed to fill all remaining segments.',
+  task: 'Analyze the transcript ($transcript) to identify moments that need AI-generated videos. Check $image_placements to see what is already covered and create video placements for segments not covered by images. Use the content plan ($content_plan) for strategic guidance only. Create detailed video placement plan with exact timestamps, video types (cinematic_realism/stock_footage - AVOID motion_graphics, use stock_footage or cinematic_realism instead), and enhanced video prompts emphasizing cinematic realism style (not animation/infographic style). CRITICAL: Video duration MUST NOT exceed 10 seconds - this is a hard limit due to hardware constraints. If transcript segments are longer than 10 seconds, split them into multiple placements or adjust timestamps. Create as many video placements as needed based on transcript content - identify moments based on keywords, topic changes, and content shifts.',
   context_refs: ['$transcript', '$content_plan', '$image_placements']
 )
 ```
@@ -47,30 +47,7 @@ write_file(
      - Confirm it contains only placement lines in the format: `- Placement N: startTime-endTime | type=video_type | prompt | filename.mp4`
    - The file will be automatically loaded as `$video_placements` context variable after saving
 
-4. **CRITICAL: Validate placement coverage**:
-   - Read `agent/content/image-placements.md` and `agent/content/video-placements.md`
-   - Read `agent/content/transcript.md` to get the total transcript duration
-   - **Check that image placements + video placements together cover the ENTIRE transcript duration with NO GAPS**
-   - **CRITICAL: Check for gaps starting from 0:00. If the first placement doesn't start at 0:00, there is a gap that must be filled.**
-   - **If gaps are found**:
-     - Identify the exact time ranges that are not covered
-     - Call the video-placer again with a specific task to fill those gaps:
-     ```
-     Task(
-       subagent_type: 'video-placer',
-       task: 'CRITICAL: There are gaps in placement coverage. The following time segments are NOT covered by any placement: [list the gaps]. You MUST create video placements to fill these gaps. Check $image_placements to avoid overlaps. Create placements for these specific time ranges to ensure 100% coverage.',
-       context_refs: ['$transcript', '$content_plan', '$image_placements', '$video_placements']
-     )
-     ```
-     - Extract and save the additional placements
-     - Re-validate until coverage is complete
-   - **If overlaps are found**:
-     - Identify which placements overlap
-     - Adjust timestamps to eliminate overlaps (prefer keeping image placements and adjusting video placements)
-     - Re-save the files
-   - **DO NOT proceed to the next phase until validation passes - all gaps must be filled**
-
-5. **Mark phase as completed and transition to Video Generation**:
+4. **Mark phase as completed and transition to Video Generation**:
 ```
 update_project(
   action: 'update_phase',
@@ -91,18 +68,16 @@ update_project(
 - **CRITICAL: Check `$image_placements` and DO NOT create video placements that overlap with image placement timestamps**
 - **CRITICAL: Videos complement images - they appear in DIFFERENT time segments**
 - **CRITICAL: Video duration MUST NOT exceed 10 seconds - this is a hard limit due to hardware constraints. If transcript segments are longer than 10 seconds, split them into multiple placements or adjust timestamps to stay within the 10-second limit.**
+- **CRITICAL: Video-placer automatically detects and fills gaps after creating initial placements to ensure 100% timeline coverage - no separate gap-filling step needed**
 - Video placements are saved to `agent/content/video-placements.md`
-- Create placements to cover all remaining transcript segments not covered by images. Ensure 100% coverage with no gaps.
-- **CRITICAL: Ensure coverage starts from 0:00. If the first placement (image or video) doesn't start at 0:00, create a video placement starting at 0:00 to cover the gap.**
+- Create as many video placements as needed based on transcript content
+- Identify moments based on keywords, topic changes, and content shifts
 - Each placement must specify video type: cinematic_realism or stock_footage (AVOID motion_graphics - use stock_footage or cinematic_realism instead)
 
 **DO NOT:**
 - Create placements that overlap with image placement timestamps
 - Create placements for images (those are handled in Image Placement phase)
-- Leave any gaps in the transcript timeline - fill ALL remaining segments to ensure complete coverage
 - Skip saving the placements - you MUST save to the file
-- Skip validation - you MUST verify the output format AND coverage before saving
-- Skip coverage validation - you MUST check for gaps and overlaps before proceeding
+- Skip format verification - you MUST verify the output format before saving
 - Save planning comments or thinking - extract ONLY the VIDEO_PLACER section
 - Skip transition to video generation - you MUST transition after marking phase complete
-- Proceed if gaps are found - you MUST fill all gaps before marking phase complete

@@ -10,7 +10,7 @@ You analyze the transcript and strategic content plan to identify specific momen
 - **ONLY create placements for `type=image` - NO INFOGRAPHICS, NO VIDEO SEGMENTS, ONLY IMAGES**
 - Map identified moments to exact transcript timestamps
 - Create detailed, documentary-style prompts for each placement
-- **Create placements to cover the transcript. Work with video-placer to ensure 100% coverage with no gaps.**
+- **Create as many image placements as needed based on transcript content**
 
 ## Responsibilities
 
@@ -27,9 +27,10 @@ You analyze the transcript and strategic content plan to identify specific momen
 - Map each identified moment to exact transcript timestamps
 - Create detailed, documentary-style prompts for each placement
 - Prepare placement entries for project state and SRT tagging
-- **CRITICAL: After image-placer creates placements, video-placer will fill remaining gaps. Together, ensure the ENTIRE transcript duration is covered with no gaps.**
-- **CRITICAL: Ensure coverage starts from 0:00 (the very beginning of the transcript). If the first moment you identify doesn't start at 0:00, either create a placement starting at 0:00 or ensure video-placer will cover 0:00 to your first placement.**
-- Create as many placements as needed to cover your assigned segments of the transcript
+- **CRITICAL: Create placements ONLY for moments that truly need IMAGES (static visuals) - NOT for moments that need video (action, demonstrations, processes)**
+- **CRITICAL: Identify moments based on keywords, topic changes, and content shifts - but ONLY create image placements for moments that benefit from static images**
+- **CRITICAL: Leave gaps for videos - do NOT try to cover the entire transcript. Video-placer will fill remaining segments with videos for action, demonstrations, and processes**
+- **CRITICAL: Split long segments into multiple placements - if a transcript segment is longer than 15-20 seconds, create multiple image placements to keep visuals dynamic**
 
 ## Input Requirements
 
@@ -49,25 +50,37 @@ IMAGE_PLACER:
 - **CRITICAL: YOU identify the moments from the transcript - don't wait for the plan to list them.**
 - **CRITICAL: ONLY create placements for `type=image` - NO INFOGRAPHICS, NO CHARTS, NO DIAGRAMS, NO DATA VISUALIZATIONS.**
 - **CRITICAL: If a moment needs an infographic, chart, or diagram, SKIP IT - those are handled by other subagents.**
-- **CRITICAL: Create placements to cover the transcript. Work with video-placer to ensure 100% coverage with no gaps.**
-- **CRITICAL: Ensure coverage starts from 0:00. If your first placement doesn't start at 0:00, either create a placement starting at 0:00 or coordinate with video-placer to ensure 0:00 is covered.**
-- Focus on moments that would truly benefit from visual enhancement with images (personal stories, historical context, conceptual explanations).
-- **CRITICAL: Only skip segments that video-placer will definitely cover (like ad breaks, transitions, or segments that clearly need video). However, if you're unsure, create an image placement - it's better to have slight overlap than gaps.**
+- **CRITICAL: Create placements ONLY for moments that truly need IMAGES (static visuals) - skip moments that need video (action, demonstrations, processes)**
+- **CRITICAL: Identify moments based on keywords, topic changes, and content shifts - but ONLY create image placements for moments that benefit from static images**
+- **CRITICAL: Leave gaps for videos - do NOT try to cover everything. Video-placer will fill remaining segments with videos**
+- Focus on moments that would truly benefit from visual enhancement with IMAGES (static visuals): 
+  - **GOOD for images**: Book covers, objects, scenes, portraits, conceptual illustrations, still life, product shots, text displays, diagrams (static)
+  - **BAD for images (use VIDEO instead)**: Any action words (grabbing, placing, watering, clipping, opening, closing, walking, moving, demonstrating) - these need video
+  - **CRITICAL: If the prompt describes ACTION or MOVEMENT, it should be VIDEO, not an image**
+- **CRITICAL: Skip moments that need VIDEO (action, demonstrations, processes, movements) - leave these for video-placer**
 - Skip any moments that require infographics, charts, diagrams, or data visualizations.
 - Keep prompts specific and visually descriptive with documentary-style detail.
 - Use exact timestamps from the transcript, not approximate ranges.
+- **CRITICAL: If a transcript segment is longer than 15 seconds, split it into multiple image placements. Create separate placements for different moments within long segments to keep visuals dynamic. Aim for 5-15 second image placements.**
 - Create detailed, production-ready prompts for each identified moment.
-- Create placements for moments that need images. Video-placer will fill remaining gaps to ensure complete transcript coverage.
+- **CRITICAL: Do NOT try to cover the entire transcript - leave gaps for videos. Create placements only for moments that truly need static images.**
 
 ## Example (Reference Only)
 
 After analyzing the transcript, you identify key moments that need images. For example:
 
 **From the transcript, you identify**:
-- A personal anecdote about childhood colorism (around 0:27-0:59)
-- A discussion about "Gora Tax" and selfie culture (around 1:45-2:17)
-- Historical references to ancient Tamil culture (around 4:15-5:00)
-- A discussion about modern media perpetuation (around 17:04-18:22)
+- A stack of productivity books mentioned (around 0:00-0:16) - GOOD for image (static objects)
+- A book cover "Getting Things Done" mentioned (around 0:16-0:35) - GOOD for image (static book cover)
+- A book cover "Atomic Habits" mentioned (around 0:54-1:13) - GOOD for image (static book cover)
+- A person's skeptical expression (around 1:13-1:31) - GOOD for image (static portrait)
+
+**You would SKIP** (these need VIDEO, not images):
+- "taking out the trash" - ACTION, needs video
+- "watering plants" - ACTION, needs video
+- "clipping nails" - ACTION, needs video
+- "opening textbook" - ACTION, needs video
+- "opening laptop" - ACTION, needs video
 
 **You would output** (ONLY for moments that need images - skip infographics, charts, diagrams):
 ```
@@ -82,4 +95,6 @@ IMAGE_PLACER:
 - **ONLY create placements for `type=image` - NO INFOGRAPHICS, NO CHARTS, NO DIAGRAMS.**
 - If a moment requires an infographic (like a hierarchy chart, migration map, or scientific diagram), SKIP IT.
 - Only create placements for moments that need images (skip infographics, charts, diagrams).
-- **CRITICAL: Create placements for moments that truly benefit from visual enhancement with images. Video-placer will fill ALL remaining gaps to ensure complete coverage, but you should be thorough - don't leave large gaps expecting video-placer to fill them.**
+- **CRITICAL: Create placements ONLY for moments that truly need IMAGES (static visuals) - skip moments that need video (action, demonstrations, processes)**
+- **CRITICAL: Leave gaps for videos - do NOT try to cover everything. Video-placer will fill remaining segments with videos for action and demonstrations**
+- **CRITICAL: Split long segments (15+ seconds) into multiple placements - create separate placements for different moments within long segments. Aim for 5-15 second image placements to keep visuals dynamic**

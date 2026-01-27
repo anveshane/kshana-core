@@ -2375,6 +2375,9 @@ export function addAsset(asset: AssetInfo, basePath: string = getCurrentProjectB
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
     console.log(`[addAsset] ✓ Successfully wrote manifest with ${manifest.assets.length} assets to ${manifestPath}`);
     
+    // Note: File system watcher in desktop app will detect this change and trigger UI refresh
+    // The watcher uses awaitWriteFinish to ensure file is fully written before detecting change
+    
     // Verify the write by reading it back
     try {
       const verifyManifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
