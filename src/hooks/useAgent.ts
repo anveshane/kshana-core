@@ -301,6 +301,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         toolName: action.toolName ?? targetTool.name,
         toolArgs: action.toolArgs ?? targetTool.args,
         agentName: action.agentName ?? targetTool.agentName,
+        startTime: targetTool.startTime,
       } : state.currentAction;
 
       return {
@@ -453,6 +454,8 @@ interface UseAgentReturn {
   isConfirmation: boolean;
   questionOptions: QuestionOption[] | undefined;
   autoApproveTimeoutMs: number | undefined;
+  /** Context content to display with the question (e.g., image prompt being approved) */
+  questionContext: string | undefined;
   error: string | undefined;
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];

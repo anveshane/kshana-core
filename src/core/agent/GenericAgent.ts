@@ -36,6 +36,15 @@ import {
 } from '../tools/builtin/generateContentTool.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
+import {
+  loadProject,
+  saveCharacter,
+  saveSetting,
+  updateContentStatus,
+  projectExists,
+} from '../../tasks/video/workflow/ProjectManager.js';
+import type { CharacterData, SettingData, ContentTypeName } from '../../tasks/video/workflow/types.js';
+import { createDefaultCharacterData, createDefaultSettingData } from '../../tasks/video/workflow/types.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -44,12 +53,85 @@ const phaseLogger = getPhaseLogger();
 function debugLog(message: string) {
   // Parse the message to extract component and content
   const match = message.match(/^\[([^\]]+)\]\s*(.*)$/);
-  if (match) {
+  if (match && match[1] && match[2]) {
     const component = match[1];
     const content = match[2];
     phaseLogger.debug(component, 'legacy', content);
   } else {
     phaseLogger.debug('GenericAgent', 'legacy', message);
+  }
+}
+
+/**
+ * Framework-managed persistence: Auto-update project registry when content is approved.
+ * This removes the need for agents to manually call update_project for every content type.
+ */
+function persistApprovedContent(
+  contentType: string,
+  name: string | undefined,
+  content: string,
+  outputFile: string | undefined
+): { persisted: boolean; action?: string; error?: string } {
+  if (!projectExists()) {
+    return { persisted: false, error: 'No project exists' };
+  }
+
+  const project = loadProject();
+  if (!project) {
+    return { persisted: false, error: 'Failed to load project' };
+  }
+
+  try {
+    // Extract first 200 chars as description for registry
+    const extractDescription = (text: string): string => {
+      const firstParagraph = text.split('\n\n')[0] || text;
+      return firstParagraph.slice(0, 200).trim();
+    };
+
+    switch (contentType) {
+      case 'character':
+        if (name) {
+          const character: CharacterData = {
+            ...createDefaultCharacterData(name),
+            description: extractDescription(content),
+            approvalStatus: 'approved' as const,
+          };
+          saveCharacter(character);
+          debugLog(`[GenericAgent] Auto-persisted character "${name}" to project registry`);
+          return { persisted: true, action: `add_character: ${name}` };
+        }
+        break;
+
+      case 'setting':
+        if (name) {
+          const setting: SettingData = {
+            ...createDefaultSettingData(name),
+            description: extractDescription(content),
+            approvalStatus: 'approved' as const,
+          };
+          saveSetting(setting);
+          debugLog(`[GenericAgent] Auto-persisted setting "${name}" to project registry`);
+          return { persisted: true, action: `add_setting: ${name}` };
+        }
+        break;
+
+      case 'plot':
+      case 'story':
+        // Update content registry status
+        updateContentStatus(project, contentType as ContentTypeName, 'available');
+        debugLog(`[GenericAgent] Auto-updated ${contentType} status to available in project registry`);
+        return { persisted: true, action: `update_content_status: ${contentType}` };
+
+      default:
+        // For other content types, just log that we're not auto-persisting
+        debugLog(`[GenericAgent] Content type "${contentType}" does not require auto-persistence`);
+        return { persisted: false };
+    }
+
+    return { persisted: false };
+  } catch (error) {
+    debugLog(`[GenericAgent] Error in auto-persistence: ${String(error)}`);
+    return { persisted: false, error: String(error) };
   }
 }
 
@@ -1497,7 +1579,7 @@ export class GenericAgent extends TypedEventEmitter {
     active: boolean;
     task: string;
     sceneNumber: number;
-    sceneImageArtifactId: string;
+    sceneImageArtifactId?: string;
     motionDescription?: string;
     context?: string;
     messages: Message[];
@@ -2403,6 +2485,14 @@ Respond in JSON format:
         variableBaseName: this.contentState.contentType,
       });
 
+      // Framework-managed persistence: Auto-update project registry
+      const persistResult = persistApprovedContent(
+        this.contentState.contentType,
+        name,
+        this.contentState.currentContent,
+        this.contentState.outputFile
+      );
+
       const result = {
         status: 'approved',
         name,
@@ -2412,12 +2502,16 @@ Respond in JSON format:
         task: this.contentState.task,
         output_file: this.contentState.outputFile,
         file_saved: fileSaved,
+        registry_updated: persistResult.persisted,
+        registry_action: persistResult.action,
         iterations: this.contentState.iterations,
         message: fileSaved
-          ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`
-          : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}\n\nTo read the full content, use fetch_context with ${variableName}.`,
-        next_steps:
-          'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
+          ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}`
+          : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}`,
+        // Simplified next_steps since registry is auto-updated
+        next_steps: persistResult.persisted
+          ? 'Project registry has been automatically updated. Continue with the next task or transition to the next phase.'
+          : 'Continue with the next task.',
       };
       this.contentState = null;
       // Reset mode back to orchestrator
@@ -3049,6 +3143,11 @@ Respond in JSON format:
     }
 
     // Initialize video gen state
+    const currentParams = {
+      duration,
+      fps: 24,
+      motionStrength: 0.7,
+    };
     this.videoGenState = {
       active: true,
       task,
@@ -3057,18 +3156,14 @@ Respond in JSON format:
       motionDescription,
       context,
       messages: [],
-      currentParams: {
-        duration,
-        fps: 24,
-        motionStrength: 0.7,
-      },
+      currentParams,
       iterations: 0,
     };
 
     // Build a summary for user approval
     const paramSummary = `**Video Generation Parameters:**
 - Scene: #${sceneNumber}
-- Source Image: ${sceneImageArtifactId}
+- Source Image: ${sceneImageArtifactId ?? 'N/A (stitch operation)'}
 - Duration: ${duration} seconds
 - Motion: ${motionDescription ?? 'Auto-determined based on scene'}
 - Task: ${task}`;
@@ -3076,7 +3171,7 @@ Respond in JSON format:
     // Return status indicating we need user approval
     return {
       status: 'awaiting_approval',
-      params: this.videoGenState.currentParams,
+      params: currentParams,
       scene_number: sceneNumber,
       image_artifact_id: sceneImageArtifactId,
       motion_description: motionDescription,

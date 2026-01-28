@@ -210,6 +210,7 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
 
       for (let i = 0; i < imagesToUpload.length; i++) {
         const refImage = imagesToUpload[i];
+        if (!refImage) continue;
         const refImagePath = findImagePathFromArtifactId(refImage.image_id);
 
         if (!refImagePath || !fs.existsSync(refImagePath)) {

@@ -261,7 +261,7 @@ For structured data (characters, settings, assets, scenes), prefer using update_
         };
         const contentType = fileToContentType[filePath];
         if (contentType) {
-          updateContentStatus(project, contentType, 'complete');
+          updateContentStatus(project, contentType, 'available');
         }
       }
 
@@ -332,9 +332,10 @@ Use this at the start of each turn to understand the project state and what acti
 
     // Set phase context in phaseLogger for all subsequent logs
     const phaseLogger = getPhaseLogger();
+    const currentPhaseInfo = project.phases[project.currentPhase as keyof typeof project.phases];
     phaseLogger.setContext({
       phase: project.currentPhase,
-      stage: project.plannerStage,
+      stage: currentPhaseInfo?.plannerStage,
       projectId: project.id,
     });
 
@@ -357,45 +358,50 @@ Use this at the start of each turn to understand the project state and what acti
 
 /**
  * Update project tool - updates the project.json file.
+ *
+ * SIMPLIFIED: Most content registration (characters, settings) is now handled
+ * automatically by the framework when content is approved. Use generate_content
+ * instead of manually calling add_character/add_setting.
  */
 export const updateProjectTool: ToolDefinition = createTool(
   'update_project',
-  `Update the project.json file with new data.
+  `Update project state and control workflow transitions.
 
-Note: project.json is an INDEX file. Content should be in .md files:
-- Characters: Write full content to characters/[name].md, then use add_character to register
-- Settings: Write full content to settings/[name].md, then use add_setting to register
-- Scenes: Write full content to plans/scenes.md, then use add_scene to register scene references
-
-Actions:
-- "create": Create a new project with the given original_input
-- "set_title": Set the project title
-- "update_phase": Update a phase status. Data: { phase: string, status: 'pending'|'in_progress'|'completed' }
+## Core Actions (use these):
+- "create": Create a new project. Data: { original_input: string }
+- "set_input_type": Mark input type. Data: { input_type: 'idea'|'story' }
+  - Use 'story' if user provided a complete story/chapter (skips plot and story phases)
+- "transition_phase": Move to next phase when current is complete. Data: {}
+- "update_phase": Update phase status. Data: { phase: string, status: 'pending'|'in_progress'|'completed' }
 - "update_planner_stage": Update planner stage. Data: { phase: string, stage: 'planning'|'verify'|'refining'|'complete' }
-- "transition_phase": Automatically transition to next phase if current is complete
-- "add_character": Register a character. Data: { name, description?, visual_description?, approval_status? }
-- "update_character": Update an existing character. Data: { name, updates: { ... } }
-- "update_character_approval": Update character approval. Data: { name, status, approval_type?: 'content'|'image', contentArtifactId?, referenceImageId? }
-- "add_setting": Register a setting. Data: { name, description?, visual_description?, approval_status? }
-- "update_setting": Update an existing setting. Data: { name, updates: { ... } }
-- "update_setting_approval": Update setting approval. Data: { name, status, approval_type?: 'content'|'image', contentArtifactId?, referenceImageId? }
-- "add_scene": Register a scene reference. Data: { scene_number, title?, description? }
-- "update_scene": Update scene reference. Data: { scene_number, updates: { ... } }
-- "update_scene_approval": Update scene approval. Data: { scene_number, approval_type: 'content'|'image'|'video', status, artifactId? }
+
+## Asset Actions (for images/videos):
 - "add_asset": Register a generated asset. Data: { id, type, path, metadata? }
-- "set_final_video": Set the final video info. Data: { artifactId, path, duration }
-- "set_input_type": Set the input type after analyzing user input. Data: { input_type: 'idea'|'story' }. Use 'story' if user provided a complete story/chapter (skips plot and story phases).`,
+- "set_final_video": Set final video info. Data: { artifactId, path, duration }
+- "update_scene_approval": Update scene approval. Data: { scene_number, approval_type, status, artifactId? }
+
+## Deprecated Actions (framework handles these automatically):
+- add_character, update_character, update_character_approval - Use generate_content(content_type: 'character') instead
+- add_setting, update_setting, update_setting_approval - Use generate_content(content_type: 'setting') instead
+- add_scene, update_scene - Use generate_content(content_type: 'scene') instead`,
   {
     type: 'object',
     properties: {
       action: {
         type: 'string',
         enum: [
+          // Core workflow actions
           'create',
-          'set_title',
+          'set_input_type',
+          'transition_phase',
           'update_phase',
           'update_planner_stage',
-          'transition_phase',
+          'set_title',
+          // Asset actions
+          'add_asset',
+          'set_final_video',
+          'update_scene_approval',
+          // Deprecated but still supported for backward compatibility
           'add_character',
           'update_character',
           'update_character_approval',
@@ -404,10 +410,6 @@ Actions:
           'update_setting_approval',
           'add_scene',
           'update_scene',
-          'update_scene_approval',
-          'add_asset',
-          'set_final_video',
-          'set_input_type',
         ],
         description: 'The action to perform',
       },

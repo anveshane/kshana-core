@@ -1,14 +1,17 @@
 /**
  * generate_content tool - Deterministic content generation with automatic context injection.
  *
- * Instead of requiring the LLM to pass context_refs, this tool automatically
- * determines what context is needed based on content_type and fetches it.
+ * This is the PRIMARY tool for content generation. It automatically:
+ * 1. Determines what context is needed based on content_type
+ * 2. Fetches and injects that context into the subagent prompt
+ * 3. Saves approved content to the appropriate file
+ * 4. Updates the project registry automatically
  */
 import { createTool } from '../ToolRegistry.js';
 
 /**
  * Defines which contexts are required for each content type.
- * The tool will automatically fetch these from the context store.
+ * The framework automatically fetches these from the context store.
  */
 export const CONTENT_TYPE_CONTEXTS: Record<string, string[]> = {
   // Content creation phases
@@ -20,10 +23,9 @@ export const CONTENT_TYPE_CONTEXTS: Record<string, string[]> = {
   narration: ['$story', '$scenes'],
 
   // Image prompt generation phases
-  // These generate detailed prompts that are then fed to image generators
-  character_image_prompt: ['$project_style'],  // + character description from read_project
-  setting_image_prompt: ['$project_style'],    // + setting description from read_project
-  scene_image_prompt: ['$project_style'],      // + scene description + character/setting refs from read_project
+  character_image_prompt: ['$project_style'],
+  setting_image_prompt: ['$project_style'],
+  scene_image_prompt: ['$project_style'],
 };
 
 /**
@@ -38,39 +40,55 @@ export const CONTENT_TYPE_OUTPUT_FILES: Record<string, string> = {
   scene: 'plans/scenes.md',
   narration: 'plans/narration.md',
 
-  // Image prompt generation - prompts are passed directly to image generator, not saved
-  character_image_prompt: '',  // Not saved - passed to image generator
-  setting_image_prompt: '',    // Not saved - passed to image generator
-  scene_image_prompt: '',      // Not saved - passed to image generator
+  // Image prompt generation - not saved to files
+  character_image_prompt: '',
+  setting_image_prompt: '',
+  scene_image_prompt: '',
 };
 
 export const generateContentTool = createTool(
   'generate_content',
-  `Generate creative content for the story-to-video pipeline.
+  `Generate creative content with automatic context injection and persistence.
 
-This tool automatically handles context - you don't need to pass context_refs.
-The tool knows exactly what context each content type needs and fetches it automatically.
+This is the PREFERRED tool for content generation. You don't need to:
+- Pass context_refs manually (auto-injected based on content_type)
+- Call update_project after approval (registry is auto-updated)
+- Specify output_file (auto-determined from content_type)
 
-## Content Creation Types:
-- plot: Generate high-level plot outline (uses: original user input)
-- story: Generate full story narrative (uses: user input + plot)
-- character: Generate character profile (uses: user input + plot + story)
-- setting: Generate setting/location description (uses: user input + plot + story)
-- scene: Generate scene descriptions (uses: user input + story + characters + settings)
-- narration: Generate narration/voice-over text (uses: story + scenes)
+## Content Types
 
-## Image Prompt Generation Types:
-- character_image_prompt: Generate detailed image prompt for a character (uses: project style + character description)
-- setting_image_prompt: Generate detailed image prompt for a setting (uses: project style + setting description)
-- scene_image_prompt: Generate detailed image prompt for a scene (uses: project style + scene + character/setting refs)
+| Type | Auto-Injected Context | Output |
+|------|----------------------|--------|
+| plot | $original_input | plans/plot.md |
+| story | $original_input, $plot | plans/story.md |
+| character | $original_input, $plot, $story | characters/{name}.md |
+| setting | $original_input, $plot, $story | settings/{name}.md |
+| scene | $story, $characters, $settings | plans/scenes.md |
+| narration | $story, $scenes | plans/narration.md |
 
-Image prompts are shown to the user for approval, then passed to the image generator.
+## Image Prompt Types
 
-## Examples:
-- generate_content(content_type: "plot") - Creates plot from user's story idea
-- generate_content(content_type: "character", name: "Alice") - Creates character profile
-- generate_content(content_type: "character_image_prompt", name: "Alice") - Creates image prompt for Alice
-- generate_content(content_type: "scene_image_prompt", scene_number: 3) - Creates image prompt for scene 3`,
+| Type | Description |
+|------|-------------|
+| character_image_prompt | Generate image prompt for a character |
+| setting_image_prompt | Generate image prompt for a setting |
+| scene_image_prompt | Generate image prompt for a scene |
+
+## Examples
+
+\`\`\`javascript
+// Create plot from user input
+generate_content(content_type: "plot")
+
+// Create character profile - name required
+generate_content(content_type: "character", name: "Alice")
+
+// Create setting - name required
+generate_content(content_type: "setting", name: "Ancient Library")
+
+// Create scene with custom task
+generate_content(content_type: "scene", task_description: "Create scene 3: The Confrontation")
+\`\`\``,
   {
     type: 'object',
     properties: {
@@ -84,7 +102,7 @@ Image prompts are shown to the user for approval, then passed to the image gener
       },
       name: {
         type: 'string',
-        description: 'For character/setting/character_image_prompt/setting_image_prompt: the name of the character or setting',
+        description: 'For character/setting: the name (REQUIRED). For scenes: optional scene title.',
       },
       scene_number: {
         type: 'number',

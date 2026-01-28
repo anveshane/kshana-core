@@ -4,6 +4,9 @@
  */
 import type { ToolDefinition } from '../llm/index.js';
 import { loadAndRenderMarkdown, type PromptContext } from './loader.js';
+import os from 'os';
+import { existsSync } from 'fs';
+import path from 'path';
 
 // NOTE: These are loaded at runtime via buildSystemMessage/build*Prompt functions.
 export const GENERIC_AGENT_BASE_PROMPT = '';
@@ -29,24 +32,8 @@ function toPromptContext(ctx: PromptRuntimeContext): PromptContext {
   return ctx as unknown as PromptContext;
 }
 
-// Tool categories for prompt building
-const COMPLEX_TOOLS = new Set(['generate_image', 'generate_video', 'edit_image']);
-
-function isComplexTool(toolName: string): boolean {
-  return COMPLEX_TOOLS.has(toolName);
-}
-
-/**
- * Build tool descriptions section for the system prompt.
- */
-function buildToolDescriptions(tools: Map<string, ToolDefinition>): string {
-  const lines = ['## Available Tools', ''];
-  for (const [name, tool] of tools) {
-    const category = isComplexTool(name) ? 'complex' : 'simple';
-    lines.push(`- \`${name}\` (${category}): ${tool.description}`);
-  }
-  return lines.join('\n');
-}
+// NOTE: Tool descriptions are provided via the LLM API's tools parameter,
+// not in the system message. This avoids duplication.
 
 /**
  * Context variable info for the system prompt.
@@ -113,14 +100,34 @@ export function buildContextVariablesSection(variables: ContextVariable[]): stri
  * @param tools - Map of tool name to tool definition
  * @param customPrompt - Optional custom prompt to append (domain-specific)
  */
+/**
+ * Check if the current working directory is a git repository.
+ */
+function isGitRepo(dir: string): boolean {
+  return existsSync(path.join(dir, '.git'));
+}
+
+/**
+ * Build the runtime environment context with actual system values.
+ */
+function buildEnvContext(): PromptRuntimeContext {
+  const cwd = process.cwd();
+  return {
+    working_directory: cwd,
+    is_git_repo: isGitRepo(cwd) ? 'Yes' : 'No',
+    platform: process.platform,
+    os_version: os.release(),
+    date: new Date().toISOString().split('T')[0],
+    // model_name and model_id are set by the caller if needed
+  };
+}
+
 export function buildSystemMessage(
   isSubAgent: boolean,
   tools: Map<string, ToolDefinition>,
   customPrompt?: string
 ): string {
-  const envContext: PromptRuntimeContext = {
-    // Defaults are empty; caller may add more later via interpolation.
-  };
+  const envContext = buildEnvContext();
 
   const base = loadAndRenderMarkdown('system/base.md', toPromptContext(envContext));
   const roleSection = isSubAgent
@@ -130,8 +137,8 @@ export function buildSystemMessage(
 
   let prompt = [base, roleSection, env].filter(Boolean).join('\n\n');
 
-  // Add tool descriptions wrapped in XML tags
-  prompt += '\n\n<tools>\n' + buildToolDescriptions(tools) + '\n</tools>';
+  // NOTE: Tool descriptions are NOT included here - they are provided via the LLM API's tools parameter.
+  // This avoids duplicating tool info in both the system message and the API tools array.
 
   // Add custom domain-specific prompt if provided, wrapped in XML tags
   if (customPrompt) {

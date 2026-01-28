@@ -397,8 +397,9 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
   // This allows streaming content to show during execution, and result.content after completion
   const resultContent = React.useMemo(() => {
     if (isExecuting || streamingContent) return undefined;
-    if (result && typeof result === 'object' && 'content' in result) {
-      const content = (result as Record<string, unknown>).content;
+    if (result && typeof result === 'object') {
+      const resultObj = result as Record<string, unknown>;
+      const content = resultObj['content'];
       if (typeof content === 'string' && content.length > 0) {
         return content;
       }

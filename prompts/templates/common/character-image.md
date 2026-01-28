@@ -23,9 +23,10 @@ Modifiers: {{STYLE_MODIFIERS}}
 Create an image prompt that includes:
 - Physical appearance details from the character description
 - Distinctive features and accessories
-- Clothing and style elements
+- Clothing and Accessories
 - The style modifiers for visual consistency
 - Neutral background (solid color or simple gradient)
+- Age, gender, race, ethnicity, and body type
 
 ## Negative Prompt Elements
 

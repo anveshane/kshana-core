@@ -1,4 +1,4 @@
-Launch a specialized subagent to handle a specific task in the story-to-video pipeline.
+Launch a specialized subagent to handle a specific task.
 
 ## Available Subagent Types
 
@@ -14,30 +14,18 @@ Launch a specialized subagent to handle a specific task in the story-to-video pi
 |-----------|----------|-------------|
 | subagent_type | Yes | Which subagent to use |
 | task | Yes | Detailed task description |
-| context_refs | No | Array of context variable names (e.g., ["$story", "$character_daniel"]) |
 | content_type | No | For content-creator: plot, story, character, setting, scene, narration |
 | output_file | No | File path to save output |
 
-## Context Passing
+## Context Handling
 
-Use `context_refs` to pass stored content to the subagent:
+The framework automatically injects context based on content_type:
+- **plot**: Gets original user input
+- **story**: Gets original input + plot
+- **character/setting**: Gets original input + plot + story
+- **scene**: Gets story + characters + settings
 
-1. First, store the content using `store_context`:
-   ```
-   store_context(content: "...", label: "Daniel character profile")
-   // Returns: { context_ref: "$character_profile" }
-   ```
-
-2. Then pass it to Task:
-   ```
-   Task(
-     subagent_type: 'image-generator',
-     task: 'Generate character reference image',
-     context_refs: ['$character_profile']
-   )
-   ```
-
-The subagent receives the full content of each referenced variable.
+Subagents can also use `read_project()` and `read_file()` to discover context.
 
 ## Content Types (for content-creator)
 

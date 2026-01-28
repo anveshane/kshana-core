@@ -152,15 +152,18 @@ When you have multiple items to process in a phase (multiple characters, setting
 
 Example for Characters & Settings phase with 3 characters:
 
+**IMPORTANT**: Use ACTUAL character names extracted from the story, not placeholder names.
+
 ```
+// Example: If story contains characters "Keerti", "Narrator", and "Doctor"
 TodoWrite(merge: false, todos: [
-  { id: "char-1", content: "Create character: Daniel", activeForm: "Creating character: Daniel", status: "in_progress" },
-  { id: "char-2", content: "Create character: Sarah", activeForm: "Creating character: Sarah", status: "pending" },
-  { id: "char-3", content: "Create character: Mike", activeForm: "Creating character: Mike", status: "pending" }
+  { id: "char-1", content: "Create character: Keerti", activeForm: "Creating character: Keerti", status: "in_progress" },
+  { id: "char-2", content: "Create character: Narrator", activeForm: "Creating character: Narrator", status: "pending" },
+  { id: "char-3", content: "Create character: Doctor", activeForm: "Creating character: Doctor", status: "pending" }
 ])
 ```
 
-After completing Daniel, update:
+After completing the first character, update:
 
 ```
 TodoWrite(merge: true, todos: [

@@ -112,6 +112,7 @@ export {
   readProjectTool,
   updateProjectTool,
   getWorkflowFileTools,
+  getAllFileTools,
 } from './FileTools.js';
 
 // Workflow Logger

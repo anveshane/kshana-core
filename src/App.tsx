@@ -645,7 +645,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           '"Solar-powered phone charger for outdoor use"',
         ],
       };
-      const examples = examplePrompts[selectedTemplateId] ?? examplePrompts.narrative ?? [];
+      const examples = examplePrompts[selectedTemplateId] ?? examplePrompts['narrative'] ?? [];
 
       return (
         <Box flexDirection="column">

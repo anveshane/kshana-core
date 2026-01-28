@@ -325,14 +325,14 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
   // Sync plot content
   const plotFile = join(projectDir, 'plans', 'plot.md');
   if (existsSync(plotFile) && project.content.plot.status === 'missing') {
-    project.content.plot.status = 'complete';
+    project.content.plot.status = 'available';
     needsSave = true;
   }
 
   // Sync story content
   const storyFile = join(projectDir, 'plans', 'story.md');
   if (existsSync(storyFile) && project.content.story.status === 'missing') {
-    project.content.story.status = 'complete';
+    project.content.story.status = 'available';
     needsSave = true;
   }
 
@@ -367,7 +367,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         const charContent = readFileSync(join(charactersDir, charFile), 'utf-8');
         // Extract name from first heading or filename
         const nameMatch = charContent.match(/^#\s*(?:Character[:\-–—\s]*)?(.+)/m);
-        const charName = nameMatch
+        const charName = nameMatch && nameMatch[1]
           ? nameMatch[1].trim()
           : charFile.replace(/\.md$/, '').replace(/[-_]/g, ' ');
 
@@ -377,7 +377,6 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         );
         if (!existingChar) {
           const character = createDefaultCharacterData(charName);
-          character.file = `characters/${charFile}`;
 
           // If characters_settings phase is complete, mark as approved
           if (
@@ -436,7 +435,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         const settingContent = readFileSync(join(settingsDir, settingFile), 'utf-8');
         // Extract name from first heading or filename
         const nameMatch = settingContent.match(/^#\s*(?:Setting[:\-–—\s]*)?(.+)/m);
-        const settingName = nameMatch
+        const settingName = nameMatch && nameMatch[1]
           ? nameMatch[1].trim()
           : settingFile.replace(/\.md$/, '').replace(/[-_]/g, ' ');
 
@@ -446,7 +445,6 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         );
         if (!existingSetting) {
           const setting = createDefaultSettingData(settingName);
-          setting.file = `settings/${settingFile}`;
 
           // If characters_settings phase is complete, mark as approved
           if (
@@ -503,7 +501,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
     for (const sceneFile of sceneFiles) {
       const match = sceneFile.match(/^scene_(\d+)\.md$/);
-      if (match) {
+      if (match && match[1]) {
         const sceneNumber = parseInt(match[1], 10);
 
         // Check if scene is already registered
@@ -511,13 +509,12 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         if (!existingScene) {
           // Create new scene ref
           const sceneRef = createDefaultSceneRef(sceneNumber);
-          sceneRef.file = `scenes/${sceneFile}`;
 
           // Extract title from file content
           try {
             const sceneContent = readFileSync(join(scenesDir, sceneFile), 'utf-8');
             const titleMatch = sceneContent.match(/^#\s*(?:Scene\s*\d+[:\-–—\s]*)?(.+)/m);
-            if (titleMatch) {
+            if (titleMatch && titleMatch[1]) {
               sceneRef.title = titleMatch[1].trim();
             }
           } catch {

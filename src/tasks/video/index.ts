@@ -19,6 +19,7 @@ import { getPhaseLogger } from '../../utils/phaseLogger.js';
 // Workflow imports
 import {
   getWorkflowFileTools,
+  getAllFileTools,
   getOrCreateProject,
   loadProject,
   getCurrentPhase,
@@ -173,15 +174,17 @@ export interface WorkflowVideoAgentConfig {
 
 /**
  * Create a tool registry with workflow tools for state-based video creation.
- * Orchestrator only needs file/project tools - generation is handled by subagents via Task.
+ * Includes file tools for reading story content, which is essential for planning phases.
+ * Generation tools (images, videos, stitch) are handled by subagents via Task.
  */
 export function createWorkflowToolRegistry(): ToolRegistry {
   // Start with default generic tools (think, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode, TodoWrite, context tools)
   const registry = createDefaultToolRegistry();
 
-  // Add workflow file tools (read_file, write_file, read_project, update_project)
-  // Note: Generation tools (images, videos, stitch) are handled by subagents via Task tool
-  for (const tool of getWorkflowFileTools()) {
+  // Add ALL file tools (read_file, write_file, read_project, update_project)
+  // read_file is needed for orchestrator to read story content before creating character/setting todos
+  // Generation tools (images, videos, stitch) are handled by subagents via Task tool
+  for (const tool of getAllFileTools()) {
     registry.register(tool);
   }
 

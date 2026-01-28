@@ -779,6 +779,7 @@ export interface WorkflowTemplate {
     id: number;
     type: string;
     title?: string;
+    mode?: number;
     inputs?: Array<{
       name: string;
       link?: number | null;

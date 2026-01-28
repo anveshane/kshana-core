@@ -1,29 +1,31 @@
 /**
- * Context tools for storing and fetching large content by reference.
+ * Context tools - DEPRECATED
  *
- * Purpose: Prevent context drift when passing long content (narratives, chapters)
- * to child agents via dispatch tools. Instead of inline context that gets
- * summarized, agents store by reference and child agents fetch the original.
+ * These tools are deprecated. The framework now automatically injects context
+ * based on content_type when using generate_content. Subagents can use
+ * read_project() and read_file() for context discovery instead.
+ *
+ * Kept for backward compatibility during migration.
  */
 import { createTool } from '../ToolRegistry.js';
 import { contextStore } from '../../context/index.js';
 
 /**
- * Store long content for reference by child agents.
+ * @deprecated Use generate_content with content_type instead - context is auto-injected
  */
 export const storeContextTool = createTool(
   'store_context',
-  'Store long content for reference by child agents. Use this when passing large amounts of content (narratives, chapters, detailed specifications >500 chars) to dispatch tools. Returns a context_ref ID to pass to dispatch_agent/dispatch_content_agent instead of inline context.',
+  '[DEPRECATED - Framework handles context automatically] Store content for reference. Consider using generate_content instead which auto-injects context.',
   {
     type: 'object',
     properties: {
       content: {
         type: 'string',
-        description: 'The full content to store (narratives, chapters, user stories, etc.)',
+        description: 'The content to store',
       },
       label: {
         type: 'string',
-        description: 'A descriptive label for this context (e.g., "Chapter 1 narrative", "User story input", "Character descriptions")',
+        description: 'A descriptive label for this context',
       },
     },
     required: ['content', 'label'],
@@ -33,9 +35,7 @@ export const storeContextTool = createTool(
     const label = args['label'] as string;
 
     if (!content || content.length === 0) {
-      return {
-        error: 'Content cannot be empty',
-      };
+      return { error: 'Content cannot be empty' };
     }
 
     const { variableName } = contextStore.store(content, label, { source: 'tool' });
@@ -44,23 +44,23 @@ export const storeContextTool = createTool(
       context_ref: variableName,
       label,
       char_count: content.length,
-      message: `Context stored as ${variableName}. Pass context_ref="${variableName}" to dispatch tools instead of inline context to preserve the original content.`,
+      deprecation_notice: 'This tool is deprecated. Use generate_content with content_type instead - context is automatically injected.',
     };
   }
 );
 
 /**
- * Fetch stored context by variable name.
+ * @deprecated Use read_project() and read_file() for context discovery
  */
 export const fetchContextTool = createTool(
   'fetch_context',
-  'Fetch stored context by variable name. Use this to retrieve full content passed from parent agent via context_ref. This ensures you receive the original, unmodified content.',
+  '[DEPRECATED] Fetch stored context. Consider using read_project() and read_file() instead.',
   {
     type: 'object',
     properties: {
       context_ref: {
         type: 'string',
-        description: 'The context variable name to fetch (e.g., "$plan", "$chapter_1")',
+        description: 'The context variable name to fetch',
       },
     },
     required: ['context_ref'],
@@ -69,16 +69,14 @@ export const fetchContextTool = createTool(
     const contextRef = args['context_ref'] as string;
 
     if (!contextRef) {
-      return {
-        error: 'context_ref is required',
-      };
+      return { error: 'context_ref is required' };
     }
 
     const result = contextStore.get(contextRef);
     if (!result) {
       return {
         error: `Context not found: ${contextRef}`,
-        suggestion: 'The context may have been deleted or expired. Check that the context_ref is correct.',
+        suggestion: 'Use read_project() to see available content, then read_file() to access it.',
       };
     }
 
@@ -92,11 +90,11 @@ export const fetchContextTool = createTool(
 );
 
 /**
- * List all stored contexts (metadata only).
+ * @deprecated Use read_project() to see project state
  */
 export const listContextsTool = createTool(
   'list_contexts',
-  'List all stored contexts with their metadata. Does not return content, only IDs, labels, and timestamps.',
+  '[DEPRECATED] List stored contexts. Use read_project() instead to see project content.',
   {
     type: 'object',
     properties: {},
@@ -113,22 +111,23 @@ export const listContextsTool = createTool(
         char_count: ctx.charCount,
         created_at: ctx.createdAt,
       })),
+      deprecation_notice: 'This tool is deprecated. Use read_project() to see project content.',
     };
   }
 );
 
 /**
- * Delete a stored context.
+ * @deprecated No longer needed - framework manages context lifecycle
  */
 export const deleteContextTool = createTool(
   'delete_context',
-  'Delete a stored context by variable name. Use this to clean up contexts that are no longer needed.',
+  '[DEPRECATED] Delete stored context. Framework manages context lifecycle automatically.',
   {
     type: 'object',
     properties: {
       context_ref: {
         type: 'string',
-        description: 'The context variable name to delete (e.g., "$plan", "$chapter_1")',
+        description: 'The context variable name to delete',
       },
     },
     required: ['context_ref'],
@@ -137,111 +136,56 @@ export const deleteContextTool = createTool(
     const contextRef = args['context_ref'] as string;
 
     if (!contextRef) {
-      return {
-        error: 'context_ref is required',
-      };
+      return { error: 'context_ref is required' };
     }
 
     const deleted = contextStore.delete(contextRef);
     if (!deleted) {
-      return {
-        error: `Context not found: ${contextRef}`,
-      };
+      return { error: `Context not found: ${contextRef}` };
     }
 
     return {
       status: 'deleted',
       context_ref: contextRef,
-      message: `Context ${contextRef} has been deleted.`,
     };
   }
 );
 
 /**
- * Configuration for what context is relevant to each content type.
- */
-interface ContentTypeContextConfig {
-  required: string[];    // Label patterns that must be present
-  optional: string[];    // Label patterns that are nice to have
-}
-
-/**
- * Maps content types to relevant context patterns (matched against labels).
- * These patterns are case-insensitive and partial match against labels.
- */
-const CONTENT_TYPE_CONTEXT_CONFIG: Record<string, ContentTypeContextConfig> = {
-  plot: {
-    required: ['original', 'input', 'story idea', 'user'],
-    optional: [],
-  },
-  story: {
-    required: ['original', 'input', 'plot'],
-    optional: ['user'],
-  },
-  character: {
-    // Priority order: look for full story/chapter content first
-    required: ['full_story', 'full story', 'story', 'chapter', 'narrative'],
-    optional: ['plot', 'original'],
-  },
-  setting: {
-    // Priority order: look for full story/chapter content first
-    required: ['full_story', 'full story', 'story', 'chapter', 'narrative'],
-    optional: ['plot', 'original'],
-  },
-  scene: {
-    required: ['full_story', 'story', 'chapter'],
-    optional: ['character', 'setting', 'plot'],
-  },
-  narration: {
-    required: ['story', 'scene'],
-    optional: ['character', 'setting'],
-  },
-};
-
-/**
- * Fetch context by searching label text.
+ * @deprecated Use read_project() and read_file() instead
  */
 export const fetchContextByLabelTool = createTool(
   'fetch_context_by_label',
-  'Search for and fetch context by label text. Use this to find context when you don\'t know the exact variable name. Returns all matching contexts.',
+  '[DEPRECATED] Search context by label. Use read_project() and read_file() instead.',
   {
     type: 'object',
     properties: {
       label_pattern: {
         type: 'string',
-        description: 'Text to search for in context labels (case-insensitive). Examples: "story", "chapter 1", "plot"',
+        description: 'Text to search for in context labels',
       },
       fetch_all: {
         type: 'boolean',
-        description: 'If true, fetch all matches. If false, fetch only the first match. Default: true',
+        description: 'If true, fetch all matches. Default: true',
       },
     },
     required: ['label_pattern'],
   },
   (args: Record<string, unknown>) => {
     const labelPattern = args['label_pattern'] as string;
-    const fetchAll = args['fetch_all'] !== false; // default to true
+    const fetchAll = args['fetch_all'] !== false;
 
     if (!labelPattern) {
-      return {
-        error: 'label_pattern is required',
-      };
+      return { error: 'label_pattern is required' };
     }
 
     const matches = contextStore.searchByLabelWithContent(labelPattern);
 
     if (matches.length === 0) {
-      // List available contexts to help the agent
-      const available = contextStore.list();
       return {
         status: 'no_matches',
         pattern: labelPattern,
-        available_contexts: available.map(ctx => ({
-          context_ref: ctx.variableName,
-          label: ctx.label,
-          char_count: ctx.charCount,
-        })),
-        suggestion: 'No contexts match this pattern. See available_contexts for what\'s stored.',
+        suggestion: 'Use read_project() to see available content, then read_file() to access it.',
       };
     }
 
@@ -251,7 +195,6 @@ export const fetchContextByLabelTool = createTool(
       status: 'found',
       pattern: labelPattern,
       match_count: matches.length,
-      returned_count: resultsToReturn.length,
       matches: resultsToReturn.map(ctx => ({
         context_ref: ctx.variableName,
         label: ctx.label,
@@ -263,22 +206,11 @@ export const fetchContextByLabelTool = createTool(
 );
 
 /**
- * Get relevant context for a specific content creation task.
- * Automatically determines what context is needed based on content type.
+ * @deprecated Use generate_content with content_type - context is auto-injected
  */
 export const getRelevantContextTool = createTool(
   'get_relevant_context',
-  `Automatically fetch context relevant to your content creation task. Use this BEFORE generating any content to ensure you have all necessary context.
-
-This tool knows what context each content type needs:
-- character: Looks for story/chapter content to extract character details
-- setting: Looks for story/chapter content to extract setting details
-- scene: Looks for story, characters, and settings
-- plot: Looks for original user input
-- story: Looks for plot and original input
-- narration: Looks for story and scenes
-
-The tool searches by label patterns, so variable name mismatches don't matter.`,
+  '[DEPRECATED] Get context for content creation. Use generate_content(content_type) instead - context is automatically injected based on content type.',
   {
     type: 'object',
     properties: {
@@ -289,125 +221,16 @@ The tool searches by label patterns, so variable name mismatches don't matter.`,
       },
       item_name: {
         type: 'string',
-        description: 'Optional: Name of the specific item being created (e.g., character name). Helps filter out irrelevant context.',
+        description: 'Optional: Name of the specific item being created',
       },
     },
     required: ['content_type'],
   },
-  (args: Record<string, unknown>) => {
-    const contentType = args['content_type'] as string;
-    const itemName = args['item_name'] as string | undefined;
-
-    if (!contentType) {
-      return {
-        error: 'content_type is required',
-      };
-    }
-
-    const config = CONTENT_TYPE_CONTEXT_CONFIG[contentType];
-    if (!config) {
-      return {
-        error: `Unknown content_type: ${contentType}`,
-        valid_types: Object.keys(CONTENT_TYPE_CONTEXT_CONFIG),
-      };
-    }
-
-    // Collect all available contexts
-    const allContexts = contextStore.list();
-    if (allContexts.length === 0) {
-      return {
-        status: 'no_context_available',
-        content_type: contentType,
-        message: 'No context has been stored yet. The parent agent should store context before dispatching content creation.',
-      };
-    }
-
-    // Find matching contexts using label patterns
-    const foundContexts: Array<{
-      variableName: string;
-      label: string;
-      charCount: number;
-      content: string;
-      isRequired: boolean;
-    }> = [];
-    const matchedPatterns: string[] = [];
-    const missingRequired: string[] = [];
-
-    // Search for required contexts
-    for (const pattern of config.required) {
-      const matches = contextStore.searchByLabelWithContent(pattern);
-      if (matches.length > 0) {
-        matchedPatterns.push(pattern);
-        for (const match of matches) {
-          // Avoid duplicates
-          if (!foundContexts.some(c => c.variableName === match.variableName)) {
-            foundContexts.push({
-              variableName: match.variableName,
-              label: match.label,
-              charCount: match.charCount,
-              content: match.content,
-              isRequired: true,
-            });
-          }
-        }
-      } else {
-        missingRequired.push(pattern);
-      }
-    }
-
-    // Search for optional contexts
-    for (const pattern of config.optional) {
-      const matches = contextStore.searchByLabelWithContent(pattern);
-      for (const match of matches) {
-        // Avoid duplicates
-        if (!foundContexts.some(c => c.variableName === match.variableName)) {
-          foundContexts.push({
-            variableName: match.variableName,
-            label: match.label,
-            charCount: match.charCount,
-            content: match.content,
-            isRequired: false,
-          });
-        }
-      }
-    }
-
-    // Build recommendation message
-    let recommendation = '';
-    if (foundContexts.length === 0) {
-      recommendation = `No relevant context found for ${contentType} creation. Available contexts: ${allContexts.map(c => `${c.variableName} (${c.label})`).join(', ')}`;
-    } else {
-      const requiredFound = foundContexts.filter(c => c.isRequired);
-      const optionalFound = foundContexts.filter(c => !c.isRequired);
-      recommendation = `Found ${requiredFound.length} required and ${optionalFound.length} optional contexts for ${contentType} creation.`;
-      if (missingRequired.length > 0) {
-        recommendation += ` Warning: Could not find contexts matching these required patterns: ${missingRequired.join(', ')}.`;
-      }
-      if (itemName) {
-        recommendation += ` Creating: ${itemName}.`;
-      }
-    }
-
+  () => {
     return {
-      status: foundContexts.length > 0 ? 'found' : 'no_relevant_context',
-      content_type: contentType,
-      item_name: itemName,
-      context_count: foundContexts.length,
-      total_chars: foundContexts.reduce((sum, c) => sum + c.charCount, 0),
-      recommendation,
-      contexts: foundContexts.map(ctx => ({
-        context_ref: ctx.variableName,
-        label: ctx.label,
-        char_count: ctx.charCount,
-        is_required: ctx.isRequired,
-        content: ctx.content,
-      })),
-      // Also list all available contexts for transparency
-      all_available: allContexts.map(ctx => ({
-        context_ref: ctx.variableName,
-        label: ctx.label,
-        char_count: ctx.charCount,
-      })),
+      status: 'deprecated',
+      message: 'This tool is deprecated. Use generate_content(content_type) instead - the framework automatically injects the required context based on content type.',
+      suggestion: 'Call generate_content(content_type: "character", name: "Daniel") and the framework will inject $original_input, $plot, $story automatically.',
     };
   }
 );

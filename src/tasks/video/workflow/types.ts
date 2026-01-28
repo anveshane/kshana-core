@@ -55,6 +55,40 @@ export const STYLE_CONFIGS: Record<ProjectStyle, StyleConfig> = {
 export type InputType = 'idea' | 'story';
 
 /**
+ * Video workflow phases in execution order.
+ * 8-phase workflow matching Sequence.md specification.
+ * NOTE: This enum must be declared before INPUT_TYPE_CONFIGS which references it.
+ */
+export enum WorkflowPhase {
+  /** Phase 1: Analyze input and create plot outline */
+  PLOT = 'plot',
+
+  /** Phase 2: Generate full story from plot (or accept direct story input) */
+  STORY = 'story',
+
+  /** Phase 3: Plan and create detailed descriptions for each character and setting */
+  CHARACTERS_SETTINGS = 'characters_settings',
+
+  /** Phase 4: Break story into individual visual scenes with descriptions */
+  SCENES = 'scenes',
+
+  /** Phase 5: Generate reference images for each character and setting (text-to-image) */
+  CHARACTER_SETTING_IMAGES = 'character_setting_images',
+
+  /** Phase 6: Generate scene images using character/setting references (image+text-to-image) */
+  SCENE_IMAGES = 'scene_images',
+
+  /** Phase 7: Generate video clip for each scene image */
+  VIDEO = 'video',
+
+  /** Phase 8: Stitch all scene videos into final video */
+  VIDEO_COMBINE = 'video_combine',
+
+  /** Workflow complete */
+  COMPLETED = 'completed',
+}
+
+/**
  * Input type configuration with display names and phase implications.
  */
 export interface InputTypeConfig {
@@ -87,39 +121,6 @@ export const INPUT_TYPE_CONFIGS: Record<InputType, InputTypeConfig> = {
 };
 
 /**
- * Video workflow phases in execution order.
- * 8-phase workflow matching Sequence.md specification.
- */
-export enum WorkflowPhase {
-  /** Phase 1: Analyze input and create plot outline */
-  PLOT = 'plot',
-
-  /** Phase 2: Generate full story from plot (or accept direct story input) */
-  STORY = 'story',
-
-  /** Phase 3: Plan and create detailed descriptions for each character and setting */
-  CHARACTERS_SETTINGS = 'characters_settings',
-
-  /** Phase 4: Break story into individual visual scenes with descriptions */
-  SCENES = 'scenes',
-
-  /** Phase 5: Generate reference images for each character and setting (text-to-image) */
-  CHARACTER_SETTING_IMAGES = 'character_setting_images',
-
-  /** Phase 6: Generate scene images using character/setting references (image+text-to-image) */
-  SCENE_IMAGES = 'scene_images',
-
-  /** Phase 7: Generate video clip for each scene image */
-  VIDEO = 'video',
-
-  /** Phase 8: Stitch all scene videos into final video */
-  VIDEO_COMBINE = 'video_combine',
-
-  /** Workflow complete */
-  COMPLETED = 'completed',
-}
-
-/**
  * Planner stage within a phase.
  * Each planning agent goes through these stages.
  */
@@ -149,6 +150,8 @@ export interface PhaseInfo {
   plannerStage?: PlannerStage;
   /** Path to the plan file (relative to .kshana/) */
   planFile?: string;
+  /** Timestamp when phase started */
+  startedAt?: number;
   /** Timestamp when phase was completed */
   completedAt: number | null;
   /** Number of refinement iterations */
