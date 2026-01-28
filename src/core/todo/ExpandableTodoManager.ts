@@ -401,7 +401,14 @@ export class ExpandableTodoManager {
       return '<system-reminder>\nYour todo list is empty. Create todos to plan your work.\n</system-reminder>';
     }
 
-    const lines = ['<system-reminder>', '## Current Todo List', ''];
+    const lines = [
+      '<system-reminder>',
+      '## RESUMING SESSION - Existing Todo List',
+      '',
+      '⚠️ IMPORTANT: These todos were persisted from a previous session.',
+      '⚠️ DO NOT recreate or replace this list. CONTINUE working on the next pending task.',
+      '',
+    ];
 
     for (let i = 0; i < this.todos.length; i++) {
       const todo = this.todos[i];

@@ -21,12 +21,16 @@ export interface ConversationManagerConfig {
 
 export interface ConversationEvents {
   onProgress?: (sessionId: string, percentage: number, message: string) => void;
-  onToolCall?: (sessionId: string, toolName: string, args: Record<string, unknown>) => void;
-  onToolResult?: (sessionId: string, toolName: string, result: unknown) => void;
+  onToolCall?: (sessionId: string, toolName: string, args: Record<string, unknown>, agentName?: string) => void;
+  onToolResult?: (sessionId: string, toolName: string, result: unknown, agentName?: string) => void;
   onTodoUpdate?: (sessionId: string, todos: ExpandableTodoItem[]) => void;
   onAgentText?: (sessionId: string, text: string, isFinal: boolean) => void;
   onQuestion?: (sessionId: string, question: string, isConfirmation: boolean) => void;
-  onAgentStatus?: (sessionId: string, status: string) => void;
+  onAgentStatus?: (sessionId: string, status: string, agentName?: string) => void;
+  /** Streaming text from agent's LLM output */
+  onStreamingText?: (sessionId: string, chunk: string, done: boolean) => void;
+  /** Tool streaming for sub-agent content generation */
+  onToolStreaming?: (sessionId: string, toolCallId: string, chunk: string, done: boolean, agentName?: string, toolName?: string, reset?: boolean) => void;
 }
 
 interface ActiveSession {
@@ -245,13 +249,25 @@ export class ConversationManager {
 
     if (events.onToolCall) {
       agent.on('tool_call', (data) => {
-        events.onToolCall!(sessionId, data.toolName, data.arguments);
+        events.onToolCall!(sessionId, data.toolName, data.arguments, data.agentName);
       });
     }
 
     if (events.onToolResult) {
       agent.on('tool_result', (data) => {
-        events.onToolResult!(sessionId, data.toolName, data.result);
+        events.onToolResult!(sessionId, data.toolName, data.result, data.agentName);
+      });
+    }
+
+    if (events.onStreamingText) {
+      agent.on('streaming_text', (data) => {
+        events.onStreamingText!(sessionId, data.chunk, data.done);
+      });
+    }
+
+    if (events.onToolStreaming) {
+      agent.on('tool_streaming', (data) => {
+        events.onToolStreaming!(sessionId, data.toolCallId, data.chunk, data.done, data.agentName, data.toolName, data.reset);
       });
     }
 
@@ -269,7 +285,7 @@ export class ConversationManager {
 
     if (events.onAgentStatus) {
       agent.on('agent_status', (data) => {
-        events.onAgentStatus!(sessionId, data.status);
+        events.onAgentStatus!(sessionId, data.status, data.agentName);
       });
     }
 

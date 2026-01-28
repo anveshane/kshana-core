@@ -28,7 +28,6 @@ export {
   listContextsTool,
   deleteContextTool,
   generateContentTool,
-  CONTENT_TYPE_CONTEXTS,
   CONTENT_TYPE_OUTPUT_FILES,
 } from './builtin/index.js';
 

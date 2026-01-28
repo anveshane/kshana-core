@@ -266,22 +266,42 @@ export class WebSocketHandler {
         }));
       },
 
-      onToolCall: (sid, toolName, args) => {
+      onToolCall: (sid, toolName, args, agentName) => {
         this.sendMessage(socket, createServerMessage<ToolCallData>('tool_call', sid, {
           toolName,
           toolCallId: '',
           arguments: args,
           status: 'started',
+          agentName,
         }));
       },
 
-      onToolResult: (sid, toolName, result) => {
+      onToolResult: (sid, toolName, result, agentName) => {
         this.sendMessage(socket, createServerMessage<ToolCallData>('tool_call', sid, {
           toolName,
           toolCallId: '',
           arguments: {},
           status: 'completed',
           result,
+          agentName,
+        }));
+      },
+
+      onStreamingText: (sid, chunk, done) => {
+        this.sendMessage(socket, createServerMessage<StreamChunkData>('stream_chunk', sid, {
+          content: chunk,
+          done,
+        }));
+      },
+
+      onToolStreaming: (sid, toolCallId, chunk, done, agentName, toolName, reset) => {
+        this.sendMessage(socket, createServerMessage<StreamChunkData>('stream_chunk', sid, {
+          content: chunk,
+          done,
+          agentName,
+          toolCallId,
+          toolName,
+          reset,
         }));
       },
 

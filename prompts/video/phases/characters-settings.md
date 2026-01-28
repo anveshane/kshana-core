@@ -9,6 +9,8 @@
 - All character names mentioned in the story
 - All key locations/settings mentioned in the story
 
+**COUNT the total number** of characters and settings you identified.
+
 Create a **Character & Setting Breakdown** and save it to `plans/characters-settings.md` for approval.
 
 Approval flow:
@@ -21,9 +23,9 @@ Approval flow:
 
 **Do NOT generate full descriptions until the breakdown is approved.**
 
-### Step 1: Create Item Todos
+### Step 1: Create Item Todos (MANDATORY if more than 1 item)
 
-After breakdown approval, create a TodoWrite list:
+After breakdown approval, **if you have more than 1 character or setting**, create a TodoWrite list with one todo per item:
 
 ```
 TodoWrite(merge: false, todos: [
@@ -34,26 +36,36 @@ TodoWrite(merge: false, todos: [
 ])
 ```
 
+**ALWAYS create individual todos** - one per character, one per setting. This is required for proper progress tracking.
+
 ### Step 2: Process EACH Item with generate_content
 
 For EACH character (ONE at a time - do not batch!):
 
 ```
-generate_content(content_type: "character", name: "<CHARACTER_NAME>")
+generate_content(
+  content_type: "character",
+  name: "<CHARACTER_NAME>",
+  instruction: "Create a detailed character profile for <CHARACTER_NAME>. Include physical appearance, personality, clothing, and visual keywords for image generation."
+)
 ```
 
 For EACH setting (ONE at a time - do not batch!):
 
 ```
-generate_content(content_type: "setting", name: "<SETTING_NAME>")
+generate_content(
+  content_type: "setting",
+  name: "<SETTING_NAME>",
+  instruction: "Create a detailed setting description for <SETTING_NAME>. Include visual details, atmosphere, lighting, and visual keywords for image generation."
+)
 ```
 
-The tool automatically:
-
-- Fetches the story and other required contexts
-- Creates the character/setting profile
-- Handles user approval flow
-- Saves to `characters/<name>.md` or `settings/<name>.md`
+The `instruction` parameter tells the content creator WHAT to create. The content creator will:
+- Query the project structure to understand available context
+- Fetch the story and other relevant content
+- Generate the profile based on your instruction
+- Present it for user approval
+- Save to `characters/<name>.md` or `settings/<name>.md`
 
 ### Step 3: After EACH Approval (MANDATORY)
 
@@ -70,7 +82,11 @@ TodoWrite(merge: true, todos: [
 ])
 
 // 3. Then create next item
-generate_content(content_type: "character", name: "Marcus")
+generate_content(
+  content_type: "character",
+  name: "Marcus",
+  instruction: "Create a detailed character profile for Marcus based on his role in the story."
+)
 ```
 
 **DO NOT skip the TodoWrite call!** The todo list MUST be updated after each approval.
@@ -102,8 +118,8 @@ Each setting description must include:
 ## Summary
 
 1. **Step 0**: Create and approve the breakdown (save to `plans/characters-settings.md`)
-2. **Step 1**: Create TodoWrite after approval
-3. **Step 2**: ONE generate_content call per character/setting (individual files!)
+2. **Step 1**: Create TodoWrite after approval (one todo per item)
+3. **Step 2**: ONE generate_content call per character/setting (with clear instruction)
 4. **Step 3**: Update todo and move to next
 5. **Step 4**: After ALL items done -> call `update_project(action: 'transition_phase', data: { next_phase: 'scenes' })`
 

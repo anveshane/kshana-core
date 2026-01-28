@@ -311,6 +311,18 @@ function formatResult(result: unknown, isError: boolean): string {
     return String(resultObj['message']);
   }
 
+  // For awaiting_verification (content was already streamed), show summary only
+  if (resultObj['status'] === 'awaiting_verification') {
+    const contentType = resultObj['content_type'] || 'content';
+    const outputFile = resultObj['output_file'] || '';
+    return `Generated ${contentType}${outputFile ? ` (will save to ${outputFile})` : ''}`;
+  }
+
+  // For approved content, show summary without full content
+  if (resultObj['status'] === 'approved' && resultObj['message']) {
+    return String(resultObj['message']);
+  }
+
   // Default: full JSON output (no truncation)
   return JSON.stringify(result, null, 2);
 }

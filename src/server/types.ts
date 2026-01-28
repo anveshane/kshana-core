@@ -88,6 +88,7 @@ export interface ToolCallData {
   status: 'started' | 'completed' | 'error';
   result?: unknown;
   error?: string;
+  agentName?: string;  // Which agent made this call (e.g., "Content Agent", "Orchestrator")
 }
 
 /**
@@ -110,6 +111,10 @@ export interface TodoUpdateData {
 export interface StreamChunkData {
   content: string;
   done: boolean;
+  agentName?: string;  // Which agent is streaming (e.g., "Content Agent", "Orchestrator")
+  toolCallId?: string; // For tool streaming, the associated tool call
+  toolName?: string;   // For tool streaming, the tool name
+  reset?: boolean;     // Reset streaming content before appending
 }
 
 /**
