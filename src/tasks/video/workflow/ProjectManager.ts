@@ -2067,3 +2067,54 @@ export function markContentAvailable(
   saveProject(project, basePath);
   return project;
 }
+
+// ============================================================================
+// Todo Persistence Functions
+// ============================================================================
+
+import type { PersistedTodo } from './types.js';
+
+/**
+ * Save todos to the project file for resumption.
+ * Called after TodoWrite operations to persist the current state.
+ */
+export function saveTodos(
+  todos: PersistedTodo[],
+  basePath: string = process.cwd()
+): boolean {
+  const project = loadProject(basePath);
+  if (!project) {
+    return false;
+  }
+
+  project.todos = todos;
+  saveProject(project, basePath);
+  return true;
+}
+
+/**
+ * Load persisted todos from the project file.
+ * Returns empty array if no todos are stored.
+ */
+export function loadTodos(basePath: string = process.cwd()): PersistedTodo[] {
+  const project = loadProject(basePath);
+  if (!project || !project.todos) {
+    return [];
+  }
+  return project.todos;
+}
+
+/**
+ * Clear persisted todos from the project file.
+ * Useful when starting a new phase or resetting.
+ */
+export function clearPersistedTodos(basePath: string = process.cwd()): boolean {
+  const project = loadProject(basePath);
+  if (!project) {
+    return false;
+  }
+
+  project.todos = [];
+  saveProject(project, basePath);
+  return true;
+}

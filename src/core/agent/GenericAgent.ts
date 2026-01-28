@@ -42,6 +42,8 @@ import {
   saveSetting,
   updateContentStatus,
   projectExists,
+  saveTodos,
+  loadTodos,
 } from '../../tasks/video/workflow/ProjectManager.js';
 import type { CharacterData, SettingData, ContentTypeName } from '../../tasks/video/workflow/types.js';
 import { createDefaultCharacterData, createDefaultSettingData } from '../../tasks/video/workflow/types.js';
@@ -235,6 +237,31 @@ export class GenericAgent extends TypedEventEmitter {
     // Query context length from LLM provider (validates minimum requirements)
     this.maxContextTokens = await this.llm.getContextLength();
     debugLog(`[GenericAgent] Initialized with context length: ${this.maxContextTokens} tokens`);
+
+    // Load persisted todos from project file (for resuming work)
+    if (projectExists() && !this.isSubAgent) {
+      const persistedTodos = loadTodos();
+      if (persistedTodos.length > 0) {
+        // Convert persisted todos to the format expected by todoManager
+        const todosForManager = persistedTodos.map(t => ({
+          id: t.id,
+          content: t.content,
+          activeForm: t.activeForm,
+          status: t.status,
+          visible: t.visible,
+          depth: t.depth,
+        }));
+        this.todoManager.writeTodos(todosForManager);
+        debugLog(`[GenericAgent] Loaded ${persistedTodos.length} persisted todos from project`);
+
+        // Emit todo update so UI can display them
+        this.emit({
+          type: 'todo_update',
+          todos: this.todoManager.getTodos(),
+          agentName: this.getEffectiveAgentName(),
+        });
+      }
+    }
   }
 
   /**
@@ -1508,6 +1535,20 @@ export class GenericAgent extends TypedEventEmitter {
     debugLog(
       `[GenericAgent] handleTodoTool emitting todo_update with ${updatedTodos.length} todos: ${JSON.stringify(updatedTodos.map(t => ({ id: t.id, status: t.status, content: t.content?.slice(0, 30) })))}`
     );
+
+    // Automatically persist todos to project file for resumption
+    if (projectExists()) {
+      const persistedTodos = updatedTodos.map(t => ({
+        id: t.id,
+        content: t.content,
+        activeForm: t.activeForm,
+        status: t.status,
+        visible: t.visible,
+        depth: t.depth,
+      }));
+      saveTodos(persistedTodos);
+      debugLog(`[GenericAgent] Auto-persisted ${persistedTodos.length} todos to project`);
+    }
 
     // Emit todo update event
     this.emit({

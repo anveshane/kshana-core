@@ -30,6 +30,7 @@ export {
   type StyleConfig,
   type InputType,
   type InputTypeConfig,
+  type PersistedTodo,
   PHASE_CONFIGS,
   PHASE_ORDER,
   PROJECT_DIR,
@@ -103,6 +104,10 @@ export {
   getContentRegistryJson,
   hasRequiredContent,
   markContentAvailable,
+  // Todo persistence functions
+  saveTodos,
+  loadTodos,
+  clearPersistedTodos,
 } from './ProjectManager.js';
 
 // File Tools

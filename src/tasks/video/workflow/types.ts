@@ -411,6 +411,21 @@ export interface ProjectFile {
 
   /** Final video information (populated after VIDEO_COMBINE phase) */
   finalVideo?: FinalVideoInfo;
+
+  /** Persisted todo list for resuming work */
+  todos?: PersistedTodo[];
+}
+
+/**
+ * Persisted todo item for project resumption.
+ */
+export interface PersistedTodo {
+  id: string;
+  content: string;
+  activeForm?: string;
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled' | 'expanded';
+  visible: boolean;
+  depth: number;
 }
 
 /**
