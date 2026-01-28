@@ -7,6 +7,7 @@ Generate AI videos for each placement identified in the previous phase.
 2. The tool will:
    - Read and parse `agent/content/video-placements.md`
    - Extract all placements (Placement 1, 2, 3, etc.)
+   - **Optionally expand each placement prompt** with an LLM (video-placer–style, using placement + transcript segment + content plan) into a detailed ComfyUI-ready video prompt. Expansion runs by default; use `expand_prompts: false` to skip.
    - Generate videos sequentially, one at a time
    - Wait for each video to complete before moving to the next
    - Continue even if some videos fail (logs failures but doesn't stop)
@@ -33,6 +34,7 @@ generate_all_videos(
 The tool will:
 - Read and parse the video-placements.md file
 - Extract all placement entries (Placement 1, 2, 3, etc.)
+- Expand each placement prompt with LLM (video-placer guidelines) when `expand_prompts` is true (default). Use `expand_prompts: false` to use placement prompts as-is.
 - Calculate duration from timestamps (rounded to 4-10 seconds maximum, hard limit of 10 seconds due to hardware constraints)
 - Extract video type (cinematic_realism, stock_footage, or motion_graphics)
 - Generate videos sequentially, one at a time
@@ -77,7 +79,7 @@ update_project(
 - Skip marking phase as completed or transitioning to the next phase
 
 **IMPORTANT:**
-- **Use the `generate_all_videos` tool** - It handles all parsing, sequential generation, and error handling
+- **Use the `generate_all_videos` tool** - It handles all parsing, optional prompt expansion (video-placer–style), sequential generation, and error handling
 - **The tool processes ALL placements automatically** - No need to count or iterate manually
 - **Sequential execution is guaranteed** - The tool enforces one-at-a-time generation in code
 - **Failed placements are logged but don't stop the process** - The tool continues with remaining placements

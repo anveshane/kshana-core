@@ -7,6 +7,7 @@ Generate images for each placement identified in the previous phase.
 2. The tool will:
    - Read and parse `agent/content/image-placements.md`
    - Extract all placements (Placement 1, 2, 3, etc.)
+   - **Optionally expand each placement prompt** with an LLM (image-generator–style, using placement + transcript segment + content plan) into a detailed ComfyUI-ready prompt. Expansion runs by default; use `expand_prompts: false` to skip.
    - Generate images sequentially, one at a time
    - Wait for each image to complete before moving to the next
    - Continue even if some images fail (logs failures but doesn't stop)
@@ -34,6 +35,7 @@ generate_all_images(
 The tool will:
 - Read and parse the image-placements.md file
 - Extract all placement entries (Placement 1, 2, 3, etc.)
+- Expand each placement prompt with LLM (image-generator guidelines) when `expand_prompts` is true (default). Use `expand_prompts: false` to use placement prompts as-is.
 - Generate images sequentially, one at a time
 - Wait for each image to complete before moving to the next
 - Continue even if some images fail (logs failures but doesn't stop)
@@ -78,7 +80,7 @@ update_project(
 - Skip marking phase as completed or transitioning to the next phase
 
 **IMPORTANT:**
-- **Use the `generate_all_images` tool** - It handles all parsing, sequential generation, and error handling
+- **Use the `generate_all_images` tool** - It handles all parsing, optional prompt expansion (image-generator–style), sequential generation, and error handling
 - **The tool processes ALL placements automatically** - No need to count or iterate manually
 - **Sequential execution is guaranteed** - The tool enforces one-at-a-time generation in code
 - **Failed placements are logged but don't stop the process** - The tool continues with remaining placements

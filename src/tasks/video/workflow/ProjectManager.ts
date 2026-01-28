@@ -2339,7 +2339,7 @@ export async function addAsset(asset: AssetInfo, basePath: string = getCurrentPr
     type: asset.type,
     path: asset.path,
     scene_number: asset.scene_number,
-    placementNumber: asset.metadata?.placementNumber,
+    placementNumber: asset.metadata?.['placementNumber'],
     manifestPath,
     basePath,
   });
@@ -2408,7 +2408,7 @@ export async function addAsset(asset: AssetInfo, basePath: string = getCurrentPr
       assetEventEmitter.emitAssetAdded({
         assetId: asset.id,
         assetType: asset.type as 'scene_image' | 'scene_video' | 'character_ref' | 'setting_ref' | 'final_video',
-        placementNumber: asset.metadata?.placementNumber as number | undefined,
+        placementNumber: asset.metadata?.['placementNumber'] as number | undefined,
         sceneNumber: asset.scene_number,
         path: asset.path,
         version: asset.version ?? 1,

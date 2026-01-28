@@ -32,6 +32,8 @@ import {
 } from './workflow/index.js';
 import { parseImagePlacements, parseImagePlacementsWithErrors, type ParsedImagePlacement } from './workflow/imagePlacementsParser.js';
 import { parseVideoPlacements, type ParsedVideoPlacement } from './workflow/videoPlacementsParser.js';
+import { getTranscriptSegmentForTimeRange } from './workflow/transcriptSegment.js';
+import { expandImagePlacementPrompt, expandVideoPlacementPrompt } from './workflow/placementPromptExpander.js';
 
 /**
  * Context for linking artifacts to project entities.
@@ -518,7 +520,7 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
       };
       
       if (placementNumber !== undefined) {
-        metadata.placementNumber = placementNumber;
+        metadata['placementNumber'] = placementNumber;
       }
       
       // Calculate version number by finding existing assets for the same placement
@@ -531,8 +533,8 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
             const manifest = JSON.parse(manifestContent) as { assets: Array<{ type?: string; scene_number?: number; metadata?: Record<string, unknown>; version?: number }> };
             const existingAssets = manifest.assets?.filter((a) => 
               a.type === assetType && (
-                a.metadata?.placementNumber === placementNumber ||
-                a.scene_number === placementNumber
+                a.metadata?.['placementNumber'] === placementNumber ||
+                a['scene_number'] === placementNumber
               )
             ) || [];
             if (existingAssets.length > 0) {
@@ -1745,13 +1747,14 @@ export const generateAllImagesTool: ToolDefinition = createTool(
 This tool:
 1. Reads and parses agent/content/image-placements.md
 2. Extracts all placement entries (Placement 1, 2, 3, etc.)
-3. Generates images sequentially, one at a time
-4. Waits for each image to complete before moving to the next
-5. Continues even if some images fail (logs failures but doesn't stop)
-6. Returns a summary of successful and failed placements
+3. Optionally expands each placement prompt via LLM (image-generator–style, placement + transcript + content plan) into a detailed ComfyUI-ready prompt. Use expand_prompts: false to skip.
+4. Generates images sequentially, one at a time
+5. Waits for each image to complete before moving to the next
+6. Continues even if some images fail (logs failures but doesn't stop)
+7. Returns a summary of successful and failed placements
 
 Use this tool during the image_generation phase to process all placements automatically.
-The tool handles all parsing, sequential generation, and error handling internally.`,
+The tool handles all parsing, optional prompt expansion, sequential generation, and error handling internally.`,
   {
     type: 'object',
     properties: {
@@ -1759,11 +1762,16 @@ The tool handles all parsing, sequential generation, and error handling internal
         type: 'string',
         description: 'Path to image-placements.md file (default: agent/content/image-placements.md)',
       },
+      expand_prompts: {
+        type: 'boolean',
+        description: 'If true (default), expand each placement prompt with LLM before ComfyUI. Set false to use placement prompts as-is.',
+      },
     },
     required: [],
   },
   async (args) => {
     const filePath = (args['file_path'] as string | undefined) || 'agent/content/image-placements.md';
+    const expandPrompts = (args['expand_prompts'] as boolean | undefined) !== false;
     
     // Read the image placements file
     const content = readProjectFile(filePath);
@@ -1821,7 +1829,15 @@ The tool handles all parsing, sequential generation, and error handling internal
     }
     
     console.log(`[generate_all_images] Found ${placements.length} placements to generate`);
-    
+    const defaultNegativePrompt = 'blurry, low quality, text, watermark';
+
+    const transcriptContent = readProjectFile('agent/content/transcript.md');
+    let contentPlanSnippet: string | undefined;
+    const contentPlanRaw = readProjectFile('agent/plans/content-plan.md');
+    if (contentPlanRaw && contentPlanRaw.trim()) {
+      contentPlanSnippet = contentPlanRaw.trim().slice(0, 1500);
+    }
+
     const results: Array<{
       placementNumber: number;
       status: 'success' | 'failed';
@@ -1829,7 +1845,7 @@ The tool handles all parsing, sequential generation, and error handling internal
       filePath?: string;
       error?: string;
     }> = [];
-    
+
     // Generate images sequentially
     for (const placement of placements) {
       console.log(`[generate_all_images] Generating image for Placement ${placement.placementNumber}...`, {
@@ -1838,17 +1854,37 @@ The tool handles all parsing, sequential generation, and error handling internal
         endTime: placement.endTime,
         promptLength: placement.prompt.length,
       });
+
+      let prompt = placement.prompt;
+      let negativePrompt = defaultNegativePrompt;
+
+      if (expandPrompts) {
+        const transcriptSegment = getTranscriptSegmentForTimeRange(
+          transcriptContent,
+          placement.startTime,
+          placement.endTime
+        );
+        const expanded = await expandImagePlacementPrompt(placement, {
+          transcriptSegment,
+          contentPlan: contentPlanSnippet,
+        });
+        if (expanded) {
+          prompt = expanded.prompt;
+          if (expanded.negativePrompt) negativePrompt = expanded.negativePrompt;
+          console.log(`[generate_all_images] Placement ${placement.placementNumber}: using expanded prompt`);
+        } else {
+          console.warn(`[generate_all_images] Placement ${placement.placementNumber}: expansion failed, using placement prompt`);
+        }
+      }
       
       try {
-        // Submit image generation job
-        // Use placement number as scene_number for tracking
         console.log(`[generate_all_images] Submitting image generation for Placement ${placement.placementNumber} with scene_number=${placement.placementNumber}`);
         const submitResult = await submitImageGeneration({
           scene_number: placement.placementNumber,
-          prompt: placement.prompt,
-          negative_prompt: 'blurry, low quality, text, watermark',
+          prompt,
+          negative_prompt: negativePrompt,
           aspect_ratio: '16:9',
-          image_type: 'scene', // Placement images are scene type
+          image_type: 'scene',
           generation_mode: 'text_to_image',
         });
         
@@ -1941,13 +1977,14 @@ export const generateAllVideosTool: ToolDefinition = createTool(
 This tool:
 1. Reads and parses agent/content/video-placements.md
 2. Extracts all placement entries (Placement 1, 2, 3, etc.)
-3. Generates videos sequentially, one at a time
-4. Waits for each video to complete before moving to the next
-5. Continues even if some videos fail (logs failures but doesn't stop)
-6. Returns a summary of successful and failed placements
+3. Optionally expands each placement prompt via LLM (video-placer–style, placement + transcript + content plan) into a detailed ComfyUI-ready video prompt. Use expand_prompts: false to skip.
+4. Generates videos sequentially, one at a time
+5. Waits for each video to complete before moving to the next
+6. Continues even if some videos fail (logs failures but doesn't stop)
+7. Returns a summary of successful and failed placements
 
 Use this tool during the video_generation phase to process all placements automatically.
-The tool handles all parsing, sequential generation, and error handling internally.
+The tool handles all parsing, optional prompt expansion, sequential generation, and error handling internally.
 Videos are generated from text prompts (no scene_image_artifact_id required).`,
   {
     type: 'object',
@@ -1956,12 +1993,17 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
         type: 'string',
         description: 'Path to video-placements.md file (default: agent/content/video-placements.md)',
       },
+      expand_prompts: {
+        type: 'boolean',
+        description: 'If true (default), expand each placement prompt with LLM before ComfyUI. Set false to use placement prompts as-is.',
+      },
     },
     required: [],
   },
   async (args) => {
     const filePath = (args['file_path'] as string | undefined) || 'agent/content/video-placements.md';
-    
+    const expandPrompts = (args['expand_prompts'] as boolean | undefined) !== false;
+
     // Read the video placements file
     const content = readProjectFile(filePath);
     if (!content) {
@@ -1990,7 +2032,14 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
     }
     
     console.log(`[generate_all_videos] Found ${placements.length} placements to generate`);
-    
+
+    const transcriptContent = readProjectFile('agent/content/transcript.md');
+    let contentPlanSnippet: string | undefined;
+    const contentPlanRaw = readProjectFile('agent/plans/content-plan.md');
+    if (contentPlanRaw && contentPlanRaw.trim()) {
+      contentPlanSnippet = contentPlanRaw.trim().slice(0, 1500);
+    }
+
     const results: Array<{
       placementNumber: number;
       status: 'success' | 'failed';
@@ -1998,16 +2047,34 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
       filePath?: string;
       error?: string;
     }> = [];
-    
+
     // Generate videos sequentially
     for (const placement of placements) {
       console.log(`[generate_all_videos] Generating video for Placement ${placement.placementNumber}...`);
-      
+
+      let prompt = placement.prompt;
+      if (expandPrompts) {
+        const transcriptSegment = getTranscriptSegmentForTimeRange(
+          transcriptContent,
+          placement.startTime,
+          placement.endTime
+        );
+        const expanded = await expandVideoPlacementPrompt(placement, {
+          transcriptSegment,
+          contentPlan: contentPlanSnippet,
+        });
+        if (expanded) {
+          prompt = expanded;
+          console.log(`[generate_all_videos] Placement ${placement.placementNumber}: using expanded prompt`);
+        } else {
+          console.warn(`[generate_all_videos] Placement ${placement.placementNumber}: expansion failed, using placement prompt`);
+        }
+      }
+
       try {
-        // Submit video generation job using the existing generateVideoPlacementTool handler
         const submitResult = await submitVideoPlacementGeneration({
           scene_number: placement.placementNumber,
-          prompt: placement.prompt,
+          prompt,
           duration: placement.duration,
           video_type: placement.videoType,
         });
