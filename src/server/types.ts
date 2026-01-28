@@ -119,7 +119,7 @@ export interface StreamChunkData {
  */
 export interface AssetAddedData {
   assetId: string;
-  assetType: 'scene_image' | 'scene_video' | 'character_ref' | 'setting_ref' | 'final_video';
+  assetType: 'scene_image' | 'scene_video' | 'scene_infographic' | 'character_ref' | 'setting_ref' | 'final_video';
   placementNumber?: number;
   sceneNumber?: number;
   path: string;

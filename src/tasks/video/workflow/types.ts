@@ -66,7 +66,13 @@ export enum WorkflowPhase {
   /** Phase 4 (YouTube): Generate images for placements */
   IMAGE_GENERATION = 'image_generation',
 
-  /** Phase 4.5 (YouTube): Map videos to transcript timestamps */
+  /** Phase 4.5 (YouTube): Map infographics to transcript timestamps */
+  INFOGRAPHICS_PLACEMENT = 'infographics_placement',
+
+  /** Phase 4.6 (YouTube): Generate infographics via Remotion */
+  INFOGRAPHICS_GENERATION = 'infographics_generation',
+
+  /** Phase 4.7 (YouTube): Map videos to transcript timestamps */
   VIDEO_PLACEMENT = 'video_placement',
 
   /** Phase 5 (YouTube): Generate videos for placements */
@@ -390,11 +396,27 @@ export interface VideoPlacement {
 }
 
 /**
+ * Planned infographic placement aligned to transcript entries.
+ * Infographics (charts, diagrams, statistics) are generated via Remotion.
+ */
+export interface InfographicPlacement {
+  transcriptIndex: number;
+  startTime: number;
+  endTime: number;
+  infographicType: 'bar_chart' | 'line_chart' | 'diagram' | 'statistic' | 'list';
+  prompt: string;
+  /** Optional structured data for Remotion (labels, values, etc.) */
+  data?: Record<string, unknown>;
+  infographicPath?: string;
+  infographicArtifactId?: string;
+}
+
+/**
  * Asset metadata stored in agent/manifest.json.
  */
 export interface AssetInfo {
   id: string;
-  type: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'final_video';
+  type: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'scene_infographic' | 'final_video';
   path: string;
   createdAt: number;
   scene_number?: number; // For scene-specific assets (also used as placementNumber for placements)
@@ -566,6 +588,8 @@ export interface ProjectFile {
     planning: PhaseInfo;
     image_placement: PhaseInfo;
     image_generation: PhaseInfo;
+    infographics_placement: PhaseInfo;
+    infographics_generation: PhaseInfo;
     video_placement: PhaseInfo;
     video_generation: PhaseInfo;
     video_replacement: PhaseInfo;
@@ -600,6 +624,8 @@ export interface ProjectFile {
   imagePlacements?: ImagePlacement[];
   /** Video placement plan aligned to transcript entries */
   videoPlacements?: VideoPlacement[];
+  /** Infographic placement plan aligned to transcript entries */
+  infographicPlacements?: InfographicPlacement[];
 }
 
 /**
@@ -737,7 +763,7 @@ export const PHASE_CONFIGS: Partial<Record<WorkflowPhase, PhaseConfig>> = {
   [WorkflowPhase.IMAGE_GENERATION]: {
     phase: WorkflowPhase.IMAGE_GENERATION,
     displayName: 'Image Generation',
-    nextPhase: WorkflowPhase.VIDEO_PLACEMENT,
+    nextPhase: WorkflowPhase.INFOGRAPHICS_PLACEMENT,
     promptFile: 'image-generation',
     agentType: 'image',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
@@ -745,6 +771,41 @@ export const PHASE_CONFIGS: Partial<Record<WorkflowPhase, PhaseConfig>> = {
     requiresPerItemApproval: false,
     isExpensive: true,
     description: 'Generate documentary-style images for planned placements',
+  },
+
+  [WorkflowPhase.INFOGRAPHICS_PLACEMENT]: {
+    phase: WorkflowPhase.INFOGRAPHICS_PLACEMENT,
+    displayName: 'Infographics Placement',
+    nextPhase: WorkflowPhase.INFOGRAPHICS_GENERATION,
+    promptFile: 'infographic-placement',
+    agentType: 'content',
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'write_infographic_placement_plan',
+      'Task',
+    ],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: false,
+    description: 'Map infographics to transcript timestamps (charts, diagrams, statistics)',
+  },
+
+  [WorkflowPhase.INFOGRAPHICS_GENERATION]: {
+    phase: WorkflowPhase.INFOGRAPHICS_GENERATION,
+    displayName: 'Infographics Generation',
+    nextPhase: WorkflowPhase.VIDEO_PLACEMENT,
+    promptFile: 'infographic-generation',
+    agentType: 'image',
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_all_infographics', 'wait_for_job', 'todo_write'],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: true,
+    description: 'Generate infographics via Remotion (charts, diagrams, data viz)',
   },
 
   [WorkflowPhase.VIDEO_PLACEMENT]: {

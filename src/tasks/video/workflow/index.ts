@@ -136,6 +136,7 @@ export {
   updateProjectTool,
   readTranscriptTool,
   writePlacementPlanTool,
+  writeInfographicPlacementPlanTool,
   getWorkflowFileTools,
 } from './FileTools.js';
 
@@ -164,6 +165,14 @@ export {
   parseVideoPlacements,
   type ParsedVideoPlacement,
 } from './videoPlacementsParser.js';
+
+export {
+  parseInfographicPlacements,
+  parseInfographicPlacementsWithErrors,
+  type ParsedInfographicPlacement,
+  type InfographicParseResult,
+  type InfographicParseError,
+} from './infographicPlacementsParser.js';
 
 // Combined tool getter
 import { getWorkflowFileTools } from './FileTools.js';

@@ -49,7 +49,7 @@ IMAGE_PLACER:
 - Output plain text only. No tool calls or JSON wrappers.
 - **CRITICAL: YOU identify the moments from the transcript - don't wait for the plan to list them.**
 - **CRITICAL: ONLY create placements for `type=image` - NO INFOGRAPHICS, NO CHARTS, NO DIAGRAMS, NO DATA VISUALIZATIONS.**
-- **CRITICAL: If a moment needs an infographic, chart, or diagram, SKIP IT - those are handled by other subagents.**
+- **CRITICAL: If a moment needs an infographic, chart, or diagram, SKIP IT - the infographics-placer handles those segments in a later phase.**
 - **CRITICAL: Create placements ONLY for moments that truly need IMAGES (static visuals) - skip moments that need video (action, demonstrations, processes)**
 - **CRITICAL: Identify moments based on keywords, topic changes, and content shifts - but ONLY create image placements for moments that benefit from static images**
 - **CRITICAL: Leave gaps for videos - do NOT try to cover everything. Video-placer will fill remaining segments with videos**

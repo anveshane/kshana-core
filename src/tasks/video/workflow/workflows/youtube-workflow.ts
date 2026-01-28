@@ -27,6 +27,8 @@ export const YOUTUBE_PHASES: WorkflowPhase[] = [
   WorkflowPhase.CONTENT_PLANNING,
   WorkflowPhase.IMAGE_PLACEMENT,
   WorkflowPhase.IMAGE_GENERATION,
+  WorkflowPhase.INFOGRAPHICS_PLACEMENT,
+  WorkflowPhase.INFOGRAPHICS_GENERATION,
   WorkflowPhase.VIDEO_PLACEMENT,
   WorkflowPhase.VIDEO_GENERATION,
   // VIDEO_REPLACEMENT and VIDEO_COMBINE skipped for now
@@ -102,7 +104,7 @@ export const YOUTUBE_PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
   [WorkflowPhase.IMAGE_GENERATION]: {
     phase: WorkflowPhase.IMAGE_GENERATION,
     displayName: 'Image Generation',
-    nextPhase: WorkflowPhase.VIDEO_PLACEMENT,
+    nextPhase: WorkflowPhase.INFOGRAPHICS_PLACEMENT,
     promptFile: 'image-generation',
     agentType: 'image',
     allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
@@ -110,6 +112,41 @@ export const YOUTUBE_PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     requiresPerItemApproval: false,
     isExpensive: true,
     description: 'Generate documentary-style images for planned placements',
+  },
+
+  [WorkflowPhase.INFOGRAPHICS_PLACEMENT]: {
+    phase: WorkflowPhase.INFOGRAPHICS_PLACEMENT,
+    displayName: 'Infographics Placement',
+    nextPhase: WorkflowPhase.INFOGRAPHICS_GENERATION,
+    promptFile: 'infographic-placement',
+    agentType: 'content',
+    allowedTools: [
+      'think',
+      'ask_user',
+      'read_file',
+      'write_file',
+      'read_project',
+      'update_project',
+      'write_infographic_placement_plan',
+      'Task',
+    ],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: false,
+    description: 'Map infographics to transcript timestamps (charts, diagrams, statistics)',
+  },
+
+  [WorkflowPhase.INFOGRAPHICS_GENERATION]: {
+    phase: WorkflowPhase.INFOGRAPHICS_GENERATION,
+    displayName: 'Infographics Generation',
+    nextPhase: WorkflowPhase.VIDEO_PLACEMENT,
+    promptFile: 'infographic-generation',
+    agentType: 'image',
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_all_infographics', 'wait_for_job', 'todo_write'],
+    itemProcessMode: 'single',
+    requiresPerItemApproval: false,
+    isExpensive: true,
+    description: 'Generate infographics via Remotion (charts, diagrams, data viz)',
   },
 
   [WorkflowPhase.VIDEO_PLACEMENT]: {

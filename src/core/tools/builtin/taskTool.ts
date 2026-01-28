@@ -21,6 +21,7 @@ Available subagent types:
 - transcript-parser: Parses SRT text input into structured transcript entries.
 - content-planner: Analyzes transcript and plans comprehensive visual placements (images, infographics, video).
 - image-placer: Creates detailed placement plan with timestamps and enhanced prompts.
+- infographics-placer: Creates infographic placement plan (charts, diagrams, statistics) with timestamps and type.
 - video-placer: Identifies video-appropriate moments (distinct from images) and creates video placement plan.
 - video-replacer: Coordinates video segment replacement with images.
 
@@ -45,7 +46,7 @@ Content Type (for content-creator):
     properties: {
       subagent_type: {
         type: 'string',
-        description: 'Which subagent to use: "Plan", "Explore", "content-creator", "image-generator", "video-assembler", "transcript-parser", "content-planner", "image-placer", "video-placer", "video-replacer"',
+        description: 'Which subagent to use: "Plan", "Explore", "content-creator", "image-generator", "video-assembler", "transcript-parser", "content-planner", "image-placer", "infographics-placer", "video-placer", "video-replacer"',
       },
       task: {
         type: 'string',

@@ -4,6 +4,8 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
 import { nanoid } from 'nanoid';
 import { createTool } from '../../core/tools/index.js';
 import type { ToolDefinition } from '../../core/llm/index.js';
@@ -32,6 +34,7 @@ import {
 } from './workflow/index.js';
 import { parseImagePlacements, parseImagePlacementsWithErrors, type ParsedImagePlacement } from './workflow/imagePlacementsParser.js';
 import { parseVideoPlacements, type ParsedVideoPlacement } from './workflow/videoPlacementsParser.js';
+import { parseInfographicPlacementsWithErrors, type ParsedInfographicPlacement } from './workflow/infographicPlacementsParser.js';
 import { getTranscriptSegmentForTimeRange } from './workflow/transcriptSegment.js';
 import { expandImagePlacementPrompt, expandVideoPlacementPrompt } from './workflow/placementPromptExpander.js';
 
@@ -1766,12 +1769,20 @@ The tool handles all parsing, optional prompt expansion, sequential generation, 
         type: 'boolean',
         description: 'If true (default), expand each placement prompt with LLM before ComfyUI. Set false to use placement prompts as-is.',
       },
+      log_expanded_prompts: {
+        type: 'boolean',
+        description:
+          'If true, print the FULL expanded prompt and negative prompt for each placement. You can also set KSHANA_LOG_EXPANDED_PROMPTS=1.',
+      },
     },
     required: [],
   },
   async (args) => {
     const filePath = (args['file_path'] as string | undefined) || 'agent/content/image-placements.md';
     const expandPrompts = (args['expand_prompts'] as boolean | undefined) !== false;
+    const logExpandedPrompts =
+      (args['log_expanded_prompts'] as boolean | undefined) === true ||
+      process.env['KSHANA_LOG_EXPANDED_PROMPTS'] === '1';
     
     // Read the image placements file
     const content = readProjectFile(filePath);
@@ -1872,6 +1883,32 @@ The tool handles all parsing, optional prompt expansion, sequential generation, 
           prompt = expanded.prompt;
           if (expanded.negativePrompt) negativePrompt = expanded.negativePrompt;
           console.log(`[generate_all_images] Placement ${placement.placementNumber}: using expanded prompt`);
+          if (logExpandedPrompts) {
+            // Log as plain strings with clear delimiters to avoid UI truncation/collapsing.
+            console.log(
+              [
+                `[generate_all_images] --- BEGIN EXPANDED PROMPT (Placement ${placement.placementNumber}) ---`,
+                expanded.prompt,
+                `[generate_all_images] --- END EXPANDED PROMPT (Placement ${placement.placementNumber}) ---`,
+              ].join('\n')
+            );
+            console.log(
+              [
+                `[generate_all_images] --- BEGIN NEGATIVE PROMPT (Placement ${placement.placementNumber}) ---`,
+                negativePrompt,
+                `[generate_all_images] --- END NEGATIVE PROMPT (Placement ${placement.placementNumber}) ---`,
+              ].join('\n')
+            );
+          } else {
+            const maxPreview = 400;
+            const preview =
+              prompt.length <= maxPreview
+                ? prompt
+                : `${prompt.slice(0, maxPreview)}... (${prompt.length} chars total)`;
+            console.log(
+              `[generate_all_images] Placement ${placement.placementNumber} expanded prompt (preview):\n${preview}`
+            );
+          }
         } else {
           console.warn(`[generate_all_images] Placement ${placement.placementNumber}: expansion failed, using placement prompt`);
         }
@@ -2140,6 +2177,264 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
 );
 
 /**
+ * Resolve path to remotion-infographics package.
+ * Priority:
+ * 1. KSHANA_REMOTION_INFographics_DIR environment variable (set by desktop app)
+ * 2. Check if remotion-infographics exists as sibling of kshana-ink (monorepo/dev)
+ * 3. Check if remotion-infographics exists relative to kshana-ink location (when bundled)
+ * 4. Fall back to relative path resolution from current file location
+ */
+function getRemotionInfographicsDir(): string {
+  // 1. Check environment variable (set by desktop app)
+  const envDir = process.env['KSHANA_REMOTION_INFographics_DIR'];
+  if (envDir) {
+    const envPath = String(envDir).trim();
+    if (envPath && fs.existsSync(envPath)) {
+      return envPath;
+    }
+  }
+
+  // 2. Try to find remotion-infographics relative to kshana-ink location
+  // When bundled in kshana-desktop, we might be at node_modules/kshana-ink/dist/...
+  const toolsDir = path.dirname(fileURLToPath(import.meta.url));
+  
+  // Try multiple possible locations
+  const possiblePaths = [
+    // Monorepo/dev: kshana-ink/remotion-infographics (sibling of dist/)
+    path.resolve(toolsDir, '..', '..', '..', '..', 'remotion-infographics'),
+    // Bundled: node_modules/kshana-ink/remotion-infographics (sibling of dist/)
+    path.resolve(toolsDir, '..', '..', 'remotion-infographics'),
+    // Alternative bundled location
+    path.resolve(toolsDir, '..', '..', '..', 'remotion-infographics'),
+    // Fallback: original logic
+    path.join(path.resolve(toolsDir, '..', '..', '..', '..'), 'remotion-infographics'),
+  ];
+
+  for (const candidatePath of possiblePaths) {
+    if (fs.existsSync(candidatePath) && fs.existsSync(path.join(candidatePath, 'package.json'))) {
+      return candidatePath;
+    }
+  }
+
+  // If none found, return the most likely path (for error message)
+  return path.resolve(toolsDir, '..', '..', '..', '..', 'remotion-infographics');
+}
+
+/**
+ * Generate all infographics for placements in infographic-placements.md via Remotion.
+ */
+export const generateAllInfographicsTool: ToolDefinition = createTool(
+  'generate_all_infographics',
+  `Generate all infographics for placements defined in infographic-placements.md using Remotion.
+
+Reads and parses agent/content/infographic-placements.md, then renders each placement as a short video clip
+(charts, diagrams, statistics, etc.) via the Remotion infographics app. Outputs are saved to
+agent/infographic-placements/ and registered in the manifest.`,
+  {
+    type: 'object',
+    properties: {
+      file_path: {
+        type: 'string',
+        description: 'Path to infographic-placements.md (default: agent/content/infographic-placements.md)',
+      },
+    },
+    required: [],
+  },
+  async (args) => {
+    const filePath = (args['file_path'] as string | undefined) || 'agent/content/infographic-placements.md';
+    const basePath = getCurrentProjectBasePath();
+    const content = readProjectFile(filePath, basePath);
+    if (!content) {
+      return {
+        status: 'error',
+        error: `Infographic placements file not found: ${filePath}`,
+        suggestion: 'Complete the infographics_placement phase first to create infographic-placements.md.',
+      };
+    }
+
+    let placements: ParsedInfographicPlacement[];
+    try {
+      const parseResult = parseInfographicPlacementsWithErrors(content, false);
+      placements = parseResult.placements;
+      console.log(`[generate_all_infographics] Parsed ${placements.length} placements`);
+      if (parseResult.warnings.length) console.warn('[generate_all_infographics] Warnings:', parseResult.warnings);
+      if (parseResult.errors.length) console.warn('[generate_all_infographics] Parse errors:', parseResult.errors);
+    } catch (e) {
+      return {
+        status: 'error',
+        error: `Failed to parse infographic placements: ${String(e)}`,
+      };
+    }
+
+    if (placements.length === 0) {
+      return {
+        status: 'completed',
+        total_placements: 0,
+        successful: 0,
+        failed: 0,
+        results: [],
+        message: 'No infographic placements found. Mark phase complete and transition.',
+      };
+    }
+
+    const remotionDir = getRemotionInfographicsDir();
+    if (!fs.existsSync(path.join(remotionDir, 'package.json'))) {
+      return {
+        status: 'error',
+        error: `remotion-infographics package not found at ${remotionDir}. Run "pnpm install" in kshana-ink/remotion-infographics.`,
+      };
+    }
+    const buildDir = path.join(remotionDir, 'build');
+    if (!fs.existsSync(buildDir) || !fs.existsSync(path.join(buildDir, 'index.html'))) {
+      const buildProc = spawnSync('pnpm', ['run', 'build'], { cwd: remotionDir, encoding: 'utf-8', timeout: 120_000 });
+      if (buildProc.error || buildProc.status !== 0) {
+        return {
+          status: 'error',
+          error: `Remotion bundle failed. Run "pnpm run build" in kshana-ink/remotion-infographics. ${buildProc.stderr || buildProc.error || ''}`,
+        };
+      }
+    }
+
+    const outDir = path.join(basePath, '.kshana', 'agent', 'infographic-placements');
+    fs.mkdirSync(outDir, { recursive: true });
+    const inputPath = path.join(outDir, '_render_input.json');
+    const outputPath = path.join(outDir, '_render_output.json');
+    fs.writeFileSync(
+      inputPath,
+      JSON.stringify({
+        placements: placements.map((p) => ({
+          placementNumber: p.placementNumber,
+          startTime: p.startTime,
+          endTime: p.endTime,
+          infographicType: p.infographicType,
+          prompt: p.prompt,
+        })),
+      }),
+      'utf-8'
+    );
+
+    const RENDER_TIMEOUT_MS = 600_000;
+    const proc = spawnSync(
+      'pnpm',
+      ['run', 'render', '--', '--input', inputPath, '--outDir', outDir, '--output', outputPath],
+      {
+        cwd: remotionDir,
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
+        timeout: RENDER_TIMEOUT_MS,
+      }
+    );
+    try {
+      fs.unlinkSync(inputPath);
+    } catch {
+      /* ignore */
+    }
+
+    if (proc.error) {
+      const timeoutMsg =
+        proc.error.message?.includes('ETIMEDOUT') || (proc as { timedOut?: boolean }).timedOut
+          ? ' Render timed out.'
+          : '';
+      return {
+        status: 'error',
+        error: `Remotion render failed: ${String(proc.error)}${timeoutMsg}`,
+        suggestion: 'Ensure remotion-infographics dependencies are installed (pnpm install in remotion-infographics).',
+      };
+    }
+    if (proc.status !== 0) {
+      return {
+        status: 'error',
+        error: `Remotion render failed (exit ${proc.status}). stderr: ${proc.stderr || 'none'}`,
+        stdout: proc.stdout,
+      };
+    }
+
+    let outputs: string[] = [];
+    try {
+      const raw = fs.readFileSync(outputPath, 'utf-8');
+      const out = JSON.parse(raw) as { outputs?: string[] };
+      outputs = out.outputs ?? [];
+    } catch (e) {
+      console.warn('[generate_all_infographics] Could not read or parse _render_output.json:', e);
+    } finally {
+      try {
+        fs.unlinkSync(outputPath);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    const results: Array<{ placementNumber: number; status: 'success' | 'failed'; artifactId?: string; filePath?: string; error?: string }> = [];
+    for (const outPath of outputs) {
+      if (!outPath) {
+        results.push({
+          placementNumber: results.length + 1,
+          status: 'failed',
+          error: 'Output path is undefined',
+        });
+        continue;
+      }
+      const baseName = path.basename(outPath ?? '', '.mp4');
+      const match = baseName.match(/^info(\d+)_/);
+      const placementNumber = match?.[1] ? parseInt(match[1], 10) : results.length + 1;
+      const manifestPath = `agent/infographic-placements/${path.basename(outPath ?? '')}`;
+      const artifactId = `info_${nanoid(8)}`;
+      try {
+        await addAsset(
+          {
+            id: artifactId,
+            type: 'scene_infographic',
+            path: manifestPath,
+            createdAt: Date.now(),
+            scene_number: placementNumber,
+            metadata: { placementNumber },
+          },
+          basePath
+        );
+        results.push({
+          placementNumber,
+          status: 'success',
+          artifactId,
+          filePath: manifestPath,
+        });
+      } catch (e) {
+        results.push({
+          placementNumber,
+          status: 'failed',
+          error: String(e),
+        });
+      }
+    }
+
+    const successful = results.filter((r) => r.status === 'success');
+    const failed = results.filter((r) => r.status === 'failed');
+
+    if (placements.length > 0 && successful.length === 0) {
+      return {
+        status: 'error',
+        error:
+          'No infographics were generated. Remotion may have failed or produced no output files. Check remotion-infographics build and stderr.',
+        total_placements: placements.length,
+        successful: 0,
+        failed: failed.length,
+        results,
+        suggestion:
+          'Run "pnpm run build" in kshana-ink/remotion-infographics, then retry. If it still fails, check _render_output.json and render stderr.',
+      };
+    }
+
+    return {
+      status: 'completed',
+      total_placements: placements.length,
+      successful: successful.length,
+      failed: failed.length,
+      results,
+      message: `Generated ${successful.length} out of ${placements.length} infographics. ${failed.length} failed.`,
+    };
+  }
+);
+
+/**
  * Get all video generation tools.
  */
 export function getVideoGenerationTools(): ToolDefinition[] {
@@ -2152,6 +2447,7 @@ export function getVideoGenerationTools(): ToolDefinition[] {
     generateStoryboardTool,
     generateAllImagesTool,
     generateAllVideosTool,
+    generateAllInfographicsTool,
     waitForJobTool,
   ];
 }
@@ -2168,4 +2464,5 @@ export const VIDEO_COMPLEX_TOOLS = new Set([
   'generate_storyboard',
   'generate_all_images',
   'generate_all_videos',
+  'generate_all_infographics',
 ]);

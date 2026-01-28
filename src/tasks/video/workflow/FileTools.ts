@@ -371,7 +371,6 @@ export const writePlacementPlanTool: ToolDefinition = createTool(
   async (args) => {
     const content = args['content'] as string;
     try {
-      // DEFENSIVE: Always pass explicit basePath to ensure correct project directory
       const basePath = getCurrentProjectBasePath();
       writeProjectFile('agent/content/image-placements.md', content, basePath);
       return {
@@ -381,6 +380,32 @@ export const writePlacementPlanTool: ToolDefinition = createTool(
       };
     } catch (error) {
       return { status: 'error', error: `Failed to write placement plan: ${String(error)}` };
+    }
+  }
+);
+
+export const writeInfographicPlacementPlanTool: ToolDefinition = createTool(
+  'write_infographic_placement_plan',
+  'Write infographic placement plan content to agent/content/infographic-placements.md.',
+  {
+    type: 'object',
+    properties: {
+      content: { type: 'string', description: 'Infographic placement plan content (INFOGRAPHIC_PLACER: format)' },
+    },
+    required: ['content'],
+  },
+  async (args) => {
+    const content = args['content'] as string;
+    try {
+      const basePath = getCurrentProjectBasePath();
+      writeProjectFile('agent/content/infographic-placements.md', content, basePath);
+      return {
+        status: 'success',
+        file_path: 'agent/content/infographic-placements.md',
+        bytes_written: content.length,
+      };
+    } catch (error) {
+      return { status: 'error', error: `Failed to write infographic placement plan: ${String(error)}` };
     }
   }
 );
@@ -504,6 +529,11 @@ function getRequiredFilesForPhase(phase: WorkflowPhase, basePath: string): strin
     case WorkflowPhase.VIDEO_PLACEMENT:
       // Video placement phase must create video-placements.md before transitioning
       requiredFiles.push('agent/content/video-placements.md');
+      break;
+
+    case WorkflowPhase.INFOGRAPHICS_PLACEMENT:
+      // Infographics placement phase must create infographic-placements.md before transitioning
+      requiredFiles.push('agent/content/infographic-placements.md');
       break;
 
     // Other phases don't have strict file requirements for transition
@@ -1379,12 +1409,28 @@ What story would you like to turn into a video?`,
  * Includes file read/write tools needed for saving plans and content files.
  */
 export function getWorkflowFileTools(): ToolDefinition[] {
-  return [readFileTool, writeFileTool, readProjectTool, updateProjectTool, readTranscriptTool, writePlacementPlanTool];
+  return [
+    readFileTool,
+    writeFileTool,
+    readProjectTool,
+    updateProjectTool,
+    readTranscriptTool,
+    writePlacementPlanTool,
+    writeInfographicPlacementPlanTool,
+  ];
 }
 
 /**
  * Get all file tools including read_file/write_file (for subagents that need direct file access).
  */
 export function getAllFileTools(): ToolDefinition[] {
-  return [readFileTool, writeFileTool, readProjectTool, updateProjectTool, readTranscriptTool, writePlacementPlanTool];
+  return [
+    readFileTool,
+    writeFileTool,
+    readProjectTool,
+    updateProjectTool,
+    readTranscriptTool,
+    writePlacementPlanTool,
+    writeInfographicPlacementPlanTool,
+  ];
 }

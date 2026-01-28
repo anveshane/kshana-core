@@ -23,6 +23,7 @@ import {
   buildPlacementPlannerPrompt,
   buildImagePlacerPrompt,
   buildVideoPlacerPrompt,
+  buildInfographicsPlacerPrompt,
   buildVideoReplacerPrompt,
   wrapUserTask,
   type ContentType,
@@ -2185,6 +2186,13 @@ ONLY: Execute the update_project tool call with action="transition_phase" immedi
       });
     }
 
+    if (subagentType === 'infographics-placer') {
+      return await this.handleDispatchInfographicsPlacer({
+        ...toolCall,
+        name: 'dispatch_infographics_placer',
+      });
+    }
+
     if (subagentType === 'video-replacer') {
       return await this.handleDispatchVideoReplacer({
         ...toolCall,
@@ -2378,6 +2386,18 @@ ONLY: Execute the update_project tool call with action="transition_phase" immedi
 
   // State for video placement sub-agent
   private videoPlacerState: {
+    active: boolean;
+    task: string;
+    context?: string;
+    messages: Message[];
+    currentOutput: string;
+    iterations: number;
+    toolCallId: string;
+    outputFile?: string;
+  } | null = null;
+
+  // State for infographics placement sub-agent
+  private infographicsPlacerState: {
     active: boolean;
     task: string;
     context?: string;
@@ -3065,6 +3085,7 @@ Respond in JSON format:
       '$transcript': { file: 'agent/content/transcript.md', label: 'Transcript' },
       '$content_plan': { file: 'agent/plans/content-plan.md', label: 'Content Plan' },
       '$image_placements': { file: 'agent/content/image-placements.md', label: 'Image Placement Plan' },
+      '$infographic_placements': { file: 'agent/content/infographic-placements.md', label: 'Infographic Placement Plan' },
     };
 
     // Use getCurrentProjectBasePath() to get the correct project directory
@@ -4396,7 +4417,7 @@ Respond in JSON format:
       return { error: 'Video placement already in progress' };
     }
 
-    // Video-placer needs $transcript and $image_placements (to avoid collisions)
+    // Video-placer needs $transcript, $image_placements, and $infographic_placements (to avoid collisions)
     const requiredRefs = contextRefs || [];
     if (!requiredRefs.includes('$transcript')) {
       debugLog(`[GenericAgent] Auto-adding $transcript to context_refs for video-placer (required but not provided)`);
@@ -4405,6 +4426,10 @@ Respond in JSON format:
     if (!requiredRefs.includes('$image_placements')) {
       debugLog(`[GenericAgent] Auto-adding $image_placements to context_refs for video-placer (required but not provided)`);
       requiredRefs.push('$image_placements');
+    }
+    if (!requiredRefs.includes('$infographic_placements')) {
+      debugLog(`[GenericAgent] Auto-adding $infographic_placements to context_refs for video-placer (required but not provided)`);
+      requiredRefs.push('$infographic_placements');
     }
 
     const { context, missingRefs } = this.buildContextFromRefs(requiredRefs);
@@ -4508,6 +4533,118 @@ Respond in JSON format:
     }
 
     this.videoPlacerState = null;
+    return result;
+  }
+
+  private async handleDispatchInfographicsPlacer(toolCall: ToolCall): Promise<unknown> {
+    this.currentMode = 'content';
+    const args = toolCall.arguments;
+    const task = args['task'] as string;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+    const outputFile = args['output_file'] as string | undefined;
+
+    if (!task) {
+      this.currentMode = 'orchestrator';
+      return { error: 'No task provided for dispatch_infographics_placer' };
+    }
+
+    if (this.infographicsPlacerState?.active) {
+      return { error: 'Infographics placement already in progress' };
+    }
+
+    const requiredRefs = contextRefs || [];
+    if (!requiredRefs.includes('$transcript')) {
+      debugLog(`[GenericAgent] Auto-adding $transcript to context_refs for infographics-placer (required but not provided)`);
+      requiredRefs.push('$transcript');
+    }
+    if (!requiredRefs.includes('$content_plan')) {
+      debugLog(`[GenericAgent] Auto-adding $content_plan to context_refs for infographics-placer (required but not provided)`);
+      requiredRefs.push('$content_plan');
+    }
+    if (!requiredRefs.includes('$image_placements')) {
+      debugLog(`[GenericAgent] Auto-adding $image_placements to context_refs for infographics-placer (required but not provided)`);
+      requiredRefs.push('$image_placements');
+    }
+
+    const { context, missingRefs } = this.buildContextFromRefs(requiredRefs);
+    if (missingRefs.length > 0) {
+      debugLog(`[GenericAgent] WARNING: Missing context_refs for infographics placer: ${missingRefs.join(', ')}`);
+    }
+
+    let outputFileToUse = outputFile || 'agent/content/infographic-placements.md';
+    if (outputFileToUse.includes('content-plan') || outputFileToUse.includes('image-placements')) {
+      debugLog('[GenericAgent] WARNING: infographics-placer received wrong path. Overriding to agent/content/infographic-placements.md');
+      outputFileToUse = 'agent/content/infographic-placements.md';
+    }
+    debugLog(`[GenericAgent] handleDispatchInfographicsPlacer: outputFile=${outputFileToUse}`);
+
+    const systemPrompt = buildInfographicsPlacerPrompt(context);
+    this.infographicsPlacerState = {
+      active: true,
+      task,
+      context,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `<request>\n${task}\n</request>` },
+      ],
+      currentOutput: '',
+      iterations: 1,
+      toolCallId: toolCall.id,
+      outputFile: outputFileToUse,
+    };
+
+    const result = await this.runOneShotSubagent(this.infographicsPlacerState, 'dispatch_infographics_placer', 0.4);
+
+    const resultObj = result as Record<string, unknown>;
+    if (resultObj['status'] === 'completed' && resultObj['output']) {
+      const output = resultObj['output'] as string;
+      let fileSaved = false;
+      let normalizedPath: string | undefined = outputFileToUse;
+      if (normalizedPath.startsWith('content/') && !normalizedPath.startsWith('agent/content/')) {
+        normalizedPath = `agent/${normalizedPath}`;
+      } else if (!normalizedPath.startsWith('agent/')) {
+        normalizedPath = normalizedPath.includes('/') ? `agent/${normalizedPath}` : `agent/content/${normalizedPath}`;
+      }
+
+      try {
+        const basePath = getCurrentProjectBasePath();
+        const projectDir = path.join(basePath, '.kshana');
+        const filePath = path.join(projectDir, normalizedPath);
+        const parentDir = path.dirname(filePath);
+        if (!fs.existsSync(parentDir)) {
+          fs.mkdirSync(parentDir, { recursive: true });
+        }
+        fs.writeFileSync(filePath, output, 'utf-8');
+        fileSaved = true;
+        const { variableName } = contextStore.storeReference(
+          normalizedPath,
+          'Infographic Placement Plan',
+          undefined,
+          'tool'
+        );
+        debugLog(`[GenericAgent] Stored reference to infographic placement plan as ${variableName}`);
+
+        let preview = output.length > 800 ? output.substring(0, 800) + '...' : output;
+        preview = preview.replace(/^```[\w]*\n/gm, '').replace(/^```$/gm, '');
+        const previewLines = preview.split('\n').slice(0, 20).join('\n');
+        const truncatedPreview = previewLines.length < preview.length ? previewLines + '\n...' : previewLines;
+
+        resultObj['output_file'] = normalizedPath;
+        resultObj['file_saved'] = fileSaved;
+        resultObj['infographic_placements_ref'] = variableName;
+        resultObj['file_path'] = normalizedPath;
+        resultObj['bytes_written'] = output.length;
+        resultObj['total_lines'] = output.split('\n').length;
+        resultObj['preview'] = truncatedPreview;
+        resultObj['content'] = output;
+      } catch (err) {
+        debugLog(`[GenericAgent] ERROR: Failed to save infographic placement plan: ${String(err)}`);
+        resultObj['file_saved'] = false;
+        resultObj['error'] = `Failed to save infographic placement plan: ${String(err)}`;
+      }
+    }
+
+    this.infographicsPlacerState = null;
     return result;
   }
 

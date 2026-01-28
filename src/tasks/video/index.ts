@@ -194,15 +194,17 @@ export function createWorkflowToolRegistry(): ToolRegistry {
     registry.register(tool);
   }
 
-  // Add generate_image, wait_for_job, generate_all_images, and generate_all_videos tools
+  // Add generate_image, wait_for_job, generate_all_images, generate_all_videos, and generate_all_infographics tools
   // generate_image and wait_for_job are needed by the image-generator subagent via Task tool
   // generate_all_images is used by the orchestrator during image_generation phase
   // generate_all_videos is used by the orchestrator during video_generation phase
+  // generate_all_infographics is used by the orchestrator during infographics_generation phase
   const videoGenerationTools = getVideoGenerationTools();
   const generateImageTool = videoGenerationTools.find(t => t.name === 'generate_image');
   const waitForJobTool = videoGenerationTools.find(t => t.name === 'wait_for_job');
   const generateAllImagesTool = videoGenerationTools.find(t => t.name === 'generate_all_images');
   const generateAllVideosTool = videoGenerationTools.find(t => t.name === 'generate_all_videos');
+  const generateAllInfographicsTool = videoGenerationTools.find(t => t.name === 'generate_all_infographics');
   if (generateImageTool) {
     registry.register(generateImageTool);
   }
@@ -214,6 +216,9 @@ export function createWorkflowToolRegistry(): ToolRegistry {
   }
   if (generateAllVideosTool) {
     registry.register(generateAllVideosTool);
+  }
+  if (generateAllInfographicsTool) {
+    registry.register(generateAllInfographicsTool);
   }
 
   return registry;
@@ -302,6 +307,7 @@ export function loadProjectFilesAsContexts(basePath: string = getCurrentProjectB
         // YouTube workflow files
         { dir: plansDir, file: 'content-plan.md', label: 'Content Plan', varName: 'content_plan' },
         { dir: contentDir, file: 'image-placements.md', label: 'Image Placement Plan', varName: 'image_placements' },
+        { dir: contentDir, file: 'infographic-placements.md', label: 'Infographic Placement Plan', varName: 'infographic_placements' },
         { dir: scriptDir, file: 'subtitles_with_images.srt', label: 'SRT with Images', varName: 'srt_with_images' },
       ]
     : [
@@ -432,6 +438,8 @@ const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
   [WorkflowPhase.CONTENT_PLANNING]: 'video/phases/planning.md', // CONTENT_PLANNING uses same prompt as PLANNING
   [WorkflowPhase.IMAGE_PLACEMENT]: 'video/phases/image-placement.md',
   [WorkflowPhase.IMAGE_GENERATION]: 'video/phases/image-generation.md',
+  [WorkflowPhase.INFOGRAPHICS_PLACEMENT]: 'video/phases/infographic-placement.md',
+  [WorkflowPhase.INFOGRAPHICS_GENERATION]: 'video/phases/infographic-generation.md',
   [WorkflowPhase.VIDEO_PLACEMENT]: 'video/phases/video-placement.md',
   [WorkflowPhase.VIDEO_GENERATION]: 'video/phases/video-generation.md',
   [WorkflowPhase.VIDEO_REPLACEMENT]: 'video/phases/video-replacement.md',

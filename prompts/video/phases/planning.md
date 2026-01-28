@@ -1,6 +1,6 @@
 ### Planning Phase
 
-**What this phase does**: Create a strategic workflow plan for ALL upcoming visual phases (IMAGE_PLACEMENT, IMAGE_GENERATION, VIDEO_REPLACEMENT, VIDEO_COMBINE). This plan identifies which moments need visuals and what type (images, infographics, or videos), similar to a project execution plan.
+**What this phase does**: Create a strategic workflow plan for ALL upcoming visual phases (IMAGE_PLACEMENT, IMAGE_GENERATION, INFOGRAPHICS_PLACEMENT, INFOGRAPHICS_GENERATION, VIDEO_PLACEMENT, VIDEO_GENERATION, VIDEO_REPLACEMENT, VIDEO_COMBINE). This plan identifies which moments need visuals and what type (images, infographics, or videos), similar to a project execution plan.
 
 **Prerequisites**:
 - Transcript must be parsed in TRANSCRIPT_INPUT phase first
@@ -34,7 +34,7 @@ read_file(file_path: 'agent/content/transcript.md')
 ```
 Task(
   subagent_type: 'content-planner',
-  task: 'Create a strategic workflow plan for ALL upcoming phases: IMAGE_PLACEMENT, IMAGE_GENERATION, VIDEO_REPLACEMENT, VIDEO_COMBINE. Identify which moments need visuals (images, infographics, or videos) and plan the execution strategy. This is a high-level strategic planning phase - do not create detailed image prompts.',
+  task: 'Create a strategic workflow plan for ALL upcoming phases: IMAGE_PLACEMENT, IMAGE_GENERATION, INFOGRAPHICS_PLACEMENT, INFOGRAPHICS_GENERATION, VIDEO_PLACEMENT, VIDEO_GENERATION, VIDEO_REPLACEMENT, VIDEO_COMBINE. Identify which moments need visuals (images, infographics, or videos) and plan the execution strategy. This is a high-level strategic planning phase - do not create detailed image prompts.',
   context_refs: ['$transcript']  // If $transcript exists, use it. Otherwise, the Task tool will resolve 'agent/content/transcript.md' automatically
 )
 ```
@@ -76,7 +76,7 @@ update_project(
 **IMPORTANT:**
 - This phase creates a STRATEGIC WORKFLOW PLAN (like a project execution plan)
 - The content plan identifies key moments that need visuals and plans for ALL upcoming phases
-- The plan covers: IMAGE_PLACEMENT, IMAGE_GENERATION, VIDEO_REPLACEMENT, VIDEO_COMBINE
+- The plan covers: IMAGE_PLACEMENT, IMAGE_GENERATION, INFOGRAPHICS_PLACEMENT, INFOGRAPHICS_GENERATION, VIDEO_PLACEMENT, VIDEO_GENERATION, VIDEO_REPLACEMENT, VIDEO_COMBINE
 - The IMAGE_PLACEMENT phase will use this strategic plan to create detailed image placements
 
 **DO NOT:**

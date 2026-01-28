@@ -524,6 +524,14 @@ export function createProject(
         status: 'pending',
         completedAt: null,
       },
+      infographics_placement: {
+        status: 'pending',
+        completedAt: null,
+      },
+      infographics_generation: {
+        status: 'pending',
+        completedAt: null,
+      },
       video_placement: {
         status: 'pending',
         completedAt: null,
@@ -2407,7 +2415,7 @@ export async function addAsset(asset: AssetInfo, basePath: string = getCurrentPr
     try {
       assetEventEmitter.emitAssetAdded({
         assetId: asset.id,
-        assetType: asset.type as 'scene_image' | 'scene_video' | 'character_ref' | 'setting_ref' | 'final_video',
+        assetType: asset.type as 'scene_image' | 'scene_video' | 'scene_infographic' | 'character_ref' | 'setting_ref' | 'final_video',
         placementNumber: asset.metadata?.['placementNumber'] as number | undefined,
         sceneNumber: asset.scene_number,
         path: asset.path,
