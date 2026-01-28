@@ -15,6 +15,7 @@ export type ServerMessageType =
   | 'todo_update'      // Todo list changes
   | 'stream_chunk'     // Streaming text chunk
   | 'stream_end'       // End of streaming
+  | 'asset_added'      // Asset added to manifest
   | 'error';           // Error message
 
 /**
@@ -111,6 +112,18 @@ export interface TodoUpdateData {
 export interface StreamChunkData {
   content: string;
   done: boolean;
+}
+
+/**
+ * Asset added message data.
+ */
+export interface AssetAddedData {
+  assetId: string;
+  assetType: 'scene_image' | 'scene_video' | 'character_ref' | 'setting_ref' | 'final_video';
+  placementNumber?: number;
+  sceneNumber?: number;
+  path: string;
+  version: number;
 }
 
 /**

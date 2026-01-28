@@ -15,6 +15,7 @@ import {
   type ToolCallData,
   type TodoUpdateData,
   type StreamChunkData,
+  type AssetAddedData,
   type ErrorData,
   type StartTaskData,
   type UserResponseData,
@@ -358,6 +359,17 @@ export class WebSocketHandler {
           status: statusType,
           message,
           agentName, // Include agent name if available
+        }));
+      },
+
+      onAssetAdded: (sid, assetId, assetType, path, version, placementNumber, sceneNumber) => {
+        this.sendMessage(socket, createServerMessage<AssetAddedData>('asset_added', sid, {
+          assetId,
+          assetType: assetType as AssetAddedData['assetType'],
+          placementNumber,
+          sceneNumber,
+          path,
+          version,
         }));
       },
     };

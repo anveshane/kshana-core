@@ -9,6 +9,7 @@ import { createDefaultToolRegistry } from '../core/tools/index.js';
 import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT, createWorkflowVideoAgent, setCurrentProjectBasePath } from '../tasks/video/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
+import { assetEventEmitter } from './assetEventEmitter.js';
 
 type TaskType = 'generic' | 'video';
 
@@ -27,6 +28,7 @@ export interface ConversationEvents {
   onAgentText?: (sessionId: string, text: string, isFinal: boolean) => void;
   onQuestion?: (sessionId: string, question: string, isConfirmation: boolean) => void;
   onAgentStatus?: (sessionId: string, status: string, agentName?: string) => void;
+  onAssetAdded?: (sessionId: string, assetId: string, assetType: string, path: string, version: number, placementNumber?: number, sceneNumber?: number) => void;
 }
 
 interface ActiveSession {
@@ -35,6 +37,8 @@ interface ActiveSession {
   abortController?: AbortController;
   initialized?: boolean;
   basePath?: string; // Store basePath for video tasks to save original input
+  assetEventHandler?: (event: { assetId: string; assetType: string; placementNumber?: number; sceneNumber?: number; path: string; version: number; sessionId?: string }) => void;
+  currentEvents?: ConversationEvents; // Store current events for asset handler
 }
 
 export class ConversationManager {
@@ -111,7 +115,23 @@ export class ConversationManager {
       taskHistory: [],
     };
 
-    this.sessions.set(sessionId, { state, agent, basePath });
+    // Set up asset event handler for this session (will be connected to events in runTask/sendResponse)
+    const assetEventHandler = (event: { assetId: string; assetType: string; placementNumber?: number; sceneNumber?: number; path: string; version: number; sessionId?: string }) => {
+      // Only forward events for this session if sessionId matches, or if no sessionId specified (global)
+      if (!event.sessionId || event.sessionId === sessionId) {
+        // Events will be set when runTask or sendResponse is called
+        // For now, just store the event to be processed later
+        const session = this.sessions.get(sessionId);
+        if (session && session.currentEvents?.onAssetAdded) {
+          session.currentEvents.onAssetAdded(sessionId, event.assetId, event.assetType, event.path, event.version, event.placementNumber, event.sceneNumber);
+        }
+      }
+    };
+
+    this.sessions.set(sessionId, { state, agent, basePath, assetEventHandler });
+
+    // Listen for asset events
+    assetEventEmitter.onAssetAdded(assetEventHandler);
 
     // CRITICAL: Set the global basePath immediately when session is created
     // This ensures tools use the correct project directory from the start
@@ -192,6 +212,12 @@ export class ConversationManager {
     session.state.lastActivity = Date.now();
     session.state.taskHistory.push(task);
 
+    // Set current session for asset event tracking
+    assetEventEmitter.setCurrentSessionId(sessionId);
+
+    // Store events for asset handler
+    session.currentEvents = events;
+
     // Create abort controller for cancellation
     session.abortController = new AbortController();
 
@@ -254,6 +280,12 @@ export class ConversationManager {
     session.state.status = 'running';
     session.state.lastActivity = Date.now();
 
+    // Set current session for asset event tracking
+    assetEventEmitter.setCurrentSessionId(sessionId);
+
+    // Store events for asset handler
+    session.currentEvents = events;
+
     // Create abort controller for cancellation
     session.abortController = new AbortController();
 
@@ -292,6 +324,9 @@ export class ConversationManager {
       // Clean up event listeners
       session.agent.removeAllListeners();
       session.abortController = undefined;
+      session.currentEvents = undefined;
+      // Clear current session
+      assetEventEmitter.setCurrentSessionId(null);
     }
   }
 
@@ -304,6 +339,23 @@ export class ConversationManager {
     events?: ConversationEvents
   ): void {
     if (!events) return;
+
+    // Update asset event handler for this session
+    const session = this.sessions.get(sessionId);
+    if (session && events.onAssetAdded) {
+      // Remove old handler if exists
+      if (session.assetEventHandler) {
+        assetEventEmitter.offAssetAdded(session.assetEventHandler);
+      }
+      // Create new handler
+      const assetEventHandler = (event: { assetId: string; assetType: string; placementNumber?: number; sceneNumber?: number; path: string; version: number; sessionId?: string }) => {
+        if (!event.sessionId || event.sessionId === sessionId) {
+          events.onAssetAdded!(sessionId, event.assetId, event.assetType, event.path, event.version, event.placementNumber, event.sceneNumber);
+        }
+      };
+      session.assetEventHandler = assetEventHandler;
+      assetEventEmitter.onAssetAdded(assetEventHandler);
+    }
 
     if (events.onProgress) {
       agent.on('progress', (data) => {
@@ -402,6 +454,10 @@ export class ConversationManager {
       // Cancel any running task
       if (session.abortController) {
         session.abortController.abort();
+      }
+      // Remove asset event handler
+      if (session.assetEventHandler) {
+        assetEventEmitter.offAssetAdded(session.assetEventHandler);
       }
       this.sessions.delete(sessionId);
       return true;

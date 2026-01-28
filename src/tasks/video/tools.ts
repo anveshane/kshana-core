@@ -571,7 +571,7 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
         version: assetData.version,
       });
       
-      addAsset(assetData);
+      await addAsset(assetData);
       
       console.log(`[waitForComfyUIJob] Successfully registered asset ${artifactId} with placementNumber ${placementNumber}`);
     } catch (error) {

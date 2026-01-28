@@ -3,9 +3,10 @@
  * Manages the .kshana directory structure and project.json index file.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, openSync, fsyncSync, closeSync } from 'fs';
 import { CONTENT_TYPE_OUTPUT_FILES } from '../../../core/tools/builtin/generateContentTool.js';
 import { join } from 'path';
+import { assetEventEmitter } from '../../../server/assetEventEmitter.js';
 import {
   type ProjectFile,
   type PhaseInfo,
@@ -2330,7 +2331,7 @@ export function updateSceneApproval(
 /**
  * Add an asset to the manifest.
  */
-export function addAsset(asset: AssetInfo, basePath: string = getCurrentProjectBasePath()): void {
+export async function addAsset(asset: AssetInfo, basePath: string = getCurrentProjectBasePath()): Promise<void> {
   const manifestPath = getManifestFilePath(basePath);
 
   console.log(`[addAsset] Registering asset:`, {
@@ -2372,11 +2373,22 @@ export function addAsset(asset: AssetInfo, basePath: string = getCurrentProjectB
   }
 
   try {
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+    // Write file and ensure it's flushed to disk
+    const fd = openSync(manifestPath, 'w');
+    try {
+      writeFileSync(fd, JSON.stringify(manifest, null, 2), 'utf-8');
+      // Force flush to disk
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     console.log(`[addAsset] ✓ Successfully wrote manifest with ${manifest.assets.length} assets to ${manifestPath}`);
     
     // Note: File system watcher in desktop app will detect this change and trigger UI refresh
     // The watcher uses awaitWriteFinish to ensure file is fully written before detecting change
+    
+    // Small delay to ensure OS has flushed the file before verification
+    await new Promise(resolve => setTimeout(resolve, 50));
     
     // Verify the write by reading it back
     try {
@@ -2389,6 +2401,22 @@ export function addAsset(asset: AssetInfo, basePath: string = getCurrentProjectB
       }
     } catch (verifyError) {
       console.error(`[addAsset] Failed to verify manifest write:`, verifyError);
+    }
+
+    // Emit asset added event for WebSocket notification
+    try {
+      assetEventEmitter.emitAssetAdded({
+        assetId: asset.id,
+        assetType: asset.type as 'scene_image' | 'scene_video' | 'character_ref' | 'setting_ref' | 'final_video',
+        placementNumber: asset.metadata?.placementNumber as number | undefined,
+        sceneNumber: asset.scene_number,
+        path: asset.path,
+        version: asset.version ?? 1,
+      });
+      console.log(`[addAsset] ✓ Emitted asset_added event for ${asset.id}`);
+    } catch (eventError) {
+      // Don't fail asset registration if event emission fails
+      console.warn(`[addAsset] Failed to emit asset_added event:`, eventError);
     }
   } catch (error) {
     console.error(`[addAsset] ✗ CRITICAL: Failed to write manifest:`, {

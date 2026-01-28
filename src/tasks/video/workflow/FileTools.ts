@@ -1261,7 +1261,7 @@ What story would you like to turn into a video?`,
             return { status: 'error', error: 'id, type, and path are required for add_asset' };
           }
           const basePath = getCurrentProjectBasePath();
-          addAsset(asset, basePath);
+          await addAsset(asset, basePath);
           return { status: 'success', message: `Asset "${asset.id}" added` };
         }
 
