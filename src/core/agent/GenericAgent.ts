@@ -31,9 +31,9 @@ import {
   LONG_CONTENT_THRESHOLD,
 } from '../context/index.js';
 import {
-  CONTENT_TYPE_CONTEXTS,
   CONTENT_TYPE_OUTPUT_FILES,
 } from '../tools/builtin/generateContentTool.js';
+import { getContentCreatorTools } from '../tools/builtin/contentCreatorTools.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import {
@@ -226,6 +226,67 @@ export class GenericAgent extends TypedEventEmitter {
     this.maxIterations = config.maxIterations ?? 100;
     this.name = config.name ?? `agent-${nanoid(6)}`;
     this.customPrompt = config.customPrompt;
+    this.currentMode = config.initialMode ?? 'orchestrator';
+  }
+
+  /**
+   * Run a sub-agent with the given tools and prompt.
+   * This creates a NEW GenericAgent instance that uses the same run() loop,
+   * ensuring consistent event emission and behavior.
+   *
+   * RECURSION PROTECTION: Sub-agents are created with isSubAgent=true and
+   * should only be given tools that cannot spawn more sub-agents.
+   */
+  private async runSubAgent(config: {
+    name: string;
+    tools: ToolDefinition[];
+    prompt: string;
+    task: string;
+    maxIterations?: number;
+  }): Promise<GenericAgentResult> {
+    // Prevent infinite recursion - sub-agents cannot spawn more sub-agents
+    if (this.isSubAgent) {
+      throw new Error('Sub-agents cannot spawn nested sub-agents');
+    }
+
+    // Convert Tool[] to Map<string, ToolDefinition>
+    const toolMap = new Map<string, ToolDefinition>();
+    for (const tool of config.tools) {
+      toolMap.set(tool.name, {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        handler: tool.handler,
+      });
+    }
+
+    // Create the sub-agent with appropriate initialMode based on agent name
+    const initialMode = config.name === 'Content Agent' ? 'content' : 'orchestrator';
+    const subAgent = new GenericAgent(toolMap, this.llm, {
+      customPrompt: config.prompt,
+      name: config.name,
+      isSubAgent: true,
+      maxIterations: config.maxIterations ?? 10,
+      initialMode,
+    });
+
+    // Forward all events from sub-agent to parent
+    // This ensures the CLI sees everything the sub-agent does
+    subAgent.on('tool_call', event => this.emit(event));
+    subAgent.on('tool_result', event => this.emit(event));
+    subAgent.on('streaming_text', event => this.emit(event));
+    subAgent.on('agent_status', event => this.emit(event));
+    subAgent.on('agent_text', event => this.emit(event));
+    subAgent.on('notification', event => this.emit(event));
+
+    // Initialize and run the sub-agent using the SAME run() loop as main agent
+    await subAgent.initialize();
+    const result = await subAgent.run(config.task);
+
+    // Clean up event listeners
+    subAgent.removeAllListeners();
+
+    return result;
   }
 
   /**
@@ -1082,21 +1143,26 @@ export class GenericAgent extends TypedEventEmitter {
       return result;
     }
 
-    // Handle generate_content - deterministic content generation with automatic context injection
+    // Handle generate_content - content generation with instruction-based approach
     if (toolCall.name === 'generate_content') {
       const args = toolCall.arguments;
       const contentType = args['content_type'] as string;
       const name = args['name'] as string | undefined;
-      const taskDescription = args['task_description'] as string | undefined;
+      const instruction = args['instruction'] as string | undefined;
 
       if (!contentType) {
         return { error: 'content_type is required for generate_content' };
       }
 
-      // Get the required contexts for this content type
-      const requiredContexts = CONTENT_TYPE_CONTEXTS[contentType] || [];
+      if (!instruction) {
+        return {
+          error: 'instruction is required for generate_content',
+          suggestion: 'Provide a clear instruction describing what content to create, e.g., "Create a detailed character profile for Alice including physical appearance and personality."'
+        };
+      }
+
       debugLog(
-        `[GenericAgent] generate_content: content_type=${contentType}, required_contexts=${requiredContexts.join(', ')}`
+        `[GenericAgent] generate_content: content_type=${contentType}, instruction=${instruction.substring(0, 100)}...`
       );
 
       // Build the output file path
@@ -1107,25 +1173,21 @@ export class GenericAgent extends TypedEventEmitter {
         outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.md`;
       }
 
-      // Build the task description
-      const task =
-        taskDescription ||
-        (name ? `Create ${contentType} profile for: ${name}` : `Create ${contentType} content`);
-
       // Create a synthetic tool call for handleDispatchContentAgent
+      // The instruction is passed as the task - content creator will fetch its own context
       const syntheticToolCall: ToolCall = {
         id: toolCall.id,
         name: 'dispatch_content_agent',
         arguments: {
-          task,
+          task: instruction,
           content_type: contentType,
-          context_refs: requiredContexts,
           output_file: outputFile,
+          // No context_refs - content creator fetches its own context
         },
       };
 
       debugLog(
-        `[GenericAgent] generate_content dispatching with context_refs: ${JSON.stringify(requiredContexts)}`
+        `[GenericAgent] generate_content dispatching with instruction: "${instruction.substring(0, 100)}..."`
       );
       const result = await this.handleDispatchContentAgent(syntheticToolCall);
       const resultObj = result as Record<string, unknown>;
@@ -1577,13 +1639,14 @@ export class GenericAgent extends TypedEventEmitter {
     active: boolean;
     task: string;
     contentType: ContentType;
-    context?: string;
     outputFile?: string;
     messages: Message[];
     currentContent: string;
     iterations: number;
     /** Tool call ID for streaming events */
     toolCallId: string;
+    /** Whether we're in the context-gathering phase (tool calls allowed) */
+    gatheringContext: boolean;
   } | null = null;
 
   // State for dispatch_image_agent sub-agent (image prompt planning + generation)
@@ -2107,34 +2170,27 @@ Respond in JSON format:
   }
 
   /**
-   * Handle dispatch_content_agent tool - spawns a sub-agent for creative content generation.
-   * Unlike dispatch_agent (for technical planning), this creates actual creative content
-   * like stories, character descriptions, and scene narratives.
+   * Handle dispatch_content_agent tool - spawns a TRUE sub-agent for creative content generation.
+   * The sub-agent runs its own run() loop, using read_project and read_file tools to gather context.
+   * All tool calls from the sub-agent are forwarded to the parent, making them visible in the CLI.
    */
   private async handleDispatchContentAgent(toolCall: ToolCall): Promise<unknown> {
-    // Set mode for UI display
-    this.currentMode = 'content';
-
     const args = toolCall.arguments;
     const task = args['task'] as string;
     const contentType = args['content_type'] as ContentType;
-    const contextRefs = args['context_refs'] as string[] | undefined;
     const outputFile = args['output_file'] as string | undefined;
 
     if (!task) {
-      this.currentMode = 'orchestrator';
-      return { error: 'No task provided for dispatch_content_agent' };
+      return { error: 'No task/instruction provided for dispatch_content_agent' };
     }
 
     if (!contentType) {
-      this.currentMode = 'orchestrator';
       return { error: 'No content_type provided for dispatch_content_agent' };
     }
 
     // Validate content_type is one of the allowed types
     const validContentTypes = ['plot', 'story', 'character', 'setting', 'scene', 'narration'];
     if (!validContentTypes.includes(contentType)) {
-      this.currentMode = 'orchestrator';
       return {
         error: `Invalid content_type "${contentType}". Must be one of: ${validContentTypes.join(', ')}`,
         suggestion:
@@ -2142,226 +2198,156 @@ Respond in JSON format:
       };
     }
 
-    // ==========================================================================
-    // PULL-BASED CONTEXT DISCOVERY
-    // Instead of requiring exact variable names, we use label-based search
-    // to find relevant context. This prevents silent failures from name mismatches.
-    // ==========================================================================
+    debugLog(
+      `[GenericAgent] Content creation via sub-agent: type=${contentType}, instruction="${task.substring(0, 100)}..."`
+    );
 
-    const contextParts: Array<{ variableName: string; label: string; content: string }> = [];
-    const missingRefs: string[] = [];
+    // Build the content prompt
+    const contentSystemPrompt = buildContentPrompt(task, contentType);
 
-    // Configuration for what context patterns are relevant to each content type
-    const CONTENT_TYPE_LABEL_PATTERNS: Record<string, { required: string[]; optional: string[] }> = {
-      plot: {
-        required: ['original', 'input', 'user'],
-        optional: [],
-      },
-      story: {
-        required: ['original', 'input', 'plot'],
-        optional: ['user'],
-      },
-      character: {
-        // Priority order: look for full story/chapter content first
-        required: ['full_story', 'full story', 'story', 'chapter', 'narrative'],
-        optional: ['plot', 'original'],
-      },
-      setting: {
-        // Priority order: look for full story/chapter content first
-        required: ['full_story', 'full story', 'story', 'chapter', 'narrative'],
-        optional: ['plot', 'original'],
-      },
-      scene: {
-        required: ['full_story', 'story', 'chapter'],
-        optional: ['character', 'setting', 'plot'],
-      },
-      narration: {
-        required: ['story', 'scene'],
-        optional: ['character', 'setting'],
-      },
-    };
+    // Build the user task for the sub-agent
+    const subAgentTask = `First, use read_project() to understand the project structure and identify what content you need. Then use read_file() to fetch the relevant content (story, characters, etc.). Finally, generate the ${contentType} content based on this instruction:\n\n${task}`;
 
-    // Helper function to add context without duplicates
-    const addContextPart = (variableName: string, label: string, content: string) => {
-      if (!contextParts.some(p => p.variableName === variableName)) {
-        contextParts.push({ variableName, label, content });
-        return true;
-      }
-      return false;
-    };
+    try {
+      // Run the sub-agent - it uses the SAME run() loop as the main agent
+      // All tool calls will be visible in the CLI via event forwarding
+      const result = await this.runSubAgent({
+        name: 'Content Agent',
+        tools: getContentCreatorTools(),
+        prompt: contentSystemPrompt,
+        task: subAgentTask,
+        maxIterations: 10,
+      });
 
-    // STEP 1: Try to resolve explicitly provided context_refs (backward compatibility)
-    if (contextRefs && contextRefs.length > 0) {
-      for (const ref of contextRefs) {
-        // First try exact variable name match
-        const stored = contextStore.get(ref);
-        if (stored) {
-          if (addContextPart(ref, stored.label, stored.content)) {
-            debugLog(
-              `[GenericAgent] Resolved context_ref ${ref} by exact match (${stored.label}, ${stored.content.length} chars)`
-            );
+      // Extract the generated content from the sub-agent's output
+      const generatedContent = result.output || '';
+
+      // Save to file if outputFile is specified
+      if (outputFile && generatedContent) {
+        try {
+          const projectDir = path.join(process.cwd(), '.kshana');
+          const filePath = path.join(projectDir, outputFile);
+
+          // Ensure parent directory exists
+          const parentDir = path.dirname(filePath);
+          if (!fs.existsSync(parentDir)) {
+            fs.mkdirSync(parentDir, { recursive: true });
           }
-        } else {
-          // Try to resolve from project files
-          const projectFileContent = this.tryResolveFromProjectFiles(ref);
-          if (projectFileContent) {
-            if (addContextPart(ref, projectFileContent.label, projectFileContent.content)) {
-              debugLog(
-                `[GenericAgent] Resolved context_ref ${ref} from project file: ${projectFileContent.file}`
-              );
-            }
-          } else {
-            // FALLBACK: Try label-based search for this ref
-            // Extract search pattern from the ref (e.g., "$full_story" -> "story", "$chapter_1" -> "chapter")
-            const refPattern = ref.replace(/^\$/, '').replace(/_\d+$/, '').replace(/_/g, ' ');
-            const labelMatches = contextStore.searchByLabelWithContent(refPattern);
-            if (labelMatches.length > 0) {
-              const bestMatch = labelMatches[0]!;
-              if (addContextPart(bestMatch.variableName, bestMatch.label, bestMatch.content)) {
-                debugLog(
-                  `[GenericAgent] Resolved context_ref ${ref} via LABEL SEARCH (pattern: "${refPattern}") -> ${bestMatch.variableName} (${bestMatch.label})`
-                );
-              }
-            } else {
-              debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
-              missingRefs.push(ref);
-            }
-          }
-        }
-      }
-    }
 
-    // STEP 2: Auto-discover relevant context if none was found or refs were incomplete
-    // This is the PULL model - we automatically find what the content agent needs
-    const patterns = CONTENT_TYPE_LABEL_PATTERNS[contentType];
-    if (patterns) {
-      // Search for required context patterns
-      for (const pattern of patterns.required) {
-        const matches = contextStore.searchByLabelWithContent(pattern);
-        for (const match of matches) {
-          if (addContextPart(match.variableName, match.label, match.content)) {
-            debugLog(
-              `[GenericAgent] AUTO-DISCOVERED context via required pattern "${pattern}": ${match.variableName} (${match.label})`
-            );
-          }
+          fs.writeFileSync(filePath, generatedContent, 'utf-8');
+          debugLog(`[GenericAgent] Saved content to ${filePath}`);
+
+          // Auto-persist to project registry
+          persistApprovedContent(contentType, undefined, generatedContent, outputFile);
+        } catch (saveError) {
+          debugLog(`[GenericAgent] Error saving content to file: ${String(saveError)}`);
         }
       }
 
-      // Search for optional context patterns if we have few contexts
-      if (contextParts.length < 3) {
-        for (const pattern of patterns.optional) {
-          const matches = contextStore.searchByLabelWithContent(pattern);
-          for (const match of matches) {
-            if (addContextPart(match.variableName, match.label, match.content)) {
-              debugLog(
-                `[GenericAgent] AUTO-DISCOVERED context via optional pattern "${pattern}": ${match.variableName} (${match.label})`
-              );
-            }
-          }
-        }
-      }
+      return {
+        status: result.status,
+        content: generatedContent,
+        content_type: contentType,
+        output_file: outputFile,
+        message: `Content generated successfully`,
+      };
+    } catch (error) {
+      return {
+        error: `Content creation failed: ${String(error)}`,
+        task,
+        content_type: contentType,
+      };
     }
-
-    // STEP 3: Legacy fallback for plot phase (kept for backward compatibility)
-    if (contextParts.length === 0 && contentType === 'plot') {
-      const originalInput = contextStore.get('$original_input');
-      if (originalInput) {
-        addContextPart('$original_input', originalInput.label, originalInput.content);
-        debugLog(
-          `[GenericAgent] LEGACY FALLBACK: Injected $original_input for plot phase (${originalInput.content.length} chars)`
-        );
-      } else {
-        debugLog(
-          `[GenericAgent] WARNING: No context found for plot creation`
-        );
-      }
-    }
-
-    // Log summary of context discovery
-    if (contextParts.length > 0) {
-      debugLog(
-        `[GenericAgent] Context discovery complete: found ${contextParts.length} contexts for ${contentType} creation: ${contextParts.map(p => `${p.variableName} (${p.label})`).join(', ')}`
-      );
-    } else {
-      debugLog(`[GenericAgent] WARNING: No context found for ${contentType} creation`);
-      debugLog(
-        `[GenericAgent] Available context variables: ${
-          contextStore
-            .list()
-            .map(c => `${c.variableName} (${c.label})`)
-            .join(', ') || 'none'
-        }`
-      );
-    }
-
-    // Log missing refs for debugging (but they may have been resolved via label search)
-    if (missingRefs.length > 0) {
-      debugLog(`[GenericAgent] Note: Some context_refs were not found by exact match: ${missingRefs.join(', ')}`);
-    }
-
-    // Validate context usage: warn if $original_input is used for characters/settings
-    // The approved $story should be used instead for consistency
-    const usesOriginalInput = contextRefs?.some(ref => ref === '$original_input');
-    const isCharacterOrSetting = contentType === 'character' || contentType === 'setting';
-    if (usesOriginalInput && isCharacterOrSetting) {
-      debugLog(
-        `[GenericAgent] WARNING: Using $original_input for ${contentType} creation. Consider using $story instead for approved content.`
-      );
-      // Return a warning but allow execution to continue (soft validation)
-      const storyAvailable =
-        contextStore.get('$story') || this.tryResolveFromProjectFiles('$story');
-      if (storyAvailable) {
-        return {
-          warning: `You are using $original_input for ${contentType} creation, but $story is available. Characters and settings should be extracted from the APPROVED STORY content, not the original input. Please use context_refs: ["$story"] instead.`,
-          suggestion:
-            'Update your Task call to use context_refs: ["$story"] for character and setting creation.',
-        };
-      }
-    }
-
-    // Build combined context with clear sections
-    let context: string | undefined;
-    if (contextParts.length > 0) {
-      context = contextParts
-        .map(part => `## ${part.variableName} (${part.label})\n\n${part.content}`)
-        .join('\n\n---\n\n');
-      debugLog(
-        `[GenericAgent] Combined ${contextParts.length} contexts for content agent (${context.length} chars total)`
-      );
-    }
-
-    // Check if we're resuming an existing content session
-    if (this.contentState?.active) {
-      return { error: 'Content creation already in progress' };
-    }
-
-    // Initialize content state with content prompt
-    const contentSystemPrompt = buildContentPrompt(task, contentType, context);
-
-    this.contentState = {
-      active: true,
-      task,
-      contentType,
-      context,
-      outputFile,
-      messages: [
-        { role: 'system', content: contentSystemPrompt },
-        {
-          role: 'user',
-          content: `<request>\nCreate the ${contentType} content for this task.\n</request>`,
-        },
-      ],
-      currentContent: '',
-      iterations: 0,
-      toolCallId: toolCall.id,
-    };
-
-    // Generate the initial content
-    return this.continueContentLoop();
   }
 
   /**
-   * Continue the content creation loop - generates content and asks for user verification.
+   * Get tools available to the content creator subagent.
+   * These allow it to pull context as needed.
+   */
+  private getContentCreatorTools(): ToolDefinition[] {
+    return [
+      {
+        name: 'read_project',
+        description: 'Read the project structure to understand what content exists (story, characters, settings, etc.)',
+        parameters: {
+          type: 'object',
+          properties: {},
+          required: [],
+        },
+      },
+      {
+        name: 'read_file',
+        description: 'Read a file from the project. Use paths from read_project output.',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: {
+              type: 'string',
+              description: 'Path to the file relative to .kshana directory (e.g., "plans/story.md", "characters/alice.md")',
+            },
+          },
+          required: ['path'],
+        },
+      },
+    ];
+  }
+
+  /**
+   * Execute a tool call from the content creator.
+   */
+  private async executeContentCreatorTool(toolCall: ToolCall): Promise<string> {
+    const projectDir = path.join(process.cwd(), '.kshana');
+
+    if (toolCall.name === 'read_project') {
+      try {
+        const project = loadProject();
+        if (!project) {
+          return 'No project found. The project has not been initialized yet.';
+        }
+        // Return a simplified view of what content exists
+        const summary: Record<string, unknown> = {
+          style: project.style,
+          currentPhase: project.currentPhase,
+          story: project.content?.story ? { file: 'plans/story.md', exists: true } : null,
+          plot: project.content?.plot ? { file: 'plans/plot.md', exists: true } : null,
+          characters: Object.keys(project.characters || {}).map(name => ({
+            name,
+            file: `characters/${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`,
+          })),
+          settings: Object.keys(project.settings || {}).map(name => ({
+            name,
+            file: `settings/${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`,
+          })),
+        };
+        return JSON.stringify(summary, null, 2);
+      } catch (err) {
+        return `Error reading project: ${String(err)}`;
+      }
+    }
+
+    if (toolCall.name === 'read_file') {
+      const filePath = toolCall.arguments['path'] as string;
+      if (!filePath) {
+        return 'Error: path is required';
+      }
+      try {
+        const fullPath = path.join(projectDir, filePath);
+        if (!fs.existsSync(fullPath)) {
+          return `File not found: ${filePath}`;
+        }
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        return content;
+      } catch (err) {
+        return `Error reading file: ${String(err)}`;
+      }
+    }
+
+    return `Unknown tool: ${toolCall.name}`;
+  }
+
+  /**
+   * Continue the content creation loop - handles tool calls for context gathering,
+   * then generates content and asks for user verification.
    */
   private async continueContentLoop(): Promise<unknown> {
     if (!this.contentState) {
@@ -2369,6 +2355,7 @@ Respond in JSON format:
     }
 
     const maxIterations = 10;
+    const maxToolCallRounds = 5; // Limit tool call rounds to prevent infinite loops
 
     if (this.contentState.iterations >= maxIterations) {
       const result = {
@@ -2387,50 +2374,131 @@ Respond in JSON format:
     this.contentState.iterations++;
 
     try {
-      // Generate or refine the content with streaming
-      let content = '';
-      let isFirstChunk = true;
+      // Get tools for context gathering phase
+      const tools = this.contentState.gatheringContext ? this.getContentCreatorTools() : undefined;
+      let toolCallRounds = 0;
 
-      // If this is a subsequent iteration (after feedback), we need to reset the streaming display
-      const shouldReset = this.contentState.iterations > 1;
+      // Agentic loop: handle tool calls until content is generated
+      while (true) {
+        // During context gathering, use non-streaming with tools
+        if (this.contentState.gatheringContext) {
+          const response = await this.llm.generate({
+            messages: this.contentState.messages,
+            tools,
+            temperature: 0.8,
+          });
 
-      for await (const chunk of this.llm.generateStream({
-        messages: this.contentState.messages,
-        temperature: 0.8, // Slightly higher temperature for creative content
-      })) {
-        if (chunk.content) {
-          content += chunk.content;
-          // Emit tool_streaming to show content inside the ToolCallDisplay
-          // On first chunk of a regeneration, include reset flag to clear old content and show display
-          this.emit({
-            type: 'tool_streaming',
-            toolCallId: this.contentState.toolCallId,
-            chunk: chunk.content,
-            done: false,
-            agentName: this.getEffectiveAgentName(),
-            toolName: 'dispatch_content_agent',
-            reset: shouldReset && isFirstChunk,
-          });
-          isFirstChunk = false;
+          // Check if there are tool calls to handle
+          if (response.toolCalls && response.toolCalls.length > 0) {
+            toolCallRounds++;
+            if (toolCallRounds > maxToolCallRounds) {
+              debugLog(`[GenericAgent] Content creator exceeded max tool call rounds, proceeding to generation`);
+              this.contentState.gatheringContext = false;
+              // Add message to proceed with generation
+              this.contentState.messages.push({
+                role: 'user',
+                content: 'You have gathered enough context. Now please generate the content based on what you have learned.',
+              });
+              continue;
+            }
+
+            // Add assistant message with tool calls
+            this.contentState.messages.push({
+              role: 'assistant',
+              content: response.content,
+              toolCalls: response.toolCalls,
+            });
+
+            // Execute each tool call and add results
+            for (const tc of response.toolCalls) {
+              debugLog(`[GenericAgent] Content creator tool call: ${tc.name}(${JSON.stringify(tc.arguments)})`);
+
+              // Emit tool_call event so UI can show sub-agent activity
+              this.emit({
+                type: 'tool_call',
+                toolCallId: tc.id,
+                toolName: tc.name,
+                arguments: tc.arguments,
+                agentName: this.getEffectiveAgentName(),
+              });
+
+              const result = await this.executeContentCreatorTool(tc);
+
+              // Emit tool_result event
+              this.emit({
+                type: 'tool_result',
+                toolCallId: tc.id,
+                toolName: tc.name,
+                result: result.length > 500 ? result.slice(0, 500) + '...' : result,
+                agentName: this.getEffectiveAgentName(),
+              });
+
+              this.contentState.messages.push({
+                role: 'tool',
+                content: result,
+                toolCallId: tc.id,
+              });
+            }
+
+            // Continue the loop to get next response
+            continue;
+          }
+
+          // No tool calls during gathering - switch to content generation
+          this.contentState.gatheringContext = false;
         }
-        if (chunk.done) {
-          this.emit({
-            type: 'tool_streaming',
-            toolCallId: this.contentState.toolCallId,
-            chunk: '',
-            done: true,
-            agentName: this.getEffectiveAgentName(),
-          });
+
+        // Content generation phase - use streaming for real-time display
+        let content = '';
+        let isFirstChunk = true;
+        const shouldReset = this.contentState.iterations > 1;
+
+        debugLog(`[GenericAgent] Starting content generation with streaming`);
+
+        for await (const chunk of this.llm.generateStream({
+          messages: this.contentState.messages,
+          temperature: 0.8,
+        })) {
+          // Handle content chunks
+          if (chunk.content) {
+            content += chunk.content;
+            this.emit({
+              type: 'tool_streaming',
+              toolCallId: this.contentState.toolCallId,
+              chunk: chunk.content,
+              done: false,
+              agentName: this.getEffectiveAgentName(),
+              toolName: 'dispatch_content_agent',
+              reset: isFirstChunk && shouldReset,
+            });
+            isFirstChunk = false;
+          }
+
+          // Handle stream completion
+          if (chunk.done) {
+            this.emit({
+              type: 'tool_streaming',
+              toolCallId: this.contentState.toolCallId,
+              chunk: '',
+              done: true,
+              agentName: this.getEffectiveAgentName(),
+            });
+          }
         }
+
+        // Clean content (remove <think> tags)
+        const cleanedContent = content ? content.replace(/<think>.*?<\/think>/gs, '').trim() : '';
+
+        this.contentState.currentContent = cleanedContent || 'No content generated';
+
+        // Add assistant response to history
+        this.contentState.messages.push({
+          role: 'assistant',
+          content: this.contentState.currentContent,
+        });
+
+        break; // Exit the loop - content generated
       }
-
-      this.contentState.currentContent = content.trim() || 'No content generated';
-
-      // Add assistant response to history
-      this.contentState.messages.push({
-        role: 'assistant',
-        content: this.contentState.currentContent,
-      });
 
       // Return status indicating we need user verification
       const verificationQuestion =
@@ -2450,7 +2518,7 @@ Respond in JSON format:
           { label: 'Accept content', description: 'Approve this content and proceed' },
           { label: 'Provide feedback', description: 'Request changes to the content' },
         ],
-        autoApproveTimeoutMs: 15000, // 15 seconds countdown for content approval
+        // No auto-approve for content - user must explicitly accept or provide feedback
       };
       debugLog(
         `[GenericAgent] continueContentLoop returning: ${JSON.stringify(
@@ -2549,10 +2617,10 @@ Respond in JSON format:
         message: fileSaved
           ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}`
           : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}`,
-        // Simplified next_steps since registry is auto-updated
+        // Clear next_steps instruction including todo update
         next_steps: persistResult.persisted
-          ? 'Project registry has been automatically updated. Continue with the next task or transition to the next phase.'
-          : 'Continue with the next task.',
+          ? 'IMPORTANT: 1) Update the todo list using TodoWrite to mark this task as completed. 2) Then continue with the next pending task or transition to the next phase.'
+          : 'IMPORTANT: 1) Update the todo list using TodoWrite to mark this task as completed. 2) Then continue with the next pending task.',
       };
       this.contentState = null;
       // Reset mode back to orchestrator

@@ -91,16 +91,24 @@ export interface HistoryEntry {
 
 /**
  * Current action - the single thing the agent is doing right now (ephemeral).
- * Disappears from UI once completed (moves to history).
+ * Stays visible after completion until next action starts or agent finishes.
  */
 export interface CurrentAction {
-  type: 'thinking' | 'tool_executing';
+  type: 'thinking' | 'tool_executing' | 'tool_completed';
   toolName?: string;
   toolArgs?: Record<string, unknown>;
   toolCallId?: string;
   startTime: number;
   /** Name of the agent performing this action */
   agentName?: string;
+  /** For completed tools: the result */
+  result?: unknown;
+  /** For completed tools: whether it was an error */
+  isError?: boolean;
+  /** For completed tools: duration in ms */
+  duration?: number;
+  /** For completed tools: streaming content that was displayed */
+  streamingContent?: string;
 }
 
 /**
@@ -208,13 +216,34 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
     case 'SET_ERROR':
       return { ...state, error: action.error, status: 'error', currentAction: null };
 
-    case 'SET_THINKING':
+    case 'SET_THINKING': {
+      // If there's a completed tool action, move it to history first
+      let newHistory = state.history;
+      const ca = state.currentAction;
+      if (ca?.type === 'tool_completed' && ca.toolName && ca.toolCallId) {
+        const historyEntry: HistoryEntry = {
+          id: `tool-${ca.toolCallId}`,
+          type: 'tool_completed',
+          content: ca.toolName,
+          timestamp: Date.now(),
+          toolName: ca.toolName,
+          toolArgs: ca.toolArgs,
+          toolResult: ca.result,
+          duration: ca.duration,
+          agentName: ca.agentName,
+          streamingContent: ca.streamingContent,
+          wasStreamed: !!ca.streamingContent,
+        };
+        newHistory = [...state.history.slice(-MAX_HISTORY + 1), historyEntry];
+      }
       return {
         ...state,
         status: 'thinking',
         currentAction: { type: 'thinking', startTime: Date.now(), agentName: action.agentName },
         currentAgentName: action.agentName ?? state.currentAgentName,
+        history: newHistory,
       };
+    }
 
     case 'TOOL_START': {
       const startTime = Date.now();
@@ -227,6 +256,27 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         startTime,
         agentName,
       };
+
+      // If there's a completed tool action, move it to history first
+      let newHistory = state.history;
+      const ca = state.currentAction;
+      if (ca?.type === 'tool_completed' && ca.toolName && ca.toolCallId) {
+        const historyEntry: HistoryEntry = {
+          id: `tool-${ca.toolCallId}`,
+          type: 'tool_completed',
+          content: ca.toolName,
+          timestamp: Date.now(),
+          toolName: ca.toolName,
+          toolArgs: ca.toolArgs,
+          toolResult: ca.result,
+          duration: ca.duration,
+          agentName: ca.agentName,
+          streamingContent: ca.streamingContent,
+          wasStreamed: !!ca.streamingContent,
+        };
+        newHistory = [...state.history.slice(-MAX_HISTORY + 1), historyEntry];
+      }
+
       return {
         ...state,
         currentAction: {
@@ -239,6 +289,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         },
         recentTools: [...state.recentTools.slice(-(MAX_VISIBLE_TOOLS - 1)), newTool],
         currentAgentName: agentName,
+        history: newHistory,
       };
     }
 
@@ -248,35 +299,33 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       const duration = tool ? endTime - tool.startTime : 0;
       const agentName = action.agentName ?? tool?.agentName ?? state.currentAgentName;
 
-      // Create history entry, including any streaming content that was generated
-      // Mark wasStreamed if content was already displayed live (to avoid duplicate display)
-      const historyEntry: HistoryEntry | null = tool
-        ? {
-            id: `tool-${action.toolCallId}`,
-            type: 'tool_completed',
-            content: tool.name,
-            timestamp: endTime,
-            toolName: tool.name,
-            toolArgs: tool.args,
-            toolResult: action.result,
-            duration,
-            agentName,
-            streamingContent: tool.streamingContent,
-            wasStreamed: !!tool.streamingContent,
-          }
-        : null;
+      // Don't add to history yet - keep in currentAction until next action starts
+      // This allows the same box to update in-place (Running → Ran)
+      // The history entry will be created when the next action starts (in TOOL_START or SET_THINKING)
+
+      // Update currentAction to show completed state (same box, different status)
+      const completedAction: CurrentAction | null = tool ? {
+        type: 'tool_completed',
+        toolName: tool.name,
+        toolArgs: tool.args,
+        toolCallId: action.toolCallId,
+        startTime: tool.startTime,
+        agentName,
+        result: action.result,
+        isError: action.isError,
+        duration,
+        streamingContent: tool.streamingContent,
+      } : null;
 
       return {
         ...state,
-        currentAction: null,
+        currentAction: completedAction,
         recentTools: state.recentTools.map(t =>
           t.id === action.toolCallId
             ? { ...t, status: action.isError ? 'error' : 'completed', result: action.result, endTime, duration }
             : t
         ),
-        history: historyEntry
-          ? [...state.history.slice(-MAX_HISTORY + 1), historyEntry]
-          : state.history,
+        // Don't add to history here - will be added when next action starts
       };
     }
 
@@ -393,8 +442,28 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       };
     }
 
-    case 'CLEAR_CURRENT_ACTION':
-      return { ...state, currentAction: null };
+    case 'CLEAR_CURRENT_ACTION': {
+      // If there's a completed tool action, move it to history first
+      let newHistory = state.history;
+      const ca = state.currentAction;
+      if (ca?.type === 'tool_completed' && ca.toolName && ca.toolCallId) {
+        const historyEntry: HistoryEntry = {
+          id: `tool-${ca.toolCallId}`,
+          type: 'tool_completed',
+          content: ca.toolName,
+          timestamp: Date.now(),
+          toolName: ca.toolName,
+          toolArgs: ca.toolArgs,
+          toolResult: ca.result,
+          duration: ca.duration,
+          agentName: ca.agentName,
+          streamingContent: ca.streamingContent,
+          wasStreamed: !!ca.streamingContent,
+        };
+        newHistory = [...state.history.slice(-MAX_HISTORY + 1), historyEntry];
+      }
+      return { ...state, currentAction: null, history: newHistory };
+    }
 
     case 'START_TASK':
       return {

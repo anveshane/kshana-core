@@ -133,6 +133,20 @@ export function AgentView({
               streamingContent={recentTools.find(t => t.id === currentAction.toolCallId)?.streamingContent}
             />
           )}
+          {currentAction.type === 'tool_completed' && currentAction.toolName && (
+            <ToolCallDisplay
+              toolName={currentAction.toolName}
+              args={currentAction.toolArgs}
+              status={currentAction.isError ? 'error' : 'completed'}
+              result={currentAction.result}
+              duration={currentAction.duration}
+              compact
+              expanded={expanded}
+              agentName={currentAction.agentName}
+              streamingContent={currentAction.streamingContent}
+              wasStreamed={!!currentAction.streamingContent}
+            />
+          )}
         </Box>
       )}
 
