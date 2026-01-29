@@ -37,14 +37,14 @@ import { parseVideoPlacements, type ParsedVideoPlacement } from './workflow/vide
 import { parseInfographicPlacementsWithErrors, type ParsedInfographicPlacement } from './workflow/infographicPlacementsParser.js';
 import { getTranscriptSegmentForTimeRange } from './workflow/transcriptSegment.js';
 import { expandImagePlacementPrompt, expandVideoPlacementPrompt } from './workflow/placementPromptExpander.js';
-import { loadRemotionSkills, REMOTION_SKILLS_INFOGraphics_SUBSET } from '../../core/prompts/loader.js';
-import type { AnimationRecommendations } from './remotionAgent.js';
+import { loadRemotionSkills } from '../../core/prompts/loader.js';
+import type { ComponentCode } from './remotionAgent.js';
 
-/** Callback to run the Remotion sub-agent (placements + skills -> animation recommendations). Injected when creating the tool. */
+/** Callback to run the Remotion sub-agent (placements + skills -> component code). Injected when creating the tool. */
 export type RunRemotionAgentCallback = (
   placements: ParsedInfographicPlacement[],
   skillsContent: string
-) => Promise<AnimationRecommendations>;
+) => Promise<ComponentCode>;
 
 /**
  * Context for linking artifacts to project entities.
@@ -2232,6 +2232,48 @@ function getRemotionInfographicsDir(): string {
  * Create the generate_all_infographics tool. When runRemotionAgent is provided, the tool
  * invokes the Remotion sub-agent to get animation recommendations before rendering.
  */
+/**
+ * Generate index.tsx content that imports and registers all generated components.
+ */
+function generateComponentIndex(componentNames: string[]): string {
+  const imports = componentNames
+    .map((name) => `import { ${name} } from './components/${name}';`)
+    .join('\n');
+  const compositions = componentNames
+    .map(
+      (name) => `      <Composition
+        id="${name}"
+        // @ts-ignore - Remotion Composition expects Record<string, unknown> but components use InfographicProps
+        component={${name}}
+        durationInFrames={5 * fps}
+        fps={fps}
+        width={1920}
+        height={1080}
+        defaultProps={{
+          prompt: '',
+          infographicType: 'statistic',
+        }}
+      />`
+    )
+    .join('\n');
+  return `import React from 'react';
+import { Composition, registerRoot } from 'remotion';
+${imports}
+
+const fps = 24;
+
+const RemotionRoot: React.FC = () => {
+  return (
+    <>
+${compositions}
+    </>
+  );
+};
+
+registerRoot(RemotionRoot);
+`;
+}
+
 function createGenerateAllInfographicsTool(runRemotionAgent?: RunRemotionAgentCallback): ToolDefinition {
   return createTool(
     'generate_all_infographics',
@@ -2239,7 +2281,7 @@ function createGenerateAllInfographicsTool(runRemotionAgent?: RunRemotionAgentCa
 
 Reads and parses agent/content/infographic-placements.md, then renders each placement as a short video clip
 (charts, diagrams, statistics, etc.) via the Remotion infographics app. Outputs are saved to
-agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and registered in the manifest.`,
+agent/infographic-placements/ and registered in the manifest.`,
     {
       type: 'object',
       properties: {
@@ -2247,17 +2289,11 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
           type: 'string',
           description: 'Path to infographic-placements.md (default: agent/content/infographic-placements.md)',
         },
-        output_dir: {
-          type: 'string',
-          description: 'Optional: set to "outputs" to save infographic MP4s under project outputs/ and register paths as outputs/<file>.mp4',
-        },
       },
       required: [],
     },
     async (args) => {
       const filePath = (args['file_path'] as string | undefined) || 'agent/content/infographic-placements.md';
-      const outputDirArg = (args['output_dir'] as string | undefined)?.trim();
-      const useOutputsDir = outputDirArg === 'outputs';
       const basePath = getCurrentProjectBasePath();
       const content = readProjectFile(filePath, basePath);
       if (!content) {
@@ -2283,6 +2319,7 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
       }
 
       if (placements.length === 0) {
+        console.log('[generate_all_infographics] No placements found, skipping generation');
         return {
           status: 'completed',
           total_placements: 0,
@@ -2293,91 +2330,128 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
         };
       }
 
-      let payloadPlacements: Array<{
-        placementNumber: number;
-        startTime: string;
-        endTime: string;
-        infographicType: string;
-        prompt: string;
-        animationHints?: { ruleRefs?: string[]; suggestion?: string; timingCurve?: string; enhancedPrompt?: string };
-      }> = placements.map((p) => ({
-        placementNumber: p.placementNumber,
-        startTime: p.startTime,
-        endTime: p.endTime,
-        infographicType: p.infographicType,
-        prompt: p.prompt,
-      }));
-
-      if (runRemotionAgent) {
-        try {
-          const skillsContent = loadRemotionSkills({
-            ruleSubset: [...REMOTION_SKILLS_INFOGraphics_SUBSET],
-          });
-          const recommendations = await runRemotionAgent(placements, skillsContent);
-          const byNumber = new Map(
-            recommendations.placements.map((r) => [r.placementNumber, r.animationHints])
-          );
-          payloadPlacements = payloadPlacements.map((pl) => {
-            const hints = byNumber.get(pl.placementNumber);
-            if (!hints) return pl;
-            return {
-              ...pl,
-              ...(hints.enhancedPrompt != null && hints.enhancedPrompt !== '' && { prompt: hints.enhancedPrompt }),
-              animationHints: {
-                ruleRefs: hints.ruleRefs,
-                suggestion: hints.suggestion,
-                timingCurve: hints.timingCurve,
-                enhancedPrompt: hints.enhancedPrompt,
-              },
-            };
-          });
-        } catch (e) {
-          console.warn('[generate_all_infographics] Remotion agent failed, continuing without hints:', e);
-        }
-      }
+      console.log(`[generate_all_infographics] Found ${placements.length} placements to generate`);
 
       const remotionDir = getRemotionInfographicsDir();
+      console.log(`[generate_all_infographics] Using remotion-infographics directory: ${remotionDir}`);
       if (!fs.existsSync(path.join(remotionDir, 'package.json'))) {
+        console.error(`[generate_all_infographics] Package.json not found at ${remotionDir}`);
         return {
           status: 'error',
           error: `remotion-infographics package not found at ${remotionDir}. Ensure remotion-infographics is set up before running infographic generation.`,
           suggestion: 'This is a setup issue. Dependencies must be pre-installed. Check that remotion-infographics directory exists and has package.json.',
         };
       }
-      // Check if dependencies are installed (node_modules exists)
-      const nodeModulesPath = path.join(remotionDir, 'node_modules');
-      if (!fs.existsSync(nodeModulesPath)) {
+      // Check if dependencies are installed (check root node_modules first for workspace hoisting, then remotion-infographics/node_modules)
+      const toolsDir = path.dirname(fileURLToPath(import.meta.url));
+      // Find kshana-ink root (go up from dist/tasks/video/tools.js to root)
+      const kshanaInkRoot = path.resolve(toolsDir, '..', '..', '..', '..');
+      const rootNodeModules = path.join(kshanaInkRoot, 'node_modules');
+      const remotionNodeModules = path.join(remotionDir, 'node_modules');
+      
+      // Check if @remotion/renderer exists in either location (indicates dependencies installed)
+      const hasRootDeps = fs.existsSync(rootNodeModules) && fs.existsSync(path.join(rootNodeModules, '@remotion', 'renderer'));
+      const hasRemotionDeps = fs.existsSync(remotionNodeModules) && fs.existsSync(path.join(remotionNodeModules, '@remotion', 'renderer'));
+      
+      if (hasRootDeps) {
+        console.log('[generate_all_infographics] Dependencies found in root node_modules (workspace hoisting)');
+      } else if (hasRemotionDeps) {
+        console.log('[generate_all_infographics] Dependencies found in remotion-infographics/node_modules');
+      } else {
+        console.error('[generate_all_infographics] Dependencies not found in root or remotion-infographics node_modules');
         return {
           status: 'error',
-          error: `remotion-infographics dependencies are not installed at ${remotionDir}. Dependencies must be pre-installed before running infographic generation.`,
-          suggestion: 'This is a setup issue that must be resolved manually. Run "pnpm install" (or "npm install") in the remotion-infographics directory before using this tool. The agent cannot install packages.',
+          error: `remotion-infographics dependencies are not installed. Dependencies must be pre-installed before running infographic generation.`,
+          suggestion: 'This is a setup issue that must be resolved manually. Run "pnpm install" at the kshana-ink root directory (workspace setup will install all dependencies including Remotion). The agent cannot install packages.',
         };
       }
-      const buildDir = path.join(remotionDir, 'build');
-      if (!fs.existsSync(buildDir) || !fs.existsSync(path.join(buildDir, 'index.html'))) {
-        const buildProc = spawnSync('pnpm', ['run', 'build'], { cwd: remotionDir, encoding: 'utf-8', timeout: 120_000 });
-        if (buildProc.error || buildProc.status !== 0) {
+
+      // Generate component code or animation hints via Remotion agent (accepts both formats)
+      const componentsDir = path.join(remotionDir, 'src', 'components');
+      fs.mkdirSync(componentsDir, { recursive: true });
+      
+      if (runRemotionAgent) {
+        try {
+          console.log('[generate_all_infographics] Calling Remotion sub-agent to generate component code...');
+          const skillsContent = loadRemotionSkills();
+          const agentResult = await runRemotionAgent(placements, skillsContent);
+          console.log(`[generate_all_infographics] Remotion agent generated component code for ${agentResult.placements.length} placements`);
+          
+          const componentNames: string[] = [];
+          for (const item of agentResult.placements) {
+            const componentFileName = `Infographic${item.placementNumber}.tsx`;
+            const componentPath = path.join(componentsDir, componentFileName);
+            fs.writeFileSync(componentPath, item.componentCode, 'utf-8');
+            componentNames.push(`Infographic${item.placementNumber}`);
+            console.log(`[generate_all_infographics] Wrote component: ${componentFileName}`);
+          }
+          
+          const indexContent = generateComponentIndex(componentNames);
+          const indexPath = path.join(remotionDir, 'src', 'index.tsx');
+          fs.writeFileSync(indexPath, indexContent, 'utf-8');
+          console.log(`[generate_all_infographics] Updated index.tsx with ${componentNames.length} components`);
+        } catch (e) {
+          console.error('[generate_all_infographics] Remotion agent failed:', e);
           return {
             status: 'error',
-            error: `Remotion bundle failed. Build must succeed before running infographic generation. ${buildProc.stderr || buildProc.error || ''}`,
-            suggestion: 'This is a setup issue. Ensure remotion-infographics builds successfully (run "pnpm run build" manually). The agent cannot fix build errors.',
+            error: `Failed to generate component code: ${String(e)}`,
+            suggestion: 'Check LLM configuration and ensure placements are valid.',
           };
         }
+      } else {
+        console.log('[generate_all_infographics] Remotion agent not available, cannot generate components');
+        return {
+          status: 'error',
+          error: 'Remotion agent callback not available. Component generation requires the Remotion sub-agent.',
+          suggestion: 'Ensure the Remotion sub-agent is properly configured in the workflow.',
+        };
       }
 
-      const outDir = useOutputsDir
-        ? path.join(basePath, 'outputs')
-        : path.join(basePath, '.kshana', 'agent', 'infographic-placements');
+      // Rebuild bundle after writing components
+      console.log('[generate_all_infographics] Rebuilding Remotion bundle with new components...');
+      const buildProc = spawnSync('pnpm', ['run', 'build'], { cwd: remotionDir, encoding: 'utf-8', timeout: 120_000 });
+      if (buildProc.error || buildProc.status !== 0) {
+        console.error('[generate_all_infographics] Bundle failed:', buildProc.stderr || buildProc.error);
+        return {
+          status: 'error',
+          error: `Remotion bundle failed after component generation. Build must succeed before running infographic generation. ${buildProc.stderr || buildProc.error || ''}`,
+          suggestion: 'Check component code for syntax errors. Ensure remotion-infographics builds successfully (run "pnpm run build" manually). The agent cannot fix build errors.',
+        };
+      }
+      console.log('[generate_all_infographics] Bundle completed successfully');
+
+      const payloadPlacements: Array<{
+        placementNumber: number;
+        startTime: string;
+        endTime: string;
+        infographicType: string;
+        prompt: string;
+        componentName: string;
+      }> = placements.map((p) => ({
+        placementNumber: p.placementNumber,
+        startTime: p.startTime,
+        endTime: p.endTime,
+        infographicType: p.infographicType,
+        prompt: p.prompt,
+        componentName: `Infographic${p.placementNumber}`,
+      }));
+
+      const outDir = path.join(basePath, '.kshana', 'agent', 'infographic-placements');
+      console.log(`[generate_all_infographics] Output directory: ${outDir}`);
       fs.mkdirSync(outDir, { recursive: true });
       const inputPath = path.join(outDir, '_render_input.json');
       const outputPath = path.join(outDir, '_render_output.json');
+      
+      console.log(`[generate_all_infographics] Writing render input with ${payloadPlacements.length} placements...`);
       fs.writeFileSync(
         inputPath,
         JSON.stringify({ placements: payloadPlacements }),
         'utf-8'
       );
+      console.log(`[generate_all_infographics] Render input written to ${inputPath}`);
 
     const RENDER_TIMEOUT_MS = 600_000;
+    console.log(`[generate_all_infographics] Starting Remotion render (timeout: ${RENDER_TIMEOUT_MS / 1000}s)...`);
     const proc = spawnSync(
       'pnpm',
       ['run', 'render', '--', '--input', inputPath, '--outDir', outDir, '--output', outputPath],
@@ -2401,7 +2475,9 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
           : '';
       const isModuleNotFound = proc.error.message?.includes('Cannot find module') || proc.error.message?.includes('MODULE_NOT_FOUND');
       
+      console.error(`[generate_all_infographics] Render process error:`, proc.error);
       if (isModuleNotFound) {
+        console.error('[generate_all_infographics] Module not found error detected');
         return {
           status: 'error',
           error: `Remotion render failed: module not found. Dependencies must be pre-installed before running infographic generation.`,
@@ -2420,7 +2496,12 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
       const stdout = proc.stdout || '';
       const isModuleNotFound = stderr.includes('Cannot find module') || stderr.includes('MODULE_NOT_FOUND') || stdout.includes('Cannot find module');
       
+      console.error(`[generate_all_infographics] Render failed with exit code ${proc.status}`);
+      if (stderr) console.error(`[generate_all_infographics] stderr:`, stderr.slice(0, 1000));
+      if (stdout) console.log(`[generate_all_infographics] stdout:`, stdout.slice(0, 1000));
+      
       if (isModuleNotFound) {
+        console.error('[generate_all_infographics] Module not found error detected in stderr/stdout');
         return {
           status: 'error',
           error: `Remotion render failed: module not found. Dependencies must be pre-installed before running infographic generation.`,
@@ -2435,12 +2516,15 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
         stdout: stdout,
       };
     }
+    
+    console.log('[generate_all_infographics] Render completed successfully');
 
     let outputs: string[] = [];
     try {
       const raw = fs.readFileSync(outputPath, 'utf-8');
       const out = JSON.parse(raw) as { outputs?: string[] };
       outputs = out.outputs ?? [];
+      console.log(`[generate_all_infographics] Render output contains ${outputs.length} files`);
     } catch (e) {
       console.warn('[generate_all_infographics] Could not read or parse _render_output.json:', e);
     } finally {
@@ -2454,8 +2538,10 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
     const results: Array<{ placementNumber: number; status: 'success' | 'failed'; artifactId?: string; filePath?: string; error?: string }> = [];
     for (const outPath of outputs) {
       if (!outPath) {
+        const placementNumber = results.length + 1;
+        console.error(`[generate_all_infographics] ✗ Placement ${placementNumber}: Output path is undefined`);
         results.push({
-          placementNumber: results.length + 1,
+          placementNumber,
           status: 'failed',
           error: 'Output path is undefined',
         });
@@ -2464,10 +2550,9 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
       const baseName = path.basename(outPath ?? '', '.mp4');
       const match = baseName.match(/^info(\d+)_/);
       const placementNumber = match?.[1] ? parseInt(match[1], 10) : results.length + 1;
-      const manifestPath = useOutputsDir
-        ? `outputs/${path.basename(outPath ?? '')}`
-        : `agent/infographic-placements/${path.basename(outPath ?? '')}`;
+      const manifestPath = `agent/infographic-placements/${path.basename(outPath ?? '')}`;
       const artifactId = `info_${nanoid(8)}`;
+      console.log(`[generate_all_infographics] Processing Placement ${placementNumber}: ${outPath}`);
       try {
         await addAsset(
           {
@@ -2480,6 +2565,11 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
           },
           basePath
         );
+        console.log(`[generate_all_infographics] ✓ Placement ${placementNumber} completed successfully:`, {
+          artifactId,
+          filePath: manifestPath,
+          placementNumber,
+        });
         results.push({
           placementNumber,
           status: 'success',
@@ -2487,10 +2577,12 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
           filePath: manifestPath,
         });
       } catch (e) {
+        const errorMsg = String(e);
+        console.error(`[generate_all_infographics] ✗ Placement ${placementNumber} failed to register asset:`, errorMsg);
         results.push({
           placementNumber,
           status: 'failed',
-          error: String(e),
+          error: errorMsg,
         });
       }
     }
@@ -2498,7 +2590,10 @@ agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and reg
     const successful = results.filter((r) => r.status === 'success');
     const failed = results.filter((r) => r.status === 'failed');
 
+    console.log(`[generate_all_infographics] Completed: ${successful.length} successful, ${failed.length} failed`);
+
     if (placements.length > 0 && successful.length === 0) {
+      console.error('[generate_all_infographics] No infographics were generated - all placements failed');
       return {
         status: 'error',
         error:

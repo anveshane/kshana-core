@@ -21,7 +21,12 @@ You analyze the transcript and strategic content plan to identify specific momen
   - Data trends (time series, categories)
 - **Avoid overlapping** with `$image_placements` timestamps. Infographics occupy **different** segments from images and videos.
 - **Choose the infographic type** per placement: `bar_chart`, `line_chart`, `diagram`, `statistic`, or `list`.
-- Create a clear **prompt** for each placement (what to show, key data or labels, style notes).
+- Create a detailed, comprehensive **prompt** for each placement. These prompts will be used by the Remotion agent (LLM) to generate complete Remotion component code, so include:
+  - **What to show**: Specific data, values, labels, text content
+  - **Visual elements**: Colors, layout, typography, icons, charts
+  - **Animation style**: Entrance effects, transitions, motion preferences
+  - **Key information**: Extract all relevant data, numbers, categories, or steps from the transcript
+  - **Style guidance**: Professional, minimal, energetic, etc.
 
 ## Input Requirements
 
@@ -43,7 +48,7 @@ INFOGRAPHIC_PLACER:
 **CRITICAL:**
 - Use exact timestamps from the transcript. No overlapping with image placements.
 - `type=` must be one of: `bar_chart`, `line_chart`, `diagram`, `statistic`, `list`.
-- Prompt describes what to visualize (data, labels, style) for Remotion generation.
+- Prompt describes what to visualize and will be used by the Remotion agent to generate complete component code. Include specific data, values, labels, visual style, and animation preferences. Be detailed and comprehensive.
 
 ## Constraints
 
@@ -63,7 +68,9 @@ INFOGRAPHIC_PLACER:
 **You would output**:
 ```
 INFOGRAPHIC_PLACER:
-- Placement 1: 0:45-1:00 | type=statistic | "40% year-over-year growth" — large bold number, subtitle "Sales growth", minimal clean style.
-- Placement 2: 1:30-1:50 | type=list | Three steps: 1) Research 2) Design 3) Ship. Numbered list, modern sans-serif, documentary style.
-- Placement 3: 2:10-2:30 | type=bar_chart | Four categories (A–D) with values 12, 18, 9, 22. Horizontal bars, soft colors, clear labels.
+- Placement 1: 0:45-1:00 | type=statistic | Display "40%" as a large, bold number in white (#ffffff) on dark blue background (#0f172a). Subtitle "Sales growth" below in smaller gray text (#94a3b8). Use spring animation for entrance. Center-aligned, minimal clean style with smooth fade-in.
+- Placement 2: 1:30-1:50 | type=list | Three steps displayed vertically: 1) Research (icon: magnifying glass) 2) Design (icon: pencil) 3) Ship (icon: rocket). Numbered list with modern sans-serif font, each item animates in sequentially with spring effect. Documentary style with subtle shadows.
+- Placement 3: 2:10-2:30 | type=bar_chart | Four categories labeled A (12), B (18), C (9), D (22). Horizontal bar chart with soft colors: A=#3b82f6, B=#10b981, C=#f59e0b, D=#ef4444. Bars animate from left with stagger delay. Clear labels above each bar. White background with subtle grid lines.
 ```
+
+**Note**: These detailed prompts help the Remotion agent generate better component code with specific visual elements, animations, and styling.

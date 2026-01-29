@@ -2,7 +2,7 @@
  * CLI to render infographic clips via Remotion.
  * Usage: pnpm run render -- --input <json-path> --outDir <dir> [--output <json-path>]
  * Requires: pnpm run build (remotion bundle) run first. Uses build/ as serveUrl.
- * Input JSON: { "placements": [ { "placementNumber": 1, "startTime": "0:45", "endTime": "1:00", "infographicType": "statistic", "prompt": "..." }, ... ] }
+ * Input JSON: { "placements": [ { "placementNumber": 1, "startTime": "0:45", "endTime": "1:00", "infographicType": "statistic", "prompt": "...", "componentName": "Infographic1" }, ... ] }
  * Writes <outDir>/info<N>_<id>.mp4. If --output is given, writes { "outputs": [...] } to that file (stdout is not used for JSON).
  */
 import { selectComposition, renderMedia } from '@remotion/renderer';
@@ -62,6 +62,7 @@ async function main() {
       endTime: string;
       infographicType: string;
       prompt: string;
+      componentName: string;
     }>;
   };
 
@@ -88,7 +89,7 @@ async function main() {
     };
     const composition = await selectComposition({
       serveUrl,
-      id: 'Infographic',
+      id: p.componentName,
       inputProps,
     });
     composition.durationInFrames = durationInFrames;

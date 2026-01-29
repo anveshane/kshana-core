@@ -6,8 +6,12 @@ Generate infographics for each placement in `agent/content/infographic-placement
 1. Call the `generate_all_infographics` tool to process all infographic placements automatically.
 2. The tool will:
    - Read and parse `agent/content/infographic-placements.md`
-   - For each placement, render an infographic clip (chart, diagram, statistic, etc.) using Remotion
-   - Save outputs to `agent/infographic-placements/` (or to `outputs/` when `output_dir: 'outputs'`) and register in the manifest
+   - Call the Remotion sub-agent (LLM) to generate complete Remotion component code for each placement
+   - Write component files to `remotion-infographics/src/components/`
+   - Update `remotion-infographics/src/index.tsx` to register all components
+   - Rebuild the Remotion bundle
+   - Render each placement as an infographic MP4 clip
+   - Save outputs to `.kshana/agent/infographic-placements/` and register in the manifest
 3. After the tool completes, mark phase complete and transition.
 
 **STEP 1: Call generate_all_infographics**
@@ -18,16 +22,7 @@ generate_all_infographics(
 )
 ```
 
-To save infographic MP4s under the project's `outputs/` folder and register paths as `outputs/<file>.mp4`, pass `output_dir: 'outputs'`:
-
-```
-generate_all_infographics(
-  file_path: 'agent/content/infographic-placements.md',
-  output_dir: 'outputs'
-)
-```
-
-Wait for the tool to complete. It processes all placements.
+Wait for the tool to complete. It processes all placements by generating component code via LLM, then rendering.
 
 **STEP 2: Mark phase complete and transition**
 
@@ -48,5 +43,7 @@ update_project(
 
 **IMPORTANT:**
 - Use `generate_all_infographics` for batch generation.
-- Generated infographics are stored in `agent/infographic-placements/` (or in `outputs/` when using `output_dir: 'outputs'`) and registered in the manifest.
+- The Remotion sub-agent (LLM) generates complete component code for each placement, deciding animations, layout, styling, and visual elements autonomously.
+- Generated components are written to `remotion-infographics/src/components/Infographic{N}.tsx` where N is the placement number.
+- Generated infographic MP4s are stored in `.kshana/agent/infographic-placements/` and registered in the manifest.
 - If there are no infographic placements, the tool may return successfully with zero generated; still mark phase complete and transition.

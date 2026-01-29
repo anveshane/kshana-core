@@ -340,7 +340,7 @@ export function buildVideoGenerationPrompt(options: VideoGenerationPromptOptions
 
 /**
  * Build the Remotion sub-agent system prompt with placements and skills.
- * Used for one-shot LLM call to get animation recommendations per placement.
+ * Used for one-shot LLM call to generate complete Remotion component code per placement.
  *
  * @param placementsJson - JSON string of placements array
  * @param skillsContent - Loaded Remotion skills markdown (SKILL + rules)

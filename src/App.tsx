@@ -22,7 +22,9 @@ import {
   loadProjectFilesAsContexts,
   PHASE_CONFIGS,
 } from './tasks/video/index.js';
-import type { LLMClientConfig } from './core/llm/index.js';
+import { LLMClient, type LLMClientConfig } from './core/llm/index.js';
+import { runRemotionAgent } from './tasks/video/remotionAgent.js';
+import type { RunRemotionAgentCallback } from './tasks/video/tools.js';
 import type { AgentConfig } from './core/agent/index.js';
 import * as uiLogger from './utils/uiLogger.js';
 import { contextStore } from './core/context/ContextStore.js';
@@ -84,10 +86,18 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   const tools = React.useMemo(() => {
     if (taskType === 'video') {
       // Use workflow tool registry for state-based video creation
+      // If llmConfig is available, wire up Remotion sub-agent callback
+      if (llmConfig) {
+        const llm = new LLMClient(llmConfig);
+        const runRemotionAgentCallback: RunRemotionAgentCallback = (placements, skillsContent) =>
+          runRemotionAgent(llm, placements, { skillsContent });
+        return createWorkflowToolRegistry({ runRemotionAgent: runRemotionAgentCallback }).getAll();
+      }
+      // Fallback when llmConfig not yet available (shouldn't happen in normal flow)
       return createWorkflowToolRegistry().getAll();
     }
     return createDefaultToolRegistry().getAll();
-  }, [taskType]);
+  }, [taskType, llmConfig]);
 
   // Get custom prompt based on task type
   // For video mode, we build it dynamically based on the current project state

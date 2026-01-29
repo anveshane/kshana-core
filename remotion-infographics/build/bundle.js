@@ -2,43 +2,522 @@
 /******/ 	"use strict";
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 960:
+/***/ 5266:
 /***/ ((__unused_webpack_module, __unused_webpack___webpack_exports__, __webpack_require__) => {
 
 
-// EXTERNAL MODULE: ./node_modules/.pnpm/react@18.3.1/node_modules/react/jsx-runtime.js
-var jsx_runtime = __webpack_require__(6070);
-// EXTERNAL MODULE: ./node_modules/.pnpm/remotion@4.0.409_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/remotion/dist/esm/index.mjs
-var esm = __webpack_require__(828);
-;// ./src/Infographic.tsx
+// EXTERNAL MODULE: ../node_modules/.pnpm/react@18.3.1/node_modules/react/jsx-runtime.js
+var jsx_runtime = __webpack_require__(6106);
+// EXTERNAL MODULE: ../node_modules/.pnpm/remotion@4.0.409_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/remotion/dist/esm/index.mjs
+var esm = __webpack_require__(7390);
+// EXTERNAL MODULE: ../node_modules/.pnpm/remotion@4.0.409_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/remotion/dist/esm/no-react.mjs
+var no_react = __webpack_require__(4497);
+;// ../node_modules/.pnpm/@remotion+google-fonts@4.0.409_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/@remotion/google-fonts/dist/esm/Montserrat.mjs
+// src/base.ts
+
+
+var loadedFonts = {};
+var withResolvers = function() {
+  let resolve;
+  let reject;
+  const promise = new Promise((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+};
+var loadFontFaceOrTimeoutAfter20Seconds = (fontFace) => {
+  const timeout = withResolvers();
+  const int = setTimeout(() => {
+    timeout.reject(new Error("Timed out loading Google Font"));
+  }, 18000);
+  return Promise.race([
+    fontFace.load().then(() => {
+      clearTimeout(int);
+    }),
+    timeout.promise
+  ]);
+};
+var loadFonts = (meta, style, options) => {
+  const weightsAndSubsetsAreSpecified = Array.isArray(options?.weights) && Array.isArray(options?.subsets) && options.weights.length > 0 && options.subsets.length > 0;
+  if (no_react.NoReactInternals.ENABLE_V5_BREAKING_CHANGES && !weightsAndSubsetsAreSpecified) {
+    throw new Error("Loading Google Fonts without specifying weights and subsets is not supported in Remotion v5. Please specify the weights and subsets you need.");
+  }
+  const promises = [];
+  const styles = style ? [style] : Object.keys(meta.fonts);
+  let fontsLoaded = 0;
+  for (const style2 of styles) {
+    if (typeof FontFace === "undefined") {
+      continue;
+    }
+    if (!meta.fonts[style2]) {
+      throw new Error(`The font ${meta.fontFamily} does not have a style ${style2}`);
+    }
+    const weights = options?.weights ?? Object.keys(meta.fonts[style2]);
+    for (const weight of weights) {
+      if (!meta.fonts[style2][weight]) {
+        throw new Error(`The font ${meta.fontFamily} does not  have a weight ${weight} in style ${style2}`);
+      }
+      const subsets = options?.subsets ?? Object.keys(meta.fonts[style2][weight]);
+      for (const subset of subsets) {
+        let font = meta.fonts[style2]?.[weight]?.[subset];
+        if (!font) {
+          throw new Error(`weight: ${weight} subset: ${subset} is not available for '${meta.fontFamily}'`);
+        }
+        let fontKey = `${meta.fontFamily}-${style2}-${weight}-${subset}`;
+        const previousPromise = loadedFonts[fontKey];
+        if (previousPromise) {
+          promises.push(previousPromise);
+          continue;
+        }
+        const baseLabel = `Fetching ${meta.fontFamily} font ${JSON.stringify({
+          style: style2,
+          weight,
+          subset
+        })}`;
+        const label = weightsAndSubsetsAreSpecified ? baseLabel : `${baseLabel}. This might be caused by loading too many font variations. Read more: https://www.remotion.dev/docs/troubleshooting/font-loading-errors#render-timeout-when-loading-google-fonts`;
+        const handle = (0,esm.delayRender)(label, { timeoutInMilliseconds: 60000 });
+        fontsLoaded++;
+        const fontFace = new FontFace(meta.fontFamily, `url(${font}) format('woff2')`, {
+          weight,
+          style: style2,
+          unicodeRange: meta.unicodeRanges[subset]
+        });
+        let attempts = 2;
+        const tryToLoad = () => {
+          if (fontFace.status === "loaded") {
+            (0,esm.continueRender)(handle);
+            return;
+          }
+          const promise = loadFontFaceOrTimeoutAfter20Seconds(fontFace).then(() => {
+            (options?.document ?? document).fonts.add(fontFace);
+            (0,esm.continueRender)(handle);
+          }).catch((err) => {
+            loadedFonts[fontKey] = undefined;
+            if (attempts === 0) {
+              throw err;
+            } else {
+              attempts--;
+              tryToLoad();
+            }
+          });
+          loadedFonts[fontKey] = promise;
+          promises.push(promise);
+        };
+        tryToLoad();
+      }
+    }
+    if (fontsLoaded > 20) {
+      console.warn(`Made ${fontsLoaded} network requests to load fonts for ${meta.fontFamily}. Consider loading fewer weights and subsets by passing options to loadFont(). Disable this warning by passing "ignoreTooManyRequestsWarning: true" to "options".`);
+    }
+  }
+  return {
+    fontFamily: meta.fontFamily,
+    fonts: meta.fonts,
+    unicodeRanges: meta.unicodeRanges,
+    waitUntilDone: () => Promise.all(promises).then(() => {
+      return;
+    })
+  };
+};
+
+// src/Montserrat.ts
+var getInfo = () => ({
+  fontFamily: "Montserrat",
+  importName: "Montserrat",
+  version: "v31",
+  url: "https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,100;0,200;0,300;0,400;0,500;0,600;0,700;0,800;0,900;1,100;1,200;1,300;1,400;1,500;1,600;1,700;1,800;1,900",
+  unicodeRanges: {
+    "cyrillic-ext": "U+0460-052F, U+1C80-1C8A, U+20B4, U+2DE0-2DFF, U+A640-A69F, U+FE2E-FE2F",
+    cyrillic: "U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116",
+    vietnamese: "U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB",
+    "latin-ext": "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF",
+    latin: "U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD"
+  },
+  fonts: {
+    italic: {
+      "100": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxC7mw9c.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRzS7mw9c.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxi7mw9c.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxy7mw9c.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRyS7m.woff2"
+      },
+      "200": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxC7mw9c.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRzS7mw9c.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxi7mw9c.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxy7mw9c.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRyS7m.woff2"
+      },
+      "300": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxC7mw9c.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRzS7mw9c.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxi7mw9c.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxy7mw9c.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRyS7m.woff2"
+      },
+      "400": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxC7mw9c.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRzS7mw9c.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxi7mw9c.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxy7mw9c.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRyS7m.woff2"
+      },
+      "500": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxC7mw9c.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRzS7mw9c.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxi7mw9c.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxy7mw9c.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRyS7m.woff2"
+      },
+      "600": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxC7mw9c.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRzS7mw9c.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxi7mw9c.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxy7mw9c.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRyS7m.woff2"
+      },
+      "700": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxC7mw9c.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRzS7mw9c.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxi7mw9c.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxy7mw9c.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRyS7m.woff2"
+      },
+      "800": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxC7mw9c.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRzS7mw9c.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxi7mw9c.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxy7mw9c.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRyS7m.woff2"
+      },
+      "900": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxC7mw9c.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRzS7mw9c.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxi7mw9c.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRxy7mw9c.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUQjIg1_i6t8kCHKm459WxRyS7m.woff2"
+      }
+    },
+    normal: {
+      "100": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WRhyzbi.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459W1hyzbi.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WZhyzbi.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wdhyzbi.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2"
+      },
+      "200": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WRhyzbi.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459W1hyzbi.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WZhyzbi.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wdhyzbi.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2"
+      },
+      "300": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WRhyzbi.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459W1hyzbi.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WZhyzbi.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wdhyzbi.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2"
+      },
+      "400": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WRhyzbi.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459W1hyzbi.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WZhyzbi.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wdhyzbi.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2"
+      },
+      "500": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WRhyzbi.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459W1hyzbi.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WZhyzbi.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wdhyzbi.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2"
+      },
+      "600": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WRhyzbi.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459W1hyzbi.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WZhyzbi.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wdhyzbi.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2"
+      },
+      "700": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WRhyzbi.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459W1hyzbi.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WZhyzbi.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wdhyzbi.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2"
+      },
+      "800": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WRhyzbi.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459W1hyzbi.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WZhyzbi.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wdhyzbi.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2"
+      },
+      "900": {
+        "cyrillic-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WRhyzbi.woff2",
+        cyrillic: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459W1hyzbi.woff2",
+        vietnamese: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459WZhyzbi.woff2",
+        "latin-ext": "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wdhyzbi.woff2",
+        latin: "https://fonts.gstatic.com/s/montserrat/v31/JTUSjIg1_i6t8kCHKm459Wlhyw.woff2"
+      }
+    }
+  },
+  subsets: ["cyrillic", "cyrillic-ext", "latin", "latin-ext", "vietnamese"]
+});
+var fontFamily = "Montserrat";
+var loadFont = (style, options) => {
+  return loadFonts(getInfo(), style, options);
+};
+
+
+;// ./src/components/Infographic1.tsx
 
 
 
-const Infographic = ({ prompt, infographicType }) => {
+
+const { fontFamily: Infographic1_fontFamily } = loadFont();
+const tasks = [
+  { text: "Organize your desk", icon: /* @__PURE__ */ (0,jsx_runtime.jsxs)("svg", { width: "24", height: "24", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("rect", { x: "2", y: "7", width: "20", height: "15", rx: "2", ry: "2" }),
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("line", { x1: "12", y1: "7", x2: "12", y2: "22" }),
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("path", { d: "M16 2H8c-1.1 0-2 .9-2 2v3h12V4c0-1.1-.9-2-2-2z" })
+  ] }) },
+  { text: "Water your plants", icon: /* @__PURE__ */ (0,jsx_runtime.jsxs)("svg", { width: "24", height: "24", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("path", { d: "M10 21v-3m0-13V3a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2m-4 0a4 4 0 0 1 4 4v5c0 1.66-1.34 3-3 3h-2c-1.66 0-3-1.34-3-3V9a4 4 0 0 1 4-4z" }),
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("path", { d: "M12 21a2 2 0 0 1-2-2h4a2 2 0 0 1-2 2z" }),
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("path", { d: "M18 10a2 2 0 0 1-2-2h4a2 2 0 0 1-2 2z" })
+  ] }) },
+  { text: "Clip your nails", icon: /* @__PURE__ */ (0,jsx_runtime.jsxs)("svg", { width: "24", height: "24", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("path", { d: "M17 21h-2a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2z" }),
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("path", { d: "M7 21H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2z" }),
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("path", { d: "M12 2v3" }),
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("path", { d: "M12 19v3" })
+  ] }) }
+];
+const Infographic1 = ({ prompt, infographicType }) => {
+  const frame = (0,esm.useCurrentFrame)();
+  const { fps, durationInFrames } = (0,esm.useVideoConfig)();
+  const entranceProgress = (0,esm.spring)({
+    frame,
+    fps,
+    config: { damping: 200 },
+    durationInFrames: 30
+  });
+  const fadeIn = (0,esm.interpolate)(entranceProgress, [0, 1], [0, 1]);
+  const slideUp = (0,esm.interpolate)(entranceProgress, [0, 1], [30, 0]);
+  const titleScale = (0,esm.interpolate)(entranceProgress, [0, 1], [0.8, 1], { extrapolateRight: "clamp" });
+  const titleOpacity = (0,esm.interpolate)(entranceProgress, [0, 1], [0, 1], { extrapolateRight: "clamp" });
   return /* @__PURE__ */ (0,jsx_runtime.jsx)(
     esm.AbsoluteFill,
     {
       style: {
-        backgroundColor: "#0f172a",
+        fontFamily: Infographic1_fontFamily,
+        backgroundColor: "#e0f2fe",
+        backgroundImage: "linear-gradient(135deg, #e0f2fe 0%, #ffffff 100%)",
         justifyContent: "center",
         alignItems: "center",
-        padding: 48
+        opacity: fadeIn
       },
       children: /* @__PURE__ */ (0,jsx_runtime.jsxs)(
         "div",
         {
           style: {
-            fontFamily: "system-ui, sans-serif",
-            color: "#f1f5f9",
-            fontSize: 28,
-            maxWidth: 900,
-            textAlign: "center",
-            lineHeight: 1.4
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            padding: "40px",
+            borderRadius: "20px",
+            backgroundColor: "rgba(255, 255, 255, 0.9)",
+            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.1)",
+            transform: `translateY(${slideUp * 0.5}px)`,
+            opacity: fadeIn,
+            maxWidth: "80%"
           },
           children: [
-            /* @__PURE__ */ (0,jsx_runtime.jsx)("div", { style: { fontSize: 14, color: "#94a3b8", marginBottom: 16, textTransform: "uppercase" }, children: infographicType }),
-            prompt
+            /* @__PURE__ */ (0,jsx_runtime.jsxs)("div", { style: { display: "flex", alignItems: "center", marginBottom: "30px" }, children: [
+              /* @__PURE__ */ (0,jsx_runtime.jsx)(
+                "div",
+                {
+                  style: {
+                    fontSize: "1.8em",
+                    fontWeight: "bold",
+                    color: "#333",
+                    marginRight: "15px",
+                    transform: `scale(${titleScale})`,
+                    opacity: titleOpacity
+                  },
+                  children: "Quick 2-Minute Tasks"
+                }
+              ),
+              /* @__PURE__ */ (0,jsx_runtime.jsxs)(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: "40px",
+                    height: "40px",
+                    borderRadius: "50%",
+                    backgroundColor: "#007bff",
+                    color: "white",
+                    fontSize: "1.2em",
+                    fontWeight: "bold",
+                    transform: `scale(${titleScale})`,
+                    opacity: titleOpacity
+                  },
+                  children: [
+                    /* @__PURE__ */ (0,jsx_runtime.jsx)("span", { style: { fontSize: "0.8em", lineHeight: 1 }, children: "2" }),
+                    /* @__PURE__ */ (0,jsx_runtime.jsx)("span", { style: { fontSize: "0.5em", lineHeight: 1, marginLeft: "2px" }, children: "MIN" })
+                  ]
+                }
+              )
+            ] }),
+            /* @__PURE__ */ (0,jsx_runtime.jsx)("ul", { style: { listStyle: "none", padding: 0, margin: 0, width: "100%" }, children: tasks.map((task, index) => {
+              const itemDelay = 15 + index * 10;
+              const itemSpring = (0,esm.spring)({
+                frame: frame - itemDelay,
+                fps,
+                config: { damping: 200, stiffness: 100 },
+                durationInFrames: 30
+              });
+              const itemTranslateY = (0,esm.interpolate)(itemSpring, [0, 1], [40, 0]);
+              const itemOpacity = (0,esm.interpolate)(itemSpring, [0, 1], [0, 1]);
+              return /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Sequence, { from: itemDelay, durationInFrames: durationInFrames - itemDelay, layout: "none", children: /* @__PURE__ */ (0,jsx_runtime.jsxs)(
+                "li",
+                {
+                  style: {
+                    display: "flex",
+                    alignItems: "center",
+                    marginBottom: "20px",
+                    fontSize: "1.2em",
+                    color: "#555",
+                    transform: `translateY(${itemTranslateY}px)`,
+                    opacity: itemOpacity
+                  },
+                  children: [
+                    /* @__PURE__ */ (0,jsx_runtime.jsx)("div", { style: { marginRight: "15px", color: "#007bff" }, children: task.icon }),
+                    /* @__PURE__ */ (0,jsx_runtime.jsx)("div", { children: task.text })
+                  ]
+                }
+              ) }, index);
+            }) })
           ]
+        }
+      )
+    }
+  );
+};
+
+// EXTERNAL MODULE: ../node_modules/.pnpm/react@18.3.1/node_modules/react/index.js
+var react = __webpack_require__(7378);
+;// ./src/components/Infographic2.tsx
+
+
+
+
+
+const { fontFamily: Infographic2_fontFamily } = loadFont();
+const steps = [
+  { text: "Sit Down", icon: "\u{1FA91}" },
+  { text: "Open Laptop", icon: "\u{1F4BB}" },
+  { text: "Study for 2 Minutes", icon: "\u23F1\uFE0F" },
+  { text: "Close Laptop", icon: "\u{1F4BB}" },
+  { text: "Do Something Else", icon: "\u2705" }
+];
+const Infographic2 = ({ prompt, infographicType }) => {
+  const frame = (0,esm.useCurrentFrame)();
+  const { fps, durationInFrames } = (0,esm.useVideoConfig)();
+  const containerEntrance = (0,esm.spring)({
+    frame,
+    fps,
+    config: { damping: 200, stiffness: 100 },
+    durationInFrames: 40
+  });
+  const containerScale = (0,esm.interpolate)(containerEntrance, [0, 1], [0.8, 1], { extrapolateRight: "clamp" });
+  const containerOpacity = (0,esm.interpolate)(containerEntrance, [0, 1], [0, 1], { extrapolateRight: "clamp" });
+  const arrowIcon = /* @__PURE__ */ (0,jsx_runtime.jsxs)("svg", { width: "30", height: "30", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", children: [
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("line", { x1: "5", y1: "12", x2: "19", y2: "12" }),
+    /* @__PURE__ */ (0,jsx_runtime.jsx)("polyline", { points: "12 5 19 12 12 19" })
+  ] });
+  return /* @__PURE__ */ (0,jsx_runtime.jsx)(
+    esm.AbsoluteFill,
+    {
+      style: {
+        fontFamily: Infographic2_fontFamily,
+        backgroundColor: "#dcfce7",
+        justifyContent: "center",
+        alignItems: "center"
+      },
+      children: /* @__PURE__ */ (0,jsx_runtime.jsx)(
+        "div",
+        {
+          style: {
+            display: "flex",
+            alignItems: "center",
+            transform: `scale(${containerScale})`,
+            opacity: containerOpacity,
+            padding: "20px",
+            borderRadius: "15px",
+            backgroundColor: "rgba(255, 255, 255, 0.8)",
+            boxShadow: "0 8px 20px rgba(0, 0, 0, 0.08)"
+          },
+          children: steps.map((step, index) => {
+            const itemDelay = index * 15;
+            const itemSpring = (0,esm.spring)({
+              frame: frame - itemDelay,
+              fps,
+              config: { damping: 150, stiffness: 120 },
+              durationInFrames: 30
+            });
+            const itemTranslateX = (0,esm.interpolate)(itemSpring, [0, 1], [-50, 0]);
+            const itemOpacity = (0,esm.interpolate)(itemSpring, [0, 1], [0, 1]);
+            const arrowDelay = itemDelay + 15;
+            const arrowSpring = (0,esm.spring)({
+              frame: frame - arrowDelay,
+              fps,
+              config: { damping: 150, stiffness: 120 },
+              durationInFrames: 20
+            });
+            const arrowOpacity = (0,esm.interpolate)(arrowSpring, [0, 1], [0, 1]);
+            return /* @__PURE__ */ (0,jsx_runtime.jsxs)(react.Fragment, { children: [
+              /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Sequence, { from: itemDelay, durationInFrames: durationInFrames - itemDelay, layout: "none", children: /* @__PURE__ */ (0,jsx_runtime.jsxs)(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    padding: "25px 35px",
+                    margin: "0 10px",
+                    backgroundColor: "#ffffff",
+                    borderRadius: "15px",
+                    boxShadow: "0 4px 15px rgba(0, 0, 0, 0.08)",
+                    minWidth: "180px",
+                    minHeight: "120px",
+                    textAlign: "center",
+                    transform: `translateX(${itemTranslateX}px)`,
+                    opacity: itemOpacity,
+                    border: index === 2 ? "3px solid #007bff" : "none"
+                    // Highlight "Study for 2 Minutes"
+                  },
+                  children: [
+                    /* @__PURE__ */ (0,jsx_runtime.jsx)("span", { style: { fontSize: "2.5em", marginBottom: "10px" }, children: step.icon }),
+                    /* @__PURE__ */ (0,jsx_runtime.jsxs)("div", { style: { fontSize: "1.1em", fontWeight: "600", color: "#333" }, children: [
+                      step.text,
+                      index === 2 && /* @__PURE__ */ (0,jsx_runtime.jsx)("div", { style: { fontSize: "0.7em", fontWeight: "bold", color: "#007bff", marginTop: "5px" }, children: "(2 MIN)" })
+                    ] })
+                  ]
+                }
+              ) }),
+              index < steps.length - 1 && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Sequence, { from: arrowDelay, durationInFrames: durationInFrames - arrowDelay, layout: "none", children: /* @__PURE__ */ (0,jsx_runtime.jsx)("div", { style: { color: "#666", opacity: arrowOpacity, transform: `translateX(${itemTranslateX * 0.5}px)` }, children: arrowIcon }) })
+            ] }, index);
+          })
         }
       )
     }
@@ -50,30 +529,48 @@ const Infographic = ({ prompt, infographicType }) => {
 
 
 
+
 const fps = 24;
 const RemotionRoot = () => {
-  return /* @__PURE__ */ (0,jsx_runtime.jsx)(jsx_runtime.Fragment, { children: /* @__PURE__ */ (0,jsx_runtime.jsx)(
-    esm.Composition,
-    {
-      id: "Infographic",
-      component: Infographic,
-      durationInFrames: 5 * fps,
-      fps,
-      width: 1920,
-      height: 1080,
-      defaultProps: {
-        prompt: "Placeholder infographic",
-        infographicType: "statistic"
+  return /* @__PURE__ */ (0,jsx_runtime.jsxs)(jsx_runtime.Fragment, { children: [
+    /* @__PURE__ */ (0,jsx_runtime.jsx)(
+      esm.Composition,
+      {
+        id: "Infographic1",
+        component: Infographic1,
+        durationInFrames: 5 * fps,
+        fps,
+        width: 1920,
+        height: 1080,
+        defaultProps: {
+          prompt: "",
+          infographicType: "statistic"
+        }
       }
-    }
-  ) });
+    ),
+    /* @__PURE__ */ (0,jsx_runtime.jsx)(
+      esm.Composition,
+      {
+        id: "Infographic2",
+        component: Infographic2,
+        durationInFrames: 5 * fps,
+        fps,
+        width: 1920,
+        height: 1080,
+        defaultProps: {
+          prompt: "",
+          infographicType: "statistic"
+        }
+      }
+    )
+  ] });
 };
 (0,esm.registerRoot)(RemotionRoot);
 
 
 /***/ }),
 
-/***/ 7183:
+/***/ 6459:
 /***/ ((__unused_webpack_module, exports) => {
 
 var __webpack_unused_export__;
@@ -221,11 +718,11 @@ exports.d = injectCSS;
 
 /***/ }),
 
-/***/ 894:
+/***/ 9674:
 /***/ ((__unused_webpack_module, __unused_webpack___webpack_exports__, __webpack_require__) => {
 
 var react__WEBPACK_IMPORTED_MODULE_0___namespace_cache;
-/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(758);
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(7378);
 
 
 if (typeof globalThis === 'undefined') {
@@ -237,7 +734,7 @@ if (typeof globalThis === 'undefined') {
 
 /***/ }),
 
-/***/ 9481:
+/***/ 5773:
 /***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 /**
@@ -252,7 +749,7 @@ if (typeof globalThis === 'undefined') {
 /*
  Modernizr 3.0.0pre (Custom Build) | MIT
 */
-var aa=__webpack_require__(758),ca=__webpack_require__(1896);function p(a){for(var b="https://reactjs.org/docs/error-decoder.html?invariant="+a,c=1;c<arguments.length;c++)b+="&args[]="+encodeURIComponent(arguments[c]);return"Minified React error #"+a+"; visit "+b+" for the full message or use the non-minified dev environment for full errors and additional helpful warnings."}var da=new Set,ea={};function fa(a,b){ha(a,b);ha(a+"Capture",b)}
+var aa=__webpack_require__(7378),ca=__webpack_require__(7748);function p(a){for(var b="https://reactjs.org/docs/error-decoder.html?invariant="+a,c=1;c<arguments.length;c++)b+="&args[]="+encodeURIComponent(arguments[c]);return"Minified React error #"+a+"; visit "+b+" for the full message or use the non-minified dev environment for full errors and additional helpful warnings."}var da=new Set,ea={};function fa(a,b){ha(a,b);ha(a+"Capture",b)}
 function ha(a,b){ea[a]=b;for(a=0;a<b.length;a++)da.add(b[a])}
 var ia=!("undefined"===typeof window||"undefined"===typeof window.document||"undefined"===typeof window.document.createElement),ja=Object.prototype.hasOwnProperty,ka=/^[:A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD][:A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C-\u200D\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\-.0-9\u00B7\u0300-\u036F\u203F-\u2040]*$/,la=
 {},ma={};function oa(a){if(ja.call(ma,a))return!0;if(ja.call(la,a))return!1;if(ka.test(a))return ma[a]=!0;la[a]=!0;return!1}function pa(a,b,c,d){if(null!==c&&0===c.type)return!1;switch(typeof b){case "function":case "symbol":return!0;case "boolean":if(d)return!1;if(null!==c)return!c.acceptsBooleans;a=a.toLowerCase().slice(0,5);return"data-"!==a&&"aria-"!==a;default:return!1}}
@@ -566,12 +1063,12 @@ exports.unstable_renderSubtreeIntoContainer=function(a,b,c,d){if(!ol(c))throw Er
 
 /***/ }),
 
-/***/ 9576:
+/***/ 9124:
 /***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 
 
-var m = __webpack_require__(8143);
+var m = __webpack_require__(4059);
 if (true) {
   exports.createRoot = m.createRoot;
   exports.hydrateRoot = m.hydrateRoot;
@@ -580,7 +1077,7 @@ if (true) {
 
 /***/ }),
 
-/***/ 8143:
+/***/ 4059:
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 
@@ -608,13 +1105,13 @@ if (true) {
   // DCE check should happen before ReactDOM bundle executes so that
   // DevTools can report bad minification during injection.
   checkDCE();
-  module.exports = __webpack_require__(9481);
+  module.exports = __webpack_require__(5773);
 } else {}
 
 
 /***/ }),
 
-/***/ 7462:
+/***/ 5538:
 /***/ ((__unused_webpack_module, exports, __webpack_require__) => {
 
 /**
@@ -626,13 +1123,13 @@ if (true) {
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
  */
-var f=__webpack_require__(758),k=Symbol.for("react.element"),l=Symbol.for("react.fragment"),m=Object.prototype.hasOwnProperty,n=f.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentOwner,p={key:!0,ref:!0,__self:!0,__source:!0};
+var f=__webpack_require__(7378),k=Symbol.for("react.element"),l=Symbol.for("react.fragment"),m=Object.prototype.hasOwnProperty,n=f.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED.ReactCurrentOwner,p={key:!0,ref:!0,__self:!0,__source:!0};
 function q(c,a,g){var b,d={},e=null,h=null;void 0!==g&&(e=""+g);void 0!==a.key&&(e=""+a.key);void 0!==a.ref&&(h=a.ref);for(b in a)m.call(a,b)&&!p.hasOwnProperty(b)&&(d[b]=a[b]);if(c&&c.defaultProps)for(b in a=c.defaultProps,a)void 0===d[b]&&(d[b]=a[b]);return{$$typeof:k,type:c,key:e,ref:h,props:d,_owner:n.current}}exports.Fragment=l;exports.jsx=q;exports.jsxs=q;
 
 
 /***/ }),
 
-/***/ 2713:
+/***/ 93:
 /***/ ((__unused_webpack_module, exports) => {
 
 /**
@@ -665,31 +1162,31 @@ exports.useMemo=function(a,b){return U.current.useMemo(a,b)};exports.useReducer=
 
 /***/ }),
 
-/***/ 758:
+/***/ 7378:
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 
 
 if (true) {
-  module.exports = __webpack_require__(2713);
+  module.exports = __webpack_require__(93);
 } else {}
 
 
 /***/ }),
 
-/***/ 6070:
+/***/ 6106:
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 
 
 if (true) {
-  module.exports = __webpack_require__(7462);
+  module.exports = __webpack_require__(5538);
 } else {}
 
 
 /***/ }),
 
-/***/ 4733:
+/***/ 89:
 /***/ ((__unused_webpack_module, exports) => {
 
 /**
@@ -715,27 +1212,27 @@ exports.unstable_shouldYield=M;exports.unstable_wrapCallback=function(a){var b=y
 
 /***/ }),
 
-/***/ 1896:
+/***/ 7748:
 /***/ ((module, __unused_webpack_exports, __webpack_require__) => {
 
 
 
 if (true) {
-  module.exports = __webpack_require__(4733);
+  module.exports = __webpack_require__(89);
 } else {}
 
 
 /***/ }),
 
-/***/ 3632:
+/***/ 5874:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 /* unused harmony export setBundleModeAndUpdate */
-/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(758);
-/* harmony import */ var react_dom_client__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(9576);
-/* harmony import */ var remotion__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(828);
-/* harmony import */ var remotion_no_react__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(3231);
-/* harmony import */ var react_jsx_runtime__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(6070);
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(7378);
+/* harmony import */ var react_dom_client__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(9124);
+/* harmony import */ var remotion__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(7390);
+/* harmony import */ var remotion_no_react__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(4497);
+/* harmony import */ var react_jsx_runtime__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(6106);
 
 
 // src/renderEntry.tsx
@@ -933,7 +1430,7 @@ var renderContent = (Root) => {
     renderToDOM(/* @__PURE__ */ (0,react_jsx_runtime__WEBPACK_IMPORTED_MODULE_4__.jsx)("div", {
       children: /* @__PURE__ */ (0,react_jsx_runtime__WEBPACK_IMPORTED_MODULE_4__.jsx)(DelayedSpinner, {})
     }));
-    Promise.all(/* import() */[__webpack_require__.e(427), __webpack_require__.e(235)]).then(__webpack_require__.bind(__webpack_require__, 5427)).then(({ StudioInternals }) => {
+    Promise.all(/* import() */[__webpack_require__.e(31), __webpack_require__.e(751)]).then(__webpack_require__.bind(__webpack_require__, 9031)).then(({ StudioInternals }) => {
       window.remotion_isStudio = true;
       window.remotion_isReadOnlyStudio = true;
       window.remotion_inputProps = "{}";
@@ -1077,7 +1574,7 @@ if (typeof window !== "undefined") {
 
 /***/ }),
 
-/***/ 828:
+/***/ 7390:
 /***/ ((__webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -1127,9 +1624,9 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   useVideoConfig: () => (/* binding */ useVideoConfig),
 /* harmony export */   watchStaticFile: () => (/* binding */ watchStaticFile)
 /* harmony export */ });
-/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(758);
-/* harmony import */ var react_jsx_runtime__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(6070);
-/* harmony import */ var react_dom__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(8143);
+/* harmony import */ var react__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(7378);
+/* harmony import */ var react_jsx_runtime__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(6106);
+/* harmony import */ var react_dom__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(4059);
 var __defProp = Object.defineProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -9583,7 +10080,7 @@ addSequenceStackTraces(Sequence);
 
 /***/ }),
 
-/***/ 3231:
+/***/ 4497:
 /***/ ((__unused_webpack___webpack_module__, __webpack_exports__, __webpack_require__) => {
 
 __webpack_require__.r(__webpack_exports__);
@@ -10575,10 +11072,10 @@ var NoReactInternals = {
 /******/ 	// startup
 /******/ 	// Load entry module and return exports
 /******/ 	// This entry module is referenced by other modules so it can't be inlined
-/******/ 	__webpack_require__(7183);
-/******/ 	__webpack_require__(960);
-/******/ 	__webpack_require__(894);
-/******/ 	var __webpack_exports__ = __webpack_require__(3632);
+/******/ 	__webpack_require__(6459);
+/******/ 	__webpack_require__(5266);
+/******/ 	__webpack_require__(9674);
+/******/ 	var __webpack_exports__ = __webpack_require__(5874);
 /******/ 	
 /******/ })()
 ;

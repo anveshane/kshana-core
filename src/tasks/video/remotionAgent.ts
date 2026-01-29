@@ -1,29 +1,22 @@
 /**
- * Remotion sub-agent: one-shot LLM call to get animation recommendations for infographic placements.
- * Uses Remotion best-practices skills and returns structured JSON per placement.
+ * Remotion sub-agent: one-shot LLM call to generate Remotion component code for infographic placements.
+ * Uses Remotion best-practices skills and returns complete TSX component code per placement.
  */
 import type { LLMClient } from '../../core/llm/index.js';
 import { buildRemotionAgentPrompt } from '../../core/prompts/index.js';
 import type { ParsedInfographicPlacement } from './workflow/infographicPlacementsParser.js';
 
-export interface AnimationHints {
-  ruleRefs?: string[];
-  suggestion?: string;
-  timingCurve?: 'linear' | 'spring' | 'ease';
-  enhancedPrompt?: string;
-}
-
-export interface AnimationRecommendationItem {
+export interface ComponentCodeItem {
   placementNumber: number;
-  animationHints: AnimationHints;
+  componentCode: string;
 }
 
-export interface AnimationRecommendations {
-  placements: AnimationRecommendationItem[];
+export interface ComponentCode {
+  placements: ComponentCodeItem[];
 }
 
 const REMOTION_AGENT_USER_MESSAGE =
-  'Output animation recommendations as JSON for the given placements. Use the exact schema from the instructions.';
+  'Generate complete Remotion component code as JSON for the given placements. Use the exact schema from the instructions.';
 
 /**
  * Strip optional ```json ... ``` wrapper from model output.
@@ -48,13 +41,13 @@ export interface RunRemotionAgentOptions {
 
 /**
  * Run the Remotion sub-agent: build prompt from placements + skills, call LLM once, parse JSON.
- * Returns per-placement animation recommendations. Throws on parse or API failure.
+ * Returns per-placement component code (complete TSX files). Throws on parse or API failure.
  */
 export async function runRemotionAgent(
   llm: LLMClient,
   placements: ParsedInfographicPlacement[],
   options?: RunRemotionAgentOptions
-): Promise<AnimationRecommendations> {
+): Promise<ComponentCode> {
   const placementsJson = JSON.stringify(
     placements.map((p) => ({
       placementNumber: p.placementNumber,
@@ -83,14 +76,27 @@ export async function runRemotionAgent(
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonStr);
-  } catch {
+  } catch (parseError) {
+    console.error('[runRemotionAgent] JSON parse error. Raw response (first 500 chars):', raw.slice(0, 500));
     throw new Error(`Remotion agent response is not valid JSON: ${jsonStr.slice(0, 200)}`);
   }
 
   const obj = parsed as Record<string, unknown>;
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(obj['placements'])) {
+    console.error('[runRemotionAgent] Invalid response structure. Response keys:', Object.keys(obj));
+    console.error('[runRemotionAgent] Response (first 500 chars):', JSON.stringify(parsed, null, 2).slice(0, 500));
     throw new Error('Remotion agent response must have a "placements" array');
   }
 
-  return parsed as AnimationRecommendations;
+  const placementItems = obj['placements'] as Array<Record<string, unknown>>;
+  for (const placementItem of placementItems) {
+    if (typeof placementItem['placementNumber'] !== 'number') {
+      throw new Error(`Each placement must have a numeric placementNumber. Got: ${JSON.stringify(placementItem)}`);
+    }
+    if (typeof placementItem['componentCode'] !== 'string' || (placementItem['componentCode'] as string).length === 0) {
+      throw new Error(`Placement ${placementItem['placementNumber']} must have a non-empty componentCode string. Found keys: ${Object.keys(placementItem).join(', ')}`);
+    }
+  }
+
+  return parsed as ComponentCode;
 }
