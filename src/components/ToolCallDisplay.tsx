@@ -519,7 +519,9 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
         {resultContent && (
           <Box marginLeft={2} marginTop={1} flexDirection="column">
             {fileSaveInfo && fileSaveInfo.saved && (
-              <Text dimColor marginBottom={1}>Preview:</Text>
+              <Box marginBottom={1}>
+                <Text dimColor>Preview:</Text>
+              </Box>
             )}
             <Box marginLeft={fileSaveInfo && fileSaveInfo.saved ? 1 : 0} marginTop={fileSaveInfo && fileSaveInfo.saved ? 0 : 0} flexDirection="column">
               <MarkdownText text={resultContent} />
@@ -595,7 +597,9 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
       {resultContent && (
         <Box marginLeft={2} marginTop={1} flexDirection="column">
           {fileSaveInfo && fileSaveInfo.saved && (
-            <Text dimColor marginBottom={1}>Preview:</Text>
+            <Box marginBottom={1}>
+              <Text dimColor>Preview:</Text>
+            </Box>
           )}
           <Box marginLeft={fileSaveInfo && fileSaveInfo.saved ? 1 : 0} marginTop={fileSaveInfo && fileSaveInfo.saved ? 0 : 0} flexDirection="column">
             <MarkdownText text={resultContent} />

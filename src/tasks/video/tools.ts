@@ -37,6 +37,14 @@ import { parseVideoPlacements, type ParsedVideoPlacement } from './workflow/vide
 import { parseInfographicPlacementsWithErrors, type ParsedInfographicPlacement } from './workflow/infographicPlacementsParser.js';
 import { getTranscriptSegmentForTimeRange } from './workflow/transcriptSegment.js';
 import { expandImagePlacementPrompt, expandVideoPlacementPrompt } from './workflow/placementPromptExpander.js';
+import { loadRemotionSkills, REMOTION_SKILLS_INFOGraphics_SUBSET } from '../../core/prompts/loader.js';
+import type { AnimationRecommendations } from './remotionAgent.js';
+
+/** Callback to run the Remotion sub-agent (placements + skills -> animation recommendations). Injected when creating the tool. */
+export type RunRemotionAgentCallback = (
+  placements: ParsedInfographicPlacement[],
+  skillsContent: string
+) => Promise<AnimationRecommendations>;
 
 /**
  * Context for linking artifacts to project entities.
@@ -2221,97 +2229,153 @@ function getRemotionInfographicsDir(): string {
 }
 
 /**
- * Generate all infographics for placements in infographic-placements.md via Remotion.
+ * Create the generate_all_infographics tool. When runRemotionAgent is provided, the tool
+ * invokes the Remotion sub-agent to get animation recommendations before rendering.
  */
-export const generateAllInfographicsTool: ToolDefinition = createTool(
-  'generate_all_infographics',
-  `Generate all infographics for placements defined in infographic-placements.md using Remotion.
+function createGenerateAllInfographicsTool(runRemotionAgent?: RunRemotionAgentCallback): ToolDefinition {
+  return createTool(
+    'generate_all_infographics',
+    `Generate all infographics for placements defined in infographic-placements.md using Remotion.
 
 Reads and parses agent/content/infographic-placements.md, then renders each placement as a short video clip
 (charts, diagrams, statistics, etc.) via the Remotion infographics app. Outputs are saved to
-agent/infographic-placements/ and registered in the manifest.`,
-  {
-    type: 'object',
-    properties: {
-      file_path: {
-        type: 'string',
-        description: 'Path to infographic-placements.md (default: agent/content/infographic-placements.md)',
+agent/infographic-placements/ (or outputs/ when output_dir is "outputs") and registered in the manifest.`,
+    {
+      type: 'object',
+      properties: {
+        file_path: {
+          type: 'string',
+          description: 'Path to infographic-placements.md (default: agent/content/infographic-placements.md)',
+        },
+        output_dir: {
+          type: 'string',
+          description: 'Optional: set to "outputs" to save infographic MP4s under project outputs/ and register paths as outputs/<file>.mp4',
+        },
       },
+      required: [],
     },
-    required: [],
-  },
-  async (args) => {
-    const filePath = (args['file_path'] as string | undefined) || 'agent/content/infographic-placements.md';
-    const basePath = getCurrentProjectBasePath();
-    const content = readProjectFile(filePath, basePath);
-    if (!content) {
-      return {
-        status: 'error',
-        error: `Infographic placements file not found: ${filePath}`,
-        suggestion: 'Complete the infographics_placement phase first to create infographic-placements.md.',
-      };
-    }
-
-    let placements: ParsedInfographicPlacement[];
-    try {
-      const parseResult = parseInfographicPlacementsWithErrors(content, false);
-      placements = parseResult.placements;
-      console.log(`[generate_all_infographics] Parsed ${placements.length} placements`);
-      if (parseResult.warnings.length) console.warn('[generate_all_infographics] Warnings:', parseResult.warnings);
-      if (parseResult.errors.length) console.warn('[generate_all_infographics] Parse errors:', parseResult.errors);
-    } catch (e) {
-      return {
-        status: 'error',
-        error: `Failed to parse infographic placements: ${String(e)}`,
-      };
-    }
-
-    if (placements.length === 0) {
-      return {
-        status: 'completed',
-        total_placements: 0,
-        successful: 0,
-        failed: 0,
-        results: [],
-        message: 'No infographic placements found. Mark phase complete and transition.',
-      };
-    }
-
-    const remotionDir = getRemotionInfographicsDir();
-    if (!fs.existsSync(path.join(remotionDir, 'package.json'))) {
-      return {
-        status: 'error',
-        error: `remotion-infographics package not found at ${remotionDir}. Run "pnpm install" in kshana-ink/remotion-infographics.`,
-      };
-    }
-    const buildDir = path.join(remotionDir, 'build');
-    if (!fs.existsSync(buildDir) || !fs.existsSync(path.join(buildDir, 'index.html'))) {
-      const buildProc = spawnSync('pnpm', ['run', 'build'], { cwd: remotionDir, encoding: 'utf-8', timeout: 120_000 });
-      if (buildProc.error || buildProc.status !== 0) {
+    async (args) => {
+      const filePath = (args['file_path'] as string | undefined) || 'agent/content/infographic-placements.md';
+      const outputDirArg = (args['output_dir'] as string | undefined)?.trim();
+      const useOutputsDir = outputDirArg === 'outputs';
+      const basePath = getCurrentProjectBasePath();
+      const content = readProjectFile(filePath, basePath);
+      if (!content) {
         return {
           status: 'error',
-          error: `Remotion bundle failed. Run "pnpm run build" in kshana-ink/remotion-infographics. ${buildProc.stderr || buildProc.error || ''}`,
+          error: `Infographic placements file not found: ${filePath}`,
+          suggestion: 'Complete the infographics_placement phase first to create infographic-placements.md.',
         };
       }
-    }
 
-    const outDir = path.join(basePath, '.kshana', 'agent', 'infographic-placements');
-    fs.mkdirSync(outDir, { recursive: true });
-    const inputPath = path.join(outDir, '_render_input.json');
-    const outputPath = path.join(outDir, '_render_output.json');
-    fs.writeFileSync(
-      inputPath,
-      JSON.stringify({
-        placements: placements.map((p) => ({
-          placementNumber: p.placementNumber,
-          startTime: p.startTime,
-          endTime: p.endTime,
-          infographicType: p.infographicType,
-          prompt: p.prompt,
-        })),
-      }),
-      'utf-8'
-    );
+      let placements: ParsedInfographicPlacement[];
+      try {
+        const parseResult = parseInfographicPlacementsWithErrors(content, false);
+        placements = parseResult.placements;
+        console.log(`[generate_all_infographics] Parsed ${placements.length} placements`);
+        if (parseResult.warnings.length) console.warn('[generate_all_infographics] Warnings:', parseResult.warnings);
+        if (parseResult.errors.length) console.warn('[generate_all_infographics] Parse errors:', parseResult.errors);
+      } catch (e) {
+        return {
+          status: 'error',
+          error: `Failed to parse infographic placements: ${String(e)}`,
+        };
+      }
+
+      if (placements.length === 0) {
+        return {
+          status: 'completed',
+          total_placements: 0,
+          successful: 0,
+          failed: 0,
+          results: [],
+          message: 'No infographic placements found. Mark phase complete and transition.',
+        };
+      }
+
+      let payloadPlacements: Array<{
+        placementNumber: number;
+        startTime: string;
+        endTime: string;
+        infographicType: string;
+        prompt: string;
+        animationHints?: { ruleRefs?: string[]; suggestion?: string; timingCurve?: string; enhancedPrompt?: string };
+      }> = placements.map((p) => ({
+        placementNumber: p.placementNumber,
+        startTime: p.startTime,
+        endTime: p.endTime,
+        infographicType: p.infographicType,
+        prompt: p.prompt,
+      }));
+
+      if (runRemotionAgent) {
+        try {
+          const skillsContent = loadRemotionSkills({
+            ruleSubset: [...REMOTION_SKILLS_INFOGraphics_SUBSET],
+          });
+          const recommendations = await runRemotionAgent(placements, skillsContent);
+          const byNumber = new Map(
+            recommendations.placements.map((r) => [r.placementNumber, r.animationHints])
+          );
+          payloadPlacements = payloadPlacements.map((pl) => {
+            const hints = byNumber.get(pl.placementNumber);
+            if (!hints) return pl;
+            return {
+              ...pl,
+              ...(hints.enhancedPrompt != null && hints.enhancedPrompt !== '' && { prompt: hints.enhancedPrompt }),
+              animationHints: {
+                ruleRefs: hints.ruleRefs,
+                suggestion: hints.suggestion,
+                timingCurve: hints.timingCurve,
+                enhancedPrompt: hints.enhancedPrompt,
+              },
+            };
+          });
+        } catch (e) {
+          console.warn('[generate_all_infographics] Remotion agent failed, continuing without hints:', e);
+        }
+      }
+
+      const remotionDir = getRemotionInfographicsDir();
+      if (!fs.existsSync(path.join(remotionDir, 'package.json'))) {
+        return {
+          status: 'error',
+          error: `remotion-infographics package not found at ${remotionDir}. Ensure remotion-infographics is set up before running infographic generation.`,
+          suggestion: 'This is a setup issue. Dependencies must be pre-installed. Check that remotion-infographics directory exists and has package.json.',
+        };
+      }
+      // Check if dependencies are installed (node_modules exists)
+      const nodeModulesPath = path.join(remotionDir, 'node_modules');
+      if (!fs.existsSync(nodeModulesPath)) {
+        return {
+          status: 'error',
+          error: `remotion-infographics dependencies are not installed at ${remotionDir}. Dependencies must be pre-installed before running infographic generation.`,
+          suggestion: 'This is a setup issue that must be resolved manually. Run "pnpm install" (or "npm install") in the remotion-infographics directory before using this tool. The agent cannot install packages.',
+        };
+      }
+      const buildDir = path.join(remotionDir, 'build');
+      if (!fs.existsSync(buildDir) || !fs.existsSync(path.join(buildDir, 'index.html'))) {
+        const buildProc = spawnSync('pnpm', ['run', 'build'], { cwd: remotionDir, encoding: 'utf-8', timeout: 120_000 });
+        if (buildProc.error || buildProc.status !== 0) {
+          return {
+            status: 'error',
+            error: `Remotion bundle failed. Build must succeed before running infographic generation. ${buildProc.stderr || buildProc.error || ''}`,
+            suggestion: 'This is a setup issue. Ensure remotion-infographics builds successfully (run "pnpm run build" manually). The agent cannot fix build errors.',
+          };
+        }
+      }
+
+      const outDir = useOutputsDir
+        ? path.join(basePath, 'outputs')
+        : path.join(basePath, '.kshana', 'agent', 'infographic-placements');
+      fs.mkdirSync(outDir, { recursive: true });
+      const inputPath = path.join(outDir, '_render_input.json');
+      const outputPath = path.join(outDir, '_render_output.json');
+      fs.writeFileSync(
+        inputPath,
+        JSON.stringify({ placements: payloadPlacements }),
+        'utf-8'
+      );
 
     const RENDER_TIMEOUT_MS = 600_000;
     const proc = spawnSync(
@@ -2335,17 +2399,40 @@ agent/infographic-placements/ and registered in the manifest.`,
         proc.error.message?.includes('ETIMEDOUT') || (proc as { timedOut?: boolean }).timedOut
           ? ' Render timed out.'
           : '';
+      const isModuleNotFound = proc.error.message?.includes('Cannot find module') || proc.error.message?.includes('MODULE_NOT_FOUND');
+      
+      if (isModuleNotFound) {
+        return {
+          status: 'error',
+          error: `Remotion render failed: module not found. Dependencies must be pre-installed before running infographic generation.`,
+          suggestion: 'This is a setup issue that must be resolved manually. Ensure remotion-infographics has all dependencies installed (run "pnpm install" in remotion-infographics directory). The agent cannot install packages.',
+        };
+      }
+      
       return {
         status: 'error',
         error: `Remotion render failed: ${String(proc.error)}${timeoutMsg}`,
-        suggestion: 'Ensure remotion-infographics dependencies are installed (pnpm install in remotion-infographics).',
+        suggestion: 'Check remotion-infographics setup and dependencies. This is a setup issue that must be resolved manually.',
       };
     }
     if (proc.status !== 0) {
+      const stderr = proc.stderr || '';
+      const stdout = proc.stdout || '';
+      const isModuleNotFound = stderr.includes('Cannot find module') || stderr.includes('MODULE_NOT_FOUND') || stdout.includes('Cannot find module');
+      
+      if (isModuleNotFound) {
+        return {
+          status: 'error',
+          error: `Remotion render failed: module not found. Dependencies must be pre-installed before running infographic generation.`,
+          suggestion: 'This is a setup issue that must be resolved manually. Ensure remotion-infographics has all dependencies installed (run "pnpm install" in remotion-infographics directory). The agent cannot install packages.',
+          stderr: stderr.slice(0, 500), // Include first 500 chars for debugging
+        };
+      }
+      
       return {
         status: 'error',
-        error: `Remotion render failed (exit ${proc.status}). stderr: ${proc.stderr || 'none'}`,
-        stdout: proc.stdout,
+        error: `Remotion render failed (exit ${proc.status}). stderr: ${stderr || 'none'}`,
+        stdout: stdout,
       };
     }
 
@@ -2377,7 +2464,9 @@ agent/infographic-placements/ and registered in the manifest.`,
       const baseName = path.basename(outPath ?? '', '.mp4');
       const match = baseName.match(/^info(\d+)_/);
       const placementNumber = match?.[1] ? parseInt(match[1], 10) : results.length + 1;
-      const manifestPath = `agent/infographic-placements/${path.basename(outPath ?? '')}`;
+      const manifestPath = useOutputsDir
+        ? `outputs/${path.basename(outPath ?? '')}`
+        : `agent/infographic-placements/${path.basename(outPath ?? '')}`;
       const artifactId = `info_${nanoid(8)}`;
       try {
         await addAsset(
@@ -2432,12 +2521,20 @@ agent/infographic-placements/ and registered in the manifest.`,
       message: `Generated ${successful.length} out of ${placements.length} infographics. ${failed.length} failed.`,
     };
   }
-);
+  );
+}
+
+/** Options for getVideoGenerationTools (e.g. runRemotionAgent for generate_all_infographics). */
+export interface GetVideoGenerationToolsOptions {
+  runRemotionAgent?: RunRemotionAgentCallback;
+}
 
 /**
- * Get all video generation tools.
+ * Get all video generation tools. When runRemotionAgent is provided, generate_all_infographics
+ * will invoke the Remotion sub-agent to get animation recommendations before rendering.
  */
-export function getVideoGenerationTools(): ToolDefinition[] {
+export function getVideoGenerationTools(options?: GetVideoGenerationToolsOptions): ToolDefinition[] {
+  const generateAllInfographicsTool = createGenerateAllInfographicsTool(options?.runRemotionAgent);
   return [
     generateImageTool,
     generateVideoPlacementTool,

@@ -12,7 +12,8 @@ import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
 import { loadAndRenderMarkdown, loadMarkdown } from '../../core/prompts/loader.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
-import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
+import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS, type RunRemotionAgentCallback } from './tools.js';
+import { runRemotionAgent } from './remotionAgent.js';
 import { getSrtTools } from './tools/srt.js';
 import { getPlacementTools } from './tools/placement.js';
 import { getVideoPlacementTools } from './tools/videoPlacement.js';
@@ -164,12 +165,17 @@ export interface WorkflowVideoAgentConfig {
   basePath?: string;
 }
 
+export interface CreateWorkflowToolRegistryOptions {
+  /** When provided, generate_all_infographics will call this to get animation recommendations (Remotion sub-agent). */
+  runRemotionAgent?: RunRemotionAgentCallback;
+}
+
 /**
  * Create a tool registry with workflow tools for state-based video creation.
  * Orchestrator only needs file/project tools - generation is handled by subagents via Task.
  * However, generate_image and wait_for_job must be registered so subagent handlers can access them.
  */
-export function createWorkflowToolRegistry(): ToolRegistry {
+export function createWorkflowToolRegistry(options?: CreateWorkflowToolRegistryOptions): ToolRegistry {
   // Start with default generic tools (think, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode, TodoWrite, context tools)
   const registry = createDefaultToolRegistry();
 
@@ -194,12 +200,8 @@ export function createWorkflowToolRegistry(): ToolRegistry {
     registry.register(tool);
   }
 
-  // Add generate_image, wait_for_job, generate_all_images, generate_all_videos, and generate_all_infographics tools
-  // generate_image and wait_for_job are needed by the image-generator subagent via Task tool
-  // generate_all_images is used by the orchestrator during image_generation phase
-  // generate_all_videos is used by the orchestrator during video_generation phase
-  // generate_all_infographics is used by the orchestrator during infographics_generation phase
-  const videoGenerationTools = getVideoGenerationTools();
+  // Add video generation tools (generate_image, wait_for_job, generate_all_*, including generate_all_infographics with optional Remotion agent)
+  const videoGenerationTools = getVideoGenerationTools({ runRemotionAgent: options?.runRemotionAgent });
   const generateImageTool = videoGenerationTools.find(t => t.name === 'generate_image');
   const waitForJobTool = videoGenerationTools.find(t => t.name === 'wait_for_job');
   const generateAllImagesTool = videoGenerationTools.find(t => t.name === 'generate_all_images');
@@ -410,11 +412,13 @@ export async function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig)
   // This makes them available to dispatch_agent and dispatch_content_agent
   const loadedContexts = loadProjectFilesAsContexts(basePath);
 
-  // Create tool registry with workflow tools
-  const registry = createWorkflowToolRegistry();
-
-  // Create LLM client
+  // Create LLM client first so we can pass runRemotionAgent into the tool registry
   const llm = new LLMClient(llmConfig);
+  const runRemotionAgentCallback: RunRemotionAgentCallback = (placements, skillsContent) =>
+    runRemotionAgent(llm, placements, { skillsContent });
+
+  // Create tool registry with workflow tools (generate_all_infographics will use Remotion sub-agent when callback is provided)
+  const registry = createWorkflowToolRegistry({ runRemotionAgent: runRemotionAgentCallback });
 
   // Build custom prompt with workflow context (include loaded contexts info)
   const customPrompt = await buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);

@@ -7,7 +7,7 @@ Generate infographics for each placement in `agent/content/infographic-placement
 2. The tool will:
    - Read and parse `agent/content/infographic-placements.md`
    - For each placement, render an infographic clip (chart, diagram, statistic, etc.) using Remotion
-   - Save outputs to `agent/infographic-placements/` and register in the manifest
+   - Save outputs to `agent/infographic-placements/` (or to `outputs/` when `output_dir: 'outputs'`) and register in the manifest
 3. After the tool completes, mark phase complete and transition.
 
 **STEP 1: Call generate_all_infographics**
@@ -15,6 +15,15 @@ Generate infographics for each placement in `agent/content/infographic-placement
 ```
 generate_all_infographics(
   file_path: 'agent/content/infographic-placements.md'
+)
+```
+
+To save infographic MP4s under the project's `outputs/` folder and register paths as `outputs/<file>.mp4`, pass `output_dir: 'outputs'`:
+
+```
+generate_all_infographics(
+  file_path: 'agent/content/infographic-placements.md',
+  output_dir: 'outputs'
 )
 ```
 
@@ -39,5 +48,5 @@ update_project(
 
 **IMPORTANT:**
 - Use `generate_all_infographics` for batch generation.
-- Generated infographics are stored in `agent/infographic-placements/` and registered in the manifest.
+- Generated infographics are stored in `agent/infographic-placements/` (or in `outputs/` when using `output_dir: 'outputs'`) and registered in the manifest.
 - If there are no infographic placements, the tool may return successfully with zero generated; still mark phase complete and transition.

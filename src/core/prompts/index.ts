@@ -3,7 +3,7 @@
  * Reads prompts from markdown files in /prompts/ directory.
  */
 import type { ToolDefinition } from '../llm/index.js';
-import { loadAndRenderMarkdown, type PromptContext } from './loader.js';
+import { loadAndRenderMarkdown, loadMarkdown, type PromptContext } from './loader.js';
 
 // NOTE: These are loaded at runtime via buildSystemMessage/build*Prompt functions.
 export const GENERIC_AGENT_BASE_PROMPT = '';
@@ -336,4 +336,19 @@ export function buildVideoGenerationPrompt(options: VideoGenerationPromptOptions
   const sceneSection = `<scene>\n<scene_number>\n${sceneNumberStr}\n</scene_number>\n<scene_image_artifact_id>\n${sceneImageArtifactId}\n</scene_image_artifact_id>\n<motion_description>\n${motionStr}\n</motion_description>\n</scene>`;
 
   return [base, sub, vid, taskSection, contextSection, sceneSection].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Build the Remotion sub-agent system prompt with placements and skills.
+ * Used for one-shot LLM call to get animation recommendations per placement.
+ *
+ * @param placementsJson - JSON string of placements array
+ * @param skillsContent - Loaded Remotion skills markdown (SKILL + rules)
+ * @returns The complete Remotion agent system prompt
+ */
+export function buildRemotionAgentPrompt(placementsJson: string, skillsContent: string): string {
+  const base = loadMarkdown('subagents/remotion-agent.md');
+  const placementsSection = `<placements>\n${placementsJson}\n</placements>`;
+  const skillsSection = `<remotion_skills>\n${skillsContent}\n</remotion_skills>`;
+  return [base, placementsSection, skillsSection].filter(Boolean).join('\n\n');
 }

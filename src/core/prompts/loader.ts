@@ -11,7 +11,7 @@
  * - This intentionally avoids bringing in external deps (no runtime install).
  * - Designed for system prompt and tool description composition from separate .md files.
  */
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -278,6 +278,59 @@ export function loadAndRenderMarkdown(relativePathFromPromptsDir: string, contex
 
 export function clearPromptTemplateCache(): void {
   templateCache.clear();
+}
+
+/** Default rule subset for infographics (animations, timing, charts, text, transitions, sequencing, compositions, parameters). */
+export const REMOTION_SKILLS_INFOGraphics_SUBSET = [
+  'animations',
+  'timing',
+  'charts',
+  'text-animations',
+  'transitions',
+  'sequencing',
+  'compositions',
+  'parameters',
+];
+
+export interface LoadRemotionSkillsOptions {
+  /** If set, only load these rule files (without .md). Otherwise load all rules/*.md. */
+  ruleSubset?: string[];
+}
+
+/**
+ * Load Remotion best-practices skills: SKILL.md + rules (or ruleSubset).
+ * Returns a single concatenated string for use in the Remotion sub-agent prompt.
+ */
+export function loadRemotionSkills(options?: LoadRemotionSkillsOptions): string {
+  const skillsDir = join(PROMPTS_DIR, 'remotion-skills');
+  if (!existsSync(skillsDir)) {
+    return '';
+  }
+  const parts: string[] = [];
+  const skillMd = join(skillsDir, 'SKILL.md');
+  if (existsSync(skillMd)) {
+    parts.push('## SKILL\n\n', readFileSync(skillMd, 'utf-8'));
+  }
+  const rulesDir = join(skillsDir, 'rules');
+  if (!existsSync(rulesDir)) {
+    return parts.join('');
+  }
+  const subset = options?.ruleSubset;
+  let names: string[] = readdirSync(rulesDir)
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => f.slice(0, -3));
+  if (subset && subset.length > 0) {
+    const set = new Set(subset);
+    names = names.filter((n) => set.has(n));
+  }
+  names.sort();
+  for (const name of names) {
+    const p = join(rulesDir, `${name}.md`);
+    if (existsSync(p)) {
+      parts.push(`\n### rules/${name}.md\n\n`, readFileSync(p, 'utf-8'));
+    }
+  }
+  return parts.join('');
 }
 
 

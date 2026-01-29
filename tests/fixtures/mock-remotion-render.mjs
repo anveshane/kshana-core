@@ -38,3 +38,6 @@ if (outputPath) {
 } else {
   console.log(json);
 }
+// Write a copy of input to outDir for integration tests to assert _render_input content
+fs.mkdirSync(outDir, { recursive: true });
+fs.writeFileSync(path.join(outDir, 'captured_input.json'), raw, 'utf-8');
