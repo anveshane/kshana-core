@@ -22,3 +22,13 @@ export {
 } from './contextTools.js';
 export { generateContentTool, CONTENT_TYPE_OUTPUT_FILES } from './generateContentTool.js';
 export { readProjectTool, readFileTool, getContentCreatorTools } from './contentCreatorTools.js';
+export {
+  addInputTool,
+  listInputsTool,
+  readInputTool,
+  useInputAsReferenceTool,
+  getAudioTimingTool,
+  setPrimaryNarrationTool,
+  getNarrationContentTool,
+  getInputTools,
+} from './inputTools.js';

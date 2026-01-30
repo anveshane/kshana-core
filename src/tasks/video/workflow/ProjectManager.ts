@@ -287,6 +287,9 @@ export function setProjectInputType(
     // Update current phase to the start phase for this input type
     project.currentPhase = inputTypeConfig.startPhase;
 
+    // Clear todos when skipping phases - new phase will create its own
+    project.todos = [];
+
     // Read the original input and save it as the story
     const originalInput = getOriginalInput(project, basePath);
     if (originalInput) {
@@ -790,6 +793,10 @@ export function transitionToNextPhase(
       project.phases[phaseKey].status = 'in_progress';
       project.phases[phaseKey].plannerStage = PlannerStage.PLANNING;
     }
+
+    // Clear persisted todos from previous phase
+    // New phase will create its own todos
+    project.todos = [];
 
     saveProject(project, basePath);
     return { project, transitioned: true, reason: result.reason };
@@ -2117,4 +2124,311 @@ export function clearPersistedTodos(basePath: string = process.cwd()): boolean {
   project.todos = [];
   saveProject(project, basePath);
   return true;
+}
+
+// ============================================================================
+// Multi-Input Management Functions
+// ============================================================================
+
+import type {
+  ProjectInput,
+  InputPurpose,
+  PrimaryNarrationConfig,
+} from './types.js';
+
+/**
+ * Add a new input to the project.
+ * @param input - The input to add (without ID)
+ * @param basePath - Base path for the project
+ * @returns The added input with its generated ID
+ */
+export function addProjectInput(
+  input: Omit<ProjectInput, 'id'>,
+  basePath: string = process.cwd()
+): ProjectInput {
+  const project = loadProject(basePath);
+  if (!project) {
+    throw new Error('No project found');
+  }
+
+  // Initialize inputs array if needed
+  if (!project.inputs) {
+    project.inputs = [];
+  }
+
+  // Generate ID
+  const inputId = `input-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const newInput: ProjectInput = {
+    ...input,
+    id: inputId,
+  };
+
+  project.inputs.push(newInput);
+  saveProject(project, basePath);
+
+  // Create inputs directory structure
+  const inputsDir = join(getProjectDir(basePath), 'inputs');
+  const subdirs = ['local', 'remote', 'youtube', 'transcriptions', 'keyframes', 'extracted_audio'];
+  for (const subdir of subdirs) {
+    const dir = join(inputsDir, subdir);
+    if (!existsSync(dir)) {
+      mkdirSync(dir, { recursive: true });
+    }
+  }
+
+  return newInput;
+}
+
+/**
+ * Update an existing input in the project.
+ * @param inputId - ID of the input to update
+ * @param updates - Partial input data to merge
+ * @param basePath - Base path for the project
+ * @returns The updated input or null if not found
+ */
+export function updateProjectInput(
+  inputId: string,
+  updates: Partial<ProjectInput>,
+  basePath: string = process.cwd()
+): ProjectInput | null {
+  const project = loadProject(basePath);
+  if (!project || !project.inputs) {
+    return null;
+  }
+
+  const index = project.inputs.findIndex((i) => i.id === inputId);
+  if (index === -1) {
+    return null;
+  }
+
+  // Deep merge for nested objects
+  const existing = project.inputs[index];
+  if (!existing) {
+    return null;
+  }
+
+  const updated: ProjectInput = {
+    ...existing,
+    ...updates,
+    source: { ...existing.source, ...updates.source },
+    metadata: { ...existing.metadata, ...updates.metadata },
+    processing: { ...existing.processing, ...updates.processing },
+  };
+
+  project.inputs[index] = updated;
+  saveProject(project, basePath);
+
+  return updated;
+}
+
+/**
+ * Delete an input from the project.
+ * @param inputId - ID of the input to delete
+ * @param basePath - Base path for the project
+ * @returns Whether the deletion was successful
+ */
+export function deleteProjectInput(
+  inputId: string,
+  basePath: string = process.cwd()
+): boolean {
+  const project = loadProject(basePath);
+  if (!project || !project.inputs) {
+    return false;
+  }
+
+  const initialLength = project.inputs.length;
+  project.inputs = project.inputs.filter((i) => i.id !== inputId);
+
+  if (project.inputs.length === initialLength) {
+    return false;
+  }
+
+  // Clear primary narration if it was this input
+  if (project.primaryNarration?.inputId === inputId) {
+    project.primaryNarration = undefined;
+  }
+
+  saveProject(project, basePath);
+  return true;
+}
+
+/**
+ * Get an input by ID.
+ * @param inputId - ID of the input to get
+ * @param basePath - Base path for the project
+ * @returns The input or null if not found
+ */
+export function getProjectInput(
+  inputId: string,
+  basePath: string = process.cwd()
+): ProjectInput | null {
+  const project = loadProject(basePath);
+  if (!project || !project.inputs) {
+    return null;
+  }
+
+  return project.inputs.find((i) => i.id === inputId) || null;
+}
+
+/**
+ * Set the primary narration source for the project.
+ * @param inputId - ID of the input to use as narration
+ * @param preserveAudio - Whether to preserve original audio in final video
+ * @param basePath - Base path for the project
+ */
+export function setPrimaryNarration(
+  inputId: string,
+  preserveAudio: boolean,
+  basePath: string = process.cwd()
+): void {
+  const project = loadProject(basePath);
+  if (!project) {
+    throw new Error('No project found');
+  }
+
+  const input = project.inputs?.find((i) => i.id === inputId);
+  if (!input) {
+    throw new Error(`Input not found: ${inputId}`);
+  }
+
+  // Determine narration type based on media type
+  let narrationType: 'text' | 'audio' | 'transcription';
+  if (input.mediaType === 'text') {
+    narrationType = 'text';
+  } else if (input.mediaType === 'audio') {
+    narrationType = 'audio';
+  } else if (input.mediaType === 'video') {
+    narrationType = 'transcription';
+  } else {
+    throw new Error(`Cannot use ${input.mediaType} as narration source`);
+  }
+
+  project.primaryNarration = {
+    inputId,
+    type: narrationType,
+    preserveAudio: narrationType !== 'text' && preserveAudio,
+  };
+
+  saveProject(project, basePath);
+}
+
+/**
+ * Get inputs filtered by purpose.
+ * @param purpose - The purpose to filter by
+ * @param basePath - Base path for the project
+ * @returns Array of inputs with the specified purpose
+ */
+export function getInputsByPurpose(
+  purpose: InputPurpose,
+  basePath: string = process.cwd()
+): ProjectInput[] {
+  const project = loadProject(basePath);
+  if (!project || !project.inputs) {
+    return [];
+  }
+
+  return project.inputs.filter((i) => i.purpose === purpose);
+}
+
+/**
+ * Get the narration content from the primary narration source.
+ * Returns the text content (from text input or audio transcription)
+ * along with timing information if audio is being preserved.
+ * @param basePath - Base path for the project
+ * @returns Narration content or null if no primary narration set
+ */
+export function getNarrationContent(
+  basePath: string = process.cwd()
+): {
+  content: string;
+  audioPath?: string;
+  timingMarkers?: Array<{ start: number; end: number; text: string }>;
+} | null {
+  const project = loadProject(basePath);
+  if (!project || !project.primaryNarration) {
+    return null;
+  }
+
+  const input = project.inputs?.find((i) => i.id === project.primaryNarration?.inputId);
+  if (!input) {
+    return null;
+  }
+
+  // Get content based on narration type
+  let content: string;
+  if (project.primaryNarration.type === 'text') {
+    // Read text content from local path
+    if (input.processing.localPath && existsSync(input.processing.localPath)) {
+      content = readFileSync(input.processing.localPath, 'utf-8');
+    } else if (input.source.type === 'inline') {
+      content = input.source.value;
+    } else {
+      return null;
+    }
+  } else {
+    // Use transcription for audio/video
+    if (!input.processing.transcription) {
+      return null;
+    }
+    content = input.processing.transcription;
+  }
+
+  const result: {
+    content: string;
+    audioPath?: string;
+    timingMarkers?: Array<{ start: number; end: number; text: string }>;
+  } = { content };
+
+  // Add audio path if preserving audio
+  if (project.primaryNarration.preserveAudio) {
+    if (input.mediaType === 'audio') {
+      result.audioPath = input.processing.localPath;
+    } else if (input.mediaType === 'video') {
+      result.audioPath = input.processing.extractedAudioPath || input.processing.localPath;
+    }
+    result.timingMarkers = input.processing.timingMarkers;
+  }
+
+  return result;
+}
+
+/**
+ * Get all inputs for the project.
+ * @param basePath - Base path for the project
+ * @returns Array of all inputs
+ */
+export function getAllInputs(basePath: string = process.cwd()): ProjectInput[] {
+  const project = loadProject(basePath);
+  if (!project || !project.inputs) {
+    return [];
+  }
+  return project.inputs;
+}
+
+/**
+ * Check if any inputs exist in the project.
+ * @param basePath - Base path for the project
+ * @returns Whether the project has any inputs
+ */
+export function hasInputs(basePath: string = process.cwd()): boolean {
+  const project = loadProject(basePath);
+  return !!(project?.inputs && project.inputs.length > 0);
+}
+
+/**
+ * Get inputs by processing status.
+ * @param status - The processing status to filter by
+ * @param basePath - Base path for the project
+ * @returns Array of inputs with the specified status
+ */
+export function getInputsByStatus(
+  status: 'pending' | 'processing' | 'completed' | 'failed',
+  basePath: string = process.cwd()
+): ProjectInput[] {
+  const project = loadProject(basePath);
+  if (!project || !project.inputs) {
+    return [];
+  }
+
+  return project.inputs.filter((i) => i.processing.status === status);
 }

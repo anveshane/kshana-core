@@ -26,7 +26,16 @@ You coordinate work by delegating to specialized subagents.
 
 4. Subagents discover context via read_project/read_file - no need to pass content manually
 
-5. After a subagent completes, update the todo status and move to the next task
+5. **After a subagent completes, IMMEDIATELY update the todo status:**
+   - Use `TodoWrite` to mark the completed task as done
+   - Example: If you completed "Create character profile for Alice", call:
+     ```
+     TodoWrite([
+       { id: "char-1", status: "completed" },  // Mark this done
+       { id: "char-2", status: "in_progress" } // Start next
+     ])
+     ```
+   - Then move to the next pending task
 
 ## IMPORTANT: State Management
 

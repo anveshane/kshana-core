@@ -1006,25 +1006,34 @@ export class GenericAgent extends TypedEventEmitter {
     });
 
     // Check for looping (skip for think + TodoWrite - these may be called frequently)
+    // - Hard errors (loop_blocked): Block execution completely
+    // - Soft warnings: Record but let tool run, warning will be included in result
+    let loopWarningMessage: string | null = null;
     if (toolCall.name !== 'think' && !isBuiltinTodoTool(toolCall.name)) {
       const loopResult = this.detectLoop(toolCall.name, toolCall.arguments);
       if (loopResult) {
-        const resultStatus = loopResult.isHardError ? 'loop_blocked' : 'loop_warning';
-        const warningResult = {
-          status: resultStatus,
-          warning: loopResult.message,
-          tool: toolCall.name,
-          blocked: loopResult.isHardError,
-        };
-        this.emit({
-          type: 'tool_result',
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          result: warningResult,
-          isError: loopResult.isHardError,
-          agentName: this.getEffectiveAgentName(),
-        });
-        return warningResult;
+        if (loopResult.isHardError) {
+          // Hard error - block execution completely
+          const warningResult = {
+            status: 'loop_blocked',
+            warning: loopResult.message,
+            tool: toolCall.name,
+            blocked: true,
+          };
+          this.emit({
+            type: 'tool_result',
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            result: warningResult,
+            isError: true,
+            agentName: this.getEffectiveAgentName(),
+          });
+          return warningResult;
+        } else {
+          // Soft warning - record it, tool will still run
+          // Warning will be included in the tool result
+          loopWarningMessage = loopResult.message;
+        }
       }
     }
 
@@ -1228,15 +1237,20 @@ export class GenericAgent extends TypedEventEmitter {
         return { __awaiting_user_input: true, ...resultObj };
       }
 
+      // Include loop warning in result if present
+      const finalResult = loopWarningMessage
+        ? { ...result as Record<string, unknown>, loop_warning: loopWarningMessage }
+        : result;
+
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
         toolName: toolCall.name,
-        result,
+        result: finalResult,
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
-      return result;
+      return finalResult;
     }
 
     // Handle dispatch_content_agent specially - spawn a sub-agent for creative content

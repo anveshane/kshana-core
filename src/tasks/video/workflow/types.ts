@@ -52,7 +52,137 @@ export const STYLE_CONFIGS: Record<ProjectStyle, StyleConfig> = {
  * Type of input provided by the user.
  * This determines which phases can be skipped.
  */
-export type InputType = 'idea' | 'story';
+export type InputType = 'idea' | 'story' | 'multi_input';
+
+// ============================================================================
+// Multi-Input Type System
+// ============================================================================
+
+/**
+ * Source type - where the input comes from.
+ */
+export type InputSourceType = 'local_path' | 'remote_url' | 'youtube' | 'inline';
+
+/**
+ * Media type - what kind of content.
+ */
+export type InputMediaType = 'text' | 'audio' | 'image' | 'video';
+
+/**
+ * Purpose - how the input will be used in the workflow.
+ */
+export type InputPurpose =
+  | 'narration' // Story/script (text or audio)
+  | 'style_ref' // Visual style reference
+  | 'motion_ref' // Motion/animation reference
+  | 'character_ref' // Character appearance reference
+  | 'setting_ref' // Setting/location reference
+  | 'anchor_video' // Pre-recorded speaker
+  | 'background_music' // Audio for background
+  | 'reference_general'; // General reference (user specifies how)
+
+/**
+ * Anchor video workflow mode - how to use pre-recorded speaker video.
+ */
+export type AnchorWorkflowMode =
+  | 'b_roll_overlay' // Picture-in-picture / cutaways
+  | 'scene_integration' // Composite into generated scenes
+  | 'audio_extraction'; // Use audio only, generate new visuals
+
+/**
+ * Processing status for an input.
+ */
+export type InputProcessingStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+/**
+ * Single input entry for the project.
+ */
+export interface ProjectInput {
+  /** Unique identifier for this input */
+  id: string;
+
+  /** Source information */
+  source: {
+    /** Type of source (local file, URL, YouTube, inline text) */
+    type: InputSourceType;
+    /** The actual path, URL, or inline content */
+    value: string;
+    /** Original user-provided string before any normalization */
+    originalValue?: string;
+  };
+
+  /** Classification */
+  /** Type of media (text, audio, image, video) */
+  mediaType: InputMediaType;
+  /** Intended purpose of this input */
+  purpose: InputPurpose;
+  /** Workflow mode for anchor videos only */
+  anchorMode?: AnchorWorkflowMode;
+
+  /** Metadata about the input */
+  metadata: {
+    /** Original filename if from file */
+    originalFilename?: string;
+    /** MIME type if known */
+    mimeType?: string;
+    /** Duration in seconds for audio/video */
+    duration?: number;
+    /** Resolution for images/video */
+    resolution?: { width: number; height: number };
+    /** File size in bytes */
+    fileSize?: number;
+    /** YouTube video ID if from YouTube */
+    youtubeId?: string;
+    /** YouTube video title */
+    youtubeTitle?: string;
+    /** Timestamp when user provided the input */
+    addedAt: number;
+    /** Timestamp when processing completed */
+    processedAt?: number;
+  };
+
+  /** Processing results */
+  processing: {
+    /** Current processing status */
+    status: InputProcessingStatus;
+    /** Local path to downloaded/copied content */
+    localPath?: string;
+    /** Transcription text for audio inputs */
+    transcription?: string;
+    /** Path to transcription file */
+    transcriptionPath?: string;
+    /** Path to extracted audio (from video) */
+    extractedAudioPath?: string;
+    /** Paths to extracted keyframes (from video) */
+    keyframePaths?: string[];
+    /** Timing markers for audio sync */
+    timingMarkers?: Array<{
+      /** Start time in seconds */
+      start: number;
+      /** End time in seconds */
+      end: number;
+      /** Text content for this segment */
+      text: string;
+    }>;
+    /** Error message if processing failed */
+    error?: string;
+  };
+
+  /** User annotations/notes about this input */
+  notes?: string;
+}
+
+/**
+ * Primary narration source configuration.
+ */
+export interface PrimaryNarrationConfig {
+  /** ID of the input used as narration */
+  inputId: string;
+  /** Type of narration source */
+  type: 'text' | 'audio' | 'transcription';
+  /** Whether to preserve original audio in final video */
+  preserveAudio: boolean;
+}
 
 /**
  * Video workflow phases in execution order.
@@ -117,6 +247,13 @@ export const INPUT_TYPE_CONFIGS: Record<InputType, InputTypeConfig> = {
     description: 'A full story, chapter, or detailed narrative ready for visualization',
     startPhase: WorkflowPhase.CHARACTERS_SETTINGS,
     skipPhases: [WorkflowPhase.PLOT, WorkflowPhase.STORY],
+  },
+  multi_input: {
+    displayName: 'Multi-Input Project',
+    description:
+      'Project with multiple input sources (text, audio, images, video) that can be added dynamically',
+    startPhase: WorkflowPhase.PLOT, // Default start, adjusted based on inputs
+    skipPhases: [], // Determined dynamically based on provided inputs
   },
 };
 
@@ -414,6 +551,12 @@ export interface ProjectFile {
 
   /** Persisted todo list for resuming work */
   todos?: PersistedTodo[];
+
+  /** All inputs for this project (multi-input support) */
+  inputs?: ProjectInput[];
+
+  /** Primary narration source configuration */
+  primaryNarration?: PrimaryNarrationConfig;
 }
 
 /**
