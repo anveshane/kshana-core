@@ -265,3 +265,50 @@ export function buildVideoGenerationPrompt(options: VideoGenerationPromptOptions
 
   return [base, sub, vid, taskSection, contextSection, sceneSection].filter(Boolean).join('\n\n');
 }
+
+/**
+ * Skill types supported by the skill-based architecture.
+ */
+export type SkillType =
+  | 'content-writing'
+  | 'image-prompting'
+  | 'video-direction'
+  | 'research-synthesis'
+  | 'narration-scripting';
+
+/**
+ * Build the explore agent system prompt.
+ * The explore agent reads documentation and summarizes relevant guidance for the orchestrator.
+ *
+ * @param query - The query describing what guidance is needed
+ * @returns The complete explore agent system prompt
+ */
+export function buildExplorePrompt(query: string): string {
+  const querySection = `<query>\n${query}\n</query>`;
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const explore = loadAndRenderMarkdown('system/explore.md', {});
+  return [base, sub, explore, querySection].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Build a skill agent system prompt.
+ * Skill agents are specialized subagents that handle specific creative capabilities.
+ *
+ * @param skillName - The skill type (content-writing, image-prompting, etc.)
+ * @param task - The task description for the skill agent
+ * @param context - Optional context (project state, previous content, etc.)
+ * @returns The complete skill agent system prompt
+ */
+export function buildSkillPrompt(
+  skillName: SkillType,
+  task: string,
+  context?: string
+): string {
+  const taskSection = `<task>\n${task}\n</task>`;
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const skill = loadAndRenderMarkdown(`skills/${skillName}.md`, {});
+  return [base, sub, skill, taskSection, contextSection].filter(Boolean).join('\n\n');
+}

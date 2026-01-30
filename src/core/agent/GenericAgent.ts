@@ -18,8 +18,11 @@ import {
   buildPlanningPrompt,
   buildContentPrompt,
   buildImageGenerationPrompt,
+  buildExplorePrompt,
+  buildSkillPrompt,
   wrapUserTask,
   type ContentType,
+  type SkillType,
 } from '../prompts/index.js';
 import { loadAndRenderMarkdown } from '../prompts/loader.js';
 import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
@@ -148,6 +151,8 @@ const SIMPLE_TOOLS = new Set([
   'dispatch_content_agent',
   'dispatch_image_agent',
   'dispatch_video_agent',
+  'dispatch_explore', // New skill-based architecture
+  'dispatch_skill', // New skill-based architecture
   'generate_content', // Deterministic content generation
   'wait_for_job',
   'TodoWrite',
@@ -1418,6 +1423,34 @@ export class GenericAgent extends TypedEventEmitter {
       return result;
     }
 
+    // Handle dispatch_explore - spawns explore agent for documentation research
+    if (toolCall.name === 'dispatch_explore') {
+      const result = await this.handleDispatchExplore(toolCall);
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
+      return result;
+    }
+
+    // Handle dispatch_skill - spawns skill agent for specialized work
+    if (toolCall.name === 'dispatch_skill') {
+      const result = await this.handleDispatchSkill(toolCall);
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
+      return result;
+    }
+
     const tool = this.tools.get(toolCall.name);
     if (!tool?.handler) {
       const errorResult = { error: `Unknown tool: ${toolCall.name}` };
@@ -1541,6 +1574,33 @@ export class GenericAgent extends TypedEventEmitter {
       return await this.handleDispatchVideoAgent({
         ...toolCall,
         name: 'dispatch_video_agent',
+      });
+    }
+
+    // New skill-based architecture types
+    if (subagentType === 'explore') {
+      return await this.handleDispatchExplore({
+        ...toolCall,
+        name: 'dispatch_explore',
+      });
+    }
+
+    // Map skill types to dispatch_skill
+    const skillTypes: SkillType[] = [
+      'content-writing',
+      'image-prompting',
+      'video-direction',
+      'research-synthesis',
+      'narration-scripting',
+    ];
+    if (skillTypes.includes(subagentType as SkillType)) {
+      return await this.handleDispatchSkill({
+        ...toolCall,
+        name: 'dispatch_skill',
+        arguments: {
+          ...args,
+          skill_name: subagentType,
+        },
       });
     }
 
@@ -3786,6 +3846,146 @@ Respond in JSON format:
     }
 
     return false;
+  }
+
+  /**
+   * Handle dispatch_explore tool - spawns an explore agent to research documentation.
+   * The explore agent reads relevant files in prompts/reference/ and returns a focused summary.
+   */
+  private async handleDispatchExplore(toolCall: ToolCall): Promise<unknown> {
+    const args = toolCall.arguments;
+    const query = (args['query'] as string) || (args['task'] as string) || (args['prompt'] as string);
+
+    if (!query) {
+      return { error: 'No query provided for dispatch_explore' };
+    }
+
+    debugLog(`[GenericAgent] dispatch_explore: query="${query.substring(0, 100)}..."`);
+
+    try {
+      // Build the explore agent prompt
+      const explorePrompt = buildExplorePrompt(query);
+
+      // Get read_file tool for the explore agent
+      const { readFileTool } = await import('../tools/builtin/contentCreatorTools.js');
+      const { thinkTool } = await import('../tools/builtin/think.js');
+
+      // Run the explore sub-agent
+      const result = await this.runSubAgent({
+        name: 'Explore Agent',
+        tools: [readFileTool, thinkTool],
+        prompt: explorePrompt,
+        task: `Research and summarize guidance for: ${query}`,
+        maxIterations: 15, // Allow multiple file reads
+      });
+
+      debugLog(`[GenericAgent] dispatch_explore completed: ${result.status}`);
+
+      return {
+        status: 'completed',
+        query,
+        summary: result.output || 'No summary generated',
+        message: 'Explore agent completed documentation research.',
+      };
+    } catch (error) {
+      debugLog(`[GenericAgent] dispatch_explore error: ${String(error)}`);
+      return {
+        status: 'error',
+        error: String(error),
+        query,
+      };
+    }
+  }
+
+  /**
+   * Handle dispatch_skill tool - spawns a skill agent for specialized creative work.
+   * Skill agents are autonomous and understand their domain.
+   */
+  private async handleDispatchSkill(toolCall: ToolCall): Promise<unknown> {
+    const args = toolCall.arguments;
+    const skillName = (args['skill_name'] as SkillType) || (args['skill'] as SkillType);
+    const task = (args['task'] as string) || (args['instruction'] as string) || (args['prompt'] as string);
+    const contextRef = args['context_ref'] as string | undefined;
+    const contextRefs = args['context_refs'] as string[] | undefined;
+
+    if (!skillName) {
+      return { error: 'No skill_name provided for dispatch_skill' };
+    }
+
+    if (!task) {
+      return { error: 'No task provided for dispatch_skill' };
+    }
+
+    // Validate skill name
+    const validSkills: SkillType[] = [
+      'content-writing',
+      'image-prompting',
+      'video-direction',
+      'research-synthesis',
+      'narration-scripting',
+    ];
+    if (!validSkills.includes(skillName)) {
+      return { error: `Invalid skill_name: ${skillName}. Valid skills: ${validSkills.join(', ')}` };
+    }
+
+    debugLog(`[GenericAgent] dispatch_skill: skill="${skillName}", task="${task.substring(0, 100)}..."`);
+
+    // Resolve context from context store
+    let context = '';
+    if (contextRefs && contextRefs.length > 0) {
+      const contextParts: string[] = [];
+      for (const ref of contextRefs) {
+        const stored = contextStore.get(ref);
+        if (stored) {
+          contextParts.push(`## ${ref} (${stored.label})\n\n${stored.content}`);
+        }
+      }
+      context = contextParts.join('\n\n---\n\n');
+    } else if (contextRef) {
+      const stored = contextStore.get(contextRef);
+      if (stored) {
+        context = stored.content;
+      }
+    }
+
+    try {
+      // Build the skill agent prompt
+      const skillPrompt = buildSkillPrompt(skillName, task, context || undefined);
+
+      // Get tools appropriate for the skill
+      const { readFileTool, readProjectTool } = await import('../tools/builtin/contentCreatorTools.js');
+      const { thinkTool } = await import('../tools/builtin/think.js');
+
+      // Base tools available to all skills
+      const skillTools = [readFileTool, readProjectTool, thinkTool];
+
+      // Run the skill sub-agent
+      const result = await this.runSubAgent({
+        name: `${skillName} Skill`,
+        tools: skillTools,
+        prompt: skillPrompt,
+        task,
+        maxIterations: 10,
+      });
+
+      debugLog(`[GenericAgent] dispatch_skill completed: skill="${skillName}", status=${result.status}`);
+
+      return {
+        status: 'completed',
+        skill: skillName,
+        task,
+        output: result.output || 'No output generated',
+        message: `${skillName} skill completed successfully.`,
+      };
+    } catch (error) {
+      debugLog(`[GenericAgent] dispatch_skill error: ${String(error)}`);
+      return {
+        status: 'error',
+        error: String(error),
+        skill: skillName,
+        task,
+      };
+    }
   }
 
   /**
