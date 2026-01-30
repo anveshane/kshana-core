@@ -10,7 +10,6 @@ import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
-import { loadAndRenderMarkdown, loadMarkdown } from '../../core/prompts/loader.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
@@ -318,23 +317,8 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
 }
 
 /**
- * Map workflow phases to their prompt file paths.
- */
-const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
-  [WorkflowPhase.PLOT]: 'video/phases/plot.md',
-  [WorkflowPhase.STORY]: 'video/phases/story.md',
-  [WorkflowPhase.CHARACTERS_SETTINGS]: 'video/phases/characters-settings.md',
-  [WorkflowPhase.SCENES]: 'video/phases/scenes.md',
-  [WorkflowPhase.CHARACTER_SETTING_IMAGES]: 'video/phases/character-setting-images.md',
-  [WorkflowPhase.SCENE_IMAGES]: 'video/phases/scene-images.md',
-  [WorkflowPhase.VIDEO]: 'video/phases/video.md',
-  [WorkflowPhase.VIDEO_COMBINE]: 'video/phases/video-combine.md',
-  [WorkflowPhase.COMPLETED]: 'video/phases/completed.md',
-};
-
-/**
- * Build the custom prompt for the workflow agent based on current phase.
- * Loads prompts from markdown files for easier maintenance.
+ * Build the custom prompt for the workflow agent.
+ * Uses the skill-based architecture - the orchestrator prompt handles workflow logic.
  */
 function buildWorkflowAgentPrompt(
   project: ReturnType<typeof loadProject>,
@@ -344,46 +328,26 @@ function buildWorkflowAgentPrompt(
   const phaseConfig = PHASE_CONFIGS[currentPhase];
 
   // Build loaded contexts section
-  let loadedContextsSection = 'No existing project files loaded yet.';
+  let loadedContextsSection = '';
   if (loadedContexts.length > 0) {
-    loadedContextsSection = `## Available Contexts
+    loadedContextsSection = `
+## Available Contexts
 The following project files have been loaded as contexts:
 ${loadedContexts.map(c => `- ${c}`).join('\n')}
-
-Use the \`generate_content\` tool for creating content - it automatically injects the correct contexts.
-For example: \`generate_content(content_type: "plot")\` automatically uses \$original_input.`;
-  }
-
-  // Load phase-specific instructions from file
-  const phasePromptFile = PHASE_PROMPT_FILES[currentPhase];
-  let phaseInstructions = '';
-  try {
-    phaseInstructions = loadMarkdown(phasePromptFile);
-  } catch {
-    // Fallback if file not found
-    phaseInstructions = `Phase instructions for ${currentPhase} not found.`;
-  }
-
-  // Build expensive checkpoint section
-  let expensiveCheckpoint = '';
-  if (phaseConfig.isExpensive) {
-    expensiveCheckpoint = `
-## Important: Checkpoint Required
-This phase involves expensive operations (${phaseConfig.displayName}).
-You MUST get user approval before starting generation.
 `;
   }
 
-  // Load and render the base workflow template
-  return loadAndRenderMarkdown('video/workflow.md', {
-    project_id: project?.id ?? 'new',
-    project_title: project?.title || '(not set)',
-    phase_display_name: phaseConfig.displayName,
-    current_phase: currentPhase,
-    loaded_contexts: loadedContextsSection,
-    phase_instructions: phaseInstructions,
-    expensive_checkpoint: expensiveCheckpoint,
-  });
+  // Build project state section
+  const projectSection = `
+## Current Project State
+- **Project ID**: ${project?.id ?? 'new'}
+- **Project Title**: ${project?.title || '(not set)'}
+- **Current Phase**: ${phaseConfig.displayName}
+${phaseConfig.isExpensive ? '\n**Note**: This phase involves expensive operations. Get user approval before generation.' : ''}
+${loadedContextsSection}
+`;
+
+  return projectSection.trim();
 }
 
 /**

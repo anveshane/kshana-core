@@ -7,7 +7,6 @@ import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
 import { getWorkflowLogger } from './WorkflowLogger.js';
 import { getPhaseLogger } from '../../../utils/phaseLogger.js';
-import { loadAndRenderMarkdown } from '../../../core/prompts/loader.js';
 import {
   loadProject,
   saveProject,
@@ -74,10 +73,19 @@ async function validateStoryInput(input: string): Promise<{ valid: boolean; reas
   try {
     const client = new LLMClient();
 
-    // Load validation prompt from file
-    const validationPrompt = loadAndRenderMarkdown('video/validation.md', {
-      user_input: trimmed,
-    });
+    // Inline validation prompt (previously loaded from video/validation.md)
+    const validationPrompt = `Evaluate if the following user input could be developed into a creative video project (story, documentary, trailer, etc.).
+
+User Input:
+"""
+${trimmed}
+"""
+
+Respond with exactly one of:
+- "VALID" if this is a creative idea, story concept, documentary topic, or content that could become a video
+- "INVALID: [reason]" if this is not usable content (random text, commands, gibberish, etc.)
+
+Be lenient - even a short idea like "a detective story" is valid. Only reject obvious non-content.`;
 
     const response = await client.generate({
       messages: [{ role: 'user', content: validationPrompt }],
