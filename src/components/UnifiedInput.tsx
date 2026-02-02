@@ -45,10 +45,14 @@ export function UnifiedInput({
   const { stdin, setRawMode } = useStdin();
 
   // Reset selection when options change
+  // Note: We intentionally exclude onSelectionChange from deps to avoid infinite loops.
+  // The callback is only used to notify the parent of the reset, not as a triggering condition.
+  const optionsKey = React.useMemo(() => JSON.stringify(options?.map(o => o.label)), [options]);
   React.useEffect(() => {
     setSelectedIndex(0);
     onSelectionChange?.(0);
-  }, [options, onSelectionChange]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [optionsKey]);
 
   // Keep cursor in bounds
   React.useEffect(() => {

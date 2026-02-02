@@ -3446,7 +3446,29 @@ Respond in JSON format:
    * Use LLM to classify whether user response indicates approval or feedback for image generation.
    */
   private async classifyImageGenResponse(userResponse: string): Promise<boolean> {
-    // Load classification prompt from file
+    // Fast path: check for common approval patterns first to avoid LLM call
+    const lower = userResponse.toLowerCase().trim();
+    const approvalPatterns = [
+      'generate image',
+      'generate',
+      'yes',
+      'ok',
+      'okay',
+      'go',
+      'create',
+      'make',
+      'proceed',
+      'lgtm',
+      'looks good',
+      'go ahead',
+      'y',
+      '1',
+    ];
+    if (approvalPatterns.some(p => lower === p || lower.startsWith(p))) {
+      return true;
+    }
+
+    // Load classification prompt from file for ambiguous cases
     const classificationPrompt = loadAndRenderMarkdown('system/classification/image-approval.md', {
       user_response: userResponse,
     });
@@ -3455,28 +3477,15 @@ Respond in JSON format:
       const response = await this.llm.generate({
         messages: [{ role: 'user', content: classificationPrompt }],
         temperature: 0,
-        maxTokens: 10,
+        maxTokens: 50,
       });
 
       const result = (response.content ?? '').trim().toUpperCase();
       return result.includes('APPROVE');
     } catch {
-      // On error, fall back to simple pattern matching
-      const lower = userResponse.toLowerCase().trim();
-      const approvalPatterns = [
-        'yes',
-        'ok',
-        'okay',
-        'generate',
-        'go',
-        'create',
-        'make',
-        'proceed',
-        'lgtm',
-        'y',
-        '1',
-      ];
-      return approvalPatterns.some(p => lower === p || lower.includes(p));
+      // On error, use the fast path patterns (already checked above, so we'd only get here
+      // if the LLM call was needed for an ambiguous case - default to feedback)
+      return false;
     }
   }
 
