@@ -1487,6 +1487,7 @@ export class GenericAgent extends TypedEventEmitter {
       const contentType = args['content_type'] as string;
       const name = args['name'] as string | undefined;
       const instruction = args['instruction'] as string | undefined;
+      const sceneNumber = args['scene_number'] as number | undefined;
 
       if (!contentType) {
         const errorResult = { error: 'content_type is required for generate_content' };
@@ -1509,10 +1510,22 @@ export class GenericAgent extends TypedEventEmitter {
 
       // Build the output file path
       let outputFile = CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
+
+      // Handle different content types that need name/number appended
       if ((contentType === 'character' || contentType === 'setting') && name) {
         // For character/setting, append the name to the directory path
         const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
         outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.md`;
+      } else if ((contentType === 'character_image_prompt' || contentType === 'setting_image_prompt') && name) {
+        // For character/setting image prompts, append name.prompt.md
+        const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+        outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.prompt.md`;
+      } else if (contentType === 'scene_image_prompt' && sceneNumber !== undefined) {
+        // For scene image prompts, append scene-N.prompt.md
+        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.prompt.md`;
+      } else if (contentType === 'scene_video_prompt' && sceneNumber !== undefined) {
+        // For scene video prompts, append scene-N.motion.md
+        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.motion.md`;
       }
 
       // Create a synthetic tool call for handleDispatchContentAgent
