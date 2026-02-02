@@ -161,14 +161,16 @@ export const readFileTool: ToolDefinition = createTool(
   'read_file',
   `Read content from a project file within the .kshana directory.
 
-Use this to read:
-- Plan files: plans/plot.md, plans/story.md, plans/scenes.md, plans/images.md, plans/video.md
-- Character files: characters/[name].md
-- Setting files: settings/[name].md
-- Original input: original_input.md
-- Asset manifest: assets/manifest.json
+**CRITICAL: ALWAYS call list_project_files FIRST to get actual file names.**
+**NEVER guess file names like "0.md", "1.md" - files are named by content!**
 
-Returns the file content as a string, or an error if file doesn't exist.`,
+Use this to read:
+- Plan files: plans/plot.md, plans/story.md, plans/scenes.md
+- Character files: characters/{actual_name}.md (e.g., characters/isha.md)
+- Setting files: settings/{actual_name}.md (e.g., settings/living_room.md)
+- Original input: original_input.md
+
+If you get "File not found", STOP and call list_project_files to see what files actually exist.`,
   {
     type: 'object',
     properties: {

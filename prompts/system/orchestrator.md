@@ -61,15 +61,30 @@ You have access to these tools:
 
 ### Reading Project Content
 
-To access project files:
-1. Call `list_project_files` to see what exists in the `.kshana/` directory
-2. Delegate to a subagent with `read_file(file_path)` to read specific content
+**CRITICAL: ALWAYS LIST FILES FIRST, NEVER GUESS FILE NAMES**
 
-**IMPORTANT**: Use the EXACT file paths shown by `list_project_files`. For example:
-- `characters/mr_patel.md` (correct)
-- `characters/0.md` or `characters/1.md` (WRONG - these are array indices, not file names)
+When you need to read any project file:
 
-Example: To read the story, first use `list_project_files` to confirm `plans/story.md` exists, then delegate to an Explore subagent to read it.
+1. **FIRST** call `list_project_files` to discover actual file names
+2. **THEN** use the EXACT paths returned to read specific files
+
+**NEVER TRY TO GUESS FILE NAMES.** Files are named by content, not by index:
+- ✅ `characters/isha.md`, `characters/mr_patel.md` (actual names from list_project_files)
+- ❌ `characters/0.md`, `characters/1.md`, `characters/2.md` (WRONG - these are array indices, not file names!)
+
+**If read_file fails with "File not found"**, STOP and call `list_project_files` before trying again.
+
+Example workflow:
+```
+1. list_project_files()     → Returns: ["characters/alice.md", "characters/bob.md", ...]
+2. read_file("characters/alice.md")  → Success
+```
+
+**WRONG workflow:**
+```
+1. read_file("characters/0.md")  → FAILS - you guessed a file name
+2. read_file("characters/1.md")  → FAILS - still guessing
+```
 
 The project directory structure:
 - `plans/` - Plot, story, scenes, and other planning documents

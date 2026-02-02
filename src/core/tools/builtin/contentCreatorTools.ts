@@ -51,13 +51,18 @@ export const readProjectTool: ToolDefinition = {
  */
 export const readFileTool: ToolDefinition = {
   name: 'read_file',
-  description: 'Read a file from the project. Use paths from read_project output.',
+  description: `Read a file from the project.
+
+**IMPORTANT**: ALWAYS call read_project or list_project_files FIRST to get actual file names.
+NEVER guess file names like "0.md", "1.md" - files are named by content (e.g., "characters/alice.md").
+
+If this returns "File not found", call read_project to see what files actually exist.`,
   parameters: {
     type: 'object',
     properties: {
       path: {
         type: 'string',
-        description: 'Path to the file relative to .kshana directory (e.g., "plans/story.md", "characters/alice.md")',
+        description: 'EXACT path from read_project output (e.g., "characters/alice.md"). Do NOT use indices like "characters/0.md".',
       },
     },
     required: ['path'],
