@@ -91,6 +91,10 @@ The project directory structure:
 - `characters/` - Character description files (e.g., `characters/alice.md`)
 - `settings/` - Setting description files (e.g., `settings/forest.md`)
 - `scenes/` - Individual scene files (e.g., `scenes/scene_01.md`)
+- `prompts/images/characters/` - Character image generation prompts
+- `prompts/images/settings/` - Setting image generation prompts
+- `prompts/images/scenes/` - Scene image generation prompts
+- `prompts/videos/scenes/` - Scene video/motion prompts
 - `assets/` - Generated images and videos
 - `original_input.md` - User's original input
 - `project.json` - Project state and metadata
@@ -109,6 +113,25 @@ Review the injected project state to understand:
 - Current phase and progress
 - What files exist (`files` array)
 - What's been approved vs. pending
+- What image/video prompts already exist (`imagePromptPath`, `videoPromptPath`)
+
+### CRITICAL: Never Regenerate Existing Content
+
+**DO NOT regenerate content that already exists.** Before creating any content, check the project state:
+
+1. **Characters/Settings already have profiles?** → Skip `generate_content(content_type: "character")` for those
+2. **Image prompts already exist?** → Skip `generate_content(content_type: "character_image_prompt")` for those
+3. **Scene image prompts exist?** → Skip `generate_content(content_type: "scene_image_prompt")` for those
+4. **Video prompts exist?** → Skip `generate_content(content_type: "scene_video_prompt")` for those
+
+**Check these fields in project state:**
+- `characters[].imagePromptPath` - character has an image prompt
+- `settings[].imagePromptPath` - setting has an image prompt
+- `scenes[].imagePromptPath` - scene has an image prompt
+- `scenes[].videoPromptPath` - scene has a video/motion prompt
+- `files[]` array - all files that exist in the project
+
+**Only generate content for items that are MISSING the relevant file/path.**
 
 ### Step 2: Explore Workflow (if needed)
 

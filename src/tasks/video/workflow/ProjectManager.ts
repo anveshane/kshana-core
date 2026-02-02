@@ -591,6 +591,112 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     }
   }
 
+  // Sync image prompts for characters
+  const charImagePromptsDir = join(projectDir, 'prompts', 'images', 'characters');
+  if (existsSync(charImagePromptsDir)) {
+    const promptFiles = readdirSync(charImagePromptsDir).filter(f => f.endsWith('.prompt.md'));
+    for (const promptFile of promptFiles) {
+      // Extract character name from filename (e.g., "alice.prompt.md" -> "alice")
+      const charNameFromFile = promptFile.replace('.prompt.md', '').replace(/[-_]/g, ' ');
+      const promptPath = `prompts/images/characters/${promptFile}`;
+
+      // Find matching character (case-insensitive)
+      const matchingChar = project.characters.find(
+        c => c.name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === charNameFromFile.toLowerCase().trim()
+      );
+      if (matchingChar && !matchingChar.imagePromptPath) {
+        matchingChar.imagePromptPath = promptPath;
+        // If character_setting_images phase is in progress or complete, mark prompt as approved
+        if (
+          project.phases.character_setting_images?.status === 'in_progress' ||
+          project.phases.character_setting_images?.status === 'completed'
+        ) {
+          matchingChar.imagePromptApprovalStatus = 'approved';
+        }
+        trackFile('character_image_prompt', promptPath, matchingChar.name);
+        needsSave = true;
+      }
+    }
+  }
+
+  // Sync image prompts for settings
+  const settingImagePromptsDir = join(projectDir, 'prompts', 'images', 'settings');
+  if (existsSync(settingImagePromptsDir)) {
+    const promptFiles = readdirSync(settingImagePromptsDir).filter(f => f.endsWith('.prompt.md'));
+    for (const promptFile of promptFiles) {
+      const settingNameFromFile = promptFile.replace('.prompt.md', '').replace(/[-_]/g, ' ');
+      const promptPath = `prompts/images/settings/${promptFile}`;
+
+      const matchingSetting = project.settings.find(
+        s => s.name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === settingNameFromFile.toLowerCase().trim()
+      );
+      if (matchingSetting && !matchingSetting.imagePromptPath) {
+        matchingSetting.imagePromptPath = promptPath;
+        if (
+          project.phases.character_setting_images?.status === 'in_progress' ||
+          project.phases.character_setting_images?.status === 'completed'
+        ) {
+          matchingSetting.imagePromptApprovalStatus = 'approved';
+        }
+        trackFile('setting_image_prompt', promptPath, matchingSetting.name);
+        needsSave = true;
+      }
+    }
+  }
+
+  // Sync image prompts for scenes
+  const sceneImagePromptsDir = join(projectDir, 'prompts', 'images', 'scenes');
+  if (existsSync(sceneImagePromptsDir)) {
+    const promptFiles = readdirSync(sceneImagePromptsDir).filter(f => f.endsWith('.prompt.md'));
+    for (const promptFile of promptFiles) {
+      // Extract scene number from filename (e.g., "scene-1.prompt.md" -> 1)
+      const sceneMatch = promptFile.match(/scene[_-]?(\d+)\.prompt\.md/i);
+      if (sceneMatch && sceneMatch[1]) {
+        const sceneNumber = parseInt(sceneMatch[1], 10);
+        const promptPath = `prompts/images/scenes/${promptFile}`;
+
+        const matchingScene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+        if (matchingScene && !matchingScene.imagePromptPath) {
+          matchingScene.imagePromptPath = promptPath;
+          if (
+            project.phases.scene_images?.status === 'in_progress' ||
+            project.phases.scene_images?.status === 'completed'
+          ) {
+            matchingScene.imagePromptApprovalStatus = 'approved';
+          }
+          trackFile('scene_image_prompt', promptPath, `Scene ${sceneNumber}`);
+          needsSave = true;
+        }
+      }
+    }
+  }
+
+  // Sync video/motion prompts for scenes
+  const sceneVideoPromptsDir = join(projectDir, 'prompts', 'videos', 'scenes');
+  if (existsSync(sceneVideoPromptsDir)) {
+    const promptFiles = readdirSync(sceneVideoPromptsDir).filter(f => f.endsWith('.motion.md'));
+    for (const promptFile of promptFiles) {
+      const sceneMatch = promptFile.match(/scene[_-]?(\d+)\.motion\.md/i);
+      if (sceneMatch && sceneMatch[1]) {
+        const sceneNumber = parseInt(sceneMatch[1], 10);
+        const promptPath = `prompts/videos/scenes/${promptFile}`;
+
+        const matchingScene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+        if (matchingScene && !matchingScene.videoPromptPath) {
+          matchingScene.videoPromptPath = promptPath;
+          if (
+            project.phases.video?.status === 'in_progress' ||
+            project.phases.video?.status === 'completed'
+          ) {
+            matchingScene.videoPromptApprovalStatus = 'approved';
+          }
+          trackFile('scene_video_prompt', promptPath, `Scene ${sceneNumber}`);
+          needsSave = true;
+        }
+      }
+    }
+  }
+
   return needsSave;
 }
 
