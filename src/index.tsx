@@ -194,9 +194,13 @@ const llmConfig = getLLMConfig(llmOverrides);
 
 // Show config info
 const currentProvider = getLLMProvider();
-console.log(`Using provider: ${currentProvider}`);
+const maskedApiKey = llmConfig.apiKey
+  ? `${llmConfig.apiKey.slice(0, 4)}...${llmConfig.apiKey.slice(-4)}`
+  : '(not set)';
+console.log(`Provider: ${currentProvider}`);
 console.log(`Model: ${llmConfig.model}`);
 console.log(`Base URL: ${llmConfig.baseUrl}`);
+console.log(`API Key: ${maskedApiKey}`);
 console.log(`Task type: ${taskType}`);
 console.log('');
 

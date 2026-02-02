@@ -125,10 +125,14 @@ async function main(): Promise<void> {
 
   // Get LLM config
   const llmConfig = getLLMConfig();
+  const maskedApiKey = llmConfig.apiKey
+    ? `${llmConfig.apiKey.slice(0, 4)}...${llmConfig.apiKey.slice(-4)}`
+    : '(not set)';
 
-  console.log(`Using provider: ${getLLMProvider()}`);
+  console.log(`Provider: ${getLLMProvider()}`);
   console.log(`Model: ${llmConfig.model}`);
   console.log(`Base URL: ${llmConfig.baseUrl}`);
+  console.log(`API Key: ${maskedApiKey}`);
   console.log('');
 
   try {
