@@ -99,4 +99,22 @@ export interface LLMClientConfig {
   baseUrl?: string;
   apiKey?: string;
   model?: string;
+  /**
+   * Whether the LLM has implicit thinking capability (e.g., DeepSeek, Claude extended thinking).
+   * When true:
+   * - The explicit 'think' tool should be disabled (redundant)
+   * - Content inside <think> tags should be emitted as 'streaming_think' events
+   * - The UI should display thinking content in a dedicated area
+   * Can also be set via LLM_IMPLICIT_THINKING=true environment variable.
+   */
+  hasImplicitThinking?: boolean;
+  /**
+   * Custom headers to send with each request.
+   * Useful for providers that require additional authentication or metadata.
+   */
+  defaultHeaders?: Record<string, string>;
+  /**
+   * Organization ID for providers that support it (e.g., OpenAI).
+   */
+  organization?: string;
 }

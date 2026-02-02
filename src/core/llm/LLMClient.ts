@@ -18,15 +18,52 @@ export class LLMClient {
   private model: string;
   private baseUrl: string;
   private cachedContextLength: number | null = null;
+  private _hasImplicitThinking: boolean;
 
   constructor(config: LLMClientConfig = {}) {
     this.baseUrl = config.baseUrl ?? process.env['LLM_BASE_URL'] ?? 'http://127.0.0.1:1234/v1';
+
+    const apiKey = config.apiKey ?? process.env['LLM_API_KEY'] ?? 'not-needed';
+    const organization = config.organization ?? process.env['LLM_ORGANIZATION'];
+    const defaultHeaders = config.defaultHeaders ?? this.parseDefaultHeaders();
+
     this.client = new OpenAI({
       baseURL: this.baseUrl,
-      apiKey: config.apiKey ?? process.env['LLM_API_KEY'] ?? 'not-needed',
+      apiKey,
       timeout: 5 * 60 * 1000, // 5 minutes for thinking/reasoning models
+      organization,
+      defaultHeaders: Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined,
     });
     this.model = config.model ?? process.env['LLM_MODEL'] ?? 'local-model';
+    // Check config, then env var for implicit thinking capability
+    this._hasImplicitThinking = config.hasImplicitThinking ??
+      (process.env['LLM_IMPLICIT_THINKING']?.toLowerCase() === 'true');
+  }
+
+  /**
+   * Parse default headers from environment variable.
+   * Format: LLM_DEFAULT_HEADERS="Header1:Value1,Header2:Value2"
+   */
+  private parseDefaultHeaders(): Record<string, string> {
+    const headersEnv = process.env['LLM_DEFAULT_HEADERS'];
+    if (!headersEnv) return {};
+
+    const headers: Record<string, string> = {};
+    for (const pair of headersEnv.split(',')) {
+      const [key, ...valueParts] = pair.split(':');
+      if (key && valueParts.length > 0) {
+        headers[key.trim()] = valueParts.join(':').trim();
+      }
+    }
+    return headers;
+  }
+
+  /**
+   * Check if the LLM has implicit thinking capability.
+   * When true, the LLM outputs <think> tags naturally and the explicit 'think' tool should be disabled.
+   */
+  get hasImplicitThinking(): boolean {
+    return this._hasImplicitThinking;
   }
 
   /**
@@ -345,6 +382,10 @@ export class LLMClient {
   private cleanContent(content: string | null): string | null {
     if (!content) return null;
     // Remove <think> tags from reasoning models
-    return content.replace(/<think>.*?<\/think>/gs, '').trim();
+    let cleaned = content
+      .replace(/<think>.*?<\/think>/gs, '') // Complete think blocks
+      .replace(/<think>.*$/gs, '') // Orphan opening tag (no closing)
+      .replace(/<\/think>/g, ''); // Orphan closing tag (no opening)
+    return cleaned.trim();
   }
 }
