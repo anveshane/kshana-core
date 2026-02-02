@@ -11,23 +11,30 @@ import { createTool } from '../ToolRegistry.js';
 
 /**
  * Default output files for each content type.
+ *
+ * Naming conventions:
+ * - Character profiles: {name}.profile.md
+ * - Setting profiles: {name}.profile.md
+ * - Image prompts: {name}.prompt.md or scene-{n}.prompt.md
+ * - Video prompts: scene-{n}.motion.md
+ * - Story chapters: chapter-{n}.story.md
  */
 export const CONTENT_TYPE_OUTPUT_FILES: Record<string, string> = {
   // Content creation phases
   plot: 'plans/plot.md',
-  story: 'plans/story.md',
-  character: 'characters/',  // Will be appended with character name
-  setting: 'settings/',      // Will be appended with setting name
+  story: 'plans/chapters/',        // Will be appended with chapter number
+  character: 'characters/',        // Will be appended with {name}.profile.md
+  setting: 'settings/',            // Will be appended with {name}.profile.md
   scene: 'plans/scenes.md',
   narration: 'plans/narration.md',
 
   // Image prompt generation - saved to prompts directory for review/refinement
-  character_image_prompt: 'prompts/images/characters/',  // Will be appended with character name
-  setting_image_prompt: 'prompts/images/settings/',      // Will be appended with setting name
-  scene_image_prompt: 'prompts/images/scenes/',          // Will be appended with scene number
+  character_image_prompt: 'prompts/images/characters/',  // Will be appended with {name}.prompt.md
+  setting_image_prompt: 'prompts/images/settings/',      // Will be appended with {name}.prompt.md
+  scene_image_prompt: 'prompts/images/scenes/',          // Will be appended with scene-{n}.prompt.md
 
   // Video prompt generation - saved to prompts directory for review/refinement
-  scene_video_prompt: 'prompts/videos/scenes/',          // Will be appended with scene number
+  scene_video_prompt: 'prompts/videos/scenes/',          // Will be appended with scene-{n}.motion.md
 };
 
 export const generateContentTool = createTool(
@@ -52,9 +59,9 @@ The content creator will:
 | Type | Output Location |
 |------|----------------|
 | plot | plans/plot.md |
-| story | plans/story.md |
-| character | characters/{name}.md |
-| setting | settings/{name}.md |
+| story | plans/chapters/chapter-{n}.story.md |
+| character | characters/{name}.profile.md |
+| setting | settings/{name}.profile.md |
 | scene | plans/scenes.md |
 | narration | plans/narration.md |
 | character_image_prompt | prompts/images/characters/{name}.prompt.md |
@@ -115,6 +122,10 @@ generate_content(
       scene_number: {
         type: 'number',
         description: 'For scene_image_prompt/scene_video_prompt: the scene number to generate a prompt for',
+      },
+      chapter_number: {
+        type: 'number',
+        description: 'For story content: the chapter number (default: 1)',
       },
     },
     required: ['content_type', 'instruction'],

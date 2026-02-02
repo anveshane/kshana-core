@@ -97,6 +97,7 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
   const dirs = [
     projectDir,
     join(projectDir, 'plans'),
+    join(projectDir, 'plans', 'chapters'),  // For chapter-based story files
     join(projectDir, 'characters'),
     join(projectDir, 'settings'),
     join(projectDir, 'assets'),
@@ -346,14 +347,31 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     trackFile('plot', 'plans/plot.md');
   }
 
-  // Sync story content
+  // Sync story content - check both old format (story.md) and new format (chapters/)
   const storyFile = join(projectDir, 'plans', 'story.md');
+  const chaptersDir = join(projectDir, 'plans', 'chapters');
+
   if (existsSync(storyFile)) {
     if (project.content.story.status === 'missing') {
       project.content.story.status = 'available';
       needsSave = true;
     }
     trackFile('story', 'plans/story.md');
+  }
+
+  // Also check for chapter-based story files
+  if (existsSync(chaptersDir)) {
+    const chapterFiles = readdirSync(chaptersDir)
+      .filter(f => /^chapter-\d+\.story\.md$/.test(f))
+      .sort();
+
+    for (const chapterFile of chapterFiles) {
+      trackFile('story_chapter', `plans/chapters/${chapterFile}`);
+      if (project.content.story.status === 'missing') {
+        project.content.story.status = 'available';
+        needsSave = true;
+      }
+    }
   }
 
   // Sync characters from project.characters
@@ -365,9 +383,9 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       project.content.characters.items.push(char.name);
       needsSave = true;
     }
-    // Also track file path
-    const safeName = char.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const charFile = `characters/${safeName}.md`;
+    // Also track file path (new convention: .profile.md)
+    const safeName = char.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    const charFile = `characters/${safeName}.profile.md`;
     if (!project.content.characters.itemFiles) {
       project.content.characters.itemFiles = {};
     }
@@ -379,10 +397,13 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     trackFile('character', charFile, char.name);
   }
 
-  // Sync characters from disk - scan characters/ directory for .md files
+  // Sync characters from disk - scan characters/ directory for .profile.md and .md files
   const charactersDir = join(projectDir, 'characters');
   if (existsSync(charactersDir)) {
-    const charFiles = readdirSync(charactersDir).filter(f => f.endsWith('.md'));
+    // Support both old (.md) and new (.profile.md) naming conventions
+    const charFiles = readdirSync(charactersDir).filter(f =>
+      f.endsWith('.profile.md') || (f.endsWith('.md') && !f.endsWith('.profile.md'))
+    );
 
     for (const charFile of charFiles) {
       try {
@@ -391,7 +412,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         const nameMatch = charContent.match(/^#\s*(?:Character[:\-–—\s]*)?(.+)/m);
         const charName = nameMatch && nameMatch[1]
           ? nameMatch[1].trim()
-          : charFile.replace(/\.md$/, '').replace(/[-_]/g, ' ');
+          : charFile.replace(/\.profile\.md$/, '').replace(/\.md$/, '').replace(/[-_]/g, ' ');
 
         // Check if character is already registered
         const existingChar = project.characters.find(
@@ -435,9 +456,9 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       project.content.settings.items.push(setting.name);
       needsSave = true;
     }
-    // Also track file path
-    const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const settingFile = `settings/${safeName}.md`;
+    // Also track file path (new convention: .profile.md)
+    const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    const settingFile = `settings/${safeName}.profile.md`;
     if (!project.content.settings.itemFiles) {
       project.content.settings.itemFiles = {};
     }
@@ -449,10 +470,13 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     trackFile('setting', settingFile, setting.name);
   }
 
-  // Sync settings from disk - scan settings/ directory for .md files
+  // Sync settings from disk - scan settings/ directory for .profile.md and .md files
   const settingsDir = join(projectDir, 'settings');
   if (existsSync(settingsDir)) {
-    const settingFiles = readdirSync(settingsDir).filter(f => f.endsWith('.md'));
+    // Support both old (.md) and new (.profile.md) naming conventions
+    const settingFiles = readdirSync(settingsDir).filter(f =>
+      f.endsWith('.profile.md') || (f.endsWith('.md') && !f.endsWith('.profile.md'))
+    );
 
     for (const settingFile of settingFiles) {
       try {
@@ -461,7 +485,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         const nameMatch = settingContent.match(/^#\s*(?:Setting[:\-–—\s]*)?(.+)/m);
         const settingName = nameMatch && nameMatch[1]
           ? nameMatch[1].trim()
-          : settingFile.replace(/\.md$/, '').replace(/[-_]/g, ' ');
+          : settingFile.replace(/\.profile\.md$/, '').replace(/\.md$/, '').replace(/[-_]/g, ' ');
 
         // Check if setting is already registered
         const existingSetting = project.settings.find(

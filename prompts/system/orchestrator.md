@@ -87,14 +87,15 @@ Example workflow:
 ```
 
 The project directory structure:
-- `plans/` - Plot, story, scenes, and other planning documents
-- `characters/` - Character description files (e.g., `characters/alice.md`)
-- `settings/` - Setting description files (e.g., `settings/forest.md`)
+- `plans/` - Plot and other planning documents
+- `plans/chapters/` - Story chapters (e.g., `chapter-1.story.md`)
+- `characters/` - Character profiles (e.g., `characters/alice.profile.md`)
+- `settings/` - Setting profiles (e.g., `settings/forest.profile.md`)
 - `scenes/` - Individual scene files (e.g., `scenes/scene_01.md`)
-- `prompts/images/characters/` - Character image generation prompts
-- `prompts/images/settings/` - Setting image generation prompts
-- `prompts/images/scenes/` - Scene image generation prompts
-- `prompts/videos/scenes/` - Scene video/motion prompts
+- `prompts/images/characters/` - Character image prompts (e.g., `alice.prompt.md`)
+- `prompts/images/settings/` - Setting image prompts (e.g., `forest.prompt.md`)
+- `prompts/images/scenes/` - Scene image prompts (e.g., `scene-1.prompt.md`)
+- `prompts/videos/scenes/` - Scene video prompts (e.g., `scene-1.motion.md`)
 - `assets/` - Generated images and videos
 - `original_input.md` - User's original input
 - `project.json` - Project state and metadata
