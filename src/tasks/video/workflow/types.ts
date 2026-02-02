@@ -460,8 +460,8 @@ export type ContentStatus = 'available' | 'partial' | 'missing';
 export interface ContentEntry {
   /** Current status of this content */
   status: ContentStatus;
-  /** Path to the main file for this content (relative to .kshana/) */
-  file: string;
+  /** Path to the main file for this content (relative to .kshana/). Only set when file exists. */
+  file?: string;
   /** For itemized content (characters/settings), list of item names */
   items?: string[];
   /** For itemized content, paths to individual item files */
@@ -557,6 +557,22 @@ export interface ProjectFile {
 
   /** Primary narration source configuration */
   primaryNarration?: PrimaryNarrationConfig;
+
+  /**
+   * List of files that actually exist in the project.
+   * This helps agents understand what content is available without
+   * parsing the full phases/content structure.
+   */
+  files?: Array<{
+    /** Type of file (original_input, plot, story, character, setting, scene, image, video) */
+    type: string;
+    /** Relative path within .kshana directory */
+    path: string;
+    /** Optional name for items (character name, setting name, scene number) */
+    name?: string;
+    /** Brief summary of file contents (1-2 sentences) for quick reference */
+    summary?: string;
+  }>;
 }
 
 /**

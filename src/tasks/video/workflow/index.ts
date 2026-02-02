@@ -108,6 +108,9 @@ export {
   saveTodos,
   loadTodos,
   clearPersistedTodos,
+  // File registration functions
+  registerFile,
+  generateFileSummary,
 } from './ProjectManager.js';
 
 // File Tools

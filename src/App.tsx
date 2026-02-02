@@ -157,6 +157,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     output,
     streamingText,
     isStreaming,
+    streamingThinkText,
+    isThinkStreaming,
     question,
     isConfirmation,
     questionOptions,
@@ -406,7 +408,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         // Continue existing project
         setStarted(true);
         uiLogger.logUserInput('Continue existing project');
-        void run('Continue working on the existing project. Call read_project to see current state.');
+        void run('Continue working on the existing project. The project state is already injected - proceed with the next step.');
       } else if (index === 1) {
         // Start new project - show warning and switch to template selection
         if (existingProject) {
@@ -724,6 +726,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         todos={todos}
         streamingText={streamingText}
         isStreaming={isStreaming}
+        streamingThinkText={streamingThinkText}
+        isThinkStreaming={isThinkStreaming}
         recentTools={recentTools}
         question={awaitingFeedbackText ? 'Please enter your feedback:' : question}
         isConfirmation={isConfirmation}

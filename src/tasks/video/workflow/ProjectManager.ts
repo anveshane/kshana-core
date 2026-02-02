@@ -40,7 +40,7 @@ import {
   createDefaultSettingData,
   createDefaultSceneRef,
 } from './types.js';
-import { generateProjectTitle } from '../../../core/context/index.js';
+import { generateProjectTitle, contextStore } from '../../../core/context/index.js';
 
 /**
  * Get the project directory path for the current working directory.
@@ -66,9 +66,13 @@ export function projectExists(basePath: string = process.cwd()): boolean {
 /**
  * Delete an existing project and all its files.
  * Use with caution - this permanently removes all project data.
+ * Also clears the context store to ensure a clean slate.
  */
 export function deleteProject(basePath: string = process.cwd()): boolean {
   const projectDir = getProjectDir(basePath);
+
+  // Always clear the context store to remove old context variables
+  contextStore.clear();
 
   if (!existsSync(projectDir)) {
     return false;
@@ -115,17 +119,19 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
 }
 
 /**
- * Create the default content registry with all content marked as missing.
+ * Create a minimal content registry with status tracking only.
+ * File paths are NOT included - they are set when content is actually created.
+ * This avoids confusion about files that don't exist yet.
  */
 export function createDefaultContentRegistry(): ContentRegistry {
   return {
-    plot: { status: 'missing', file: 'plans/plot.md' },
-    story: { status: 'missing', file: 'plans/story.md' },
-    characters: { status: 'missing', file: 'plans/characters.md', items: [], itemFiles: {} },
-    settings: { status: 'missing', file: 'plans/settings.md', items: [], itemFiles: {} },
-    scenes: { status: 'missing', file: 'plans/scenes.md', items: [] },
-    images: { status: 'missing', file: 'plans/images.md', items: [] },
-    videos: { status: 'missing', file: 'plans/video.md', items: [] },
+    plot: { status: 'missing' },
+    story: { status: 'missing' },
+    characters: { status: 'missing', items: [] },
+    settings: { status: 'missing', items: [] },
+    scenes: { status: 'missing', items: [] },
+    images: { status: 'missing', items: [] },
+    videos: { status: 'missing', items: [] },
   };
 }
 
@@ -188,6 +194,7 @@ export function createProject(
   writeFileSync(fullInputPath, cleanInput, 'utf-8');
 
   // Default to 'idea' input type - agent will analyze and update if it's a full story
+  // Simplified structure: only track phase status, no file references for non-existent files
   const project: ProjectFile = {
     version: '2.0',
     id: projectId,
@@ -198,53 +205,28 @@ export function createProject(
     createdAt: now,
     updatedAt: now,
     currentPhase: WorkflowPhase.PLOT,
+    // Minimal phase tracking - no planFile references (files created on demand)
     phases: {
-      plot: {
-        status: 'pending',
-        planFile: 'plans/plot.md',
-        completedAt: null,
-      },
-      story: {
-        status: 'pending',
-        planFile: 'plans/story.md',
-        completedAt: null,
-      },
-      characters_settings: {
-        status: 'pending',
-        planFile: 'plans/characters-settings.md',
-        completedAt: null,
-      },
-      scenes: {
-        status: 'pending',
-        planFile: 'plans/scenes-outline.md',
-        completedAt: null,
-      },
-      character_setting_images: {
-        status: 'pending',
-        planFile: 'plans/ref-images.md',
-        completedAt: null,
-      },
-      scene_images: {
-        status: 'pending',
-        planFile: 'plans/scene-images.md',
-        completedAt: null,
-      },
-      video: {
-        status: 'pending',
-        planFile: 'plans/video.md',
-        completedAt: null,
-      },
-      video_combine: {
-        status: 'pending',
-        planFile: 'plans/final-video.md',
-        completedAt: null,
-      },
+      plot: { status: 'pending', completedAt: null },
+      story: { status: 'pending', completedAt: null },
+      characters_settings: { status: 'pending', completedAt: null },
+      scenes: { status: 'pending', completedAt: null },
+      character_setting_images: { status: 'pending', completedAt: null },
+      scene_images: { status: 'pending', completedAt: null },
+      video: { status: 'pending', completedAt: null },
+      video_combine: { status: 'pending', completedAt: null },
     },
+    // Empty content registry - entries added when content is created
     content: createDefaultContentRegistry(),
+    // Empty arrays - populated as items are created
     characters: [],
     settings: [],
     scenes: [],
     assets: [],
+    // Track only files that actually exist
+    files: [
+      { type: 'original_input', path: inputFilePath },
+    ],
   };
 
   // Save project file
@@ -323,20 +305,47 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     needsSave = true;
   }
 
+  // Ensure files array exists
+  if (!project.files) {
+    project.files = [];
+    needsSave = true;
+  }
+
+  // Helper to add file if not already tracked
+  const trackFile = (type: string, path: string, name?: string) => {
+    if (!project.files) project.files = [];
+    const exists = project.files.some(f => f.path === path);
+    if (!exists) {
+      project.files.push({ type, path, name });
+      needsSave = true;
+    }
+  };
+
   const projectDir = getProjectDir(basePath);
+
+  // Always track original_input if it exists
+  if (existsSync(join(projectDir, project.originalInputFile))) {
+    trackFile('original_input', project.originalInputFile);
+  }
 
   // Sync plot content
   const plotFile = join(projectDir, 'plans', 'plot.md');
-  if (existsSync(plotFile) && project.content.plot.status === 'missing') {
-    project.content.plot.status = 'available';
-    needsSave = true;
+  if (existsSync(plotFile)) {
+    if (project.content.plot.status === 'missing') {
+      project.content.plot.status = 'available';
+      needsSave = true;
+    }
+    trackFile('plot', 'plans/plot.md');
   }
 
   // Sync story content
   const storyFile = join(projectDir, 'plans', 'story.md');
-  if (existsSync(storyFile) && project.content.story.status === 'missing') {
-    project.content.story.status = 'available';
-    needsSave = true;
+  if (existsSync(storyFile)) {
+    if (project.content.story.status === 'missing') {
+      project.content.story.status = 'available';
+      needsSave = true;
+    }
+    trackFile('story', 'plans/story.md');
   }
 
   // Sync characters from project.characters
@@ -358,6 +367,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       project.content.characters.itemFiles[char.name] = charFile;
       needsSave = true;
     }
+    // Track in files array
+    trackFile('character', charFile, char.name);
   }
 
   // Sync characters from disk - scan characters/ directory for .md files
@@ -426,6 +437,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       project.content.settings.itemFiles[setting.name] = settingFile;
       needsSave = true;
     }
+    // Track in files array
+    trackFile('setting', settingFile, setting.name);
   }
 
   // Sync settings from disk - scan settings/ directory for .md files
@@ -485,6 +498,9 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       project.content.scenes.items.push(sceneName);
       needsSave = true;
     }
+    // Track in files array
+    const sceneFile = `scenes/scene_${String(scene.sceneNumber).padStart(2, '0')}.md`;
+    trackFile('scene', sceneFile, `Scene ${scene.sceneNumber}`);
   }
   if (
     (project.content.scenes.items?.length ?? 0) > 0 &&
@@ -506,6 +522,9 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       const match = sceneFile.match(/^scene_(\d+)\.md$/);
       if (match && match[1]) {
         const sceneNumber = parseInt(match[1], 10);
+
+        // Track scene file in files array
+        trackFile('scene', `scenes/${sceneFile}`, `Scene ${sceneNumber}`);
 
         // Check if scene is already registered
         const existingScene = project.scenes.find(s => s.sceneNumber === sceneNumber);
@@ -649,6 +668,88 @@ export function saveProject(project: ProjectFile, basePath: string = process.cwd
   const filePath = getProjectFilePath(basePath);
   project.updatedAt = Date.now();
   writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
+}
+
+/**
+ * Register a file in the project's files array with an optional summary.
+ * If the file already exists in the array, updates it.
+ */
+export function registerFile(
+  filePath: string,
+  fileType: string,
+  options: { name?: string; summary?: string } = {},
+  basePath: string = process.cwd()
+): void {
+  const project = loadProject(basePath);
+  if (!project) return;
+
+  // Initialize files array if needed
+  if (!project.files) {
+    project.files = [];
+  }
+
+  // Check if file already registered
+  const existingIndex = project.files.findIndex(f => f.path === filePath);
+
+  const fileEntry = {
+    type: fileType,
+    path: filePath,
+    ...(options.name && { name: options.name }),
+    ...(options.summary && { summary: options.summary }),
+  };
+
+  if (existingIndex >= 0) {
+    // Update existing entry
+    project.files[existingIndex] = fileEntry;
+  } else {
+    // Add new entry
+    project.files.push(fileEntry);
+  }
+
+  saveProject(project, basePath);
+}
+
+/**
+ * Generate a brief summary of file content (first 1-2 sentences or key info).
+ */
+export function generateFileSummary(content: string, fileType: string): string {
+  const trimmed = content.trim();
+
+  // For markdown files, try to extract the first meaningful paragraph
+  if (fileType === 'plot' || fileType === 'story') {
+    // Skip title lines (starting with #)
+    const lines = trimmed.split('\n').filter(l => !l.startsWith('#') && l.trim());
+    const firstParagraph = lines.slice(0, 3).join(' ').trim();
+    if (firstParagraph.length > 150) {
+      return firstParagraph.slice(0, 147) + '...';
+    }
+    return firstParagraph || `${fileType} content`;
+  }
+
+  // For character/setting files, extract name and brief description
+  if (fileType === 'character' || fileType === 'setting') {
+    const nameMatch = trimmed.match(/^#\s*(.+)/m);
+    const name = nameMatch ? nameMatch[1] : 'Unknown';
+    const descLines = trimmed.split('\n').filter(l => !l.startsWith('#') && l.trim()).slice(0, 2);
+    const desc = descLines.join(' ').trim();
+    if (desc.length > 100) {
+      return `${name}: ${desc.slice(0, 97)}...`;
+    }
+    return `${name}: ${desc || 'No description'}`;
+  }
+
+  // For scene files
+  if (fileType === 'scene') {
+    const titleMatch = trimmed.match(/^#\s*(.+)/m);
+    const title = titleMatch?.[1] ?? 'Untitled scene';
+    return title;
+  }
+
+  // Default: first 100 chars
+  if (trimmed.length > 100) {
+    return trimmed.slice(0, 97) + '...';
+  }
+  return trimmed || `${fileType} content`;
 }
 
 /**
@@ -890,7 +991,8 @@ export function saveCharacter(character: CharacterData, basePath: string = proce
     }
     // Also track in content registry for persistence across restarts
     addContentItem(project, 'characters', character.name, filePath, basePath);
-    // Note: addContentItem calls saveProject internally
+    // Track in files array for simplified project overview
+    addProjectFile(project, 'character', filePath, character.name, basePath);
   }
 }
 
@@ -1035,7 +1137,8 @@ export function saveSetting(setting: SettingData, basePath: string = process.cwd
     }
     // Also track in content registry for persistence across restarts
     addContentItem(project, 'settings', setting.name, filePath, basePath);
-    // Note: addContentItem calls saveProject internally
+    // Track in files array for simplified project overview
+    addProjectFile(project, 'setting', filePath, setting.name, basePath);
   }
 }
 
@@ -1401,6 +1504,17 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
     }
   }
 
+  // Build files section with summaries
+  let filesSection = '';
+  if (project.files && project.files.length > 0) {
+    const fileLines = project.files.map(f => {
+      const nameStr = f.name ? ` (${f.name})` : '';
+      const summaryStr = f.summary ? `: ${f.summary}` : '';
+      return `  - ${f.path}${nameStr}${summaryStr}`;
+    });
+    filesSection = `\n\nAvailable Files:\n${fileLines.join('\n')}`;
+  }
+
   return `
 Project: ${project.title || '(untitled)'}
 ID: ${project.id}
@@ -1414,7 +1528,7 @@ Skipped Phases: ${skippedPhases.length > 0 ? skippedPhases.join(', ') : 'none'}
 Characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'none defined'}
 Settings: ${settingNames.length > 0 ? settingNames.join(', ') : 'none defined'}
 Scenes: ${project.scenes.length}/${MAX_SCENES} (max)
-Assets: ${project.assets.length}${itemProgress}${sceneLimitWarning}
+Assets: ${project.assets.length}${itemProgress}${sceneLimitWarning}${filesSection}
 `.trim();
 }
 
@@ -1935,6 +2049,59 @@ export function addContentItem(
 
   saveProject(project, basePath);
   return project;
+}
+
+/**
+ * Add a file to the project's files tracking array.
+ * This helps agents understand what content exists without parsing the full structure.
+ */
+export function addProjectFile(
+  project: ProjectFile,
+  fileType: string,
+  filePath: string,
+  name?: string,
+  basePath: string = process.cwd()
+): ProjectFile {
+  // Initialize files array if needed
+  if (!project.files) {
+    project.files = [];
+  }
+
+  // Check if file already exists in the array
+  const existingIndex = project.files.findIndex(
+    f => f.path === filePath || (f.type === fileType && f.name === name)
+  );
+
+  if (existingIndex >= 0) {
+    // Update existing entry
+    project.files[existingIndex] = { type: fileType, path: filePath, name };
+  } else {
+    // Add new entry
+    project.files.push({ type: fileType, path: filePath, name });
+  }
+
+  saveProject(project, basePath);
+  return project;
+}
+
+/**
+ * Get the files summary string for use in prompts.
+ * This provides a simple list of existing files for agents to reference.
+ */
+export function getFilesContext(project: ProjectFile): string {
+  if (!project.files || project.files.length === 0) {
+    return 'No project files created yet.';
+  }
+
+  let context = '## Existing Project Files\n\n';
+  context += 'The following files exist and can be read:\n\n';
+
+  for (const file of project.files) {
+    const nameStr = file.name ? ` (${file.name})` : '';
+    context += `- **${file.type}${nameStr}**: \`.kshana/${file.path}\`\n`;
+  }
+
+  return context.trim();
 }
 
 /**

@@ -68,7 +68,7 @@ export interface ToolCallHistoryItem {
  */
 export interface HistoryEntry {
   id: string;
-  type: 'user_input' | 'agent_text' | 'tool_completed' | 'error' | 'phase_transition';
+  type: 'user_input' | 'agent_text' | 'tool_completed' | 'error' | 'phase_transition' | 'thinking';
   content: string;
   timestamp: number;
   toolName?: string;
@@ -127,6 +127,10 @@ interface AgentState {
   streamingText: string;
   /** Whether streaming is in progress */
   isStreaming: boolean;
+  /** Current streaming think text being accumulated (for implicit LLM thinking) */
+  streamingThinkText: string;
+  /** Whether think streaming is in progress */
+  isThinkStreaming: boolean;
   question: string | undefined;
   isConfirmation: boolean;
   questionOptions: QuestionOption[] | undefined;
@@ -156,6 +160,8 @@ type AgentAction =
   | { type: 'ADD_USER_INPUT'; text: string; isTask?: boolean }
   | { type: 'STREAM_CHUNK'; chunk: string; agentName?: string }
   | { type: 'STREAM_DONE'; skipHistory?: boolean; agentName?: string }
+  | { type: 'THINK_CHUNK'; chunk: string }
+  | { type: 'THINK_DONE' }
   | { type: 'SET_THINKING'; agentName?: string }
   | { type: 'CLEAR_CURRENT_ACTION' }
   | { type: 'RESET' }
@@ -171,6 +177,8 @@ const initialState: AgentState = {
   output: '',
   streamingText: '',
   isStreaming: false,
+  streamingThinkText: '',
+  isThinkStreaming: false,
   question: undefined,
   isConfirmation: false,
   questionOptions: undefined,
@@ -403,6 +411,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         ...state,
         streamingText: state.streamingText + action.chunk,
         isStreaming: true,
+        // Keep thinking text visible alongside regular streaming
         currentAgentName: action.agentName ?? state.currentAgentName,
       };
 
@@ -442,6 +451,47 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       };
     }
 
+    case 'THINK_CHUNK': {
+      // Append thinking content from implicit LLM thinking (e.g., DeepSeek <think> tags)
+      // If this is a new thinking session (wasn't streaming before), start fresh
+      const isNewSession = !state.isThinkStreaming;
+      const baseText = isNewSession ? '' : state.streamingThinkText;
+      debugLog(`[useAgent] THINK_CHUNK: chunk=${action.chunk.length} chars, newSession=${isNewSession}, newTotal=${(baseText + action.chunk).length} chars`);
+      return {
+        ...state,
+        streamingThinkText: baseText + action.chunk,
+        isThinkStreaming: true,
+      };
+    }
+
+    case 'THINK_DONE': {
+      // Add completed thinking to history so it persists, then clear streaming state
+      const thinkText = state.streamingThinkText.trim();
+      debugLog(`[useAgent] THINK_DONE: finalThinkText=${thinkText.length} chars - adding to history`);
+      if (!thinkText) {
+        return {
+          ...state,
+          streamingThinkText: '',
+          isThinkStreaming: false,
+        };
+      }
+      return {
+        ...state,
+        streamingThinkText: '',
+        isThinkStreaming: false,
+        history: [
+          ...state.history.slice(-MAX_HISTORY + 1),
+          {
+            id: `think-${Date.now()}`,
+            type: 'thinking',
+            content: thinkText,
+            timestamp: Date.now(),
+            agentName: state.currentAgentName,
+          },
+        ],
+      };
+    }
+
     case 'CLEAR_CURRENT_ACTION': {
       // If there's a completed tool action, move it to history first
       let newHistory = state.history;
@@ -462,6 +512,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         };
         newHistory = [...state.history.slice(-MAX_HISTORY + 1), historyEntry];
       }
+      // Keep thinking text visible - will be cleared on next task or new streaming
       return { ...state, currentAction: null, history: newHistory };
     }
 
@@ -475,6 +526,8 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         output: '',
         streamingText: '',
         isStreaming: false,
+        streamingThinkText: '',
+        isThinkStreaming: false,
         currentAction: { type: 'thinking', startTime: Date.now() },
         // Add the task to history
         history: [
@@ -519,6 +572,10 @@ interface UseAgentReturn {
   output: string;
   streamingText: string;
   isStreaming: boolean;
+  /** Streaming think text from implicit LLM thinking (e.g., DeepSeek <think> tags) */
+  streamingThinkText: string;
+  /** Whether think streaming is in progress */
+  isThinkStreaming: boolean;
   question: string | undefined;
   isConfirmation: boolean;
   questionOptions: QuestionOption[] | undefined;
@@ -601,6 +658,16 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         dispatch({ type: 'STREAM_DONE', skipHistory: event.skipHistory });
       } else if (event.chunk) {
         dispatch({ type: 'STREAM_CHUNK', chunk: event.chunk });
+      }
+      onEvent?.(event);
+    });
+
+    agent.on('streaming_think', event => {
+      debugLog(`[useAgent] streaming_think event: done=${event.done}, chunkLen=${event.chunk?.length ?? 0}`);
+      if (event.done) {
+        dispatch({ type: 'THINK_DONE' });
+      } else if (event.chunk) {
+        dispatch({ type: 'THINK_CHUNK', chunk: event.chunk });
       }
       onEvent?.(event);
     });
@@ -797,6 +864,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     output: state.output,
     streamingText: state.streamingText,
     isStreaming: state.isStreaming,
+    streamingThinkText: state.streamingThinkText,
+    isThinkStreaming: state.isThinkStreaming,
     question: state.question,
     isConfirmation: state.isConfirmation,
     questionOptions: state.questionOptions,

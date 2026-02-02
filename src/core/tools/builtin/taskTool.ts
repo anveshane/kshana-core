@@ -14,36 +14,38 @@ IMPORTANT: Only ONE task of each type can run at a time. Wait for the current ta
 
 ## Available Subagent Types
 
-- **Plan**: Read-only planning specialist. Analyzes project state and designs execution plans. Does NOT generate content.
-- **Explore**: Read-only project explorer. Reads and summarizes existing project content (characters, settings, scenes).
+### Core Subagents
+- **Plan**: Read-only planning specialist. Analyzes project state and designs execution plans.
+- **Explore**: Read-only explorer. Reads documentation, project files, and summarizes content.
 - **content-creator**: Creative content generator. Creates plot, story, characters, settings, scenes, narration.
-- **image-generator**: Image generation specialist. Crafts prompts and generates images for characters, settings, and scenes.
-- **video-assembler**: Video generation specialist. Creates video clips from scene images and stitches them into final video.
+- **image-generator**: Image generation specialist. Crafts prompts and generates images.
+- **video-assembler**: Video generation specialist. Creates video clips and stitches them together.
+
+### Skill Subagents
+- **content-writing**: Specialized writing for narrative content
+- **image-prompting**: Creates optimized prompts for image generation
+- **video-direction**: Creates motion descriptions for video generation
+- **research-synthesis**: Research and information synthesis
+- **narration-scripting**: Voice-over script creation
 
 ## Context Handling
 
-The framework automatically injects context based on content_type:
-- **plot**: Gets original user input
-- **story**: Gets original input + plot
-- **character/setting**: Gets original input + plot + story
-- **scene**: Gets story + characters + settings
-
-Subagents can also use read_project() and read_file() to discover additional context.
+Subagents use read_project() and read_file() to discover and fetch context from project files.
 
 ## Content Types (for content-creator)
 
-- **plot**: High-level story outline (auto-injected: $original_input)
-- **story**: Full narrative with dialogue (auto-injected: $original_input, $plot)
-- **character**: Character profile (auto-injected: $original_input, $plot, $story)
-- **setting**: Location description (auto-injected: $original_input, $plot, $story)
-- **scene**: Visual scene description (auto-injected: $story, $characters, $settings)
-- **narration**: Voice-over text (auto-injected: $story, $scenes)`,
+- **plot**: High-level story outline
+- **story**: Full narrative with dialogue
+- **character**: Character profile
+- **setting**: Location description
+- **scene**: Visual scene description
+- **narration**: Voice-over text`,
   {
     type: 'object',
     properties: {
       subagent_type: {
         type: 'string',
-        description: 'Which subagent to use: "Plan", "Explore", "content-creator", "image-generator", "video-assembler"',
+        description: 'Which subagent to use. Core: "Plan", "Explore", "content-creator", "image-generator", "video-assembler". Skills: "content-writing", "image-prompting", "video-direction", "research-synthesis", "narration-scripting"',
       },
       task: {
         type: 'string',
@@ -56,12 +58,6 @@ Subagents can also use read_project() and read_file() to discover additional con
       output_file: {
         type: 'string',
         description: 'Optional file path to save the output (e.g., "plans/story.md")',
-      },
-      // Deprecated - kept for backward compatibility
-      context_refs: {
-        type: 'array',
-        items: { type: 'string' },
-        description: '[DEPRECATED - context is auto-injected] Array of context variable names',
       },
     },
     required: ['subagent_type', 'task'],

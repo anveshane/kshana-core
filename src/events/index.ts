@@ -7,8 +7,13 @@ export type {
   ToolResultEvent,
   TodoUpdateEvent,
   AgentTextEvent,
+  StreamingTextEvent,
+  StreamingThinkEvent,
+  ToolStreamingEvent,
   NotificationEvent,
   QuestionEvent,
   QuestionOption,
   AgentStatusEvent,
+  UserInputInjectedEvent,
+  PhaseTransitionEvent,
 } from './events.js';

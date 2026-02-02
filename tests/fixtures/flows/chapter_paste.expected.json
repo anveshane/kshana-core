@@ -1,0 +1,87 @@
+{
+  "version": "1.0",
+  "scenario": "chapter_paste",
+  "trigger": "User pastes a full chapter/story content into the system",
+  "description": "Critical path for processing narrative content: save as story, then extract characters",
+  "criticalPath": [
+    {
+      "stepId": "1",
+      "agent": "Orchestrator",
+      "tool": "generate_content",
+      "description": "Process and save the pasted chapter as organized story content",
+      "expectedArgs": {
+        "content_type": "story"
+      },
+      "subSteps": [
+        {
+          "stepId": "1.1",
+          "agent": "Content Agent",
+          "tool": "read_project",
+          "description": "Fetch project structure to understand what exists"
+        },
+        {
+          "stepId": "1.2",
+          "agent": "Content Agent",
+          "tool": "read_file",
+          "description": "Read the original user input (pasted chapter)",
+          "expectedArgs": {
+            "path": "original_input.md"
+          }
+        }
+      ]
+    },
+    {
+      "stepId": "2",
+      "agent": "Orchestrator",
+      "tool": "generate_content",
+      "description": "Extract the first/main character from the story",
+      "expectedArgs": {
+        "content_type": "character"
+      },
+      "subSteps": [
+        {
+          "stepId": "2.1",
+          "agent": "Content Agent",
+          "tool": "read_project",
+          "description": "Fetch project structure"
+        },
+        {
+          "stepId": "2.2",
+          "agent": "Content Agent",
+          "tool": "read_file",
+          "description": "Read the story content to extract character",
+          "expectedArgs": {
+            "path": "plans/story.md"
+          }
+        }
+      ]
+    },
+    {
+      "stepId": "3",
+      "agent": "Orchestrator",
+      "tool": "generate_content",
+      "description": "Extract the first/main setting from the story",
+      "expectedArgs": {
+        "content_type": "setting"
+      },
+      "allowReorder": true,
+      "subSteps": [
+        {
+          "stepId": "3.1",
+          "agent": "Content Agent",
+          "tool": "read_project",
+          "description": "Fetch project structure"
+        },
+        {
+          "stepId": "3.2",
+          "agent": "Content Agent",
+          "tool": "read_file",
+          "description": "Read the story content to extract setting",
+          "expectedArgs": {
+            "path": "plans/story.md"
+          }
+        }
+      ]
+    }
+  ]
+}

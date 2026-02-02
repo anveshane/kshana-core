@@ -44,7 +44,7 @@ Good todos:
 
 Bad todos:
 - "Create profiles for Daniel, Sarah, and Mike" (compound - split!)
-- "Use dispatch_content_agent to create Daniel" (describes HOW, not WHAT)
+- "Use generate_content tool to create Daniel" (describes HOW, not WHAT)
 - "Marking task as complete" (meta-commentary)
 
 Now analyze the task and call TodoWrite with appropriate todos.

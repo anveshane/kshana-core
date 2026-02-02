@@ -231,8 +231,6 @@ const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
   generate_video: { gerund: 'Generating video', past: 'Generated video' },
   edit_image: { gerund: 'Editing image', past: 'Edited image' },
   wait_for_job: { gerund: 'Waiting for job', past: 'Job completed' },
-  read_project_state: { gerund: 'Reading project state', past: 'Read project state' },
-  write_project_state: { gerund: 'Saving project state', past: 'Saved project state' },
   read_project: { gerund: 'Reading project', past: 'Read project' },
   update_project: { gerund: 'Updating project', past: 'Updated project' },
   read_file: { gerund: 'Reading file', past: 'Read file' },

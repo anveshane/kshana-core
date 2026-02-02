@@ -74,6 +74,21 @@ function HistoryItem({ entry, expanded }: { entry: HistoryEntry; expanded: boole
     );
   }
 
+  if (entry.type === 'thinking') {
+    return (
+      <Box marginBottom={1} paddingLeft={1} borderStyle="single" borderColor="gray" flexDirection="column">
+        <Box>
+          <Text color="white" dimColor>💭 </Text>
+          <Text color="white" dimColor italic>Thought</Text>
+          {entry.agentName && <Text color="white" dimColor> [{entry.agentName}]</Text>}
+        </Box>
+        <Box marginTop={1}>
+          <TruncatedText text={entry.content} maxLines={MAX_LINES_TRUNCATED} expanded={expanded} color="white" dimColor />
+        </Box>
+      </Box>
+    );
+  }
+
   return null;
 }
 

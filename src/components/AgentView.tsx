@@ -55,6 +55,10 @@ interface AgentViewProps {
   todos: ExpandableTodoItem[];
   streamingText?: string;
   isStreaming?: boolean;
+  /** Streaming think text from implicit LLM thinking */
+  streamingThinkText?: string;
+  /** Whether think streaming is in progress */
+  isThinkStreaming?: boolean;
   recentTools?: ToolHistoryItem[];
   question?: string;
   isConfirmation?: boolean;
@@ -84,6 +88,8 @@ export function AgentView({
   todos,
   streamingText,
   isStreaming = false,
+  streamingThinkText,
+  isThinkStreaming = false,
   recentTools = [],
   question,
   isConfirmation = false,
@@ -147,6 +153,23 @@ export function AgentView({
               wasStreamed={!!currentAction.streamingContent}
             />
           )}
+        </Box>
+      )}
+
+      {/* Streaming Think Text - muted style for implicit LLM thinking */}
+      {(streamingThinkText || isThinkStreaming) && (
+        <Box marginY={1} paddingLeft={1} borderStyle="single" borderColor="gray">
+          <Box flexDirection="column">
+            <Box>
+              <Text color="white" dimColor>💭 </Text>
+              <Text color="white" dimColor italic>{isThinkStreaming ? 'Thinking...' : 'Thought'}</Text>
+            </Box>
+            {streamingThinkText && (
+              <Box marginTop={1}>
+                <Text color="white" dimColor italic wrap="wrap">{streamingThinkText}</Text>
+              </Box>
+            )}
+          </Box>
         </Box>
       )}
 

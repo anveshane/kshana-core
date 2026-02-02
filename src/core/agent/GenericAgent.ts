@@ -39,6 +39,7 @@ import {
 import { getContentCreatorTools } from '../tools/builtin/contentCreatorTools.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
+import { FlowRecorder } from '../../utils/FlowRecorder.js';
 import {
   loadProject,
   saveCharacter,
@@ -223,6 +224,10 @@ export class GenericAgent extends TypedEventEmitter {
   // Claude SDK-style plan mode state
   private planModeActive = false;
 
+  // Think tag streaming filter state
+  private thinkTagBuffer: string = '';
+  private insideThinkTag: boolean = false;
+
   constructor(tools: Map<string, ToolDefinition>, llm: LLMClient, config: AgentConfig = {}) {
     super();
     this.tools = tools;
@@ -248,6 +253,7 @@ export class GenericAgent extends TypedEventEmitter {
     prompt: string;
     task: string;
     maxIterations?: number;
+    parentToolCallId?: string;
   }): Promise<GenericAgentResult> {
     // Prevent infinite recursion - sub-agents cannot spawn more sub-agents
     if (this.isSubAgent) {
@@ -284,9 +290,19 @@ export class GenericAgent extends TypedEventEmitter {
     subAgent.on('agent_text', event => this.emit(event));
     subAgent.on('notification', event => this.emit(event));
 
+    // Track sub-agent context for flow recording
+    if (config.parentToolCallId) {
+      FlowRecorder.getSession()?.enterSubAgent(config.name, config.parentToolCallId);
+    }
+
     // Initialize and run the sub-agent using the SAME run() loop as main agent
     await subAgent.initialize();
     const result = await subAgent.run(config.task);
+
+    // Exit sub-agent context for flow recording
+    if (config.parentToolCallId) {
+      FlowRecorder.getSession()?.exitSubAgent();
+    }
 
     // Clean up event listeners
     subAgent.removeAllListeners();
@@ -379,34 +395,262 @@ export class GenericAgent extends TypedEventEmitter {
   }
 
   /**
+   * Get the effective list of tools to use for LLM calls.
+   * If the LLM has implicit thinking enabled, the explicit 'think' tool is filtered out
+   * since it would be redundant.
+   */
+  private getEffectiveTools(): ToolDefinition[] {
+    const allTools = Array.from(this.tools.values());
+
+    // If LLM has implicit thinking, filter out the explicit 'think' tool
+    if (this.llm.hasImplicitThinking) {
+      return allTools.filter(tool => tool.name !== 'think');
+    }
+
+    return allTools;
+  }
+
+  /**
+   * Check if a string could be a prefix of a tag.
+   * This is used to determine if we should keep content in the buffer.
+   */
+  private couldBeTagPrefix(str: string, tag: string): boolean {
+    // Check if the string ends with any prefix of the tag
+    for (let i = 1; i <= Math.min(str.length, tag.length - 1); i++) {
+      const suffix = str.slice(-i);
+      const prefix = tag.slice(0, i);
+      if (suffix === prefix) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Process a streaming chunk and separate <think> tag content from regular content.
+   * Uses a buffer to handle tags that span multiple chunks.
+   * Returns both regular content and thinking content.
+   */
+  private processStreamChunk(chunk: string): { output: string; thinking: string } {
+    // Add chunk to buffer
+    this.thinkTagBuffer += chunk;
+
+    let output = '';
+    let thinking = '';
+
+    while (this.thinkTagBuffer.length > 0) {
+      if (this.insideThinkTag) {
+        // Look for closing </think> tag
+        const closeIndex = this.thinkTagBuffer.indexOf('</think>');
+        if (closeIndex !== -1) {
+          // Found closing tag - capture thinking content up to it
+          thinking += this.thinkTagBuffer.slice(0, closeIndex);
+          this.thinkTagBuffer = this.thinkTagBuffer.slice(closeIndex + '</think>'.length);
+          this.insideThinkTag = false;
+          // Continue processing - there might be more content or tags after
+        } else {
+          // No closing tag yet - check if buffer could end with partial </think>
+          // Only keep content if it could actually be a prefix of </think>
+          if (this.couldBeTagPrefix(this.thinkTagBuffer, '</think>')) {
+            // Find where the potential partial starts
+            for (let i = 1; i < '</think>'.length && i <= this.thinkTagBuffer.length; i++) {
+              const suffix = this.thinkTagBuffer.slice(-i);
+              const prefix = '</think>'.slice(0, i);
+              if (suffix === prefix) {
+                // Emit everything before the potential partial
+                thinking += this.thinkTagBuffer.slice(0, -i);
+                this.thinkTagBuffer = suffix;
+                break;
+              }
+            }
+          } else {
+            // No potential partial - emit all as thinking content
+            thinking += this.thinkTagBuffer;
+            this.thinkTagBuffer = '';
+          }
+          // Wait for more data
+          break;
+        }
+      } else {
+        // Look for opening <think> tag
+        const openIndex = this.thinkTagBuffer.indexOf('<think>');
+        if (openIndex !== -1) {
+          // Emit everything before the tag as output
+          output += this.thinkTagBuffer.slice(0, openIndex);
+          this.thinkTagBuffer = this.thinkTagBuffer.slice(openIndex + '<think>'.length);
+          this.insideThinkTag = true;
+          // Continue processing - there might be think content after
+        } else {
+          // No opening tag - also check for orphan </think> tags (malformed LLM output)
+          const orphanCloseIndex = this.thinkTagBuffer.indexOf('</think>');
+          if (orphanCloseIndex !== -1) {
+            // Strip orphan closing tag - emit content before it as output
+            output += this.thinkTagBuffer.slice(0, orphanCloseIndex);
+            this.thinkTagBuffer = this.thinkTagBuffer.slice(orphanCloseIndex + '</think>'.length);
+            // Continue processing - there might be more content after
+          } else {
+            // Check if buffer could end with partial <think> or partial </think>
+            const couldBeOpenPartial = this.couldBeTagPrefix(this.thinkTagBuffer, '<think>');
+            const couldBeClosePartial = this.couldBeTagPrefix(this.thinkTagBuffer, '</think>');
+
+            if (couldBeOpenPartial || couldBeClosePartial) {
+              // Find where the potential partial starts (check both tags)
+              let partialLen = 0;
+
+              // Check for partial <think>
+              for (let i = 1; i < '<think>'.length && i <= this.thinkTagBuffer.length; i++) {
+                const suffix = this.thinkTagBuffer.slice(-i);
+                const prefix = '<think>'.slice(0, i);
+                if (suffix === prefix) {
+                  partialLen = Math.max(partialLen, i);
+                }
+              }
+
+              // Check for partial </think>
+              for (let i = 1; i < '</think>'.length && i <= this.thinkTagBuffer.length; i++) {
+                const suffix = this.thinkTagBuffer.slice(-i);
+                const prefix = '</think>'.slice(0, i);
+                if (suffix === prefix) {
+                  partialLen = Math.max(partialLen, i);
+                }
+              }
+
+              if (partialLen > 0) {
+                // Emit everything before the potential partial
+                output += this.thinkTagBuffer.slice(0, -partialLen);
+                this.thinkTagBuffer = this.thinkTagBuffer.slice(-partialLen);
+              }
+            } else {
+              // No potential partial - emit all as output
+              output += this.thinkTagBuffer;
+              this.thinkTagBuffer = '';
+            }
+            // Wait for more data
+            break;
+          }
+        }
+      }
+    }
+
+    return { output, thinking };
+  }
+
+  /**
+   * Reset think tag filter state for a new streaming session.
+   */
+  private resetThinkTagFilter(): void {
+    this.thinkTagBuffer = '';
+    this.insideThinkTag = false;
+  }
+
+  /**
+   * Flush any remaining content from the think tag buffer.
+   * Called when streaming is done to emit any buffered content.
+   * Returns both regular content and any remaining thinking content.
+   */
+  private flushThinkTagBuffer(): { output: string; thinking: string } {
+    if (this.insideThinkTag) {
+      // Still inside a think tag - return buffer as thinking content
+      const thinking = this.thinkTagBuffer;
+      this.thinkTagBuffer = '';
+      return { output: '', thinking };
+    }
+    // Outside think tag - return remaining buffer as output
+    const output = this.thinkTagBuffer;
+    this.thinkTagBuffer = '';
+    return { output, thinking: '' };
+  }
+
+  /**
+   * Check if an error is a retryable network error.
+   */
+  private isRetryableError(error: unknown): boolean {
+    if (error instanceof Error) {
+      const message = error.message.toLowerCase();
+      // Common network errors that are worth retrying
+      return (
+        message.includes('premature close') ||
+        message.includes('econnreset') ||
+        message.includes('econnrefused') ||
+        message.includes('etimedout') ||
+        message.includes('socket hang up') ||
+        message.includes('network error') ||
+        message.includes('fetch failed')
+      );
+    }
+    return false;
+  }
+
+  /**
+   * Sleep for a given number of milliseconds.
+   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
    * Generate LLM response with streaming, emitting chunks as they arrive.
    * Accumulates content and tool calls, returning the complete response.
+   *
+   * If the LLM has implicit thinking enabled, <think> content is emitted as
+   * 'streaming_think' events for the UI to display in a dedicated area.
+   *
+   * Includes retry logic for transient network errors.
    */
   private async generateWithStreaming(
     messages: Message[],
     tools: ToolDefinition[]
   ): Promise<LLMResponse> {
-    let content = '';
-    const toolCalls: ToolCall[] = [];
-    const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> =
-      new Map();
-    let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
+    const MAX_RETRIES = 3;
+    const BASE_DELAY_MS = 1000;
 
-    try {
-      for await (const chunk of this.llm.generateStream({ messages, tools, temperature: 0.7 })) {
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      // Reset state for each attempt
+      let content = '';
+      const toolCalls: ToolCall[] = [];
+      const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> =
+        new Map();
+      let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
+
+      // Check if LLM has implicit thinking - if so, emit think content to UI
+      const hasImplicitThinking = this.llm.hasImplicitThinking;
+
+      // Reset think tag filter for this streaming session
+      this.resetThinkTagFilter();
+
+      try {
+        for await (const chunk of this.llm.generateStream({ messages, tools, temperature: 0.7 })) {
         // Check for abort
         if (this.aborted) {
+          if (hasImplicitThinking) {
+            this.emit({ type: 'streaming_think', chunk: '', done: true });
+          }
           this.emit({ type: 'streaming_text', chunk: '', done: true });
           break;
         }
 
         // Handle content chunks
         if (chunk.content) {
+          // Accumulate raw content for final response
           content += chunk.content;
-          debugLog(
-            `[GenericAgent] streaming_text emit: chunk=${chunk.content.length} chars, total=${content.length} chars`
-          );
-          this.emit({ type: 'streaming_text', chunk: chunk.content, done: false });
+
+          // Separate <think> content from regular output
+          const { output, thinking } = this.processStreamChunk(chunk.content);
+
+          // Emit thinking content if LLM has implicit thinking
+          if (hasImplicitThinking && thinking) {
+            this.emit({ type: 'streaming_think', chunk: thinking, done: false });
+          }
+
+          // Emit regular content
+          if (output) {
+            debugLog(
+              `[GenericAgent] streaming_text emit: chunk=${output.length} chars (filtered from ${chunk.content.length}), total=${content.length} chars`
+            );
+            this.emit({ type: 'streaming_text', chunk: output, done: false });
+          }
         }
 
         // Handle tool call deltas
@@ -426,6 +670,22 @@ export class GenericAgent extends TypedEventEmitter {
 
         // Handle stream completion and capture usage
         if (chunk.done) {
+          // Flush any remaining buffered content
+          const { output: remainingOutput, thinking: remainingThinking } = this.flushThinkTagBuffer();
+
+          // Emit any remaining thinking content
+          if (hasImplicitThinking && remainingThinking) {
+            this.emit({ type: 'streaming_think', chunk: remainingThinking, done: false });
+          }
+          if (hasImplicitThinking) {
+            this.emit({ type: 'streaming_think', chunk: '', done: true });
+          }
+
+          // Emit any remaining regular content
+          if (remainingOutput) {
+            this.emit({ type: 'streaming_text', chunk: remainingOutput, done: false });
+          }
+
           debugLog(
             `[GenericAgent] streaming_text DONE: total content=${content.length} chars, toolCallCount=${toolCallAccumulators.size}`
           );
@@ -435,50 +695,85 @@ export class GenericAgent extends TypedEventEmitter {
           }
         }
       }
-    } catch (error) {
-      // On error, emit done and re-throw
-      this.emit({ type: 'streaming_text', chunk: '', done: true });
-      throw error;
-    }
-
-    // Convert accumulated tool calls to final format
-    for (const [, acc] of toolCallAccumulators) {
-      if (acc.id && acc.name) {
-        try {
-          toolCalls.push({
-            id: acc.id,
-            name: acc.name,
-            arguments: acc.arguments ? JSON.parse(acc.arguments) : {},
-          });
-        } catch {
-          // If JSON parsing fails, use empty object
-          toolCalls.push({
-            id: acc.id,
-            name: acc.name,
-            arguments: {},
-          });
+        // Success! Convert accumulated tool calls to final format
+        for (const [, acc] of toolCallAccumulators) {
+          if (acc.id && acc.name) {
+            try {
+              toolCalls.push({
+                id: acc.id,
+                name: acc.name,
+                arguments: acc.arguments ? JSON.parse(acc.arguments) : {},
+              });
+            } catch {
+              // If JSON parsing fails, use empty object
+              toolCalls.push({
+                id: acc.id,
+                name: acc.name,
+                arguments: {},
+              });
+            }
+          }
         }
+
+        // Clean content (remove <think> tags including orphaned ones)
+        const cleanedContent = content
+          ? content
+              .replace(/<think>.*?<\/think>/gs, '') // Complete think blocks
+              .replace(/<think>.*$/gs, '') // Orphan opening tag
+              .replace(/<\/think>/g, '') // Orphan closing tag
+              .trim()
+          : null;
+
+        debugLog(
+          `[GenericAgent] generateWithStreaming result: rawContent=${content.length} chars, cleanedContent=${cleanedContent?.length ?? 0} chars, toolCalls=${toolCalls.length}`
+        );
+        if (cleanedContent) {
+          debugLog(
+            `[GenericAgent] generateWithStreaming content preview: "${cleanedContent.slice(0, 200)}${cleanedContent.length > 200 ? '...' : ''}"`
+          );
+        }
+
+        return {
+          content: cleanedContent,
+          toolCalls,
+          finishReason: 'stop',
+          usage,
+        };
+      } catch (error) {
+        lastError = error;
+
+        // Reset filter state
+        this.resetThinkTagFilter();
+
+        // Check if this is a retryable error
+        if (this.isRetryableError(error) && attempt < MAX_RETRIES - 1) {
+          const delayMs = BASE_DELAY_MS * Math.pow(2, attempt);
+          debugLog(
+            `[GenericAgent] Retryable error on attempt ${attempt + 1}/${MAX_RETRIES}: ${error instanceof Error ? error.message : String(error)}. Retrying in ${delayMs}ms...`
+          );
+
+          // Emit notification about retry
+          this.emit({
+            type: 'notification',
+            level: 'warning',
+            message: `Connection interrupted. Retrying... (attempt ${attempt + 2}/${MAX_RETRIES})`,
+          });
+
+          await this.sleep(delayMs);
+          continue; // Retry
+        }
+
+        // Non-retryable error or max retries exceeded - emit done and throw
+        if (hasImplicitThinking) {
+          this.emit({ type: 'streaming_think', chunk: '', done: true });
+        }
+        this.emit({ type: 'streaming_text', chunk: '', done: true });
+        throw error;
       }
     }
 
-    // Clean content (remove <think> tags)
-    const cleanedContent = content ? content.replace(/<think>.*?<\/think>/gs, '').trim() : null;
-
-    debugLog(
-      `[GenericAgent] generateWithStreaming result: rawContent=${content.length} chars, cleanedContent=${cleanedContent?.length ?? 0} chars, toolCalls=${toolCalls.length}`
-    );
-    if (cleanedContent) {
-      debugLog(
-        `[GenericAgent] generateWithStreaming content preview: "${cleanedContent.slice(0, 200)}${cleanedContent.length > 200 ? '...' : ''}"`
-      );
-    }
-
-    return {
-      content: cleanedContent,
-      toolCalls,
-      finishReason: 'stop',
-      usage,
-    };
+    // Should not reach here, but if we do, throw the last error
+    throw lastError ?? new Error('generateWithStreaming failed after all retries');
   }
 
   /**
@@ -488,6 +783,11 @@ export class GenericAgent extends TypedEventEmitter {
   async run(task: string, userResponse?: string): Promise<GenericAgentResult> {
     // Reset abort state for new run
     this.aborted = false;
+
+    // Start flow recording session (only for main orchestrator, not sub-agents)
+    if (!this.isSubAgent && !userResponse) {
+      FlowRecorder.startSession(task);
+    }
 
     // Emit started status
     this.emit({ type: 'agent_status', status: 'started', agentName: this.getEffectiveAgentName() });
@@ -793,9 +1093,10 @@ export class GenericAgent extends TypedEventEmitter {
       const messagesWithReminder = this.injectTodoReminder();
 
       // Stream LLM response
+      // Use getEffectiveTools() to filter out 'think' tool if LLM has implicit thinking
       const response = await this.generateWithStreaming(
         messagesWithReminder,
-        Array.from(this.tools.values())
+        this.getEffectiveTools()
       );
 
       // Track token usage for context window management
@@ -873,6 +1174,10 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Check if max iterations reached
     if (this.iteration >= this.maxIterations) {
+      // End flow recording session on error (only for main orchestrator)
+      if (!this.isSubAgent) {
+        FlowRecorder.endSession();
+      }
       this.emit({ type: 'agent_status', status: 'error', agentName: this.getEffectiveAgentName() });
       return {
         status: 'interrupted',
@@ -880,6 +1185,11 @@ export class GenericAgent extends TypedEventEmitter {
         todos: this.todoManager.getTodos(),
         error: 'max_iterations_reached',
       };
+    }
+
+    // End flow recording session on completion (only for main orchestrator)
+    if (!this.isSubAgent) {
+      FlowRecorder.endSession();
     }
 
     // Emit completed status
@@ -1010,6 +1320,14 @@ export class GenericAgent extends TypedEventEmitter {
       agentName: this.getEffectiveAgentName(),
     });
 
+    // Record tool start for flow tracking
+    FlowRecorder.getSession()?.onToolStart(
+      toolCall.id,
+      toolCall.name,
+      toolCall.arguments,
+      this.getEffectiveAgentName()
+    );
+
     // Check for looping (skip for think + TodoWrite - these may be called frequently)
     // - Hard errors (loop_blocked): Block execution completely
     // - Soft warnings: Record but let tool run, warning will be included in result
@@ -1033,6 +1351,7 @@ export class GenericAgent extends TypedEventEmitter {
             isError: true,
             agentName: this.getEffectiveAgentName(),
           });
+          FlowRecorder.getSession()?.onToolComplete(toolCall.id, warningResult, true);
           return warningResult;
         } else {
           // Soft warning - record it, tool will still run
@@ -1053,6 +1372,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
     }
 
@@ -1067,6 +1387,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
     }
 
@@ -1081,6 +1402,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
     }
 
@@ -1143,6 +1465,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
+        FlowRecorder.getSession()?.onToolComplete(toolCall.id, resultObj, false);
         return { __awaiting_user_input: true, ...resultObj };
       }
 
@@ -1154,6 +1477,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
     }
 
@@ -1165,14 +1489,18 @@ export class GenericAgent extends TypedEventEmitter {
       const instruction = args['instruction'] as string | undefined;
 
       if (!contentType) {
-        return { error: 'content_type is required for generate_content' };
+        const errorResult = { error: 'content_type is required for generate_content' };
+        FlowRecorder.getSession()?.onToolComplete(toolCall.id, errorResult, true);
+        return errorResult;
       }
 
       if (!instruction) {
-        return {
+        const errorResult = {
           error: 'instruction is required for generate_content',
           suggestion: 'Provide a clear instruction describing what content to create, e.g., "Create a detailed character profile for Alice including physical appearance and personality."'
         };
+        FlowRecorder.getSession()?.onToolComplete(toolCall.id, errorResult, true);
+        return errorResult;
       }
 
       debugLog(
@@ -1239,6 +1567,7 @@ export class GenericAgent extends TypedEventEmitter {
           agentName: this.getEffectiveAgentName(),
         });
 
+        FlowRecorder.getSession()?.onToolComplete(toolCall.id, resultObj, false);
         return { __awaiting_user_input: true, ...resultObj };
       }
 
@@ -1255,6 +1584,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, finalResult, false);
       return finalResult;
     }
 
@@ -1304,6 +1634,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
+        FlowRecorder.getSession()?.onToolComplete(toolCall.id, resultObj, false);
         return { __awaiting_user_input: true, ...resultObj };
       }
 
@@ -1315,6 +1646,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
     }
 
@@ -1357,6 +1689,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
+        FlowRecorder.getSession()?.onToolComplete(toolCall.id, resultObj, false);
         return { __awaiting_user_input: true, ...resultObj };
       }
 
@@ -1368,6 +1701,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
     }
 
@@ -1409,6 +1743,7 @@ export class GenericAgent extends TypedEventEmitter {
         });
 
         // Return special marker to indicate we're pausing for user input
+        FlowRecorder.getSession()?.onToolComplete(toolCall.id, resultObj, false);
         return { __awaiting_user_input: true, ...resultObj };
       }
 
@@ -1420,6 +1755,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
     }
 
@@ -1434,6 +1770,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
     }
 
@@ -1448,6 +1785,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
     }
 
@@ -1462,6 +1800,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: true,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, errorResult, true);
       return errorResult;
     }
 
@@ -1484,6 +1823,7 @@ export class GenericAgent extends TypedEventEmitter {
           isError: false,
           agentName: this.getEffectiveAgentName(),
         });
+        FlowRecorder.getSession()?.onToolComplete(toolCall.id, confirmResult, false);
         return confirmResult;
       } else {
         // Second call after confirmation - execute and clear pending
@@ -1521,6 +1861,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: false,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
     } catch (error) {
       const errorResult = { error: String(error), tool: toolCall.name };
@@ -1532,6 +1873,7 @@ export class GenericAgent extends TypedEventEmitter {
         isError: true,
         agentName: this.getEffectiveAgentName(),
       });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, errorResult, true);
       return errorResult;
     }
   }
@@ -1578,7 +1920,7 @@ export class GenericAgent extends TypedEventEmitter {
     }
 
     // New skill-based architecture types
-    if (subagentType === 'explore') {
+    if (subagentType === 'Explore') {
       return await this.handleDispatchExplore({
         ...toolCall,
         name: 'dispatch_explore',
@@ -2291,6 +2633,7 @@ Respond in JSON format:
         prompt: contentSystemPrompt,
         task: subAgentTask,
         maxIterations: 10,
+        parentToolCallId: toolCall.id,
       });
 
       // Extract the generated content from the sub-agent's output
@@ -2339,6 +2682,8 @@ Respond in JSON format:
    * These allow it to pull context as needed.
    */
   private getContentCreatorTools(): ToolDefinition[] {
+    const projectDir = path.join(process.cwd(), '.kshana');
+
     return [
       {
         name: 'read_project',
@@ -2347,6 +2692,34 @@ Respond in JSON format:
           type: 'object',
           properties: {},
           required: [],
+        },
+        handler: async () => {
+          try {
+            const project = loadProject();
+            if (!project) {
+              return 'No project found. The project has not been initialized yet.';
+            }
+            // Return a simplified view of what content exists
+            const summary: Record<string, unknown> = {
+              style: project.style,
+              currentPhase: project.currentPhase,
+              story: project.content?.story ? { file: 'plans/story.md', exists: true } : null,
+              plot: project.content?.plot ? { file: 'plans/plot.md', exists: true } : null,
+              characters: Object.keys(project.characters || {}).map(name => ({
+                name,
+                file: `characters/${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`,
+              })),
+              settings: Object.keys(project.settings || {}).map(name => ({
+                name,
+                file: `settings/${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`,
+              })),
+              // Include files array for more complete picture
+              files: project.files || [],
+            };
+            return JSON.stringify(summary, null, 2);
+          } catch (err) {
+            return `Error reading project: ${String(err)}`;
+          }
         },
       },
       {
@@ -2361,6 +2734,22 @@ Respond in JSON format:
             },
           },
           required: ['path'],
+        },
+        handler: async (args: Record<string, unknown>) => {
+          const filePath = args['path'] as string;
+          if (!filePath) {
+            return 'Error: path is required';
+          }
+          try {
+            const fullPath = path.join(projectDir, filePath);
+            if (!fs.existsSync(fullPath)) {
+              return `File not found: ${filePath}`;
+            }
+            const content = fs.readFileSync(fullPath, 'utf-8');
+            return content;
+          } catch (err) {
+            return `Error reading file: ${String(err)}`;
+          }
         },
       },
     ];
@@ -2560,8 +2949,14 @@ Respond in JSON format:
           }
         }
 
-        // Clean content (remove <think> tags)
-        const cleanedContent = content ? content.replace(/<think>.*?<\/think>/gs, '').trim() : '';
+        // Clean content (remove <think> tags including orphaned ones)
+        const cleanedContent = content
+          ? content
+              .replace(/<think>.*?<\/think>/gs, '') // Complete think blocks
+              .replace(/<think>.*$/gs, '') // Orphan opening tag
+              .replace(/<\/think>/g, '') // Orphan closing tag
+              .trim()
+          : '';
 
         this.contentState.currentContent = cleanedContent || 'No content generated';
 
@@ -3752,9 +4147,19 @@ Respond in JSON format:
 
   /**
    * Build the system message for this agent.
+   * For main orchestrator, injects current project state automatically.
    */
   private buildSystemMessage(): string {
-    return buildSystemMessage(this.isSubAgent, this.tools, this.customPrompt);
+    // Load project state for main orchestrator (not sub-agents)
+    let projectState: Record<string, unknown> | null = null;
+    if (!this.isSubAgent) {
+      const project = loadProject();
+      if (project) {
+        projectState = project as unknown as Record<string, unknown>;
+      }
+    }
+
+    return buildSystemMessage(this.isSubAgent, this.tools, this.customPrompt, projectState);
   }
 
   /**
@@ -3867,16 +4272,17 @@ Respond in JSON format:
       const explorePrompt = buildExplorePrompt(query);
 
       // Get read_file tool for the explore agent
-      const { readFileTool } = await import('../tools/builtin/contentCreatorTools.js');
+      const { readFileTool, readProjectTool } = await import('../tools/builtin/contentCreatorTools.js');
       const { thinkTool } = await import('../tools/builtin/think.js');
 
       // Run the explore sub-agent
       const result = await this.runSubAgent({
         name: 'Explore Agent',
-        tools: [readFileTool, thinkTool],
+        tools: [readFileTool, readProjectTool, thinkTool],
         prompt: explorePrompt,
         task: `Research and summarize guidance for: ${query}`,
         maxIterations: 15, // Allow multiple file reads
+        parentToolCallId: toolCall.id,
       });
 
       debugLog(`[GenericAgent] dispatch_explore completed: ${result.status}`);
@@ -3966,6 +4372,7 @@ Respond in JSON format:
         prompt: skillPrompt,
         task,
         maxIterations: 10,
+        parentToolCallId: toolCall.id,
       });
 
       debugLog(`[GenericAgent] dispatch_skill completed: skill="${skillName}", status=${result.status}`);

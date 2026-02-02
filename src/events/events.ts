@@ -67,6 +67,19 @@ export interface StreamingTextEvent {
 }
 
 /**
+ * Streaming think event for implicit LLM reasoning (e.g., DeepSeek, Claude extended thinking).
+ * This is emitted when an LLM outputs <think> tags as part of its natural reasoning.
+ * The UI should display this in a dedicated "thinking" area.
+ */
+export interface StreamingThinkEvent {
+  type: 'streaming_think';
+  /** The thinking content chunk to append */
+  chunk: string;
+  /** Whether this thinking block is complete */
+  done: boolean;
+}
+
+/**
  * Tool streaming event for streaming content within a tool call display.
  * Used for sub-agent loops (content, image prompt, plan) that generate content
  * which should be displayed inside the tool's UI box.
@@ -161,6 +174,7 @@ export type AgentEvent =
   | TodoUpdateEvent
   | AgentTextEvent
   | StreamingTextEvent
+  | StreamingThinkEvent
   | ToolStreamingEvent
   | NotificationEvent
   | QuestionEvent
