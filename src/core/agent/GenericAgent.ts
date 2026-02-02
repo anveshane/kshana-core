@@ -3417,15 +3417,15 @@ Respond in JSON format:
 
   /**
    * Handle user response to image generation prompt approval.
-   * Uses LLM to classify whether the response is approval or feedback.
+   * Uses simple pattern matching to classify whether the response is approval or feedback.
    */
   async handleImageGenResponse(userResponse: string): Promise<unknown> {
     if (!this.imageGenState) {
       return { error: 'No active image generation session' };
     }
 
-    // Use LLM to classify the user's intent
-    const isApproval = await this.classifyImageGenResponse(userResponse);
+    // Classify user intent with simple pattern matching
+    const isApproval = this.classifyImageGenResponse(userResponse);
 
     if (isApproval) {
       // User approved - execute the actual image generation
@@ -3443,10 +3443,11 @@ Respond in JSON format:
   }
 
   /**
-   * Use LLM to classify whether user response indicates approval or feedback for image generation.
+   * Classify whether user response indicates approval or feedback for image generation.
+   * Uses simple pattern matching - no LLM needed since options are predefined.
    */
-  private async classifyImageGenResponse(userResponse: string): Promise<boolean> {
-    // Fast path: check for common approval patterns first to avoid LLM call
+  private classifyImageGenResponse(userResponse: string): boolean {
+    // Simple string matching - no LLM needed since options are predefined
     const lower = userResponse.toLowerCase().trim();
     const approvalPatterns = [
       'generate image',
@@ -3464,29 +3465,7 @@ Respond in JSON format:
       'y',
       '1',
     ];
-    if (approvalPatterns.some(p => lower === p || lower.startsWith(p))) {
-      return true;
-    }
-
-    // Load classification prompt from file for ambiguous cases
-    const classificationPrompt = loadAndRenderMarkdown('system/classification/image-approval.md', {
-      user_response: userResponse,
-    });
-
-    try {
-      const response = await this.llm.generate({
-        messages: [{ role: 'user', content: classificationPrompt }],
-        temperature: 0,
-        maxTokens: 50,
-      });
-
-      const result = (response.content ?? '').trim().toUpperCase();
-      return result.includes('APPROVE');
-    } catch {
-      // On error, use the fast path patterns (already checked above, so we'd only get here
-      // if the LLM call was needed for an ambiguous case - default to feedback)
-      return false;
-    }
+    return approvalPatterns.some(p => lower === p || lower.startsWith(p));
   }
 
   /**
