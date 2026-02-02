@@ -61,23 +61,23 @@ export const TodoList = React.memo(function TodoList({
   // Always show ALL todos - never truncate per CLAUDE.md instructions
   const visibleTodos = showHidden ? todos : todos.filter(t => t.visible);
 
-  if (visibleTodos.length === 0) {
-    return (
-      <Box>
-        <Text dimColor italic>
-          No todos
-        </Text>
-      </Box>
-    );
-  }
-
-  // Find current task for highlighting
-  const currentTask = visibleTodos.find(t => t.status === 'in_progress');
-
   // Count stats for display
   const completedCount = visibleTodos.filter(t => t.status === 'completed').length;
   const pendingCount = visibleTodos.filter(t => t.status === 'pending').length;
   const inProgressCount = visibleTodos.filter(t => t.status === 'in_progress').length;
+
+  // Hide the list when empty or when all todos are completed
+  if (visibleTodos.length === 0) {
+    return null;
+  }
+
+  // All todos completed - hide the list
+  if (completedCount === visibleTodos.length && visibleTodos.length > 0) {
+    return null;
+  }
+
+  // Find current task for highlighting
+  const currentTask = visibleTodos.find(t => t.status === 'in_progress');
 
   return (
     <Box flexDirection="column">
