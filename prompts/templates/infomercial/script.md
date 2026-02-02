@@ -4,8 +4,9 @@ You are creating a product infomercial script.
 
 ## Context
 
-**Value Proposition:**
-{{$value_proposition}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
+
+The value proposition should be at `plans/value_proposition.md`.
 
 ## Task
 

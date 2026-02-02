@@ -12,11 +12,9 @@ Create a cohesive final documentary video with proper flow and transitions.
 
 ## Input Context
 
-**Segment Videos:**
-{{SEGMENT_VIDEOS}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Documentary Structure:**
-{{$outline}}
+Segment videos are tracked in `project.json` with their artifact IDs. The documentary structure is at `plans/outline.md`.
 
 ## Artifacts in This Phase
 

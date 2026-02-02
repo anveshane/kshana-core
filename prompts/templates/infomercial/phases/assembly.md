@@ -12,11 +12,9 @@ Create a cohesive, persuasive infomercial video.
 
 ## Input Context
 
-**Script:**
-{{$script}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Demo Videos:**
-{{DEMO_VIDEOS}}
+The script is at `plans/script.md`. Demo videos are tracked in `project.json` with their artifact IDs.
 
 ## Artifacts in This Phase
 

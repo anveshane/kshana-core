@@ -12,11 +12,9 @@ Create professional product imagery and demonstration visuals.
 
 ## Input Context
 
-**Products:**
-{{$products}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Demo Sequences:**
-{{$demos}}
+Products are in the `products/` directory. Demo sequences are in `demos/`. Read them to generate product visuals.
 
 ## Artifacts in This Phase
 

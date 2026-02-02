@@ -4,8 +4,9 @@ You are creating a research outline for a documentary video.
 
 ## Context
 
-**Thesis Statement:**
-{{$thesis}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
+
+The thesis statement should be at `plans/thesis.md`.
 
 ## Task
 

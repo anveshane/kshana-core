@@ -1,14 +1,15 @@
 /**
- * Message condenser - automatically stores long content and replaces with references.
+ * DEPRECATED: Message condenser - no longer stores content or creates references.
  *
- * Purpose: Keep message history manageable by replacing long content (>500 chars)
- * with context variable references. The original content is stored and can be
- * fetched when needed.
+ * Context variable storage has been replaced with dynamic file discovery:
+ * - Agents use list_project_files() to discover what content exists
+ * - Agents use read_file() to access specific content when needed
+ *
+ * This module is kept for API compatibility but content is passed through unchanged.
  */
-import { contextStore } from './ContextStore.js';
 
 /**
- * Threshold for considering content "long" and worth storing.
+ * Threshold for considering content "long" (kept for API compatibility).
  */
 export const LONG_CONTENT_THRESHOLD = 500;
 
@@ -16,72 +17,46 @@ export const LONG_CONTENT_THRESHOLD = 500;
  * Result of condensing content.
  */
 export interface CondenseResult {
-  condensed: string;       // The condensed text (with reference)
-  wasCondensed: boolean;   // Whether condensing occurred
-  variableName?: string;   // The variable name if stored (e.g., "$plan")
+  condensed: string;       // The text (unchanged - no longer condensed)
+  wasCondensed: boolean;   // Always false now
+  variableName?: string;   // Always undefined now
 }
 
 /**
- * Condense long content by storing it and returning a reference.
+ * DEPRECATED: No longer condenses content.
+ * Returns content unchanged - context variables are no longer used.
  *
- * @param content - The content to potentially condense
- * @param label - Label describing the content
- * @param options - Additional options
- * @returns Condensed result with reference or original content
+ * @param content - The content (returned unchanged)
+ * @param label - Label (ignored)
+ * @param options - Options (ignored)
+ * @returns Original content unchanged
  */
 export function condenseContent(
   content: string,
-  label: string,
-  options: {
+  _label: string,
+  _options: {
     source?: 'user_input' | 'tool' | 'manual';
     variableBaseName?: string;
     threshold?: number;
   } = {}
 ): CondenseResult {
-  const threshold = options.threshold ?? LONG_CONTENT_THRESHOLD;
-
-  if (content.length <= threshold) {
-    return {
-      condensed: content,
-      wasCondensed: false,
-    };
-  }
-
-  // Store the content
-  const { variableName } = contextStore.store(content, label, {
-    source: options.source ?? 'user_input',
-    variableBaseName: options.variableBaseName ?? label,
-  });
-
-  // Create a condensed reference with clear instructions
-  const preview = content.slice(0, 150).replace(/\n/g, ' ').trim();
-  const condensed = `[STORED CONTENT: ${variableName}]
-Length: ${content.length} chars
-
-Preview: "${preview}..."
-
-IMPORTANT: When dispatching sub-agents, include this in context_refs array.
-Example: dispatch_content_agent(task="...", content_type="...", context_refs=["${variableName}", ...])`;
-
+  // No longer condense - return content unchanged
+  // Agents use list_project_files + read_file for content discovery
   return {
-    condensed,
-    wasCondensed: true,
-    variableName,
+    condensed: content,
+    wasCondensed: false,
   };
 }
 
 /**
- * Condense user input specifically.
- * Generates a descriptive variable name based on content analysis.
+ * DEPRECATED: No longer condenses user input.
+ * Returns content unchanged - context variables are no longer used.
  */
 export function condenseUserInput(content: string): CondenseResult {
-  const label = generateContentLabel(content);
-  const variableBaseName = generateVariableBaseName(content);
-
-  return condenseContent(content, label, {
-    source: 'user_input',
-    variableBaseName,
-  });
+  return {
+    condensed: content,
+    wasCondensed: false,
+  };
 }
 
 /**

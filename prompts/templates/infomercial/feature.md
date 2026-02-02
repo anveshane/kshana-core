@@ -4,8 +4,9 @@ You are defining a specific product feature for the infomercial.
 
 ## Context
 
-**Product:**
-{{$products}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
+
+Products are in the `products/` directory.
 
 ## Task
 

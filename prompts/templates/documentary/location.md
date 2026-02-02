@@ -4,8 +4,9 @@ You are defining a location or B-roll concept for a documentary.
 
 ## Context
 
-**Documentary Outline:**
-{{$outline}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
+
+The documentary outline should be at `plans/outline.md`.
 
 ## Task
 

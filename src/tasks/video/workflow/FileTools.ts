@@ -3,6 +3,8 @@
  * These tools allow agents to read/write project files and manage project state.
  */
 
+import { existsSync, readdirSync, statSync } from 'fs';
+import { join } from 'path';
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
 import { getWorkflowLogger } from './WorkflowLogger.js';
@@ -32,25 +34,13 @@ import {
   updateScene,
   setProjectInputType,
   updateContentStatus,
+  registerFile,
+  generateFileSummary,
+  getProjectDir,
 } from './ProjectManager.js';
 import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus, InputType, ContentTypeName } from './types.js';
 import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase, INPUT_TYPE_CONFIGS } from './types.js';
 import { LLMClient } from '../../../core/llm/index.js';
-import { contextStore } from '../../../core/context/index.js';
-
-/**
- * Expand context references (e.g., $wakes) to their actual stored content.
- * Returns the original string if it's not a context reference.
- */
-function expandContextRef(value: string): string {
-  if (value.startsWith('$') && value.length > 1) {
-    const stored = contextStore.get(value);
-    if (stored) {
-      return stored.content;
-    }
-  }
-  return value;
-}
 
 /**
  * Validates if the input is a valid story idea using an LLM call.
@@ -219,6 +209,208 @@ Returns the file content as a string, or an error if file doesn't exist.`,
 );
 
 /**
+ * Helper function to recursively list files in a directory
+ */
+function listDirectoryContents(
+  dirPath: string,
+  basePath: string,
+  depth: number = 0,
+  maxDepth: number = 3
+): Array<{ path: string; type: 'file' | 'directory'; size?: number }> {
+  const results: Array<{ path: string; type: 'file' | 'directory'; size?: number }> = [];
+
+  if (depth > maxDepth || !existsSync(dirPath)) {
+    return results;
+  }
+
+  try {
+    const entries = readdirSync(dirPath);
+
+    for (const entry of entries) {
+      const fullPath = join(dirPath, entry);
+      const relativePath = fullPath.replace(basePath + '/', '');
+
+      try {
+        const stats = statSync(fullPath);
+
+        if (stats.isDirectory()) {
+          results.push({ path: relativePath + '/', type: 'directory' });
+          // Recurse into subdirectories
+          const subResults = listDirectoryContents(fullPath, basePath, depth + 1, maxDepth);
+          results.push(...subResults);
+        } else if (stats.isFile()) {
+          results.push({
+            path: relativePath,
+            type: 'file',
+            size: stats.size,
+          });
+        }
+      } catch {
+        // Skip files we can't stat
+      }
+    }
+  } catch {
+    // Skip directories we can't read
+  }
+
+  return results;
+}
+
+/**
+ * List project files tool - returns the directory structure of the .kshana project.
+ */
+export const listProjectFilesTool: ToolDefinition = createTool(
+  'list_project_files',
+  `List all files in the project directory (.kshana/).
+
+Returns the directory structure with file information:
+- plans/ - Plot, story, scenes, and other planning documents
+- characters/ - Character description files
+- settings/ - Setting description files
+- scenes/ - Individual scene files
+- assets/ - Generated images and videos
+- original_input.md - User's original input
+- project.json - Project state and metadata
+
+Use this to discover what content exists, then use read_file to access specific files.
+This is the primary way to find available project content.`,
+  {
+    type: 'object',
+    properties: {
+      include_sizes: {
+        type: 'boolean',
+        description: 'Include file sizes in the output (default: false)',
+      },
+    },
+    required: [],
+  },
+  async (args) => {
+    const includeSizes = args['include_sizes'] === true;
+    const projectDir = getProjectDir();
+
+    if (!existsSync(projectDir)) {
+      return {
+        status: 'no_project',
+        content: '📁 No project directory found.\n\nCreate a project first using update_project with action "create".',
+        message: 'No project directory found. Create a project first using update_project with action "create".',
+        files: [],
+      };
+    }
+
+    // Get all files recursively
+    const allFiles = listDirectoryContents(projectDir, projectDir);
+
+    // Categorize files by type
+    const categorized: Record<string, string[]> = {
+      plans: [],
+      characters: [],
+      settings: [],
+      scenes: [],
+      assets: [],
+      other: [],
+    };
+
+    const fileList: Array<{ path: string; type: string; size?: number }> = [];
+
+    for (const file of allFiles) {
+      if (file.type === 'directory') {
+        continue; // Skip directory entries in output
+      }
+
+      // Skip internal files that agents shouldn't access directly
+      if (file.path === 'project.json') {
+        continue; // Use read_project tool instead
+      }
+
+      // Determine category
+      let category = 'other';
+      if (file.path.startsWith('plans/')) {
+        category = 'plans';
+      } else if (file.path.startsWith('characters/')) {
+        category = 'characters';
+      } else if (file.path.startsWith('settings/')) {
+        category = 'settings';
+      } else if (file.path.startsWith('scenes/')) {
+        category = 'scenes';
+      } else if (file.path.startsWith('assets/')) {
+        category = 'assets';
+      }
+
+      categorized[category]?.push(file.path);
+
+      const fileEntry: { path: string; type: string; size?: number } = {
+        path: file.path,
+        type: category,
+      };
+      if (includeSizes && file.size !== undefined) {
+        fileEntry.size = file.size;
+      }
+      fileList.push(fileEntry);
+    }
+
+    // Build summary sections
+    const summaryLines: string[] = [];
+    summaryLines.push(`📁 Project Files (.kshana/) - ${fileList.length} files total`);
+    summaryLines.push('');
+
+    if (categorized['plans'] && categorized['plans'].length > 0) {
+      summaryLines.push(`**Plans** (${categorized['plans'].length}):`);
+      for (const file of categorized['plans']) {
+        summaryLines.push(`  - ${file}`);
+      }
+      summaryLines.push('');
+    }
+    if (categorized['characters'] && categorized['characters'].length > 0) {
+      summaryLines.push(`**Characters** (${categorized['characters'].length}):`);
+      for (const file of categorized['characters']) {
+        summaryLines.push(`  - ${file}`);
+      }
+      summaryLines.push('');
+    }
+    if (categorized['settings'] && categorized['settings'].length > 0) {
+      summaryLines.push(`**Settings** (${categorized['settings'].length}):`);
+      for (const file of categorized['settings']) {
+        summaryLines.push(`  - ${file}`);
+      }
+      summaryLines.push('');
+    }
+    if (categorized['scenes'] && categorized['scenes'].length > 0) {
+      summaryLines.push(`**Scenes** (${categorized['scenes'].length}):`);
+      for (const file of categorized['scenes']) {
+        summaryLines.push(`  - ${file}`);
+      }
+      summaryLines.push('');
+    }
+    if (categorized['assets'] && categorized['assets'].length > 0) {
+      summaryLines.push(`**Assets** (${categorized['assets'].length}):`);
+      for (const file of categorized['assets']) {
+        summaryLines.push(`  - ${file}`);
+      }
+      summaryLines.push('');
+    }
+    if (categorized['other'] && categorized['other'].length > 0) {
+      summaryLines.push(`**Other** (${categorized['other'].length}):`);
+      for (const file of categorized['other']) {
+        summaryLines.push(`  - ${file}`);
+      }
+      summaryLines.push('');
+    }
+
+    // Build content string for UI display
+    const content = summaryLines.join('\n');
+
+    return {
+      status: 'success',
+      content, // This field is displayed in the UI
+      project_directory: '.kshana/',
+      total_files: fileList.length,
+      files: fileList,
+      usage_hint: 'Use read_file(file_path) to read any of these files. Paths are relative to .kshana/',
+    };
+  }
+);
+
+/**
  * Write file tool - writes content to a project file.
  */
 export const writeFileTool: ToolDefinition = createTool(
@@ -227,9 +419,12 @@ export const writeFileTool: ToolDefinition = createTool(
 
 Use this to write:
 - Plan files: plans/plot.md, plans/story.md, plans/scenes.md, etc.
-- Any other text files within the project
+- Character files: characters/[name].md
+- Setting files: settings/[name].md
+- Scene files: scenes/scene_[N].md
 
-For structured data (characters, settings, assets, scenes), prefer using update_project instead.`,
+Files are automatically registered in project.json with a summary for easy discovery.
+For structured data (assets, approvals), use update_project instead.`,
   {
     type: 'object',
     properties: {
@@ -241,12 +436,17 @@ For structured data (characters, settings, assets, scenes), prefer using update_
         type: 'string',
         description: 'Content to write to the file',
       },
+      summary: {
+        type: 'string',
+        description: 'Optional brief summary of the content (1-2 sentences). Auto-generated if not provided.',
+      },
     },
     required: ['file_path', 'content'],
   },
   async (args) => {
     const filePath = args['file_path'] as string;
     const content = args['content'] as string;
+    const summary = args['summary'] as string | undefined;
 
     // Security: prevent path traversal
     if (filePath.includes('..') || filePath.startsWith('/')) {
@@ -259,10 +459,44 @@ For structured data (characters, settings, assets, scenes), prefer using update_
     try {
       writeProjectFile(filePath, content);
 
+      // Determine file type from path
+      const fileTypeMap: Record<string, string> = {
+        'plans/plot.md': 'plot',
+        'plans/story.md': 'story',
+        'plans/scenes.md': 'scenes_plan',
+        'plans/images.md': 'images_plan',
+        'plans/video.md': 'video_plan',
+        'original_input.md': 'original_input',
+      };
+
+      let fileType = fileTypeMap[filePath];
+      if (!fileType) {
+        // Infer from path
+        if (filePath.startsWith('characters/')) fileType = 'character';
+        else if (filePath.startsWith('settings/')) fileType = 'setting';
+        else if (filePath.startsWith('scenes/')) fileType = 'scene';
+        else fileType = 'other';
+      }
+
+      // Generate summary if not provided
+      const fileSummary = summary || generateFileSummary(content, fileType);
+
+      // Extract name from path for character/setting/scene files
+      let name: string | undefined;
+      if (fileType === 'character' || fileType === 'setting') {
+        const match = filePath.match(/\/([\w-]+)\.md$/);
+        name = match?.[1] ? match[1].replace(/-/g, ' ') : undefined;
+      } else if (fileType === 'scene') {
+        const match = filePath.match(/scene[_-]?(\d+)/i);
+        name = match?.[1] ? `Scene ${match[1]}` : undefined;
+      }
+
+      // Register file in project.json with summary
+      registerFile(filePath, fileType, { name, summary: fileSummary });
+
       // Track plot/story content in the content registry for persistence
       const project = loadProject();
       if (project) {
-        // Map file paths to content types
         const fileToContentType: Record<string, ContentTypeName> = {
           'plans/plot.md': 'plot',
           'plans/story.md': 'story',
@@ -275,9 +509,10 @@ For structured data (characters, settings, assets, scenes), prefer using update_
 
       return {
         status: 'success',
-        message: `File written successfully: ${filePath}`,
+        message: `File written and registered: ${filePath}`,
         file_path: filePath,
         bytes_written: content.length,
+        summary: fileSummary,
       };
     } catch (error) {
       return {
@@ -439,9 +674,6 @@ export const updateProjectTool: ToolDefinition = createTool(
           if (!originalInput) {
             return { status: 'error', error: 'original_input is required for create action' };
           }
-
-          // Expand context references (e.g., $wakes -> actual content)
-          originalInput = expandContextRef(originalInput);
 
           // Validate that the input is actually a story idea
           const validation = await validateStoryInput(originalInput);
@@ -909,12 +1141,12 @@ What story would you like to turn into a video?`,
  * Only includes project state tools - content files are handled by subagents via Task.
  */
 export function getWorkflowFileTools(): ToolDefinition[] {
-  return [readProjectTool, updateProjectTool];
+  return [listProjectFilesTool, readProjectTool, updateProjectTool];
 }
 
 /**
  * Get all file tools including read_file/write_file (for subagents that need direct file access).
  */
 export function getAllFileTools(): ToolDefinition[] {
-  return [readFileTool, writeFileTool, readProjectTool, updateProjectTool];
+  return [listProjectFilesTool, readFileTool, writeFileTool, readProjectTool, updateProjectTool];
 }

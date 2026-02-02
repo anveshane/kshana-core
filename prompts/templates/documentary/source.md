@@ -4,8 +4,9 @@ You are defining a source (expert, organization, study, or interviewee) for a do
 
 ## Context
 
-**Documentary Outline:**
-{{$outline}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
+
+The documentary outline should be at `plans/outline.md`.
 
 ## Task
 

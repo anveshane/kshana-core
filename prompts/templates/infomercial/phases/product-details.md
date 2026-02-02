@@ -12,8 +12,9 @@ Document products and features with visual detail for generation.
 
 ## Input Context
 
-**Value Proposition:**
-{{$value_proposition}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
+
+The value proposition should be available at `plans/value_proposition.md`. Read it to develop product and feature details.
 
 ## Artifacts in This Phase
 

@@ -12,11 +12,9 @@ Stitch all approved scene videos together into a cohesive final video with prope
 
 ## Input Context
 
-**Scene Videos:**
-{{SCENE_VIDEOS}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Scene Order:**
-{{SCENE_ORDER}}
+Scene videos are tracked in `project.json` under the scenes array with their `videoArtifactId` properties. The scene order is determined by the `sceneNumber` field.
 
 ## Artifacts in This Phase
 

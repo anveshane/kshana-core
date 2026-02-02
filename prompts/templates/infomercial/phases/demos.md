@@ -12,14 +12,9 @@ Create compelling demo sequences that prove product value.
 
 ## Input Context
 
-**Script:**
-{{$script}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Products:**
-{{$products}}
-
-**Features:**
-{{$features}}
+The script is at `plans/script.md`. Products are in the `products/` directory and features in `features/`. Read them to plan demo sequences.
 
 ## Artifacts in This Phase
 

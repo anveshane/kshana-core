@@ -12,8 +12,9 @@ Identify and describe the 3-5 key visuals that will make up the Short.
 
 ## Input Context
 
-**Script:**
-{{$script}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
+
+The script should be available at `plans/script.md`. Read it to identify key visual moments.
 
 ## Artifacts in This Phase
 

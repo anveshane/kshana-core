@@ -4,8 +4,9 @@ You are defining a key visual moment for a YouTube Short.
 
 ## Context
 
-**Script:**
-{{$script}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
+
+The script should be at `plans/script.md`.
 
 ## Task
 

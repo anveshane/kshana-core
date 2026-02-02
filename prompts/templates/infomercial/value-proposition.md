@@ -4,8 +4,9 @@ You are creating a compelling value proposition for a product infomercial.
 
 ## Context
 
-**Product Information:**
-{{$original_input}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
+
+The original product information should be at `original_input.md`.
 
 ## Task
 

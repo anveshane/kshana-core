@@ -12,11 +12,9 @@ Create a polished, engaging Short ready for upload.
 
 ## Input Context
 
-**Script:**
-{{$script}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Visual Clips:**
-{{VISUAL_CLIPS}}
+The script is at `plans/script.md`. Visual clips are tracked in `project.json` with their artifact IDs.
 
 ## Artifacts in This Phase
 

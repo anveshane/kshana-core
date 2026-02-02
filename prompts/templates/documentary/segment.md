@@ -4,14 +4,9 @@ You are creating a detailed segment for a documentary video.
 
 ## Context
 
-**Documentary Outline:**
-{{$outline}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
 
-**Available Sources:**
-{{$sources}}
-
-**Available Locations:**
-{{$locations}}
+The documentary outline should be at `plans/outline.md`. Sources are in the `sources/` directory and locations in `locations/`.
 
 ## Task
 

@@ -12,14 +12,9 @@ Create professional documentary visuals that support the narrative and maintain 
 
 ## Input Context
 
-**Sources:**
-{{$sources}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Locations:**
-{{$locations}}
-
-**Segments:**
-{{$segments}}
+Sources are in the `sources/` directory, locations in `locations/`, and segments in `segments/`. Read them to generate appropriate visual assets.
 
 ## Artifacts in This Phase
 

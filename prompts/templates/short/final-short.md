@@ -2,13 +2,11 @@
 
 Assemble all visual clips into the final YouTube Short.
 
-## Input Clips
+## Input Context
 
-{{VISUAL_CLIPS}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
 
-## Script Timing
-
-{{$script}}
+Visual clips are tracked in `project.json` with their artifact IDs. The script is at `plans/script.md`.
 
 ## Assembly Requirements
 

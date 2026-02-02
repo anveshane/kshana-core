@@ -4,8 +4,9 @@ You are creating a script for a YouTube Short (under 60 seconds).
 
 ## Context
 
-**Hook:**
-{{$hook}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
+
+The hook should be at `plans/hook.md`.
 
 ## Task
 

@@ -12,8 +12,9 @@ Extract and detail all characters, settings, and scenes from the story to prepar
 
 ## Input Context
 
-**Story:**
-{{$story}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
+
+The story should be available at `plans/story.md`. Read it to extract characters, settings, and scenes.
 
 ## Artifacts in This Phase
 

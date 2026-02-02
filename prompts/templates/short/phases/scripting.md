@@ -12,8 +12,9 @@ Write a tight, engaging script that delivers on the hook's promise.
 
 ## Input Context
 
-**Hook:**
-{{$hook}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
+
+The hook should be available at `plans/hook.md`. Read it to develop the complete script.
 
 ## Artifacts in This Phase
 

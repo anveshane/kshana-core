@@ -11,7 +11,6 @@ import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
-import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
@@ -25,6 +24,9 @@ import {
   WorkflowPhase,
   PHASE_CONFIGS,
   getProjectDir,
+  // Style and input type configs
+  STYLE_CONFIGS,
+  INPUT_TYPE_CONFIGS,
   // Generic template-aware imports
   GenericProjectManager,
   createProjectManager,
@@ -53,11 +55,8 @@ export {
   VIDEO_COMPLEX_TOOLS,
 } from './tools.js';
 
-// Re-export state
+// Re-export state types
 export {
-  readProjectStateTool,
-  writeProjectStateTool,
-  getProjectStateTools,
   resetProjectState,
   setCurrentProjectId,
 } from './state.js';
@@ -91,11 +90,6 @@ export function createVideoToolRegistry(): ToolRegistry {
 
   // Add video generation tools
   for (const tool of getVideoGenerationTools()) {
-    registry.register(tool);
-  }
-
-  // Add project state tools
-  for (const tool of getProjectStateTools()) {
     registry.register(tool);
   }
 
@@ -146,9 +140,6 @@ export function getVideoToolNames(): string[] {
     'generate_video',
     'edit_image',
     'wait_for_job',
-    // State tools
-    'read_project_state',
-    'write_project_state',
   ];
 }
 
@@ -191,89 +182,17 @@ export function createWorkflowToolRegistry(): ToolRegistry {
 }
 
 /**
- * Load existing project plan files into context store.
- * Returns array of context variable names that were loaded.
+ * DEPRECATED: Context loading has been replaced with dynamic file discovery.
  *
- * Phase-specific loading could be added here in the future:
- * - plot phase: only original_input
- * - story phase: plot
- * - characters_settings: story
- * - scenes: story, characters
- * - images: characters, scenes
- * - video: scenes, images
+ * Agents now use:
+ * - list_project_files() to discover what content exists
+ * - read_file() to read specific content when needed
+ *
+ * This function is kept for API compatibility but does nothing.
  */
-export function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
-  const projectDir = getProjectDir(basePath);
-  const plansDir = join(projectDir, 'plans');
-  const loadedContexts: string[] = [];
-  let totalChars = 0;
-
-  const contextSizes: Record<string, number> = {};
-
-  // Load the original user input first - this is critical for content generation
-  // Variable name MUST be $original_input to match phase prompts
-  const originalInputPath = join(projectDir, 'original_input.md');
-  if (existsSync(originalInputPath)) {
-    try {
-      const content = readFileSync(originalInputPath, 'utf-8');
-      if (content.trim().length > 0) {
-        const { variableName } = contextStore.store(content, 'Original User Input', {
-          source: 'user_input',
-          variableBaseName: 'original_input',
-        });
-        loadedContexts.push(variableName);
-        contextSizes['original_input'] = content.length;
-        totalChars += content.length;
-      }
-    } catch {
-      // Skip if can't be read
-    }
-  }
-
-  // Plan files to load with their context labels
-  const planFiles = [
-    { file: 'plot.md', label: 'Plot Outline', varName: 'plot' },
-    { file: 'story.md', label: 'Story', varName: 'story' },
-    { file: 'scenes.md', label: 'Scenes', varName: 'scenes' },
-    { file: 'characters.md', label: 'Characters', varName: 'characters' },
-    { file: 'settings.md', label: 'Settings', varName: 'settings' },
-    { file: 'images.md', label: 'Image Plan', varName: 'images' },
-  ];
-
-  for (const { file, label, varName } of planFiles) {
-    const filePath = join(plansDir, file);
-    if (existsSync(filePath)) {
-      try {
-        const content = readFileSync(filePath, 'utf-8');
-        if (content.trim().length > 0) {
-          const { variableName } = contextStore.store(content, label, {
-            source: 'tool',
-            variableBaseName: varName,
-          });
-          loadedContexts.push(variableName);
-          contextSizes[varName] = content.length;
-          totalChars += content.length;
-        }
-      } catch {
-        // Skip files that can't be read
-      }
-    }
-  }
-
-  // Log context loading metrics for phase-aware monitoring
-  if (loadedContexts.length > 0) {
-    const phaseLogger = getPhaseLogger();
-    // Estimate tokens: ~3 chars per token
-    const estimatedTokens = Math.ceil(totalChars / 3);
-    phaseLogger.info('Workflow', 'context_loading', `Loaded ${loadedContexts.length} contexts (~${estimatedTokens} tokens)`, {
-      contexts: loadedContexts,
-      sizes: contextSizes,
-      totalChars,
-      estimatedTokens,
-    });
-  }
-
-  return loadedContexts;
+export function loadProjectFilesAsContexts(_basePath: string = process.cwd()): string[] {
+  // No longer loads contexts - agents use list_project_files + read_file instead
+  return [];
 }
 
 /**
@@ -319,6 +238,7 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
 /**
  * Build the custom prompt for the workflow agent.
  * Uses the skill-based architecture - the orchestrator prompt handles workflow logic.
+ * Includes full project context so the LLM knows the project type, style, and user's intent.
  */
 function buildWorkflowAgentPrompt(
   project: ReturnType<typeof loadProject>,
@@ -326,6 +246,14 @@ function buildWorkflowAgentPrompt(
   loadedContexts: string[] = []
 ): string {
   const phaseConfig = PHASE_CONFIGS[currentPhase];
+
+  // Get style and input type display names
+  const styleDisplay = project?.style
+    ? STYLE_CONFIGS[project.style]?.displayName ?? project.style
+    : 'Not set';
+  const inputTypeDisplay = project?.inputType
+    ? INPUT_TYPE_CONFIGS[project.inputType]?.displayName ?? project.inputType
+    : 'Not set';
 
   // Build loaded contexts section
   let loadedContextsSection = '';
@@ -337,14 +265,67 @@ ${loadedContexts.map(c => `- ${c}`).join('\n')}
 `;
   }
 
+  // Build project type description based on template/workflow
+  const projectTypeDescription = `
+## Project Type: Narrative Story Video
+This is a **Narrative Story Video** project. The user wants to create a video from a story or narrative content.
+
+**Visual Style**: ${styleDisplay}
+All generated images should follow this visual style.
+
+**Input Type**: ${inputTypeDisplay}
+${project?.inputType === 'story' ? 'The user has provided complete story/chapter content. Extract and organize this content.' : 'The user has provided a story idea. Develop it into full content.'}
+
+## What This Means For You
+When the user provides content (story, chapter, text):
+1. **DO NOT ask what they want to do** - they want to create a video from this content
+2. **Process the content** according to the current phase
+3. **Follow the workflow**: story → characters/settings → scenes → images → video
+
+The user has already chosen "Narrative Story Video" and "${styleDisplay}" style. Honor these choices.
+`;
+
+  // Build sub-agent info section
+  const subAgentSection = `
+## Available Sub-Agents
+
+You can delegate work using these dispatch tools:
+
+### dispatch_explore(query)
+Research agent that reads documentation and returns focused summaries.
+Use for: Understanding workflows, finding patterns, checking documentation.
+
+### dispatch_skill(skill_name, task)
+Specialized skill agents for creative work.
+
+| skill_name | Use For |
+|------------|---------|
+| content-writing | Plots, stories, characters, settings, scenes, narration |
+| image-prompting | Visual descriptions for image generation |
+| video-direction | Motion/camera descriptions for video clips |
+| research-synthesis | Documentary research and fact-gathering |
+| narration-scripting | Voice-over scripts with delivery marks |
+
+### Direct Tools (no dispatch needed)
+- \`read_project\` - Read project.json with file summaries
+- \`update_project\` - Update project state, phase transitions
+- \`AskUserQuestion\` - Ask user for input with options
+- \`generate_content\` - Generate content (auto-injects context)
+`;
+
   // Build project state section
   const projectSection = `
+${projectTypeDescription}
+
 ## Current Project State
 - **Project ID**: ${project?.id ?? 'new'}
 - **Project Title**: ${project?.title || '(not set)'}
+- **Visual Style**: ${styleDisplay}
+- **Input Type**: ${inputTypeDisplay}
 - **Current Phase**: ${phaseConfig.displayName}
 ${phaseConfig.isExpensive ? '\n**Note**: This phase involves expensive operations. Get user approval before generation.' : ''}
 ${loadedContextsSection}
+${subAgentSection}
 `;
 
   return projectSection.trim();

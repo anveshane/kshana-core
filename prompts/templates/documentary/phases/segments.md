@@ -12,14 +12,9 @@ Create detailed segment breakdowns that combine narrative, sources, and visual d
 
 ## Input Context
 
-**Outline:**
-{{$outline}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Sources:**
-{{$sources}}
-
-**Locations:**
-{{$locations}}
+The outline should be at `plans/outline.md`. Sources are in the `sources/` directory and locations in `locations/`. Read them to develop detailed segments.
 
 ## Artifacts in This Phase
 

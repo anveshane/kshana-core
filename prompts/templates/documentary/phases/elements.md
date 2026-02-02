@@ -12,11 +12,9 @@ Detail all sources for credibility and locations for visual storytelling.
 
 ## Input Context
 
-**Thesis:**
-{{$thesis}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Outline:**
-{{$outline}}
+The thesis should be at `plans/thesis.md` and the outline at `plans/outline.md`. Read them to identify needed sources and locations.
 
 ## Artifacts in This Phase
 

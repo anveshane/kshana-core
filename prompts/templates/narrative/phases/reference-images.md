@@ -12,11 +12,9 @@ Create reference images that will be used to maintain visual consistency when ge
 
 ## Input Context
 
-**Characters:**
-{{$characters}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Settings:**
-{{$settings}}
+Character files are in `characters/[name].md` and setting files are in `settings/[name].md`. Read each one to generate appropriate reference images.
 
 ## Artifacts in This Phase
 

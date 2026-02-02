@@ -12,14 +12,9 @@ Create scene images that visually tell each moment of the story while maintainin
 
 ## Input Context
 
-**Scenes:**
-{{$scenes}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Character Reference Images:**
-{{CHARACTER_IMAGES}}
-
-**Setting Reference Images:**
-{{SETTING_IMAGES}}
+Scene files are in `scenes/scene_[N].md`. Character and setting reference images are tracked in `project.json` under characters and settings arrays with their `referenceImagePath` properties.
 
 ## Artifacts in This Phase
 

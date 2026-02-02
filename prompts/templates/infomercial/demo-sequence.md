@@ -4,14 +4,9 @@ You are creating a product demonstration sequence for the infomercial.
 
 ## Context
 
-**Script:**
-{{$script}}
+Use `list_project_files` to discover available content, then `read_file` to access what you need.
 
-**Products:**
-{{$products}}
-
-**Features:**
-{{$features}}
+The script should be at `plans/script.md`. Products are in the `products/` directory and features in `features/`.
 
 ## Task
 

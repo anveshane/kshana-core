@@ -12,11 +12,9 @@ Create dynamic, engaging video clips that bring the visuals to life.
 
 ## Input Context
 
-**Key Visuals:**
-{{$visuals}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Visual Images:**
-{{VISUAL_IMAGES}}
+Key visuals are documented in `plans/visuals.md`. Visual images are tracked in `project.json` with their artifact IDs.
 
 ## Artifacts in This Phase
 

@@ -12,11 +12,9 @@ Create compelling video demonstrations from demo images.
 
 ## Input Context
 
-**Demo Sequences:**
-{{$demos}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Demo Images:**
-{{DEMO_IMAGES}}
+Demo sequences are in the `demos/` directory. Demo images are tracked in `project.json` with their artifact IDs.
 
 ## Artifacts in This Phase
 

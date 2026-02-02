@@ -36,60 +36,26 @@ function toPromptContext(ctx: PromptRuntimeContext): PromptContext {
 // not in the system message. This avoids duplication.
 
 /**
- * Context variable info for the system prompt.
- * variableName is used as the primary reference (e.g., "$plan", "$chapter_1")
+ * DEPRECATED: Context variable info - no longer used.
+ * Context variables have been replaced with dynamic file discovery.
  */
 export interface ContextVariable {
-  variableName: string; // Primary key like $chapter_1 (used as context_ref)
-  label: string;        // Description
-  charCount: number;    // Size
+  variableName: string;
+  label: string;
+  charCount: number;
 }
 
 /**
- * Build context variables section for the system prompt.
- * These are large content blocks stored by reference that the agent can access.
- * Provides clear guidance on what each variable contains and how to use it.
+ * DEPRECATED: No longer builds context variables section.
+ * Context variables have been replaced with dynamic file discovery.
+ * Agents use list_project_files() + read_file() instead.
+ *
+ * Always returns empty string.
  */
-export function buildContextVariablesSection(variables: ContextVariable[]): string {
-  if (variables.length === 0) {
-    return '';
-  }
-
-  const lines = [
-    '## Stored Context Variables',
-    '',
-    'The following content has been stored for use with sub-agents. **Use these when dispatching tasks that need this content.**',
-    '',
-  ];
-
-  for (const v of variables) {
-    lines.push(`### ${v.variableName}`);
-    lines.push(`- **context_ref**: \`"${v.variableName}"\``);
-    lines.push(`- **Content**: ${v.label}`);
-    lines.push(`- **Size**: ${v.charCount.toLocaleString()} characters`);
-    lines.push('');
-  }
-
-  lines.push('---');
-  lines.push('');
-  lines.push('**How to use stored context:**');
-  lines.push('');
-  lines.push('When dispatching a sub-agent that needs content from a stored variable:');
-  lines.push('1. Identify which variable contains the relevant content');
-  lines.push('2. Pass its `context_ref` to the dispatch tool');
-  lines.push('3. Do NOT summarize the content inline - the full content will be provided');
-  lines.push('');
-
-  if (variables.length > 0) {
-    const varNames = variables.map(v => `"${v.variableName}"`).join(', ');
-    lines.push('**Example:**');
-    lines.push('```');
-    lines.push(`// Pass ALL relevant contexts to content agents:`);
-    lines.push(`dispatch_content_agent(task="...", content_type="...", context_refs=[${varNames}])`);
-    lines.push('```');
-  }
-
-  return lines.join('\n');
+export function buildContextVariablesSection(_variables: ContextVariable[]): string {
+  // Context variables are no longer used - return empty
+  // Agents now use list_project_files() + read_file() for content discovery
+  return '';
 }
 
 /**
@@ -122,10 +88,36 @@ function buildEnvContext(): PromptRuntimeContext {
   };
 }
 
+/**
+ * Build a project state section for injection into the orchestrator prompt.
+ * Returns empty string if no project state provided.
+ */
+function buildProjectStateSection(projectState: Record<string, unknown> | null): string {
+  if (!projectState) {
+    return '';
+  }
+
+  return `
+<project_state>
+The following is the current project state. This is automatically injected - you do NOT need to call read_project at the start.
+
+\`\`\`json
+${JSON.stringify(projectState, null, 2)}
+\`\`\`
+
+**When to use read_project:**
+- Only call \`read_project\` if you believe the project state has changed (e.g., after content generation/approval)
+- Only call it if you need the updated state to make a decision
+- Do NOT call it at the start of a conversation - you already have the state above
+</project_state>
+`;
+}
+
 export function buildSystemMessage(
   isSubAgent: boolean,
   tools: Map<string, ToolDefinition>,
-  customPrompt?: string
+  customPrompt?: string,
+  projectState?: Record<string, unknown> | null
 ): string {
   const envContext = buildEnvContext();
 
@@ -139,6 +131,11 @@ export function buildSystemMessage(
 
   // NOTE: Tool descriptions are NOT included here - they are provided via the LLM API's tools parameter.
   // This avoids duplicating tool info in both the system message and the API tools array.
+
+  // Add project state for main orchestrator (not sub-agents)
+  if (!isSubAgent && projectState) {
+    prompt += '\n\n' + buildProjectStateSection(projectState);
+  }
 
   // Add custom domain-specific prompt if provided, wrapped in XML tags
   if (customPrompt) {

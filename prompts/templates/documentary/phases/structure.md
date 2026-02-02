@@ -12,8 +12,9 @@ Develop a comprehensive outline that organizes the documentary's content logical
 
 ## Input Context
 
-**Thesis:**
-{{$thesis}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
+
+The thesis should be available at `plans/thesis.md`. Read it to develop the documentary structure.
 
 ## Artifacts in This Phase
 

@@ -12,11 +12,9 @@ Create animated video clips that bring the static segment images to life.
 
 ## Input Context
 
-**Segments:**
-{{$segments}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Segment Images:**
-{{SEGMENT_IMAGES}}
+Segment files are in the `segments/` directory. Segment images are tracked in `project.json` with their artifact IDs.
 
 ## Artifacts in This Phase
 

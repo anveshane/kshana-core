@@ -12,8 +12,9 @@ Write a full narrative story with dialogue, descriptions, and emotional beats th
 
 ## Input Context
 
-**Plot Outline:**
-{{$plot}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
+
+The plot outline should be available at `plans/plot.md`. Read it to expand into a full story.
 
 ## Artifacts in This Phase
 

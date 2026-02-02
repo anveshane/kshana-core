@@ -12,11 +12,9 @@ Create animated video clips for each scene that bring the static images to life.
 
 ## Input Context
 
-**Scenes:**
-{{$scenes}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
 
-**Scene Images:**
-{{SCENE_IMAGES}}
+Scene files are in `scenes/scene_[N].md`. Scene images are tracked in `project.json` under the scenes array with their `imageArtifactId` properties.
 
 ## Artifacts in This Phase
 

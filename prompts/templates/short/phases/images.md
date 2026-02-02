@@ -12,8 +12,9 @@ Create visually striking, mobile-optimized images for each key visual.
 
 ## Input Context
 
-**Key Visuals:**
-{{$visuals}}
+Use `list_project_files` to see available content, then `read_file` to access what you need.
+
+Key visuals are documented in `plans/visuals.md`. Read it to generate the appropriate images.
 
 ## Artifacts in This Phase
 

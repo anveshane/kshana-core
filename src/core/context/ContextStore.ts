@@ -1,12 +1,13 @@
 /**
- * Persistent context store for passing large content between agents.
- * Stores context to disk to survive restarts.
+ * DEPRECATED: Context store - file persistence has been disabled.
  *
- * Purpose: Prevent context drift when passing long content (narratives, chapters)
- * to child agents. Instead of summarizing, we store by reference.
+ * Context storage has been replaced with dynamic file discovery:
+ * - Agents use list_project_files() to discover what content exists
+ * - Agents use read_file() to access specific content when needed
+ *
+ * This class is kept for API compatibility but does NOT write to disk.
+ * It only tracks variable names in memory.
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
 
 /**
  * Metadata for stored context (stored in index.json)
@@ -27,16 +28,8 @@ export interface StoredContext extends StoredContextMeta {
   content: string;
 }
 
-const CONTEXT_DIR = join(process.cwd(), '.kshana', 'context');
-const CONTEXT_INDEX_FILE = join(CONTEXT_DIR, 'index.json');
-
-/**
- * Convert variable name to safe filename.
- * e.g., "$plan_2" -> "plan_2.md"
- */
-function variableToFilename(variableName: string): string {
-  return variableName.replace(/^\$/, '') + '.md';
-}
+// NOTE: Context directory is no longer used
+// Agents use .kshana/plans/, .kshana/characters/, etc. directly
 
 /**
  * Persistent context store for large content.
@@ -81,39 +74,37 @@ export class ContextStore {
   }
 
   /**
-   * Load the context index from disk.
+   * DEPRECATED: No longer loads from disk.
+   * Context storage has been replaced with dynamic file discovery.
    */
   private loadIndex(): void {
-    if (existsSync(CONTEXT_INDEX_FILE)) {
-      try {
-        const data = JSON.parse(readFileSync(CONTEXT_INDEX_FILE, 'utf-8')) as Record<string, StoredContextMeta>;
-        this.index = new Map(Object.entries(data));
-      } catch {
-        this.index = new Map();
-      }
-    }
+    // No-op: Context files are no longer used
+    // Agents use list_project_files() + read_file() instead
+    this.index = new Map();
   }
 
   /**
-   * Save the context index to disk.
+   * DEPRECATED: No longer saves to disk.
+   * Context storage has been replaced with dynamic file discovery.
    */
   private saveIndex(): void {
-    if (!existsSync(CONTEXT_DIR)) {
-      mkdirSync(CONTEXT_DIR, { recursive: true });
-    }
-    writeFileSync(
-      CONTEXT_INDEX_FILE,
-      JSON.stringify(Object.fromEntries(this.index), null, 2)
-    );
+    // No-op: Context files are no longer created
   }
 
   /**
-   * Store content and return the variable name.
+   * DEPRECATED: File-based context storage has been replaced with dynamic file discovery.
    *
-   * @param content - The full content to store
+   * Agents now use:
+   * - list_project_files() to discover what content exists in .kshana/
+   * - read_file() to read specific content when needed
+   *
+   * This method is kept for API compatibility but does NOT write to disk.
+   * It only generates a variable name and tracks in memory (no persistence).
+   *
+   * @param content - The full content (ignored - not stored)
    * @param label - A descriptive label for this context
    * @param options - Additional options
-   * @returns The variable name (e.g., "$plan")
+   * @returns The variable name (e.g., "$plan") - for API compatibility only
    */
   store(
     content: string,
@@ -123,51 +114,36 @@ export class ContextStore {
       variableBaseName?: string;
     } = {}
   ): { variableName: string } {
-    const source = options.source ?? 'manual';
+    // Generate a variable name for API compatibility, but don't persist anything
     const variableName = this.generateVariableName(options.variableBaseName ?? label);
 
+    // Track in memory only (no file creation, no index persistence)
+    // This allows getActiveVariables() to still work for debugging
     const meta: StoredContextMeta = {
       variableName,
       label,
       createdAt: new Date().toISOString(),
       charCount: content.length,
-      source,
+      source: options.source ?? 'manual',
     };
-
-    if (!existsSync(CONTEXT_DIR)) {
-      mkdirSync(CONTEXT_DIR, { recursive: true });
-    }
-
-    // Use variable name for filename (e.g., "$plan" -> "plan.txt")
-    const contentFile = join(CONTEXT_DIR, variableToFilename(variableName));
-    writeFileSync(contentFile, content);
-
-    // Index by variable name
     this.index.set(variableName, meta);
-    this.saveIndex();
+
+    // NOTE: Deliberately NOT calling saveIndex() or writeFileSync()
+    // Context files are no longer created - agents use project files directly
 
     return { variableName };
   }
 
   /**
-   * Retrieve stored context by variable name.
+   * DEPRECATED: Context content is no longer stored.
+   * Use read_file() to access project files directly.
    *
    * @param variableName - The variable name (e.g., "$plan")
-   * @returns The content and label, or null if not found
+   * @returns Always returns null - content is not stored
    */
   get(variableName: string): { content: string; label: string } | null {
-    const meta = this.index.get(variableName);
-    if (!meta) return null;
-
-    const contentFile = join(CONTEXT_DIR, variableToFilename(variableName));
-    if (!existsSync(contentFile)) {
-      this.index.delete(variableName);
-      this.saveIndex();
-      return null;
-    }
-
-    const content = readFileSync(contentFile, 'utf-8');
-    return { content, label: meta.label };
+    // Content is no longer stored - agents should use read_file() instead
+    return null;
   }
 
   /**
@@ -189,21 +165,15 @@ export class ContextStore {
   }
 
   /**
-   * Delete a stored context.
+   * DEPRECATED: Context files are no longer created.
+   * This method only clears in-memory tracking.
    *
    * @param variableName - The variable name (e.g., "$plan")
-   * @returns true if deleted, false if not found
+   * @returns true if removed from memory, false if not found
    */
   delete(variableName: string): boolean {
     if (!this.index.has(variableName)) return false;
-
-    const contentFile = join(CONTEXT_DIR, variableToFilename(variableName));
-    if (existsSync(contentFile)) {
-      unlinkSync(contentFile);
-    }
-
     this.index.delete(variableName);
-    this.saveIndex();
     return true;
   }
 
@@ -233,29 +203,20 @@ export class ContextStore {
   }
 
   /**
-   * Search for contexts by label pattern and fetch their content.
-   * Returns full context data (metadata + content) for all matches.
+   * DEPRECATED: Context content is no longer stored.
+   * Use list_project_files() + read_file() instead.
    *
    * @param pattern - Text pattern to search for in labels
-   * @returns Array of matching contexts with content
+   * @returns Always returns empty array - content is not stored
    */
   searchByLabelWithContent(pattern: string): StoredContext[] {
-    const matches = this.searchByLabel(pattern);
-    const results: StoredContext[] = [];
-    for (const meta of matches) {
-      const data = this.get(meta.variableName);
-      if (data) {
-        results.push({
-          ...meta,
-          content: data.content,
-        });
-      }
-    }
-    return results;
+    // Content is no longer stored - agents should use project files directly
+    return [];
   }
 
   /**
-   * Clean up contexts older than specified days.
+   * DEPRECATED: Context files are no longer created.
+   * This method only clears old entries from in-memory tracking.
    */
   cleanup(olderThanDays: number = 7): number {
     const cutoffDate = new Date();
@@ -266,7 +227,7 @@ export class ContextStore {
     for (const [variableName, meta] of this.index.entries()) {
       const createdTime = new Date(meta.createdAt).getTime();
       if (createdTime < cutoffTime) {
-        this.delete(variableName);
+        this.index.delete(variableName);
         deleted++;
       }
     }
@@ -275,32 +236,13 @@ export class ContextStore {
   }
 
   /**
-   * Clear all stored contexts.
+   * DEPRECATED: Context files are no longer created.
+   * This method only clears in-memory tracking.
    */
   clear(): number {
     const count = this.index.size;
-
-    if (existsSync(CONTEXT_DIR)) {
-      const files = readdirSync(CONTEXT_DIR);
-      for (const file of files) {
-        if (file.endsWith('.md')) {
-          const filePath = join(CONTEXT_DIR, file);
-          // Check if file exists before trying to delete (handles race conditions)
-          if (existsSync(filePath)) {
-            try {
-              unlinkSync(filePath);
-            } catch {
-              // Ignore errors (file may have been deleted by another process)
-            }
-          }
-        }
-      }
-    }
-
     this.index.clear();
     this.variableCounter.clear();
-    this.saveIndex();
-
     return count;
   }
 }

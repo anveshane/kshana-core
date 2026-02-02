@@ -32,7 +32,7 @@ interface ToolCallDisplayProps {
 export const HIDDEN_TOOLS = new Set(['TodoWrite', 'todo_write']);
 
 // Tools with special rendering (not standard tool call format)
-const SPECIAL_RENDER_TOOLS = new Set(['think', 'write_project_state', 'read_project_state', 'dispatch_agent']);
+const SPECIAL_RENDER_TOOLS = new Set(['think', 'dispatch_agent']);
 
 // User-friendly display names with gerund (ongoing) and past tense (completed)
 const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
@@ -44,9 +44,21 @@ const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
   generate_video: { gerund: 'Generating video', past: 'Generated video' },
   edit_image: { gerund: 'Editing image', past: 'Edited image' },
   wait_for_job: { gerund: 'Waiting for job', past: 'Job completed' },
-  read_project_state: { gerund: 'Reading project state', past: 'Read project state' },
-  write_project_state: { gerund: 'Saving project state', past: 'Saved project state' },
+  read_file: { gerund: 'Reading file', past: 'Read file' },
+  list_project_files: { gerund: 'Listing project files', past: 'Listed project files' },
 };
+
+// Tools whose results should be truncated to a few lines
+const TRUNCATE_RESULT_TOOLS = new Set(['read_file']);
+
+/** Truncate text to N lines and add "..." if truncated */
+function truncateToLines(text: string, maxLines: number): { text: string; truncated: boolean } {
+  const lines = text.split('\n');
+  if (lines.length <= maxLines) {
+    return { text, truncated: false };
+  }
+  return { text: lines.slice(0, maxLines).join('\n') + '\n...', truncated: true };
+}
 
 function getDisplayName(toolName: string, isExecuting: boolean): string {
   const names = TOOL_DISPLAY_NAMES[toolName];
@@ -118,101 +130,7 @@ function getStatusIcon(status: ToolCallDisplayProps['status']): { icon: string; 
   }
 }
 
-// Capitalize first letter of a string
-function capitalize(str: string): string {
-  return str.charAt(0).toUpperCase() + str.slice(1);
-}
 
-// Format an object's key-value pairs as readable text
-function formatObjectAsText(obj: Record<string, unknown>): string {
-  const parts: string[] = [];
-
-  // Try to find a primary identifier (name, title, etc.)
-  const nameField = obj['name'] || obj['title'];
-  const roleField = obj['role'];
-
-  if (nameField) {
-    let line = String(nameField);
-    if (roleField) {
-      line += ` (${roleField})`;
-    }
-    parts.push(line);
-  }
-
-  // Add other meaningful fields
-  for (const [key, value] of Object.entries(obj)) {
-    // Skip fields we've already used or are not useful for display
-    if (['name', 'title', 'role'].includes(key)) continue;
-
-    if (typeof value === 'string') {
-      parts.push(`${capitalize(key)}: ${value}`);
-    } else if (typeof value === 'number') {
-      parts.push(`${capitalize(key)}: ${value}`);
-    }
-    // Skip nested objects/arrays in the summary
-  }
-
-  return parts.join(' | ');
-}
-
-// Format project state data as readable key-value pairs
-function formatProjectStateData(data: Record<string, unknown>, indent = 0): React.ReactNode[] {
-  const nodes: React.ReactNode[] = [];
-  const prefix = '  '.repeat(indent);
-
-  for (const [key, value] of Object.entries(data)) {
-    const capitalizedKey = capitalize(key);
-
-    if (Array.isArray(value)) {
-      // Handle arrays (like characters, settings, scenes)
-      nodes.push(
-        <Box key={key}>
-          <Text dimColor>{prefix}</Text>
-          <Text color="yellow" bold>{capitalizedKey}:</Text>
-        </Box>
-      );
-      for (let i = 0; i < value.length; i++) {
-        const item = value[i];
-        if (typeof item === 'object' && item !== null) {
-          const obj = item as Record<string, unknown>;
-          // Format object as readable text
-          const formattedText = formatObjectAsText(obj);
-          nodes.push(
-            <Text key={`${key}-${i}`} dimColor>
-              {prefix}  - {formattedText}
-            </Text>
-          );
-        } else {
-          nodes.push(
-            <Text key={`${key}-${i}`} dimColor>
-              {prefix}  - {String(item)}
-            </Text>
-          );
-        }
-      }
-    } else if (typeof value === 'object' && value !== null) {
-      // Nested object
-      nodes.push(
-        <Box key={key}>
-          <Text dimColor>{prefix}</Text>
-          <Text color="yellow" bold>{capitalizedKey}:</Text>
-        </Box>
-      );
-      nodes.push(...formatProjectStateData(value as Record<string, unknown>, indent + 1));
-    } else {
-      // Simple value - no truncation
-      nodes.push(
-        <Box key={key}>
-          <Text dimColor>{prefix}</Text>
-          <Text color="yellow" bold>{capitalizedKey}: </Text>
-          <Text dimColor>{String(value)}</Text>
-        </Box>
-      );
-    }
-  }
-
-  return nodes;
-}
 
 // Render think tool specially
 function renderThinkTool(
@@ -304,64 +222,92 @@ function renderDispatchAgentTool(
   );
 }
 
-// Render project state tool specially
-function renderProjectStateTool(
-  toolName: string,
+// Render read_file tool specially with truncated content
+function renderReadFileTool(
   args: Record<string, unknown> | undefined,
   status: ToolCallDisplayProps['status'],
-  duration?: number
+  result?: unknown,
+  duration?: number,
+  agentName?: string
 ): React.ReactNode {
-  const dataType = args?.['data_type'] as string | undefined;
-  const rawData = args?.['data'];
+  const filePath = args?.['path'] as string | undefined;
   const isExecuting = status === 'executing';
-  const isRead = toolName === 'read_project_state';
+  const isError = status === 'error';
 
-  // Parse data if it's a JSON string, otherwise use as-is
-  let data: Record<string, unknown> | undefined;
-  if (typeof rawData === 'string') {
-    try {
-      data = JSON.parse(rawData) as Record<string, unknown>;
-    } catch {
-      // If it's not valid JSON, wrap it
-      data = { value: rawData };
+  // Extract file content from result
+  let fileContent: string | undefined;
+  let truncatedContent: string | undefined;
+  let wasTruncated = false;
+
+  if (!isExecuting && result) {
+    if (typeof result === 'string') {
+      fileContent = result;
+    } else if (typeof result === 'object') {
+      const resultObj = result as Record<string, unknown>;
+      if (typeof resultObj['content'] === 'string') {
+        fileContent = resultObj['content'];
+      } else if (typeof resultObj['error'] === 'string') {
+        fileContent = resultObj['error'];
+      }
     }
-  } else if (typeof rawData === 'object' && rawData !== null) {
-    data = rawData as Record<string, unknown>;
+
+    if (fileContent && !isError) {
+      const truncResult = truncateToLines(fileContent, 3);
+      truncatedContent = truncResult.text;
+      wasTruncated = truncResult.truncated;
+    }
   }
 
-  const capitalizedDataType = capitalize(dataType || 'unknown');
+  // Get just the filename from the path
+  const fileName = filePath ? filePath.split('/').pop() : 'unknown';
 
   return (
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor="cyan"
+      borderColor={isError ? 'red' : isExecuting ? 'yellow' : 'green'}
       paddingX={1}
       marginY={1}
     >
       <Box>
         {isExecuting ? (
           <>
-            <Text color="cyan">{isRead ? '📖 ' : '📋 '}</Text>
+            <Text color="yellow">◉ </Text>
             <Spinner />
-            <Text color="cyan"> {isRead ? 'Reading' : 'Saving'} project state...</Text>
+            <Text> Reading file</Text>
+            {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
           </>
         ) : (
           <>
-            <Text color="cyan">{isRead ? '📖 ' : '📋 '}</Text>
-            <Text color="cyan">{isRead ? 'Project State: ' : 'Project State Update: '}</Text>
-            <Text color="magenta" bold>{capitalizedDataType}</Text>
+            <Text color={isError ? 'red' : 'green'}>{isError ? '✗' : '✓'} </Text>
+            <Text>Read file</Text>
+            {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
+            {duration !== undefined && (
+              <Text dimColor> ({formatDuration(duration)})</Text>
+            )}
           </>
         )}
       </Box>
-      {!isExecuting && data && (
-        <Box flexDirection="column" marginLeft={2} marginTop={1}>
-          {formatProjectStateData(data)}
+      <Box marginLeft={2}>
+        <Text dimColor>read_file(path="{fileName}")</Text>
+      </Box>
+      {isError && fileContent && (
+        <Box marginLeft={2} marginTop={1}>
+          <Text color="red">{fileContent}</Text>
+        </Box>
+      )}
+      {!isExecuting && !isError && truncatedContent && (
+        <Box marginLeft={2} marginTop={1} flexDirection="column">
+          <Text dimColor>{truncatedContent}</Text>
+          {wasTruncated && (
+            <Text color="gray" italic> (content truncated)</Text>
+          )}
         </Box>
       )}
     </Box>
   );
 }
+
 
 export const ToolCallDisplay = React.memo(function ToolCallDisplay({
   toolName,
@@ -385,9 +331,9 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
     return renderDispatchAgentTool(args, status, result, expanded);
   }
 
-  // Special rendering for project state tools
-  if (toolName === 'write_project_state' || toolName === 'read_project_state') {
-    return renderProjectStateTool(toolName, args, status, duration);
+  // Special rendering for read_file tool
+  if (toolName === 'read_file') {
+    return renderReadFileTool(args, status, result, duration, agentName);
   }
 
   // Standard tool display
