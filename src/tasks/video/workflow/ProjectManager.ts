@@ -100,6 +100,14 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
     join(projectDir, 'characters'),
     join(projectDir, 'settings'),
     join(projectDir, 'assets'),
+    // Prompt directories for image/video prompt files
+    join(projectDir, 'prompts'),
+    join(projectDir, 'prompts', 'images'),
+    join(projectDir, 'prompts', 'images', 'characters'),
+    join(projectDir, 'prompts', 'images', 'settings'),
+    join(projectDir, 'prompts', 'images', 'scenes'),
+    join(projectDir, 'prompts', 'videos'),
+    join(projectDir, 'prompts', 'videos', 'scenes'),
   ];
 
   for (const dir of dirs) {
@@ -2240,6 +2248,216 @@ export function markContentAvailable(
 
   saveProject(project, basePath);
   return project;
+}
+
+// ============================================================================
+// Image/Video Prompt Persistence Functions
+// ============================================================================
+
+/**
+ * Prompt type for image/video prompts.
+ */
+export type PromptType = 'character' | 'setting' | 'scene';
+
+/**
+ * Save an image prompt to the prompts directory.
+ * @param type - Type of prompt (character, setting, scene)
+ * @param name - Name/identifier (character name, setting name, or scene number as string)
+ * @param content - The prompt content to save
+ * @param basePath - Base path for the project
+ * @returns The relative path where the prompt was saved
+ */
+export function saveImagePrompt(
+  type: PromptType,
+  name: string,
+  content: string,
+  basePath: string = process.cwd()
+): string {
+  const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  let relativePath: string;
+
+  switch (type) {
+    case 'character':
+      relativePath = `prompts/images/characters/${safeName}.prompt.md`;
+      break;
+    case 'setting':
+      relativePath = `prompts/images/settings/${safeName}.prompt.md`;
+      break;
+    case 'scene':
+      relativePath = `prompts/images/scenes/scene-${safeName}.prompt.md`;
+      break;
+  }
+
+  writeProjectFile(relativePath, content, basePath);
+
+  // Update the project with the prompt path
+  const project = loadProject(basePath);
+  if (project) {
+    if (type === 'character') {
+      const character = project.characters.find(c =>
+        c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
+      );
+      if (character) {
+        character.imagePromptPath = relativePath;
+        saveProject(project, basePath);
+      }
+    } else if (type === 'setting') {
+      const setting = project.settings.find(s =>
+        s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
+      );
+      if (setting) {
+        setting.imagePromptPath = relativePath;
+        saveProject(project, basePath);
+      }
+    } else if (type === 'scene') {
+      const sceneNumber = parseInt(name, 10);
+      const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+      if (scene) {
+        scene.imagePromptPath = relativePath;
+        saveProject(project, basePath);
+      }
+    }
+  }
+
+  return relativePath;
+}
+
+/**
+ * Load an image prompt from the prompts directory.
+ * @param type - Type of prompt (character, setting, scene)
+ * @param name - Name/identifier (character name, setting name, or scene number as string)
+ * @param basePath - Base path for the project
+ * @returns The prompt content or null if not found
+ */
+export function loadImagePrompt(
+  type: PromptType,
+  name: string,
+  basePath: string = process.cwd()
+): string | null {
+  const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  let relativePath: string;
+
+  switch (type) {
+    case 'character':
+      relativePath = `prompts/images/characters/${safeName}.prompt.md`;
+      break;
+    case 'setting':
+      relativePath = `prompts/images/settings/${safeName}.prompt.md`;
+      break;
+    case 'scene':
+      relativePath = `prompts/images/scenes/scene-${safeName}.prompt.md`;
+      break;
+  }
+
+  return readProjectFile(relativePath, basePath);
+}
+
+/**
+ * Save a video/motion prompt to the prompts directory.
+ * @param sceneNumber - The scene number
+ * @param content - The prompt content to save
+ * @param basePath - Base path for the project
+ * @returns The relative path where the prompt was saved
+ */
+export function saveVideoPrompt(
+  sceneNumber: number,
+  content: string,
+  basePath: string = process.cwd()
+): string {
+  const relativePath = `prompts/videos/scenes/scene-${sceneNumber}.motion.md`;
+  writeProjectFile(relativePath, content, basePath);
+
+  // Update the project with the prompt path
+  const project = loadProject(basePath);
+  if (project) {
+    const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+    if (scene) {
+      scene.videoPromptPath = relativePath;
+      saveProject(project, basePath);
+    }
+  }
+
+  return relativePath;
+}
+
+/**
+ * Load a video/motion prompt from the prompts directory.
+ * @param sceneNumber - The scene number
+ * @param basePath - Base path for the project
+ * @returns The prompt content or null if not found
+ */
+export function loadVideoPrompt(
+  sceneNumber: number,
+  basePath: string = process.cwd()
+): string | null {
+  const relativePath = `prompts/videos/scenes/scene-${sceneNumber}.motion.md`;
+  return readProjectFile(relativePath, basePath);
+}
+
+/**
+ * Update the image prompt approval status for a character, setting, or scene.
+ */
+export function updateImagePromptApproval(
+  type: PromptType,
+  name: string,
+  status: ItemApprovalStatus,
+  basePath: string = process.cwd()
+): boolean {
+  const project = loadProject(basePath);
+  if (!project) return false;
+
+  const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+
+  if (type === 'character') {
+    const character = project.characters.find(c =>
+      c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
+    );
+    if (character) {
+      character.imagePromptApprovalStatus = status;
+      saveProject(project, basePath);
+      return true;
+    }
+  } else if (type === 'setting') {
+    const setting = project.settings.find(s =>
+      s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
+    );
+    if (setting) {
+      setting.imagePromptApprovalStatus = status;
+      saveProject(project, basePath);
+      return true;
+    }
+  } else if (type === 'scene') {
+    const sceneNumber = parseInt(name, 10);
+    const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+    if (scene) {
+      scene.imagePromptApprovalStatus = status;
+      saveProject(project, basePath);
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Update the video prompt approval status for a scene.
+ */
+export function updateVideoPromptApproval(
+  sceneNumber: number,
+  status: ItemApprovalStatus,
+  basePath: string = process.cwd()
+): boolean {
+  const project = loadProject(basePath);
+  if (!project) return false;
+
+  const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+  if (scene) {
+    scene.videoPromptApprovalStatus = status;
+    saveProject(project, basePath);
+    return true;
+  }
+
+  return false;
 }
 
 // ============================================================================

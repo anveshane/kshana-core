@@ -350,6 +350,10 @@ export interface CharacterData {
   referenceImageApprovedAt?: number;
   /** Number of regeneration attempts */
   regenerationCount: number;
+  /** Path to the saved image prompt file */
+  imagePromptPath?: string;
+  /** Approval status for the image prompt */
+  imagePromptApprovalStatus?: ItemApprovalStatus;
 }
 
 /**
@@ -376,6 +380,10 @@ export interface SettingData {
   referenceImageApprovedAt?: number;
   /** Number of regeneration attempts */
   regenerationCount: number;
+  /** Path to the saved image prompt file */
+  imagePromptPath?: string;
+  /** Approval status for the image prompt */
+  imagePromptApprovalStatus?: ItemApprovalStatus;
 }
 
 /**
@@ -401,6 +409,12 @@ export interface SceneRef {
   /** Timestamp when content was approved */
   contentApprovedAt?: number;
 
+  // Image prompt approval (before SCENE_IMAGES generation)
+  /** Path to the saved image prompt file */
+  imagePromptPath?: string;
+  /** Approval status for the image prompt */
+  imagePromptApprovalStatus?: ItemApprovalStatus;
+
   // Image approval (SCENE_IMAGES phase)
   /** Approval status for the scene image */
   imageApprovalStatus: ItemApprovalStatus;
@@ -410,6 +424,12 @@ export interface SceneRef {
   imagePrompt?: string;
   /** Timestamp when image was approved */
   imageApprovedAt?: number;
+
+  // Video prompt approval (before VIDEO generation)
+  /** Path to the saved video/motion prompt file */
+  videoPromptPath?: string;
+  /** Approval status for the video prompt */
+  videoPromptApprovalStatus?: ItemApprovalStatus;
 
   // Video approval (VIDEO phase)
   /** Approval status for the scene video */

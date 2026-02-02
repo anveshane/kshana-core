@@ -169,6 +169,8 @@ generate_content(
 
 ## Content Types for generate_content
 
+### Narrative Content
+
 | Type | Description | Output File |
 |------|-------------|-------------|
 | `plot` | High-level story outline | plans/plot.md |
@@ -177,6 +179,89 @@ generate_content(
 | `setting` | Location description (requires `name`) | settings/{name}.md |
 | `scene` | Visual scene breakdown | plans/scenes.md |
 | `narration` | Voice-over text | plans/narration.md |
+
+### Image/Video Prompts (IMPORTANT - Generate Before Images/Videos)
+
+| Type | Description | Output File |
+|------|-------------|-------------|
+| `character_image_prompt` | Detailed image prompt (requires `name`) | prompts/images/characters/{name}.prompt.md |
+| `setting_image_prompt` | Detailed image prompt (requires `name`) | prompts/images/settings/{name}.prompt.md |
+| `scene_image_prompt` | Detailed image prompt (requires `scene_number`) | prompts/images/scenes/scene-{n}.prompt.md |
+| `scene_video_prompt` | Detailed motion prompt (requires `scene_number`) | prompts/videos/scenes/scene-{n}.motion.md |
+
+## Image/Video Generation Workflow (NEW)
+
+**IMPORTANT**: Image and video prompts are now FIRST-CLASS CONTENT, not generated on-the-fly.
+
+### For Character/Setting Images (CHARACTER_SETTING_IMAGES phase):
+
+For each character:
+1. **Generate the prompt first**:
+```
+generate_content(
+  content_type: "character_image_prompt",
+  name: "Alice",
+  instruction: "Create a comprehensive image generation prompt for Alice's reference image."
+)
+```
+
+2. **Get user approval on the prompt** (saved to prompts/images/characters/alice.prompt.md)
+
+3. **THEN generate the image** with the approved prompt:
+```
+generate_image(
+  prompt: [read from approved prompt file],
+  image_type: "character_ref",
+  ...
+)
+```
+
+4. **Get user approval on the image**
+
+Same flow for settings with `setting_image_prompt`.
+
+### For Scene Images (SCENE_IMAGES phase):
+
+For each scene:
+1. **Generate the prompt first**:
+```
+generate_content(
+  content_type: "scene_image_prompt",
+  scene_number: 1,
+  instruction: "Create a comprehensive image generation prompt for scene 1 using character and setting references."
+)
+```
+
+2. **Get user approval on the prompt** (saved to prompts/images/scenes/scene-1.prompt.md)
+
+3. **THEN generate the image** with the approved prompt
+
+4. **Get user approval on the image**
+
+### For Scene Videos (VIDEO phase):
+
+For each scene:
+1. **Generate the motion prompt first**:
+```
+generate_content(
+  content_type: "scene_video_prompt",
+  scene_number: 1,
+  instruction: "Create a comprehensive motion prompt for animating scene 1's image."
+)
+```
+
+2. **Get user approval on the motion prompt** (saved to prompts/videos/scenes/scene-1.motion.md)
+
+3. **THEN generate the video** with the approved motion prompt
+
+4. **Get user approval on the video**
+
+### Why This Matters
+
+- User can review/edit prompts BEFORE expensive image/video generation
+- Prompts are saved for consistency and regeneration
+- More control = fewer wasted API calls
+- Prompts serve as documentation of visual decisions
 
 ## Project State Updates
 

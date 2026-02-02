@@ -21,10 +21,13 @@ export const CONTENT_TYPE_OUTPUT_FILES: Record<string, string> = {
   scene: 'plans/scenes.md',
   narration: 'plans/narration.md',
 
-  // Image prompt generation - not saved to files
-  character_image_prompt: '',
-  setting_image_prompt: '',
-  scene_image_prompt: '',
+  // Image prompt generation - saved to prompts directory for review/refinement
+  character_image_prompt: 'prompts/images/characters/',  // Will be appended with character name
+  setting_image_prompt: 'prompts/images/settings/',      // Will be appended with setting name
+  scene_image_prompt: 'prompts/images/scenes/',          // Will be appended with scene number
+
+  // Video prompt generation - saved to prompts directory for review/refinement
+  scene_video_prompt: 'prompts/videos/scenes/',          // Will be appended with scene number
 };
 
 export const generateContentTool = createTool(
@@ -54,6 +57,10 @@ The content creator will:
 | setting | settings/{name}.md |
 | scene | plans/scenes.md |
 | narration | plans/narration.md |
+| character_image_prompt | prompts/images/characters/{name}.prompt.md |
+| setting_image_prompt | prompts/images/settings/{name}.prompt.md |
+| scene_image_prompt | prompts/images/scenes/scene-{n}.prompt.md |
+| scene_video_prompt | prompts/videos/scenes/scene-{n}.motion.md |
 
 ## Examples
 
@@ -92,7 +99,8 @@ generate_content(
         type: 'string',
         enum: [
           'plot', 'story', 'character', 'setting', 'scene', 'narration',
-          'character_image_prompt', 'setting_image_prompt', 'scene_image_prompt'
+          'character_image_prompt', 'setting_image_prompt', 'scene_image_prompt',
+          'scene_video_prompt'
         ],
         description: 'Type of content to generate - determines output file path',
       },
@@ -102,11 +110,11 @@ generate_content(
       },
       name: {
         type: 'string',
-        description: 'For character/setting: the name (REQUIRED for these types). For scenes: optional scene title.',
+        description: 'For character/setting/character_image_prompt/setting_image_prompt: the name (REQUIRED for these types). For scenes: optional scene title.',
       },
       scene_number: {
         type: 'number',
-        description: 'For scene_image_prompt: the scene number to generate an image prompt for',
+        description: 'For scene_image_prompt/scene_video_prompt: the scene number to generate a prompt for',
       },
     },
     required: ['content_type', 'instruction'],
