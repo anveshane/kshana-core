@@ -48,8 +48,10 @@ Based on the current state, you can:
 Always:
 1. Explain what artifact you're working on
 2. Show progress and what comes next
-3. Ask for approval before expensive operations (image/video generation)
+3. **Use `AskUserQuestion` for approval before expensive operations** (image/video generation) - never plain text questions
 4. Offer options when the user can make creative choices
+
+**CRITICAL**: Never output text and stop when the workflow is incomplete. If you need user input, use `AskUserQuestion` to pause and wait. Plain text questions cause the task to end prematurely.
 
 ## Quality Checklist
 

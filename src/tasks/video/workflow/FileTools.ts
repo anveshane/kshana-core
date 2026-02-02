@@ -193,9 +193,16 @@ Returns the file content as a string, or an error if file doesn't exist.`,
     const content = readProjectFile(filePath);
 
     if (content === null) {
+      // Check if the user might have used an array index instead of actual filename
+      const indexPattern = /^(characters|settings|scenes)\/\d+\.md$/;
+      const isLikelyIndexError = indexPattern.test(filePath);
+
       return {
         status: 'error',
         error: `File not found: ${filePath}`,
+        hint: isLikelyIndexError
+          ? `It looks like you used a numeric index (e.g., "0.md") instead of the actual file name. Use list_project_files to see the real file names, then use the exact path shown (e.g., "characters/mr_patel.md").`
+          : 'Use list_project_files to see available files and their exact paths.',
       };
     }
 
@@ -207,6 +214,12 @@ Returns the file content as a string, or an error if file doesn't exist.`,
     };
   }
 );
+
+/**
+ * Directories to exclude from project file listing.
+ * These are internal/debug directories that agents shouldn't see or access.
+ */
+const EXCLUDED_DIRECTORIES = ['flows', 'logs', '.git'];
 
 /**
  * Helper function to recursively list files in a directory
@@ -227,6 +240,11 @@ function listDirectoryContents(
     const entries = readdirSync(dirPath);
 
     for (const entry of entries) {
+      // Skip excluded directories
+      if (EXCLUDED_DIRECTORIES.includes(entry)) {
+        continue;
+      }
+
       const fullPath = join(dirPath, entry);
       const relativePath = fullPath.replace(basePath + '/', '');
 
@@ -405,7 +423,7 @@ This is the primary way to find available project content.`,
       project_directory: '.kshana/',
       total_files: fileList.length,
       files: fileList,
-      usage_hint: 'Use read_file(file_path) to read any of these files. Paths are relative to .kshana/',
+      usage_hint: 'IMPORTANT: Use the EXACT file paths shown above with read_file(). For example: read_file(path="characters/mr_patel.md"). Do NOT use array indices like 0.md or 1.md - use the actual file names.',
     };
   }
 );

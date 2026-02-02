@@ -97,10 +97,33 @@ function buildProjectStateSection(projectState: Record<string, unknown> | null):
     return '';
   }
 
+  // Extract file paths for prominent display
+  const files = (projectState['files'] as Array<{ path: string; type: string; name?: string }>) || [];
+  const filesByType: Record<string, string[]> = {};
+  for (const file of files) {
+    const type = file.type || 'other';
+    if (!filesByType[type]) filesByType[type] = [];
+    const display = file.name ? `${file.path} (${file.name})` : file.path;
+    filesByType[type].push(display);
+  }
+
+  let filesList = '';
+  for (const [type, paths] of Object.entries(filesByType)) {
+    if (paths.length > 0) {
+      filesList += `\n**${type}**: ${paths.join(', ')}`;
+    }
+  }
+
   return `
 <project_state>
 The following is the current project state. This is automatically injected - you do NOT need to call read_project at the start.
 
+## Available Files (use EXACT paths with read_file)
+${filesList || 'No files created yet.'}
+
+**IMPORTANT**: Use the exact file paths shown above. Do NOT construct paths from array indices (e.g., "0.md", "1.md" are WRONG).
+
+## Full Project State
 \`\`\`json
 ${JSON.stringify(projectState, null, 2)}
 \`\`\`

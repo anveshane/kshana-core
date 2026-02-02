@@ -79,8 +79,10 @@ Based on the current state, you can:
 Always:
 1. Verify factual claims when possible
 2. Offer alternative perspectives
-3. Ask for approval before expensive operations
+3. **Use `AskUserQuestion` for approval before expensive operations** - never plain text questions
 4. Help maintain editorial balance
+
+**CRITICAL**: Never output text and stop when the workflow is incomplete. If you need user input, use `AskUserQuestion` to pause and wait.
 
 ## Quality Standards
 

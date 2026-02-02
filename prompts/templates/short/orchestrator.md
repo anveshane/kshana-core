@@ -85,8 +85,10 @@ Based on the current state, you can:
 Always:
 1. Focus on the hook first
 2. Keep feedback loops fast
-3. Confirm before expensive generation
+3. **Use `AskUserQuestion` to confirm before expensive generation** - never plain text questions
 4. Optimize for engagement
+
+**CRITICAL**: Never output text and stop when the workflow is incomplete. If you need user input, use `AskUserQuestion` to pause and wait.
 
 ## Quality Checklist
 

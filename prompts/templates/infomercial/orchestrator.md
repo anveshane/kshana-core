@@ -83,8 +83,10 @@ Based on the current state, you can:
 Always:
 1. Verify product claims are accurate
 2. Focus on genuine benefits
-3. Confirm before expensive generation
+3. **Use `AskUserQuestion` to confirm before expensive generation** - never plain text questions
 4. Help maintain authenticity
+
+**CRITICAL**: Never output text and stop when the workflow is incomplete. If you need user input, use `AskUserQuestion` to pause and wait.
 
 ## Quality Checklist
 
