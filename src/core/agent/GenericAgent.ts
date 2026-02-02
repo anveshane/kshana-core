@@ -2323,7 +2323,7 @@ export class GenericAgent extends TypedEventEmitter {
     }
 
     // Use LLM to classify the user's intent
-    const isApproval = await this.classifyPlanResponse(userResponse);
+    const isApproval = this.classifyPlanResponse(userResponse);
 
     if (isApproval) {
       // Generate plan name and summary using LLM
@@ -2365,11 +2365,19 @@ export class GenericAgent extends TypedEventEmitter {
   }
 
   /**
-   * Use LLM to classify whether user response indicates approval or feedback.
+   * Classify whether user response indicates approval or feedback using pattern matching.
    */
-  private async classifyPlanResponse(userResponse: string): Promise<boolean> {
-    const normalized = userResponse.toLowerCase().trim();
-    const directApprove = [
+  private classifyPlanResponse(userResponse: string): boolean {
+    const lower = userResponse.toLowerCase().trim();
+
+    // Explicit feedback patterns - check first
+    const feedbackPatterns = ['provide feedback', 'feedback', '2', 'no', 'not yet', 'change', 'revise'];
+    if (feedbackPatterns.some(p => lower === p || lower.startsWith(p))) {
+      return false;
+    }
+
+    // Approval patterns
+    const approvalPatterns = [
       'accept',
       'accept content',
       'approve',
@@ -2379,52 +2387,16 @@ export class GenericAgent extends TypedEventEmitter {
       'okay',
       'proceed',
       'go ahead',
+      'go',
       'start',
       'continue',
       'lgtm',
+      'looks good',
+      'y',
       '1',
     ];
-    if (directApprove.some(value => normalized === value)) {
-      return true;
-    }
-    const directFeedback = ['provide feedback', 'feedback', '2', 'no', 'not yet'];
-    if (directFeedback.some(value => normalized === value)) {
-      return false;
-    }
 
-    // Load classification prompt from file
-    const classificationPrompt = loadAndRenderMarkdown('system/classification/plan-approval.md', {
-      user_response: userResponse,
-    });
-
-    try {
-      const response = await this.llm.generate({
-        messages: [{ role: 'user', content: classificationPrompt }],
-        temperature: 0,
-        maxTokens: 10,
-      });
-
-      const result = (response.content ?? '').trim().toUpperCase();
-      return result.includes('APPROVE');
-    } catch {
-      // On error, fall back to simple pattern matching
-      const lower = userResponse.toLowerCase().trim();
-      const approvalPatterns = [
-        'yes',
-        'ok',
-        'okay',
-        'proceed',
-        'accept',
-        'approve',
-        'go',
-        'start',
-        'continue',
-        'lgtm',
-        'y',
-        '1',
-      ];
-      return approvalPatterns.some(p => lower === p || lower.includes(p));
-    }
+    return approvalPatterns.some(p => lower === p || lower.startsWith(p));
   }
 
   /**
@@ -3023,7 +2995,7 @@ Respond in JSON format:
     }
 
     // Use LLM to classify the user's intent (reuse same classification logic as planning)
-    const isApproval = await this.classifyPlanResponse(userResponse);
+    const isApproval = this.classifyPlanResponse(userResponse);
 
     if (isApproval) {
       // Write content to output file if specified
