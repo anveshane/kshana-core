@@ -42,3 +42,21 @@ export {
   GENERIC_AGENT_SUB_AGENT_SECTION,
   GENERIC_AGENT_ORCHESTRATOR_SECTION,
 } from './prompts/index.js';
+
+// Planner
+export { BackwardPlanner, AssetScanner } from './planner/index.js';
+export type {
+  UserGoal,
+  GoalPreferences,
+  ProvidedAsset,
+  AssetSource,
+  AssetRegistry,
+  SatisfactionLevel,
+  ExecutionPlan,
+  PlanStep,
+  SkippedArtifact,
+  ScanResult,
+  ScanIssue,
+  PlannerOptions,
+  PlanValidation,
+} from './planner/index.js';

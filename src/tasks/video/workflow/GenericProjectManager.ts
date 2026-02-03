@@ -662,6 +662,56 @@ export class GenericProjectManager {
     return this.projectPath;
   }
 
+  /**
+   * Synchronously load the project without auto-discovering content.
+   * Used by planner tools that need quick access to project state.
+   */
+  loadProjectSync(): GenericProjectFile {
+    const projectFile = path.join(this.projectPath, PROJECT_FILE);
+    if (!fs.existsSync(projectFile)) {
+      throw new Error('No project found at this location');
+    }
+
+    const content = fs.readFileSync(projectFile, 'utf-8');
+    const project = JSON.parse(content) as GenericProjectFile;
+
+    return project;
+  }
+
+  /**
+   * Create an empty project for planning (doesn't save to disk).
+   * Used when no project exists but we need a project structure for the planner.
+   */
+  createEmptyProject(templateId: string): GenericProjectFile {
+    const registry = TemplateRegistry.getInstance();
+    const template = registry.get(templateId);
+
+    if (!template) {
+      throw new Error(`Template not found: ${templateId}`);
+    }
+
+    const projectId = generateProjectId();
+    const now = Date.now();
+
+    const project: GenericProjectFile = {
+      version: '3.0',
+      id: projectId,
+      title: 'Planning Project',
+      templateId,
+      templateVersion: template.version,
+      style: template.defaultStyle,
+      inputType: template.inputTypes[0]?.id || 'idea',
+      createdAt: now,
+      updatedAt: now,
+      artifacts: {},
+      phases: {},
+      assets: [],
+      contextStore: {},
+    };
+
+    return project;
+  }
+
   // ==========================================================================
   // STATUS & PROGRESS
   // ==========================================================================

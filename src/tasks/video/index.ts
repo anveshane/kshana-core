@@ -10,6 +10,9 @@ import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
+import { createPlannerTools, type PlannerToolContext } from '../../core/tools/builtin/plannerTools.js';
+import { BackwardPlanner, AssetScanner } from '../../core/planner/index.js';
+import type { UserGoal, ExecutionPlan, AssetRegistry } from '../../core/planner/types.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
@@ -175,6 +178,43 @@ export function createWorkflowToolRegistry(): ToolRegistry {
   // read_file is needed for orchestrator to read story content before creating character/setting todos
   // Generation tools (images, videos, stitch) are handled by subagents via Task tool
   for (const tool of getAllFileTools()) {
+    registry.register(tool);
+  }
+
+  return registry;
+}
+
+/**
+ * Create a tool registry with workflow tools AND planner tools for goal-driven workflow.
+ * This enables the backward-planning approach where the agent works from goals.
+ */
+export function createGoalDrivenToolRegistry(
+  templateId?: string,
+  basePath: string = process.cwd()
+): ToolRegistry {
+  // Start with base workflow tools
+  const registry = createWorkflowToolRegistry();
+
+  // Initialize templates and get the template
+  initializeTemplates();
+  const finalTemplateId = templateId || TEMPLATE_IDS.NARRATIVE;
+  const template = getTemplateOrThrow(finalTemplateId);
+
+  // Create project manager to get project state
+  const projectManager = createProjectManager(basePath);
+  const project = projectManager.projectExists()
+    ? projectManager.loadProjectSync()
+    : projectManager.createEmptyProject(finalTemplateId);
+
+  // Create planner tool context
+  const plannerContext: PlannerToolContext = {
+    template,
+    project,
+    projectDir: getProjectDir(basePath),
+  };
+
+  // Add planner tools
+  for (const tool of createPlannerTools(plannerContext)) {
     registry.register(tool);
   }
 

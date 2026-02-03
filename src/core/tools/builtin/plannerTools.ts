@@ -1,0 +1,319 @@
+/**
+ * Planner Tools
+ *
+ * Tools for the goal-driven orchestrator to scan assets and create backward plans.
+ */
+
+import type { ToolDefinition } from '../../llm/index.js';
+import { BackwardPlanner, AssetScanner } from '../../planner/index.js';
+import type {
+  UserGoal,
+  GoalPreferences,
+  AssetRegistry,
+  ProvidedAsset,
+} from '../../planner/types.js';
+import type { VideoTemplate, GenericProjectFile } from '../../templates/types.js';
+
+/**
+ * Context required for planner tools.
+ * This should be injected when creating the tool handlers.
+ */
+export interface PlannerToolContext {
+  template: VideoTemplate;
+  project: GenericProjectFile;
+  projectDir: string;
+}
+
+/**
+ * Serializable asset data for tool responses
+ */
+interface SerializableAsset {
+  id: string;
+  artifactTypeId: string;
+  itemId?: string;
+  path?: string;
+  content?: string;
+  source: string;
+  registeredAt: number;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Registry data that can be passed between tool calls
+ */
+interface RegistryData {
+  assets: SerializableAsset[];
+  satisfiedArtifacts: Record<string, 'full' | 'partial'>;
+  lastScanAt: number;
+}
+
+/**
+ * Create scan_assets tool
+ */
+export function createScanAssetsTool(context: PlannerToolContext): ToolDefinition {
+  return {
+    name: 'scan_assets',
+    description: `Scan the project for existing and user-provided assets.
+
+This tool examines:
+1. The project state for already-approved artifacts
+2. Standard artifact directories (characters/, settings/, scenes/, etc.)
+3. Any additional paths you specify
+
+Use this FIRST when starting a session to understand what already exists.
+The result shows which artifact types are fully or partially satisfied.`,
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        additional_paths: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Additional file paths to scan for user-provided assets (images, videos, documents)',
+        },
+      },
+    },
+    handler: async (params: Record<string, unknown>) => {
+      const additionalPaths = params['additional_paths'] as string[] | undefined;
+
+      const scanner = new AssetScanner(context.template);
+      const result = scanner.scan(context.projectDir, context.project);
+
+      // Register any additional user paths
+      if (additionalPaths && additionalPaths.length > 0) {
+        scanner.registerUserAssets(additionalPaths, result.registry);
+      }
+
+      // Build response
+      const summary = scanner.getSummary(result.registry);
+
+      // Convert registry to serializable format
+      const registryData: RegistryData = {
+        assets: Array.from(result.registry.assets.entries()).map(([, asset]) => ({
+          id: asset.id,
+          artifactTypeId: asset.artifactTypeId,
+          itemId: asset.itemId,
+          path: asset.path,
+          content: asset.content,
+          source: asset.source,
+          registeredAt: asset.registeredAt,
+          metadata: asset.metadata,
+        })),
+        satisfiedArtifacts: Object.fromEntries(result.registry.satisfiedArtifacts),
+        lastScanAt: result.registry.lastScanAt,
+      };
+
+      return {
+        success: true,
+        summary,
+        registry: registryData,
+        assetCount: result.assetCount,
+        issues: result.issues,
+      };
+    },
+  };
+}
+
+/**
+ * Create create_backward_plan tool
+ */
+export function createBackwardPlanTool(context: PlannerToolContext): ToolDefinition {
+  return {
+    name: 'create_backward_plan',
+    description: `Create an execution plan by working backwards from target artifacts.
+
+This tool:
+1. Takes the artifact types the user wants (e.g., 'final_video', 'story', 'scene_image')
+2. Traverses the dependency graph backwards to find ALL required artifacts
+3. Subtracts what already exists (from a scan or provided registry)
+4. Returns an ordered plan with only the steps needed
+
+Use this AFTER understanding the user's goal to build the minimal execution path.
+
+Available artifact types for this template:
+${Object.keys(context.template.artifactTypes).join(', ')}`,
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        target_artifacts: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Artifact type IDs the user wants to create (e.g., ["final_video"], ["story"], ["scene_image"])',
+        },
+        preferences: {
+          type: 'object',
+          description: 'User preferences (style, duration, format, etc.)',
+          properties: {
+            style: { type: 'string', description: 'Visual style preference' },
+            duration: { type: 'number', description: 'Target duration in seconds' },
+            format: { type: 'string', description: 'Output format preference' },
+          },
+        },
+        goal_description: {
+          type: 'string',
+          description: 'Original user description of their goal',
+        },
+        registry_data: {
+          type: 'object',
+          description: 'Previously scanned registry data (from scan_assets). If not provided, a fresh scan is performed.',
+        },
+        include_optional: {
+          type: 'boolean',
+          description: 'Include optional dependencies in the plan (default: false)',
+        },
+      },
+      required: ['target_artifacts'],
+    },
+    handler: async (params: Record<string, unknown>) => {
+      const targetArtifacts = params['target_artifacts'] as string[];
+      const preferences = params['preferences'] as GoalPreferences | undefined;
+      const goalDescription = params['goal_description'] as string | undefined;
+      const registryDataParam = params['registry_data'] as RegistryData | undefined;
+      const includeOptional = params['include_optional'] as boolean | undefined;
+
+      // Get or create registry
+      let registry: AssetRegistry;
+
+      if (registryDataParam) {
+        // Reconstruct registry from provided data
+        const assetMap = new Map<string, ProvidedAsset>();
+        for (const a of registryDataParam.assets) {
+          assetMap.set(a.id, {
+            id: a.id,
+            artifactTypeId: a.artifactTypeId,
+            itemId: a.itemId,
+            path: a.path,
+            content: a.content,
+            source: a.source as 'user_provided' | 'previously_generated' | 'imported' | 'detected',
+            registeredAt: a.registeredAt,
+            metadata: a.metadata,
+          });
+        }
+        registry = {
+          assets: assetMap,
+          satisfiedArtifacts: new Map(Object.entries(registryDataParam.satisfiedArtifacts)),
+          lastScanAt: registryDataParam.lastScanAt,
+        };
+      } else {
+        // Perform fresh scan
+        const scanner = new AssetScanner(context.template);
+        const scanResult = scanner.scan(context.projectDir, context.project);
+        registry = scanResult.registry;
+      }
+
+      // Build goal
+      const goal: UserGoal = {
+        targetArtifacts,
+        preferences: preferences || {},
+        description: goalDescription || `Create ${targetArtifacts.join(', ')}`,
+      };
+
+      // Create planner and build plan
+      const planner = new BackwardPlanner(context.template);
+      const plan = planner.buildPlan(goal, registry, {
+        includeOptional,
+      });
+
+      // Validate plan
+      const validation = planner.validatePlan(plan);
+
+      return {
+        success: validation.valid,
+        plan: {
+          goal: plan.goal,
+          steps: plan.steps,
+          skippedArtifacts: plan.skippedArtifacts,
+          summary: plan.summary,
+          expensiveStepCount: plan.expensiveStepCount,
+          requiresApproval: plan.requiresApproval,
+        },
+        validation: {
+          valid: validation.valid,
+          errors: validation.errors,
+          warnings: validation.warnings,
+        },
+      };
+    },
+  };
+}
+
+/**
+ * Create register_user_content tool
+ */
+export function createRegisterContentTool(context: PlannerToolContext): ToolDefinition {
+  return {
+    name: 'register_user_content',
+    description: `Register user-provided content as an existing asset.
+
+Use this when the user provides content directly (e.g., pastes a story, describes characters).
+This marks the corresponding artifact type as satisfied so the planner can skip generation.
+
+Available artifact types:
+${Object.keys(context.template.artifactTypes).join(', ')}`,
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        artifact_type: {
+          type: 'string',
+          description: 'The artifact type this content satisfies (e.g., "story", "plot")',
+        },
+        content: {
+          type: 'string',
+          description: 'The content provided by the user',
+        },
+        item_id: {
+          type: 'string',
+          description: 'For collections: the specific item ID (e.g., character name)',
+        },
+        mark_fully_satisfied: {
+          type: 'boolean',
+          description: 'Whether to mark this artifact type as fully satisfied (default: true for non-collections)',
+        },
+      },
+      required: ['artifact_type', 'content'],
+    },
+    handler: async (params: Record<string, unknown>) => {
+      const artifactType = params['artifact_type'] as string;
+      const content = params['content'] as string;
+      const itemId = params['item_id'] as string | undefined;
+      const markFullySatisfied = params['mark_fully_satisfied'] as boolean | undefined;
+
+      const scanner = new AssetScanner(context.template);
+      const asset = scanner.registerContent(content, artifactType, itemId);
+
+      if (!asset) {
+        return {
+          success: false,
+          error: `Unknown artifact type: ${artifactType}`,
+        };
+      }
+
+      const typeDef = context.template.artifactTypes[artifactType];
+      const shouldMarkFull = markFullySatisfied ?? (typeDef && !typeDef.isCollection);
+
+      return {
+        success: true,
+        asset: {
+          id: asset.id,
+          artifactTypeId: asset.artifactTypeId,
+          itemId: asset.itemId,
+          source: asset.source,
+          registeredAt: asset.registeredAt,
+          contentLength: content.length,
+        },
+        markedFullySatisfied: shouldMarkFull,
+        message: `Registered ${asset.artifactTypeId}${asset.itemId ? ` (${asset.itemId})` : ''} as user-provided content`,
+      };
+    },
+  };
+}
+
+/**
+ * Create all planner tools with the given context
+ */
+export function createPlannerTools(context: PlannerToolContext): ToolDefinition[] {
+  return [
+    createScanAssetsTool(context),
+    createBackwardPlanTool(context),
+    createRegisterContentTool(context),
+  ];
+}
