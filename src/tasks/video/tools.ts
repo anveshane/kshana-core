@@ -1160,8 +1160,8 @@ async function submitVideoPlacementGeneration(params: VideoPlacementGenerationPa
       negativePrompt,
       seed: Math.floor(Math.random() * 2 ** 32),
       filenamePrefix: `Placement${scene_number}_video`,
-      width: 480, // Optimized for speed: 480x480 square
-      height: 480, // Optimized for speed: 480x480 square
+      width: 640, // Match test script: 640x640 (LTX-2 default, may help with pan/artifacts)
+      height: 640,
       frameCount,
     });
 

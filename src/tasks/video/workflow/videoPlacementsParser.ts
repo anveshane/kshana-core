@@ -17,22 +17,35 @@ export interface ParsedVideoPlacement {
  * Convert time string to seconds.
  * Handles formats: "M:SS", "MM:SS", "H:MM:SS", "HH:MM:SS"
  */
+function sanitizeTimeToken(timeStr: string): string {
+  return timeStr
+    .trim()
+    .replace(/^[\[\(]+/, '')
+    .replace(/[\]\)]+$/, '')
+    .replace(/,/g, '.');
+}
+
 function timeToSeconds(timeStr: string): number {
-  const parts = timeStr.split(':');
+  const cleaned = sanitizeTimeToken(timeStr);
+  const parts = cleaned.split(':');
+  const parseSeconds = (value: string): number => {
+    const parsed = Number.parseFloat(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
   if (parts.length === 3) {
-    // HH:MM:SS format
+    // HH:MM:SS[.mmm] format
     const hours = parseInt(parts[0] ?? '0', 10) || 0;
     const minutes = parseInt(parts[1] ?? '0', 10) || 0;
-    const seconds = parseInt(parts[2] ?? '0', 10) || 0;
+    const seconds = parseSeconds(parts[2] ?? '0');
     return hours * 3600 + minutes * 60 + seconds;
   } else if (parts.length === 2) {
-    // M:SS or MM:SS format
+    // M:SS[.mmm] or MM:SS[.mmm] format
     const minutes = parseInt(parts[0] ?? '0', 10) || 0;
-    const seconds = parseInt(parts[1] ?? '0', 10) || 0;
+    const seconds = parseSeconds(parts[1] ?? '0');
     return minutes * 60 + seconds;
   }
-  // If it's just seconds (e.g., "15")
-  return parseInt(timeStr, 10) || 0;
+  // If it's just seconds (e.g., "15" or "15.500")
+  return parseSeconds(cleaned);
 }
 
 /**
@@ -96,13 +109,13 @@ export function parseVideoPlacements(content: string): ParsedVideoPlacement[] {
       const filename = altMatch[5]?.trim() || undefined;
       
       // Parse time range (format: "0:15-0:24" or "7:41-7:56")
-      const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
+      const timeMatch = timeRange.match(/^(\[?[\d:.,]+\]?)\s*-\s*(\[?[\d:.,]+\]?)$/);
       if (!timeMatch || !timeMatch[1] || !timeMatch[2]) {
         continue;
       }
       
-      const startTime = timeMatch[1];
-      const endTime = timeMatch[2];
+      const startTime = sanitizeTimeToken(timeMatch[1]);
+      const endTime = sanitizeTimeToken(timeMatch[2]);
       const startSeconds = timeToSeconds(startTime);
       const endSeconds = timeToSeconds(endTime);
       const duration = roundDuration(endSeconds - startSeconds);
@@ -141,13 +154,13 @@ export function parseVideoPlacements(content: string): ParsedVideoPlacement[] {
     const filename = placementMatch[5]?.trim() || undefined;
     
     // Parse time range (format: "0:15-0:24" or "7:41-7:56")
-    const timeMatch = timeRange.match(/^([\d:]+)-([\d:]+)$/);
+    const timeMatch = timeRange.match(/^(\[?[\d:.,]+\]?)\s*-\s*(\[?[\d:.,]+\]?)$/);
     if (!timeMatch || !timeMatch[1] || !timeMatch[2]) {
       continue;
     }
     
-    const startTime = timeMatch[1];
-    const endTime = timeMatch[2];
+    const startTime = sanitizeTimeToken(timeMatch[1]);
+    const endTime = sanitizeTimeToken(timeMatch[2]);
     const startSeconds = timeToSeconds(startTime);
     const endSeconds = timeToSeconds(endTime);
     const duration = roundDuration(endSeconds - startSeconds);

@@ -34,19 +34,32 @@ export interface InfographicParseResult {
  * Convert time string to seconds.
  * Handles formats: "M:SS", "MM:SS", "H:MM:SS", "HH:MM:SS"
  */
+function sanitizeTimeToken(timeStr: string): string {
+  return timeStr
+    .trim()
+    .replace(/^[\[\(]+/, '')
+    .replace(/[\]\)]+$/, '')
+    .replace(/,/g, '.');
+}
+
 function timeToSeconds(timeStr: string): number {
-  const parts = timeStr.split(':');
+  const cleaned = sanitizeTimeToken(timeStr);
+  const parts = cleaned.split(':');
+  const parseSeconds = (value: string): number => {
+    const parsed = Number.parseFloat(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
   if (parts.length === 3) {
     const hours = parseInt(parts[0] ?? '0', 10) || 0;
     const minutes = parseInt(parts[1] ?? '0', 10) || 0;
-    const seconds = parseInt(parts[2] ?? '0', 10) || 0;
+    const seconds = parseSeconds(parts[2] ?? '0');
     return hours * 3600 + minutes * 60 + seconds;
   } else if (parts.length === 2) {
     const minutes = parseInt(parts[0] ?? '0', 10) || 0;
-    const seconds = parseInt(parts[1] ?? '0', 10) || 0;
+    const seconds = parseSeconds(parts[1] ?? '0');
     return minutes * 60 + seconds;
   }
-  return parseInt(timeStr, 10) || 0;
+  return parseSeconds(cleaned);
 }
 
 function normalizeInfographicType(raw: string): 'bar_chart' | 'line_chart' | 'diagram' | 'statistic' | 'list' {
@@ -125,7 +138,7 @@ export function parseInfographicPlacementsWithErrors(
     }
 
     const timeRange = match[2]!.trim();
-    const timeMatch = timeRange.match(/^([\d:]+)\s*-\s*([\d:]+)$/);
+    const timeMatch = timeRange.match(/^(\[?[\d:.,]+\]?)\s*-\s*(\[?[\d:.,]+\]?)$/);
     if (!timeMatch || !timeMatch[1] || !timeMatch[2]) {
       if (strict) {
         errors.push({
@@ -138,8 +151,8 @@ export function parseInfographicPlacementsWithErrors(
       continue;
     }
 
-    const startTime = timeMatch[1].trim();
-    const endTime = timeMatch[2].trim();
+    const startTime = sanitizeTimeToken(timeMatch[1].trim());
+    const endTime = sanitizeTimeToken(timeMatch[2].trim());
     const startSeconds = timeToSeconds(startTime);
     const endSeconds = timeToSeconds(endTime);
     if (startSeconds >= endSeconds) {
