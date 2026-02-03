@@ -149,7 +149,7 @@ The explore subagent reads documentation and returns focused guidance.
 
 ### Step 3: Understand Existing Content
 
-If you need to read actual file content, delegate to a subagent that can use `read_file`:
+If you need to understand story/character/scene content (for planning or context), use Explore:
 
 ```
 Task(
@@ -158,7 +158,11 @@ Task(
 )
 ```
 
-**Note:** You cannot call `read_file` directly - subagents can.
+**Note:** You cannot call `read_file` directly - Explore can read files and summarize them.
+
+**IMPORTANT**: Do NOT use Explore to read image/video prompt files for generation. Instead, use `prompt_file` parameter directly:
+- For `generate_image`: pass `prompt_file: "prompts/images/characters/alice.prompt.md"`
+- The tool reads the file internally - no need to read it yourself
 
 ### Step 4: Ask for Clarification or Confirmation
 
@@ -246,14 +250,17 @@ generate_content(
 
 2. **Get user approval on the prompt** (saved to prompts/images/characters/alice.prompt.md)
 
-3. **THEN generate the image** with the approved prompt:
+3. **THEN generate the image** using `prompt_file` to read from the approved prompt:
 ```
 generate_image(
-  prompt: [read from approved prompt file],
+  prompt_file: "prompts/images/characters/alice.prompt.md",
   image_type: "character_ref",
-  ...
+  character_name: "Alice",
+  scene_number: 1
 )
 ```
+
+**NOTE**: Use `prompt_file` instead of `prompt`. The tool reads the prompt directly from the file—no need to read the file yourself via Explore or any other tool.
 
 4. **Get user approval on the image**
 
@@ -273,7 +280,21 @@ generate_content(
 
 2. **Get user approval on the prompt** (saved to prompts/images/scenes/scene-1.prompt.md)
 
-3. **THEN generate the image** with the approved prompt
+3. **THEN generate the image** using `prompt_file`:
+```
+generate_image(
+  prompt_file: "prompts/images/scenes/scene-1.prompt.md",
+  image_type: "scene",
+  scene_number: 1
+)
+```
+
+**AUTO-DETECTION**: The tool automatically parses the prompt file for:
+- `**Generation Mode:**` - detects `image_text_to_image` for composite scenes
+- `**Reference Images:**` - extracts character/setting references
+- `**Negative Prompt:**` and `**Aspect Ratio:**` - applies if specified
+
+When `image_text_to_image` mode is detected with references, the tool resolves character/setting names to their actual reference image paths from project state.
 
 4. **Get user approval on the image**
 
@@ -291,7 +312,14 @@ generate_content(
 
 2. **Get user approval on the motion prompt** (saved to prompts/videos/scenes/scene-1.motion.md)
 
-3. **THEN generate the video** with the approved motion prompt
+3. **THEN generate the video** using `motion_prompt_file`:
+```
+generate_video_from_image(
+  scene_image_artifact_id: "artifact-id-from-project-state",
+  scene_number: 1,
+  motion_prompt_file: "prompts/videos/scenes/scene-1.motion.md"
+)
+```
 
 4. **Get user approval on the video**
 

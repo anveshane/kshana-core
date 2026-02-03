@@ -446,7 +446,9 @@ export const generateImageTool: ToolDefinition = createTool(
    - Requires reference_images array with character and setting refs
    - Uses reference images to maintain visual consistency
 
-The tool will return a job ID. Use wait_for_job to check completion.`,
+The tool will return a job ID. Use wait_for_job to check completion.
+
+**Prompt source**: Provide EITHER \`prompt\` (inline text) OR \`prompt_file\` (path to .prompt.md file). Using \`prompt_file\` is preferred as it reads from approved prompt files.`,
   {
     type: 'object',
     properties: {
@@ -456,7 +458,11 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       },
       prompt: {
         type: 'string',
-        description: 'Detailed image generation prompt describing the visual',
+        description: 'Detailed image generation prompt describing the visual (use prompt_file instead if prompt exists in a file)',
+      },
+      prompt_file: {
+        type: 'string',
+        description: 'Path to prompt file (e.g., "prompts/images/characters/alice.prompt.md"). Reads the prompt from this file instead of requiring inline prompt text.',
       },
       negative_prompt: {
         type: 'string',
@@ -513,10 +519,71 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         },
       },
     },
-    required: ['scene_number', 'prompt'],
+    required: ['scene_number'],
   },
   async (args) => {
-    const params = args as unknown as ImageGenerationParams;
+    let params = args as unknown as ImageGenerationParams;
+
+    // If prompt_file is provided, read and parse the prompt from the file
+    const promptFile = args['prompt_file'] as string | undefined;
+    if (promptFile) {
+      const fullPath = path.join(process.cwd(), PROJECT_DIR, promptFile);
+      if (!fs.existsSync(fullPath)) {
+        return {
+          status: 'error',
+          error: `Prompt file not found: ${promptFile}`,
+          suggestion: 'Check that the prompt file path is correct and the file exists.',
+        };
+      }
+      const promptContent = fs.readFileSync(fullPath, 'utf-8');
+
+      // Parse the prompt file for both prompt text and metadata
+      const parsed = parsePromptFile(promptContent);
+      params = { ...params, prompt: parsed.prompt };
+
+      // Apply generation mode from prompt file if not explicitly provided
+      if (parsed.generationMode && !params.generation_mode) {
+        params.generation_mode = parsed.generationMode;
+      }
+
+      // Apply negative prompt from prompt file if not explicitly provided
+      if (parsed.negativePrompt && !params.negative_prompt) {
+        params.negative_prompt = parsed.negativePrompt;
+      }
+
+      // Apply aspect ratio from prompt file if not explicitly provided
+      if (parsed.aspectRatio && !params.aspect_ratio) {
+        params.aspect_ratio = parsed.aspectRatio as ImageGenerationParams['aspect_ratio'];
+      }
+
+      // If references are specified in prompt file and not provided in args, resolve them
+      if (parsed.references.length > 0 && !params.reference_images?.length) {
+        const resolvedRefs = resolveReferencesToPaths(parsed.references);
+        if (resolvedRefs && resolvedRefs.length > 0) {
+          params.reference_images = resolvedRefs;
+          // Auto-set generation mode to image_text_to_image when we have references
+          if (!params.generation_mode) {
+            params.generation_mode = 'image_text_to_image';
+          }
+        } else if (parsed.generationMode === 'image_text_to_image') {
+          // Prompt file specifies image_text_to_image but references couldn't be resolved
+          return {
+            status: 'error',
+            error: `Prompt file specifies image_text_to_image mode with references (${parsed.references.map(r => r.name).join(', ')}), but reference images could not be found in project state.`,
+            suggestion: 'Ensure character/setting reference images have been generated and are tracked in project.json.',
+            requested_references: parsed.references,
+          };
+        }
+      }
+    }
+
+    // Validate that we have a prompt from either source
+    if (!params.prompt) {
+      return {
+        status: 'error',
+        error: 'No prompt provided. Supply either "prompt" (inline text) or "prompt_file" (path to prompt file).',
+      };
+    }
 
     // Determine generation mode based on image_type and reference_images
     const generationMode = params.generation_mode ??
@@ -562,6 +629,219 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
     };
   }
 );
+
+/**
+ * Parsed metadata from a prompt file.
+ */
+interface PromptFileMetadata {
+  /** The actual prompt text */
+  prompt: string;
+  /** Generation mode (text_to_image or image_text_to_image) */
+  generationMode?: 'text_to_image' | 'image_text_to_image';
+  /** Reference images specified in the prompt */
+  references: Array<{
+    type: 'character' | 'setting';
+    name: string;
+    refId?: string;
+  }>;
+  /** Negative prompt if specified */
+  negativePrompt?: string;
+  /** Aspect ratio if specified */
+  aspectRatio?: string;
+}
+
+/**
+ * Extract prompt text from a markdown file.
+ * Handles files that may have:
+ * 1. Markdown headers (e.g., "# Image Prompt: ...") - skipped
+ * 2. Metadata sections (e.g., "**Purpose**:", "**Key Elements**:") - stopped before
+ *
+ * The actual prompt is typically the first paragraph after the header.
+ */
+function extractPromptFromMarkdown(content: string): string {
+  const lines = content.split('\n');
+  const promptLines: string[] = [];
+  let startIndex = 0;
+
+  // Skip the first line if it's a markdown header
+  if (lines[0]?.trim().startsWith('#')) {
+    startIndex = 1;
+  }
+
+  // Collect lines until we hit metadata (lines starting with **) or end of content
+  for (let i = startIndex; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line?.trim() || '';
+
+    // Stop at metadata sections (bold headers like **Purpose**:)
+    if (trimmed.startsWith('**') && trimmed.includes(':')) {
+      break;
+    }
+
+    // Skip empty lines at the beginning
+    if (promptLines.length === 0 && trimmed === '') {
+      continue;
+    }
+
+    promptLines.push(line || '');
+  }
+
+  return promptLines.join('\n').trim();
+}
+
+/**
+ * Parse a prompt file to extract both the prompt text and metadata.
+ * Supports scene image prompts that include generation mode and reference images.
+ *
+ * Expected format for scene prompts:
+ * ```
+ * **Image Prompt:**
+ * [prompt text]
+ *
+ * **Reference Images:**
+ * - Character: Alice (ref_id: char_alice_001)
+ * - Setting: Forest (ref_id: setting_forest_001)
+ *
+ * **Generation Mode:**
+ * image_text_to_image
+ *
+ * **Negative Prompt:**
+ * [negative prompt text]
+ *
+ * **Aspect Ratio:**
+ * 16:9
+ * ```
+ */
+function parsePromptFile(content: string): PromptFileMetadata {
+  const result: PromptFileMetadata = {
+    prompt: '',
+    references: [],
+  };
+
+  // Check for structured prompt format (scene prompts)
+  const imagePromptMatch = content.match(/\*\*Image Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i);
+  if (imagePromptMatch && imagePromptMatch[1]) {
+    result.prompt = imagePromptMatch[1].trim();
+  } else {
+    // Fall back to simple extraction
+    result.prompt = extractPromptFromMarkdown(content);
+  }
+
+  // Parse generation mode
+  const modeMatch = content.match(/\*\*Generation Mode:\*\*\s*\n\s*(text_to_image|image_text_to_image)/i);
+  if (modeMatch && modeMatch[1]) {
+    result.generationMode = modeMatch[1].toLowerCase() as 'text_to_image' | 'image_text_to_image';
+  }
+
+  // Parse reference images
+  // Format: "- Character: Name (ref_id: xxx)" or "- Setting: Name (ref_id: xxx)"
+  const refSection = content.match(/\*\*Reference Images:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i);
+  if (refSection && refSection[1]) {
+    const refLines = refSection[1].split('\n');
+    for (const line of refLines) {
+      // Match "- Character: Name" or "- Character: Name (ref_id: xxx)"
+      const charMatch = line.match(/^-\s*Character:\s*([^(]+?)(?:\s*\(ref_id:\s*([^)]+)\))?$/i);
+      if (charMatch && charMatch[1]) {
+        result.references.push({
+          type: 'character',
+          name: charMatch[1].trim(),
+          refId: charMatch[2]?.trim(),
+        });
+        continue;
+      }
+
+      // Match "- Setting: Name" or "- Setting: Name (ref_id: xxx)"
+      const settingMatch = line.match(/^-\s*Setting:\s*([^(]+?)(?:\s*\(ref_id:\s*([^)]+)\))?$/i);
+      if (settingMatch && settingMatch[1]) {
+        result.references.push({
+          type: 'setting',
+          name: settingMatch[1].trim(),
+          refId: settingMatch[2]?.trim(),
+        });
+      }
+    }
+  }
+
+  // Parse negative prompt
+  const negativeMatch = content.match(/\*\*Negative Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i);
+  if (negativeMatch && negativeMatch[1]) {
+    result.negativePrompt = negativeMatch[1].trim();
+  }
+
+  // Parse aspect ratio
+  const aspectMatch = content.match(/\*\*Aspect Ratio:\*\*\s*\n\s*([\d:]+)/i);
+  if (aspectMatch && aspectMatch[1]) {
+    result.aspectRatio = aspectMatch[1].trim();
+  }
+
+  return result;
+}
+
+/**
+ * Resolve reference names to actual image paths from project state.
+ */
+function resolveReferencesToPaths(
+  references: PromptFileMetadata['references']
+): Array<{ image_id: string; type: 'character' | 'setting'; name: string }> | null {
+  const project = loadProject();
+  if (!project) {
+    return null;
+  }
+
+  const resolved: Array<{ image_id: string; type: 'character' | 'setting'; name: string }> = [];
+
+  for (const ref of references) {
+    if (ref.type === 'character') {
+      // Find character by name (case-insensitive partial match)
+      const character = project.characters.find(
+        c => c.name.toLowerCase().includes(ref.name.toLowerCase()) ||
+             ref.name.toLowerCase().includes(c.name.toLowerCase())
+      );
+      if (character?.referenceImagePath) {
+        resolved.push({
+          image_id: path.join(process.cwd(), PROJECT_DIR, character.referenceImagePath),
+          type: 'character',
+          name: character.name,
+        });
+      } else if (character?.referenceImageId) {
+        // Try to resolve from content.images
+        const imagePath = project.content?.images?.itemFiles?.[character.referenceImageId];
+        if (imagePath) {
+          resolved.push({
+            image_id: path.join(process.cwd(), PROJECT_DIR, imagePath),
+            type: 'character',
+            name: character.name,
+          });
+        }
+      }
+    } else if (ref.type === 'setting') {
+      // Find setting by name (case-insensitive partial match)
+      const setting = project.settings.find(
+        s => s.name.toLowerCase().includes(ref.name.toLowerCase()) ||
+             ref.name.toLowerCase().includes(s.name.toLowerCase())
+      );
+      if (setting?.referenceImagePath) {
+        resolved.push({
+          image_id: path.join(process.cwd(), PROJECT_DIR, setting.referenceImagePath),
+          type: 'setting',
+          name: setting.name,
+        });
+      } else if (setting?.referenceImageId) {
+        // Try to resolve from content.images
+        const imagePath = project.content?.images?.itemFiles?.[setting.referenceImageId];
+        if (imagePath) {
+          resolved.push({
+            image_id: path.join(process.cwd(), PROJECT_DIR, imagePath),
+            type: 'setting',
+            name: setting.name,
+          });
+        }
+      }
+    }
+  }
+
+  return resolved.length > 0 ? resolved : null;
+}
 
 /**
  * Helper function to find image path from artifact ID.
@@ -627,7 +907,9 @@ export const generateVideoFromImageTool: ToolDefinition = createTool(
 - "wind blows through the trees, clouds drift"
 - "subtle breathing motion, eyes blinking"
 
-Returns a job ID. Use wait_for_job to check completion.`,
+Returns a job ID. Use wait_for_job to check completion.
+
+**Motion prompt source**: Provide EITHER \`motion_prompt\` (inline text) OR \`motion_prompt_file\` (path to .motion.md file). Using \`motion_prompt_file\` is preferred as it reads from approved prompt files.`,
   {
     type: 'object',
     properties: {
@@ -641,7 +923,11 @@ Returns a job ID. Use wait_for_job to check completion.`,
       },
       motion_prompt: {
         type: 'string',
-        description: 'Description of the motion/animation to apply (camera movements, character actions, environmental effects)',
+        description: 'Description of the motion/animation to apply (use motion_prompt_file instead if prompt exists in a file)',
+      },
+      motion_prompt_file: {
+        type: 'string',
+        description: 'Path to motion prompt file (e.g., "prompts/videos/scenes/scene-1.motion.md"). Reads the prompt from this file instead of requiring inline text.',
       },
       negative_prompt: {
         type: 'string',
@@ -652,12 +938,35 @@ Returns a job ID. Use wait_for_job to check completion.`,
         description: 'Random seed for reproducibility (optional)',
       },
     },
-    required: ['scene_image_artifact_id', 'scene_number', 'motion_prompt'],
+    required: ['scene_image_artifact_id', 'scene_number'],
   },
   async (args) => {
     const sceneImageArtifactId = args['scene_image_artifact_id'] as string;
     const sceneNumber = args['scene_number'] as number;
-    const motionPrompt = args['motion_prompt'] as string;
+    let motionPrompt = args['motion_prompt'] as string | undefined;
+
+    // If motion_prompt_file is provided, read the prompt from the file
+    const motionPromptFile = args['motion_prompt_file'] as string | undefined;
+    if (motionPromptFile) {
+      const fullPath = path.join(process.cwd(), PROJECT_DIR, motionPromptFile);
+      if (!fs.existsSync(fullPath)) {
+        return {
+          status: 'error',
+          error: `Motion prompt file not found: ${motionPromptFile}`,
+          suggestion: 'Check that the motion prompt file path is correct and the file exists.',
+        };
+      }
+      const promptContent = fs.readFileSync(fullPath, 'utf-8');
+      motionPrompt = extractPromptFromMarkdown(promptContent);
+    }
+
+    // Validate that we have a motion prompt from either source
+    if (!motionPrompt) {
+      return {
+        status: 'error',
+        error: 'No motion prompt provided. Supply either "motion_prompt" (inline text) or "motion_prompt_file" (path to prompt file).',
+      };
+    }
     const negativePrompt = args['negative_prompt'] as string | undefined;
     const seed = args['seed'] as number | undefined;
 
