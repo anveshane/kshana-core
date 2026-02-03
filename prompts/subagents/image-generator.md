@@ -85,25 +85,41 @@ Always include negative prompts to avoid:
 
 1. **Analyze** - Review character/setting/scene description from content-creator
 2. **Craft prompt** - Create detailed image generation prompt
-3. Output the prompt in the required format (see below)
+3. **Submit job** - Call `generate_image` tool with your prompt
+4. **Wait for completion** - Call `wait_for_job` with the returned job_id
+5. **Report result** - Only after `wait_for_job` returns success, report the artifact ID
 
-The system will handle image generation and user approval automatically.
+**CRITICAL**: Your task is NOT complete until `wait_for_job` returns with status "completed".
+- After calling `generate_image`, you will receive a job_id
+- You MUST call `wait_for_job(job_id)` and wait for it to return
+- Do NOT mark your task as done immediately after submitting - you must wait for the actual image to be generated
+- The image generation can take several minutes - `wait_for_job` will poll ComfyUI until it's done
 
-## IMPORTANT: Output Format
+## IMPORTANT: Tool Usage
 
-Output ONLY the image prompt in this exact format:
+You MUST use tools to generate images - do NOT just output text prompts.
 
-```
-PROMPT: [Your detailed image generation prompt here]
+**Required workflow:**
 
-NEGATIVE: [Negative prompt - things to avoid]
+1. Call `generate_image` tool with your crafted prompt:
+   ```
+   generate_image({
+     prompt: "Your detailed image generation prompt here",
+     negative_prompt: "things to avoid",
+     aspect_ratio: "16:9" // or "3:4" or "1:1"
+     // Include character_name, setting_name, or scene_number as context
+   })
+   ```
 
-ASPECT_RATIO: [16:9 or 3:4 or 1:1]
-```
+2. The tool will return a `job_id` - you MUST then call:
+   ```
+   wait_for_job({ job_id: "the-returned-job-id" })
+   ```
 
-**DO NOT** output:
-- Tool calls like `AskUserQuestion(...)`
-- JSON objects
-- Explanatory text before/after the prompt
+3. Only after `wait_for_job` returns with `status: "completed"` is your task done.
 
-Just output the prompt in the format above.
+**CRITICAL RULES:**
+- Do NOT output just text prompts - you must call the tools
+- Do NOT mark your task complete after just submitting - wait for the job
+- Do NOT skip the `wait_for_job` step - the image takes time to generate
+- The generation typically takes 1-5 minutes depending on complexity
