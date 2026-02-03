@@ -9,7 +9,7 @@ import { createDefaultToolRegistry } from '../core/tools/index.js';
 import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT, createWorkflowVideoAgent, setCurrentProjectBasePath } from '../tasks/video/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
-import { assetEventEmitter } from './assetEventEmitter.js';
+import { assetEventEmitter, type AssetAddedEvent } from './assetEventEmitter.js';
 
 type TaskType = 'generic' | 'video';
 
@@ -37,7 +37,7 @@ interface ActiveSession {
   abortController?: AbortController;
   initialized?: boolean;
   basePath?: string; // Store basePath for video tasks to save original input
-  assetEventHandler?: (event: { assetId: string; assetType: string; placementNumber?: number; sceneNumber?: number; path: string; version: number; sessionId?: string }) => void;
+  assetEventHandler?: (event: AssetAddedEvent) => void;
   currentEvents?: ConversationEvents; // Store current events for asset handler
 }
 
@@ -116,13 +116,12 @@ export class ConversationManager {
     };
 
     // Set up asset event handler for this session (will be connected to events in runTask/sendResponse)
-    const assetEventHandler = (event: { assetId: string; assetType: string; placementNumber?: number; sceneNumber?: number; path: string; version: number; sessionId?: string }) => {
-      // Only forward events for this session if sessionId matches, or if no sessionId specified (global)
-      if (!event.sessionId || event.sessionId === sessionId) {
-        // Events will be set when runTask or sendResponse is called
-        // For now, just store the event to be processed later
+    // Filter by project directory so ALL sessions with the same project receive asset events,
+    // not just the session that generated them (fixes real-time UI updates for ProjectContext)
+    const assetEventHandler = (event: AssetAddedEvent) => {
+      if (!event.projectDirectory || event.projectDirectory === basePath) {
         const session = this.sessions.get(sessionId);
-        if (session && session.currentEvents?.onAssetAdded) {
+        if (session?.currentEvents?.onAssetAdded) {
           session.currentEvents.onAssetAdded(sessionId, event.assetId, event.assetType, event.path, event.version, event.placementNumber, event.sceneNumber);
         }
       }
@@ -347,9 +346,10 @@ export class ConversationManager {
       if (session.assetEventHandler) {
         assetEventEmitter.offAssetAdded(session.assetEventHandler);
       }
-      // Create new handler
-      const assetEventHandler = (event: { assetId: string; assetType: string; placementNumber?: number; sceneNumber?: number; path: string; version: number; sessionId?: string }) => {
-        if (!event.sessionId || event.sessionId === sessionId) {
+      // Filter by project directory so all sessions with same project receive events
+      const sessionBasePath = session.basePath;
+      const assetEventHandler = (event: AssetAddedEvent) => {
+        if (!event.projectDirectory || event.projectDirectory === sessionBasePath) {
           events.onAssetAdded!(sessionId, event.assetId, event.assetType, event.path, event.version, event.placementNumber, event.sceneNumber);
         }
       };

@@ -19,12 +19,15 @@ const REMOTION_AGENT_USER_MESSAGE =
   'Generate complete Remotion component code as JSON for the given placements. Use the exact schema from the instructions.';
 
 /**
- * Strip optional ```json ... ``` wrapper from model output.
+ * Strip optional ```json ... ``` (or ```JSON ... ```) wrapper from model output.
+ * Handles optional newline after opening fence and trailing ```.
  */
 function stripJsonFence(raw: string): string {
   let s = raw.trim();
-  if (s.startsWith('```json')) {
-    s = s.slice(7).trim();
+  const jsonFence = /^```(?:json|JSON)\s*\n?/i;
+  const match = s.match(jsonFence);
+  if (match) {
+    s = s.slice(match[0].length).trim();
   } else if (s.startsWith('```')) {
     s = s.slice(3).trim();
   }
@@ -65,6 +68,7 @@ export async function runRemotionAgent(
       { role: 'system', content: systemPrompt },
       { role: 'user', content: REMOTION_AGENT_USER_MESSAGE },
     ],
+    maxTokens: 32768,
   });
 
   const raw = response.content?.trim() ?? '';
@@ -77,8 +81,14 @@ export async function runRemotionAgent(
   try {
     parsed = JSON.parse(jsonStr);
   } catch (parseError) {
+    const truncatedHint =
+      jsonStr.length > 1000 || /"[^"]*$/.test(jsonStr) || jsonStr.endsWith('\\')
+        ? ' Response may be truncated (increase max_tokens for long component code).'
+        : '';
     console.error('[runRemotionAgent] JSON parse error. Raw response (first 500 chars):', raw.slice(0, 500));
-    throw new Error(`Remotion agent response is not valid JSON: ${jsonStr.slice(0, 200)}`);
+    throw new Error(
+      `Remotion agent response is not valid JSON: ${jsonStr.slice(0, 200)}${truncatedHint}`
+    );
   }
 
   const obj = parsed as Record<string, unknown>;

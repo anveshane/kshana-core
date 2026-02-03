@@ -2408,8 +2408,15 @@ agent/infographic-placements/ and registered in the manifest.`,
       }
 
       // Rebuild bundle after writing components
+      // Clear NODE_OPTIONS to avoid inheriting ts-node/register from Electron dev env (not available in remotion-infographics)
+      const remotionEnv = { ...process.env, NODE_OPTIONS: '' };
       console.log('[generate_all_infographics] Rebuilding Remotion bundle with new components...');
-      const buildProc = spawnSync('pnpm', ['run', 'build'], { cwd: remotionDir, encoding: 'utf-8', timeout: 120_000 });
+      const buildProc = spawnSync('pnpm', ['run', 'build'], {
+        cwd: remotionDir,
+        encoding: 'utf-8',
+        timeout: 120_000,
+        env: remotionEnv,
+      });
       if (buildProc.error || buildProc.status !== 0) {
         console.error('[generate_all_infographics] Bundle failed:', buildProc.stderr || buildProc.error);
         return {
@@ -2460,6 +2467,7 @@ agent/infographic-placements/ and registered in the manifest.`,
         encoding: 'utf-8',
         maxBuffer: 10 * 1024 * 1024,
         timeout: RENDER_TIMEOUT_MS,
+        env: remotionEnv,
       }
     );
     try {

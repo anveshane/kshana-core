@@ -79,8 +79,12 @@ async function main() {
   const serveUrl = buildDir;
   const fps = 24;
   const outputs: string[] = [];
+  const total = placements.length;
 
-  for (const p of placements) {
+  for (let i = 0; i < placements.length; i++) {
+    const p = placements[i]!;
+    const progressStart = (i / total) * 100;
+    console.log(`REMOTION_PROGRESS:${JSON.stringify({ placementIndex: i, totalPlacements: total, progress: progressStart, stage: 'rendering' })}`);
     const durationSeconds = Math.max(1, timeToSeconds(p.endTime) - timeToSeconds(p.startTime));
     const durationInFrames = Math.round(durationSeconds * fps);
     const inputProps = {
@@ -107,6 +111,8 @@ async function main() {
       logLevel: 'error',
     });
     outputs.push(outFilePath);
+    const progressEnd = ((i + 1) / total) * 100;
+    console.log(`REMOTION_PROGRESS:${JSON.stringify({ placementIndex: i, totalPlacements: total, progress: progressEnd, stage: 'rendering' })}`);
   }
 
   writeOutputs(outputPath, outputs);

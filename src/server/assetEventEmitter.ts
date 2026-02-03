@@ -4,7 +4,7 @@
  */
 import { EventEmitter } from 'events';
 
-interface AssetAddedEvent {
+export interface AssetAddedEvent {
   assetId: string;
   assetType: 'scene_image' | 'scene_video' | 'scene_infographic' | 'character_ref' | 'setting_ref' | 'final_video';
   placementNumber?: number;
@@ -12,6 +12,7 @@ interface AssetAddedEvent {
   path: string;
   version: number;
   sessionId?: string;
+  projectDirectory?: string;
 }
 
 class AssetEventEmitter extends EventEmitter {

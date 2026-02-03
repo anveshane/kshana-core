@@ -2420,6 +2420,7 @@ export async function addAsset(asset: AssetInfo, basePath: string = getCurrentPr
         sceneNumber: asset.scene_number,
         path: asset.path,
         version: asset.version ?? 1,
+        projectDirectory: basePath,
       });
       console.log(`[addAsset] ✓ Emitted asset_added event for ${asset.id}`);
     } catch (eventError) {
