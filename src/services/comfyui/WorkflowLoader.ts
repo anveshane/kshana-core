@@ -72,14 +72,12 @@ function getWorkflowsDir(): string {
   return path.resolve(process.cwd(), 'workflows');
 }
 
-// Get the workflows directory
-const WORKFLOWS_DIR = getWorkflowsDir();
-
 /**
  * Load a workflow JSON template from the workflows directory.
  */
 export function loadWorkflowTemplate(templateName: string): WorkflowTemplate {
-  const templatePath = path.join(WORKFLOWS_DIR, templateName);
+  // Resolve at call time so updates to KSHANA_WORKFLOWS_DIR (via settings restart) are honored
+  const templatePath = path.join(getWorkflowsDir(), templateName);
 
   if (!fs.existsSync(templatePath)) {
     throw new Error(`Workflow template not found: ${templatePath}`);
@@ -591,6 +589,9 @@ export function parameterizeLtxT2VWorkflow(
     }
   }
 
+  // Bypass LoraLoaderModelOnly nodes with lora_name "None" (ComfyUI rejects "None")
+  bypassLoraLoaderNodesWithNone(apiWorkflow);
+
   return apiWorkflow;
 }
 
@@ -658,6 +659,9 @@ export function parameterizeLtxI2VWorkflow(
       console.log(`[LtxI2V] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
     }
   }
+
+  // Bypass LoraLoaderModelOnly nodes with lora_name "None" (ComfyUI rejects "None")
+  bypassLoraLoaderNodesWithNone(apiWorkflow);
 
   return apiWorkflow;
 }
@@ -1062,6 +1066,48 @@ export function expandSubgraphs(workflow: WorkflowTemplate): WorkflowTemplate {
 
   // Remove remaining UI-only nodes (PrimitiveNode, etc.)
   return removeUIOnlyNodes(expanded);
+}
+
+/**
+ * Bypass LoraLoaderModelOnly nodes that have lora_name "None".
+ * ComfyUI rejects "None" as it's not in the installed LoRAs list. When no LoRA is
+ * selected, we remove the node and reroute the model input directly to consumers.
+ */
+function bypassLoraLoaderNodesWithNone(apiWorkflow: Record<string, unknown>): void {
+  const nodesToBypass: Array<{ nodeId: string; modelSource: [string, number] }> = [];
+
+  for (const [nodeId, node] of Object.entries(apiWorkflow)) {
+    const nodeData = node as { class_type?: string; inputs?: Record<string, unknown> };
+    if (nodeData.class_type !== 'LoraLoaderModelOnly') continue;
+
+    const loraName = nodeData.inputs?.['lora_name'];
+    const loraStr = typeof loraName === 'string' ? loraName : String(loraName ?? '');
+    if (loraStr.toLowerCase() !== 'none') continue;
+
+    const modelInput = nodeData.inputs?.['model'];
+    if (!Array.isArray(modelInput) || modelInput.length < 2) continue;
+
+    const [sourceNodeId, sourceSlot] = modelInput;
+    nodesToBypass.push({ nodeId, modelSource: [String(sourceNodeId), Number(sourceSlot)] });
+  }
+
+  for (const { nodeId, modelSource } of nodesToBypass) {
+    // Update all nodes that reference this LoraLoader's output
+    for (const [consumerId, consumerNode] of Object.entries(apiWorkflow)) {
+      if (consumerId === nodeId) continue;
+      const consumer = consumerNode as { inputs?: Record<string, unknown> };
+      const inputs = consumer.inputs;
+      if (!inputs) continue;
+
+      for (const [inputName, inputVal] of Object.entries(inputs)) {
+        if (!Array.isArray(inputVal) || inputVal[0] !== nodeId) continue;
+        (consumer.inputs as Record<string, unknown>)[inputName] = [...modelSource];
+        console.log(`[bypassLoraLoaderNodesWithNone] Rerouted ${consumerId}.${inputName} from [${nodeId},0] to [${modelSource[0]},${modelSource[1]}]`);
+      }
+    }
+    delete apiWorkflow[nodeId];
+    console.log(`[bypassLoraLoaderNodesWithNone] Removed LoraLoaderModelOnly node ${nodeId} (lora_name="None")`);
+  }
 }
 
 /**

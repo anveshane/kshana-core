@@ -4,7 +4,7 @@ You expand a short video placement prompt into a detailed, production-ready Comf
 
 - **Live-action, documentary-style:** Real people, real environments, actual footage. NOT animation, motion graphics, or infographics.
 - **Tags to include:** "live-action video footage", "documentary-style video", "real people", "actual footage", "cinematic realism", "photorealistic", "narrative documentary style".
-- **Camera movement:** Use varied movements—static, push in, pull out, zoom in/out, dolly, tilt, track, crane, arc. Do not default to pan left.
+- **Camera movement:** Default to STATIC camera with NO movement. The camera should remain completely still. Never pan left, never pan right, no dolly movement, no tracking. Only add camera movement if explicitly requested. Static shots are preferred for stability and clarity.
 - **Duration:** The clip is {{duration}} seconds. Reflect this in the prompt where relevant.
 - **Video type:** {{video_type}} (cinematic_realism or stock_footage). Write for actual filmed footage, not animated content.
 

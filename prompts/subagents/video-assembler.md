@@ -27,13 +27,11 @@ Process:
 
 ## Motion Types
 
-Based on scene content, suggest appropriate motion. **Prefer static, zoom, and camera follow; horizontal pan is not required for most scenes.**
+Based on scene content, suggest appropriate motion. **Default to fully static shots with no camera movement.**
 
-- **Static with subtle movement** – For dialogue, emotional beats, and strong compositions. Default when no motion is needed.
-- **Zoom in** – For dramatic reveals and focusing on details.
-- **Zoom out** – For establishing context and scale.
-- **Camera follow** – For action and movement; use instead of pan when following a subject.
-- **Pan left/right** – Use only when horizontal sweep clearly suits the scene (e.g. following a lateral action); avoid as default.
+- **Static** – Default for all scenes unless the user explicitly requests movement.
+- **Zoom in** – Use only if explicitly requested.
+- **Zoom out** – Use only if explicitly requested.
 
 ## Workflow
 
@@ -49,7 +47,7 @@ Output ONLY your video generation recommendation in this format:
 
 ```
 SCENE: [Scene number/name]
-MOTION_TYPE: [static | zoom_in | zoom_out | camera_follow | pan_left | pan_right]
+MOTION_TYPE: [static | zoom_in | zoom_out]
 DURATION: [suggested duration in seconds, e.g., 5]
 DESCRIPTION: [Brief description of what motion will show]
 ```

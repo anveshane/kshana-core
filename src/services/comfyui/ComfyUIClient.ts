@@ -31,13 +31,18 @@ export interface CompletionResult {
   prompt_id: string;
 }
 
-const DEFAULT_CONFIG: ComfyUIClientConfig = {
-  baseUrl: process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188',
-  // outputDir should be explicitly provided by caller (project-specific)
-  // This default is only used if not specified
-  outputDir: './outputs',
-  timeout: parseInt(process.env['COMFYUI_TIMEOUT'] || '300', 10),
-};
+// Read env at call time so backend restarts can pick up new values without process reload
+function getDefaultConfig(): ComfyUIClientConfig {
+  const parsedTimeout = parseInt(process.env['COMFYUI_TIMEOUT'] || '300', 10);
+
+  return {
+    baseUrl: process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188',
+    // outputDir should be explicitly provided by caller (project-specific)
+    // This default is only used if not specified
+    outputDir: './outputs',
+    timeout: Number.isFinite(parsedTimeout) ? parsedTimeout : 300,
+  };
+}
 
 /**
  * Async HTTP client for ComfyUI API.
@@ -48,7 +53,7 @@ export class ComfyUIClient {
   private timeout: number;
 
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
-    const merged = { ...DEFAULT_CONFIG, ...config };
+    const merged = { ...getDefaultConfig(), ...config };
     this.baseUrl = merged.baseUrl.replace(/\/$/, '');
     this.outputDir = merged.outputDir;
     this.timeout = merged.timeout;

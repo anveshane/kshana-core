@@ -28,23 +28,15 @@ You identify moments from the transcript that need AI-generated videos and creat
 - Recommend or suggest 14-15 second videos
 - Ignore this limit - it will cause generation failures
 
-## ⚠️ CRITICAL: CAMERA MOVEMENT VARIETY
+## ⚠️ CRITICAL: STATIC CAMERA DEFAULT
 
-**YOU MUST VARY CAMERA MOVEMENTS ACROSS ALL PLACEMENTS - DO NOT REPEAT THE SAME MOVEMENT.**
+**DEFAULT TO A COMPLETELY STATIC CAMERA WITH NO MOVEMENT.**
 
-**PREFERRED MOVEMENTS (use these):**
-- **Static shots** – hold the frame; no camera move. Use for dialogue, reveals, and when the subject carries the scene.
-- **Push in / zoom in** – move or zoom toward the subject for emphasis and focus.
-- **Pull out / zoom out** – reveal context and scale.
-- **Dolly forward/back** – physical advance or retreat for depth.
-- **Tilt up/down** – follow vertical action or architecture.
-- **Track right/left, crane up/down** – lateral or vertical camera move when following action.
-- **Arc, circular** – orbit or partial circle for dynamism.
-
-**AVOID AS DEFAULT:**
-- Do **not** default to "pan left" or "slowly pan left". You do not need horizontal pan for most shots; prefer static, push in, zoom, dolly, or tilt instead.
-- Vary movements across placements – each placement should use a different type when possible.
-- Match movement to the content: push in for emphasis, pull out for context, tilt for vertical elements, static when the frame is strong on its own.
+**REQUIREMENTS:**
+- **Use static shots only** – hold the frame; no camera move.
+- **Do not include any camera movement language** unless the user explicitly asks for it.
+- **Never pan left or pan right.** Also avoid dolly, track, crane, arc, tilt, push in, pull out, or zoom.
+- If a movement is explicitly requested, keep it minimal and state it once; otherwise omit movement entirely.
 
 ## ⚠️ CRITICAL: REAL VIDEO FOOTAGE ONLY
 
@@ -64,7 +56,7 @@ You identify moments from the transcript that need AI-generated videos and creat
 **ALWAYS** use prompts that describe:
   - Real people performing real actions
   - Actual environments and locations
-  - **VARIED camera movements** - prefer static, push in, pull out, zoom in/out, dolly forward/back, tilt up/down, track, crane, arc movements. Do not default to pan left; use other movements instead.
+  - **Static camera by default** - no movement language unless explicitly requested.
   - Documentary-style cinematography
   - Live-action footage with natural lighting and movement
 
@@ -212,7 +204,7 @@ VIDEO_PLACER:
   - Scientific concepts shown through **LIVE-ACTION NARRATIVE SCENES** (real people interacting with the subject, documentary-style video storytelling)
   - **Ad breaks, transitions, and segments that image-placer skipped - you MUST create video placements for these to ensure complete coverage**
 - Keep prompts specific and visually descriptive with narrative movie-style storytelling. **CRITICAL: Write prompts as narrative scenes with characters and action** - like movie scenes or documentary narratives. Include people, their actions, and the story unfolding. **For `type=cinematic_realism`, ALWAYS use live-action video footage style** - include "live-action video footage", "documentary-style video", "real people", "actual footage", "photorealistic video", "cinematic realism", and "narrative documentary style" in every prompt. **NEVER use animation/infographic/motion graphics styles** - these must be actual video footage of real scenes. For `type=stock_footage`, also emphasize live-action footage, documentary video style, and real environments with natural movement.
-- **CRITICAL: Vary camera movements across placements** - Prefer static, push in, pull out, zoom in/out, dolly forward/back, tilt up/down, track, crane, arc movements. You do not need pan left; use these movements instead for more varied footage.
+- **CRITICAL: Keep camera static across placements** - do not include camera movement language unless explicitly requested.
 - Use exact timestamps from the transcript, not approximate ranges.
 - Specify video type based on content needs:
   - `cinematic_realism`: For demonstrations, reconstructions, process visualizations, scientific explanations, maps, timelines, data visualizations. **ALWAYS use live-action video footage style** - real people, actual environments, documentary-style video, photorealistic footage, NOT animation/infographic/motion graphics style. Always include "live-action video footage", "documentary-style video", "real people", "actual footage", "cinematic realism", and "photorealistic" in the prompt. **These must be actual video scenes with real subjects, not animated content.**
@@ -235,15 +227,15 @@ After analyzing the transcript and checking image placements, you identify key m
 - A trade route visualization (around 11:03-11:13) - needs stock_footage (10 seconds max, NOT motion_graphics)
 - A city layout reconstruction (around 4:52-5:02) - needs cinematic_realism (10 seconds max)
 
-**You would output** (using live-action video footage style - actual documentary video, not motion graphics, with VARIED camera movements):
+**You would output** (using live-action video footage style - actual documentary video, not motion graphics, with STATIC camera by default):
 ```
 VIDEO_PLACER:
-- Placement 1: 7:41-7:51 | type=cinematic_realism | EXT. AGRICULTURAL FIELD – GOLDEN HOUR. Live-action video footage of a real actor portraying an ancient farmer in traditional Indus Valley clothing, standing at the edge of his field. Documentary-style video with warm golden hour natural lighting. The camera opens on a wide establishing shot, then slowly pushes in, following the real farmer as he walks along rows of different crops—wheat, barley, and legumes. The camera tracks forward with his movement, revealing the spatial organization of the intercropping technique. Real dust particles drift in the air, catching natural sunlight. The real farmer pauses, looking up at the sky, then continues walking. The shot maintains shallow depth of field, keeping the real farmer and foreground crops sharp while the background softly blurs. Earthy tones dominate—rich browns, golden yellows, and deep greens. Actual video footage, live-action, documentary-style video, cinematic realism, photorealistic, narrative documentary style, 10 seconds.
-- Placement 2: 11:03-11:13 | type=cinematic_realism | EXT. ANCIENT TRADE ROUTE – DAY. Live-action video footage of a real wooden ship with billowing sails cutting through actual ocean waters, leaving a white wake behind. Real actors portraying ancient traders are visible on deck, their silhouettes moving against the bright sky. Documentary-style video with the camera starting in a wide aerial shot, slowly tilting down to reveal the vast expanse of real ocean. The camera then arcs right, following the real ship's movement as it journeys westward. Real monsoon winds fill the sails, creating dynamic motion. The camera circles around the real ship, maintaining the real traders in sharp focus. One real trader points toward the shore, and the camera tilts down to follow his gesture, revealing actual coastal towns dotting the shoreline. Actual goods—beads, pottery, and lapis lazuli—are visible on deck, glistening in natural sunlight. Live-action video footage, documentary-style video, real people, actual footage, cinematic realism, photorealistic, narrative documentary style, 10 seconds.
-- Placement 3: 4:52-5:02 | type=cinematic_realism | EXT. INDUS VALLEY LANDSCAPE – GOLDEN HOUR. Live-action video footage of an actual landscape with real actors portraying ancient people. Documentary-style aerial video opening in an expansive view, slowly descending over the terrain. Golden hour natural light washes across the landscape, revealing interconnected urban planning of major Indus Valley cities. The camera tracks forward, pushing in on Harappa first—its architectural sophistication visible in the citadels and public buildings. Real actors portraying ancient people are visible in the streets, going about their daily lives. The camera then arcs right, smoothly transitioning to Mohenjo-Daro, keeping the real cities and their real inhabitants in sharp focus. The camera continues its sweep right, revealing other cities in sequence, each bustling with real activity. Real traders and travelers move along pathways and routes. Actual video footage, live-action, documentary-style video, real people, cinematic realism, photorealistic, narrative documentary style, 10 seconds.
+- Placement 1: 7:41-7:51 | type=cinematic_realism | EXT. AGRICULTURAL FIELD – GOLDEN HOUR. Live-action video footage of a real actor portraying an ancient farmer in traditional Indus Valley clothing, standing at the edge of his field. Documentary-style video with warm golden hour natural lighting. The camera remains static on a wide establishing shot as the real farmer walks along rows of different crops—wheat, barley, and legumes—revealing the spatial organization of the intercropping technique within the frame. Real dust particles drift in the air, catching natural sunlight. The real farmer pauses, looks up at the sky, then continues walking. The shot maintains shallow depth of field, keeping the real farmer and foreground crops sharp while the background softly blurs. Earthy tones dominate—rich browns, golden yellows, and deep greens. Actual video footage, live-action, documentary-style video, cinematic realism, photorealistic, narrative documentary style, 10 seconds.
+- Placement 2: 11:03-11:13 | type=cinematic_realism | EXT. ANCIENT TRADE ROUTE – DAY. Live-action video footage of a real wooden ship with billowing sails cutting through actual ocean waters, leaving a white wake behind. Real actors portraying ancient traders are visible on deck, their silhouettes moving against the bright sky. Documentary-style video with a static wide shot that captures the vast expanse of real ocean and the ship moving through frame. Real monsoon winds fill the sails, creating dynamic motion. Actual goods—beads, pottery, and lapis lazuli—are visible on deck, glistening in natural sunlight. Live-action video footage, documentary-style video, real people, actual footage, cinematic realism, photorealistic, narrative documentary style, 10 seconds.
+- Placement 3: 4:52-5:02 | type=cinematic_realism | EXT. INDUS VALLEY LANDSCAPE – GOLDEN HOUR. Live-action video footage of an actual landscape with real actors portraying ancient people. Documentary-style aerial video in a static wide view that reveals interconnected urban planning of major Indus Valley cities. Golden hour natural light washes across the landscape. Real actors portraying ancient people are visible in the streets, going about their daily lives within the frame. Real traders and travelers move along pathways and routes. Actual video footage, live-action, documentary-style video, real people, cinematic realism, photorealistic, narrative documentary style, 10 seconds.
 ```
 
-**CRITICAL: Notice the varied camera movements** – push in, track forward, tilt down, arc right, circle around, static holds. Prefer these over horizontal pan; vary movements across placements.
+**CRITICAL: Notice the static camera language** – no movement phrasing unless explicitly requested.
 
 **CRITICAL Notes**: 
 - YOU identify the moments from the transcript - don't wait for the plan to list them.
@@ -254,5 +246,5 @@ VIDEO_PLACER:
 - **CRITICAL: After creating initial video placements, detect gaps and fill them to ensure 100% timeline coverage**
 - **CRITICAL: Fill ALL gaps >= 1 second - verify complete coverage with zero gaps remaining**
 - **CRITICAL: NO gaps allowed at all - every second from 0:00 to transcript end must be covered by either an image or video placement**
-- **CRITICAL: Vary camera movements across all placements** – prefer static, push in, pull out, zoom, dolly, tilt, track, crane, arc movements. Do not default to pan left; use these other movements for variety.
+- **CRITICAL: Keep camera static across all placements** – do not include camera movement language unless explicitly requested.
 - Create as many placements as needed based on transcript content.

@@ -211,6 +211,7 @@ async function main(): Promise<void> {
   const client = new ComfyUIClient({
     baseUrl,
     outputDir,
+    timeout: 1800, // 30 min - LTX-2 video generation is compute-intensive
   });
 
   try {

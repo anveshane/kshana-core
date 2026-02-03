@@ -29,6 +29,7 @@ import {
   getAgentDir,
   getAssets,
   readProjectFile,
+  writeProjectFile,
   getCurrentProjectBasePath,
   getManifestFilePath,
 } from './workflow/index.js';
@@ -111,6 +112,263 @@ export interface ImageGenerationParams {
   reference_images?: ReferenceImage[];
   /** Generation mode: text-to-image or image+text-to-image */
   generation_mode?: 'text_to_image' | 'image_text_to_image';
+}
+
+const AUTO_GAP_PREFIX = 'AUTO GAP:';
+const GAP_MIN_SECONDS = 0.5;
+const GAP_ADJACENT_EPSILON = 0.01;
+
+function timeStringToSeconds(timeStr: string): number {
+  const parts = timeStr.split(':');
+  if (parts.length === 3) {
+    const hours = parseInt(parts[0] ?? '0', 10) || 0;
+    const minutes = parseInt(parts[1] ?? '0', 10) || 0;
+    const seconds = parseInt(parts[2] ?? '0', 10) || 0;
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+  if (parts.length === 2) {
+    const minutes = parseInt(parts[0] ?? '0', 10) || 0;
+    const seconds = parseInt(parts[1] ?? '0', 10) || 0;
+    return minutes * 60 + seconds;
+  }
+  return parseInt(timeStr, 10) || 0;
+}
+
+function formatTimeSeconds(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const hh = Math.floor(total / 3600);
+  const mm = Math.floor((total % 3600) / 60);
+  const ss = total % 60;
+  if (hh > 0) {
+    return `${hh}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`;
+  }
+  return `${mm}:${String(ss).padStart(2, '0')}`;
+}
+
+function parseTranscriptDurationSeconds(transcriptContent: string | null): number {
+  if (!transcriptContent || !transcriptContent.trim()) return 0;
+  const lines = transcriptContent.split(/\r?\n/);
+  let maxEnd = 0;
+  for (const line of lines) {
+    const match = line.match(/\[(\d{2}:\d{2}:\d{2},\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2},\d{3})\]/);
+    if (!match || !match[2]) continue;
+    const timeMatch = match[2].match(/(\d{2}):(\d{2}):(\d{2}),(\d{3})/);
+    if (!timeMatch) continue;
+    const [, hh, mm, ss, ms] = timeMatch;
+    const endSeconds =
+      Number(hh) * 3600 + Number(mm) * 60 + Number(ss) + Number(ms) / 1000;
+    if (endSeconds > maxEnd) maxEnd = endSeconds;
+  }
+  return maxEnd;
+}
+
+interface TimeInterval {
+  start: number;
+  end: number;
+}
+
+function mergeIntervals(intervals: TimeInterval[]): TimeInterval[] {
+  if (intervals.length === 0) return [];
+  const sorted = [...intervals].sort((a, b) => a.start - b.start);
+  const merged: TimeInterval[] = [];
+  let current = { ...sorted[0]! };
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i]!;
+    if (next.start <= current.end + GAP_ADJACENT_EPSILON) {
+      current.end = Math.max(current.end, next.end);
+    } else {
+      merged.push(current);
+      current = { ...next };
+    }
+  }
+  merged.push(current);
+  return merged;
+}
+
+function collectIntervalsFromPlacements(
+  placements: Array<{ startTime: string; endTime: string }>,
+): TimeInterval[] {
+  const intervals: TimeInterval[] = [];
+  for (const placement of placements) {
+    const start = timeStringToSeconds(placement.startTime);
+    const end = timeStringToSeconds(placement.endTime);
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
+      intervals.push({ start, end });
+    }
+  }
+  return intervals;
+}
+
+function isAutoGapPrompt(prompt: string): boolean {
+  return prompt.trim().startsWith(AUTO_GAP_PREFIX);
+}
+
+function buildVideoPlacementsMarkdown(
+  manual: ParsedVideoPlacement[],
+  auto: ParsedVideoPlacement[],
+): string {
+  const lines: string[] = [];
+  lines.push('VIDEO_PLACER:');
+  lines.push('');
+  lines.push('# Video Placements');
+  lines.push('');
+  lines.push('## Manual Placements');
+  lines.push('');
+  if (manual.length === 0) {
+    lines.push('- (none)');
+  } else {
+    for (const placement of manual) {
+      lines.push(
+        `- Placement ${placement.placementNumber}: ${placement.startTime}-${placement.endTime} | type=${placement.videoType} | ${placement.prompt}`,
+      );
+    }
+  }
+  lines.push('');
+  lines.push('## Auto Gap Placements');
+  lines.push('');
+  if (auto.length === 0) {
+    lines.push('- (none)');
+  } else {
+    for (const placement of auto) {
+      lines.push(
+        `- Placement ${placement.placementNumber}: ${placement.startTime}-${placement.endTime} | type=${placement.videoType} | ${placement.prompt}`,
+      );
+    }
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+async function autoFillVideoPlacementGaps(
+  videoPlacementsPath: string,
+): Promise<{ updated: boolean; autoCount: number; gapCount: number }> {
+  const imageContent = readProjectFile('agent/content/image-placements.md');
+  const infographicContent = readProjectFile(
+    'agent/content/infographic-placements.md',
+  );
+  const videoContent = readProjectFile(videoPlacementsPath);
+  const transcriptContent = readProjectFile('agent/content/transcript.md');
+
+  const imageParse = imageContent
+    ? parseImagePlacementsWithErrors(imageContent, false)
+    : { placements: [], errors: [], warnings: [] };
+  const infographicParse = infographicContent
+    ? parseInfographicPlacementsWithErrors(infographicContent, false)
+    : { placements: [], errors: [], warnings: [] };
+
+  if (imageParse.errors.length > 0) {
+    console.warn(
+      `[autoFillVideoPlacementGaps] Image placement parse errors: ${imageParse.errors.length}`,
+    );
+  }
+  if (infographicParse.errors.length > 0) {
+    console.warn(
+      `[autoFillVideoPlacementGaps] Infographic placement parse errors: ${infographicParse.errors.length}`,
+    );
+  }
+
+  const parsedVideoPlacements = videoContent
+    ? parseVideoPlacements(videoContent)
+    : [];
+  const manualVideoPlacements = parsedVideoPlacements.filter(
+    (placement) => !isAutoGapPrompt(placement.prompt),
+  );
+
+  const manualIntervals = collectIntervalsFromPlacements(
+    manualVideoPlacements,
+  );
+  const imageIntervals = collectIntervalsFromPlacements(
+    imageParse.placements,
+  );
+  const infographicIntervals = collectIntervalsFromPlacements(
+    infographicParse.placements,
+  );
+
+  const allIntervals = [...manualIntervals, ...imageIntervals, ...infographicIntervals];
+  const merged = mergeIntervals(allIntervals);
+
+  const transcriptDuration = parseTranscriptDurationSeconds(transcriptContent);
+  const placementsMaxEnd =
+    allIntervals.length > 0
+      ? Math.max(...allIntervals.map((i) => i.end))
+      : 0;
+  const totalDuration =
+    transcriptDuration > 0 ? transcriptDuration : placementsMaxEnd;
+
+  if (transcriptDuration === 0 && placementsMaxEnd > 0) {
+    console.warn(
+      '[autoFillVideoPlacementGaps] Transcript duration missing; using placements max end time',
+      { placementsMaxEnd },
+    );
+  }
+
+  if (totalDuration <= 0) {
+    console.warn(
+      '[autoFillVideoPlacementGaps] No transcript or placements duration available; skipping gap fill',
+    );
+    return { updated: false, autoCount: 0, gapCount: 0 };
+  }
+
+  const gaps: TimeInterval[] = [];
+  let cursor = 0;
+  for (const interval of merged) {
+    if (interval.start - cursor >= GAP_MIN_SECONDS) {
+      gaps.push({ start: cursor, end: interval.start });
+    }
+    cursor = Math.max(cursor, interval.end);
+  }
+  if (totalDuration - cursor >= GAP_MIN_SECONDS) {
+    gaps.push({ start: cursor, end: totalDuration });
+  }
+
+  const maxManualPlacementNumber = manualVideoPlacements.reduce(
+    (max, placement) => Math.max(max, placement.placementNumber),
+    0,
+  );
+
+  const autoPlacements: ParsedVideoPlacement[] = gaps.map((gap, index) => {
+    const startSeconds = Math.floor(gap.start);
+    const endSeconds = Math.max(startSeconds + 1, Math.ceil(gap.end));
+    const startTime = formatTimeSeconds(startSeconds);
+    const endTime = formatTimeSeconds(endSeconds);
+    const transcriptSegment = getTranscriptSegmentForTimeRange(
+      transcriptContent,
+      startTime,
+      endTime,
+    );
+    const prompt = transcriptSegment
+      ? `${AUTO_GAP_PREFIX} ${transcriptSegment}`
+      : `${AUTO_GAP_PREFIX} contextual b-roll matching narration`;
+    return {
+      placementNumber: maxManualPlacementNumber + index + 1,
+      startTime,
+      endTime,
+      videoType: 'cinematic_realism',
+      prompt,
+      duration: Math.min(10, Math.max(4, Math.round(endSeconds - startSeconds))),
+    };
+  });
+
+  const markdown = buildVideoPlacementsMarkdown(
+    manualVideoPlacements,
+    autoPlacements,
+  );
+  writeProjectFile(videoPlacementsPath, markdown);
+
+  console.log('[autoFillVideoPlacementGaps] Summary', {
+    imagePlacements: imageParse.placements.length,
+    infographicPlacements: infographicParse.placements.length,
+    manualVideoPlacements: manualVideoPlacements.length,
+    mergedIntervals: merged.length,
+    gapCount: gaps.length,
+    autoPlacements: autoPlacements.length,
+  });
+
+  return {
+    updated: true,
+    autoCount: autoPlacements.length,
+    gapCount: gaps.length,
+  };
 }
 
 /**
@@ -2042,14 +2300,23 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
         type: 'boolean',
         description: 'If true (default), expand each placement prompt with LLM before ComfyUI. Set false to use placement prompts as-is.',
       },
+      auto_fill_gaps: {
+        type: 'boolean',
+        description: 'If true (default), auto-generate video placements to fill timeline gaps before generating.',
+      },
     },
     required: [],
   },
   async (args) => {
     const filePath = (args['file_path'] as string | undefined) || 'agent/content/video-placements.md';
     const expandPrompts = (args['expand_prompts'] as boolean | undefined) !== false;
+    const autoFillGaps = (args['auto_fill_gaps'] as boolean | undefined) !== false;
 
     // Read the video placements file
+    if (autoFillGaps) {
+      await autoFillVideoPlacementGaps(filePath);
+    }
+
     const content = readProjectFile(filePath);
     if (!content) {
       return {

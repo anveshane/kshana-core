@@ -58,6 +58,22 @@ import { generateProjectTitle, contextStore } from '../../../core/context/index.
 import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 
+let manifestWriteLock: Promise<void> = Promise.resolve();
+
+async function withManifestWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = manifestWriteLock;
+  let release!: () => void;
+  manifestWriteLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
 /**
  * Detect the execution context (CLI or Desktop).
  * CLI: Running in kshana-ink project directory (Node.js process)
@@ -2340,129 +2356,131 @@ export function updateSceneApproval(
  * Add an asset to the manifest.
  */
 export async function addAsset(asset: AssetInfo, basePath: string = getCurrentProjectBasePath()): Promise<void> {
-  const manifestPath = getManifestFilePath(basePath);
+  await withManifestWriteLock(async () => {
+    const manifestPath = getManifestFilePath(basePath);
 
-  console.log(`[addAsset] Registering asset:`, {
-    id: asset.id,
-    type: asset.type,
-    path: asset.path,
-    scene_number: asset.scene_number,
-    placementNumber: asset.metadata?.['placementNumber'],
-    manifestPath,
-    basePath,
-  });
-
-  let manifest: { schema_version?: string; assets: AssetInfo[] } = { assets: [] };
-  if (existsSync(manifestPath)) {
-    try {
-      manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      console.log(`[addAsset] Loaded existing manifest with ${manifest.assets?.length || 0} assets`);
-    } catch (error) {
-      console.error(`[addAsset] Failed to parse existing manifest:`, error);
-      // Use empty manifest on parse error
-    }
-  } else {
-    console.log(`[addAsset] Manifest file does not exist, creating new one: ${manifestPath}`);
-  }
-
-  // Ensure schema_version is set
-  if (!manifest.schema_version) {
-    manifest.schema_version = '1';
-  }
-
-  // Check if asset already exists
-  const existingIndex = manifest.assets.findIndex((a) => a.id === asset.id);
-  if (existingIndex >= 0) {
-    console.log(`[addAsset] Updating existing asset at index ${existingIndex}`);
-    manifest.assets[existingIndex] = asset;
-  } else {
-    console.log(`[addAsset] Adding new asset (total will be ${manifest.assets.length + 1})`);
-    manifest.assets.push(asset);
-  }
-
-  try {
-    // Write file and ensure it's flushed to disk
-    const fd = openSync(manifestPath, 'w');
-    try {
-      writeFileSync(fd, JSON.stringify(manifest, null, 2), 'utf-8');
-      // Force flush to disk
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    console.log(`[addAsset] ✓ Successfully wrote manifest with ${manifest.assets.length} assets to ${manifestPath}`);
-    
-    // Note: File system watcher in desktop app will detect this change and trigger UI refresh
-    // The watcher uses awaitWriteFinish to ensure file is fully written before detecting change
-    
-    // Small delay to ensure OS has flushed the file before verification
-    await new Promise(resolve => setTimeout(resolve, 50));
-    
-    // Verify the write by reading it back
-    try {
-      const verifyManifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      const assetInManifest = verifyManifest.assets?.find((a: AssetInfo) => a.id === asset.id);
-      if (assetInManifest) {
-        console.log(`[addAsset] ✓ Verified asset ${asset.id} is in manifest`);
-      } else {
-        console.error(`[addAsset] ✗ CRITICAL: Asset ${asset.id} was not found in manifest after write!`);
-      }
-    } catch (verifyError) {
-      console.error(`[addAsset] Failed to verify manifest write:`, verifyError);
-    }
-
-    // Emit asset added event for WebSocket notification
-    try {
-      assetEventEmitter.emitAssetAdded({
-        assetId: asset.id,
-        assetType: asset.type as 'scene_image' | 'scene_video' | 'scene_infographic' | 'character_ref' | 'setting_ref' | 'final_video',
-        placementNumber: asset.metadata?.['placementNumber'] as number | undefined,
-        sceneNumber: asset.scene_number,
-        path: asset.path,
-        version: asset.version ?? 1,
-        projectDirectory: basePath,
-      });
-      console.log(`[addAsset] ✓ Emitted asset_added event for ${asset.id}`);
-    } catch (eventError) {
-      // Don't fail asset registration if event emission fails
-      console.warn(`[addAsset] Failed to emit asset_added event:`, eventError);
-    }
-  } catch (error) {
-    console.error(`[addAsset] ✗ CRITICAL: Failed to write manifest:`, {
-      error: error instanceof Error ? error.message : String(error),
-      stack: error instanceof Error ? error.stack : undefined,
+    console.log(`[addAsset] Registering asset:`, {
+      id: asset.id,
+      type: asset.type,
+      path: asset.path,
+      scene_number: asset.scene_number,
+      placementNumber: asset.metadata?.['placementNumber'],
       manifestPath,
       basePath,
     });
-    throw error; // Re-throw so caller knows registration failed
-  }
 
-  // Update project file's asset list
-  try {
-    const project = loadProject(basePath);
-    if (project && !project.assets.includes(asset.id)) {
-      project.assets.push(asset.id);
-
-      // Also track in content registry for persistence across restarts
-      // Map asset types to content types
-      const contentType: ContentTypeName | null =
-        asset.type === 'scene_image' || asset.type === 'character_ref' || asset.type === 'setting_ref'
-          ? 'images'
-          : asset.type === 'scene_video' || asset.type === 'final_video'
-            ? 'videos'
-            : null;
-
-      if (contentType) {
-        addContentItem(project, contentType, asset.id, asset.path, basePath);
-      } else {
-        saveProject(project, basePath);
+    let manifest: { schema_version?: string; assets: AssetInfo[] } = { assets: [] };
+    if (existsSync(manifestPath)) {
+      try {
+        manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+        console.log(`[addAsset] Loaded existing manifest with ${manifest.assets?.length || 0} assets`);
+      } catch (error) {
+        console.error(`[addAsset] Failed to parse existing manifest:`, error);
+        // Use empty manifest on parse error
       }
-      console.log(`[addAsset] Updated project file with asset ${asset.id}`);
+    } else {
+      console.log(`[addAsset] Manifest file does not exist, creating new one: ${manifestPath}`);
     }
-  } catch (error) {
-    console.warn(`[addAsset] Failed to update project file (non-critical):`, error);
-    // Don't throw - manifest write succeeded, project file update is secondary
-  }
+
+    // Ensure schema_version is set
+    if (!manifest.schema_version) {
+      manifest.schema_version = '1';
+    }
+
+    // Check if asset already exists
+    const existingIndex = manifest.assets.findIndex((a) => a.id === asset.id);
+    if (existingIndex >= 0) {
+      console.log(`[addAsset] Updating existing asset at index ${existingIndex}`);
+      manifest.assets[existingIndex] = asset;
+    } else {
+      console.log(`[addAsset] Adding new asset (total will be ${manifest.assets.length + 1})`);
+      manifest.assets.push(asset);
+    }
+
+    try {
+      // Write file and ensure it's flushed to disk
+      const fd = openSync(manifestPath, 'w');
+      try {
+        writeFileSync(fd, JSON.stringify(manifest, null, 2), 'utf-8');
+        // Force flush to disk
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+      console.log(`[addAsset] ✓ Successfully wrote manifest with ${manifest.assets.length} assets to ${manifestPath}`);
+      
+      // Note: File system watcher in desktop app will detect this change and trigger UI refresh
+      // The watcher uses awaitWriteFinish to ensure file is fully written before detecting change
+      
+      // Small delay to ensure OS has flushed the file before verification
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // Verify the write by reading it back
+      try {
+        const verifyManifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+        const assetInManifest = verifyManifest.assets?.find((a: AssetInfo) => a.id === asset.id);
+        if (assetInManifest) {
+          console.log(`[addAsset] ✓ Verified asset ${asset.id} is in manifest`);
+        } else {
+          console.error(`[addAsset] ✗ CRITICAL: Asset ${asset.id} was not found in manifest after write!`);
+        }
+      } catch (verifyError) {
+        console.error(`[addAsset] Failed to verify manifest write:`, verifyError);
+      }
+
+      // Emit asset added event for WebSocket notification
+      try {
+        assetEventEmitter.emitAssetAdded({
+          assetId: asset.id,
+          assetType: asset.type as 'scene_image' | 'scene_video' | 'scene_infographic' | 'character_ref' | 'setting_ref' | 'final_video',
+          placementNumber: asset.metadata?.['placementNumber'] as number | undefined,
+          sceneNumber: asset.scene_number,
+          path: asset.path,
+          version: asset.version ?? 1,
+          projectDirectory: basePath,
+        });
+        console.log(`[addAsset] ✓ Emitted asset_added event for ${asset.id}`);
+      } catch (eventError) {
+        // Don't fail asset registration if event emission fails
+        console.warn(`[addAsset] Failed to emit asset_added event:`, eventError);
+      }
+    } catch (error) {
+      console.error(`[addAsset] ✗ CRITICAL: Failed to write manifest:`, {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        manifestPath,
+        basePath,
+      });
+      throw error; // Re-throw so caller knows registration failed
+    }
+
+    // Update project file's asset list
+    try {
+      const project = loadProject(basePath);
+      if (project && !project.assets.includes(asset.id)) {
+        project.assets.push(asset.id);
+
+        // Also track in content registry for persistence across restarts
+        // Map asset types to content types
+        const contentType: ContentTypeName | null =
+          asset.type === 'scene_image' || asset.type === 'character_ref' || asset.type === 'setting_ref'
+            ? 'images'
+            : asset.type === 'scene_video' || asset.type === 'final_video'
+              ? 'videos'
+              : null;
+
+        if (contentType) {
+          addContentItem(project, contentType, asset.id, asset.path, basePath);
+        } else {
+          saveProject(project, basePath);
+        }
+        console.log(`[addAsset] Updated project file with asset ${asset.id}`);
+      }
+    } catch (error) {
+      console.warn(`[addAsset] Failed to update project file (non-critical):`, error);
+      // Don't throw - manifest write succeeded, project file update is secondary
+    }
+  });
 }
 
 /**

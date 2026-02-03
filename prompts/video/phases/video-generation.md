@@ -27,7 +27,8 @@ Simply call the `generate_all_videos` tool. It handles everything automatically:
 
 ```
 generate_all_videos(
-  file_path: 'agent/content/video-placements.md'
+  file_path: 'agent/content/video-placements.md',
+  auto_fill_gaps: true
 )
 ```
 

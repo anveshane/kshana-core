@@ -14,8 +14,8 @@ For each scene:
 5. Update scene with videoArtifactId using `update_project` action: 'update_scene_approval'
 
 Video clips should include:
-- Subtle camera movement (pan, zoom, etc.)
-- Motion appropriate to the scene action
+- Static camera by default; no movement unless explicitly requested
+- Motion appropriate to the scene action only when explicitly requested
 - Duration matching the scene's pacing (typically 3-6 seconds)
 
 Process ONE scene at a time. Wait for user approval before moving to the next.
