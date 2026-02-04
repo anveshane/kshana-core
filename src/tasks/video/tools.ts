@@ -2145,7 +2145,12 @@ The tool handles all parsing, optional prompt expansion, sequential generation, 
           transcriptSegment,
           contentPlan: contentPlanSnippet,
         });
-        if (expanded) {
+        if (expanded && 'error' in expanded) {
+          console.warn(
+            `[generate_all_images] Placement ${placement.placementNumber}: prompt expansion failed (${expanded.error}); continuing with original placement prompt. ` +
+              'In desktop: Settings → select OpenAI/Gemini, enter API key, Save & Restart.'
+          );
+        } else if (expanded && 'prompt' in expanded) {
           prompt = expanded.prompt;
           if (expanded.negativePrompt) negativePrompt = expanded.negativePrompt;
           console.log(`[generate_all_images] Placement ${placement.placementNumber}: using expanded prompt`);
@@ -2175,8 +2180,10 @@ The tool handles all parsing, optional prompt expansion, sequential generation, 
               `[generate_all_images] Placement ${placement.placementNumber} expanded prompt (preview):\n${preview}`
             );
           }
-        } else {
-          console.warn(`[generate_all_images] Placement ${placement.placementNumber}: expansion failed, using placement prompt`);
+        } else if (!expanded) {
+          console.warn(
+            `[generate_all_images] Placement ${placement.placementNumber}: prompt expansion returned empty; continuing with original placement prompt`
+          );
         }
       }
       
@@ -2379,7 +2386,9 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
           prompt = expanded;
           console.log(`[generate_all_videos] Placement ${placement.placementNumber}: using expanded prompt`);
         } else {
-          console.warn(`[generate_all_videos] Placement ${placement.placementNumber}: expansion failed, using placement prompt`);
+          console.warn(
+            `[generate_all_videos] Placement ${placement.placementNumber}: prompt expansion unavailable; continuing with original placement prompt`
+          );
         }
       }
 

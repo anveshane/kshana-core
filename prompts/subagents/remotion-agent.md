@@ -2,7 +2,7 @@
 
 **CRITICAL WARNINGS - READ THESE FIRST:**
 
-1. **You MUST output `componentCode` (complete TypeScript/React code). DO NOT use the old format with `animationHints`. Your response will be rejected if you use `animationHints`.**
+1. **You MUST output `componentCode` (complete TypeScript/React code). DO NOT use the old format with `animationHints`. Your response will be rejected if you use `animationHints`.** Keep component code concise: avoid verbose comments and redundant boilerplate to prevent response truncation.
 
 2. **ALL BACKGROUNDS MUST USE GRADIENTS - NEVER FLAT COLORS**
    - ❌ WRONG: `backgroundColor: '#0f172a'` or `backgroundColor: '#ffffff'`

@@ -3,7 +3,7 @@
  * Validates Remotion-agent flow: placements + skills in, LLM returns JSON, parse and validate.
  */
 import { describe, it, expect } from 'vitest';
-import { runRemotionAgent, type AnimationRecommendations } from '../../src/tasks/video/remotionAgent.js';
+import { runRemotionAgent } from '../../src/tasks/video/remotionAgent.js';
 import type { ParsedInfographicPlacement } from '../../src/tasks/video/workflow/infographicPlacementsParser.js';
 import { MockLLMClient } from '../integration/MockLLMClient.js';
 
@@ -17,24 +17,20 @@ const SAMPLE_PLACEMENTS: ParsedInfographicPlacement[] = [
   },
 ];
 
-const VALID_RECOMMENDATIONS_JSON = JSON.stringify({
+const VALID_COMPONENT_CODE_JSON = JSON.stringify({
   placements: [
     {
       placementNumber: 1,
-      animationHints: {
-        ruleRefs: ['animations.md', 'timing.md'],
-        suggestion: 'Use spring for headline.',
-        timingCurve: 'spring',
-        enhancedPrompt: 'Optional enhanced prompt.',
-      },
+      componentCode:
+        "import React from 'react';\nimport { AbsoluteFill } from 'remotion';\n\nexport const Infographic1 = () => <AbsoluteFill />;",
     },
   ],
-} as AnimationRecommendations);
+});
 
 describe('runRemotionAgent', () => {
-  it('returns parsed AnimationRecommendations when mock LLM returns valid JSON', async () => {
+  it('returns parsed ComponentCode when mock LLM returns valid JSON', async () => {
     const mockLLM = new MockLLMClient();
-    mockLLM.setDefaultResponse({ content: VALID_RECOMMENDATIONS_JSON });
+    mockLLM.setDefaultResponse({ content: VALID_COMPONENT_CODE_JSON });
 
     const result = await runRemotionAgent(mockLLM as any, SAMPLE_PLACEMENTS, {
       skillsContent: 'fake skills',
@@ -43,17 +39,12 @@ describe('runRemotionAgent', () => {
     expect(result.placements).toHaveLength(1);
     expect(result.placements[0]).toMatchObject({
       placementNumber: 1,
-      animationHints: {
-        ruleRefs: ['animations.md', 'timing.md'],
-        suggestion: 'Use spring for headline.',
-        timingCurve: 'spring',
-        enhancedPrompt: 'Optional enhanced prompt.',
-      },
+      componentCode: expect.stringContaining('Infographic1'),
     });
   });
 
   it('parses result when mock LLM returns JSON wrapped in ```json fence', async () => {
-    const fenced = '```json\n' + VALID_RECOMMENDATIONS_JSON + '\n```';
+    const fenced = '```json\n' + VALID_COMPONENT_CODE_JSON + '\n```';
     const mockLLM = new MockLLMClient();
     mockLLM.setDefaultResponse({ content: fenced });
 
@@ -63,7 +54,7 @@ describe('runRemotionAgent', () => {
 
     expect(result.placements).toHaveLength(1);
     expect(result.placements[0]!.placementNumber).toBe(1);
-    expect(result.placements[0]!.animationHints?.suggestion).toBe('Use spring for headline.');
+    expect(result.placements[0]!.componentCode).toContain('Infographic1');
   });
 
   it('throws when mock LLM returns invalid JSON', async () => {

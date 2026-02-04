@@ -1,6 +1,6 @@
 /**
- * Remotion sub-agent: one-shot LLM call to generate Remotion component code for infographic placements.
- * Uses Remotion best-practices skills and returns complete TSX component code per placement.
+ * Remotion sub-agent: LLM calls to generate Remotion component code for infographic placements.
+ * Processes one placement at a time to avoid response truncation from long component code.
  */
 import type { LLMClient } from '../../core/llm/index.js';
 import { buildRemotionAgentPrompt } from '../../core/prompts/index.js';
@@ -16,7 +16,15 @@ export interface ComponentCode {
 }
 
 const REMOTION_AGENT_USER_MESSAGE =
-  'Generate complete Remotion component code as JSON for the given placements. Use the exact schema from the instructions.';
+  'Generate complete Remotion component code as JSON for the given placement. Use the exact schema from the instructions.';
+
+/** Max tokens for Remotion agent response. Override via REMOTION_AGENT_MAX_TOKENS env (default 65536). */
+function getRemotionAgentMaxTokens(): number {
+  const raw = process.env['REMOTION_AGENT_MAX_TOKENS'];
+  if (!raw) return 65536;
+  const n = Number.parseInt(raw, 10);
+  return Number.isNaN(n) || n < 1024 ? 65536 : n;
+}
 
 /**
  * Strip optional ```json ... ``` (or ```JSON ... ```) wrapper from model output.
@@ -42,8 +50,46 @@ export interface RunRemotionAgentOptions {
   skillsContent?: string;
 }
 
+function parseSinglePlacementResponse(raw: string, placementNumber: number): ComponentCodeItem {
+  const jsonStr = stripJsonFence(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    const truncatedHint =
+      jsonStr.length > 1000 || /"[^"]*$/.test(jsonStr) || jsonStr.endsWith('\\')
+        ? ' Response may be truncated (increase REMOTION_AGENT_MAX_TOKENS env).'
+        : '';
+    console.error('[runRemotionAgent] JSON parse error. Raw response (first 500 chars):', raw.slice(0, 500));
+    throw new Error(
+      `Remotion agent response for placement ${placementNumber} is not valid JSON: ${jsonStr.slice(0, 200)}${truncatedHint}`
+    );
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(obj['placements'])) {
+    console.error('[runRemotionAgent] Invalid response structure. Response keys:', Object.keys(obj));
+    throw new Error(`Remotion agent response for placement ${placementNumber} must have a "placements" array`);
+  }
+
+  const items = obj['placements'] as Array<Record<string, unknown>>;
+  const item = items.find((i) => i['placementNumber'] === placementNumber) ?? items[0];
+  if (!item || typeof item['placementNumber'] !== 'number') {
+    throw new Error(`Each placement must have a numeric placementNumber. Got: ${JSON.stringify(item)}`);
+  }
+  if (typeof item['componentCode'] !== 'string' || (item['componentCode'] as string).length === 0) {
+    throw new Error(
+      `Placement ${item['placementNumber']} must have a non-empty componentCode string. Found keys: ${Object.keys(item).join(', ')}`
+    );
+  }
+  return {
+    placementNumber: item['placementNumber'] as number,
+    componentCode: item['componentCode'] as string,
+  };
+}
+
 /**
- * Run the Remotion sub-agent: build prompt from placements + skills, call LLM once, parse JSON.
+ * Run the Remotion sub-agent: one LLM call per placement to avoid truncation.
  * Returns per-placement component code (complete TSX files). Throws on parse or API failure.
  */
 export async function runRemotionAgent(
@@ -51,62 +97,38 @@ export async function runRemotionAgent(
   placements: ParsedInfographicPlacement[],
   options?: RunRemotionAgentOptions
 ): Promise<ComponentCode> {
-  const placementsJson = JSON.stringify(
-    placements.map((p) => ({
-      placementNumber: p.placementNumber,
-      startTime: p.startTime,
-      endTime: p.endTime,
-      infographicType: p.infographicType,
-      prompt: p.prompt,
-    }))
-  );
   const skillsContent = options?.skillsContent ?? '';
-  const systemPrompt = buildRemotionAgentPrompt(placementsJson, skillsContent);
+  const maxTokens = getRemotionAgentMaxTokens();
+  const results: ComponentCodeItem[] = [];
 
-  const response = await llm.generate({
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: REMOTION_AGENT_USER_MESSAGE },
-    ],
-    maxTokens: 32768,
-  });
+  for (const placement of placements) {
+    const placementJson = JSON.stringify([
+      {
+        placementNumber: placement.placementNumber,
+        startTime: placement.startTime,
+        endTime: placement.endTime,
+        infographicType: placement.infographicType,
+        prompt: placement.prompt,
+      },
+    ]);
+    const systemPrompt = buildRemotionAgentPrompt(placementJson, skillsContent);
 
-  const raw = response.content?.trim() ?? '';
-  if (!raw) {
-    throw new Error('Remotion agent returned empty response');
-  }
+    const response = await llm.generate({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: REMOTION_AGENT_USER_MESSAGE },
+      ],
+      maxTokens,
+    });
 
-  const jsonStr = stripJsonFence(raw);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonStr);
-  } catch (parseError) {
-    const truncatedHint =
-      jsonStr.length > 1000 || /"[^"]*$/.test(jsonStr) || jsonStr.endsWith('\\')
-        ? ' Response may be truncated (increase max_tokens for long component code).'
-        : '';
-    console.error('[runRemotionAgent] JSON parse error. Raw response (first 500 chars):', raw.slice(0, 500));
-    throw new Error(
-      `Remotion agent response is not valid JSON: ${jsonStr.slice(0, 200)}${truncatedHint}`
-    );
-  }
-
-  const obj = parsed as Record<string, unknown>;
-  if (!parsed || typeof parsed !== 'object' || !Array.isArray(obj['placements'])) {
-    console.error('[runRemotionAgent] Invalid response structure. Response keys:', Object.keys(obj));
-    console.error('[runRemotionAgent] Response (first 500 chars):', JSON.stringify(parsed, null, 2).slice(0, 500));
-    throw new Error('Remotion agent response must have a "placements" array');
-  }
-
-  const placementItems = obj['placements'] as Array<Record<string, unknown>>;
-  for (const placementItem of placementItems) {
-    if (typeof placementItem['placementNumber'] !== 'number') {
-      throw new Error(`Each placement must have a numeric placementNumber. Got: ${JSON.stringify(placementItem)}`);
+    const raw = response.content?.trim() ?? '';
+    if (!raw) {
+      throw new Error(`Remotion agent returned empty response for placement ${placement.placementNumber}`);
     }
-    if (typeof placementItem['componentCode'] !== 'string' || (placementItem['componentCode'] as string).length === 0) {
-      throw new Error(`Placement ${placementItem['placementNumber']} must have a non-empty componentCode string. Found keys: ${Object.keys(placementItem).join(', ')}`);
-    }
+
+    const item = parseSinglePlacementResponse(raw, placement.placementNumber);
+    results.push(item);
   }
 
-  return parsed as ComponentCode;
+  return { placements: results };
 }

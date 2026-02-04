@@ -5,6 +5,7 @@
  */
 import { getLLMConfig } from '../../../core/llm/index.js';
 import { LLMClient } from '../../../core/llm/index.js';
+import { validateLLMConfig } from '../../../core/llm/index.js';
 import { loadAndRenderMarkdown } from '../../../core/prompts/loader.js';
 import type { ParsedImagePlacement } from './imagePlacementsParser.js';
 import type { ParsedVideoPlacement } from './videoPlacementsParser.js';
@@ -26,14 +27,33 @@ export interface ExpandImageResult {
   negativePrompt?: string;
 }
 
+export interface ExpandImageError {
+  error: string;
+}
+
+let warnedImageConfig = false;
+let warnedVideoConfig = false;
+
 /**
  * Expand an image placement prompt into a detailed ComfyUI-ready prompt and optional negative prompt.
- * Returns null on LLM error (caller should fall back to placement.prompt).
+ * Returns ExpandImageResult on success, { error: string } on failure (caller should fall back to placement.prompt).
  */
 export async function expandImagePlacementPrompt(
   placement: ParsedImagePlacement,
   ctx: ExpandImageContext
-): Promise<ExpandImageResult | null> {
+): Promise<ExpandImageResult | ExpandImageError | null> {
+  const validation = validateLLMConfig();
+  if (!validation.valid) {
+    if (!warnedImageConfig) {
+      warnedImageConfig = true;
+      console.warn(
+        '[placementPromptExpander] Prompt expansion disabled (invalid LLM config). ' +
+          `Fix env vars or disable expandPrompts. Errors: ${validation.errors.join('; ')}`
+      );
+    }
+    return { error: validation.errors.join('; ') };
+  }
+
   const userPrompt = loadAndRenderMarkdown('placement/expand-image-prompt.md', {
     placement_prompt: placement.prompt,
     start_time: placement.startTime,
@@ -61,8 +81,13 @@ export async function expandImagePlacementPrompt(
     }
     return { prompt: raw };
   } catch (e) {
-    console.warn('[placementPromptExpander] expandImagePlacementPrompt failed:', e);
-    return null;
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(
+      '[placementPromptExpander] expandImagePlacementPrompt failed; using original placement prompt. ' +
+        'If using LM Studio/Ollama, ensure it is running and reachable.',
+      e
+    );
+    return { error: msg };
   }
 }
 
@@ -74,6 +99,18 @@ export async function expandVideoPlacementPrompt(
   placement: ParsedVideoPlacement,
   ctx: ExpandVideoContext
 ): Promise<string | null> {
+  const validation = validateLLMConfig();
+  if (!validation.valid) {
+    if (!warnedVideoConfig) {
+      warnedVideoConfig = true;
+      console.warn(
+        '[placementPromptExpander] Prompt expansion disabled (invalid LLM config). ' +
+          `Fix env vars or disable expandPrompts. Errors: ${validation.errors.join('; ')}`
+      );
+    }
+    return null;
+  }
+
   const userPrompt = loadAndRenderMarkdown('placement/expand-video-prompt.md', {
     placement_prompt: placement.prompt,
     duration: placement.duration,
@@ -93,7 +130,11 @@ export async function expandVideoPlacementPrompt(
     const raw = (response.content ?? '').trim();
     return raw || null;
   } catch (e) {
-    console.warn('[placementPromptExpander] expandVideoPlacementPrompt failed:', e);
+    console.warn(
+      '[placementPromptExpander] expandVideoPlacementPrompt failed; using original placement prompt. ' +
+        'If using LM Studio/Ollama, ensure it is running and reachable.',
+      e
+    );
     return null;
   }
 }

@@ -1,13 +1,13 @@
 /**
  * Integration test for generate_all_infographics: temp project, placer file, mock runRemotionAgent.
- * Asserts _render_input.json (via captured_input.json) has placements and animationHints; with mock Remotion build asserts completion and manifest.
+ * Asserts _render_input.json (via captured_input.json) has placements; with mock Remotion build asserts completion.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import { join } from 'path';
 import { getVideoGenerationTools } from '../../src/tasks/video/tools.js';
 import { setCurrentProjectBasePath } from '../../src/tasks/video/index.js';
-import type { AnimationRecommendations } from '../../src/tasks/video/remotionAgent.js';
+import type { ComponentCode } from '../../src/tasks/video/remotionAgent.js';
 import type { RunRemotionAgentCallback } from '../../src/tasks/video/tools.js';
 
 const ROOT = join(process.cwd());
@@ -17,24 +17,15 @@ const PLACER_FIXTURE = join(FIXTURES, 'infographic-placements.md');
 /** Path relative to project base where readProjectFile looks: .kshana/agent/content/infographic-placements.md */
 const KSHANA_AGENT_CONTENT = join('.kshana', 'agent', 'content');
 
-const MOCK_RECOMMENDATIONS: AnimationRecommendations = {
+const MOCK_COMPONENT_CODE: ComponentCode = {
   placements: [
     {
       placementNumber: 1,
-      animationHints: {
-        ruleRefs: ['animations.md'],
-        suggestion: 'Use spring for headline.',
-        timingCurve: 'spring',
-        enhancedPrompt: 'Enhanced statistic prompt.',
-      },
+      componentCode: "import React from 'react';\nimport { AbsoluteFill } from 'remotion';\n\nexport const Infographic1 = () => <AbsoluteFill />;",
     },
     {
       placementNumber: 2,
-      animationHints: {
-        ruleRefs: ['lists.md'],
-        suggestion: 'Stagger list items.',
-        enhancedPrompt: 'Enhanced list prompt.',
-      },
+      componentCode: "import React from 'react';\nimport { AbsoluteFill } from 'remotion';\n\nexport const Infographic2 = () => <AbsoluteFill />;",
     },
   ],
 };
@@ -73,8 +64,8 @@ describe('generate_all_infographics integration', () => {
     if (fs.existsSync(TEMP_PROJECT)) fs.rmSync(TEMP_PROJECT, { recursive: true, force: true });
   });
 
-  it('writes _render_input.json with placements and animationHints, completes with mock Remotion', async () => {
-    const mockRunRemotionAgent: RunRemotionAgentCallback = async () => MOCK_RECOMMENDATIONS;
+  it('writes _render_input.json with placements, completes with mock Remotion', async () => {
+    const mockRunRemotionAgent: RunRemotionAgentCallback = async () => MOCK_COMPONENT_CODE;
     const tools = getVideoGenerationTools({ runRemotionAgent: mockRunRemotionAgent });
     const tool = tools.find((t) => t.name === 'generate_all_infographics');
     expect(tool).toBeDefined();
@@ -99,17 +90,13 @@ describe('generate_all_infographics integration', () => {
     const capturedPath = join(outDir, 'captured_input.json');
     expect(fs.existsSync(capturedPath)).toBe(true);
     const renderInput = JSON.parse(fs.readFileSync(capturedPath, 'utf-8')) as {
-      placements: Array<Record<string, unknown>>;
+      placements: Array<{ placementNumber: number; componentName: string }>;
     };
     expect(Array.isArray(renderInput.placements)).toBe(true);
     expect(renderInput.placements.length).toBeGreaterThanOrEqual(1);
-    const withHints = renderInput.placements.find(
-      (p) => p.animationHints && typeof (p.animationHints as Record<string, unknown>).suggestion === 'string'
-    );
-    expect(withHints).toBeDefined();
-    expect((withHints as { animationHints: { suggestion: string } }).animationHints.suggestion).toBe(
-      'Use spring for headline.'
-    );
+    const withComponent = renderInput.placements.find((p) => p.componentName?.startsWith('Infographic'));
+    expect(withComponent).toBeDefined();
+    expect(withComponent!.componentName).toMatch(/^Infographic\d+$/);
 
     expect(res.results).toBeDefined();
     expect(Array.isArray(res.results)).toBe(true);
@@ -120,7 +107,7 @@ describe('generate_all_infographics integration', () => {
 
   it('when Remotion build missing, returns error', async () => {
     fs.rmSync(join(TEMP_REMOTION, 'build'), { recursive: true, force: true });
-    const mockRunRemotionAgent: RunRemotionAgentCallback = async () => MOCK_RECOMMENDATIONS;
+    const mockRunRemotionAgent: RunRemotionAgentCallback = async () => MOCK_COMPONENT_CODE;
     const tools = getVideoGenerationTools({ runRemotionAgent: mockRunRemotionAgent });
     const tool = tools.find((t) => t.name === 'generate_all_infographics');
     expect(tool).toBeDefined();
