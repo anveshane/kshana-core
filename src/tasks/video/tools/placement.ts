@@ -51,7 +51,7 @@ export const createImagePlacementTool: ToolDefinition = createTool(
           endTimeSeconds: p.endTime,
         })),
       ],
-    });
+    }, { allowImageInfographicOverlap: true });
 
     if (!validation.accepted) {
       return {

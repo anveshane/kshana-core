@@ -1,7 +1,7 @@
 /**
  * Tool registry for managing agent tools.
  */
-import type { ToolDefinition, ToolParameterSchema } from '../llm/index.js';
+import type { ToolDefinition, ToolParameterSchema, ToolContext } from '../llm/index.js';
 
 /**
  * Tool registry for managing and registering tools.
@@ -74,7 +74,7 @@ export function createTool(
   name: string,
   description: string,
   parameters: ToolParameterSchema,
-  handler?: (args: Record<string, unknown>) => unknown | Promise<unknown>
+  handler?: (args: Record<string, unknown>, context?: ToolContext) => unknown | Promise<unknown>
 ): ToolDefinition {
   return {
     name,

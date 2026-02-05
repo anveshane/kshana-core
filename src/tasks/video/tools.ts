@@ -5,10 +5,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn, type ChildProcess } from 'node:child_process';
 import { nanoid } from 'nanoid';
+import { bundle } from '@remotion/bundler';
 import { createTool } from '../../core/tools/index.js';
-import type { ToolDefinition } from '../../core/llm/index.js';
+import type { ToolDefinition, ToolContext } from '../../core/llm/index.js';
 import {
   ComfyUIClient,
   loadWorkflowTemplate,
@@ -304,11 +305,17 @@ async function autoFillVideoPlacementGaps(
     (placement) => !isAutoGapPrompt(placement.prompt),
   );
 
-  const validated = validatePlacementSets({
-    imagePlacements: imageParse.placements,
-    videoPlacements: manualVideoPlacements,
-    infographicPlacements: infographicParse.placements,
-  });
+  const validated = validatePlacementSets(
+    {
+      imagePlacements: imageParse.placements,
+      videoPlacements: manualVideoPlacements,
+      infographicPlacements: infographicParse.placements,
+    },
+    {
+      allowImageInfographicOverlap: true,
+      requireInfographicWithinImage: true,
+    },
+  );
 
   if (validated.warnings.length > 0) {
     console.warn('[autoFillVideoPlacementGaps] Overlap adjustments:', validated.warnings);
@@ -333,11 +340,7 @@ async function autoFillVideoPlacementGaps(
   const imageIntervals = collectIntervalsFromPlacements(
     validated.imagePlacements,
   );
-  const infographicIntervals = collectIntervalsFromPlacements(
-    validated.infographicPlacements,
-  );
-
-  const allIntervals = [...manualIntervals, ...imageIntervals, ...infographicIntervals];
+  const allIntervals = [...manualIntervals, ...imageIntervals];
   const merged = mergeIntervals(allIntervals);
 
   const transcriptDuration = parseTranscriptDurationSeconds(transcriptContent);
@@ -1065,6 +1068,16 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
   },
   async (args) => {
     const params = args as unknown as ImageGenerationParams;
+
+    const comfyUIAvailable = await ComfyUIClient.isAvailable();
+    if (!comfyUIAvailable) {
+      console.warn('[generate_image] ComfyUI unavailable - skipping image generation');
+      return {
+        status: 'error',
+        error: 'ComfyUI is unavailable (health check failed).',
+        suggestion: 'Retry after ComfyUI is back online, or skip this phase and continue the workflow.',
+      };
+    }
 
     // Check for duplicates if this is a scene image (placement image)
     if (params.image_type === 'scene' || !params.image_type) {
@@ -2097,6 +2110,17 @@ The tool handles all parsing, optional prompt expansion, sequential generation, 
     required: [],
   },
   async (args) => {
+    const comfyUIAvailable = await ComfyUIClient.isAvailable();
+    if (!comfyUIAvailable) {
+      console.warn('[generate_all_images] ComfyUI unavailable - skipping image generation');
+      return {
+        status: 'error',
+        error: 'ComfyUI is unavailable (health check failed).',
+        suggestion: 'Skip IMAGE_GENERATION and proceed to INFOGRAPHICS_PLACEMENT. You can retry image generation after ComfyUI is back.',
+        next_action: 'Call update_project to mark image_generation complete, then transition to the next phase.',
+      };
+    }
+
     const filePath = (args['file_path'] as string | undefined) || 'agent/content/image-placements.md';
     const expandPrompts = (args['expand_prompts'] as boolean | undefined) !== false;
     const logExpandedPrompts =
@@ -2660,6 +2684,22 @@ export function sanitizeGeneratedComponentCode(componentCode: string): string {
     .replace(/\bEasing\.quart\b/g, 'Easing.quad')
     .replace(/\bEasing\.quint\b/g, 'Easing.quad');
 
+  // Fix mismatched quotes in JSX/TSX attributes (e.g., attr="value' or attr='value")
+  // This catches common LLM errors where opening and closing quotes don't match
+  sanitized = sanitized.replace(
+    /(\w+)=(["'])([^"']*?)(['"])/g,
+    (match, attr, openQuote, value, closeQuote) => {
+      // If quotes don't match, use the opening quote for both
+      if (openQuote !== closeQuote) {
+        console.warn(
+          `[sanitizeGeneratedComponentCode] Fixed mismatched quotes: ${attr}=${openQuote}${value}${closeQuote} -> ${attr}=${openQuote}${value}${openQuote}`
+        );
+        return `${attr}=${openQuote}${value}${openQuote}`;
+      }
+      return match;
+    }
+  );
+
   // Warn on common 3D and CSS animation pitfalls.
   if (sanitized.includes('<ThreeCanvas')) {
     const hasWidth = /<ThreeCanvas[^>]*(\swidth=|\swidth=\{)/.test(sanitized);
@@ -2675,6 +2715,68 @@ export function sanitizeGeneratedComponentCode(componentCode: string): string {
   return sanitized;
 }
 
+/**
+ * Validate basic syntax of generated component code before writing to file.
+ * Catches common issues that would cause build failures (mismatched quotes, unclosed tags, etc.)
+ * @returns Object with valid flag and optional error message
+ */
+function validateComponentSyntax(code: string): { valid: boolean; error?: string } {
+  const issues: string[] = [];
+
+  // Check for basic JSX tag balance (rough heuristic)
+  // Count opening tags (not self-closing), closing tags, and self-closing tags
+  const openTags = (code.match(/<\w+[^/>]*>/g) ?? []).filter(tag => !tag.endsWith('/>')).length;
+  const closeTags = (code.match(/<\/\w+>/g) ?? []).length;
+  const selfClosing = (code.match(/<\w+[^>]*\/>/g) ?? []).length;
+
+  // Allow some tolerance since JSX fragments and complex nesting can throw off simple counting
+  const tagDifference = Math.abs(openTags - closeTags);
+  if (tagDifference > 2) {
+    issues.push(`Potential tag mismatch: ${openTags} opening tags, ${closeTags} closing tags`);
+  }
+
+  // Check for obvious unmatched quotes in string literals
+  // This is a heuristic - we look for strings that appear incomplete
+  const lines = code.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue; // Skip undefined/empty lines
+    
+    // Skip comment lines
+    if (line.trim().startsWith('//') || line.trim().startsWith('/*') || line.trim().startsWith('*')) {
+      continue;
+    }
+    
+    // Count quotes (excluding escaped quotes)
+    const doubleQuotes = (line.match(/(?<!\\)"/g) ?? []).length;
+    const singleQuotes = (line.match(/(?<!\\)'/g) ?? []).length;
+    const backticks = (line.match(/(?<!\\)`/g) ?? []).length;
+
+    // Each type of quote should appear in pairs (even number) on a single line
+    // Allow odd counts for template literals and multi-line strings
+    if (doubleQuotes % 2 !== 0 && !line.includes('`')) {
+      issues.push(`Line ${i + 1}: Unmatched double quotes`);
+    }
+    if (singleQuotes % 2 !== 0 && !line.includes('`')) {
+      issues.push(`Line ${i + 1}: Unmatched single quotes`);
+    }
+  }
+
+  // Check for common syntax errors
+  if (code.includes('=""') && code.includes("=''")) {
+    // Mixed quote styles are fine, but check for the specific mismatched pattern
+    const mismatchedPattern = /\w+=["'][^"']*['"](?!["'])/g;
+    const matches = code.match(mismatchedPattern);
+    if (matches && matches.length > 0) {
+      issues.push(`Potentially mismatched quotes detected in ${matches.length} locations`);
+    }
+  }
+
+  return issues.length > 0
+    ? { valid: false, error: issues.join('; ') }
+    : { valid: true };
+}
+
 function parseRenderReferenceError(stderr: string, stdout: string): RenderReferenceErrorDetails | null {
   const combined = `${stderr}\n${stdout}`;
   const referenceMatch = combined.match(/ReferenceError:\s*([A-Za-z_][A-Za-z0-9_]*)\s+is not defined/);
@@ -2685,6 +2787,218 @@ function parseRenderReferenceError(stderr: string, stdout: string): RenderRefere
     componentName: componentMatch?.[1],
     placementNumber: componentMatch?.[2] ? parseInt(componentMatch[2], 10) : undefined,
   };
+}
+
+/** Result of an async process execution */
+interface AsyncProcessResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+  error?: Error;
+  timedOut?: boolean;
+}
+
+/** Progress update from Remotion render */
+interface RemotionProgressUpdate {
+  placementIndex?: number;
+  totalPlacements?: number;
+  progress?: number;
+  stage?: string;
+}
+
+/**
+ * Run a command asynchronously with progress streaming support.
+ * Parses REMOTION_PROGRESS logs from stdout to stream progress updates.
+ */
+async function runRemotionRenderAsync(
+  command: string,
+  args: string[],
+  options: {
+    cwd: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs: number;
+    streamProgress?: (chunk: string) => void;
+    totalPlacements?: number;
+  },
+): Promise<AsyncProcessResult> {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let resolved = false;
+    let lastProgressMessage = '';
+
+    const proc = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+    });
+
+    // Track progress for user-friendly updates
+    let lastReportedPlacement = 0;
+    let lastReportedProgress = 0;
+
+    proc.stdout?.on('data', (data: Buffer) => {
+      const output = data.toString();
+      stdout += output;
+
+      // Parse REMOTION_PROGRESS logs for progress updates
+      const lines = output.split('\n');
+      for (const line of lines) {
+        const match = line.match(/REMOTION_PROGRESS:(.+)/);
+        if (match?.[1] && options.streamProgress) {
+          try {
+            const progress = JSON.parse(match[1]) as RemotionProgressUpdate;
+            const placementIdx = (progress.placementIndex ?? 0) + 1; // Convert to 1-indexed
+            const totalPlacements = progress.totalPlacements ?? options.totalPlacements ?? 1;
+            const renderProgress = Math.round((progress.progress ?? 0) * 100);
+            const stage = progress.stage ?? 'rendering';
+
+            // Only report meaningful progress changes
+            const shouldReport =
+              placementIdx !== lastReportedPlacement ||
+              Math.abs(renderProgress - lastReportedProgress) >= 10 ||
+              stage !== 'rendering';
+
+            if (shouldReport) {
+              lastReportedPlacement = placementIdx;
+              lastReportedProgress = renderProgress;
+
+              const progressMessage =
+                stage === 'bundling'
+                  ? `Building infographic ${placementIdx}/${totalPlacements}...`
+                  : `Rendering infographic ${placementIdx}/${totalPlacements} (${renderProgress}%)`;
+
+              // Avoid duplicate messages
+              if (progressMessage !== lastProgressMessage) {
+                lastProgressMessage = progressMessage;
+                options.streamProgress(progressMessage + '\n');
+              }
+            }
+          } catch (e) {
+            // Ignore parse errors
+          }
+        }
+      }
+    });
+
+    proc.stderr?.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        timedOut = true;
+        proc.kill('SIGTERM');
+        // Give it a moment to terminate gracefully
+        setTimeout(() => {
+          if (!resolved) {
+            proc.kill('SIGKILL');
+          }
+        }, 5000);
+      }
+    }, options.timeoutMs);
+
+    proc.on('close', (code) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      resolve({
+        success: code === 0 && !timedOut,
+        stdout,
+        stderr,
+        exitCode: code,
+        timedOut,
+      });
+    });
+
+    proc.on('error', (error) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      resolve({
+        success: false,
+        stdout,
+        stderr,
+        exitCode: null,
+        error,
+        timedOut,
+      });
+    });
+  });
+}
+
+/**
+ * Run a build command asynchronously with progress streaming.
+ */
+async function runBuildAsync(
+  command: string,
+  args: string[],
+  options: {
+    cwd: string;
+    env?: NodeJS.ProcessEnv;
+    timeoutMs: number;
+    streamProgress?: (chunk: string) => void;
+  },
+): Promise<AsyncProcessResult> {
+  return new Promise((resolve) => {
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let resolved = false;
+
+    const proc = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+    });
+
+    proc.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr?.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    const timeout = setTimeout(() => {
+      if (!resolved) {
+        timedOut = true;
+        proc.kill('SIGTERM');
+        setTimeout(() => {
+          if (!resolved) {
+            proc.kill('SIGKILL');
+          }
+        }, 5000);
+      }
+    }, options.timeoutMs);
+
+    proc.on('close', (code) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      resolve({
+        success: code === 0 && !timedOut,
+        stdout,
+        stderr,
+        exitCode: code,
+        timedOut,
+      });
+    });
+
+    proc.on('error', (error) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      resolve({
+        success: false,
+        stdout,
+        stderr,
+        exitCode: null,
+        error,
+        timedOut,
+      });
+    });
+  });
 }
 
 function createGenerateAllInfographicsTool(runRemotionAgent?: RunRemotionAgentCallback): ToolDefinition {
@@ -2705,7 +3019,8 @@ agent/infographic-placements/ and registered in the manifest.`,
       },
       required: [],
     },
-    async (args) => {
+    async (args, context) => {
+      const streamProgress = context?.streamProgress;
       const filePath = (args['file_path'] as string | undefined) || 'agent/content/infographic-placements.md';
       const basePath = getCurrentProjectBasePath();
       const content = readProjectFile(filePath, basePath);
@@ -2801,29 +3116,106 @@ agent/infographic-placements/ and registered in the manifest.`,
       const remotionEnv = { ...process.env, NODE_OPTIONS: '' };
       const skillsContent = loadRemotionSkills();
       const componentNames = placements.map((p) => `Infographic${p.placementNumber}`);
+      const isPackaged = process.env['KSHANA_PACKAGED'] === '1' && process.env['NODE_ENV'] === 'production';
 
       const writeComponentCode = (placementNumber: number, componentCode: string): void => {
         const componentFileName = `Infographic${placementNumber}.tsx`;
         const componentPath = path.join(componentsDir, componentFileName);
         const sanitizedCode = sanitizeGeneratedComponentCode(componentCode);
+        
+        // Validate syntax before writing
+        const validation = validateComponentSyntax(sanitizedCode);
+        if (!validation.valid) {
+          console.warn(
+            `[generate_all_infographics] Component ${componentFileName} has potential syntax issues: ${validation.error}`
+          );
+          console.warn('[generate_all_infographics] Writing anyway - build will catch any real errors');
+        }
+        
         fs.writeFileSync(componentPath, sanitizedCode, 'utf-8');
         console.log(`[generate_all_infographics] Wrote component: ${componentFileName}`);
       };
 
-      const rebuildBundle = (): { ok: boolean; error?: string } => {
+      const rebuildBundle = async (): Promise<{ ok: boolean; error?: string }> => {
         console.log('[generate_all_infographics] Rebuilding Remotion bundle with new components...');
-        const buildProc = spawnSync('pnpm', ['run', 'build'], {
-          cwd: remotionDir,
-          encoding: 'utf-8',
-          timeout: 120_000,
-          env: remotionEnv,
-        });
-        if (buildProc.error || buildProc.status !== 0) {
-          const detail = buildProc.stderr || String(buildProc.error ?? '');
+        streamProgress?.('Building Remotion components...\n');
+        let detail = '';
+
+        if (!isPackaged) {
+          const buildResult = await runBuildAsync('pnpm', ['run', 'build'], {
+            cwd: remotionDir,
+            env: remotionEnv,
+            timeoutMs: 120_000,
+            streamProgress,
+          });
+          if (!buildResult.success) {
+            detail = buildResult.stderr || String(buildResult.error ?? '');
+          }
+        } else {
+          try {
+            const entryPoint = path.join(remotionDir, 'src', 'index.tsx');
+            const buildOutDir = path.join(remotionDir, 'build');
+
+            if (!fs.existsSync(entryPoint)) {
+              throw new Error(`Remotion entry point not found: ${entryPoint}`);
+            }
+
+            await bundle({
+              entryPoint,
+              outDir: buildOutDir,
+              enableCaching: true,
+              publicPath: '/',
+              onProgress: (progress: number) => {
+                const percent = Math.round(progress * 100);
+                if (percent % 10 === 0 || percent === 100) {
+                  streamProgress?.(
+                    `Bundling: ${percent}%\n`,
+                  );
+                }
+              },
+            });
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            const errorStack = error instanceof Error ? error.stack : '';
+            detail = [errorMsg, errorStack].filter(Boolean).join('\n');
+          }
+        }
+
+        if (detail) {
           console.error('[generate_all_infographics] Bundle failed:', detail);
+
+          // Parse esbuild/TypeScript errors to extract file, line, and column info
+          // Common patterns: "Infographic3.tsx:56:25", "at Infographic3.tsx (56:25)"
+          const errorPatterns = [
+            /(?:Error|ERROR).*?(Infographic\d+\.tsx):(\d+):(\d+)/,
+            /Module build failed.*?\/components\/(Infographic\d+\.tsx)[\s\S]*?:(\d+):(\d+)/,
+            /(Infographic\d+\.tsx)\((\d+),(\d+)\)/,
+            /SyntaxError.*?(Infographic\d+\.tsx).*?line (\d+)/,
+          ];
+
+          for (const pattern of errorPatterns) {
+            const errorMatch = detail.match(pattern);
+            if (errorMatch) {
+              const [, file, line, col] = errorMatch;
+              console.error(
+                `[generate_all_infographics] ✗ Syntax error in ${file} at line ${line}, column ${col ?? '?'}`,
+              );
+              console.error(`[generate_all_infographics] Common causes:`);
+              console.error(`  - Mismatched quotes (e.g., attr="value' instead of attr="value")`);
+              console.error(`  - Unclosed JSX tags or malformed JSX`);
+              console.error(`  - Invalid JavaScript/TypeScript syntax`);
+              console.error(
+                `[generate_all_infographics] Check the component file for syntax errors before retrying`,
+              );
+              break;
+            }
+          }
+
           return { ok: false, error: detail };
         }
+
         console.log('[generate_all_infographics] Bundle completed successfully');
+        streamProgress?.('Bundle completed successfully\n');
         return { ok: true };
       };
 
@@ -2847,7 +3239,7 @@ agent/infographic-placements/ and registered in the manifest.`,
         };
       }
 
-      const initialBuild = rebuildBundle();
+      const initialBuild = await rebuildBundle();
       if (!initialBuild.ok) {
         return {
           status: 'error',
@@ -2889,31 +3281,30 @@ agent/infographic-placements/ and registered in the manifest.`,
       const RENDER_TIMEOUT_MS = 600_000;
       const MAX_REMEDIATION_RETRIES = 2;
       let retryAttempt = 0;
-      let proc: ReturnType<typeof spawnSync>;
+      let renderResult: AsyncProcessResult;
       let lastReferenceError: RenderReferenceErrorDetails | null = null;
 
       while (true) {
         console.log(`[generate_all_infographics] Starting Remotion render (timeout: ${RENDER_TIMEOUT_MS / 1000}s)...`);
-        proc = spawnSync(
+        streamProgress?.(`Starting render for ${placements.length} infographic${placements.length > 1 ? 's' : ''}...\n`);
+        
+        renderResult = await runRemotionRenderAsync(
           'pnpm',
           ['run', 'render', '--', '--input', inputPath, '--outDir', outDir, '--output', outputPath],
           {
             cwd: remotionDir,
-            encoding: 'utf-8',
-            maxBuffer: 10 * 1024 * 1024,
-            timeout: RENDER_TIMEOUT_MS,
             env: remotionEnv,
+            timeoutMs: RENDER_TIMEOUT_MS,
+            streamProgress,
+            totalPlacements: placements.length,
           }
         );
 
-        if (proc.error) {
-          const timeoutMsg =
-            proc.error.message?.includes('ETIMEDOUT') || (proc as { timedOut?: boolean }).timedOut
-              ? ' Render timed out.'
-              : '';
-          const isModuleNotFound = proc.error.message?.includes('Cannot find module') || proc.error.message?.includes('MODULE_NOT_FOUND');
+        if (renderResult.error) {
+          const timeoutMsg = renderResult.timedOut ? ' Render timed out.' : '';
+          const isModuleNotFound = renderResult.error.message?.includes('Cannot find module') || renderResult.error.message?.includes('MODULE_NOT_FOUND');
 
-          console.error(`[generate_all_infographics] Render process error:`, proc.error);
+          console.error(`[generate_all_infographics] Render process error:`, renderResult.error);
           if (isModuleNotFound) {
             console.error('[generate_all_infographics] Module not found error detected');
             return {
@@ -2925,19 +3316,19 @@ agent/infographic-placements/ and registered in the manifest.`,
 
           return {
             status: 'error',
-            error: `Remotion render failed: ${String(proc.error)}${timeoutMsg}`,
+            error: `Remotion render failed: ${String(renderResult.error)}${timeoutMsg}`,
             suggestion: 'Check remotion-infographics setup and dependencies. This is a setup issue that must be resolved manually.',
           };
         }
 
-        if (proc.status === 0) break;
+        if (renderResult.success) break;
 
-        const stderr = String(proc.stderr || '');
-        const stdout = String(proc.stdout || '');
+        const stderr = renderResult.stderr;
+        const stdout = renderResult.stdout;
         const isModuleNotFound = stderr.includes('Cannot find module') || stderr.includes('MODULE_NOT_FOUND') || stdout.includes('Cannot find module');
         lastReferenceError = parseRenderReferenceError(stderr, stdout);
 
-        console.error(`[generate_all_infographics] Render failed with exit code ${proc.status}`);
+        console.error(`[generate_all_infographics] Render failed with exit code ${renderResult.exitCode}`);
         if (stderr) console.error(`[generate_all_infographics] stderr:`, stderr.slice(0, 1000));
         if (stdout) console.log(`[generate_all_infographics] stdout:`, stdout.slice(0, 1000));
 
@@ -2959,7 +3350,7 @@ agent/infographic-placements/ and registered in the manifest.`,
         ) {
           return {
             status: 'error',
-            error: `Remotion render failed (exit ${proc.status}). stderr: ${stderr || 'none'}`,
+            error: `Remotion render failed (exit ${renderResult.exitCode}). stderr: ${stderr || 'none'}`,
             stdout: stdout,
             runtime_error: lastReferenceError
               ? {
@@ -3011,7 +3402,7 @@ agent/infographic-placements/ and registered in the manifest.`,
             };
           }
           writeComponentCode(failedPlacementNumber, retryItem.componentCode);
-          const retryBuild = rebuildBundle();
+          const retryBuild = await rebuildBundle();
           if (!retryBuild.ok) {
             return {
               status: 'error',
@@ -3044,6 +3435,7 @@ agent/infographic-placements/ and registered in the manifest.`,
       }
 
     console.log('[generate_all_infographics] Render completed successfully');
+    streamProgress?.(`All ${placements.length} infographic${placements.length > 1 ? 's' : ''} rendered successfully!\n`);
 
     let outputs: string[] = [];
     try {

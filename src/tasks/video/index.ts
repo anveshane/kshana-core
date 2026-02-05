@@ -20,6 +20,7 @@ import { getVideoPlacementTools } from './tools/videoPlacement.js';
 import { getVideoReplacementTools } from './tools/video-replacement.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
+import { ComfyUIClient } from '../../services/comfyui/ComfyUIClient.js';
 import type { OrchestrationContext } from '../../core/orchestration/index.js';
 
 // Workflow imports
@@ -169,6 +170,37 @@ export interface WorkflowVideoAgentConfig {
 export interface CreateWorkflowToolRegistryOptions {
   /** When provided, generate_all_infographics will call this to get animation recommendations (Remotion sub-agent). */
   runRemotionAgent?: RunRemotionAgentCallback;
+  /** Project instance to check current phase for conditional tool registration */
+  project?: ReturnType<typeof loadProject>;
+}
+
+async function ensureComfyUIAvailabilityContext(
+  project?: ReturnType<typeof loadProject>
+): Promise<boolean | null> {
+  if (!project || project.currentPhase !== WorkflowPhase.IMAGE_GENERATION) {
+    return null;
+  }
+
+  const comfyUIAvailable = await ComfyUIClient.isAvailable();
+  console.log(`[registerVideoTools] ComfyUI availability check: ${comfyUIAvailable}`);
+
+  // Inject context variable for agent to check
+  contextStore.store(
+    `ComfyUI Status: ${comfyUIAvailable ? 'Available' : 'Unavailable'}\n\n` +
+      `The ComfyUI service is ${comfyUIAvailable ? 'available and ready for image generation' : 'currently unavailable (connection failed)'}.`,
+    'ComfyUI Availability',
+    {
+      variableBaseName: 'comfyui_available',
+      source: 'tool',
+    }
+  );
+
+  if (!comfyUIAvailable) {
+    console.log('[registerVideoTools] ComfyUI unavailable - image generation tools will not be registered');
+    console.log('[registerVideoTools] Agent should skip image generation and proceed to next phase');
+  }
+
+  return comfyUIAvailable;
 }
 
 /**
@@ -176,7 +208,7 @@ export interface CreateWorkflowToolRegistryOptions {
  * Orchestrator only needs file/project tools - generation is handled by subagents via Task.
  * However, generate_image and wait_for_job must be registered so subagent handlers can access them.
  */
-export function createWorkflowToolRegistry(options?: CreateWorkflowToolRegistryOptions): ToolRegistry {
+export async function createWorkflowToolRegistry(options?: CreateWorkflowToolRegistryOptions): Promise<ToolRegistry> {
   // Start with default generic tools (think, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode, TodoWrite, context tools)
   const registry = createDefaultToolRegistry();
 
@@ -208,15 +240,30 @@ export function createWorkflowToolRegistry(options?: CreateWorkflowToolRegistryO
   const generateAllImagesTool = videoGenerationTools.find(t => t.name === 'generate_all_images');
   const generateAllVideosTool = videoGenerationTools.find(t => t.name === 'generate_all_videos');
   const generateAllInfographicsTool = videoGenerationTools.find(t => t.name === 'generate_all_infographics');
-  if (generateImageTool) {
+  
+  // Check ComfyUI availability for IMAGE_GENERATION phase
+  // Only register image generation tools if ComfyUI is available
+  let comfyUIAvailable = true;
+  const project = options?.project;
+  const availability = await ensureComfyUIAvailabilityContext(project);
+  if (availability !== null) {
+    comfyUIAvailable = availability;
+  }
+  
+  // Register image generation tools only if ComfyUI is available
+  if (comfyUIAvailable && generateImageTool) {
     registry.register(generateImageTool);
   }
+  if (comfyUIAvailable && generateAllImagesTool) {
+    registry.register(generateAllImagesTool);
+  }
+  
+  // Always register wait_for_job tool (might be needed for other purposes)
   if (waitForJobTool) {
     registry.register(waitForJobTool);
   }
-  if (generateAllImagesTool) {
-    registry.register(generateAllImagesTool);
-  }
+  
+  // Always register video and infographic generation tools
   if (generateAllVideosTool) {
     registry.register(generateAllVideosTool);
   }
@@ -422,7 +469,7 @@ export async function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig)
     });
 
   // Create tool registry with workflow tools (generate_all_infographics will use Remotion sub-agent when callback is provided)
-  const registry = createWorkflowToolRegistry({ runRemotionAgent: runRemotionAgentCallback });
+  const registry = await createWorkflowToolRegistry({ runRemotionAgent: runRemotionAgentCallback, project });
 
   // Build custom prompt with workflow context (include loaded contexts info)
   const customPrompt = await buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
@@ -475,6 +522,9 @@ export async function buildWorkflowAgentPrompt(
   if (!project) {
     throw new Error('Project is required to build workflow agent prompt');
   }
+
+  // Ensure ComfyUI availability context is refreshed when entering IMAGE_GENERATION
+  await ensureComfyUIAvailabilityContext(project);
 
   // Use workflow manager to get phase config
   const { getPhaseConfig } = await import('./workflow/workflows/workflow-manager.js');

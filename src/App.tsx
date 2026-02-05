@@ -82,11 +82,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     }
   }, [taskType, started]);
 
-  // Create tool registry based on task type
-  const tools = React.useMemo(() => {
+  const [tools, setTools] = React.useState(() => createDefaultToolRegistry().getAll());
+
+  const refreshTools = React.useCallback(async (project?: ReturnType<typeof loadProject>) => {
     if (taskType === 'video') {
-      // Use workflow tool registry for state-based video creation
-      // If llmConfig is available, wire up Remotion sub-agent callback
       if (llmConfig) {
         const llm = new LLMClient(llmConfig);
         const runRemotionAgentCallback: RunRemotionAgentCallback = (placements, skillsContent, options) =>
@@ -94,13 +93,20 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             skillsContent,
             userMessageSuffix: options?.userMessageSuffix,
           });
-        return createWorkflowToolRegistry({ runRemotionAgent: runRemotionAgentCallback }).getAll();
+        const registry = await createWorkflowToolRegistry({ runRemotionAgent: runRemotionAgentCallback, project });
+        setTools(registry.getAll());
+        return;
       }
-      // Fallback when llmConfig not yet available (shouldn't happen in normal flow)
-      return createWorkflowToolRegistry().getAll();
+      const registry = await createWorkflowToolRegistry({ project });
+      setTools(registry.getAll());
+      return;
     }
-    return createDefaultToolRegistry().getAll();
+    setTools(createDefaultToolRegistry().getAll());
   }, [taskType, llmConfig]);
+
+  React.useEffect(() => {
+    void refreshTools(existingProject ?? undefined);
+  }, [refreshTools, existingProject]);
 
   // Get custom prompt based on task type
   // For video mode, we build it dynamically based on the current project state
@@ -206,6 +212,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           const loadedContexts = loadProjectFilesAsContexts();
           // buildWorkflowAgentPrompt is async, so we need to await it
           void buildWorkflowAgentPrompt(project, currentPhase, loadedContexts).then(updateCustomPrompt);
+          // Refresh tools so phase-specific availability checks are applied
+          void refreshTools(project);
         }
       }
     }

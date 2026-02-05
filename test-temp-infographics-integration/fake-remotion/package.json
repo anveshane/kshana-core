@@ -1,0 +1,1 @@
+{"name":"fake-remotion","scripts":{"build":"node -e \"process.exit(0)\"","render":"node \"/Users/indhicdev/Kshana/kshana-ink/test-temp-infographics-integration/fake-remotion/mock-remotion-render-reference-error.mjs\""}}

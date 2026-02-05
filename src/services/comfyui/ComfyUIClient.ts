@@ -52,6 +52,10 @@ export class ComfyUIClient {
   private outputDir: string;
   private timeout: number;
 
+  // Static cache for availability checks
+  private static availabilityCache: { result: boolean; timestamp: number } | null = null;
+  private static readonly CACHE_TTL = 30000; // 30 seconds
+
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
     const merged = { ...getDefaultConfig(), ...config };
     this.baseUrl = merged.baseUrl.replace(/\/$/, '');
@@ -61,6 +65,61 @@ export class ComfyUIClient {
     // Ensure output directory exists
     if (!fs.existsSync(this.outputDir)) {
       fs.mkdirSync(this.outputDir, { recursive: true });
+    }
+  }
+
+  /**
+   * Check if ComfyUI service is available.
+   * Uses cached result (30s TTL) to avoid repeated health checks.
+   * 
+   * @param baseUrl - Optional base URL override (defaults to env COMFYUI_BASE_URL)
+   * @returns true if ComfyUI responds to health check, false otherwise
+   */
+  static async isAvailable(baseUrl?: string): Promise<boolean> {
+    // Check cache
+    if (this.availabilityCache && 
+        Date.now() - this.availabilityCache.timestamp < this.CACHE_TTL) {
+      return this.availabilityCache.result;
+    }
+
+    const url = baseUrl || process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
+    
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000); // 2s timeout
+
+    try {
+      const response = await fetch(`${url}/system_stats`, {
+        signal: controller.signal,
+        method: 'GET',
+      });
+
+      if (!response.ok) {
+        this.availabilityCache = { result: false, timestamp: Date.now() };
+        return false;
+      }
+
+      // Ensure we got valid JSON back (guards against proxy HTML pages returning 200)
+      if (typeof response.json !== 'function') {
+        this.availabilityCache = { result: false, timestamp: Date.now() };
+        return false;
+      }
+
+      try {
+        const data = await response.json();
+        const isObject = data !== null && typeof data === 'object';
+        this.availabilityCache = { result: isObject, timestamp: Date.now() };
+        return isObject;
+      } catch {
+        this.availabilityCache = { result: false, timestamp: Date.now() };
+        return false;
+      }
+    } catch (error) {
+      // Connection error, timeout, or any other failure
+      // Cache unavailable result
+      this.availabilityCache = { result: false, timestamp: Date.now() };
+      return false;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

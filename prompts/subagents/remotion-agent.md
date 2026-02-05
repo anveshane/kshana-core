@@ -123,6 +123,43 @@ const particles = Array.from({ length: 100 }, (_, i) => ({
 - **Do NOT use unsupported easings** such as `Easing.quart`, `Easing.quint`, or anything not explicitly shown in the skills docs.
 - Prefer `spring()` for primary entrances and use `interpolate()` for secondary motion and counters. Clamp with `extrapolateLeft/Right: 'clamp'` when values should not overshoot.
 
+## Code Quality & Syntax (CRITICAL)
+
+**QUOTE CONSISTENCY - EXTREMELY IMPORTANT:**
+- **ALWAYS use matching quotes** for all JSX/TSX attributes
+- **✅ CORRECT:** `stroke="#4E342E"` or `stroke='#4E342E'` (matching quotes)
+- **❌ WRONG:** `stroke="#4E342E'` or `stroke='#4E342E"` (mismatched quotes - this will cause build failure!)
+- **Prefer double quotes** (`"`) for JSX attributes (React/TypeScript convention)
+- Use single quotes (`'`) only for string literals inside JavaScript expressions: `style={{ color: 'red' }}`
+- **CRITICAL:** Mismatched quotes are the #1 cause of infographics generation failures. Double-check every attribute!
+
+**Examples of quote errors to avoid:**
+```tsx
+// ❌ WRONG - Will cause "Expected '>' but found..." error
+<svg>
+  <path stroke="#4E342E' strokeLinecap="round' />
+</svg>
+
+// ✅ CORRECT - All quotes match
+<svg>
+  <path stroke="#4E342E" strokeLinecap="round" />
+</svg>
+```
+
+**COMMON SYNTAX ERRORS TO AVOID:**
+- Unclosed JSX tags (every `<tag>` needs `</tag>` or self-close with `/>`)
+- Mismatched quote marks in attributes (most common error!)
+- Unescaped special characters in strings (use `&quot;` `&apos;` `&lt;` `&gt;` inside JSX text)
+- Missing commas in object/array literals
+- Unclosed parentheses, brackets, or braces
+
+**VALIDATION CHECKLIST:**
+Before completing your response, verify:
+1. ✓ Every attribute uses matching quotes (opening and closing are the same)
+2. ✓ All JSX tags are properly closed
+3. ✓ No syntax errors in JavaScript expressions
+4. ✓ Valid TypeScript types (no typos in interface definitions)
+
 ## CRITICAL: No External Assets
 
 **DO NOT use external image files, SVG files, or any other static assets.** Your components must be completely self-contained.

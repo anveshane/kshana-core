@@ -53,13 +53,28 @@ export interface ToolParameterSchema {
 }
 
 /**
+ * Context passed to tool handlers for streaming progress updates.
+ */
+export interface ToolContext {
+  /**
+   * Stream a progress update during long-running operations.
+   * The chunk will be displayed in the UI as a streaming message.
+   */
+  streamProgress?: (chunk: string) => void;
+  /**
+   * Get the current tool call ID.
+   */
+  getToolCallId?: () => string;
+}
+
+/**
  * Tool definition for the LLM.
  */
 export interface ToolDefinition {
   name: string;
   description: string;
   parameters: ToolParameterSchema;
-  handler?: (args: Record<string, unknown>) => unknown | Promise<unknown>;
+  handler?: (args: Record<string, unknown>, context?: ToolContext) => unknown | Promise<unknown>;
 }
 
 /**

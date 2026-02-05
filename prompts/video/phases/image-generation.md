@@ -2,6 +2,36 @@
 
 Generate images for each placement identified in the previous phase.
 
+## ComfyUI Availability Check
+
+**CRITICAL: Check the `$comfyui_available` context variable first!**
+
+**If ComfyUI is UNAVAILABLE** (context shows "Unavailable"):
+1. **Inform the user**: "ComfyUI is currently unavailable (connection failed). Skipping image generation for this phase."
+2. **Explain**: "The workflow will continue to the INFOGRAPHICS_PLACEMENT phase. Images can be generated later when ComfyUI is reconnected."
+3. **Mark phase complete and transition**:
+   ```
+   update_project(
+     action: 'update_phase',
+     data: { phase: 'image_generation', status: 'completed' }
+   )
+   ```
+   Then:
+   ```
+   update_project(
+     action: 'transition_phase',
+     data: {}
+   )
+   ```
+4. **DO NOT** attempt to call `generate_all_images` or `generate_image` tools - they will not be available
+
+**If ComfyUI is AVAILABLE** (context shows "Available"):
+- Proceed normally with the image generation workflow below
+
+---
+
+## Normal Image Generation Workflow (when ComfyUI Available)
+
 **SIMPLE WORKFLOW:**
 1. Call the `generate_all_images` tool to process all placements automatically
 2. The tool will:

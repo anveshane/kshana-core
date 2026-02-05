@@ -3,7 +3,7 @@
  * Usage: pnpm run render -- --input <json-path> --outDir <dir> [--output <json-path>]
  * Requires: pnpm run build (remotion bundle) run first. Uses build/ as serveUrl.
  * Input JSON: { "placements": [ { "placementNumber": 1, "startTime": "0:45", "endTime": "1:00", "infographicType": "statistic", "prompt": "...", "componentName": "Infographic1" }, ... ] }
- * Writes <outDir>/info<N>_<id>.mp4. If --output is given, writes { "outputs": [...] } to that file (stdout is not used for JSON).
+ * Writes <outDir>/info<N>_<id>.webm (with alpha). If --output is given, writes { "outputs": [...] } to that file (stdout is not used for JSON).
  */
 import { selectComposition, renderMedia } from '@remotion/renderer';
 import path from 'node:path';
@@ -99,16 +99,18 @@ async function main() {
     composition.durationInFrames = durationInFrames;
 
     const baseName = `info${p.placementNumber}_${Date.now().toString(36)}`;
-    const outFilePath = path.join(outDir, `${baseName}.mp4`);
+    const outFilePath = path.join(outDir, `${baseName}.webm`);
     fs.mkdirSync(outDir, { recursive: true });
 
     await renderMedia({
       composition,
       serveUrl,
-      codec: 'h264',
+      codec: 'vp9',
       outputLocation: outFilePath,
       inputProps,
       logLevel: 'error',
+      pixelFormat: 'yuva420p',
+      imageFormat: 'png',
     });
     outputs.push(outFilePath);
     const progressEnd = ((i + 1) / total) * 100;

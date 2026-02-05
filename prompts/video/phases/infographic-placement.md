@@ -1,11 +1,11 @@
 ### Infographics Placement Phase
 
-**What this phase does**: Identify moments from the transcript that need infographics (charts, diagrams, statistics, data visualizations) and create detailed infographic placements with exact timestamps, type, and prompts. Do not overlap with image placements.
+**What this phase does**: Identify moments from the transcript that need infographics (charts, diagrams, statistics, data visualizations) and create detailed infographic placements with exact timestamps, type, and prompts. Align infographics **inside** image placements so they render as overlays on top of images.
 
 **Prerequisites**:
 - Content plan at `agent/plans/content-plan.md`
 - Transcript at `agent/content/transcript.md`
-- Image placements at `agent/content/image-placements.md` (to avoid collisions)
+- Image placements at `agent/content/image-placements.md` (to align overlay timing)
 - `$transcript`, `$content_plan`, and `$image_placements` context variables
 
 **Steps (execute in order)**:
@@ -18,7 +18,7 @@
 ```
 Task(
   subagent_type: 'infographics-placer',
-  task: 'Analyze the transcript ($transcript) to identify key moments that need INFOGRAPHICS (charts, diagrams, statistics, lists, data viz). Use the content plan ($content_plan) for guidance. Use $image_placements to avoid overlapping timestamps. Create detailed infographic placement plan with exact timestamps, type (bar_chart, line_chart, diagram, statistic, list), and prompts. Output MUST start with INFOGRAPHIC_PLACER: and use format: - Placement N: start-end | type=... | prompt.',
+  task: 'Analyze the transcript ($transcript) to identify key moments that need INFOGRAPHICS (charts, diagrams, statistics, lists, data viz). Use the content plan ($content_plan) for guidance. Use $image_placements to align infographic timings **inside** image placements (overlay mode). Create detailed infographic placement plan with exact timestamps, type (bar_chart, line_chart, diagram, statistic, list), and prompts. Output MUST start with INFOGRAPHIC_PLACER: and use format: - Placement N: start-end | type=... | prompt.',
   context_refs: ['$transcript', '$content_plan', '$image_placements']
 )
 ```
@@ -47,11 +47,12 @@ update_project(
 
 **IMPORTANT:**
 - Create placements ONLY for infographics. No images, no video.
-- Do not overlap with `$image_placements` timestamps.
+- Infographics should be **contained within** image placements so they render as overlays.
+- Prompts should assume transparency: overlay cards, no full-bleed backgrounds, preserve margins.
 - Output must start with `INFOGRAPHIC_PLACER:` and use `type=bar_chart|line_chart|diagram|statistic|list`.
 - Save to `agent/content/infographic-placements.md` before transitioning.
 
 **DO NOT:**
 - Create image or video placements
-- Overlap timestamps with image placements
+- Place infographics outside image placements
 - Skip saving or transitioning

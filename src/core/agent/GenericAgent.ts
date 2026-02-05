@@ -11,7 +11,7 @@ import { nanoid } from 'nanoid';
 import * as fs from 'fs';
 import * as path from 'path';
 import { TypedEventEmitter } from '../../events/index.js';
-import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
+import type { LLMClient, Message, ToolCall, ToolContext, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
 import {
   buildSystemMessage,
@@ -2029,7 +2029,22 @@ ONLY: Execute the update_project tool call with action="transition_phase" immedi
 
     // Execute the tool handler
     try {
-      const result = await Promise.resolve(tool.handler(toolCall.arguments));
+      // Create tool context for streaming progress updates
+      const toolContext: ToolContext = {
+        streamProgress: (chunk: string) => {
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: toolCall.id,
+            chunk,
+            done: false,
+            agentName: this.getEffectiveAgentName(),
+            toolName: toolCall.name,
+          });
+        },
+        getToolCallId: () => toolCall.id,
+      };
+
+      const result = await Promise.resolve(tool.handler(toolCall.arguments, toolContext));
 
       // Check for phase transition info in result and emit event
       const resultObj = result as Record<string, unknown> | null;
@@ -4139,7 +4154,21 @@ Respond in JSON format:
         }
 
         try {
-          const toolResult = await Promise.resolve(tool.handler(toolCall.arguments));
+          // Create tool context for streaming progress updates
+          const subagentToolContext: ToolContext = {
+            streamProgress: (chunk: string) => {
+              this.emit({
+                type: 'tool_streaming',
+                toolCallId: toolCall.id,
+                chunk,
+                done: false,
+                agentName: this.getEffectiveAgentName(),
+                toolName: toolCall.name,
+              });
+            },
+            getToolCallId: () => toolCall.id,
+          };
+          const toolResult = await Promise.resolve(tool.handler(toolCall.arguments, subagentToolContext));
           state.messages.push({
             role: 'tool',
             toolCallId: toolCall.id,
@@ -5240,6 +5269,17 @@ Respond in JSON format:
         const isYouTube = isYouTubeWorkflow(project.inputType);
         const isVideoGenerationPhase = project.currentPhase === WorkflowPhase.VIDEO_GENERATION;
         const isLegacyVideoPhase = project.currentPhase === WorkflowPhase.VIDEO;
+        const isInfographicsPhase =
+          project.currentPhase === WorkflowPhase.INFOGRAPHICS_PLACEMENT ||
+          project.currentPhase === WorkflowPhase.INFOGRAPHICS_GENERATION;
+
+        if (isInfographicsPhase) {
+          this.currentMode = 'orchestrator';
+          return {
+            error: 'dispatch_video_agent is not used for infographics generation.',
+            suggestion: 'Use generate_all_infographics tool to render infographic overlays.',
+          };
+        }
         
         // YouTube workflow's VIDEO_GENERATION phase doesn't require scene images
         // Legacy workflow's VIDEO phase does require scene images
@@ -5249,6 +5289,10 @@ Respond in JSON format:
         } else if (isLegacyVideoPhase) {
           requiresSceneImage = true;
           debugLog(`[GenericAgent] Legacy workflow VIDEO phase - scene_image_artifact_id required`);
+        } else {
+          // Outside video phases, avoid a misleading scene image requirement.
+          requiresSceneImage = false;
+          debugLog(`[GenericAgent] dispatch_video_agent called outside video phases (${project.currentPhase})`);
         }
       }
     } catch (err) {

@@ -13,6 +13,8 @@ export interface PlacementValidationConfig {
   minGapSeconds?: number;
   minDurationSeconds?: number;
   priorities?: Record<PlacementType, number>;
+  allowImageInfographicOverlap?: boolean;
+  requireInfographicWithinImage?: boolean;
 }
 
 export interface PlacementValidationWarning {
@@ -87,6 +89,8 @@ function createConfig(config?: PlacementValidationConfig): Required<PlacementVal
       ...DEFAULT_PRIORITIES,
       ...(config?.priorities ?? {}),
     },
+    allowImageInfographicOverlap: config?.allowImageInfographicOverlap ?? false,
+    requireInfographicWithinImage: config?.requireInfographicWithinImage ?? false,
   };
 }
 
@@ -280,19 +284,55 @@ export function validatePlacementSets(
   const imageWindows = mapToWindows(input.imagePlacements, 'image', cfg.priorities);
   const videoWindows = mapToWindows(input.videoPlacements, 'video', cfg.priorities);
   const infographicWindows = mapToWindows(input.infographicPlacements, 'infographic', cfg.priorities);
-  const all = [...imageWindows, ...videoWindows, ...infographicWindows];
 
-  const { kept, warnings } = resolveOverlaps(all, cfg);
+  if (!cfg.allowImageInfographicOverlap) {
+    const all = [...imageWindows, ...videoWindows, ...infographicWindows];
+    const { kept, warnings } = resolveOverlaps(all, cfg);
 
-  const keptImages = kept.filter((w) => w.placementType === 'image');
-  const keptVideos = kept.filter((w) => w.placementType === 'video');
-  const keptInfographics = kept.filter((w) => w.placementType === 'infographic');
+    const keptImages = kept.filter((w) => w.placementType === 'image');
+    const keptVideos = kept.filter((w) => w.placementType === 'video');
+    const keptInfographics = kept.filter((w) => w.placementType === 'infographic');
+
+    return {
+      imagePlacements: toImagePlacements(input.imagePlacements, keptImages),
+      videoPlacements: toVideoPlacements(input.videoPlacements, keptVideos),
+      infographicPlacements: toInfographicPlacements(input.infographicPlacements, keptInfographics),
+      warnings: warnings.map((w) => w.message),
+    };
+  }
+
+  const warnings: string[] = [];
+
+  // Resolve overlaps between images and videos only (infographics can overlap images).
+  const baseResult = resolveOverlaps([...imageWindows, ...videoWindows], cfg);
+  warnings.push(...baseResult.warnings.map((w) => w.message));
+
+  const keptImages = baseResult.kept.filter((w) => w.placementType === 'image');
+  const keptVideos = baseResult.kept.filter((w) => w.placementType === 'video');
+
+  let filteredInfographics = infographicWindows;
+  if (cfg.requireInfographicWithinImage) {
+    filteredInfographics = infographicWindows.filter((info) => {
+      const contained = keptImages.some(
+        (img) => info.startSeconds >= img.startSeconds && info.endSeconds <= img.endSeconds,
+      );
+      if (!contained) {
+        warnings.push(
+          `Dropped infographic #${info.placementNumber}: not contained within any image placement.`,
+        );
+      }
+      return contained;
+    });
+  }
+
+  const infographicResult = resolveOverlaps(filteredInfographics, cfg);
+  warnings.push(...infographicResult.warnings.map((w) => w.message));
 
   return {
     imagePlacements: toImagePlacements(input.imagePlacements, keptImages),
     videoPlacements: toVideoPlacements(input.videoPlacements, keptVideos),
-    infographicPlacements: toInfographicPlacements(input.infographicPlacements, keptInfographics),
-    warnings: warnings.map((w) => w.message),
+    infographicPlacements: toInfographicPlacements(input.infographicPlacements, infographicResult.kept),
+    warnings,
   };
 }
 
@@ -328,6 +368,15 @@ export function validateSinglePlacementAgainstExisting(
     .sort((a, b) => a.startTimeSeconds - b.startTimeSeconds);
 
   for (const item of existing) {
+    const allowImageInfographicOverlap =
+      cfg.allowImageInfographicOverlap &&
+      ((item.placementType === 'image' && input.placementType === 'infographic') ||
+        (item.placementType === 'infographic' && input.placementType === 'image'));
+
+    if (allowImageInfographicOverlap) {
+      continue;
+    }
+
     if (candidate.end <= item.startTimeSeconds - cfg.minGapSeconds) continue;
     if (candidate.start >= item.endTimeSeconds + cfg.minGapSeconds) continue;
 
