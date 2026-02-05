@@ -7,6 +7,8 @@
  * - Placement N: startTime-endTime | type=bar_chart|line_chart|diagram|statistic|list | prompt text
  */
 
+import { validatePlacementSets, type PlacementValidationConfig } from './PlacementValidator.js';
+
 export interface ParsedInfographicPlacement {
   placementNumber: number;
   startTime: string;
@@ -28,6 +30,11 @@ export interface InfographicParseResult {
   placements: ParsedInfographicPlacement[];
   errors: InfographicParseError[];
   warnings: string[];
+}
+
+export interface InfographicPlacementParseOptions {
+  validateOverlaps?: boolean;
+  validationConfig?: PlacementValidationConfig;
 }
 
 /**
@@ -86,6 +93,7 @@ function normalizeInfographicType(raw: string): 'bar_chart' | 'line_chart' | 'di
 export function parseInfographicPlacementsWithErrors(
   content: string,
   strict: boolean = false,
+  options: InfographicPlacementParseOptions = {},
 ): InfographicParseResult {
   const placements: ParsedInfographicPlacement[] = [];
   const errors: InfographicParseError[] = [];
@@ -199,6 +207,19 @@ export function parseInfographicPlacementsWithErrors(
     placementNumbers.add(p.placementNumber);
   }
   placements.sort((a, b) => a.placementNumber - b.placementNumber);
+
+  if (options.validateOverlaps === true) {
+    const validated = validatePlacementSets(
+      {
+        imagePlacements: [],
+        videoPlacements: [],
+        infographicPlacements: placements,
+      },
+      options.validationConfig,
+    );
+    placements.splice(0, placements.length, ...validated.infographicPlacements);
+    warnings.push(...validated.warnings);
+  }
 
   return { placements, errors, warnings };
 }

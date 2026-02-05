@@ -6,7 +6,16 @@ import { v4 as uuidv4 } from 'uuid';
 import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
 import { createDefaultToolRegistry } from '../core/tools/index.js';
-import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT, createWorkflowVideoAgent, setCurrentProjectBasePath } from '../tasks/video/index.js';
+import { ContinuationPlanner, IntentRouter, StateAnalyzer, type OrchestrationContext } from '../core/orchestration/index.js';
+import {
+  buildWorkflowAgentPrompt,
+  createVideoToolRegistry,
+  VIDEO_CREATION_SYSTEM_PROMPT,
+  createWorkflowVideoAgent,
+  loadProjectFilesAsContexts,
+  setCurrentProjectBasePath,
+} from '../tasks/video/index.js';
+import { getCurrentPhase, loadProject } from '../tasks/video/workflow/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import { assetEventEmitter, type AssetAddedEvent } from './assetEventEmitter.js';
@@ -18,6 +27,7 @@ export interface ConversationManagerConfig {
   sessionTimeoutMs?: number;  // Default: 30 minutes
   maxIterations?: number;     // Default: 50
   taskType?: TaskType;        // Default: 'generic'
+  enableOrchestration?: boolean; // Default: true for video tasks
 }
 
 export interface ConversationEvents {
@@ -39,6 +49,9 @@ interface ActiveSession {
   basePath?: string; // Store basePath for video tasks to save original input
   assetEventHandler?: (event: AssetAddedEvent) => void;
   currentEvents?: ConversationEvents; // Store current events for asset handler
+  intentRouter?: IntentRouter;
+  stateAnalyzer?: StateAnalyzer;
+  continuationPlanner?: ContinuationPlanner;
 }
 
 export class ConversationManager {
@@ -47,6 +60,7 @@ export class ConversationManager {
   private sessionTimeoutMs: number;
   private maxIterations: number;
   private taskType: TaskType;
+  private enableOrchestration: boolean;
   private cleanupInterval?: ReturnType<typeof setInterval>;
 
   constructor(config: ConversationManagerConfig) {
@@ -54,6 +68,7 @@ export class ConversationManager {
     this.sessionTimeoutMs = config.sessionTimeoutMs ?? 30 * 60 * 1000; // 30 minutes
     this.maxIterations = config.maxIterations ?? 50;
     this.taskType = config.taskType ?? 'generic';
+    this.enableOrchestration = config.enableOrchestration ?? this.taskType === 'video';
 
     // Start cleanup interval
     this.cleanupInterval = setInterval(() => this.cleanupStaleSessions(), 60 * 1000);
@@ -127,7 +142,14 @@ export class ConversationManager {
       }
     };
 
-    this.sessions.set(sessionId, { state, agent, basePath, assetEventHandler });
+    const activeSession: ActiveSession = { state, agent, basePath, assetEventHandler };
+    if (this.taskType === 'video' && this.enableOrchestration && basePath) {
+      activeSession.intentRouter = new IntentRouter();
+      activeSession.stateAnalyzer = new StateAnalyzer();
+      activeSession.continuationPlanner = new ContinuationPlanner();
+    }
+
+    this.sessions.set(sessionId, activeSession);
 
     // Listen for asset events
     assetEventEmitter.onAssetAdded(assetEventHandler);
@@ -231,6 +253,8 @@ export class ConversationManager {
         console.log(`[ConversationManager] Reset basePath to ${session.basePath} before runTask()`);
       }
 
+      await this.refreshWorkflowPrompt(session, task);
+
       const result = await session.agent.run(task);
 
       // Update session state based on result
@@ -298,6 +322,8 @@ export class ConversationManager {
         setCurrentProjectBasePath(session.basePath);
         console.log(`[ConversationManager] Reset basePath to ${session.basePath} before sendResponse()`);
       }
+
+      await this.refreshWorkflowPrompt(session, response);
 
       const result = await session.agent.run('', response);
 
@@ -426,6 +452,62 @@ export class ConversationManager {
     }
   }
 
+  private async refreshWorkflowPrompt(session: ActiveSession, userInput: string): Promise<void> {
+    if (this.taskType !== 'video' || !session.basePath) {
+      return;
+    }
+
+    const project = loadProject(session.basePath);
+    if (!project) {
+      return;
+    }
+
+    const currentPhase = getCurrentPhase(project);
+    const loadedContexts = loadProjectFilesAsContexts(session.basePath);
+
+    let orchestrationContext: OrchestrationContext | undefined;
+    if (this.enableOrchestration && session.intentRouter && session.stateAnalyzer && session.continuationPlanner) {
+      try {
+        const route = session.intentRouter.classifyIntent(userInput, true);
+        let stateAnalysis: OrchestrationContext['stateAnalysis'];
+        let continuationPlan: OrchestrationContext['continuationPlan'];
+
+        if (route.requiresStateAnalysis) {
+          stateAnalysis = await session.stateAnalyzer.analyzeProjectState(session.basePath, project);
+          continuationPlan = session.continuationPlanner.createContinuationPlan(stateAnalysis, route);
+        } else if (route.suggestedStrategy === 'interactive') {
+          continuationPlan = {
+            strategy: 'resume_phase',
+            specificTasks: ['Ask a clarifying question before executing phase actions.'],
+            checkpoints: ['Avoid running expensive generation tools until user intent is clarified.'],
+            blockers: [],
+            guidanceText: 'User intent is ambiguous. Clarify intent first.',
+          };
+        }
+
+        orchestrationContext = {
+          intentRoute: route,
+          stateAnalysis,
+          continuationPlan,
+        };
+      } catch (error) {
+        console.warn('[ConversationManager] Orchestration failed, falling back to standard prompt:', error);
+      }
+    }
+
+    try {
+      const customPrompt = await buildWorkflowAgentPrompt(
+        project,
+        currentPhase,
+        loadedContexts,
+        orchestrationContext
+      );
+      session.agent.updateCustomPrompt(customPrompt);
+    } catch (error) {
+      console.warn('[ConversationManager] Failed to refresh workflow prompt:', error);
+    }
+  }
+
   /**
    * Cancel a running task.
    */
@@ -437,6 +519,12 @@ export class ConversationManager {
 
     if (session.abortController) {
       session.abortController.abort();
+
+      // Stop the agent to set the aborted flag and interrupt execution
+      if (session.agent) {
+        session.agent.stop();
+      }
+
       session.state.status = 'idle';
       session.state.lastActivity = Date.now();
       return true;
@@ -454,6 +542,10 @@ export class ConversationManager {
       // Cancel any running task
       if (session.abortController) {
         session.abortController.abort();
+      }
+      // Stop the agent to set the aborted flag
+      if (session.agent) {
+        session.agent.stop();
       }
       // Remove asset event handler
       if (session.assetEventHandler) {

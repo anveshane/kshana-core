@@ -89,8 +89,11 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       // If llmConfig is available, wire up Remotion sub-agent callback
       if (llmConfig) {
         const llm = new LLMClient(llmConfig);
-        const runRemotionAgentCallback: RunRemotionAgentCallback = (placements, skillsContent) =>
-          runRemotionAgent(llm, placements, { skillsContent });
+        const runRemotionAgentCallback: RunRemotionAgentCallback = (placements, skillsContent, options) =>
+          runRemotionAgent(llm, placements, {
+            skillsContent,
+            userMessageSuffix: options?.userMessageSuffix,
+          });
         return createWorkflowToolRegistry({ runRemotionAgent: runRemotionAgentCallback }).getAll();
       }
       // Fallback when llmConfig not yet available (shouldn't happen in normal flow)

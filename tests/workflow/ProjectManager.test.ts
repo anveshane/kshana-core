@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import {
+  WorkflowPhase,
   projectExists,
   createProject,
   loadProject,
@@ -16,6 +17,8 @@ import {
   getOriginalInput,
   getStateTransitionPrompt,
   saveProject,
+  setProjectInputType,
+  transitionToNextPhase,
   addCharacter,
   updateCharacterApproval,
   addSetting,
@@ -174,6 +177,41 @@ describe('ProjectManager', () => {
       writeProjectFile('plans/plot.md', 'Test content', TEST_BASE_PATH);
 
       expect(readProjectFile('plans/plot.md', TEST_BASE_PATH)).toBe('Test content');
+    });
+  });
+
+  describe('YouTube workflow phase ordering', () => {
+    it('transitions from image_generation to infographics_placement', async () => {
+      createProject('Test story', TEST_BASE_PATH);
+      setProjectInputType('youtube_srt', TEST_BASE_PATH);
+
+      const project = loadProject(TEST_BASE_PATH)!;
+      project.currentPhase = WorkflowPhase.IMAGE_GENERATION;
+      saveProject(project, TEST_BASE_PATH);
+
+      updatePhaseStatus(project, 'image_generation', 'completed', TEST_BASE_PATH);
+      const reloaded = loadProject(TEST_BASE_PATH)!;
+      const result = await transitionToNextPhase(reloaded, TEST_BASE_PATH);
+      expect(result.transitioned).toBe(true);
+      expect(result.project.currentPhase).toBe(WorkflowPhase.INFOGRAPHICS_PLACEMENT);
+    });
+
+    it('never skips infographics_placement when image_generation is completed', async () => {
+      createProject('Test story', TEST_BASE_PATH);
+      setProjectInputType('youtube_srt', TEST_BASE_PATH);
+
+      const project = loadProject(TEST_BASE_PATH)!;
+      project.currentPhase = WorkflowPhase.IMAGE_GENERATION;
+      project.phases.infographics_placement.status = 'pending';
+      project.phases.infographics_generation.status = 'pending';
+      saveProject(project, TEST_BASE_PATH);
+
+      updatePhaseStatus(project, 'image_generation', 'completed', TEST_BASE_PATH);
+      const reloaded = loadProject(TEST_BASE_PATH)!;
+      const result = await transitionToNextPhase(reloaded, TEST_BASE_PATH);
+
+      expect(result.project.currentPhase).not.toBe(WorkflowPhase.INFOGRAPHICS_GENERATION);
+      expect(result.project.currentPhase).toBe(WorkflowPhase.INFOGRAPHICS_PLACEMENT);
     });
   });
 });

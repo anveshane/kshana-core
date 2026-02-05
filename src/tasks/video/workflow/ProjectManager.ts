@@ -1767,6 +1767,20 @@ export async function transitionToNextPhase(
 
   const result = await determineNextPhase(project);
 
+  // Workflow invariant: image_generation must always transition to infographics_placement.
+  if (
+    currentPhase === WorkflowPhase.IMAGE_GENERATION &&
+    result.nextPhase !== WorkflowPhase.INFOGRAPHICS_PLACEMENT
+  ) {
+    return {
+      project,
+      transitioned: false,
+      reason:
+        `Invalid phase transition invariant. Expected ${WorkflowPhase.INFOGRAPHICS_PLACEMENT} after ${WorkflowPhase.IMAGE_GENERATION}, ` +
+        `but got ${result.nextPhase}.`,
+    };
+  }
+
   // No safeguard needed - workflow manager ensures YouTube workflows can never
   // transition to PLOT/STORY phases since they're not in the YouTube workflow
 

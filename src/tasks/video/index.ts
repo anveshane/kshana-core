@@ -20,6 +20,7 @@ import { getVideoPlacementTools } from './tools/videoPlacement.js';
 import { getVideoReplacementTools } from './tools/video-replacement.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
+import type { OrchestrationContext } from '../../core/orchestration/index.js';
 
 // Workflow imports
 import {
@@ -414,8 +415,11 @@ export async function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig)
 
   // Create LLM client first so we can pass runRemotionAgent into the tool registry
   const llm = new LLMClient(llmConfig);
-  const runRemotionAgentCallback: RunRemotionAgentCallback = (placements, skillsContent) =>
-    runRemotionAgent(llm, placements, { skillsContent });
+  const runRemotionAgentCallback: RunRemotionAgentCallback = (placements, skillsContent, options) =>
+    runRemotionAgent(llm, placements, {
+      skillsContent,
+      userMessageSuffix: options?.userMessageSuffix,
+    });
 
   // Create tool registry with workflow tools (generate_all_infographics will use Remotion sub-agent when callback is provided)
   const registry = createWorkflowToolRegistry({ runRemotionAgent: runRemotionAgentCallback });
@@ -465,7 +469,8 @@ const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
 export async function buildWorkflowAgentPrompt(
   project: ReturnType<typeof loadProject>,
   currentPhase: WorkflowPhase,
-  loadedContexts: string[] = []
+  loadedContexts: string[] = [],
+  orchestrationContext?: OrchestrationContext
 ): Promise<string> {
   if (!project) {
     throw new Error('Project is required to build workflow agent prompt');
@@ -510,6 +515,31 @@ You MUST get user approval before starting generation.
 `;
   }
 
+  const hasStateContext = Boolean(orchestrationContext?.stateAnalysis);
+  const hasContinuationPlan = Boolean(orchestrationContext?.continuationPlan);
+
+  const stateContext = orchestrationContext?.stateAnalysis
+    ? `- Summary: ${orchestrationContext.stateAnalysis.summary}
+- Phase completion: ${orchestrationContext.stateAnalysis.completion.completed}/${orchestrationContext.stateAnalysis.completion.total} (${orchestrationContext.stateAnalysis.completion.percentage}%)
+- Phase status: ${orchestrationContext.stateAnalysis.phaseStatus ?? 'unknown'}`
+    : '';
+
+  const continuationStrategy = orchestrationContext?.continuationPlan
+    ? `${orchestrationContext.continuationPlan.strategy}
+
+${orchestrationContext.continuationPlan.guidanceText}`
+    : '';
+
+  const specificTasks = orchestrationContext?.continuationPlan?.specificTasks?.length
+    ? orchestrationContext.continuationPlan.specificTasks.map(task => `- ${task}`).join('\n')
+    : '';
+
+  const blockers = orchestrationContext?.continuationPlan?.blockers?.length
+    ? orchestrationContext.continuationPlan.blockers
+      .map(blocker => `- [${blocker.severity}] ${blocker.message}`)
+      .join('\n')
+    : '';
+
   // Load and render the base workflow template
   return loadAndRenderMarkdown('video/workflow.md', {
     project_id: project?.id ?? 'new',
@@ -520,6 +550,14 @@ You MUST get user approval before starting generation.
     loaded_contexts: loadedContextsSection,
     phase_instructions: phaseInstructions,
     expensive_checkpoint: expensiveCheckpoint,
+    has_state_context: hasStateContext,
+    state_context: stateContext,
+    has_continuation_strategy: hasContinuationPlan,
+    continuation_strategy: continuationStrategy,
+    has_specific_tasks: Boolean(specificTasks),
+    specific_tasks: specificTasks,
+    has_blockers: Boolean(blockers),
+    blockers,
   });
 }
 

@@ -2,13 +2,19 @@ You expand a short image placement prompt into a detailed, production-ready Comf
 
 ## Guidelines (match image-generator)
 
-**Structure:** Subject → Details → Setting/Context → Lighting → Style (documentary, photorealistic) → Technical (16:9, 8K).
+**Structure:** Subject → Details (include framing/viewpoint) → Setting/Context (who/where/when) → Lighting/Atmosphere → Style (documentary, photorealistic) → Technical (16:9, 8K).
 
-**Principles:** Informational focus, clarity over artistry, documentary aesthetic. Each image is standalone.
+**Principles:** Informational focus, clarity over artistry, documentary aesthetic. Each image is standalone. Avoid internal contradictions.
 
 **Style:** Documentary/educational, photorealistic, 16:9 aspect ratio, 8K, high detail.
 
-**Negative prompts:** Avoid deformed, blurry, text, watermarks, overly stylized, unrealistic colors, multiple competing subjects.
+**Camera/Composition:** Always specify shot type and viewpoint (e.g., wide/medium/close-up, eye-level/water-level/aerial), subject framing, and 1–3 key foreground/background elements that support the story.
+
+**Historical authenticity:** If depicting a real period/event, keep props/wardrobe/architecture period-accurate and add era-appropriate photographic cues when helpful (e.g., “high-resolution scan of an 1890s glass-plate photograph”, grain, halation, scratches, vignette) while still meeting the 8K/high-detail requirement.
+
+**Detail level:** Write a single paragraph of ~3–6 sentences. Include at least one concrete viewpoint/framing cue, one lighting cue, and 2–4 era/style cues (especially for historical scenes).
+
+**Negative prompts:** Avoid deformed, blurry, text, watermarks, overly stylized, unrealistic colors, anachronisms/modern elements, CGI/3D render look, and multiple competing subjects.
 
 ## Input
 

@@ -54,32 +54,55 @@ export async function expandImagePlacementPrompt(
     return { error: validation.errors.join('; ') };
   }
 
-  const userPrompt = loadAndRenderMarkdown('placement/expand-image-prompt.md', {
-    placement_prompt: placement.prompt,
-    start_time: placement.startTime,
-    end_time: placement.endTime,
-    transcript_segment: ctx.transcriptSegment || '(none)',
-    content_plan: ctx.contentPlan ?? '',
-  });
-
-  try {
-    const config = getLLMConfig();
-    const client = new LLMClient(config);
-    const response = await client.generate({
-      messages: [{ role: 'user', content: userPrompt }],
-      temperature: 0.3,
-      maxTokens: 800,
+  const renderUserPrompt = (contentPlan?: string) =>
+    loadAndRenderMarkdown('placement/expand-image-prompt.md', {
+      placement_prompt: placement.prompt,
+      start_time: placement.startTime,
+      end_time: placement.endTime,
+      transcript_segment: ctx.transcriptSegment || '(none)',
+      content_plan: contentPlan ?? '',
     });
-    const raw = (response.content ?? '').trim();
-    if (!raw) return null;
 
+  const parseExpandedImageResponse = (raw: string): ExpandImageResult | null => {
     const idx = raw.indexOf(NEGATIVE_MARKER);
     if (idx >= 0) {
       const prompt = raw.slice(0, idx).replace(/\n+$/, '').trim();
       const rest = raw.slice(idx + NEGATIVE_MARKER.length).replace(/^\n+/, '').trim();
       if (prompt) return { prompt, negativePrompt: rest || undefined };
+      return null;
     }
     return { prompt: raw };
+  };
+
+  try {
+    const config = getLLMConfig();
+    const client = new LLMClient(config);
+    const firstResponse = await client.generate({
+      messages: [{ role: 'user', content: renderUserPrompt(ctx.contentPlan ?? '') }],
+      temperature: 0.2,
+      maxTokens: 1600,
+    });
+    const firstRaw = (firstResponse.content ?? '').trim();
+    if (firstRaw) {
+      const parsed = parseExpandedImageResponse(firstRaw);
+      if (parsed) return parsed;
+    }
+
+    // Some providers can consume completion tokens without returning visible content.
+    // Retry once with a shorter input prompt (no content-plan excerpt) to reduce token pressure.
+    console.warn(
+      `[placementPromptExpander] Empty image expansion response for placement ${placement.placementNumber}; retrying without content plan. ` +
+        `finishReason=${firstResponse.finishReason ?? 'unknown'}, completionTokens=${firstResponse.usage?.completionTokens ?? 'n/a'}`
+    );
+    const retryResponse = await client.generate({
+      messages: [{ role: 'user', content: renderUserPrompt('') }],
+      temperature: 0.2,
+      maxTokens: 1600,
+    });
+    const retryRaw = (retryResponse.content ?? '').trim();
+    if (!retryRaw) return null;
+
+    return parseExpandedImageResponse(retryRaw);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.warn(
@@ -125,7 +148,7 @@ export async function expandVideoPlacementPrompt(
     const response = await client.generate({
       messages: [{ role: 'user', content: userPrompt }],
       temperature: 0.3,
-      maxTokens: 800,
+      maxTokens: 1200,
     });
     const raw = (response.content ?? '').trim();
     return raw || null;

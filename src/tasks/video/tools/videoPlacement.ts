@@ -5,6 +5,7 @@ import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
 import { loadProject, saveProject } from '../workflow/ProjectManager.js';
 import type { VideoPlacement } from '../workflow/types.js';
+import { validateSinglePlacementAgainstExisting } from '../workflow/PlacementValidator.js';
 
 export const createVideoPlacementTool: ToolDefinition = createTool(
   'create_video_placement',
@@ -30,8 +31,43 @@ export const createVideoPlacementTool: ToolDefinition = createTool(
       return { status: 'error', error: 'No project found' };
     }
 
-    const startTime = Number(args['start_time']);
-    const endTime = Number(args['end_time']);
+    const validation = validateSinglePlacementAgainstExisting({
+      placementType: 'video',
+      placementNumber: Number(args['transcript_index']),
+      startTimeSeconds: Number(args['start_time']),
+      endTimeSeconds: Number(args['end_time']),
+      existing: [
+        ...(project.imagePlacements ?? []).map((p) => ({
+          placementType: 'image' as const,
+          placementNumber: p.transcriptIndex,
+          startTimeSeconds: p.startTime,
+          endTimeSeconds: p.endTime,
+        })),
+        ...(project.videoPlacements ?? []).map((p) => ({
+          placementType: 'video' as const,
+          placementNumber: p.transcriptIndex,
+          startTimeSeconds: p.startTime,
+          endTimeSeconds: p.endTime,
+        })),
+        ...(project.infographicPlacements ?? []).map((p) => ({
+          placementType: 'infographic' as const,
+          placementNumber: p.transcriptIndex,
+          startTimeSeconds: p.startTime,
+          endTimeSeconds: p.endTime,
+        })),
+      ],
+    });
+
+    if (!validation.accepted) {
+      return {
+        status: 'error',
+        error: 'Placement overlaps existing placements and cannot be adjusted without becoming too short.',
+        warnings: validation.warnings,
+      };
+    }
+
+    const startTime = validation.startTimeSeconds;
+    const endTime = validation.endTimeSeconds;
 
     const placement: VideoPlacement = {
       transcriptIndex: Number(args['transcript_index']),
@@ -48,7 +84,7 @@ export const createVideoPlacementTool: ToolDefinition = createTool(
     project.videoPlacements.push(placement);
     saveProject(project);
 
-    return { status: 'success', placement };
+    return { status: 'success', placement, warnings: validation.warnings };
   }
 );
 

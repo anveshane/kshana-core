@@ -12,7 +12,7 @@
  * - Designed for system prompt and tool description composition from separate .md files.
  */
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // Get prompts directory - try multiple locations for flexibility
@@ -20,35 +20,39 @@ import { fileURLToPath } from 'node:url';
 // When running from source: src/core/prompts/loader.ts -> prompts/
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Strategy: Find the package root by searching up for dist/prompts/ or prompts/
-// This works whether code is bundled or not
+// Strategy: Find prompt files with deterministic priority:
+// 1) packageRoot/prompts (source prompts, preferred in development)
+// 2) packageRoot/dist/prompts (built prompts, fallback for packaged/runtime use)
+// This avoids stale prompt edits when backend runs from dist but source prompts changed.
 function findPromptsDir(startDir: string): string | null {
   let currentDir = startDir;
   const maxDepth = 10; // Prevent infinite loops
 
   for (let i = 0; i < maxDepth; i++) {
-    // Check if dist/prompts exists (indicates package root with built code)
-    const distPromptsPath = join(currentDir, 'dist', 'prompts');
-    if (existsSync(join(distPromptsPath, 'video', 'main.md'))) {
-      return distPromptsPath;
-    }
-
-    // Check if prompts exists directly (for source code)
-    const sourcePromptsPath = join(currentDir, 'prompts');
-    if (existsSync(join(sourcePromptsPath, 'video', 'main.md'))) {
-      return sourcePromptsPath;
-    }
-
     // Check if package.json exists (indicates package root)
     const packageJsonPath = join(currentDir, 'package.json');
     if (existsSync(packageJsonPath)) {
-      // Try dist/prompts first, then prompts/
-      if (existsSync(join(currentDir, 'dist', 'prompts', 'video', 'main.md'))) {
-        return join(currentDir, 'dist', 'prompts');
-      }
       if (existsSync(join(currentDir, 'prompts', 'video', 'main.md'))) {
         return join(currentDir, 'prompts');
       }
+      if (existsSync(join(currentDir, 'dist', 'prompts', 'video', 'main.md'))) {
+        return join(currentDir, 'dist', 'prompts');
+      }
+    }
+
+    // Fallbacks while traversing up from nested runtime folders.
+    // Skip "<package>/dist/prompts" when inside dist to avoid preferring stale copied prompts.
+    const promptsPath = join(currentDir, 'prompts');
+    if (
+      basename(currentDir) !== 'dist' &&
+      existsSync(join(promptsPath, 'video', 'main.md'))
+    ) {
+      return promptsPath;
+    }
+
+    const distPromptsPath = join(currentDir, 'dist', 'prompts');
+    if (existsSync(join(distPromptsPath, 'video', 'main.md'))) {
+      return distPromptsPath;
     }
 
     // Go up one level
@@ -332,5 +336,3 @@ export function loadRemotionSkills(options?: LoadRemotionSkillsOptions): string 
   }
   return parts.join('');
 }
-
-

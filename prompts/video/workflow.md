@@ -43,6 +43,26 @@ transcript_input → planning → image_placement → image_generation → video
 ## Available Context Variables
 {{loaded_contexts}}
 
+{{#if has_state_context}}
+## State Context
+{{state_context}}
+{{/if}}
+
+{{#if has_continuation_strategy}}
+## Continuation Strategy
+{{continuation_strategy}}
+{{/if}}
+
+{{#if has_specific_tasks}}
+## Specific Tasks This Session
+{{specific_tasks}}
+{{/if}}
+
+{{#if has_blockers}}
+## Blockers
+{{blockers}}
+{{/if}}
+
 ## Phase Instructions
 {{phase_instructions}}
 

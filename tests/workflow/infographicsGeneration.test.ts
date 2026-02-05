@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
+import { sanitizeGeneratedComponentCode } from '../../src/tasks/video/tools.js';
 
 const ROOT = join(process.cwd());
 const FIXTURES = join(ROOT, 'tests', 'fixtures');
@@ -67,6 +68,23 @@ describe('infographicsGeneration', () => {
 
       const out = JSON.parse(readFileSync(outputPath, 'utf-8')) as { outputs?: string[] };
       expect(out.outputs).toEqual([]);
+    });
+  });
+
+  describe('generated component sanitization', () => {
+    it('rewrites SVG id variable references into url(#id) strings', () => {
+      const code = `const A = () => (
+  <svg>
+    <defs>
+      <linearGradient id="waterGrad"><stop offset="0%" stopColor="#fff" /></linearGradient>
+    </defs>
+    <rect width="100" height="100" fill={waterGrad} />
+  </svg>
+);`;
+
+      const sanitized = sanitizeGeneratedComponentCode(code);
+      expect(sanitized).toContain('fill="url(#waterGrad)"');
+      expect(sanitized).not.toContain('fill={waterGrad}');
     });
   });
 

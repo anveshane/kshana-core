@@ -163,7 +163,10 @@ export {
 
 export {
   parseVideoPlacements,
+  parseVideoPlacementsWithErrors,
   type ParsedVideoPlacement,
+  type VideoParseResult,
+  type VideoParseError,
 } from './videoPlacementsParser.js';
 
 export {
@@ -173,6 +176,17 @@ export {
   type InfographicParseResult,
   type InfographicParseError,
 } from './infographicPlacementsParser.js';
+
+export {
+  validatePlacementSets,
+  validateSinglePlacementAgainstExisting,
+  type PlacementType,
+  type PlacementValidationConfig,
+  type ValidatePlacementSetsInput,
+  type ValidatePlacementSetsResult,
+  type ValidateSinglePlacementInput,
+  type ValidateSinglePlacementResult,
+} from './PlacementValidator.js';
 
 // Combined tool getter
 import { getWorkflowFileTools } from './FileTools.js';

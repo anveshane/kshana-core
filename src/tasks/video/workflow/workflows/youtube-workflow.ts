@@ -237,6 +237,15 @@ export function getNextYouTubePhase(currentPhase: WorkflowPhase): WorkflowPhase 
     const nextIndex = currentIndex + 1;
     const nextPhase = YOUTUBE_PHASES[nextIndex];
     if (nextPhase !== undefined) {
+      if (
+        currentPhase === WorkflowPhase.IMAGE_GENERATION &&
+        nextPhase !== WorkflowPhase.INFOGRAPHICS_PLACEMENT
+      ) {
+        console.error(
+          `[youtube-workflow] Phase invariant violated: expected ${WorkflowPhase.INFOGRAPHICS_PLACEMENT} after ${WorkflowPhase.IMAGE_GENERATION}, got ${nextPhase}.`,
+        );
+        return WorkflowPhase.INFOGRAPHICS_PLACEMENT;
+      }
       return nextPhase;
     }
   }

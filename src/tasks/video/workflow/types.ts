@@ -1094,6 +1094,19 @@ export async function determineNextPhase(project: ProjectFile): Promise<StateTra
     // For YouTube workflow, use strict sequence from youtube-workflow.ts
     if (isYouTubePhase(currentPhase)) {
       const nextPhase = getNextYouTubePhase(currentPhase);
+
+      if (
+        currentPhase === WorkflowPhase.IMAGE_GENERATION &&
+        nextPhase !== WorkflowPhase.INFOGRAPHICS_PLACEMENT
+      ) {
+        return {
+          nextPhase: currentPhase,
+          reason:
+            `Transition invariant violation: expected ${WorkflowPhase.INFOGRAPHICS_PLACEMENT} after ${WorkflowPhase.IMAGE_GENERATION}, ` +
+            `but got ${nextPhase ?? 'null'}.`,
+          isAutomatic: false,
+        };
+      }
       
       if (nextPhase) {
         const nextPhaseConfig = getPhaseConfig(nextPhase, project.inputType);

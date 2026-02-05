@@ -33,9 +33,10 @@ import {
   getCurrentProjectBasePath,
   getManifestFilePath,
 } from './workflow/index.js';
-import { parseImagePlacements, parseImagePlacementsWithErrors, type ParsedImagePlacement } from './workflow/imagePlacementsParser.js';
-import { parseVideoPlacements, type ParsedVideoPlacement } from './workflow/videoPlacementsParser.js';
+import { parseImagePlacementsWithErrors, type ParsedImagePlacement } from './workflow/imagePlacementsParser.js';
+import { parseVideoPlacementsWithErrors, type ParsedVideoPlacement } from './workflow/videoPlacementsParser.js';
 import { parseInfographicPlacementsWithErrors, type ParsedInfographicPlacement } from './workflow/infographicPlacementsParser.js';
+import { validatePlacementSets } from './workflow/PlacementValidator.js';
 import { getTranscriptSegmentForTimeRange } from './workflow/transcriptSegment.js';
 import { expandImagePlacementPrompt, expandVideoPlacementPrompt } from './workflow/placementPromptExpander.js';
 import { loadRemotionSkills } from '../../core/prompts/loader.js';
@@ -44,7 +45,13 @@ import type { ComponentCode } from './remotionAgent.js';
 /** Callback to run the Remotion sub-agent (placements + skills -> component code). Injected when creating the tool. */
 export type RunRemotionAgentCallback = (
   placements: ParsedInfographicPlacement[],
-  skillsContent: string
+  skillsContent: string,
+  options?: {
+    userMessageSuffix?: string;
+    failedPlacementNumber?: number;
+    failedComponentName?: string;
+    retryAttempt?: number;
+  }
 ) => Promise<ComponentCode>;
 
 /**
@@ -115,7 +122,7 @@ export interface ImageGenerationParams {
 }
 
 const AUTO_GAP_PREFIX = 'AUTO GAP:';
-const GAP_MIN_SECONDS = 0.5;
+const GAP_MIN_SECONDS = 1;
 const GAP_ADJACENT_EPSILON = 0.01;
 
 function timeStringToSeconds(timeStr: string): number {
@@ -239,6 +246,28 @@ function buildVideoPlacementsMarkdown(
   return lines.join('\n');
 }
 
+function buildImagePlacementsMarkdown(placements: ParsedImagePlacement[]): string {
+  const lines: string[] = ['IMAGE_PLACER:'];
+  for (const placement of placements) {
+    lines.push(
+      `- Placement ${placement.placementNumber}: ${placement.startTime}-${placement.endTime} | ${placement.prompt}`,
+    );
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+function buildInfographicPlacementsMarkdown(placements: ParsedInfographicPlacement[]): string {
+  const lines: string[] = ['INFOGRAPHIC_PLACER:'];
+  for (const placement of placements) {
+    lines.push(
+      `- Placement ${placement.placementNumber}: ${placement.startTime}-${placement.endTime} | type=${placement.infographicType} | ${placement.prompt}`,
+    );
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
 async function autoFillVideoPlacementGaps(
   videoPlacementsPath: string,
 ): Promise<{ updated: boolean; autoCount: number; gapCount: number }> {
@@ -250,10 +279,10 @@ async function autoFillVideoPlacementGaps(
   const transcriptContent = readProjectFile('agent/content/transcript.md');
 
   const imageParse = imageContent
-    ? parseImagePlacementsWithErrors(imageContent, false)
+    ? parseImagePlacementsWithErrors(imageContent, false, { validateOverlaps: false })
     : { placements: [], errors: [], warnings: [] };
   const infographicParse = infographicContent
-    ? parseInfographicPlacementsWithErrors(infographicContent, false)
+    ? parseInfographicPlacementsWithErrors(infographicContent, false, { validateOverlaps: false })
     : { placements: [], errors: [], warnings: [] };
 
   if (imageParse.errors.length > 0) {
@@ -267,21 +296,45 @@ async function autoFillVideoPlacementGaps(
     );
   }
 
-  const parsedVideoPlacements = videoContent
-    ? parseVideoPlacements(videoContent)
-    : [];
+  const videoParseResult = videoContent
+    ? parseVideoPlacementsWithErrors(videoContent, false, { validateOverlaps: false })
+    : { placements: [], errors: [], warnings: [] };
+  const parsedVideoPlacements = videoParseResult.placements;
   const manualVideoPlacements = parsedVideoPlacements.filter(
     (placement) => !isAutoGapPrompt(placement.prompt),
   );
 
+  const validated = validatePlacementSets({
+    imagePlacements: imageParse.placements,
+    videoPlacements: manualVideoPlacements,
+    infographicPlacements: infographicParse.placements,
+  });
+
+  if (validated.warnings.length > 0) {
+    console.warn('[autoFillVideoPlacementGaps] Overlap adjustments:', validated.warnings);
+  }
+
+  if (imageContent) {
+    writeProjectFile(
+      'agent/content/image-placements.md',
+      buildImagePlacementsMarkdown(validated.imagePlacements),
+    );
+  }
+  if (infographicContent) {
+    writeProjectFile(
+      'agent/content/infographic-placements.md',
+      buildInfographicPlacementsMarkdown(validated.infographicPlacements),
+    );
+  }
+
   const manualIntervals = collectIntervalsFromPlacements(
-    manualVideoPlacements,
+    validated.videoPlacements,
   );
   const imageIntervals = collectIntervalsFromPlacements(
-    imageParse.placements,
+    validated.imagePlacements,
   );
   const infographicIntervals = collectIntervalsFromPlacements(
-    infographicParse.placements,
+    validated.infographicPlacements,
   );
 
   const allIntervals = [...manualIntervals, ...imageIntervals, ...infographicIntervals];
@@ -321,7 +374,7 @@ async function autoFillVideoPlacementGaps(
     gaps.push({ start: cursor, end: totalDuration });
   }
 
-  const maxManualPlacementNumber = manualVideoPlacements.reduce(
+  const maxManualPlacementNumber = validated.videoPlacements.reduce(
     (max, placement) => Math.max(max, placement.placementNumber),
     0,
   );
@@ -350,7 +403,7 @@ async function autoFillVideoPlacementGaps(
   });
 
   const markdown = buildVideoPlacementsMarkdown(
-    manualVideoPlacements,
+    validated.videoPlacements,
     autoPlacements,
   );
   writeProjectFile(videoPlacementsPath, markdown);
@@ -358,7 +411,7 @@ async function autoFillVideoPlacementGaps(
   console.log('[autoFillVideoPlacementGaps] Summary', {
     imagePlacements: imageParse.placements.length,
     infographicPlacements: infographicParse.placements.length,
-    manualVideoPlacements: manualVideoPlacements.length,
+    manualVideoPlacements: validated.videoPlacements.length,
     mergedIntervals: merged.length,
     gapCount: gaps.length,
     autoPlacements: autoPlacements.length,
@@ -2064,7 +2117,7 @@ The tool handles all parsing, optional prompt expansion, sequential generation, 
     // Parse placements with enhanced error reporting
     let placements: ParsedImagePlacement[];
     try {
-      const parseResult = parseImagePlacementsWithErrors(content, false);
+      const parseResult = parseImagePlacementsWithErrors(content, false, { validateOverlaps: true });
       placements = parseResult.placements;
 
       // Log warnings and errors for debugging
@@ -2078,6 +2131,11 @@ The tool handles all parsing, optional prompt expansion, sequential generation, 
           `Line ${e.line}: ${e.reason}${e.suggestion ? ` (${e.suggestion})` : ''}`
         ).join('; ');
         console.error('[generate_all_images] Error details:', errorDetails);
+      }
+
+      const normalizedMarkdown = buildImagePlacementsMarkdown(placements);
+      if (normalizedMarkdown.trim() !== content.trim()) {
+        writeProjectFile(filePath, normalizedMarkdown);
       }
 
       if (placements.length === 0) {
@@ -2335,7 +2393,22 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
     // Parse placements
     let placements: ParsedVideoPlacement[];
     try {
-      placements = parseVideoPlacements(content);
+      const parseResult = parseVideoPlacementsWithErrors(content, false, { validateOverlaps: true });
+      placements = parseResult.placements;
+      if (parseResult.warnings.length > 0) {
+        console.warn('[generate_all_videos] Parser warnings:', parseResult.warnings);
+      }
+      if (parseResult.errors.length > 0) {
+        console.warn('[generate_all_videos] Parser errors (non-strict mode):', parseResult.errors);
+      }
+
+      const normalizedMarkdown = buildVideoPlacementsMarkdown(
+        placements.filter((placement) => !isAutoGapPrompt(placement.prompt)),
+        placements.filter((placement) => isAutoGapPrompt(placement.prompt)),
+      );
+      if (normalizedMarkdown.trim() !== content.trim()) {
+        writeProjectFile(filePath, normalizedMarkdown);
+      }
     } catch (error) {
       return {
         status: 'error',
@@ -2550,6 +2623,49 @@ registerRoot(RemotionRoot);
 `;
 }
 
+interface RenderReferenceErrorDetails {
+  variableName: string;
+  componentName?: string;
+  placementNumber?: number;
+}
+
+/**
+ * Rewrites common invalid JSX SVG references like `fill={waterGrad}` to `fill="url(#waterGrad)"`
+ * when `waterGrad` is declared as an SVG id in this component's <defs> section.
+ */
+export function sanitizeGeneratedComponentCode(componentCode: string): string {
+  const defsSectionPattern = /<defs[\s\S]*?<\/defs>/g;
+  const idPattern = /\bid=["']([A-Za-z_][\w:-]*)["']/g;
+  const svgIds = new Set<string>();
+
+  for (const defsSection of componentCode.match(defsSectionPattern) ?? []) {
+    let idMatch: RegExpExecArray | null;
+    while ((idMatch = idPattern.exec(defsSection)) !== null) {
+      if (idMatch[1]) svgIds.add(idMatch[1]);
+    }
+  }
+
+  if (svgIds.size === 0) return componentCode;
+
+  const attrPattern = /\b(fill|stroke|filter|clipPath|mask)=\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+  return componentCode.replace(attrPattern, (_m, attr: string, refName: string) => {
+    if (!svgIds.has(refName)) return `${attr}={${refName}}`;
+    return `${attr}="url(#${refName})"`;
+  });
+}
+
+function parseRenderReferenceError(stderr: string, stdout: string): RenderReferenceErrorDetails | null {
+  const combined = `${stderr}\n${stdout}`;
+  const referenceMatch = combined.match(/ReferenceError:\s*([A-Za-z_][A-Za-z0-9_]*)\s+is not defined/);
+  if (!referenceMatch?.[1]) return null;
+  const componentMatch = combined.match(/at\s+(Infographic(\d+))/);
+  return {
+    variableName: referenceMatch[1],
+    componentName: componentMatch?.[1],
+    placementNumber: componentMatch?.[2] ? parseInt(componentMatch[2], 10) : undefined,
+  };
+}
+
 function createGenerateAllInfographicsTool(runRemotionAgent?: RunRemotionAgentCallback): ToolDefinition {
   return createTool(
     'generate_all_infographics',
@@ -2582,11 +2698,16 @@ agent/infographic-placements/ and registered in the manifest.`,
 
       let placements: ParsedInfographicPlacement[];
       try {
-        const parseResult = parseInfographicPlacementsWithErrors(content, false);
+        const parseResult = parseInfographicPlacementsWithErrors(content, false, { validateOverlaps: true });
         placements = parseResult.placements;
         console.log(`[generate_all_infographics] Parsed ${placements.length} placements`);
         if (parseResult.warnings.length) console.warn('[generate_all_infographics] Warnings:', parseResult.warnings);
         if (parseResult.errors.length) console.warn('[generate_all_infographics] Parse errors:', parseResult.errors);
+
+        const normalizedMarkdown = buildInfographicPlacementsMarkdown(placements);
+        if (normalizedMarkdown.trim() !== content.trim()) {
+          writeProjectFile(filePath, normalizedMarkdown, basePath);
+        }
       } catch (e) {
         return {
           status: 'error',
@@ -2642,39 +2763,11 @@ agent/infographic-placements/ and registered in the manifest.`,
         };
       }
 
-      // Generate component code or animation hints via Remotion agent (accepts both formats)
+      // Generate component code via Remotion agent.
       const componentsDir = path.join(remotionDir, 'src', 'components');
       fs.mkdirSync(componentsDir, { recursive: true });
-      
-      if (runRemotionAgent) {
-        try {
-          console.log('[generate_all_infographics] Calling Remotion sub-agent to generate component code...');
-          const skillsContent = loadRemotionSkills();
-          const agentResult = await runRemotionAgent(placements, skillsContent);
-          console.log(`[generate_all_infographics] Remotion agent generated component code for ${agentResult.placements.length} placements`);
-          
-          const componentNames: string[] = [];
-          for (const item of agentResult.placements) {
-            const componentFileName = `Infographic${item.placementNumber}.tsx`;
-            const componentPath = path.join(componentsDir, componentFileName);
-            fs.writeFileSync(componentPath, item.componentCode, 'utf-8');
-            componentNames.push(`Infographic${item.placementNumber}`);
-            console.log(`[generate_all_infographics] Wrote component: ${componentFileName}`);
-          }
-          
-          const indexContent = generateComponentIndex(componentNames);
-          const indexPath = path.join(remotionDir, 'src', 'index.tsx');
-          fs.writeFileSync(indexPath, indexContent, 'utf-8');
-          console.log(`[generate_all_infographics] Updated index.tsx with ${componentNames.length} components`);
-        } catch (e) {
-          console.error('[generate_all_infographics] Remotion agent failed:', e);
-          return {
-            status: 'error',
-            error: `Failed to generate component code: ${String(e)}`,
-            suggestion: 'Check LLM configuration and ensure placements are valid.',
-          };
-        }
-      } else {
+
+      if (!runRemotionAgent) {
         console.log('[generate_all_infographics] Remotion agent not available, cannot generate components');
         return {
           status: 'error',
@@ -2683,25 +2776,64 @@ agent/infographic-placements/ and registered in the manifest.`,
         };
       }
 
-      // Rebuild bundle after writing components
       // Clear NODE_OPTIONS to avoid inheriting ts-node/register from Electron dev env (not available in remotion-infographics)
       const remotionEnv = { ...process.env, NODE_OPTIONS: '' };
-      console.log('[generate_all_infographics] Rebuilding Remotion bundle with new components...');
-      const buildProc = spawnSync('pnpm', ['run', 'build'], {
-        cwd: remotionDir,
-        encoding: 'utf-8',
-        timeout: 120_000,
-        env: remotionEnv,
-      });
-      if (buildProc.error || buildProc.status !== 0) {
-        console.error('[generate_all_infographics] Bundle failed:', buildProc.stderr || buildProc.error);
+      const skillsContent = loadRemotionSkills();
+      const componentNames = placements.map((p) => `Infographic${p.placementNumber}`);
+
+      const writeComponentCode = (placementNumber: number, componentCode: string): void => {
+        const componentFileName = `Infographic${placementNumber}.tsx`;
+        const componentPath = path.join(componentsDir, componentFileName);
+        const sanitizedCode = sanitizeGeneratedComponentCode(componentCode);
+        fs.writeFileSync(componentPath, sanitizedCode, 'utf-8');
+        console.log(`[generate_all_infographics] Wrote component: ${componentFileName}`);
+      };
+
+      const rebuildBundle = (): { ok: boolean; error?: string } => {
+        console.log('[generate_all_infographics] Rebuilding Remotion bundle with new components...');
+        const buildProc = spawnSync('pnpm', ['run', 'build'], {
+          cwd: remotionDir,
+          encoding: 'utf-8',
+          timeout: 120_000,
+          env: remotionEnv,
+        });
+        if (buildProc.error || buildProc.status !== 0) {
+          const detail = buildProc.stderr || String(buildProc.error ?? '');
+          console.error('[generate_all_infographics] Bundle failed:', detail);
+          return { ok: false, error: detail };
+        }
+        console.log('[generate_all_infographics] Bundle completed successfully');
+        return { ok: true };
+      };
+
+      try {
+        console.log('[generate_all_infographics] Calling Remotion sub-agent to generate component code...');
+        const agentResult = await runRemotionAgent(placements, skillsContent);
+        console.log(`[generate_all_infographics] Remotion agent generated component code for ${agentResult.placements.length} placements`);
+        for (const item of agentResult.placements) {
+          writeComponentCode(item.placementNumber, item.componentCode);
+        }
+        const indexContent = generateComponentIndex(componentNames);
+        const indexPath = path.join(remotionDir, 'src', 'index.tsx');
+        fs.writeFileSync(indexPath, indexContent, 'utf-8');
+        console.log(`[generate_all_infographics] Updated index.tsx with ${componentNames.length} components`);
+      } catch (e) {
+        console.error('[generate_all_infographics] Remotion agent failed:', e);
         return {
           status: 'error',
-          error: `Remotion bundle failed after component generation. Build must succeed before running infographic generation. ${buildProc.stderr || buildProc.error || ''}`,
+          error: `Failed to generate component code: ${String(e)}`,
+          suggestion: 'Check LLM configuration and ensure placements are valid.',
+        };
+      }
+
+      const initialBuild = rebuildBundle();
+      if (!initialBuild.ok) {
+        return {
+          status: 'error',
+          error: `Remotion bundle failed after component generation. Build must succeed before running infographic generation. ${initialBuild.error ?? ''}`,
           suggestion: 'Check component code for syntax errors. Ensure remotion-infographics builds successfully (run "pnpm run build" manually). The agent cannot fix build errors.',
         };
       }
-      console.log('[generate_all_infographics] Bundle completed successfully');
 
       const payloadPlacements: Array<{
         placementNumber: number;
@@ -2733,74 +2865,163 @@ agent/infographic-placements/ and registered in the manifest.`,
       );
       console.log(`[generate_all_infographics] Render input written to ${inputPath}`);
 
-    const RENDER_TIMEOUT_MS = 600_000;
-    console.log(`[generate_all_infographics] Starting Remotion render (timeout: ${RENDER_TIMEOUT_MS / 1000}s)...`);
-    const proc = spawnSync(
-      'pnpm',
-      ['run', 'render', '--', '--input', inputPath, '--outDir', outDir, '--output', outputPath],
-      {
-        cwd: remotionDir,
-        encoding: 'utf-8',
-        maxBuffer: 10 * 1024 * 1024,
-        timeout: RENDER_TIMEOUT_MS,
-        env: remotionEnv,
-      }
-    );
-    try {
-      fs.unlinkSync(inputPath);
-    } catch {
-      /* ignore */
-    }
+      const RENDER_TIMEOUT_MS = 600_000;
+      const MAX_REMEDIATION_RETRIES = 2;
+      let retryAttempt = 0;
+      let proc: ReturnType<typeof spawnSync>;
+      let lastReferenceError: RenderReferenceErrorDetails | null = null;
 
-    if (proc.error) {
-      const timeoutMsg =
-        proc.error.message?.includes('ETIMEDOUT') || (proc as { timedOut?: boolean }).timedOut
-          ? ' Render timed out.'
-          : '';
-      const isModuleNotFound = proc.error.message?.includes('Cannot find module') || proc.error.message?.includes('MODULE_NOT_FOUND');
-      
-      console.error(`[generate_all_infographics] Render process error:`, proc.error);
-      if (isModuleNotFound) {
-        console.error('[generate_all_infographics] Module not found error detected');
-        return {
-          status: 'error',
-          error: `Remotion render failed: module not found. Dependencies must be pre-installed before running infographic generation.`,
-          suggestion: 'This is a setup issue that must be resolved manually. Ensure remotion-infographics has all dependencies installed (run "pnpm install" in remotion-infographics directory). The agent cannot install packages.',
-        };
+      while (true) {
+        console.log(`[generate_all_infographics] Starting Remotion render (timeout: ${RENDER_TIMEOUT_MS / 1000}s)...`);
+        proc = spawnSync(
+          'pnpm',
+          ['run', 'render', '--', '--input', inputPath, '--outDir', outDir, '--output', outputPath],
+          {
+            cwd: remotionDir,
+            encoding: 'utf-8',
+            maxBuffer: 10 * 1024 * 1024,
+            timeout: RENDER_TIMEOUT_MS,
+            env: remotionEnv,
+          }
+        );
+
+        if (proc.error) {
+          const timeoutMsg =
+            proc.error.message?.includes('ETIMEDOUT') || (proc as { timedOut?: boolean }).timedOut
+              ? ' Render timed out.'
+              : '';
+          const isModuleNotFound = proc.error.message?.includes('Cannot find module') || proc.error.message?.includes('MODULE_NOT_FOUND');
+
+          console.error(`[generate_all_infographics] Render process error:`, proc.error);
+          if (isModuleNotFound) {
+            console.error('[generate_all_infographics] Module not found error detected');
+            return {
+              status: 'error',
+              error: `Remotion render failed: module not found. Dependencies must be pre-installed before running infographic generation.`,
+              suggestion: 'This is a setup issue that must be resolved manually. Ensure remotion-infographics has all dependencies installed (run "pnpm install" in remotion-infographics directory). The agent cannot install packages.',
+            };
+          }
+
+          return {
+            status: 'error',
+            error: `Remotion render failed: ${String(proc.error)}${timeoutMsg}`,
+            suggestion: 'Check remotion-infographics setup and dependencies. This is a setup issue that must be resolved manually.',
+          };
+        }
+
+        if (proc.status === 0) break;
+
+        const stderr = proc.stderr || '';
+        const stdout = proc.stdout || '';
+        const isModuleNotFound = stderr.includes('Cannot find module') || stderr.includes('MODULE_NOT_FOUND') || stdout.includes('Cannot find module');
+        lastReferenceError = parseRenderReferenceError(stderr, stdout);
+
+        console.error(`[generate_all_infographics] Render failed with exit code ${proc.status}`);
+        if (stderr) console.error(`[generate_all_infographics] stderr:`, stderr.slice(0, 1000));
+        if (stdout) console.log(`[generate_all_infographics] stdout:`, stdout.slice(0, 1000));
+
+        if (isModuleNotFound) {
+          console.error('[generate_all_infographics] Module not found error detected in stderr/stdout');
+          return {
+            status: 'error',
+            error: `Remotion render failed: module not found. Dependencies must be pre-installed before running infographic generation.`,
+            suggestion: 'This is a setup issue that must be resolved manually. Ensure remotion-infographics has all dependencies installed (run "pnpm install" in remotion-infographics directory). The agent cannot install packages.',
+            stderr: stderr.slice(0, 500),
+          };
+        }
+
+        const failedPlacementNumber = lastReferenceError?.placementNumber;
+        if (
+          !lastReferenceError ||
+          !failedPlacementNumber ||
+          retryAttempt >= MAX_REMEDIATION_RETRIES
+        ) {
+          return {
+            status: 'error',
+            error: `Remotion render failed (exit ${proc.status}). stderr: ${stderr || 'none'}`,
+            stdout: stdout,
+            runtime_error: lastReferenceError
+              ? {
+                  variableName: lastReferenceError.variableName,
+                  componentName: lastReferenceError.componentName,
+                  placementNumber: lastReferenceError.placementNumber,
+                }
+              : undefined,
+          };
+        }
+
+        const failedPlacement = placements.find((p) => p.placementNumber === failedPlacementNumber);
+        if (!failedPlacement) {
+          return {
+            status: 'error',
+            error: `Remotion render failed for unknown placement ${failedPlacementNumber}. stderr: ${stderr || 'none'}`,
+            runtime_error: {
+              variableName: lastReferenceError.variableName,
+              componentName: lastReferenceError.componentName,
+              placementNumber: failedPlacementNumber,
+            },
+          };
+        }
+
+        retryAttempt += 1;
+        console.warn(
+          `[generate_all_infographics] Remediating placement #${failedPlacementNumber} after runtime error "${lastReferenceError.variableName}" (retry ${retryAttempt}/${MAX_REMEDIATION_RETRIES})`,
+        );
+        try {
+          const retryResult = await runRemotionAgent([failedPlacement], skillsContent, {
+            retryAttempt,
+            failedPlacementNumber,
+            failedComponentName: lastReferenceError.componentName,
+            userMessageSuffix:
+              `The previous component failed at runtime: ReferenceError: ${lastReferenceError.variableName} is not defined` +
+              `${lastReferenceError.componentName ? ` in ${lastReferenceError.componentName}` : ''}.` +
+              ' Regenerate ONLY this component with valid TSX. If referencing SVG defs ids, use strings like "url(#id)" instead of JS identifiers.',
+          });
+          const retryItem = retryResult.placements.find((item) => item.placementNumber === failedPlacementNumber);
+          if (!retryItem) {
+            return {
+              status: 'error',
+              error: `Remotion retry failed: sub-agent did not return placement ${failedPlacementNumber}.`,
+              runtime_error: {
+                variableName: lastReferenceError.variableName,
+                componentName: lastReferenceError.componentName,
+                placementNumber: failedPlacementNumber,
+              },
+            };
+          }
+          writeComponentCode(failedPlacementNumber, retryItem.componentCode);
+          const retryBuild = rebuildBundle();
+          if (!retryBuild.ok) {
+            return {
+              status: 'error',
+              error: `Remotion bundle failed after retrying placement ${failedPlacementNumber}. ${retryBuild.error ?? ''}`,
+              runtime_error: {
+                variableName: lastReferenceError.variableName,
+                componentName: lastReferenceError.componentName,
+                placementNumber: failedPlacementNumber,
+              },
+            };
+          }
+          continue;
+        } catch (retryErr) {
+          return {
+            status: 'error',
+            error: `Failed to regenerate component for placement ${failedPlacementNumber}: ${String(retryErr)}`,
+            runtime_error: {
+              variableName: lastReferenceError.variableName,
+              componentName: lastReferenceError.componentName,
+              placementNumber: failedPlacementNumber,
+            },
+          };
+        }
       }
-      
-      return {
-        status: 'error',
-        error: `Remotion render failed: ${String(proc.error)}${timeoutMsg}`,
-        suggestion: 'Check remotion-infographics setup and dependencies. This is a setup issue that must be resolved manually.',
-      };
-    }
-    if (proc.status !== 0) {
-      const stderr = proc.stderr || '';
-      const stdout = proc.stdout || '';
-      const isModuleNotFound = stderr.includes('Cannot find module') || stderr.includes('MODULE_NOT_FOUND') || stdout.includes('Cannot find module');
-      
-      console.error(`[generate_all_infographics] Render failed with exit code ${proc.status}`);
-      if (stderr) console.error(`[generate_all_infographics] stderr:`, stderr.slice(0, 1000));
-      if (stdout) console.log(`[generate_all_infographics] stdout:`, stdout.slice(0, 1000));
-      
-      if (isModuleNotFound) {
-        console.error('[generate_all_infographics] Module not found error detected in stderr/stdout');
-        return {
-          status: 'error',
-          error: `Remotion render failed: module not found. Dependencies must be pre-installed before running infographic generation.`,
-          suggestion: 'This is a setup issue that must be resolved manually. Ensure remotion-infographics has all dependencies installed (run "pnpm install" in remotion-infographics directory). The agent cannot install packages.',
-          stderr: stderr.slice(0, 500), // Include first 500 chars for debugging
-        };
+
+      try {
+        fs.unlinkSync(inputPath);
+      } catch {
+        /* ignore */
       }
-      
-      return {
-        status: 'error',
-        error: `Remotion render failed (exit ${proc.status}). stderr: ${stderr || 'none'}`,
-        stdout: stdout,
-      };
-    }
-    
+
     console.log('[generate_all_infographics] Render completed successfully');
 
     let outputs: string[] = [];

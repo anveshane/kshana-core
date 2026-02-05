@@ -927,13 +927,19 @@ What story would you like to turn into a video?`,
             if (isYouTubePhase(beforePhase)) {
               const expectedNext = getNextYouTubePhase(beforePhase);
               if (expectedNext && updatedProject.currentPhase !== expectedNext) {
+                const actualNext = updatedProject.currentPhase;
                 // Rollback - restore previous state
                 updatedProject.currentPhase = beforePhase;
                 saveProject(updatedProject, basePath);
                 return {
                   status: 'error',
-                  error: `Invalid phase transition: expected ${expectedNext}, got ${updatedProject.currentPhase}`,
+                  error: `Invalid phase transition: expected ${expectedNext}, got ${actualNext}`,
                   current_phase: beforePhase,
+                  expected_next_phase: expectedNext,
+                  actual_next_phase: actualNext,
+                  next_action:
+                    `Transition invariant violated. Stay on ${beforePhase}, verify phase completion output, then call transition_phase again. ` +
+                    `The next phase must be ${expectedNext}.`,
                 };
               }
             }

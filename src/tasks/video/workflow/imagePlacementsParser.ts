@@ -8,6 +8,8 @@
  * - Comprehensive validation and error reporting
  */
 
+import { validatePlacementSets, type PlacementValidationConfig } from './PlacementValidator.js';
+
 export interface ParsedImagePlacement {
   placementNumber: number;
   startTime: string;
@@ -26,6 +28,11 @@ export interface ParseResult {
   placements: ParsedImagePlacement[];
   errors: ParseError[];
   warnings: string[];
+}
+
+export interface ImagePlacementParseOptions {
+  validateOverlaps?: boolean;
+  validationConfig?: PlacementValidationConfig;
 }
 
 /**
@@ -142,6 +149,7 @@ function tryMatchPlacementLine(line: string): RegExpMatchArray | null {
 export function parseImagePlacementsWithErrors(
   content: string,
   strict: boolean = false,
+  options: ImagePlacementParseOptions = {},
 ): ParseResult {
   const placements: ParsedImagePlacement[] = [];
   const errors: ParseError[] = [];
@@ -261,6 +269,19 @@ export function parseImagePlacementsWithErrors(
 
   // Sort by placement number
   placements.sort((a, b) => a.placementNumber - b.placementNumber);
+
+  if (options.validateOverlaps === true) {
+    const validated = validatePlacementSets(
+      {
+        imagePlacements: placements,
+        videoPlacements: [],
+        infographicPlacements: [],
+      },
+      options.validationConfig,
+    );
+    placements.splice(0, placements.length, ...validated.imagePlacements);
+    warnings.push(...validated.warnings);
+  }
 
   return {
     placements,

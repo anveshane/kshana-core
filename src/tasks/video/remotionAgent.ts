@@ -48,6 +48,8 @@ function stripJsonFence(raw: string): string {
 export interface RunRemotionAgentOptions {
   /** Pre-loaded Remotion skills markdown. If not provided, prompt will not include skills. */
   skillsContent?: string;
+  /** Optional corrective hint appended to the user message (used for targeted retries). */
+  userMessageSuffix?: string;
 }
 
 function parseSinglePlacementResponse(raw: string, placementNumber: number): ComponentCodeItem {
@@ -98,6 +100,7 @@ export async function runRemotionAgent(
   options?: RunRemotionAgentOptions
 ): Promise<ComponentCode> {
   const skillsContent = options?.skillsContent ?? '';
+  const userMessageSuffix = options?.userMessageSuffix?.trim() ?? '';
   const maxTokens = getRemotionAgentMaxTokens();
   const results: ComponentCodeItem[] = [];
 
@@ -116,7 +119,12 @@ export async function runRemotionAgent(
     const response = await llm.generate({
       messages: [
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: REMOTION_AGENT_USER_MESSAGE },
+        {
+          role: 'user',
+          content: userMessageSuffix
+            ? `${REMOTION_AGENT_USER_MESSAGE}\n\n${userMessageSuffix}`
+            : REMOTION_AGENT_USER_MESSAGE,
+        },
       ],
       maxTokens,
     });
