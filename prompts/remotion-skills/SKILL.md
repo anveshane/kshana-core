@@ -43,3 +43,14 @@ Read individual rule files for detailed explanations and code examples:
 - [rules/videos.md](rules/videos.md) - Embedding videos in Remotion - trimming, volume, speed, looping, pitch
 - [rules/parameters.md](rules/parameters.md) - Make a video parametrizable by adding a Zod schema
 - [rules/maps.md](rules/maps.md) - Add a map using Mapbox and animate it
+
+## Advanced Examples
+
+Complete, production-ready component examples for complex animations:
+
+- [examples/3d-rotating-cube.tsx](examples/3d-rotating-cube.tsx) - Basic 3D with ThreeCanvas, lighting, and rotation
+- [examples/3d-extruded-bar-chart.tsx](examples/3d-extruded-bar-chart.tsx) - 3D data visualization with animated bars
+- [examples/multi-beat-sequence.tsx](examples/multi-beat-sequence.tsx) - Multi-phase animation (title → data → emphasis)
+- [examples/particle-effects.tsx](examples/particle-effects.tsx) - Particle system converging to form shapes
+- [examples/transition-series-demo.tsx](examples/transition-series-demo.tsx) - Multi-scene transitions with slide/fade
+- [examples/kinetic-typography.tsx](examples/kinetic-typography.tsx) - Animated text with spring physics and counters

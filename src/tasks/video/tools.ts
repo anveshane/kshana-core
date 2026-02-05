@@ -2645,13 +2645,34 @@ export function sanitizeGeneratedComponentCode(componentCode: string): string {
     }
   }
 
-  if (svgIds.size === 0) return componentCode;
+  let sanitized = componentCode;
 
-  const attrPattern = /\b(fill|stroke|filter|clipPath|mask)=\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
-  return componentCode.replace(attrPattern, (_m, attr: string, refName: string) => {
-    if (!svgIds.has(refName)) return `${attr}={${refName}}`;
-    return `${attr}="url(#${refName})"`;
-  });
+  if (svgIds.size > 0) {
+    const attrPattern = /\b(fill|stroke|filter|clipPath|mask)=\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+    sanitized = sanitized.replace(attrPattern, (_m, attr: string, refName: string) => {
+      if (!svgIds.has(refName)) return `${attr}={${refName}}`;
+      return `${attr}="url(#${refName})"`;
+    });
+  }
+
+  // Guard against unsupported easing names from generated code.
+  sanitized = sanitized
+    .replace(/\bEasing\.quart\b/g, 'Easing.quad')
+    .replace(/\bEasing\.quint\b/g, 'Easing.quad');
+
+  // Warn on common 3D and CSS animation pitfalls.
+  if (sanitized.includes('<ThreeCanvas')) {
+    const hasWidth = /<ThreeCanvas[^>]*(\swidth=|\swidth=\{)/.test(sanitized);
+    const hasHeight = /<ThreeCanvas[^>]*(\sheight=|\sheight=\{)/.test(sanitized);
+    if (!hasWidth || !hasHeight) {
+      console.warn('[sanitizeGeneratedComponentCode] ThreeCanvas missing width/height props.');
+    }
+  }
+  if (/(animation\s*:|transition\s*:|@keyframes)/i.test(sanitized)) {
+    console.warn('[sanitizeGeneratedComponentCode] CSS animations/transitions detected in component code.');
+  }
+
+  return sanitized;
 }
 
 function parseRenderReferenceError(stderr: string, stdout: string): RenderReferenceErrorDetails | null {
@@ -2911,8 +2932,8 @@ agent/infographic-placements/ and registered in the manifest.`,
 
         if (proc.status === 0) break;
 
-        const stderr = proc.stderr || '';
-        const stdout = proc.stdout || '';
+        const stderr = String(proc.stderr || '');
+        const stdout = String(proc.stdout || '');
         const isModuleNotFound = stderr.includes('Cannot find module') || stderr.includes('MODULE_NOT_FOUND') || stdout.includes('Cannot find module');
         lastReferenceError = parseRenderReferenceError(stderr, stdout);
 
