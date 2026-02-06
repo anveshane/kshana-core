@@ -113,6 +113,131 @@ const particles = Array.from({ length: 100 }, (_, i) => ({
 ))}
 ```
 
+## Stylized Maps & Territorial Visualizations (CRITICAL for Geographic Content)
+
+**When the prompt involves maps, territories, geographic locations, or treaty visualizations:**
+
+Maps MUST be stylized SVG graphics - NOT blurry CSS shapes. Create clean, professional cartographic visualizations.
+
+**World Map SVG Approach:**
+```tsx
+// Simplified continental outlines as SVG paths
+const WorldMapSVG: React.FC<{ highlightedRegions?: string[] }> = ({ highlightedRegions = [] }) => (
+  <svg viewBox="0 0 1000 500" style={{ width: '100%', height: '100%' }}>
+    {/* Grid lines for nautical/cartographic feel */}
+    <defs>
+      <pattern id="mapGrid" width="50" height="50" patternUnits="userSpaceOnUse">
+        <path d="M 50 0 L 0 0 0 50" fill="none" stroke="rgba(100, 150, 180, 0.2)" strokeWidth="0.5"/>
+      </pattern>
+    </defs>
+    <rect width="100%" height="100%" fill="url(#mapGrid)" />
+    
+    {/* North America - simplified path */}
+    <path d="M 50 80 Q 100 60 180 70 Q 220 90 250 150 Q 200 200 150 220 Q 100 200 80 150 Q 60 120 50 80 Z" 
+          fill="rgba(200, 180, 160, 0.4)" stroke="rgba(150, 130, 110, 0.6)" strokeWidth="1.5"/>
+    
+    {/* South America */}
+    <path d="M 200 250 Q 230 280 240 350 Q 220 420 200 450 Q 170 400 180 320 Q 185 270 200 250 Z"
+          fill="rgba(200, 180, 160, 0.4)" stroke="rgba(150, 130, 110, 0.6)" strokeWidth="1.5"/>
+    
+    {/* Europe + Africa */}
+    <path d="M 450 100 Q 500 80 530 100 Q 550 150 520 180 Q 480 200 450 180 Q 440 140 450 100 Z"
+          fill="rgba(200, 180, 160, 0.4)" stroke="rgba(150, 130, 110, 0.6)" strokeWidth="1.5"/>
+    <path d="M 460 200 Q 520 220 540 300 Q 500 380 460 350 Q 440 280 460 200 Z"
+          fill="rgba(200, 180, 160, 0.4)" stroke="rgba(150, 130, 110, 0.6)" strokeWidth="1.5"/>
+    
+    {/* Asia */}
+    <path d="M 550 60 Q 700 50 850 100 Q 900 150 880 200 Q 800 250 700 230 Q 600 200 560 150 Q 540 100 550 60 Z"
+          fill="rgba(200, 180, 160, 0.4)" stroke="rgba(150, 130, 110, 0.6)" strokeWidth="1.5"/>
+    
+    {/* Australia */}
+    <path d="M 800 320 Q 870 300 920 340 Q 930 400 880 420 Q 820 410 800 370 Q 790 340 800 320 Z"
+          fill="rgba(200, 180, 160, 0.4)" stroke="rgba(150, 130, 110, 0.6)" strokeWidth="1.5"/>
+  </svg>
+);
+```
+
+**Location Markers with Animation:**
+```tsx
+interface Territory {
+  name: string;
+  x: number; // percentage 0-100
+  y: number;
+  region?: string;
+  detail?: string;
+}
+
+const territories: Territory[] = [
+  { name: 'Puerto Rico', x: 22, y: 48, region: 'Caribbean' },
+  { name: 'Guam', x: 85, y: 50, region: 'Pacific' },
+  { name: 'Philippines', x: 82, y: 58, region: 'Pacific', detail: '$20 Million' }
+];
+
+// Animated marker with staggered entrance
+{territories.map((t, i) => {
+  const markerProgress = spring({ frame: frame - (20 + i * 15), fps, config: { damping: 15, stiffness: 100 } });
+  return (
+    <div key={t.name} style={{
+      position: 'absolute',
+      left: `${t.x}%`,
+      top: `${t.y}%`,
+      transform: `translate(-50%, -50%) scale(${markerProgress})`,
+      opacity: markerProgress,
+    }}>
+      {/* Pulse ring */}
+      <div style={{
+        position: 'absolute',
+        width: 60, height: 60,
+        borderRadius: '50%',
+        background: `radial-gradient(circle, rgba(245, 158, 11, ${0.4 + Math.sin(frame * 0.1) * 0.2}) 0%, transparent 70%)`,
+        transform: 'translate(-50%, -50%)',
+      }} />
+      
+      {/* Pin marker */}
+      <svg width="32" height="44" viewBox="0 0 32 44" style={{ filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.3))' }}>
+        <path d="M16 0 C7 0 0 7 0 16 C0 28 16 44 16 44 C16 44 32 28 32 16 C32 7 25 0 16 0 Z" fill="#f59e0b"/>
+        <circle cx="16" cy="16" r="8" fill="#fffbeb"/>
+      </svg>
+      
+      {/* Info card */}
+      <div style={{
+        position: 'absolute',
+        top: 50,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        background: 'linear-gradient(135deg, rgba(30, 41, 59, 0.95) 0%, rgba(15, 23, 42, 0.98) 100%)',
+        padding: '16px 24px',
+        borderRadius: '12px',
+        border: '2px solid #f59e0b',
+        boxShadow: '0 10px 30px rgba(0,0,0,0.4)',
+        backdropFilter: 'blur(8px)',
+        whiteSpace: 'nowrap',
+      }}>
+        <div style={{ fontSize: 22, fontWeight: 'bold', color: '#fbbf24' }}>{t.name}</div>
+        {t.region && <div style={{ fontSize: 14, color: '#94a3b8', marginTop: 4 }}>{t.region}</div>}
+      </div>
+    </div>
+  );
+})}
+```
+
+**CRITICAL Map Rules:**
+- ❌ NEVER use blurry CSS divs (`filter: blur(20px)`) for land masses - this looks terrible
+- ❌ NEVER use Mapbox or any external map service (offline-only requirement)
+- ✅ Use clean SVG paths for continental/regional shapes
+- ✅ Add grid overlays for cartographic atmosphere
+- ✅ Animate markers sequentially with staggered `spring()` animations
+- ✅ Use pulsing glow effects on location markers
+- ✅ Include professional info cards with territory details
+- ✅ Color-code territories by category with distinct fills
+
+**Map Styling:**
+- Land masses: Semi-transparent fills (`rgba(200, 180, 160, 0.4)`) with subtle strokes
+- Water/background: Grid pattern or subtle radial gradient
+- Highlighted territories: Brighter fills with glowing borders
+- Markers: SVG pin icons with drop shadows and pulse animations
+- Info cards: Glass-morphism style with accent borders
+
 ## Animation Safety (CRITICAL)
 
 - **All animations must be driven by `useCurrentFrame()` and `useVideoConfig()`**. CSS animations/transitions and Tailwind animation utilities are forbidden (they flicker or break in Remotion renders).

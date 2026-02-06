@@ -55,11 +55,27 @@ The Remotion agent supports advanced effects. Suggest these in your prompts when
 - Large numbers → "Counter animating from 0 with glow effects"
 - Headlines, titles → "Text morphing or letter-by-letter reveal"
 
+**Stylized Maps & Territorial Visualizations** (use `type=diagram`):
+- Geographic territories, treaty maps → "Stylized SVG world map with highlighted regions"
+- Location markers, points of interest → "Map with animated location pins and info cards"
+- Trade routes, migration paths → "Stylized map with animated path lines"
+- Regional comparisons → "Side-by-side or single map with color-coded regions"
+
+**CRITICAL for Maps:**
+- Maps MUST be stylized SVG graphics (no Mapbox, no external services)
+- Use simplified continental shapes with clean SVG paths
+- Highlight specific territories with contrasting fills/strokes
+- Add animated location markers that appear sequentially
+- Include info cards/labels for each territory with staggered entrance
+- Use grid overlays or nautical-style decorative elements for atmosphere
+- Color-code territories by category (e.g., ceded territories, disputed areas)
+
 **When to use advanced effects:**
 - Hero moments, key statistics → Use 3D or particles for impact
 - Long segments (10+ seconds) → Use multi-scene transitions
 - Impressive numbers, achievements → Use kinetic typography + particles
 - Product/brand content → Use 3D with premium lighting
+- Geographic/territorial content → Use stylized SVG maps with animated markers
 
 ## Input Requirements
 
@@ -115,4 +131,10 @@ INFOGRAPHIC_PLACER:
 - Placement 4: 3:00-3:15 | type=diagram | PARTICLE FORMATION: Company logo forms from 500+ scattered particles that converge into position over 8 seconds. Particles start as random floating dots, then smoothly animate to their final logo positions. Add subtle glow effect once formed. Premium reveal for brand moment.
 ```
 
-**Note**: Use advanced effects (3D, particles, transitions) for hero moments, impressive stats, and premium brand content. Keep simpler 2D animations for standard data visualization where clarity is the priority.
+**Map/Territorial example (stylized SVG, NOT Mapbox)**:
+```
+INFOGRAPHIC_PLACER:
+- Placement 5: 4:00-4:25 | type=diagram | TERRITORIAL MAP - Treaty of Paris (1898): Create a stylized world map using clean SVG paths for continental outlines (NOT blurry CSS shapes). Highlight three territories with animated location markers appearing sequentially: 1) Puerto Rico (Caribbean, position ~22% from left, 48% from top), 2) Guam (Pacific, ~85% left, 50% top), 3) Philippines (Pacific, ~82% left, 58% top, include "$20 Million" price tag). Each territory gets a pulsing pin marker with SVG icon and an info card showing name and region. Use amber/gold accent color (#f59e0b) for markers and borders. Add subtle grid overlay for nautical/cartographic atmosphere. Title card in top-left: "TERRITORIAL MAP" with subtitle "Treaty of Paris (1898)". Background must be transparent - apply styling to cards/markers only.
+```
+
+**Note**: Use advanced effects (3D, particles, transitions) for hero moments, impressive stats, and premium brand content. Keep simpler 2D animations for standard data visualization where clarity is the priority. For geographic/territorial content, ALWAYS specify stylized SVG maps with animated markers - never suggest blurry CSS shapes.

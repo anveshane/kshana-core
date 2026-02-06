@@ -1151,15 +1151,20 @@ export interface VideoPlacementGenerationParams {
 /**
  * Calculate frame count for LTX-2 workflow from duration.
  * LTX-2 requires frame count to be divisible by 8 + 1.
- * Formula: Math.floor((duration * 24) / 8) * 8 + 1
+ * Formula: Math.ceil((duration * 25) / 8) * 8 + 1
+ * 
+ * NOTE: LTX-2 workflows use 25 fps (not 24 fps) as the native frame rate.
+ * Using Math.ceil ensures we get at least the requested duration (videos may
+ * be slightly longer but never shorter than expected).
  * 
  * @param duration Duration in seconds (4-10 seconds maximum)
- * @returns Frame count (97 for 4s, 121 for 5s, up to 241 for 10s)
+ * @returns Frame count ensuring at least the requested duration
  */
 function calculateFrameCount(duration: number): number {
-  // 24 fps, frame count must be divisible by 8 + 1
-  const baseFrames = duration * 24;
-  return Math.floor(baseFrames / 8) * 8 + 1;
+  // 25 fps (LTX-2 native), frame count must be divisible by 8 + 1
+  // Use Math.ceil to ensure we never generate shorter videos than requested
+  const baseFrames = duration * 25;
+  return Math.ceil(baseFrames / 8) * 8 + 1;
 }
 
 /**
