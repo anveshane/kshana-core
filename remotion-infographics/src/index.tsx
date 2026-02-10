@@ -2,6 +2,7 @@ import React from 'react';
 import { Composition, registerRoot } from 'remotion';
 import { Infographic1 } from './components/Infographic1';
 import { Infographic2 } from './components/Infographic2';
+import { Infographic3 } from './components/Infographic3';
 
 const fps = 24;
 
@@ -19,6 +20,7 @@ const RemotionRoot: React.FC = () => {
         defaultProps={{
           prompt: '',
           infographicType: 'statistic',
+          data: {},
         }}
       />
       <Composition
@@ -32,6 +34,21 @@ const RemotionRoot: React.FC = () => {
         defaultProps={{
           prompt: '',
           infographicType: 'statistic',
+          data: {},
+        }}
+      />
+      <Composition
+        id="Infographic3"
+        // @ts-ignore - Remotion Composition expects Record<string, unknown> but components use InfographicProps
+        component={Infographic3}
+        durationInFrames={5 * fps}
+        fps={fps}
+        width={1920}
+        height={1080}
+        defaultProps={{
+          prompt: '',
+          infographicType: 'statistic',
+          data: {},
         }}
       />
     </>

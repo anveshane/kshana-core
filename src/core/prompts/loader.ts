@@ -336,3 +336,174 @@ export function loadRemotionSkills(options?: LoadRemotionSkillsOptions): string 
   }
   return parts.join('');
 }
+
+export type InfographicType = 'bar_chart' | 'line_chart' | 'diagram' | 'statistic' | 'list';
+
+export interface InfographicSkillSelection {
+  content: string;
+  selectedRules: string[];
+  selectedExamples: string[];
+}
+
+const INFOGRAPHIC_GENERATION_GUARDRAILS = `
+### kshana-required-infographic-guardrails
+
+- Strongly prefer rendering \`{prompt}\` in a visible heading/title element.
+- Strongly prefer rendering \`{infographicType}\` as a visible badge/label.
+- If \`data\` is provided and non-empty, strongly prefer rendering at least one label/value derived from \`data\`.
+- Do not use CSS \`animation\`, \`transition\`, or \`@keyframes\`.
+- Use Remotion frame-driven motion only: \`spring\`, \`interpolate\`, \`Sequence\`, \`Series\`, or \`TransitionSeries\`.
+- Do not use remote URLs for assets.
+- Do not use \`Math.random()\`; use deterministic Remotion patterns.
+- Prioritize valid, compilable TSX output over visual complexity.
+`.trim();
+
+const BASE_INFOGRAPHIC_RULES = [
+  'animations',
+  'timing',
+  'sequencing',
+  'text-animations',
+  'compositions',
+];
+
+const GEOGRAPHIC_KEYWORDS = [
+  'map',
+  'territory',
+  'territories',
+  'geography',
+  'location',
+  'locations',
+  'region',
+  'regions',
+  'country',
+  'countries',
+  'route',
+  'routes',
+  'migration',
+  'border',
+];
+
+const THREE_D_KEYWORDS = [
+  '3d',
+  'extruded',
+  'depth',
+  'isometric',
+  'orbit',
+  'rotating',
+  'spatial',
+  'particle',
+  'particles',
+];
+
+const TRANSITION_HINT_KEYWORDS = [
+  'step',
+  'steps',
+  'phase',
+  'phases',
+  'timeline',
+  'before',
+  'after',
+  'sequence',
+  'stages',
+  'compare',
+  'comparison',
+];
+
+function hasAnyKeyword(text: string, keywords: string[]): boolean {
+  const lower = text.toLowerCase();
+  return keywords.some((keyword) => {
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`);
+    return pattern.test(lower);
+  });
+}
+
+function inferRulesForInfographicType(type: InfographicType, promptText: string): string[] {
+  const selected = new Set<string>(BASE_INFOGRAPHIC_RULES);
+  if (type === 'bar_chart' || type === 'line_chart') {
+    selected.add('charts');
+  }
+
+  if (type === 'list' && hasAnyKeyword(promptText, TRANSITION_HINT_KEYWORDS)) {
+    selected.add('transitions');
+  }
+
+  if (type === 'diagram' && hasAnyKeyword(promptText, TRANSITION_HINT_KEYWORDS)) {
+    selected.add('transitions');
+  }
+
+  if (hasAnyKeyword(promptText, THREE_D_KEYWORDS)) {
+    selected.add('3d');
+  }
+
+  if (hasAnyKeyword(promptText, GEOGRAPHIC_KEYWORDS)) {
+    selected.add('maps');
+  }
+
+  return Array.from(selected).sort();
+}
+
+function inferExamplesForInfographicType(type: InfographicType, promptText: string): string[] {
+  const selected = new Set<string>(['multi-beat-sequence']);
+
+  if (type === 'bar_chart' || type === 'line_chart') {
+    selected.add('3d-extruded-bar-chart');
+  }
+  if (type === 'statistic') {
+    selected.add('kinetic-typography');
+  }
+  if (type === 'list') {
+    selected.add('transition-series-demo');
+  }
+  if (hasAnyKeyword(promptText, THREE_D_KEYWORDS)) {
+    selected.add('3d-rotating-cube');
+  }
+  if (promptText.toLowerCase().includes('particle')) {
+    selected.add('particle-effects');
+  }
+
+  return Array.from(selected).sort();
+}
+
+function loadRemotionExamples(exampleSubset: string[]): string {
+  const examplesDir = join(PROMPTS_DIR, 'remotion-skills', 'examples');
+  if (!existsSync(examplesDir) || exampleSubset.length === 0) {
+    return '';
+  }
+
+  const parts: string[] = [];
+  const selected = new Set(exampleSubset);
+  let names = readdirSync(examplesDir)
+    .filter((f) => f.endsWith('.tsx'))
+    .map((f) => f.slice(0, -4))
+    .filter((name) => selected.has(name));
+  names = names.sort();
+
+  for (const name of names) {
+    const p = join(examplesDir, `${name}.tsx`);
+    if (existsSync(p)) {
+      parts.push(`\n### examples/${name}.tsx\n\n`, readFileSync(p, 'utf-8'));
+    }
+  }
+
+  return parts.join('');
+}
+
+export function loadRemotionSkillsForInfographicType(
+  type: InfographicType,
+  promptText: string,
+): InfographicSkillSelection {
+  const selectedRules = inferRulesForInfographicType(type, promptText);
+  const selectedExamples = inferExamplesForInfographicType(type, promptText);
+  const skillsContent = loadRemotionSkills({ ruleSubset: selectedRules });
+  const examplesContent = loadRemotionExamples(selectedExamples);
+  const content = [skillsContent, examplesContent, INFOGRAPHIC_GENERATION_GUARDRAILS]
+    .filter(Boolean)
+    .join('\n\n');
+
+  return {
+    content,
+    selectedRules,
+    selectedExamples,
+  };
+}

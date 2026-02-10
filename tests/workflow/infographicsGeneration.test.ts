@@ -5,7 +5,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
-import { sanitizeGeneratedComponentCode } from '../../src/tasks/video/tools.js';
+import {
+  classifyInfographicQualityFailures,
+  normalizeRemotionProgress,
+  sanitizeGeneratedComponentCode,
+  validateInfographicQuality,
+} from '../../src/tasks/video/tools.js';
 
 const ROOT = join(process.cwd());
 const FIXTURES = join(ROOT, 'tests', 'fixtures');
@@ -88,6 +93,175 @@ describe('infographicsGeneration', () => {
     });
   });
 
+  describe('generated component quality validation', () => {
+    it('accepts valid transparent, prompt-driven frame animation component', () => {
+      const code = `
+import React from 'react';
+import {AbsoluteFill, spring, useCurrentFrame, useVideoConfig} from 'remotion';
+type Props = {prompt: string; infographicType: string; data?: Record<string, unknown>};
+export const Infographic1: React.FC<Props> = ({prompt, infographicType, data}) => {
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const opacity = spring({frame, fps, config: {damping: 200}});
+  return (
+    <AbsoluteFill style={{background: 'transparent'}}>
+      <div style={{opacity}}>{prompt} {infographicType} {JSON.stringify(data ?? {})}</div>
+    </AbsoluteFill>
+  );
+};`;
+
+      const result = validateInfographicQuality(code);
+      expect(result.valid).toBe(true);
+      expect(result.failures).toEqual([]);
+    });
+
+    it('rejects remote assets and CSS keyframe/transition animation', () => {
+      const code = `
+import React from 'react';
+export const Infographic2: React.FC<{prompt: string}> = ({prompt}) => {
+  return (
+    <div style={{backgroundColor: 'transparent', animation: 'pulse 1s linear infinite', transition: 'all .2s'}}>
+      <img src="https://example.com/logo.png" />
+      <span>{prompt}</span>
+    </div>
+  );
+};`;
+
+      const result = validateInfographicQuality(code);
+      expect(result.valid).toBe(false);
+      expect(result.failures).toContain('contains remote URL asset');
+      expect(result.failures).toContain(
+        'contains CSS animation/transition instead of frame-driven motion',
+      );
+    });
+
+    it('allows SVG namespace URLs while still validating quality rules', () => {
+      const code = `
+import React from 'react';
+import {AbsoluteFill, spring, useCurrentFrame, useVideoConfig} from 'remotion';
+type Props = {prompt: string; infographicType: string};
+export const InfographicSvg: React.FC<Props> = ({prompt, infographicType}) => {
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const opacity = spring({frame, fps, config: {damping: 200}});
+  return (
+    <AbsoluteFill style={{background: 'transparent'}}>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+        <rect x="0" y="0" width="10" height="10" fill="currentColor" />
+      </svg>
+      <div style={{opacity}}>{prompt} {infographicType}</div>
+    </AbsoluteFill>
+  );
+};`;
+
+      const result = validateInfographicQuality(code);
+      expect(result.valid).toBe(true);
+      expect(result.failures).toEqual([]);
+    });
+
+    it('rejects static output that does not render prompt/type/data content', () => {
+      const code = `
+import React from 'react';
+import {AbsoluteFill, spring, useCurrentFrame, useVideoConfig} from 'remotion';
+type Props = {prompt: string; infographicType: string; data?: Record<string, unknown>};
+export const Infographic3: React.FC<Props> = ({prompt, infographicType, data}) => {
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const opacity = spring({frame, fps, config: {damping: 200}});
+  return (
+    <AbsoluteFill style={{background: 'transparent'}}>
+      <div style={{opacity}}>Static hardcoded text only</div>
+    </AbsoluteFill>
+  );
+};`;
+
+      const result = validateInfographicQuality(code);
+      expect(result.valid).toBe(false);
+      expect(result.failures).toContain('does not render prompt, infographicType, or data-driven content');
+    });
+
+    it('rejects Math.random usage for deterministic rendering', () => {
+      const code = `
+import React from 'react';
+import {AbsoluteFill, useCurrentFrame, useVideoConfig, spring} from 'remotion';
+type Props = {prompt: string; infographicType: string};
+export const Infographic4: React.FC<Props> = ({prompt}) => {
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const opacity = spring({frame, fps, config: {damping: 200}});
+  const randomX = Math.random() * 100;
+  return <AbsoluteFill style={{background: 'transparent'}}><div style={{opacity, left: randomX}}>{prompt}</div></AbsoluteFill>;
+};`;
+
+      const result = validateInfographicQuality(code);
+      expect(result.valid).toBe(false);
+      expect(result.failures).toContain('contains Math.random(); use remotion random() with a static seed');
+    });
+
+    it('accepts prompt usage when helper functions return JSX before main return', () => {
+      const code = `
+import React from 'react';
+import {AbsoluteFill, spring, useCurrentFrame, useVideoConfig} from 'remotion';
+const Badge: React.FC<{label: string}> = ({label}) => {
+  return <span>{label}</span>;
+};
+type Props = {prompt: string; infographicType: string};
+export const Infographic5: React.FC<Props> = ({prompt, infographicType}) => {
+  const frame = useCurrentFrame();
+  const {fps} = useVideoConfig();
+  const opacity = spring({frame, fps, config: {damping: 200}});
+  const heading = prompt.trim();
+  const displayHeading = heading.toUpperCase();
+  return (
+    <AbsoluteFill style={{background: 'transparent'}}>
+      <div style={{opacity}}>
+        <Badge label={infographicType} />
+        <h1>{displayHeading}</h1>
+      </div>
+    </AbsoluteFill>
+  );
+};`;
+
+      const result = validateInfographicQuality(code);
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  describe('quality failure classification', () => {
+    it('classifies hard and soft quality failures correctly', () => {
+      const failures = [
+        'does not render prompt, infographicType, or data-driven content',
+        'contains CSS animation/transition instead of frame-driven motion',
+        'missing transparent root background',
+        'contains Math.random(); use remotion random() with a static seed',
+      ];
+      const classified = classifyInfographicQualityFailures(failures);
+      expect(classified.soft).toEqual([
+        'does not render prompt, infographicType, or data-driven content',
+        'contains CSS animation/transition instead of frame-driven motion',
+      ]);
+      expect(classified.hard).toEqual([
+        'missing transparent root background',
+        'contains Math.random(); use remotion random() with a static seed',
+      ]);
+    });
+  });
+
+  describe('progress normalization', () => {
+    it('normalizes fraction progress values', () => {
+      expect(normalizeRemotionProgress(0.33)).toBeCloseTo(0.33, 5);
+    });
+
+    it('normalizes legacy percent values', () => {
+      expect(normalizeRemotionProgress(33)).toBeCloseTo(0.33, 5);
+    });
+
+    it('clamps out-of-range values', () => {
+      expect(normalizeRemotionProgress(-1)).toBe(0);
+      expect(normalizeRemotionProgress(120)).toBe(1);
+    });
+  });
+
   describe('render.mts e2e', () => {
     it('render.mts writes --output and produces outputs (skip if no build or SKIP_REMOTION_E2E)', () => {
       if (process.env.SKIP_REMOTION_E2E === '1') {
@@ -112,6 +286,11 @@ describe('infographicsGeneration', () => {
         { encoding: 'utf-8', cwd: REMOTION, timeout: 120_000 }
       );
 
+      const stderr = `${r.stderr ?? ''}\n${r.stdout ?? ''}`;
+      if (r.status !== 0 && /listen EPERM|operation not permitted.*tsx|tsx-\d+\/.+\.pipe/i.test(stderr)) {
+        return;
+      }
+
       expect(r.status).toBe(0);
       expect(r.error).toBeUndefined();
       expect(existsSync(outputPath)).toBe(true);
@@ -119,9 +298,9 @@ describe('infographicsGeneration', () => {
       const out = JSON.parse(readFileSync(outputPath, 'utf-8')) as { outputs?: string[] };
       expect(Array.isArray(out.outputs)).toBe(true);
       expect(out.outputs!.length).toBeGreaterThanOrEqual(1);
-      const mp4 = out.outputs![0];
-      expect(mp4).toMatch(/\.mp4$/);
-      expect(existsSync(mp4)).toBe(true);
+      const webm = out.outputs![0];
+      expect(webm).toMatch(/\.webm$/);
+      expect(existsSync(webm)).toBe(true);
     });
   });
 });

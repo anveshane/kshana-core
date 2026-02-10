@@ -79,6 +79,37 @@ function normalizeInfographicType(raw: string): 'bar_chart' | 'line_chart' | 'di
   return 'statistic';
 }
 
+function parsePromptAndData(rawPromptSegment: string): {
+  prompt: string;
+  data?: Record<string, unknown>;
+  dataParseError?: string;
+} {
+  const markerMatch = rawPromptSegment.match(/^(.*)\|\s*data\s*=\s*([\s\S]*)$/);
+  if (!markerMatch || !markerMatch[1]) {
+    return { prompt: rawPromptSegment.trim() };
+  }
+
+  const prompt = markerMatch[1].trim();
+  const rawData = markerMatch[2]?.trim();
+  if (!rawData) {
+    return { prompt, dataParseError: 'data= marker present but JSON payload is empty' };
+  }
+
+  try {
+    const parsed = JSON.parse(rawData) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { prompt, dataParseError: 'data JSON must be an object' };
+    }
+    return { prompt, data: parsed as Record<string, unknown> };
+  } catch (error) {
+    return {
+      prompt,
+      dataParseError:
+        error instanceof Error ? error.message : `Invalid data JSON: ${String(error)}`,
+    };
+  }
+}
+
 /**
  * Parse infographic placements from the infographic-placements.md file content.
  *
@@ -176,7 +207,24 @@ export function parseInfographicPlacementsWithErrors(
     }
 
     const typeStr = match[3]!.trim();
-    const prompt = match[4]!.trim();
+    const parsedPrompt = parsePromptAndData(match[4]!);
+    const prompt = parsedPrompt.prompt;
+
+    if (parsedPrompt.dataParseError) {
+      const reason = `Invalid data JSON: ${parsedPrompt.dataParseError}`;
+      if (strict) {
+        errors.push({
+          line: lineNum + 1,
+          content: trimmedLine,
+          reason,
+          suggestion:
+            'Use valid JSON object syntax for data payload, e.g. data={"labels":["Q1"],"values":[42]}',
+        });
+        continue;
+      }
+      warnings.push(`Line ${lineNum + 1}: ${reason}`);
+    }
+
     if (!prompt) {
       if (strict) {
         errors.push({
@@ -196,6 +244,7 @@ export function parseInfographicPlacementsWithErrors(
       endTime,
       infographicType,
       prompt,
+      data: parsedPrompt.data,
     });
   }
 

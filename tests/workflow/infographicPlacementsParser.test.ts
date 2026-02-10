@@ -113,6 +113,28 @@ Some random line.
       expect(result.warnings.some((w) => w.includes('Duplicate placement number 1'))).toBe(true);
     });
 
+    it('parses optional data JSON payload', () => {
+      const content = `INFOGRAPHIC_PLACER:
+- Placement 1: 0:00-0:05 | type=bar_chart | Revenue by quarter | data={"labels":["Q1","Q2"],"values":[12,18]}`;
+      const result = parseInfographicPlacementsWithErrors(content, false);
+      expect(result.errors).toHaveLength(0);
+      expect(result.placements).toHaveLength(1);
+      expect(result.placements[0]?.data).toEqual({
+        labels: ['Q1', 'Q2'],
+        values: [12, 18],
+      });
+    });
+
+    it('handles malformed data JSON gracefully in non-strict mode', () => {
+      const content = `INFOGRAPHIC_PLACER:
+- Placement 1: 0:00-0:05 | type=statistic | Growth metric | data={"value":42`;
+      const result = parseInfographicPlacementsWithErrors(content, false);
+      expect(result.errors).toHaveLength(0);
+      expect(result.warnings.some((w) => w.includes('Invalid data JSON'))).toBe(true);
+      expect(result.placements).toHaveLength(1);
+      expect(result.placements[0]?.data).toBeUndefined();
+    });
+
     it('handles time formats M:SS and MM:SS', () => {
       const content = `INFOGRAPHIC_PLACER:
 - Placement 1: 0:05-1:30 | type=statistic | Short to long.
@@ -151,6 +173,14 @@ Some random line.
       const result = parseInfographicPlacementsWithErrors(content, true);
       expect(result.placements).toHaveLength(0);
       expect(result.errors.some((e) => e.reason.includes('match') || e.reason.includes('pattern'))).toBe(true);
+    });
+
+    it('rejects malformed data JSON in strict mode', () => {
+      const content = `INFOGRAPHIC_PLACER:
+- Placement 1: 0:00-0:05 | type=statistic | Broken data | data={"value":42`;
+      const result = parseInfographicPlacementsWithErrors(content, true);
+      expect(result.placements).toHaveLength(0);
+      expect(result.errors.some((e) => e.reason.includes('Invalid data JSON'))).toBe(true);
     });
   });
 

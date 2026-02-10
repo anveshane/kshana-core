@@ -17,17 +17,25 @@ const PLACER_FIXTURE = join(FIXTURES, 'infographic-placements.md');
 /** Path relative to project base where readProjectFile looks: .kshana/agent/content/infographic-placements.md */
 const KSHANA_AGENT_CONTENT = join('.kshana', 'agent', 'content');
 
+const buildMockComponentCode = (placementNumber: number): string =>
+  `import React from 'react';
+import { AbsoluteFill, useCurrentFrame, useVideoConfig, spring } from 'remotion';
+interface InfographicProps { prompt: string; infographicType: string; data?: Record<string, unknown>; }
+export const Infographic${placementNumber}: React.FC<InfographicProps> = ({ prompt, infographicType, data }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+  const opacity = spring({ frame, fps, config: { damping: 200 } });
+  return <AbsoluteFill style={{ background: 'transparent', justifyContent: 'center', alignItems: 'center' }}><div style={{ opacity }}>{prompt} - {infographicType} - {JSON.stringify(data ?? {})}</div></AbsoluteFill>;
+};`;
+
 const MOCK_COMPONENT_CODE: ComponentCode = {
-  placements: [
-    {
-      placementNumber: 1,
-      componentCode: "import React from 'react';\nimport { AbsoluteFill } from 'remotion';\n\nexport const Infographic1 = () => <AbsoluteFill />;",
-    },
-    {
-      placementNumber: 2,
-      componentCode: "import React from 'react';\nimport { AbsoluteFill } from 'remotion';\n\nexport const Infographic2 = () => <AbsoluteFill />;",
-    },
-  ],
+  placements: Array.from({ length: 6 }, (_, index) => {
+    const placementNumber = index + 1;
+    return {
+      placementNumber,
+      componentCode: buildMockComponentCode(placementNumber),
+    };
+  }),
 };
 
 describe('generate_all_infographics integration', () => {
@@ -77,6 +85,7 @@ describe('generate_all_infographics integration', () => {
 
     const result = await (tool!.handler! as (args: Record<string, unknown>) => Promise<unknown>)({
       file_path: 'agent/content/infographic-placements.md',
+      expand_prompts: false,
     });
 
     const res = result as {
@@ -118,10 +127,83 @@ describe('generate_all_infographics integration', () => {
 
     const result = await (tool!.handler! as (args: Record<string, unknown>) => Promise<unknown>)({
       file_path: 'agent/content/infographic-placements.md',
+      expand_prompts: false,
     });
 
     expect(result).toMatchObject({ status: 'error' });
     expect((result as { error?: string }).error).toMatch(/package not found|not found/);
+  });
+
+  it('auto-remediates bundle syntax failure by regenerating only the failing placement', async () => {
+    const flakyBuildScript = join(TEMP_REMOTION, 'mock-remotion-build-syntax-error.mjs');
+    fs.writeFileSync(
+      flakyBuildScript,
+      `import fs from 'node:fs';
+import path from 'node:path';
+const componentPath = path.join(process.cwd(), 'src', 'components', 'Infographic1.tsx');
+const content = fs.readFileSync(componentPath, 'utf-8');
+if (content.includes('BAD_BUILD_TOKEN')) {
+  console.error('Error: Transform failed with 1 error:');
+  console.error(\`\${componentPath}:219:20: ERROR: The character ">" is not valid inside a JSX element\`);
+  process.exit(1);
+}
+process.exit(0);`,
+      'utf-8',
+    );
+    fs.writeFileSync(
+      join(TEMP_REMOTION, 'package.json'),
+      JSON.stringify({
+        name: 'fake-remotion',
+        scripts: {
+          build: `node "${flakyBuildScript}"`,
+          render: `node "${MOCK_SCRIPT}"`,
+        },
+      }),
+      'utf-8',
+    );
+
+    let callCount = 0;
+    const retryOptions: Array<{ failedPlacementNumber?: number; retryAttempt?: number }> = [];
+    const mockRunRemotionAgent: RunRemotionAgentCallback = async (placements, _skillsContent, options) => {
+      callCount += 1;
+      if (options) retryOptions.push({ failedPlacementNumber: options.failedPlacementNumber, retryAttempt: options.retryAttempt });
+      const placementNumber = placements[0]?.placementNumber ?? 1;
+
+      if (placementNumber === 1 && !options?.retryAttempt) {
+        return {
+          placements: [
+            {
+              placementNumber: 1,
+              componentCode:
+                "import React from 'react';\\nimport { AbsoluteFill, useCurrentFrame, useVideoConfig, spring } from 'remotion';\\ninterface InfographicProps { prompt: string; infographicType: string; data?: Record<string, unknown>; }\\nexport const Infographic1: React.FC<InfographicProps> = ({ prompt, infographicType, data }) => { const frame = useCurrentFrame(); const { fps } = useVideoConfig(); const opacity = spring({ frame, fps, config: { damping: 200 } }); return <AbsoluteFill style={{ background: 'transparent', justifyContent: 'center', alignItems: 'center' }}><div style={{ opacity }}>BAD_BUILD_TOKEN {prompt} {infographicType} {JSON.stringify(data ?? {})}</div></AbsoluteFill>; };",
+            },
+          ],
+        };
+      }
+
+      return {
+        placements: [
+          {
+            placementNumber,
+            componentCode:
+              `import React from 'react';\nimport { AbsoluteFill, useCurrentFrame, useVideoConfig, spring } from 'remotion';\ninterface InfographicProps { prompt: string; infographicType: string; data?: Record<string, unknown>; }\nexport const Infographic${placementNumber}: React.FC<InfographicProps> = ({ prompt, infographicType, data }) => { const frame = useCurrentFrame(); const { fps } = useVideoConfig(); const opacity = spring({ frame, fps, config: { damping: 200 } }); return <AbsoluteFill style={{ background: 'transparent', justifyContent: 'center', alignItems: 'center' }}><div style={{ opacity }}>{prompt} {infographicType} {JSON.stringify(data ?? {})}</div></AbsoluteFill>; };`,
+          },
+        ],
+      };
+    };
+
+    const tools = getVideoGenerationTools({ runRemotionAgent: mockRunRemotionAgent });
+    const tool = tools.find((t) => t.name === 'generate_all_infographics');
+    expect(tool).toBeDefined();
+
+    const result = await (tool!.handler! as (args: Record<string, unknown>) => Promise<unknown>)({
+      file_path: 'agent/content/infographic-placements.md',
+      expand_prompts: false,
+    });
+
+    expect((result as { status: string }).status).toBe('completed');
+    expect(callCount).toBeGreaterThanOrEqual(3);
+    expect(retryOptions.some((o) => o.failedPlacementNumber === 1 && o.retryAttempt === 1)).toBe(true);
   });
 
   it('retries only failed placement when render fails with ReferenceError', async () => {
@@ -170,32 +252,29 @@ fs.writeFileSync(path.join(outDir, 'captured_input.json'), raw, 'utf-8');`,
 
     let callCount = 0;
     const retryOptions: Array<{ failedPlacementNumber?: number; retryAttempt?: number }> = [];
-    const mockRunRemotionAgent: RunRemotionAgentCallback = async (_placements, _skillsContent, options) => {
+    const mockRunRemotionAgent: RunRemotionAgentCallback = async (placements, _skillsContent, options) => {
       callCount += 1;
       if (options) retryOptions.push({ failedPlacementNumber: options.failedPlacementNumber, retryAttempt: options.retryAttempt });
-      if (callCount === 1) {
+      const placementNumber = placements[0]?.placementNumber ?? 1;
+
+      if (placementNumber === 2 && !options?.retryAttempt) {
         return {
           placements: [
             {
-              placementNumber: 1,
-              componentCode: "import React from 'react';\\nimport { AbsoluteFill } from 'remotion';\\nexport const Infographic1 = () => <AbsoluteFill />;",
-            },
-            {
               placementNumber: 2,
-              componentCode: "import React from 'react';\\nimport { AbsoluteFill } from 'remotion';\\nexport const Infographic2 = () => <AbsoluteFill>BAD_WATER</AbsoluteFill>;",
-            },
-            {
-              placementNumber: 3,
-              componentCode: "import React from 'react';\\nimport { AbsoluteFill } from 'remotion';\\nexport const Infographic3 = () => <AbsoluteFill />;",
+              componentCode:
+                "import React from 'react';\\nimport { AbsoluteFill, useCurrentFrame, useVideoConfig, spring } from 'remotion';\\ninterface InfographicProps { prompt: string; infographicType: string; data?: Record<string, unknown>; }\\nexport const Infographic2: React.FC<InfographicProps> = ({ prompt }) => { const frame = useCurrentFrame(); const { fps } = useVideoConfig(); const opacity = spring({ frame, fps, config: { damping: 200 } }); return <AbsoluteFill style={{ background: 'transparent' }}><div style={{ opacity }}>BAD_WATER {prompt}</div></AbsoluteFill>; };",
             },
           ],
         };
       }
+
       return {
         placements: [
           {
-            placementNumber: 2,
-            componentCode: "import React from 'react';\\nimport { AbsoluteFill } from 'remotion';\\nexport const Infographic2 = () => <AbsoluteFill />;",
+            placementNumber,
+            componentCode:
+              `import React from 'react';\nimport { AbsoluteFill, useCurrentFrame, useVideoConfig, spring } from 'remotion';\ninterface InfographicProps { prompt: string; infographicType: string; data?: Record<string, unknown>; }\nexport const Infographic${placementNumber}: React.FC<InfographicProps> = ({ prompt, infographicType }) => { const frame = useCurrentFrame(); const { fps } = useVideoConfig(); const opacity = spring({ frame, fps, config: { damping: 200 } }); return <AbsoluteFill style={{ background: 'transparent', justifyContent: 'center', alignItems: 'center' }}><div style={{ opacity }}>{prompt} {infographicType}</div></AbsoluteFill>; };`,
           },
         ],
       };
@@ -207,10 +286,11 @@ fs.writeFileSync(path.join(outDir, 'captured_input.json'), raw, 'utf-8');`,
 
     const result = await (tool!.handler! as (args: Record<string, unknown>) => Promise<unknown>)({
       file_path: 'agent/content/infographic-placements.md',
+      expand_prompts: false,
     });
 
     expect((result as { status: string }).status).toBe('completed');
-    expect(callCount).toBe(2);
+    expect(callCount).toBeGreaterThanOrEqual(3);
     expect(retryOptions.some((o) => o.failedPlacementNumber === 2 && o.retryAttempt === 1)).toBe(true);
   });
 });

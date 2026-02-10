@@ -1,1 +1,0 @@
-import React from 'react';\nimport { AbsoluteFill } from 'remotion';\nexport const Infographic3 = () => <AbsoluteFill />;

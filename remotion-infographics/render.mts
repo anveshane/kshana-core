@@ -62,6 +62,7 @@ async function main() {
       endTime: string;
       infographicType: string;
       prompt: string;
+      data?: Record<string, unknown>;
       componentName: string;
     }>;
   };
@@ -83,13 +84,14 @@ async function main() {
 
   for (let i = 0; i < placements.length; i++) {
     const p = placements[i]!;
-    const progressStart = (i / total) * 100;
+    const progressStart = i / total;
     console.log(`REMOTION_PROGRESS:${JSON.stringify({ placementIndex: i, totalPlacements: total, progress: progressStart, stage: 'rendering' })}`);
     const durationSeconds = Math.max(1, timeToSeconds(p.endTime) - timeToSeconds(p.startTime));
     const durationInFrames = Math.round(durationSeconds * fps);
     const inputProps = {
       prompt: p.prompt,
       infographicType: p.infographicType,
+      data: p.data ?? {},
     };
     const composition = await selectComposition({
       serveUrl,
@@ -113,7 +115,7 @@ async function main() {
       imageFormat: 'png',
     });
     outputs.push(outFilePath);
-    const progressEnd = ((i + 1) / total) * 100;
+    const progressEnd = (i + 1) / total;
     console.log(`REMOTION_PROGRESS:${JSON.stringify({ placementIndex: i, totalPlacements: total, progress: progressEnd, stage: 'rendering' })}`);
   }
 

@@ -119,6 +119,7 @@ export async function runRemotionAgent(
         endTime: placement.endTime,
         infographicType: placement.infographicType,
         prompt: placement.prompt,
+        data: placement.data ?? {},
       },
     ]);
     const systemPrompt = buildRemotionAgentPrompt(placementJson, skillsContent);
