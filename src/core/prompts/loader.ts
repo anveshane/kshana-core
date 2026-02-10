@@ -311,9 +311,14 @@ export function loadRemotionSkills(options?: LoadRemotionSkillsOptions): string 
     return '';
   }
   const parts: string[] = [];
+  // Load Remotion fundamentals FIRST (official system prompt foundation)
+  const fundamentalsMd = join(skillsDir, 'REMOTION-FUNDAMENTALS.md');
+  if (existsSync(fundamentalsMd)) {
+    parts.push('## Remotion Fundamentals\n\n', readFileSync(fundamentalsMd, 'utf-8'));
+  }
   const skillMd = join(skillsDir, 'SKILL.md');
   if (existsSync(skillMd)) {
-    parts.push('## SKILL\n\n', readFileSync(skillMd, 'utf-8'));
+    parts.push('\n## SKILL\n\n', readFileSync(skillMd, 'utf-8'));
   }
   const rulesDir = join(skillsDir, 'rules');
   if (!existsSync(rulesDir)) {
@@ -348,14 +353,12 @@ export interface InfographicSkillSelection {
 const INFOGRAPHIC_GENERATION_GUARDRAILS = `
 ### kshana-required-infographic-guardrails
 
-- Strongly prefer rendering \`{prompt}\` in a visible heading/title element.
-- Strongly prefer rendering \`{infographicType}\` as a visible badge/label.
-- If \`data\` is provided and non-empty, strongly prefer rendering at least one label/value derived from \`data\`.
+- NEVER render \`{prompt}\` or \`{infographicType}\` as visible text. Extract a short, meaningful title from the prompt topic and use \`data\` fields for display content.
+- If \`data\` is provided and non-empty, render at least one label/value derived from \`data\`.
 - Do not use CSS \`animation\`, \`transition\`, or \`@keyframes\`.
 - Use Remotion frame-driven motion only: \`spring\`, \`interpolate\`, \`Sequence\`, \`Series\`, or \`TransitionSeries\`.
 - Do not use remote URLs for assets.
 - Do not use \`Math.random()\`; use deterministic Remotion patterns.
-- Prioritize valid, compilable TSX output over visual complexity.
 `.trim();
 
 const BASE_INFOGRAPHIC_RULES = [
@@ -364,23 +367,6 @@ const BASE_INFOGRAPHIC_RULES = [
   'sequencing',
   'text-animations',
   'compositions',
-];
-
-const GEOGRAPHIC_KEYWORDS = [
-  'map',
-  'territory',
-  'territories',
-  'geography',
-  'location',
-  'locations',
-  'region',
-  'regions',
-  'country',
-  'countries',
-  'route',
-  'routes',
-  'migration',
-  'border',
 ];
 
 const THREE_D_KEYWORDS = [
@@ -436,30 +422,41 @@ function inferRulesForInfographicType(type: InfographicType, promptText: string)
     selected.add('3d');
   }
 
-  if (hasAnyKeyword(promptText, GEOGRAPHIC_KEYWORDS)) {
-    selected.add('maps');
-  }
-
   return Array.from(selected).sort();
 }
 
 function inferExamplesForInfographicType(type: InfographicType, promptText: string): string[] {
+  // Always include multi-beat-sequence as base quality reference
   const selected = new Set<string>(['multi-beat-sequence']);
 
   if (type === 'bar_chart' || type === 'line_chart') {
     selected.add('3d-extruded-bar-chart');
+    selected.add('data-story');
   }
   if (type === 'statistic') {
     selected.add('kinetic-typography');
+    selected.add('cinematic-statistic');
   }
   if (type === 'list') {
     selected.add('transition-series-demo');
+    selected.add('elegant-timeline');
+  }
+  if (type === 'diagram') {
+    selected.add('elegant-timeline');
   }
   if (hasAnyKeyword(promptText, THREE_D_KEYWORDS)) {
     selected.add('3d-rotating-cube');
   }
   if (promptText.toLowerCase().includes('particle')) {
     selected.add('particle-effects');
+  }
+  // Include cinematic-statistic for any type that might have key stats
+  if (hasAnyKeyword(promptText, ['milestone', 'achievement', 'growth', 'revenue', 'total', 'record'])) {
+    selected.add('cinematic-statistic');
+  }
+  // Include timeline example for historical/chronological content
+  if (hasAnyKeyword(promptText, ['timeline', 'history', 'historical', 'treaty', 'era', 'century', 'year', 'date', 'chronolog'])) {
+    selected.add('elegant-timeline');
   }
 
   return Array.from(selected).sort();

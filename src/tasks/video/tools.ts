@@ -2788,178 +2788,11 @@ function validateComponentSyntax(code: string): { valid: boolean; error?: string
     : { valid: true };
 }
 
-export interface InfographicQualityValidation {
-  valid: boolean;
-  failures: string[];
-}
-
-type InfographicQualityMode = 'balanced' | 'permissive' | 'strict';
-type InfographicQualitySeverity = 'hard' | 'soft';
-
-interface ClassifiedInfographicQualityFailures {
-  hard: string[];
-  soft: string[];
-}
-
-const SOFT_INFOGRAPHIC_QUALITY_FAILURES = new Set<string>([
-  'does not render prompt, infographicType, or data-driven content',
-  'contains CSS animation/transition instead of frame-driven motion',
-]);
-
-function classifyInfographicFailureSeverity(failure: string): InfographicQualitySeverity {
-  return SOFT_INFOGRAPHIC_QUALITY_FAILURES.has(failure) ? 'soft' : 'hard';
-}
-
-export function classifyInfographicQualityFailures(
-  failures: string[],
-): ClassifiedInfographicQualityFailures {
-  const hard: string[] = [];
-  const soft: string[] = [];
-  for (const failure of failures) {
-    if (classifyInfographicFailureSeverity(failure) === 'soft') {
-      soft.push(failure);
-    } else {
-      hard.push(failure);
-    }
-  }
-  return { hard, soft };
-}
-
-function getInfographicQualityMode(): InfographicQualityMode {
-  const mode = (process.env['KSHANA_INFOGRAPHIC_QUALITY_MODE'] ?? 'balanced')
-    .trim()
-    .toLowerCase();
-  if (mode === 'strict' || mode === 'permissive' || mode === 'balanced') {
-    return mode;
-  }
-  return 'balanced';
-}
-
 interface BuildComponentErrorDetails {
   fileName: string;
   placementNumber?: number;
   line?: number;
   column?: number;
-}
-
-function extractRenderedSection(code: string): string {
-  const returnMatches = Array.from(code.matchAll(/return\s*\(([\s\S]*?)\)\s*;?/g));
-  if (returnMatches.length === 0) return code;
-
-  const absoluteFillMatch = returnMatches.find((match) => (match[1] ?? '').includes('<AbsoluteFill'));
-  if (absoluteFillMatch?.[1]) return absoluteFillMatch[1];
-
-  const lastMatch = returnMatches[returnMatches.length - 1];
-  return lastMatch?.[1] ?? code;
-}
-
-function collectDerivedVariables(code: string, signal: 'prompt' | 'infographicType' | 'data'): Set<string> {
-  const declarations = new Map<string, string>();
-  const declarationPattern = /\b(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([\s\S]*?);/g;
-  let match: RegExpExecArray | null;
-  while ((match = declarationPattern.exec(code)) !== null) {
-    const variableName = match[1];
-    const expression = match[2];
-    if (variableName && expression) {
-      declarations.set(variableName, expression);
-    }
-  }
-
-  const derived = new Set<string>();
-  const knownTokens = new Set<string>([signal]);
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    for (const [variableName, expression] of declarations) {
-      if (derived.has(variableName)) continue;
-      for (const token of knownTokens) {
-        if (new RegExp(`\\b${token}\\b`).test(expression)) {
-          derived.add(variableName);
-          knownTokens.add(variableName);
-          changed = true;
-          break;
-        }
-      }
-    }
-  }
-
-  return derived;
-}
-
-function usesSignalInRenderedOutput(
-  renderedSection: string,
-  fullCode: string,
-  signal: 'prompt' | 'infographicType' | 'data',
-): boolean {
-  const directJsxUsage =
-    new RegExp(`\\{[^}]*\\b${signal}\\b[^}]*\\}`, 'm').test(renderedSection) ||
-    new RegExp(`\\b${signal}\\.`, 'm').test(renderedSection);
-  if (directJsxUsage) return true;
-
-  const derivedVariables = collectDerivedVariables(fullCode, signal);
-  for (const variableName of derivedVariables) {
-    if (new RegExp(`\\{[^}]*\\b${variableName}\\b[^}]*\\}`, 'm').test(renderedSection)) {
-      return true;
-    }
-    if (new RegExp(`\\b${variableName}\\b`, 'm').test(renderedSection)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Validate qualitative requirements for generated infographic components.
- * This is intentionally heuristic; it catches common low-quality regressions before build/render.
- */
-export function validateInfographicQuality(code: string): InfographicQualityValidation {
-  const failures: string[] = [];
-  const normalized = code.replace(/\r\n/g, '\n');
-  const renderedSection = extractRenderedSection(normalized);
-  const normalizedWithoutSvgNamespaces = normalized.replace(
-    /\bxmlns(?::[a-z0-9_-]+)?\s*=\s*["']https?:\/\/www\.w3\.org\/[^"']+["']/gi,
-    '',
-  );
-
-  // Transparent overlay requirement.
-  if (!/background(?:Color)?\s*:\s*['"]transparent['"]/i.test(normalized)) {
-    failures.push('missing transparent root background');
-  }
-
-  // Offline-only: no remote assets.
-  if (/https?:\/\//i.test(normalizedWithoutSvgNamespaces)) {
-    failures.push('contains remote URL asset');
-  }
-
-  // Placement fidelity: prompt/type/data must appear in rendered output (directly or through derived values).
-  const usesPrompt = usesSignalInRenderedOutput(renderedSection, normalized, 'prompt');
-  const usesType = usesSignalInRenderedOutput(renderedSection, normalized, 'infographicType');
-  const usesData = usesSignalInRenderedOutput(renderedSection, normalized, 'data');
-  if (!usesPrompt && !usesType && !usesData) {
-    failures.push('does not render prompt, infographicType, or data-driven content');
-  }
-
-  // Determinism for Remotion renders.
-  if (/Math\.random\s*\(/.test(normalized)) {
-    failures.push('contains Math.random(); use remotion random() with a static seed');
-  }
-
-  // Must have frame-driven motion.
-  if (!/(spring\s*\(|interpolate\s*\(|<Sequence\b|<Series\b|TransitionSeries)/.test(normalized)) {
-    failures.push('missing frame-driven animation primitives');
-  }
-
-  // Ban CSS keyframe/transition animation.
-  if (/(animation\s*:|transition\s*:|@keyframes)/i.test(normalized)) {
-    failures.push('contains CSS animation/transition instead of frame-driven motion');
-  }
-
-  return {
-    valid: failures.length === 0,
-    failures,
-  };
 }
 
 function parseBuildComponentError(detail: string): BuildComponentErrorDetails | null {
@@ -3032,118 +2865,6 @@ export function normalizeRemotionProgress(progress: number | undefined): number 
   if (normalized < 0) return 0;
   if (normalized > 1) return 1;
   return normalized;
-}
-
-function buildFallbackInfographicComponentCode(placementNumber: number): string {
-  return `import React from 'react';
-import { AbsoluteFill, spring, useCurrentFrame, useVideoConfig } from 'remotion';
-
-interface InfographicProps {
-  prompt: string;
-  infographicType: string;
-  data?: Record<string, unknown>;
-}
-
-const stringifyValue = (value: unknown): string => {
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) return value.map((item) => stringifyValue(item)).join(', ');
-  if (value && typeof value === 'object') return JSON.stringify(value);
-  return 'n/a';
-};
-
-export const Infographic${placementNumber}: React.FC<InfographicProps> = ({
-  prompt,
-  infographicType,
-  data,
-}) => {
-  const frame = useCurrentFrame();
-  const { fps } = useVideoConfig();
-  const opacity = spring({
-    frame,
-    fps,
-    config: { damping: 200 },
-  });
-  const scale = 0.95 + spring({
-    frame,
-    fps,
-    config: { damping: 200 },
-  }) * 0.05;
-  const rows = Object.entries(data ?? {}).slice(0, 6);
-
-  return (
-    <AbsoluteFill
-      style={{
-        background: 'transparent',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        padding: 40,
-      }}
-    >
-      <div
-        style={{
-          width: '78%',
-          borderRadius: 24,
-          border: '2px solid rgba(148, 163, 184, 0.4)',
-          background: 'rgba(15, 23, 42, 0.82)',
-          boxShadow: '0 24px 60px rgba(0, 0, 0, 0.35)',
-          padding: 32,
-          color: '#e2e8f0',
-          fontFamily: 'system-ui, sans-serif',
-          opacity,
-          transform: 'scale(' + scale + ')',
-        }}
-      >
-        <div
-          style={{
-            fontSize: 18,
-            letterSpacing: 1.2,
-            textTransform: 'uppercase',
-            color: '#93c5fd',
-            fontWeight: 700,
-          }}
-        >
-          {infographicType}
-        </div>
-        <div
-          style={{
-            fontSize: 40,
-            lineHeight: 1.15,
-            fontWeight: 700,
-            marginTop: 8,
-          }}
-        >
-          {prompt}
-        </div>
-        {rows.length > 0 ? (
-          <div style={{ marginTop: 20, display: 'grid', gap: 10 }}>
-            {rows.map(([key, value]) => (
-              <div
-                key={key}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '180px 1fr',
-                  gap: 12,
-                  fontSize: 18,
-                  lineHeight: 1.3,
-                }}
-              >
-                <span style={{ color: '#94a3b8', fontWeight: 600 }}>{key}</span>
-                <span style={{ color: '#f8fafc' }}>{stringifyValue(value)}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ marginTop: 20, fontSize: 18, color: '#94a3b8' }}>
-            No structured data provided.
-          </div>
-        )}
-      </div>
-    </AbsoluteFill>
-  );
-};
-`;
 }
 
 /**
@@ -3546,19 +3267,12 @@ agent/infographic-placements/ and registered in the manifest.`,
         number,
         { selectedRules: string[]; selectedExamples: string[]; content: string }
       >();
-      const qualityRetryTracker = new Map<number, number>();
-      const qualityMode = getInfographicQualityMode();
-      const fallbackAppliedPlacements: number[] = [];
-      let softFailureCount = 0;
-      let hardFailureCount = 0;
-
       const writeComponentCode = (
         placement: ParsedInfographicPlacement,
         componentCode: string,
       ): {
         sanitizedCode: string;
         syntaxValidation: { valid: boolean; error?: string };
-        qualityValidation: InfographicQualityValidation;
       } => {
         const componentFileName = `Infographic${placement.placementNumber}.tsx`;
         const componentPath = path.join(componentsDir, componentFileName);
@@ -3572,13 +3286,6 @@ agent/infographic-placements/ and registered in the manifest.`,
           );
           console.warn('[generate_all_infographics] Writing anyway - build will catch any real errors');
         }
-
-        const qualityValidation = validateInfographicQuality(sanitizedCode);
-        if (!qualityValidation.valid) {
-          console.warn(
-            `[generate_all_infographics] Component ${componentFileName} failed quality checks: ${qualityValidation.failures.join('; ')}`,
-          );
-        }
         
         fs.writeFileSync(componentPath, sanitizedCode, 'utf-8');
         console.log(`[generate_all_infographics] Wrote component: ${componentFileName}`);
@@ -3586,7 +3293,6 @@ agent/infographic-placements/ and registered in the manifest.`,
         return {
           sanitizedCode,
           syntaxValidation,
-          qualityValidation,
         };
       };
 
@@ -3734,18 +3440,6 @@ agent/infographic-placements/ and registered in the manifest.`,
 
       try {
         console.log('[generate_all_infographics] Calling Remotion sub-agent to generate component code...');
-        console.log('[generate_all_infographics] Quality mode:', qualityMode);
-        const qualityFailureCounts: Record<string, number> = {};
-
-        const recordQualityFailures = (failures: string[]): ClassifiedInfographicQualityFailures => {
-          for (const failure of failures) {
-            qualityFailureCounts[failure] = (qualityFailureCounts[failure] ?? 0) + 1;
-          }
-          const classified = classifyInfographicQualityFailures(failures);
-          softFailureCount += classified.soft.length;
-          hardFailureCount += classified.hard.length;
-          return classified;
-        };
 
         for (const placement of placementsForGeneration) {
           const skillSelection = loadRemotionSkillsForInfographicType(
@@ -3764,141 +3458,18 @@ agent/infographic-placements/ and registered in the manifest.`,
             (entry) => entry.placementNumber === placement.placementNumber,
           );
           if (!item) {
-            const missingComponentError =
-              `Remotion agent did not return component code for placement ${placement.placementNumber}`;
-            hardFailureCount += 1;
-            if (qualityMode === 'strict') {
-              throw new Error(missingComponentError);
-            }
-            console.warn(`[generate_all_infographics] ${missingComponentError}. Applying fallback component.`);
-            const fallbackWriteResult = writeComponentCode(
-              placement,
-              buildFallbackInfographicComponentCode(placement.placementNumber),
+            throw new Error(
+              `Remotion agent did not return component code for placement ${placement.placementNumber}`,
             );
-            if (!fallbackWriteResult.qualityValidation.valid) {
-              const finalReason = fallbackWriteResult.qualityValidation.failures.join('; ');
-              return {
-                status: 'error',
-                error:
-                  `Fallback component for placement ${placement.placementNumber} failed quality checks: ${finalReason}`,
-                suggestion:
-                  'Review fallback builder or switch to strict mode for debugging.',
-              };
-            }
-            fallbackAppliedPlacements.push(placement.placementNumber);
-            continue;
           }
 
-          let writeResult = writeComponentCode(placement, item.componentCode);
-          if (!writeResult.qualityValidation.valid) {
-            qualityRetryTracker.set(placement.placementNumber, 1);
-            recordQualityFailures(writeResult.qualityValidation.failures);
-
-            const qualityReason = writeResult.qualityValidation.failures.join('; ');
-            console.warn(
-              `[generate_all_infographics] Placement ${placement.placementNumber}: retrying due to quality failures: ${qualityReason}`,
-            );
-            const retryResult = await runRemotionAgent([placement], skillSelection.content, {
-              userMessageSuffix:
-                `Regenerate placement ${placement.placementNumber} with these corrections: ${qualityReason}. ` +
-                `Ensure component renders prompt/infographicType/data content in visible JSX. ` +
-                `Explicitly include {prompt} and a visible infographicType label in the rendered output. ` +
-                `Keep root transparent, use frame-driven motion only, and never use Math.random().`,
-              failedPlacementNumber: placement.placementNumber,
-              retryAttempt: 1,
-            });
-            const retryItem = retryResult.placements.find(
-              (entry) => entry.placementNumber === placement.placementNumber,
-            );
-            if (!retryItem) {
-              const retryMissingError =
-                `Remotion quality retry did not return placement ${placement.placementNumber}`;
-              hardFailureCount += 1;
-              if (qualityMode === 'strict') {
-                throw new Error(retryMissingError);
-              }
-              console.warn(`[generate_all_infographics] ${retryMissingError}. Applying fallback component.`);
-              const fallbackWriteResult = writeComponentCode(
-                placement,
-                buildFallbackInfographicComponentCode(placement.placementNumber),
-              );
-              if (!fallbackWriteResult.qualityValidation.valid) {
-                const finalReason = fallbackWriteResult.qualityValidation.failures.join('; ');
-                return {
-                  status: 'error',
-                  error:
-                    `Fallback component for placement ${placement.placementNumber} failed quality checks: ${finalReason}`,
-                  suggestion:
-                    'Review fallback builder or switch to strict mode for debugging.',
-                };
-              }
-              fallbackAppliedPlacements.push(placement.placementNumber);
-              continue;
-            }
-
-            writeResult = writeComponentCode(placement, retryItem.componentCode);
-            if (!writeResult.qualityValidation.valid) {
-              const classifiedFinal = recordQualityFailures(writeResult.qualityValidation.failures);
-              const finalReason = writeResult.qualityValidation.failures.join('; ');
-              if (qualityMode === 'strict') {
-                return {
-                  status: 'error',
-                  error:
-                    `Placement ${placement.placementNumber} failed infographic quality checks after retry: ${finalReason}`,
-                  suggestion:
-                    'Refine placement prompt/data and retry. Ensure prompt requires concrete labels/values and overlay-safe styling.',
-                };
-              }
-
-              if (qualityMode === 'permissive') {
-                console.warn(
-                  `[generate_all_infographics] Placement ${placement.placementNumber}: continuing in permissive mode despite quality failures: ${finalReason}`,
-                );
-                continue;
-              }
-
-              if (classifiedFinal.hard.length === 0) {
-                console.warn(
-                  `[generate_all_infographics] Placement ${placement.placementNumber}: soft quality failures only; continuing in balanced mode: ${finalReason}`,
-                );
-                continue;
-              }
-
-              console.warn(
-                `[generate_all_infographics] Placement ${placement.placementNumber}: hard quality failures remain in balanced mode; applying fallback component.`,
-              );
-              const fallbackWriteResult = writeComponentCode(
-                placement,
-                buildFallbackInfographicComponentCode(placement.placementNumber),
-              );
-              if (!fallbackWriteResult.qualityValidation.valid) {
-                const fallbackReason = fallbackWriteResult.qualityValidation.failures.join('; ');
-                return {
-                  status: 'error',
-                  error:
-                    `Fallback component for placement ${placement.placementNumber} failed quality checks: ${fallbackReason}`,
-                  suggestion:
-                    'Review fallback builder or switch to strict mode for debugging.',
-                };
-              }
-              fallbackAppliedPlacements.push(placement.placementNumber);
-            }
-          }
+          writeComponentCode(placement, item.componentCode);
         }
 
         const indexContent = generateComponentIndex(componentNames);
         const indexPath = path.join(remotionDir, 'src', 'index.tsx');
         fs.writeFileSync(indexPath, indexContent, 'utf-8');
         console.log(`[generate_all_infographics] Updated index.tsx with ${componentNames.length} components`);
-        console.log('[generate_all_infographics] Quality gate summary', {
-          qualityMode,
-          placements: placementsForGeneration.length,
-          qualityRetries: Array.from(qualityRetryTracker.entries()),
-          qualityFailureCounts,
-          softFailureCount,
-          hardFailureCount,
-          fallbackAppliedPlacements,
-        });
       } catch (e) {
         console.error('[generate_all_infographics] Remotion agent failed:', e);
         return {
@@ -4201,11 +3772,6 @@ agent/infographic-placements/ and registered in the manifest.`,
         total_placements: placementsForGeneration.length,
         successful: 0,
         failed: failed.length,
-        quality_mode: qualityMode,
-        soft_failure_count: softFailureCount,
-        hard_failure_count: hardFailureCount,
-        fallback_count: fallbackAppliedPlacements.length,
-        fallback_placements: fallbackAppliedPlacements,
         results,
         suggestion:
           'Run "pnpm run build" in kshana-ink/remotion-infographics, then retry. If it still fails, check _render_output.json and render stderr.',
@@ -4217,11 +3783,6 @@ agent/infographic-placements/ and registered in the manifest.`,
       total_placements: placementsForGeneration.length,
       successful: successful.length,
       failed: failed.length,
-      quality_mode: qualityMode,
-      soft_failure_count: softFailureCount,
-      hard_failure_count: hardFailureCount,
-      fallback_count: fallbackAppliedPlacements.length,
-      fallback_placements: fallbackAppliedPlacements,
       results,
       message: `Generated ${successful.length} out of ${placementsForGeneration.length} infographics. ${failed.length} failed.`,
     };

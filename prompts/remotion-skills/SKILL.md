@@ -54,3 +54,6 @@ Complete, production-ready component examples for complex animations:
 - [examples/particle-effects.tsx](examples/particle-effects.tsx) - Particle system converging to form shapes
 - [examples/transition-series-demo.tsx](examples/transition-series-demo.tsx) - Multi-scene transitions with slide/fade
 - [examples/kinetic-typography.tsx](examples/kinetic-typography.tsx) - Animated text with spring physics and counters
+- [examples/cinematic-statistic.tsx](examples/cinematic-statistic.tsx) - Dramatic stat reveal with counter animation, glass morphism, and ambient particles
+- [examples/elegant-timeline.tsx](examples/elegant-timeline.tsx) - Polished historical timeline with staggered glass cards and glow emphasis
+- [examples/data-story.tsx](examples/data-story.tsx) - Narrative bar chart with axis draw, staggered growth, shine overlays, and winner badge

@@ -6,7 +6,6 @@ import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { spawnSync } from 'child_process';
 import {
-  classifyInfographicQualityFailures,
   normalizeRemotionProgress,
   sanitizeGeneratedComponentCode,
   validateInfographicQuality,
@@ -224,26 +223,6 @@ export const Infographic5: React.FC<Props> = ({prompt, infographicType}) => {
 
       const result = validateInfographicQuality(code);
       expect(result.valid).toBe(true);
-    });
-  });
-
-  describe('quality failure classification', () => {
-    it('classifies hard and soft quality failures correctly', () => {
-      const failures = [
-        'does not render prompt, infographicType, or data-driven content',
-        'contains CSS animation/transition instead of frame-driven motion',
-        'missing transparent root background',
-        'contains Math.random(); use remotion random() with a static seed',
-      ];
-      const classified = classifyInfographicQualityFailures(failures);
-      expect(classified.soft).toEqual([
-        'does not render prompt, infographicType, or data-driven content',
-        'contains CSS animation/transition instead of frame-driven motion',
-      ]);
-      expect(classified.hard).toEqual([
-        'missing transparent root background',
-        'contains Math.random(); use remotion random() with a static seed',
-      ]);
     });
   });
 
