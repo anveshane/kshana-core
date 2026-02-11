@@ -69,27 +69,46 @@ export async function expandInfographicPlacementPrompt(
     return { error: validation.errors.join('; ') };
   }
 
-  const userPrompt = loadAndRenderMarkdown('placement/expand-infographic-prompt.md', {
-    placement_prompt: placement.prompt,
-    placement_type: placement.infographicType,
-    start_time: placement.startTime,
-    end_time: placement.endTime,
-    transcript_segment: ctx.transcriptSegment || '(none)',
-    content_plan: ctx.contentPlan ?? '',
-    placement_data: placement.data ? JSON.stringify(placement.data) : '',
-  });
+  const renderUserPrompt = (contentPlan?: string, placementData?: string) =>
+    loadAndRenderMarkdown('placement/expand-infographic-prompt.md', {
+      placement_prompt: placement.prompt,
+      placement_type: placement.infographicType,
+      start_time: placement.startTime,
+      end_time: placement.endTime,
+      transcript_segment: ctx.transcriptSegment || '(none)',
+      content_plan: contentPlan ?? '',
+      placement_data: placementData ?? '',
+    });
 
   try {
     const config = getLLMConfig();
     const client = new LLMClient(config);
-    const response = await client.generate({
-      messages: [{ role: 'user', content: userPrompt }],
+    const firstResponse = await client.generate({
+      messages: [{ role: 'user', content: renderUserPrompt(ctx.contentPlan ?? '', placement.data ? JSON.stringify(placement.data) : '') }],
       temperature: 0.2,
       maxTokens: 1800,
     });
-    const raw = (response.content ?? '').trim();
-    if (!raw) return null;
-    return parseExpandedInfographicResponse(raw);
+    const firstRaw = (firstResponse.content ?? '').trim();
+    if (firstRaw) {
+      const parsed = parseExpandedInfographicResponse(firstRaw);
+      if (parsed) return parsed;
+    }
+
+    // Some providers can consume completion tokens without returning visible content.
+    // Retry once with a shorter input prompt (no content-plan excerpt or placement data) to reduce token pressure.
+    console.warn(
+      `[infographicPromptExpander] Empty infographic expansion response for placement ${placement.placementNumber}; retrying without content plan. ` +
+        `finishReason=${firstResponse.finishReason ?? 'unknown'}, completionTokens=${firstResponse.usage?.completionTokens ?? 'n/a'}`
+    );
+    const retryResponse = await client.generate({
+      messages: [{ role: 'user', content: renderUserPrompt('', '') }],
+      temperature: 0.2,
+      maxTokens: 1800,
+    });
+    const retryRaw = (retryResponse.content ?? '').trim();
+    if (!retryRaw) return null;
+
+    return parseExpandedInfographicResponse(retryRaw);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     console.warn(

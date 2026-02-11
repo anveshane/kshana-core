@@ -286,22 +286,87 @@ Every component with >= 5s duration must have at least 3 animation beats:
 - **Legible labels**: Ensure full text is visible and not cut off by rotated containers or overflow.
 - Prefer inline SVG for arrows and connection lines
 
-### 3D Content (use when topic benefits from spatial visualization)
+### 3D Content (use @remotion/three for premium, impactful visuals)
+
+**When to Use Real 3D:**
+- Prompt explicitly mentions: "3D", "rotating", "extruded", "depth", "isometric", "orbital", "spatial", "cube", "sphere"
+- Bar/line charts that benefit from Z-axis elevation (3D bars show magnitude dramatically)
+- Duration >= 5 seconds (enough time for 3D reveal to feel premium)
+- Technical/architecture/system diagrams (3D enhances spatial understanding)
+- Hero stats/achievements that deserve dramatic reveal
+
+**3D Template Examples:**
+
+**Extruded Bar Chart:**
 ```tsx
 import { ThreeCanvas } from '@remotion/three';
-<ThreeCanvas width={width} height={height}>
+
+// Bars positioned in 3D space, extruding upward
+<ThreeCanvas width={width} height={height} camera={{ position: [0, 4, 10], fov: 50 }}>
+  <ambientLight intensity={0.6} />
+  <directionalLight position={[8, 12, 6]} intensity={1.2} castShadow />
+  <pointLight position={[-5, 5, -5]} intensity={0.4} color="#60a5fa" />
+  
+  {data.values.map((value, i) => {
+    const height = interpolate(frame, [15 + i * 10, 55 + i * 10], [0, value * 2], { 
+      easing: Easing.out(Easing.cubic), extrapolateRight: 'clamp' 
+    });
+    return (
+      <mesh key={i} position={[i * 3 - 3, height / 2, 0]}>
+        <boxGeometry args={[2, height, 2]} />
+        <meshStandardMaterial color={barColors[i]} metalness={0.3} roughness={0.4} />
+      </mesh>
+    );
+  })}
+</ThreeCanvas>
+```
+
+**Rotating 3D Cube (Dramatic Stat):**
+```tsx
+import { ThreeCanvas } from '@remotion/three';
+
+const rotation = interpolate(frame, [0, 60], [0, Math.PI / 2], { 
+  easing: Easing.inOut(Easing.cubic), extrapolateRight: 'clamp' 
+});
+
+<ThreeCanvas width={width} height={height} camera={{ position: [0, 0, 6] }}>
   <ambientLight intensity={0.5} />
   <directionalLight position={[5, 10, 5]} intensity={1} />
-  <pointLight position={[-5, 5, -5]} intensity={0.5} color="#4facfe" />
+  <pointLight position={[-5, 5, -5]} intensity={0.6} color="#a78bfa" />
+  
   <mesh rotation={[0, rotation, 0]}>
-    <boxGeometry args={[2, 2, 2]} />
-    <meshStandardMaterial color="#4a9eff" metalness={0.3} roughness={0.4} />
+    <boxGeometry args={[3, 3, 3]} />
+    <meshStandardMaterial color="#6b21a8" metalness={0.4} roughness={0.3} />
   </mesh>
 </ThreeCanvas>
 ```
-- Always include lighting (ambient + directional + optional point light for color)
-- Animate with `useCurrentFrame()` — rotation, scale, camera orbit
-- Keep under 100k triangles; no external 3D assets
+
+**3D Floating Cards (Multiple Metrics):**
+```tsx
+import { ThreeCanvas } from '@remotion/three';
+
+{metrics.map((metric, i) => {
+  const zPos = -i * 2; // Depth stagger
+  const rotateY = Math.sin(frame * 0.02 + i) * 0.05; // Gentle oscillation
+  const scale = spring({ frame: frame - i * 15, fps, config: { damping: 200 } });
+  
+  return (
+    <mesh key={i} position={[i * 4 - 4, 0, zPos]} rotation={[0, rotateY, 0]} scale={scale}>
+      <boxGeometry args={[3, 2, 0.2]} />
+      <meshStandardMaterial color={cardColors[i]} metalness={0.2} roughness={0.5} />
+    </mesh>
+  );
+})}
+```
+
+**3D Implementation Checklist:**
+- ✅ Always include 3 lights: ambient (0.5-0.6) + directional (position [5-10, 10-15, 5-10], intensity 1.0-1.4) + optional point light for color accent
+- ✅ Camera position: typically [0, 3-5, 8-12] for elevated view, or [0, 0, 6-8] for front view
+- ✅ Animate rotation, position, scale, or camera orbit using `useCurrentFrame()` and `interpolate()`
+- ✅ Use `meshStandardMaterial` with metalness (0.2-0.4) and roughness (0.3-0.5) for realistic lighting
+- ✅ Keep geometry procedural: `boxGeometry`, `sphereGeometry`, `cylinderGeometry`, `planeGeometry` only (no external models)
+- ✅ Add shadows via directional light `castShadow` when appropriate
+- ✅ Stagger animation timing when multiple 3D objects (10-15 frame delays)
 
 ### Particle Effects (ambient depth & emphasis)
 Deterministic particle arrays driven by frame math:
@@ -361,7 +426,9 @@ const particles = Array.from({ length: 50 }, (_, i) => ({
 - **Visual polish**: Depth with shadows, gradients for interest, glows on important elements, generous spacing, modern typography
 - **Analyze the prompt**: Extract key information, labels, values, concepts — but NEVER display the raw prompt string
 - **Consult the skills docs**: Use `<remotion_skills>` for 3D, charts, animations, transitions, text-animations as appropriate
+- **Use @remotion/three aggressively**: When prompts mention "3D", "rotating", "extruded", "depth" or when visualizing data that benefits from Z-axis (bar charts, system layers, networks), use real 3D with ThreeCanvas. Include proper lighting (ambient + directional + optional point light), camera positioning, and material properties (metalness 0.2-0.4, roughness 0.3-0.5).
+- **3D beats 2D for impact**: Extruded 3D bars are more impressive than flat CSS bars. Rotating cubes reveal stats dramatically. Floating 3D cards in depth create premium feel. Default to 3D when duration >= 5s and topic allows.
 - **No templates**: Each component must be tailored to its specific placement and prompt
 - **Production quality**: Generate code that produces high-quality MP4 videos — never basic placeholders or minimal designs
 
-Generate polished, cinematic-quality infographics that look like high-end documentary graphics.
+Generate polished, cinematic-quality infographics that look like high-end documentary graphics. When in doubt between 2D and 3D, choose 3D for more visual impact.
