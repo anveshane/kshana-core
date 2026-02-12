@@ -30,6 +30,10 @@ pnpm-debug.log*
 
 # Misc
 *.tsbuildinfo
+tsup.config.js
+tsup.config.js.map
+tsup.config.d.ts
+tsup.config.d.ts.map
 
 # Subprojects
 prompt-optimizer/

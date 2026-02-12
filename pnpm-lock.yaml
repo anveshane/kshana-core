@@ -154,9 +154,45 @@ importers:
       '@remotion/bundler':
         specifier: 4.0.409
         version: 4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@remotion/captions':
+        specifier: 4.0.409
+        version: 4.0.409
+      '@remotion/fonts':
+        specifier: 4.0.409
+        version: 4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@remotion/gif':
+        specifier: 4.0.409
+        version: 4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@remotion/google-fonts':
+        specifier: 4.0.409
+        version: 4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@remotion/layout-utils':
+        specifier: 4.0.409
+        version: 4.0.409
+      '@remotion/lottie':
+        specifier: 4.0.409
+        version: 4.0.409(lottie-web@5.13.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@remotion/media':
+        specifier: 4.0.409
+        version: 4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@remotion/renderer':
         specifier: 4.0.409
         version: 4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@remotion/three':
+        specifier: 4.0.409
+        version: 4.0.409(@react-three/fiber@9.5.0(@types/react@18.3.27)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(three@0.182.0))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(remotion@4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(three@0.182.0)
+      '@remotion/transitions':
+        specifier: 4.0.409
+        version: 4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@remotion/zod-types':
+        specifier: 4.0.409
+        version: 4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(zod@3.22.3)
+      '@turf/turf':
+        specifier: ^6.5.0
+        version: 6.5.0
+      mapbox-gl:
+        specifier: ^3.0.0
+        version: 3.18.1
       react:
         specifier: 18.3.1
         version: 18.3.1
@@ -166,10 +202,16 @@ importers:
       remotion:
         specifier: 4.0.409
         version: 4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      zod:
+        specifier: 3.22.3
+        version: 3.22.3
     devDependencies:
       '@remotion/cli':
         specifier: 4.0.409
         version: 4.0.409(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      '@types/mapbox-gl':
+        specifier: ^3.0.0
+        version: 3.4.1
       '@types/react':
         specifier: 18.3.27
         version: 18.3.27

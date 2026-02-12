@@ -118,12 +118,20 @@ export function setCurrentProjectBasePath(basePath: string): void {
 
 /**
  * Get the current project base path.
- * Returns the stored path if set, otherwise falls back to process.cwd().
+ * Throws if the base path was never explicitly set via setCurrentProjectBasePath().
  * 
  * @returns The current project base path
+ * @throws Error if the base path was never set
  */
 export function getCurrentProjectBasePath(): string {
-  return currentProjectBasePath ?? process.cwd();
+  if (currentProjectBasePath === null) {
+    throw new Error(
+      '[ProjectManager] currentProjectBasePath was never set. ' +
+      'Ensure setCurrentProjectBasePath() is called before any file operations. ' +
+      'This usually means the server was started without taskType: "video" or no project_dir was provided via WebSocket.'
+    );
+  }
+  return currentProjectBasePath;
 }
 
 /**
