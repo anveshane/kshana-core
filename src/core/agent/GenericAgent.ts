@@ -1471,7 +1471,7 @@ ONLY: Execute the update_project tool call with action="transition_phase" immedi
           // Block content-creator with scene content_type during video_generation
           // Also block other content creation workflows that shouldn't happen during video generation
           if (subagentType === 'content-creator' && (contentType === 'scene' || contentType === 'plot' || contentType === 'story')) {
-            const errorMsg = `ERROR: Cannot use Task with content-creator and content_type="${contentType}" during video_generation phase. The video_generation phase should be marked as complete after generate_all_videos completes, not create new content. If generate_all_videos failed, mark the phase as complete anyway and do not try alternative workflows.`;
+            const errorMsg = `ERROR: Cannot use Task with content-creator and content_type="${contentType}" during video_generation phase. The video_generation phase should only complete after background video generation succeeds for all placements. Do not create alternative content workflows here.`;
             
             debugLog(`[GenericAgent] ${errorMsg}`);
             
@@ -1479,7 +1479,7 @@ ONLY: Execute the update_project tool call with action="transition_phase" immedi
               status: 'error',
               error: errorMsg,
               toolCallId: toolCall.id,
-              message: 'Alternative workflow blocked during video_generation phase. Mark the phase as complete instead.',
+              message: 'Alternative workflow blocked during video_generation phase. Use read_background_generation and retry_failed_batch_id for failed video placements.',
             };
             
             this.emit({
@@ -1636,7 +1636,7 @@ ONLY: Execute the update_project tool call with action="transition_phase" immedi
           // Block scene, plot, story content generation during video_generation
           // These should not be created during video generation - the phase should just be marked complete
           if (contentType === 'scene' || contentType === 'plot' || contentType === 'story' || contentType === 'character' || contentType === 'setting') {
-            const errorMsg = `ERROR: Cannot use generate_content with content_type="${contentType}" during video_generation phase. The video_generation phase should be marked as complete after generate_all_videos completes, not create new content. If generate_all_videos failed, mark the phase as complete anyway and do not try alternative workflows.`;
+            const errorMsg = `ERROR: Cannot use generate_content with content_type="${contentType}" during video_generation phase. The video_generation phase should only complete after background video generation succeeds for all placements. Do not create alternative content workflows here.`;
             
             debugLog(`[GenericAgent] ${errorMsg}`);
             
@@ -1644,7 +1644,7 @@ ONLY: Execute the update_project tool call with action="transition_phase" immedi
               status: 'error',
               error: errorMsg,
               toolCallId: toolCall.id,
-              message: 'Alternative workflow blocked during video_generation phase. Mark the phase as complete instead.',
+              message: 'Alternative workflow blocked during video_generation phase. Use read_background_generation and retry_failed_batch_id for failed video placements.',
             };
             
             this.emit({

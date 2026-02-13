@@ -107,7 +107,7 @@ export const YOUTUBE_PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     nextPhase: WorkflowPhase.INFOGRAPHICS_PLACEMENT,
     promptFile: 'image-generation',
     agentType: 'image',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_all_images', 'read_background_generation', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'single',
     requiresPerItemApproval: false,
     isExpensive: true,
@@ -168,7 +168,7 @@ export const YOUTUBE_PHASE_CONFIGS: Record<WorkflowPhase, PhaseConfig> = {
     nextPhase: WorkflowPhase.COMPLETED, // Skipping VIDEO_REPLACEMENT and VIDEO_COMBINE for now
     promptFile: 'video-generation',
     agentType: 'video',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_all_videos', 'generate_video', 'wait_for_job', 'todo_write'],
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_all_videos', 'read_background_generation', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'single',
     requiresPerItemApproval: false,
     isExpensive: true,

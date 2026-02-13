@@ -19,6 +19,7 @@ import {
   type ContentEntry,
   type ContentTypeName,
   type ContentStatus,
+  type BackgroundGenerationState,
   type ItemApprovalStatus,
   type ItemApprovalEntry,
   type PhaseConfig,
@@ -59,6 +60,13 @@ import { dirname } from 'path';
 import { fileURLToPath } from 'url';
 
 let manifestWriteLock: Promise<void> = Promise.resolve();
+
+function createDefaultBackgroundGenerationState(): BackgroundGenerationState {
+  return {
+    batches: [],
+    activeBatchIds: [],
+  };
+}
 
 async function withManifestWriteLock<T>(fn: () => Promise<T>): Promise<T> {
   const previous = manifestWriteLock;
@@ -608,6 +616,7 @@ export function createProject(
     assets: [],
     transcriptEntries: [] as TranscriptEntry[],
     imagePlacements: [] as ImagePlacement[],
+    backgroundGeneration: createDefaultBackgroundGenerationState(),
   };
 
   // Mark phases as skipped based on input type
@@ -1094,6 +1103,21 @@ export function loadProject(basePath: string = getCurrentProjectBasePath()): Pro
       planMigrated = true;
     }
 
+    let backgroundGenerationMigrated = false;
+    if (!project.backgroundGeneration) {
+      project.backgroundGeneration = createDefaultBackgroundGenerationState();
+      backgroundGenerationMigrated = true;
+    } else {
+      if (!Array.isArray(project.backgroundGeneration.batches)) {
+        project.backgroundGeneration.batches = [];
+        backgroundGenerationMigrated = true;
+      }
+      if (!Array.isArray(project.backgroundGeneration.activeBatchIds)) {
+        project.backgroundGeneration.activeBatchIds = [];
+        backgroundGenerationMigrated = true;
+      }
+    }
+
     const { phase: normalizedPhase, changed } = normalizeCurrentPhaseForInputType(project);
     if (changed) {
       project.currentPhase = normalizedPhase;
@@ -1123,7 +1147,7 @@ export function loadProject(basePath: string = getCurrentProjectBasePath()): Pro
     // Sync content registry for backward compatibility
     const syncChanged = syncContentRegistry(project, basePath);
 
-    if (changed || syncChanged || planMigrated || phaseMigrated) {
+    if (changed || syncChanged || planMigrated || phaseMigrated || backgroundGenerationMigrated) {
       saveProject(project, basePath);
     }
 
@@ -2584,6 +2608,11 @@ export function getProjectSummary(basePath: string = getCurrentProjectBasePath()
   const planStatus = project.plan?.stage === PlannerStage.COMPLETE
     ? `✅ Approved (ID: ${project.plan?.planId ?? 'unknown'})`
     : `⏳ ${project.plan?.stage ?? 'NONE'} (ID: ${project.plan?.planId ?? 'unknown'})`;
+  const backgroundState = project.backgroundGeneration;
+  const activeBackgroundCount = backgroundState?.activeBatchIds?.length ?? 0;
+  const failedBackgroundCount = backgroundState?.batches?.filter((batch) => batch.status === 'failed').length ?? 0;
+  const totalBackgroundCount = backgroundState?.batches?.length ?? 0;
+  const backgroundSummary = `\nBackground Batches: active=${activeBackgroundCount}, failed=${failedBackgroundCount}, total=${totalBackgroundCount}`;
 
   if (!phaseConfig) {
     return `
@@ -2612,6 +2641,7 @@ Characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'none defi
 Settings: ${settingNames.length > 0 ? settingNames.join(', ') : 'none defined'}
 Scenes: ${project.scenes.length}/${MAX_SCENES} (max)
 Assets: ${project.assets.length}${itemProgress}${sceneLimitWarning}
+${backgroundSummary}
 `.trim();
 }
 
@@ -2656,6 +2686,16 @@ export function getStateTransitionPrompt(basePath: string = getCurrentProjectBas
   const isYouTubeWorkflow = isYouTubeWorkflowType(project.inputType);
   const masterPlanStage = project.plan?.stage ?? 'NONE';
   const masterPlanExists = project.plan?.planFile ? planFileHasContent(project.plan.planFile, basePath) : false;
+  const backgroundState = project.backgroundGeneration;
+  const backgroundBatches = backgroundState?.batches ?? [];
+  const activeBackgroundBatches = backgroundBatches.filter(
+    (batch) => batch.status === 'queued' || batch.status === 'running',
+  );
+  const activeImageBatches = activeBackgroundBatches.filter((batch) => batch.kind === 'image');
+  const activeVideoBatches = activeBackgroundBatches.filter((batch) => batch.kind === 'video');
+  const failedVideoBatches = backgroundBatches
+    .filter((batch) => batch.kind === 'video' && batch.status === 'failed')
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 
   // For YouTube workflow, skip all master plan logic
   if (isYouTubeWorkflow) {
@@ -2671,6 +2711,16 @@ export function getStateTransitionPrompt(basePath: string = getCurrentProjectBas
 
 ## What to Do Next
 `;
+
+    if (activeBackgroundBatches.length > 0 || failedVideoBatches.length > 0) {
+      instruction += `
+- **Background batches active**: ${activeBackgroundBatches.length}
+- **Active image batches**: ${activeImageBatches.length}
+- **Active video batches**: ${activeVideoBatches.length}
+- **Failed video batches**: ${failedVideoBatches.length}
+- Use read_background_generation to inspect batch status and failed placements.
+`;
+    }
 
     // For YouTube workflow, transcript_input should transition to planning immediately
     if (currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
@@ -2697,6 +2747,38 @@ The Content Planning phase deliverables are complete (content plan exists).
           return instruction.trim();
         }
       }
+    }
+
+    if (currentPhase === WorkflowPhase.IMAGE_GENERATION && activeImageBatches.length > 0) {
+      instruction += `
+Image generation is already running in the background.
+1. Call update_project with action "update_phase" to mark "image_generation" as "completed"
+2. Then call update_project with action "transition_phase" to move to the next phase
+3. Continue working while images render in background
+`;
+      return instruction.trim();
+    }
+
+    if (currentPhase === WorkflowPhase.VIDEO_GENERATION && activeVideoBatches.length > 0) {
+      instruction += `
+Video generation is running in the background.
+1. Call read_background_generation to check progress
+2. Do NOT mark video_generation complete until all placements succeed
+3. If background batches are still running, continue monitoring
+`;
+      return instruction.trim();
+    }
+
+    if (currentPhase === WorkflowPhase.VIDEO_GENERATION && failedVideoBatches.length > 0) {
+      const latestFailedBatch = failedVideoBatches[0];
+      instruction += `
+Background video generation has failed placements.
+1. Retry only failed placements:
+   generate_all_videos(retry_failed_batch_id: "${latestFailedBatch?.id}", run_in_background: true)
+2. Use read_background_generation to monitor the retry batch
+3. Mark video_generation complete only after a retry batch finishes with zero failures
+`;
+      return instruction.trim();
     }
 
     // Proceed with phase execution for YouTube workflow

@@ -12,7 +12,7 @@ import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
 import { loadAndRenderMarkdown, loadMarkdown } from '../../core/prompts/loader.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
-import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS, type RunRemotionAgentCallback } from './tools.js';
+import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS, resumePendingBatches, type RunRemotionAgentCallback } from './tools.js';
 import { runRemotionAgent } from './remotionAgent.js';
 import { getSrtTools } from './tools/srt.js';
 import { getPlacementTools } from './tools/placement.js';
@@ -45,7 +45,9 @@ export {
   generateVideoTool,
   editImageTool,
   waitForJobTool,
+  readBackgroundGenerationTool,
   getVideoGenerationTools,
+  resumePendingBatches,
   VIDEO_COMPLEX_TOOLS,
 } from './tools.js';
 
@@ -139,8 +141,11 @@ export function getVideoToolNames(): string[] {
   return [
     // Generation tools
     'generate_image',
+    'generate_all_images',
     'generate_video',
+    'generate_all_videos',
     'edit_image',
+    'read_background_generation',
     'wait_for_job',
     // State tools
     'read_project_state',
@@ -240,6 +245,7 @@ export async function createWorkflowToolRegistry(options?: CreateWorkflowToolReg
   const generateAllImagesTool = videoGenerationTools.find(t => t.name === 'generate_all_images');
   const generateAllVideosTool = videoGenerationTools.find(t => t.name === 'generate_all_videos');
   const generateAllInfographicsTool = videoGenerationTools.find(t => t.name === 'generate_all_infographics');
+  const readBackgroundGenerationTool = videoGenerationTools.find(t => t.name === 'read_background_generation');
   
   // Check ComfyUI availability for IMAGE_GENERATION phase
   // Only register image generation tools if ComfyUI is available
@@ -261,6 +267,9 @@ export async function createWorkflowToolRegistry(options?: CreateWorkflowToolReg
   // Always register wait_for_job tool (might be needed for other purposes)
   if (waitForJobTool) {
     registry.register(waitForJobTool);
+  }
+  if (readBackgroundGenerationTool) {
+    registry.register(readBackgroundGenerationTool);
   }
   
   // Always register video and infographic generation tools
@@ -447,6 +456,9 @@ export async function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig)
   // Initialize or load project
   const project = getOrCreateProject(originalInput, 'cinematic_realism', basePath);
   const currentPhase = getCurrentPhase(project);
+
+  // Auto-resume any queued/running background image/video batches after startup.
+  await resumePendingBatches(basePath);
   
   // Use workflow manager to get phase config (ensures correct workflow is used)
   const { getPhaseConfig } = await import('./workflow/workflows/workflow-manager.js');

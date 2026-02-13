@@ -3,31 +3,28 @@
 Generate AI videos for each placement identified in the previous phase.
 
 **SIMPLE WORKFLOW:**
-1. Call the `generate_all_videos` tool to process all placements automatically
-2. The tool will:
-   - Read and parse `agent/content/video-placements.md`
-   - Extract all placements (Placement 1, 2, 3, etc.)
-   - **Optionally expand each placement prompt** with an LLM (video-placer–style, using placement + transcript segment + content plan) into a detailed ComfyUI-ready video prompt. Expansion runs by default; use `expand_prompts: false` to skip.
-   - Generate videos sequentially, one at a time
-   - Wait for each video to complete before moving to the next
-   - Continue even if some videos fail (logs failures but doesn't stop)
-   - Return a summary of successful and failed placements
-3. After the tool completes, mark phase complete and transition to the next phase
+1. Call `generate_all_videos` in background mode (default)
+2. It returns immediately with `status: "queued"` and `batch_id`
+3. Monitor status with `read_background_generation`
+4. Complete `video_generation` only when all placements in the active batch succeed
+5. If any placements fail, retry failed-only using `retry_failed_batch_id`
 
 **NEVER:**
 - Manually parse the video-placements.md file
 - Call `generate_video` tool for individual placements
 - Create todos
 - Process multiple placements at once
-- Skip marking phase as completed or transitioning to the next phase
+- Mark phase completed while failed placements still exist
 
-**STEP 1: Call generate_all_videos tool**
+**STEP 1: Queue background video generation**
 
-Simply call the `generate_all_videos` tool. It handles everything automatically:
+Call:
 
 ```
 generate_all_videos(
   file_path: 'agent/content/video-placements.md',
+  expand_prompts: true,
+  run_in_background: true,
   auto_fill_gaps: true
 )
 ```
@@ -35,27 +32,42 @@ generate_all_videos(
 The tool will:
 - Read and parse the video-placements.md file
 - Extract all placement entries (Placement 1, 2, 3, etc.)
-- Expand each placement prompt with LLM (video-placer guidelines) when `expand_prompts` is true (default). Use `expand_prompts: false` to use placement prompts as-is.
-- Calculate duration from timestamps (rounded to 4-10 seconds maximum, hard limit of 10 seconds due to hardware constraints)
-- Extract video type (cinematic_realism, stock_footage, or motion_graphics)
-- Generate videos sequentially, one at a time
-- Wait for each video to complete before moving to the next
-- Continue even if some videos fail (logs failures but doesn't stop)
-- Return a summary with successful and failed placements
+- Optionally expand prompts with LLM
+- Queue a persistent background batch and return immediately
+- Generate videos sequentially in background
 
-**WAIT for the tool to complete** - It will process ALL placements before returning.
+**Do NOT transition immediately after queueing.**
 
-**STEP 2: Check results and mark phase complete**
+**STEP 2: Monitor progress**
 
-After the `generate_all_videos` tool completes:
+Call:
 
-1. **Check the result summary** - The tool returns:
-   - `total_placements`: Total number of placements found
-   - `successful`: Number of successfully generated videos
-   - `failed`: Number of failed video generations
-   - `results`: Array with details for each placement
+```
+read_background_generation(
+  kind: 'video',
+  include_items: true
+)
+```
 
-2. **Mark the phase complete:**
+Interpretation:
+- If batch status is `running` or `queued`: keep monitoring.
+- If batch status is `failed`: retry failed placements only.
+- If batch status is `completed` with zero failures: complete phase.
+
+**STEP 3: Retry failed placements (when needed)**
+
+```
+generate_all_videos(
+  retry_failed_batch_id: 'video-batch-...',
+  run_in_background: true
+)
+```
+
+**STEP 4: Complete phase only after full success**
+
+When the active/retry batch finishes with zero failed placements:
+
+1. Mark phase complete:
 ```
 update_project(
   action: 'update_phase',
@@ -63,7 +75,7 @@ update_project(
 )
 ```
 
-3. **Transition to next phase:**
+2. Transition:
 ```
 update_project(
   action: 'transition_phase',
@@ -76,14 +88,12 @@ update_project(
 - Call `generate_video` tool for individual placements
 - Create todos or task lists
 - Try to manage video placement state manually
-- Retry failed placements manually
-- Skip marking phase as completed or transitioning to the next phase
+- Transition while failed placements remain
 
 **IMPORTANT:**
-- **Use the `generate_all_videos` tool** - It handles all parsing, optional prompt expansion (video-placer–style), sequential generation, and error handling
-- **The tool processes ALL placements automatically** - No need to count or iterate manually
-- **Sequential execution is guaranteed** - The tool enforces one-at-a-time generation in code
-- **Failed placements are logged but don't stop the process** - The tool continues with remaining placements
-- **After the tool completes** - Mark phase complete and transition to the next phase.
+- **Use `generate_all_videos` with background mode**
+- **Use `read_background_generation` for status**
+- **Retry with `retry_failed_batch_id` instead of full reruns**
+- **Complete video_generation only when all placements succeed**
 - Generated videos are automatically stored in `agent/video-placements/` directory
 - Videos are automatically registered in the manifest

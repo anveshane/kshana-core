@@ -412,6 +412,74 @@ export interface InfographicPlacement {
 }
 
 /**
+ * Supported background generation pipeline kinds.
+ */
+export type BackgroundGenerationKind = 'image' | 'video';
+
+/**
+ * Status for an individual background generation item.
+ */
+export type BackgroundGenerationItemStatus = 'pending' | 'processing' | 'completed' | 'failed';
+
+/**
+ * Status for a background generation batch.
+ */
+export type BackgroundGenerationBatchStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+/**
+ * Item tracked inside a background generation batch.
+ */
+export interface BackgroundGenerationItem {
+  placementNumber: number;
+  startTime: string;
+  endTime: string;
+  prompt: string;
+  status: BackgroundGenerationItemStatus;
+  attempts: number;
+  updatedAt: number;
+  jobId?: string;
+  artifactId?: string;
+  filePath?: string;
+  error?: string;
+  metadata?: {
+    duration?: number;
+    videoType?: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
+    negativePrompt?: string;
+  };
+}
+
+/**
+ * Persistent batch metadata for non-blocking generation.
+ */
+export interface BackgroundGenerationBatch {
+  id: string;
+  kind: BackgroundGenerationKind;
+  phase: WorkflowPhase.IMAGE_GENERATION | WorkflowPhase.VIDEO_GENERATION;
+  sourceFile: string;
+  status: BackgroundGenerationBatchStatus;
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number;
+  finishedAt?: number;
+  expandPrompts: boolean;
+  autoFillGaps?: boolean;
+  retryOfBatchId?: string;
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  items: BackgroundGenerationItem[];
+}
+
+/**
+ * Persistent state container for background generation batches.
+ */
+export interface BackgroundGenerationState {
+  batches: BackgroundGenerationBatch[];
+  activeBatchIds: string[];
+  lastResumedAt?: number;
+}
+
+/**
  * Asset metadata stored in agent/manifest.json.
  */
 export interface AssetInfo {
@@ -626,6 +694,8 @@ export interface ProjectFile {
   videoPlacements?: VideoPlacement[];
   /** Infographic placement plan aligned to transcript entries */
   infographicPlacements?: InfographicPlacement[];
+  /** Persistent background generation state for non-blocking image/video batches */
+  backgroundGeneration?: BackgroundGenerationState;
 }
 
 /**
@@ -766,7 +836,7 @@ export const PHASE_CONFIGS: Partial<Record<WorkflowPhase, PhaseConfig>> = {
     nextPhase: WorkflowPhase.INFOGRAPHICS_PLACEMENT,
     promptFile: 'image-generation',
     agentType: 'image',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'dispatch_image_agent', 'generate_image', 'wait_for_job', 'todo_write'],
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_all_images', 'read_background_generation', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'single',
     requiresPerItemApproval: false,
     isExpensive: true,
@@ -827,7 +897,7 @@ export const PHASE_CONFIGS: Partial<Record<WorkflowPhase, PhaseConfig>> = {
     nextPhase: WorkflowPhase.COMPLETED,
     promptFile: 'video-generation',
     agentType: 'video',
-    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_video', 'wait_for_job', 'todo_write'],
+    allowedTools: ['think', 'ask_user', 'read_file', 'write_file', 'read_project', 'update_project', 'generate_all_videos', 'read_background_generation', 'wait_for_job', 'todo_write'],
     itemProcessMode: 'single',
     requiresPerItemApproval: false,
     isExpensive: true,

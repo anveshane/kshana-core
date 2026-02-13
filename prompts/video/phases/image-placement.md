@@ -19,7 +19,7 @@
 ```
 Task(
   subagent_type: 'image-placer',
-  task: 'Analyze the transcript ($transcript) to identify key moments that need IMAGES (static visuals). Use the content plan ($content_plan) for strategic guidance only. Create detailed image placement plan with exact timestamps and enhanced image prompts. Create placements ONLY for moments that truly need static images (book covers, objects, scenes, portraits) - skip moments that need video (any action words like grabbing, placing, watering, clipping, opening, closing, moving). If a transcript segment is longer than 10-12 seconds, split it into multiple image placements. Aim for 5-8 second image placements to keep visuals dynamic. Create background images for segments likely to receive infographic overlays (subtle, low-text backgrounds). Leave gaps for videos ONLY for action/demonstration/process segments. Video-placer will fill remaining segments with videos.',
+  task: 'Analyze the transcript ($transcript) to identify key moments that need IMAGES (static visuals). Use the content plan ($content_plan) for strategic guidance only. Create detailed image placement plan with exact timestamps and enhanced image prompts. Create placements ONLY for moments that truly need static images (book covers, objects, scenes, portraits) - skip moments that need video (any action words like grabbing, placing, watering, clipping, opening, closing, moving). HARD LIMIT: No single image placement may exceed 5 seconds. If a transcript segment is longer than 6 seconds, you MUST split it into multiple image placements of 4-5 seconds each. Aim for 4-5 second image placements to keep visuals dynamic and avoid a static look. Consecutive image placements MUST be back-to-back with ZERO gap (if one ends at 0:35, the next starts at 0:35, NOT 0:36). Any intentional gap left for video must be at least 4 seconds. Gaps of 1-3 seconds are NOT allowed. Create background images for segments likely to receive infographic overlays (subtle, low-text backgrounds). Leave gaps for videos ONLY for action/demonstration/process segments. Video-placer will fill remaining segments with videos.',
   context_refs: ['$transcript', '$content_plan']
 )
 ```
@@ -58,7 +58,8 @@ update_project(
 - Create as many image placements as needed based on transcript content
 - **CRITICAL: Create placements ONLY for moments that truly need IMAGES (static visuals) - skip moments that need video (action, demonstrations, processes)**
 - **CRITICAL: Leave gaps for videos ONLY for action/demonstration/process segments. Otherwise increase image coverage.**
-- **CRITICAL: Split long segments into multiple placements - if a transcript segment is longer than 10-12 seconds, create multiple image placements. Aim for 5-8 second image placements to keep visuals dynamic**
+- **CRITICAL: HARD LIMIT: No single image placement may exceed 5 seconds. If a transcript segment is longer than 6 seconds, split it into multiple 4-5 second placements. This prevents the video from looking static.**
+- **CRITICAL: Consecutive image placements MUST be back-to-back with ZERO gap. If one ends at 0:35, the next MUST start at 0:35, not 0:36. Any intentional gap for video must be at least 4 seconds. Gaps of 1-3 seconds are dead space and NOT allowed.**
 - **CRITICAL: If a prompt describes ACTION (grabbing, placing, watering, clipping, opening, closing, moving), it should be VIDEO, not an image - skip these moments**
 
 **DO NOT:**

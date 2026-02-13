@@ -22,11 +22,21 @@ import {
   AGENT_DIR,
   addAsset,
   loadProject,
+  saveProject,
+  updatePhaseStatus,
+  transitionToNextPhase,
   updateCharacter,
   updateSetting,
   updateScene,
   getProjectStyleConfig,
   STYLE_CONFIGS,
+  WorkflowPhase,
+  type ProjectFile,
+  type BackgroundGenerationState,
+  type BackgroundGenerationBatch,
+  type BackgroundGenerationBatchStatus,
+  type BackgroundGenerationItem,
+  type BackgroundGenerationKind,
   getAgentDir,
   getAssets,
   readProjectFile,
@@ -456,6 +466,126 @@ export interface ImageEditParams {
 
 // Job storage (in-memory for now, could be Redis/DB in production)
 const jobs = new Map<string, GenerationJob>();
+const activeBatchRunners = new Map<string, Promise<void>>();
+const MAX_BACKGROUND_BATCH_HISTORY = 30;
+
+interface PreparedImageGenerationPlacement {
+  placementNumber: number;
+  startTime: string;
+  endTime: string;
+  prompt: string;
+  negativePrompt: string;
+}
+
+interface PreparedVideoGenerationPlacement {
+  placementNumber: number;
+  startTime: string;
+  endTime: string;
+  prompt: string;
+  duration: number;
+  videoType: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
+}
+
+function getBatchRunnerKey(projectId: string, batchId: string): string {
+  return `${projectId}:${batchId}`;
+}
+
+function ensureBackgroundGenerationState(project: ProjectFile): BackgroundGenerationState {
+  if (!project.backgroundGeneration) {
+    project.backgroundGeneration = {
+      batches: [],
+      activeBatchIds: [],
+    };
+  }
+  if (!Array.isArray(project.backgroundGeneration.batches)) {
+    project.backgroundGeneration.batches = [];
+  }
+  if (!Array.isArray(project.backgroundGeneration.activeBatchIds)) {
+    project.backgroundGeneration.activeBatchIds = [];
+  }
+  return project.backgroundGeneration;
+}
+
+function trimBackgroundBatchHistory(state: BackgroundGenerationState): void {
+  if (state.batches.length <= MAX_BACKGROUND_BATCH_HISTORY) {
+    return;
+  }
+  state.batches = state.batches
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, MAX_BACKGROUND_BATCH_HISTORY);
+  const existing = new Set(state.batches.map((batch) => batch.id));
+  state.activeBatchIds = state.activeBatchIds.filter((id) => existing.has(id));
+}
+
+function persistBatchUpdate(
+  basePath: string,
+  batchId: string,
+  updater: (batch: BackgroundGenerationBatch, state: BackgroundGenerationState, project: ProjectFile) => void,
+): BackgroundGenerationBatch | null {
+  const project = loadProject(basePath);
+  if (!project) return null;
+  const state = ensureBackgroundGenerationState(project);
+  const batch = state.batches.find((entry) => entry.id === batchId);
+  if (!batch) return null;
+
+  updater(batch, state, project);
+  batch.updatedAt = Date.now();
+
+  if (batch.status === 'queued' || batch.status === 'running') {
+    if (!state.activeBatchIds.includes(batch.id)) {
+      state.activeBatchIds.push(batch.id);
+    }
+  } else {
+    state.activeBatchIds = state.activeBatchIds.filter((id) => id !== batch.id);
+  }
+
+  trimBackgroundBatchHistory(state);
+  saveProject(project, basePath);
+  return batch;
+}
+
+function createBackgroundBatch(
+  basePath: string,
+  params: {
+    kind: BackgroundGenerationKind;
+    sourceFile: string;
+    expandPrompts: boolean;
+    autoFillGaps?: boolean;
+    retryOfBatchId?: string;
+    items: BackgroundGenerationItem[];
+  },
+): { projectId: string; batch: BackgroundGenerationBatch } | null {
+  const project = loadProject(basePath);
+  if (!project) return null;
+
+  const state = ensureBackgroundGenerationState(project);
+  const now = Date.now();
+  const batch: BackgroundGenerationBatch = {
+    id: `${params.kind}-batch-${now}-${nanoid(6)}`,
+    kind: params.kind,
+    phase: params.kind === 'image' ? WorkflowPhase.IMAGE_GENERATION : WorkflowPhase.VIDEO_GENERATION,
+    sourceFile: params.sourceFile,
+    status: 'queued',
+    createdAt: now,
+    updatedAt: now,
+    expandPrompts: params.expandPrompts,
+    autoFillGaps: params.autoFillGaps,
+    retryOfBatchId: params.retryOfBatchId,
+    totalItems: params.items.length,
+    completedItems: 0,
+    failedItems: 0,
+    items: params.items,
+  };
+
+  state.batches.unshift(batch);
+  if (!state.activeBatchIds.includes(batch.id)) {
+    state.activeBatchIds.push(batch.id);
+  }
+  trimBackgroundBatchHistory(state);
+  saveProject(project, basePath);
+
+  return { projectId: project.id, batch };
+}
 
 // Get the project assets directory for images (legacy - still used for non-placement images)
 function getAssetsDir(): string {
@@ -1158,7 +1288,7 @@ export interface VideoPlacementGenerationParams {
  * LTX-2 requires frame count to be divisible by 8 + 1.
  * Formula: Math.ceil((duration * 25) / 8) * 8 + 1
  * 
- * NOTE: LTX-2 workflows use 25 fps (not 24 fps) as the native frame rate.
+ * NOTE: LTX-2 workflows use 24 fps (not 24 fps) as the native frame rate.
  * Using Math.ceil ensures we get at least the requested duration (videos may
  * be slightly longer but never shorter than expected).
  * 
@@ -1166,10 +1296,10 @@ export interface VideoPlacementGenerationParams {
  * @returns Frame count ensuring at least the requested duration
  */
 function calculateFrameCount(duration: number): number {
-  // 25 fps (LTX-2 native), frame count must be divisible by 8 + 1
+  // 24 fps (LTX-2 native), frame count must be divisible by 8 + 1
   // Use Math.ceil to ensure we never generate shorter videos than requested
-  const baseFrames = duration * 25;
-  return Math.ceil(baseFrames / 8) * 8 + 1;
+  const baseFrames = duration * 24;
+  return baseFrames + 1
 }
 
 /**
@@ -2080,6 +2210,644 @@ Returns an array of job IDs that can be tracked with wait_for_job.`,
   }
 );
 
+function recomputeBatchCounts(batch: BackgroundGenerationBatch): void {
+  batch.completedItems = batch.items.filter((item) => item.status === 'completed').length;
+  batch.failedItems = batch.items.filter((item) => item.status === 'failed').length;
+}
+
+function startBackgroundBatchRunner(
+  basePath: string,
+  projectId: string,
+  batchId: string,
+  kind: BackgroundGenerationKind,
+): boolean {
+  const key = getBatchRunnerKey(projectId, batchId);
+  if (activeBatchRunners.has(key)) {
+    return false;
+  }
+
+  const runner = (kind === 'image'
+    ? runImageBatchSequentially(basePath, batchId)
+    : runVideoBatchSequentially(basePath, batchId))
+    .catch((error) => {
+      console.error(`[background:${kind}] Batch ${batchId} failed with unhandled error:`, error);
+      persistBatchUpdate(basePath, batchId, (batch) => {
+        batch.status = 'failed';
+        batch.finishedAt = Date.now();
+      });
+    })
+    .finally(() => {
+      activeBatchRunners.delete(key);
+    });
+
+  activeBatchRunners.set(key, runner);
+  return true;
+}
+
+function getRetryItemsForBatch(
+  basePath: string,
+  batchId: string,
+  expectedKind: BackgroundGenerationKind,
+): { items: BackgroundGenerationItem[]; sourceFile: string } | { error: string } {
+  const project = loadProject(basePath);
+  if (!project?.backgroundGeneration) {
+    return { error: 'No background generation state found in project.' };
+  }
+
+  const batch = project.backgroundGeneration.batches.find((entry) => entry.id === batchId);
+  if (!batch) {
+    return { error: `Background batch not found: ${batchId}` };
+  }
+  if (batch.kind !== expectedKind) {
+    return { error: `Batch ${batchId} is ${batch.kind}, expected ${expectedKind}.` };
+  }
+
+  const failedItems = batch.items
+    .filter((item) => item.status === 'failed')
+    .map((item) => ({
+      ...item,
+      status: 'pending' as const,
+      attempts: 0,
+      error: undefined,
+      artifactId: undefined,
+      filePath: undefined,
+      jobId: undefined,
+      updatedAt: Date.now(),
+    }));
+
+  if (failedItems.length === 0) {
+    return { error: `Batch ${batchId} has no failed items to retry.` };
+  }
+
+  return {
+    items: failedItems,
+    sourceFile: batch.sourceFile,
+  };
+}
+
+async function prepareImagePlacementsForGeneration(
+  placements: ParsedImagePlacement[],
+  options: {
+    expandPrompts: boolean;
+    logExpandedPrompts: boolean;
+    logPrefix: string;
+  },
+): Promise<PreparedImageGenerationPlacement[]> {
+  const defaultNegativePrompt = 'blurry, low quality, text, watermark';
+  const transcriptContent = readProjectFile('agent/content/transcript.md');
+  let contentPlanSnippet: string | undefined;
+  const contentPlanRaw = readProjectFile('agent/plans/content-plan.md');
+  if (contentPlanRaw && contentPlanRaw.trim()) {
+    contentPlanSnippet = contentPlanRaw.trim().slice(0, 1500);
+  }
+
+  const prepared: PreparedImageGenerationPlacement[] = [];
+
+  for (const placement of placements) {
+    let prompt = placement.prompt;
+    let negativePrompt = defaultNegativePrompt;
+
+    if (options.expandPrompts) {
+      const transcriptSegment = getTranscriptSegmentForTimeRange(
+        transcriptContent,
+        placement.startTime,
+        placement.endTime,
+      );
+      const expanded = await expandImagePlacementPrompt(placement, {
+        transcriptSegment,
+        contentPlan: contentPlanSnippet,
+      });
+      if (expanded && 'error' in expanded) {
+        console.warn(
+          `${options.logPrefix} Placement ${placement.placementNumber}: prompt expansion failed (${expanded.error}); continuing with original placement prompt. ` +
+            'In desktop: Settings → select OpenAI/Gemini, enter API key, Save & Restart.',
+        );
+      } else if (expanded && 'prompt' in expanded) {
+        prompt = expanded.prompt;
+        if (expanded.negativePrompt) negativePrompt = expanded.negativePrompt;
+        console.log(`${options.logPrefix} Placement ${placement.placementNumber}: using expanded prompt`);
+        if (options.logExpandedPrompts) {
+          console.log(
+            [
+              `${options.logPrefix} --- BEGIN EXPANDED PROMPT (Placement ${placement.placementNumber}) ---`,
+              expanded.prompt,
+              `${options.logPrefix} --- END EXPANDED PROMPT (Placement ${placement.placementNumber}) ---`,
+            ].join('\n'),
+          );
+          console.log(
+            [
+              `${options.logPrefix} --- BEGIN NEGATIVE PROMPT (Placement ${placement.placementNumber}) ---`,
+              negativePrompt,
+              `${options.logPrefix} --- END NEGATIVE PROMPT (Placement ${placement.placementNumber}) ---`,
+            ].join('\n'),
+          );
+        } else {
+          const maxPreview = 400;
+          const preview =
+            prompt.length <= maxPreview ? prompt : `${prompt.slice(0, maxPreview)}... (${prompt.length} chars total)`;
+          console.log(`${options.logPrefix} Placement ${placement.placementNumber} expanded prompt (preview):\n${preview}`);
+        }
+      } else if (!expanded) {
+        console.warn(
+          `${options.logPrefix} Placement ${placement.placementNumber}: prompt expansion returned empty; continuing with original placement prompt`,
+        );
+      }
+    }
+
+    prepared.push({
+      placementNumber: placement.placementNumber,
+      startTime: placement.startTime,
+      endTime: placement.endTime,
+      prompt,
+      negativePrompt,
+    });
+  }
+
+  return prepared;
+}
+
+async function prepareVideoPlacementsForGeneration(
+  placements: ParsedVideoPlacement[],
+  options: {
+    expandPrompts: boolean;
+    logPrefix: string;
+  },
+): Promise<PreparedVideoGenerationPlacement[]> {
+  const transcriptContent = readProjectFile('agent/content/transcript.md');
+  let contentPlanSnippet: string | undefined;
+  const contentPlanRaw = readProjectFile('agent/plans/content-plan.md');
+  if (contentPlanRaw && contentPlanRaw.trim()) {
+    contentPlanSnippet = contentPlanRaw.trim().slice(0, 1500);
+  }
+
+  const prepared: PreparedVideoGenerationPlacement[] = [];
+  for (const placement of placements) {
+    let prompt = placement.prompt;
+    if (options.expandPrompts) {
+      const transcriptSegment = getTranscriptSegmentForTimeRange(
+        transcriptContent,
+        placement.startTime,
+        placement.endTime,
+      );
+      const expanded = await expandVideoPlacementPrompt(placement, {
+        transcriptSegment,
+        contentPlan: contentPlanSnippet,
+      });
+      if (expanded) {
+        prompt = expanded;
+        console.log(`${options.logPrefix} Placement ${placement.placementNumber}: using expanded prompt`);
+      } else {
+        console.warn(
+          `${options.logPrefix} Placement ${placement.placementNumber}: prompt expansion unavailable; continuing with original placement prompt`,
+        );
+      }
+    }
+
+    prepared.push({
+      placementNumber: placement.placementNumber,
+      startTime: placement.startTime,
+      endTime: placement.endTime,
+      prompt,
+      duration: placement.duration,
+      videoType: placement.videoType,
+    });
+  }
+
+  return prepared;
+}
+
+async function runImageGenerationSequentially(
+  placements: PreparedImageGenerationPlacement[],
+  logPrefix: string,
+): Promise<Array<{
+  placementNumber: number;
+  status: 'success' | 'failed';
+  artifactId?: string;
+  filePath?: string;
+  error?: string;
+}>> {
+  const results: Array<{
+    placementNumber: number;
+    status: 'success' | 'failed';
+    artifactId?: string;
+    filePath?: string;
+    error?: string;
+  }> = [];
+
+  for (const placement of placements) {
+    try {
+      console.log(`${logPrefix} Submitting image generation for Placement ${placement.placementNumber}`);
+      const submitResult = await submitImageGeneration({
+        scene_number: placement.placementNumber,
+        prompt: placement.prompt,
+        negative_prompt: placement.negativePrompt,
+        aspect_ratio: '16:9',
+        image_type: 'scene',
+        generation_mode: 'text_to_image',
+      });
+
+      if (submitResult.status !== 'submitted' || !submitResult.jobId) {
+        const errorMsg = submitResult.error || 'Failed to submit image generation';
+        results.push({
+          placementNumber: placement.placementNumber,
+          status: 'failed',
+          error: errorMsg,
+        });
+        continue;
+      }
+
+      const timeout = getVideoGenerationTimeout();
+      const waitResult = await waitForComfyUIJob(submitResult.jobId, timeout);
+      if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
+        results.push({
+          placementNumber: placement.placementNumber,
+          status: 'success',
+          artifactId: waitResult.artifactId,
+          filePath: waitResult.filePath,
+        });
+      } else {
+        results.push({
+          placementNumber: placement.placementNumber,
+          status: 'failed',
+          error: waitResult.error || 'Image generation did not complete',
+        });
+      }
+    } catch (error) {
+      results.push({
+        placementNumber: placement.placementNumber,
+        status: 'failed',
+        error: String(error),
+      });
+    }
+  }
+
+  return results;
+}
+
+async function runVideoGenerationSequentially(
+  placements: PreparedVideoGenerationPlacement[],
+  logPrefix: string,
+): Promise<Array<{
+  placementNumber: number;
+  status: 'success' | 'failed';
+  artifactId?: string;
+  filePath?: string;
+  error?: string;
+}>> {
+  const results: Array<{
+    placementNumber: number;
+    status: 'success' | 'failed';
+    artifactId?: string;
+    filePath?: string;
+    error?: string;
+  }> = [];
+
+  for (const placement of placements) {
+    try {
+      console.log(`${logPrefix} Submitting video generation for Placement ${placement.placementNumber}`);
+      const submitResult = await submitVideoPlacementGeneration({
+        scene_number: placement.placementNumber,
+        prompt: placement.prompt,
+        duration: placement.duration,
+        video_type: placement.videoType,
+      });
+
+      if (submitResult.status !== 'submitted' || !submitResult.jobId) {
+        const errorMsg = submitResult.error || 'Failed to submit video generation';
+        results.push({
+          placementNumber: placement.placementNumber,
+          status: 'failed',
+          error: errorMsg,
+        });
+        continue;
+      }
+
+      const timeout = getVideoGenerationTimeout();
+      const waitResult = await waitForComfyUIJob(submitResult.jobId, timeout);
+      if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
+        results.push({
+          placementNumber: placement.placementNumber,
+          status: 'success',
+          artifactId: waitResult.artifactId,
+          filePath: waitResult.filePath,
+        });
+      } else {
+        results.push({
+          placementNumber: placement.placementNumber,
+          status: 'failed',
+          error: waitResult.error || 'Video generation did not complete',
+        });
+      }
+    } catch (error) {
+      results.push({
+        placementNumber: placement.placementNumber,
+        status: 'failed',
+        error: String(error),
+      });
+    }
+  }
+
+  return results;
+}
+
+async function runImageBatchSequentially(basePath: string, batchId: string): Promise<void> {
+  let batch = persistBatchUpdate(basePath, batchId, (entry) => {
+    if (entry.status !== 'completed' && entry.status !== 'failed') {
+      entry.status = 'running';
+      entry.startedAt = entry.startedAt ?? Date.now();
+      for (const item of entry.items) {
+        if (item.status === 'processing') {
+          item.status = 'pending';
+          item.jobId = undefined;
+        }
+      }
+      recomputeBatchCounts(entry);
+    }
+  });
+  if (!batch) return;
+  if (batch.status === 'completed' || batch.status === 'failed') return;
+
+  for (const itemSnapshot of batch.items) {
+    if (itemSnapshot.status === 'completed') continue;
+    if (itemSnapshot.status === 'failed') continue;
+
+    const itemId = itemSnapshot.placementNumber;
+    batch = persistBatchUpdate(basePath, batchId, (entry) => {
+      const item = entry.items.find((candidate) => candidate.placementNumber === itemId);
+      if (!item || item.status === 'completed') return;
+      item.status = 'processing';
+      item.attempts += 1;
+      item.updatedAt = Date.now();
+      item.error = undefined;
+      item.jobId = undefined;
+      recomputeBatchCounts(entry);
+    });
+    if (!batch) return;
+
+    const item = batch.items.find((candidate) => candidate.placementNumber === itemId);
+    if (!item) continue;
+
+    const submitResult = await submitImageGeneration({
+      scene_number: item.placementNumber,
+      prompt: item.prompt,
+      negative_prompt: item.metadata?.negativePrompt ?? 'blurry, low quality, text, watermark',
+      aspect_ratio: '16:9',
+      image_type: 'scene',
+      generation_mode: 'text_to_image',
+    });
+
+    if (submitResult.status !== 'submitted' || !submitResult.jobId) {
+      persistBatchUpdate(basePath, batchId, (entry) => {
+        const target = entry.items.find((candidate) => candidate.placementNumber === itemId);
+        if (!target) return;
+        target.status = 'failed';
+        target.error = submitResult.error || 'Failed to submit image generation';
+        target.updatedAt = Date.now();
+        recomputeBatchCounts(entry);
+      });
+      continue;
+    }
+
+    persistBatchUpdate(basePath, batchId, (entry) => {
+      const target = entry.items.find((candidate) => candidate.placementNumber === itemId);
+      if (!target) return;
+      target.jobId = submitResult.jobId;
+      target.updatedAt = Date.now();
+    });
+
+    const waitResult = await waitForComfyUIJob(submitResult.jobId, getVideoGenerationTimeout());
+    persistBatchUpdate(basePath, batchId, (entry) => {
+      const target = entry.items.find((candidate) => candidate.placementNumber === itemId);
+      if (!target) return;
+      if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
+        target.status = 'completed';
+        target.artifactId = waitResult.artifactId;
+        target.filePath = waitResult.filePath;
+        target.error = undefined;
+      } else {
+        target.status = 'failed';
+        target.error = waitResult.error || 'Image generation did not complete';
+      }
+      target.updatedAt = Date.now();
+      recomputeBatchCounts(entry);
+    });
+  }
+
+  persistBatchUpdate(basePath, batchId, (entry) => {
+    recomputeBatchCounts(entry);
+    entry.status = entry.failedItems > 0 ? 'failed' : 'completed';
+    entry.finishedAt = Date.now();
+  });
+}
+
+async function runVideoBatchSequentially(basePath: string, batchId: string): Promise<void> {
+  let batch = persistBatchUpdate(basePath, batchId, (entry) => {
+    if (entry.status !== 'completed' && entry.status !== 'failed') {
+      entry.status = 'running';
+      entry.startedAt = entry.startedAt ?? Date.now();
+      for (const item of entry.items) {
+        if (item.status === 'processing') {
+          item.status = 'pending';
+          item.jobId = undefined;
+        }
+      }
+      recomputeBatchCounts(entry);
+    }
+  });
+  if (!batch) return;
+  if (batch.status === 'completed' || batch.status === 'failed') return;
+
+  for (const itemSnapshot of batch.items) {
+    if (itemSnapshot.status === 'completed') continue;
+    if (itemSnapshot.status === 'failed') continue;
+
+    const itemId = itemSnapshot.placementNumber;
+    batch = persistBatchUpdate(basePath, batchId, (entry) => {
+      const item = entry.items.find((candidate) => candidate.placementNumber === itemId);
+      if (!item || item.status === 'completed') return;
+      item.status = 'processing';
+      item.attempts += 1;
+      item.updatedAt = Date.now();
+      item.error = undefined;
+      item.jobId = undefined;
+      recomputeBatchCounts(entry);
+    });
+    if (!batch) return;
+
+    const item = batch.items.find((candidate) => candidate.placementNumber === itemId);
+    if (!item) continue;
+
+    const submitResult = await submitVideoPlacementGeneration({
+      scene_number: item.placementNumber,
+      prompt: item.prompt,
+      duration: item.metadata?.duration ?? 6,
+      video_type: item.metadata?.videoType ?? 'cinematic_realism',
+    });
+
+    if (submitResult.status !== 'submitted' || !submitResult.jobId) {
+      persistBatchUpdate(basePath, batchId, (entry) => {
+        const target = entry.items.find((candidate) => candidate.placementNumber === itemId);
+        if (!target) return;
+        target.status = 'failed';
+        target.error = submitResult.error || 'Failed to submit video generation';
+        target.updatedAt = Date.now();
+        recomputeBatchCounts(entry);
+      });
+      continue;
+    }
+
+    persistBatchUpdate(basePath, batchId, (entry) => {
+      const target = entry.items.find((candidate) => candidate.placementNumber === itemId);
+      if (!target) return;
+      target.jobId = submitResult.jobId;
+      target.updatedAt = Date.now();
+    });
+
+    const waitResult = await waitForComfyUIJob(submitResult.jobId, getVideoGenerationTimeout());
+    persistBatchUpdate(basePath, batchId, (entry) => {
+      const target = entry.items.find((candidate) => candidate.placementNumber === itemId);
+      if (!target) return;
+      if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
+        target.status = 'completed';
+        target.artifactId = waitResult.artifactId;
+        target.filePath = waitResult.filePath;
+        target.error = undefined;
+      } else {
+        target.status = 'failed';
+        target.error = waitResult.error || 'Video generation did not complete';
+      }
+      target.updatedAt = Date.now();
+      recomputeBatchCounts(entry);
+    });
+  }
+
+  const finalized = persistBatchUpdate(basePath, batchId, (entry) => {
+    recomputeBatchCounts(entry);
+    entry.status = entry.failedItems > 0 ? 'failed' : 'completed';
+    entry.finishedAt = Date.now();
+  });
+
+  if (finalized?.status === 'completed' && finalized.failedItems === 0) {
+    const project = loadProject(basePath);
+    if (project) {
+      updatePhaseStatus(project, 'video_generation', 'completed', basePath);
+      const refreshed = loadProject(basePath);
+      if (refreshed?.currentPhase === WorkflowPhase.VIDEO_GENERATION) {
+        await transitionToNextPhase(refreshed, basePath);
+      }
+    }
+  }
+}
+
+export async function resumePendingBatches(
+  basePath: string = getCurrentProjectBasePath(),
+): Promise<{ resumed: number }> {
+  const project = loadProject(basePath);
+  if (!project?.backgroundGeneration) {
+    return { resumed: 0 };
+  }
+  const state = ensureBackgroundGenerationState(project);
+  const resumable = state.batches.filter((batch) => {
+    if (batch.status !== 'queued' && batch.status !== 'running') return false;
+    return state.activeBatchIds.includes(batch.id) || batch.status === 'queued' || batch.status === 'running';
+  });
+
+  let resumed = 0;
+  for (const batch of resumable) {
+    if (startBackgroundBatchRunner(basePath, project.id, batch.id, batch.kind)) {
+      resumed += 1;
+    }
+  }
+
+  if (resumed > 0) {
+    state.lastResumedAt = Date.now();
+    saveProject(project, basePath);
+  }
+
+  return { resumed };
+}
+
+export function __getActiveBatchRunnerCountForTests(): number {
+  return activeBatchRunners.size;
+}
+
+export function __resetActiveBatchRunnersForTests(): void {
+  activeBatchRunners.clear();
+}
+
+export const readBackgroundGenerationTool: ToolDefinition = createTool(
+  'read_background_generation',
+  `Read persistent background generation batch status for image/video runs.`,
+  {
+    type: 'object',
+    properties: {
+      batch_id: {
+        type: 'string',
+        description: 'Optional batch id filter.',
+      },
+      kind: {
+        type: 'string',
+        enum: ['image', 'video'],
+        description: 'Optional generation kind filter.',
+      },
+      status: {
+        type: 'string',
+        enum: ['queued', 'running', 'completed', 'failed'],
+        description: 'Optional batch status filter.',
+      },
+      include_items: {
+        type: 'boolean',
+        description: 'Include per-placement item details (default: false).',
+      },
+    },
+    required: [],
+  },
+  async (args) => {
+    const project = loadProject();
+    if (!project?.backgroundGeneration) {
+      return {
+        status: 'success',
+        active_batch_ids: [],
+        batches: [],
+      };
+    }
+
+    const includeItems = args['include_items'] === true;
+    const batchId = args['batch_id'] as string | undefined;
+    const kind = args['kind'] as BackgroundGenerationKind | undefined;
+    const statusFilter = args['status'] as BackgroundGenerationBatchStatus | undefined;
+
+    const state = ensureBackgroundGenerationState(project);
+    const batches = state.batches
+      .filter((batch) => (batchId ? batch.id === batchId : true))
+      .filter((batch) => (kind ? batch.kind === kind : true))
+      .filter((batch) => (statusFilter ? batch.status === statusFilter : true))
+      .map((batch) => ({
+        id: batch.id,
+        kind: batch.kind,
+        status: batch.status,
+        phase: batch.phase,
+        source_file: batch.sourceFile,
+        created_at: batch.createdAt,
+        started_at: batch.startedAt,
+        finished_at: batch.finishedAt,
+        updated_at: batch.updatedAt,
+        total_items: batch.totalItems,
+        completed_items: batch.completedItems,
+        failed_items: batch.failedItems,
+        retry_of_batch_id: batch.retryOfBatchId,
+        items: includeItems ? batch.items : undefined,
+      }));
+
+    return {
+      status: 'success',
+      active_batch_ids: state.activeBatchIds,
+      total_batches: batches.length,
+      batches,
+    };
+  },
+);
+
 /**
  * Generate all images for placements defined in image-placements.md.
  * Parses the file, extracts all placements, and generates images sequentially.
@@ -2093,13 +2861,13 @@ This tool:
 1. Reads and parses agent/content/image-placements.md
 2. Extracts all placement entries (Placement 1, 2, 3, etc.)
 3. Optionally expands each placement prompt via LLM (image-generator–style, placement + transcript + content plan) into a detailed ComfyUI-ready prompt. Use expand_prompts: false to skip.
-4. Generates images sequentially, one at a time
-5. Waits for each image to complete before moving to the next
-6. Continues even if some images fail (logs failures but doesn't stop)
-7. Returns a summary of successful and failed placements
+4. By default, queues a persistent background batch and returns immediately
+5. Background worker generates sequentially and persists per-placement progress
+6. Supports retry_failed_batch_id to retry only failed placements from a previous batch
+7. Optionally runs synchronously when run_in_background: false
 
 Use this tool during the image_generation phase to process all placements automatically.
-The tool handles all parsing, optional prompt expansion, sequential generation, and error handling internally.`,
+The tool handles parsing, optional prompt expansion, background persistence, retries, and generation.`,
   {
     type: 'object',
     properties: {
@@ -2115,6 +2883,14 @@ The tool handles all parsing, optional prompt expansion, sequential generation, 
         type: 'boolean',
         description:
           'If true, print the FULL expanded prompt and negative prompt for each placement. You can also set KSHANA_LOG_EXPANDED_PROMPTS=1.',
+      },
+      run_in_background: {
+        type: 'boolean',
+        description: 'If true (default), queue and run generation in background. Set false for blocking execution.',
+      },
+      retry_failed_batch_id: {
+        type: 'string',
+        description: 'Retry only failed placements from this prior image batch id.',
       },
     },
     required: [],
@@ -2133,236 +2909,173 @@ The tool handles all parsing, optional prompt expansion, sequential generation, 
 
     const filePath = (args['file_path'] as string | undefined) || 'agent/content/image-placements.md';
     const expandPrompts = (args['expand_prompts'] as boolean | undefined) !== false;
+    const runInBackground = (args['run_in_background'] as boolean | undefined) !== false;
+    const retryFailedBatchId = args['retry_failed_batch_id'] as string | undefined;
+    const basePath = getCurrentProjectBasePath();
     const logExpandedPrompts =
       (args['log_expanded_prompts'] as boolean | undefined) === true ||
       process.env['KSHANA_LOG_EXPANDED_PROMPTS'] === '1';
-    
-    // Read the image placements file
-    const content = readProjectFile(filePath);
-    if (!content) {
-      return {
-        status: 'error',
-        error: `Image placements file not found: ${filePath}`,
-        suggestion: 'The image_placement phase must be completed first. Please run the image_placement phase to create the image-placements.md file, or call update_project with action: "update_phase" to return to the image_placement phase.',
-        next_action: 'Complete the image_placement phase by creating agent/content/image-placements.md, then try generating images again.',
-      };
-    }
-    
-    // Parse placements with enhanced error reporting
-    let placements: ParsedImagePlacement[];
-    try {
-      const parseResult = parseImagePlacementsWithErrors(content, false, { validateOverlaps: true });
-      placements = parseResult.placements;
 
-      // Log warnings and errors for debugging
-      if (parseResult.warnings.length > 0) {
-        console.warn('[generate_all_images] Parser warnings:', parseResult.warnings);
-      }
-      if (parseResult.errors.length > 0) {
-        console.error('[generate_all_images] Parser errors (non-strict mode, continuing):', parseResult.errors);
-        // Include error details in response for user visibility
-        const errorDetails = parseResult.errors.map(e => 
-          `Line ${e.line}: ${e.reason}${e.suggestion ? ` (${e.suggestion})` : ''}`
-        ).join('; ');
-        console.error('[generate_all_images] Error details:', errorDetails);
-      }
+    let preparedPlacements: PreparedImageGenerationPlacement[] = [];
+    let sourceFile = filePath;
 
-      const normalizedMarkdown = buildImagePlacementsMarkdown(placements);
-      if (normalizedMarkdown.trim() !== content.trim()) {
-        writeProjectFile(filePath, normalizedMarkdown);
+    if (retryFailedBatchId) {
+      const retry = getRetryItemsForBatch(basePath, retryFailedBatchId, 'image');
+      if ('error' in retry) {
+        return { status: 'error', error: retry.error };
       }
-
-      if (placements.length === 0) {
-        // If we have errors, include them in the response
-        const errorMessages = parseResult.errors.length > 0
-          ? `\n\nParser found ${parseResult.errors.length} error(s):\n${parseResult.errors.map(e => 
-              `  Line ${e.line}: ${e.reason}${e.suggestion ? ` - ${e.suggestion}` : ''}`
-            ).join('\n')}`
-          : '';
-        
+      sourceFile = retry.sourceFile;
+      preparedPlacements = retry.items.map((item) => ({
+        placementNumber: item.placementNumber,
+        startTime: item.startTime,
+        endTime: item.endTime,
+        prompt: item.prompt,
+        negativePrompt: item.metadata?.negativePrompt ?? 'blurry, low quality, text, watermark',
+      }));
+    } else {
+      const content = readProjectFile(filePath);
+      if (!content) {
         return {
           status: 'error',
-          error: 'No placements found in image-placements.md',
-          suggestion: `The image-placements.md file exists but contains no valid placements.${errorMessages}\n\nPlease re-run the image_placement phase to create placements.`,
-          next_action: 'Re-run the image_placement phase to identify and create image placements, then try generating images again.',
+          error: `Image placements file not found: ${filePath}`,
+          suggestion: 'The image_placement phase must be completed first. Please run the image_placement phase to create the image-placements.md file, or call update_project with action: "update_phase" to return to the image_placement phase.',
+          next_action: 'Complete the image_placement phase by creating agent/content/image-placements.md, then try generating images again.',
         };
       }
-    } catch (error) {
-      console.error('[generate_all_images] Unexpected error parsing placements:', error);
+
+      let placements: ParsedImagePlacement[];
+      try {
+        const parseResult = parseImagePlacementsWithErrors(content, false, { validateOverlaps: true });
+        placements = parseResult.placements;
+        if (parseResult.warnings.length > 0) {
+          console.warn('[generate_all_images] Parser warnings:', parseResult.warnings);
+        }
+        if (parseResult.errors.length > 0) {
+          console.error('[generate_all_images] Parser errors (non-strict mode, continuing):', parseResult.errors);
+          const errorDetails = parseResult.errors.map(e =>
+            `Line ${e.line}: ${e.reason}${e.suggestion ? ` (${e.suggestion})` : ''}`,
+          ).join('; ');
+          console.error('[generate_all_images] Error details:', errorDetails);
+        }
+
+        const normalizedMarkdown = buildImagePlacementsMarkdown(placements);
+        if (normalizedMarkdown.trim() !== content.trim()) {
+          writeProjectFile(filePath, normalizedMarkdown);
+        }
+
+        if (placements.length === 0) {
+          const errorMessages = parseResult.errors.length > 0
+            ? `\n\nParser found ${parseResult.errors.length} error(s):\n${parseResult.errors.map(e =>
+                `  Line ${e.line}: ${e.reason}${e.suggestion ? ` - ${e.suggestion}` : ''}`,
+              ).join('\n')}`
+            : '';
+
+          return {
+            status: 'error',
+            error: 'No placements found in image-placements.md',
+            suggestion: `The image-placements.md file exists but contains no valid placements.${errorMessages}\n\nPlease re-run the image_placement phase to create placements.`,
+            next_action: 'Re-run the image_placement phase to identify and create image placements, then try generating images again.',
+          };
+        }
+      } catch (error) {
+        console.error('[generate_all_images] Unexpected error parsing placements:', error);
+        return {
+          status: 'error',
+          error: `Failed to parse image placements: ${String(error)}`,
+          suggestion: 'The image-placements.md file may be corrupted or in an invalid format. Please check the file or re-run the image_placement phase to regenerate it.',
+          next_action: 'Review the image-placements.md file format, or re-run the image_placement phase to create a new placements file.',
+        };
+      }
+
+      preparedPlacements = await prepareImagePlacementsForGeneration(placements, {
+        expandPrompts,
+        logExpandedPrompts,
+        logPrefix: '[generate_all_images]',
+      });
+    }
+
+    if (preparedPlacements.length === 0) {
       return {
         status: 'error',
-        error: `Failed to parse image placements: ${String(error)}`,
-        suggestion: 'The image-placements.md file may be corrupted or in an invalid format. Please check the file or re-run the image_placement phase to regenerate it.',
-        next_action: 'Review the image-placements.md file format, or re-run the image_placement phase to create a new placements file.',
+        error: 'No placements available to generate.',
       };
     }
-    
-    console.log(`[generate_all_images] Found ${placements.length} placements to generate`);
-    const defaultNegativePrompt = 'blurry, low quality, text, watermark';
 
-    const transcriptContent = readProjectFile('agent/content/transcript.md');
-    let contentPlanSnippet: string | undefined;
-    const contentPlanRaw = readProjectFile('agent/plans/content-plan.md');
-    if (contentPlanRaw && contentPlanRaw.trim()) {
-      contentPlanSnippet = contentPlanRaw.trim().slice(0, 1500);
-    }
-
-    const results: Array<{
-      placementNumber: number;
-      status: 'success' | 'failed';
-      artifactId?: string;
-      filePath?: string;
-      error?: string;
-    }> = [];
-
-    // Generate images sequentially
-    for (const placement of placements) {
-      console.log(`[generate_all_images] Generating image for Placement ${placement.placementNumber}...`, {
+    if (runInBackground) {
+      const now = Date.now();
+      const batchItems: BackgroundGenerationItem[] = preparedPlacements.map((placement) => ({
         placementNumber: placement.placementNumber,
         startTime: placement.startTime,
         endTime: placement.endTime,
-        promptLength: placement.prompt.length,
+        prompt: placement.prompt,
+        status: 'pending',
+        attempts: 0,
+        updatedAt: now,
+        metadata: {
+          negativePrompt: placement.negativePrompt,
+        },
+      }));
+
+      const created = createBackgroundBatch(basePath, {
+        kind: 'image',
+        sourceFile,
+        expandPrompts,
+        retryOfBatchId: retryFailedBatchId,
+        items: batchItems,
       });
+      if (!created) {
+        return {
+          status: 'error',
+          error: 'No active project found. Create or load a project before queuing background generation.',
+        };
+      }
 
-      let prompt = placement.prompt;
-      let negativePrompt = defaultNegativePrompt;
-
-      if (expandPrompts) {
-        const transcriptSegment = getTranscriptSegmentForTimeRange(
-          transcriptContent,
-          placement.startTime,
-          placement.endTime
-        );
-        const expanded = await expandImagePlacementPrompt(placement, {
-          transcriptSegment,
-          contentPlan: contentPlanSnippet,
-        });
-        if (expanded && 'error' in expanded) {
-          console.warn(
-            `[generate_all_images] Placement ${placement.placementNumber}: prompt expansion failed (${expanded.error}); continuing with original placement prompt. ` +
-              'In desktop: Settings → select OpenAI/Gemini, enter API key, Save & Restart.'
-          );
-        } else if (expanded && 'prompt' in expanded) {
-          prompt = expanded.prompt;
-          if (expanded.negativePrompt) negativePrompt = expanded.negativePrompt;
-          console.log(`[generate_all_images] Placement ${placement.placementNumber}: using expanded prompt`);
-          if (logExpandedPrompts) {
-            // Log as plain strings with clear delimiters to avoid UI truncation/collapsing.
-            console.log(
-              [
-                `[generate_all_images] --- BEGIN EXPANDED PROMPT (Placement ${placement.placementNumber}) ---`,
-                expanded.prompt,
-                `[generate_all_images] --- END EXPANDED PROMPT (Placement ${placement.placementNumber}) ---`,
-              ].join('\n')
-            );
-            console.log(
-              [
-                `[generate_all_images] --- BEGIN NEGATIVE PROMPT (Placement ${placement.placementNumber}) ---`,
-                negativePrompt,
-                `[generate_all_images] --- END NEGATIVE PROMPT (Placement ${placement.placementNumber}) ---`,
-              ].join('\n')
-            );
+      let autoTransitioned = false;
+      let currentPhase: WorkflowPhase | undefined;
+      const projectAfterQueue = loadProject(basePath);
+      if (projectAfterQueue) {
+        currentPhase = projectAfterQueue.currentPhase;
+        if (projectAfterQueue.currentPhase === WorkflowPhase.IMAGE_GENERATION) {
+          updatePhaseStatus(projectAfterQueue, 'image_generation', 'completed', basePath);
+          const refreshed = loadProject(basePath);
+          if (refreshed && refreshed.currentPhase === WorkflowPhase.IMAGE_GENERATION) {
+            const transitionResult = await transitionToNextPhase(refreshed, basePath);
+            autoTransitioned = transitionResult.transitioned;
+            currentPhase = transitionResult.project.currentPhase;
           } else {
-            const maxPreview = 400;
-            const preview =
-              prompt.length <= maxPreview
-                ? prompt
-                : `${prompt.slice(0, maxPreview)}... (${prompt.length} chars total)`;
-            console.log(
-              `[generate_all_images] Placement ${placement.placementNumber} expanded prompt (preview):\n${preview}`
-            );
+            currentPhase = refreshed?.currentPhase ?? currentPhase;
           }
-        } else if (!expanded) {
-          console.warn(
-            `[generate_all_images] Placement ${placement.placementNumber}: prompt expansion returned empty; continuing with original placement prompt`
-          );
         }
       }
-      
-      try {
-        console.log(`[generate_all_images] Submitting image generation for Placement ${placement.placementNumber} with scene_number=${placement.placementNumber}`);
-        const submitResult = await submitImageGeneration({
-          scene_number: placement.placementNumber,
-          prompt,
-          negative_prompt: negativePrompt,
-          aspect_ratio: '16:9',
-          image_type: 'scene',
-          generation_mode: 'text_to_image',
-        });
-        
-        if (submitResult.status !== 'submitted' || !submitResult.jobId) {
-          const errorMsg = submitResult.error || 'Failed to submit image generation';
-          console.error(`[generate_all_images] Placement ${placement.placementNumber} failed to submit: ${errorMsg}`);
-          results.push({
-            placementNumber: placement.placementNumber,
-            status: 'failed',
-            error: errorMsg,
-          });
-          continue;
-        }
-        
-        console.log(`[generate_all_images] Job submitted for Placement ${placement.placementNumber}, jobId=${submitResult.jobId}`);
-        
-        // Wait for job completion
-        const timeout = getVideoGenerationTimeout();
-        console.log(`[generate_all_images] Waiting for job ${submitResult.jobId} to complete (timeout=${timeout}s)...`);
-        const waitResult = await waitForComfyUIJob(submitResult.jobId, timeout);
-        
-        console.log(`[generate_all_images] Job ${submitResult.jobId} completed with status:`, {
-          status: waitResult.status,
-          artifactId: waitResult.artifactId,
-          filePath: waitResult.filePath,
-          error: waitResult.error,
-        });
-        
-        if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
-          console.log(`[generate_all_images] ✓ Placement ${placement.placementNumber} completed successfully:`, {
-            artifactId: waitResult.artifactId,
-            filePath: waitResult.filePath,
-            placementNumber: placement.placementNumber,
-          });
-          results.push({
-            placementNumber: placement.placementNumber,
-            status: 'success',
-            artifactId: waitResult.artifactId,
-            filePath: waitResult.filePath,
-          });
-        } else {
-          const errorMsg = waitResult.error || 'Image generation did not complete';
-          console.error(`[generate_all_images] ✗ Placement ${placement.placementNumber} failed: ${errorMsg}`);
-          results.push({
-            placementNumber: placement.placementNumber,
-            status: 'failed',
-            error: errorMsg,
-          });
-        }
-      } catch (error) {
-        const errorMsg = String(error);
-        console.error(`[generate_all_images] ✗ Placement ${placement.placementNumber} threw error:`, {
-          error: errorMsg,
-          stack: error instanceof Error ? error.stack : undefined,
-        });
-        results.push({
-          placementNumber: placement.placementNumber,
-          status: 'failed',
-          error: errorMsg,
-        });
-      }
+
+      startBackgroundBatchRunner(basePath, created.projectId, created.batch.id, 'image');
+
+      return {
+        status: 'queued',
+        batch_id: created.batch.id,
+        total_placements: preparedPlacements.length,
+        transitioned: autoTransitioned,
+        current_phase: currentPhase,
+        next_action: autoTransitioned
+          ? 'Background image generation started and workflow has already moved to the next phase.'
+          : 'Background image generation started. Continue workflow and use read_background_generation to monitor progress.',
+        message: autoTransitioned
+          ? `Queued ${preparedPlacements.length} image placements in background batch ${created.batch.id} and auto-transitioned to ${currentPhase}.`
+          : `Queued ${preparedPlacements.length} image placements in background batch ${created.batch.id}.`,
+      };
     }
-    
-    // Summary
-    const successful = results.filter(r => r.status === 'success');
-    const failed = results.filter(r => r.status === 'failed');
-    
-    console.log(`[generate_all_images] Completed: ${successful.length} successful, ${failed.length} failed`);
-    
+
+    const results = await runImageGenerationSequentially(preparedPlacements, '[generate_all_images]');
+    const successful = results.filter((result) => result.status === 'success');
+    const failed = results.filter((result) => result.status === 'failed');
+
     return {
       status: 'completed',
-      total_placements: placements.length,
+      total_placements: preparedPlacements.length,
       successful: successful.length,
       failed: failed.length,
-      results: results,
-      message: `Generated ${successful.length} out of ${placements.length} images. ${failed.length} failed.`,
+      results,
+      message: `Generated ${successful.length} out of ${preparedPlacements.length} images. ${failed.length} failed.`,
     };
   }
 );
@@ -2380,10 +3093,10 @@ This tool:
 1. Reads and parses agent/content/video-placements.md
 2. Extracts all placement entries (Placement 1, 2, 3, etc.)
 3. Optionally expands each placement prompt via LLM (video-placer–style, placement + transcript + content plan) into a detailed ComfyUI-ready video prompt. Use expand_prompts: false to skip.
-4. Generates videos sequentially, one at a time
-5. Waits for each video to complete before moving to the next
-6. Continues even if some videos fail (logs failures but doesn't stop)
-7. Returns a summary of successful and failed placements
+4. By default, queues a persistent background batch and returns immediately
+5. Background worker generates sequentially and persists per-placement progress
+6. Supports retry_failed_batch_id to retry only failed placements from a previous batch
+7. Optionally runs synchronously when run_in_background: false
 
 Use this tool during the video_generation phase to process all placements automatically.
 The tool handles all parsing, optional prompt expansion, sequential generation, and error handling internally.
@@ -2403,6 +3116,14 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
         type: 'boolean',
         description: 'If true (default), auto-generate video placements to fill timeline gaps before generating.',
       },
+      run_in_background: {
+        type: 'boolean',
+        description: 'If true (default), queue and run generation in background. Set false for blocking execution.',
+      },
+      retry_failed_batch_id: {
+        type: 'string',
+        description: 'Retry only failed placements from this prior video batch id.',
+      },
     },
     required: [],
   },
@@ -2410,159 +3131,138 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
     const filePath = (args['file_path'] as string | undefined) || 'agent/content/video-placements.md';
     const expandPrompts = (args['expand_prompts'] as boolean | undefined) !== false;
     const autoFillGaps = (args['auto_fill_gaps'] as boolean | undefined) !== false;
+    const runInBackground = (args['run_in_background'] as boolean | undefined) !== false;
+    const retryFailedBatchId = args['retry_failed_batch_id'] as string | undefined;
+    const basePath = getCurrentProjectBasePath();
 
-    // Read the video placements file
-    if (autoFillGaps) {
-      await autoFillVideoPlacementGaps(filePath);
-    }
+    let preparedPlacements: PreparedVideoGenerationPlacement[] = [];
+    let sourceFile = filePath;
 
-    const content = readProjectFile(filePath);
-    if (!content) {
-      return {
-        status: 'error',
-        error: `Video placements file not found: ${filePath}`,
-      };
-    }
-    
-    // Parse placements
-    let placements: ParsedVideoPlacement[];
-    try {
-      const parseResult = parseVideoPlacementsWithErrors(content, false, { validateOverlaps: true });
-      placements = parseResult.placements;
-      if (parseResult.warnings.length > 0) {
-        console.warn('[generate_all_videos] Parser warnings:', parseResult.warnings);
+    if (retryFailedBatchId) {
+      const retry = getRetryItemsForBatch(basePath, retryFailedBatchId, 'video');
+      if ('error' in retry) {
+        return { status: 'error', error: retry.error };
       }
-      if (parseResult.errors.length > 0) {
-        console.warn('[generate_all_videos] Parser errors (non-strict mode):', parseResult.errors);
-      }
-
-      const normalizedMarkdown = buildVideoPlacementsMarkdown(
-        placements.filter((placement) => !isAutoGapPrompt(placement.prompt)),
-        placements.filter((placement) => isAutoGapPrompt(placement.prompt)),
-      );
-      if (normalizedMarkdown.trim() !== content.trim()) {
-        writeProjectFile(filePath, normalizedMarkdown);
-      }
-    } catch (error) {
-      return {
-        status: 'error',
-        error: `Failed to parse video placements: ${String(error)}`,
-      };
-    }
-    
-    if (placements.length === 0) {
-      return {
-        status: 'error',
-        error: 'No placements found in video-placements.md',
-      };
-    }
-    
-    console.log(`[generate_all_videos] Found ${placements.length} placements to generate`);
-
-    const transcriptContent = readProjectFile('agent/content/transcript.md');
-    let contentPlanSnippet: string | undefined;
-    const contentPlanRaw = readProjectFile('agent/plans/content-plan.md');
-    if (contentPlanRaw && contentPlanRaw.trim()) {
-      contentPlanSnippet = contentPlanRaw.trim().slice(0, 1500);
-    }
-
-    const results: Array<{
-      placementNumber: number;
-      status: 'success' | 'failed';
-      artifactId?: string;
-      filePath?: string;
-      error?: string;
-    }> = [];
-
-    // Generate videos sequentially
-    for (const placement of placements) {
-      console.log(`[generate_all_videos] Generating video for Placement ${placement.placementNumber}...`);
-
-      let prompt = placement.prompt;
-      if (expandPrompts) {
-        const transcriptSegment = getTranscriptSegmentForTimeRange(
-          transcriptContent,
-          placement.startTime,
-          placement.endTime
-        );
-        const expanded = await expandVideoPlacementPrompt(placement, {
-          transcriptSegment,
-          contentPlan: contentPlanSnippet,
-        });
-        if (expanded) {
-          prompt = expanded;
-          console.log(`[generate_all_videos] Placement ${placement.placementNumber}: using expanded prompt`);
-        } else {
-          console.warn(
-            `[generate_all_videos] Placement ${placement.placementNumber}: prompt expansion unavailable; continuing with original placement prompt`
-          );
-        }
+      sourceFile = retry.sourceFile;
+      preparedPlacements = retry.items.map((item) => ({
+        placementNumber: item.placementNumber,
+        startTime: item.startTime,
+        endTime: item.endTime,
+        prompt: item.prompt,
+        duration: item.metadata?.duration ?? 6,
+        videoType: item.metadata?.videoType ?? 'cinematic_realism',
+      }));
+    } else {
+      if (autoFillGaps) {
+        await autoFillVideoPlacementGaps(filePath);
       }
 
+      const content = readProjectFile(filePath);
+      if (!content) {
+        return {
+          status: 'error',
+          error: `Video placements file not found: ${filePath}`,
+        };
+      }
+
+      let placements: ParsedVideoPlacement[];
       try {
-        const submitResult = await submitVideoPlacementGeneration({
-          scene_number: placement.placementNumber,
-          prompt,
-          duration: placement.duration,
-          video_type: placement.videoType,
-        });
-        
-        if (submitResult.status !== 'submitted' || !submitResult.jobId) {
-          const errorMsg = submitResult.error || 'Failed to submit video generation';
-          console.error(`[generate_all_videos] Placement ${placement.placementNumber} failed: ${errorMsg}`);
-          results.push({
-            placementNumber: placement.placementNumber,
-            status: 'failed',
-            error: errorMsg,
-          });
-          continue;
+        const parseResult = parseVideoPlacementsWithErrors(content, false, { validateOverlaps: true });
+        placements = parseResult.placements;
+        if (parseResult.warnings.length > 0) {
+          console.warn('[generate_all_videos] Parser warnings:', parseResult.warnings);
         }
-        
-        // Wait for job completion
-        const timeout = getVideoGenerationTimeout();
-        const waitResult = await waitForComfyUIJob(submitResult.jobId, timeout);
-        
-        if (waitResult.status === 'completed' && waitResult.artifactId && waitResult.filePath) {
-          console.log(`[generate_all_videos] Placement ${placement.placementNumber} completed: ${waitResult.artifactId}`);
-          results.push({
-            placementNumber: placement.placementNumber,
-            status: 'success',
-            artifactId: waitResult.artifactId,
-            filePath: waitResult.filePath,
-          });
-        } else {
-          const errorMsg = waitResult.error || 'Video generation did not complete';
-          console.error(`[generate_all_videos] Placement ${placement.placementNumber} failed: ${errorMsg}`);
-          results.push({
-            placementNumber: placement.placementNumber,
-            status: 'failed',
-            error: errorMsg,
-          });
+        if (parseResult.errors.length > 0) {
+          console.warn('[generate_all_videos] Parser errors (non-strict mode):', parseResult.errors);
+        }
+
+        const normalizedMarkdown = buildVideoPlacementsMarkdown(
+          placements.filter((placement) => !isAutoGapPrompt(placement.prompt)),
+          placements.filter((placement) => isAutoGapPrompt(placement.prompt)),
+        );
+        if (normalizedMarkdown.trim() !== content.trim()) {
+          writeProjectFile(filePath, normalizedMarkdown);
         }
       } catch (error) {
-        const errorMsg = String(error);
-        console.error(`[generate_all_videos] Placement ${placement.placementNumber} error: ${errorMsg}`);
-        results.push({
-          placementNumber: placement.placementNumber,
-          status: 'failed',
-          error: errorMsg,
-        });
+        return {
+          status: 'error',
+          error: `Failed to parse video placements: ${String(error)}`,
+        };
       }
+
+      if (placements.length === 0) {
+        return {
+          status: 'error',
+          error: 'No placements found in video-placements.md',
+        };
+      }
+
+      preparedPlacements = await prepareVideoPlacementsForGeneration(placements, {
+        expandPrompts,
+        logPrefix: '[generate_all_videos]',
+      });
     }
-    
-    // Summary
-    const successful = results.filter(r => r.status === 'success');
-    const failed = results.filter(r => r.status === 'failed');
-    
-    console.log(`[generate_all_videos] Completed: ${successful.length} successful, ${failed.length} failed`);
-    
+
+    if (preparedPlacements.length === 0) {
+      return {
+        status: 'error',
+        error: 'No placements available to generate.',
+      };
+    }
+
+    if (runInBackground) {
+      const now = Date.now();
+      const batchItems: BackgroundGenerationItem[] = preparedPlacements.map((placement) => ({
+        placementNumber: placement.placementNumber,
+        startTime: placement.startTime,
+        endTime: placement.endTime,
+        prompt: placement.prompt,
+        status: 'pending',
+        attempts: 0,
+        updatedAt: now,
+        metadata: {
+          duration: placement.duration,
+          videoType: placement.videoType,
+        },
+      }));
+
+      const created = createBackgroundBatch(basePath, {
+        kind: 'video',
+        sourceFile,
+        expandPrompts,
+        autoFillGaps,
+        retryOfBatchId: retryFailedBatchId,
+        items: batchItems,
+      });
+      if (!created) {
+        return {
+          status: 'error',
+          error: 'No active project found. Create or load a project before queuing background generation.',
+        };
+      }
+
+      startBackgroundBatchRunner(basePath, created.projectId, created.batch.id, 'video');
+      return {
+        status: 'queued',
+        batch_id: created.batch.id,
+        total_placements: preparedPlacements.length,
+        next_action:
+          'Background video generation started. Continue workflow and use read_background_generation to monitor progress. video_generation will auto-complete only when all placements succeed.',
+        message: `Queued ${preparedPlacements.length} video placements in background batch ${created.batch.id}.`,
+      };
+    }
+
+    const results = await runVideoGenerationSequentially(preparedPlacements, '[generate_all_videos]');
+    const successful = results.filter((result) => result.status === 'success');
+    const failed = results.filter((result) => result.status === 'failed');
+
     return {
       status: 'completed',
-      total_placements: placements.length,
+      total_placements: preparedPlacements.length,
       successful: successful.length,
       failed: failed.length,
-      results: results,
-      message: `Generated ${successful.length} out of ${placements.length} videos. ${failed.length} failed. IMPORTANT: Mark the video_generation phase as completed now, even if some or all videos failed.`,
+      results,
+      message: `Generated ${successful.length} out of ${preparedPlacements.length} videos. ${failed.length} failed.`,
     };
   }
 );
@@ -3811,6 +4511,7 @@ export function getVideoGenerationTools(options?: GetVideoGenerationToolsOptions
     generateAllImagesTool,
     generateAllVideosTool,
     generateAllInfographicsTool,
+    readBackgroundGenerationTool,
     waitForJobTool,
   ];
 }

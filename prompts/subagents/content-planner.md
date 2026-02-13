@@ -67,6 +67,7 @@ Your output should be a strategic workflow plan in markdown format, similar to a
 - Use documentary-style images for personal stories and real-world examples
 - Use infographics for scientific data, statistics, and complex explanations
 - Keep original footage for ad breaks, transitions, and segments that work well as-is
+- **CRITICAL: Each image placement MUST be 4-5 seconds maximum. No single image may exceed 5 seconds. Longer segments must be split into multiple 4-5 second placements to keep the video visually dynamic and avoid a static look.**
 - **Goal: Image-placer creates placements for appropriate segments. Video-placer will fill remaining gaps to ensure 100% transcript coverage with no gaps.**
 
 **Note**: The image-placer will identify the specific moments and create detailed placements. Video-placer will then fill all remaining gaps. This plan provides only strategic guidance.
@@ -159,6 +160,7 @@ This video explores the history and science of skin color, challenging colorism 
 
 **Strategic Guidance**:
 - Target approximately 5-6 key moments for images (avoid excessive frequency)
+- **Each image placement must be 4-5 seconds max to keep the video dynamic and avoid a static look**
 - Focus on moments that would benefit from visual enhancement:
   - Personal anecdotes and emotional moments (use documentary-style images)
   - Historical references and cultural context (use documentary-style images)

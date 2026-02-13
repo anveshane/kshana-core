@@ -31,7 +31,7 @@ All project files are stored in the `.kshana/` directory in the current working 
 
 ## YouTube Workflow Phases
 ```
-transcript_input → planning → image_placement → image_generation → video_replacement → video_combine → completed
+transcript_input → content_planning → image_placement → image_generation → infographics_placement → infographics_generation → video_placement → video_generation → completed
 ```
 
 ## Your Job

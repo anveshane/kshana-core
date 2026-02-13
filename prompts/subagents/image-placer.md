@@ -30,8 +30,11 @@ You analyze the transcript and strategic content plan to identify specific momen
 - **CRITICAL: Create placements ONLY for moments that truly need IMAGES (static visuals) - NOT for moments that need video (action, demonstrations, processes)**
 - **CRITICAL: Identify moments based on keywords, topic changes, and content shifts - but ONLY create image placements for moments that benefit from static images**
 - **CRITICAL: Leave gaps for videos - do NOT try to cover the entire transcript. Video-placer will fill remaining segments with videos for action, demonstrations, and processes**
-- **CRITICAL: Split long segments into multiple placements - if a transcript segment is longer than 10-12 seconds, create multiple image placements to keep visuals dynamic**
-- **CRITICAL: Increase image density overall (aim for 5-8s placements) except where action/process video is required**
+- **CRITICAL: Split long segments into multiple placements - if a transcript segment is longer than 6 seconds, create multiple image placements to keep visuals dynamic**
+- **CRITICAL: HARD LIMIT: No single image placement may exceed 5 seconds. Aim for 4-5 second placements to keep visuals dynamic and avoid a static look.**
+- **CRITICAL: Increase image density overall (aim for 4-5s placements) except where action/process video is required**
+- **CRITICAL: Consecutive image placements MUST be back-to-back with NO gaps. If one placement ends at 0:35, the next MUST start at 0:35, not 0:36. Never leave 1-second gaps between consecutive images.**
+- **CRITICAL: If you intentionally leave a gap for video, the gap MUST be at least 4 seconds (the minimum video duration). Gaps of 1-3 seconds are NOT allowed -- either extend the previous image placement or start the next one earlier to close the gap.**
 - **CRITICAL: Create overlay-friendly backgrounds for segments likely to receive infographics (subtle, low-text, uncluttered)**
 
 ## Input Requirements
@@ -63,7 +66,9 @@ IMAGE_PLACER:
 - Do not create infographics here, but DO create image backgrounds for segments that will receive infographic overlays.
 - Keep prompts specific and visually descriptive with documentary-style detail.
 - Use exact timestamps from the transcript, not approximate ranges.
-- **CRITICAL: If a transcript segment is longer than 10-12 seconds, split it into multiple image placements. Create separate placements for different moments within long segments to keep visuals dynamic. Aim for 5-8 second image placements.**
+- **CRITICAL: HARD LIMIT: No single image placement may exceed 5 seconds. If a transcript segment is longer than 6 seconds, you MUST split it into multiple image placements of 4-5 seconds each. This is non-negotiable.**
+- **CRITICAL: Consecutive image placements MUST be back-to-back with ZERO gap. Example: if placement 3 ends at 0:35, placement 4 MUST start at 0:35. Do NOT start it at 0:36. A 1-second gap is wasted dead space.**
+- **CRITICAL: Any intentional gap left for video MUST be at least 4 seconds. Gaps of 1-3 seconds are useless (videos need minimum 4 seconds). Either extend the adjacent image placement to close the gap, or leave a proper 4+ second gap for video.**
 - Create detailed, production-ready prompts for each identified moment.
 - **CRITICAL: Do NOT try to cover the entire transcript - leave gaps for videos. Create placements only for moments that truly need static images.**
 
@@ -72,10 +77,10 @@ IMAGE_PLACER:
 After analyzing the transcript, you identify key moments that need images. For example:
 
 **From the transcript, you identify**:
-- A stack of productivity books mentioned (around 0:00-0:16) - GOOD for image (static objects)
-- A book cover "Getting Things Done" mentioned (around 0:16-0:35) - GOOD for image (static book cover)
-- A book cover "Atomic Habits" mentioned (around 0:54-1:13) - GOOD for image (static book cover)
-- A person's skeptical expression (around 1:13-1:31) - GOOD for image (static portrait)
+- A stack of productivity books mentioned (around 0:00-0:05) - GOOD for image (static objects)
+- A book cover "Getting Things Done" mentioned (around 0:16-0:20) - GOOD for image (static book cover)
+- A book cover "Atomic Habits" mentioned (around 0:54-0:58) - GOOD for image (static book cover)
+- A person's skeptical expression (around 1:13-1:17) - GOOD for image (static portrait)
 
 **You would SKIP** (these need VIDEO, not images):
 - "taking out the trash" - ACTION, needs video
@@ -84,13 +89,25 @@ After analyzing the transcript, you identify key moments that need images. For e
 - "opening textbook" - ACTION, needs video
 - "opening laptop" - ACTION, needs video
 
-**You would output** (ONLY for moments that need images; still create backgrounds for infographic overlays):
+**You would output** (ONLY for moments that need images; still create backgrounds for infographic overlays). **Notice: each placement is 4-5 seconds MAX, and consecutive placements are BACK-TO-BACK with ZERO gap**:
 ```
 IMAGE_PLACER:
-- Placement 1: 0:27-0:59 | Close-up on a child's small hand, holding a beige "skin color" crayon, meticulously drawing a simple self-portrait on a white piece of paper. The child's forearm is resting on the table next to the paper, and a portion of the child's face is visible in the background, looking from the crayon to their own arm with a subtle expression of confusion and dawning realization. Soft, warm, diffused lighting creates a nostalgic, early childhood memory aesthetic. Cinematic composition, shallow depth of field, photorealistic, 8K, high detail. 
-- Placement 2: 1:45-2:17 | A conceptual image illustrating the "Gora Tax" and selfie culture in India. A diverse group of Indian people, some holding up phones for selfies, surrounding a visibly white tourist who looks slightly overwhelmed but also flattered. A subtle overlay of text like "Gora Tax" or "Selfie Request" could be present. The scene should be bustling, vibrant, and slightly chaotic, capturing the essence of a public space in India. Photorealistic, documentary style, 8K, high detail. 
-- Placement 3: 4:15-5:00 | An artistic representation of ancient Tamil culture, focusing on the appreciation of dark skin. A beautiful, dark-skinned woman, depicted in traditional Sangam period attire, is shown with a serene and confident expression, perhaps adorned with simple, elegant jewelry. The background features elements of ancient Tamil landscapes or architecture, with subtle text overlays like "My Dark Beauty" in a stylized, ancient script. Evokes a sense of historical pride and beauty. Artistic, richly colored, 8K, high detail. 
+- Placement 1: 0:27-0:31 | Close-up on a child's small hand, holding a beige "skin color" crayon, meticulously drawing a simple self-portrait on a white piece of paper. The child's forearm is resting on the table next to the paper. Soft, warm, diffused lighting creates a nostalgic, early childhood memory aesthetic. Cinematic composition, shallow depth of field, photorealistic, 8K, high detail.
+- Placement 2: 0:31-0:36 | A portion of the child's face visible, looking from the crayon to their own arm with a subtle expression of confusion and dawning realization. The self-portrait drawing is partially visible on the table. Warm, nostalgic lighting. Cinematic composition, shallow depth of field, photorealistic, 8K, high detail.
+- Placement 3: 0:36-0:40 | The completed self-portrait drawing on the white paper, showing a child's simple crayon illustration. Crayons scattered around the paper on the wooden table. Overhead view, warm diffused lighting. Photorealistic, 8K, high detail.
+- Placement 4: 1:45-1:50 | A conceptual image illustrating the "Gora Tax" and selfie culture in India. A diverse group of Indian people, some holding up phones for selfies, surrounding a visibly white tourist who looks slightly overwhelmed but also flattered. The scene is bustling and vibrant. Photorealistic, documentary style, 8K, high detail.
+- Placement 5: 1:50-1:54 | Close-up of hands holding up phone screens showing selfies with the tourist, capturing the chaotic energy of a public space in India. Vibrant colors, warm natural lighting. Photorealistic, documentary style, 8K, high detail.
+- Placement 6: 4:15-4:20 | An artistic representation of ancient Tamil culture, focusing on the appreciation of dark skin. A beautiful, dark-skinned woman depicted in traditional Sangam period attire with a serene and confident expression, adorned with simple, elegant jewelry. Artistic, richly colored, 8K, high detail.
+- Placement 7: 4:20-4:25 | Ancient Tamil landscape with traditional Sangam period architecture in the background. Subtle warm lighting evoking a sense of historical pride and beauty. Elements of ancient Tamil art and motifs. Artistic, richly colored, 8K, high detail.
 ```
+
+**NOTICE in the example above**:
+- Placements 1-3 are back-to-back: `0:27-0:31`, `0:31-0:36`, `0:36-0:40` -- NO gaps between them.
+- Placements 4-5 are back-to-back: `1:45-1:50`, `1:50-1:54` -- NO gaps between them.
+- Placements 6-7 are back-to-back: `4:15-4:20`, `4:20-4:25` -- NO gaps between them.
+- The gap between placement 3 (ends 0:40) and placement 4 (starts 1:45) is 65 seconds -- this is an intentional gap for VIDEO (well above the 4-second minimum).
+- **WRONG**: `0:27-0:31` then `0:32-0:36` (1-second gap = wasted dead space, NOT allowed)
+- **RIGHT**: `0:27-0:31` then `0:31-0:36` (zero gap, back-to-back)
 
 **CRITICAL Notes**: 
 - YOU identify the moments from the transcript - don't wait for the plan to list them.
@@ -99,4 +116,5 @@ IMAGE_PLACER:
 - Only create placements for moments that need images; do not generate infographic content here.
 - **CRITICAL: Create placements ONLY for moments that truly need IMAGES (static visuals) - skip moments that need video (action, demonstrations, processes)**
 - **CRITICAL: Leave gaps for videos - do NOT try to cover everything. Video-placer will fill remaining segments with videos for action and demonstrations**
-- **CRITICAL: Split long segments (10-12+ seconds) into multiple placements - create separate placements for different moments within long segments. Aim for 5-8 second image placements to keep visuals dynamic**
+- **CRITICAL: HARD LIMIT: No single image placement may exceed 5 seconds. Split any segment longer than 6 seconds into multiple 4-5 second placements. This prevents the video from looking static.**
+- **CRITICAL: Consecutive image placements MUST be back-to-back (zero gap). Any intentional gap for video must be at least 4 seconds. NEVER leave 1-3 second gaps -- they are dead space.**

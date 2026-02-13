@@ -57,7 +57,7 @@ The Remotion agent supports advanced effects. Suggest these in your prompts when
 
 **When to use advanced effects:**
 - Hero moments, key statistics → Use 3D or particles for impact
-- Long segments (10+ seconds) → Use multi-scene transitions
+- Segments over 6 seconds → Use multi-scene transitions
 - Impressive numbers, achievements → Use kinetic typography + particles
 - Product/brand content → Use 3D with premium lighting
 
@@ -88,31 +88,31 @@ INFOGRAPHIC_PLACER:
 - Output plain text only. No tool calls or JSON wrappers.
 - **ONLY** infographic placements. No images, no video.
 - Do **not** place infographics outside `$image_placements`. Overlays only.
-- Keep segments typically 5–15 seconds; split long stretches into multiple placements if needed.
+- Keep segments typically 4–8 seconds; split any segment longer than 8 seconds into multiple placements to keep visuals dynamic.
 - Create as many infographic placements as the content needs, but avoid redundancy.
 
 ## Example (Reference Only)
 
 **From the transcript you identify**:
-- " sales grew 40% year over year" (0:45–1:00) → `type=statistic`, prompt describing the stat and styling
-- "Step one: research. Step two: design. Step three: ship." (1:30–1:50) → `type=list`, prompt with steps and visual style
-- "Here’s how the four categories compare" (2:10–2:30) → `type=bar_chart`, prompt with categories and comparison
+- " sales grew 40% year over year" (0:45–0:50) → `type=statistic`, prompt describing the stat and styling
+- "Step one: research. Step two: design. Step three: ship." (1:30–1:38) → `type=list`, prompt with steps and visual style
+- "Here’s how the four categories compare" (2:10–2:17) → `type=bar_chart`, prompt with categories and comparison
 
-**Basic output example**:
+**Basic output example** (notice each placement is 4-8 seconds max):
 ```
 INFOGRAPHIC_PLACER:
-- Placement 1: 0:45-1:00 | type=statistic | Display "40%" as a large, bold number in white (#ffffff) on dark blue background (#0f172a). Subtitle "Sales growth" below in smaller gray text (#94a3b8). Use spring animation for entrance. Center-aligned, minimal clean style with smooth fade-in.
-- Placement 2: 1:30-1:50 | type=list | Three steps displayed vertically: 1) Research (icon: magnifying glass) 2) Design (icon: pencil) 3) Ship (icon: rocket). Numbered list with modern sans-serif font, each item animates in sequentially with spring effect. Documentary style with subtle shadows.
-- Placement 3: 2:10-2:30 | type=bar_chart | Four categories labeled A (12), B (18), C (9), D (22). Horizontal bar chart with soft colors: A=#3b82f6, B=#10b981, C=#f59e0b, D=#ef4444. Bars animate from left with stagger delay. Clear labels above each bar. White background with subtle grid lines.
+- Placement 1: 0:45-0:50 | type=statistic | Display "40%" as a large, bold number in white (#ffffff) on dark blue background (#0f172a). Subtitle "Sales growth" below in smaller gray text (#94a3b8). Use spring animation for entrance. Center-aligned, minimal clean style with smooth fade-in.
+- Placement 2: 1:30-1:38 | type=list | Three steps displayed vertically: 1) Research (icon: magnifying glass) 2) Design (icon: pencil) 3) Ship (icon: rocket). Numbered list with modern sans-serif font, each item animates in sequentially with spring effect. Documentary style with subtle shadows.
+- Placement 3: 2:10-2:17 | type=bar_chart | Four categories labeled A (12), B (18), C (9), D (22). Horizontal bar chart with soft colors: A=#3b82f6, B=#10b981, C=#f59e0b, D=#ef4444. Bars animate from left with stagger delay. Clear labels above each bar. White background with subtle grid lines.
 ```
 
-**Advanced output example (for high-impact content)**:
+**Advanced output example (for high-impact content)** (notice each placement is 4-8 seconds max):
 ```
 INFOGRAPHIC_PLACER:
-- Placement 1: 0:45-1:05 | type=statistic | 3D HERO MOMENT: Display "1 MILLION" as kinetic typography with animated counter from 0 to 1,000,000. Numbers should glow with cyan (#00d4ff) emission. Add floating particle effects that converge toward the number as it reaches the final value. Premium dark background card with metallic accent border. Spring physics on entrance with dramatic scale-in.
-- Placement 2: 1:30-1:55 | type=list | MULTI-SCENE TRANSITIONS: Three steps shown as separate scenes with smooth slide transitions between them. Scene 1: "Research" with magnifying glass icon and soft blue glow (#3b82f6). Scene 2: "Design" with pencil icon and purple accent (#8b5cf6). Scene 3: "Ship" with rocket icon and green success glow (#10b981). Each scene centers the step with large typography that scales in with spring effect. Use TransitionSeries for scene changes.
-- Placement 3: 2:10-2:40 | type=bar_chart | 3D EXTRUDED BAR CHART: Four categories as 3D rectangular prisms (A=12, B=18, C=9, D=22) with camera slowly orbiting the scene. Bars rise from floor with staggered timing. Metallic materials: A=steel blue, B=emerald, C=amber, D=ruby. Add ambient particles floating in the scene. Dramatic directional lighting from top-left. Labels float above each bar with spring entrance.
-- Placement 4: 3:00-3:15 | type=diagram | PARTICLE FORMATION: Company logo forms from 500+ scattered particles that converge into position over 8 seconds. Particles start as random floating dots, then smoothly animate to their final logo positions. Add subtle glow effect once formed. Premium reveal for brand moment.
+- Placement 1: 0:45-0:52 | type=statistic | 3D HERO MOMENT: Display "1 MILLION" as kinetic typography with animated counter from 0 to 1,000,000. Numbers should glow with cyan (#00d4ff) emission. Add floating particle effects that converge toward the number as it reaches the final value. Premium dark background card with metallic accent border. Spring physics on entrance with dramatic scale-in.
+- Placement 2: 1:30-1:38 | type=list | MULTI-SCENE TRANSITIONS: Three steps shown as separate scenes with smooth slide transitions between them. Scene 1: "Research" with magnifying glass icon and soft blue glow (#3b82f6). Scene 2: "Design" with pencil icon and purple accent (#8b5cf6). Scene 3: "Ship" with rocket icon and green success glow (#10b981). Each scene centers the step with large typography that scales in with spring effect. Use TransitionSeries for scene changes.
+- Placement 3: 2:10-2:17 | type=bar_chart | 3D EXTRUDED BAR CHART: Four categories as 3D rectangular prisms (A=12, B=18, C=9, D=22) with camera slowly orbiting the scene. Bars rise from floor with staggered timing. Metallic materials: A=steel blue, B=emerald, C=amber, D=ruby. Add ambient particles floating in the scene. Dramatic directional lighting from top-left. Labels float above each bar with spring entrance.
+- Placement 4: 3:00-3:06 | type=diagram | PARTICLE FORMATION: Company logo forms from 500+ scattered particles that converge into position over 6 seconds. Particles start as random floating dots, then smoothly animate to their final logo positions. Add subtle glow effect once formed. Premium reveal for brand moment.
 ```
 
 **Note**: Use advanced effects (3D, particles, transitions) for hero moments, impressive stats, and premium brand content. Keep simpler 2D animations for standard data visualization where clarity is the priority.
