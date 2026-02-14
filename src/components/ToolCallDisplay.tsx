@@ -45,6 +45,7 @@ const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
   edit_image: { gerund: 'Editing image', past: 'Edited image' },
   wait_for_job: { gerund: 'Waiting for job', past: 'Job completed' },
   read_file: { gerund: 'Reading file', past: 'Read file' },
+  generate_content: { gerund: 'Generating content', past: 'Generated content' },
   list_project_files: { gerund: 'Listing project files', past: 'Listed project files' },
 };
 
@@ -130,8 +131,6 @@ function getStatusIcon(status: ToolCallDisplayProps['status']): { icon: string; 
   }
 }
 
-
-
 // Render think tool specially
 function renderThinkTool(
   args: Record<string, unknown> | undefined,
@@ -152,7 +151,9 @@ function renderThinkTool(
         ) : (
           <>
             <Text>💭 </Text>
-            <Text italic color="white">{thought || 'Thinking...'}</Text>
+            <Text italic color="white">
+              {thought || 'Thinking...'}
+            </Text>
           </>
         )}
       </Box>
@@ -176,13 +177,7 @@ function renderDispatchAgentTool(
   const plan = resultObj?.['plan'] as string | undefined;
 
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="round"
-      borderColor="blue"
-      paddingX={1}
-      marginY={1}
-    >
+    <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1} marginY={1}>
       <Box>
         {isExecuting ? (
           <>
@@ -191,23 +186,40 @@ function renderDispatchAgentTool(
             <Text color="blue"> Planning...</Text>
           </>
         ) : (
-          <Text color="blue" bold>📝 Plan Complete</Text>
+          <Text color="blue" bold>
+            📝 Plan Complete
+          </Text>
         )}
       </Box>
       <Box flexDirection="column" marginLeft={2} marginTop={1}>
         <Box flexDirection="column">
-          <Text bold color="yellow">Task: </Text>
-          <TruncatedText text={task || 'No task specified'} maxLines={MAX_LINES_TRUNCATED} expanded={expanded} />
+          <Text bold color="yellow">
+            Task:{' '}
+          </Text>
+          <TruncatedText
+            text={task || 'No task specified'}
+            maxLines={MAX_LINES_TRUNCATED}
+            expanded={expanded}
+          />
         </Box>
         {context && (
           <Box flexDirection="column" marginTop={1}>
-            <Text bold color="yellow">Context: </Text>
-            <TruncatedText text={context} maxLines={MAX_LINES_TRUNCATED} expanded={expanded} dimColor />
+            <Text bold color="yellow">
+              Context:{' '}
+            </Text>
+            <TruncatedText
+              text={context}
+              maxLines={MAX_LINES_TRUNCATED}
+              expanded={expanded}
+              dimColor
+            />
           </Box>
         )}
         {plan && !isExecuting && (
           <Box flexDirection="column" marginTop={1}>
-            <Text bold color="green">Plan:</Text>
+            <Text bold color="green">
+              Plan:
+            </Text>
             <Box marginTop={1} marginLeft={1} flexDirection="column">
               {expanded ? (
                 <MarkdownText text={plan} />
@@ -230,7 +242,8 @@ function renderReadFileTool(
   duration?: number,
   agentName?: string
 ): React.ReactNode {
-  const filePath = args?.['path'] as string | undefined;
+  const filePath =
+    (args?.['file_path'] as string | undefined) ?? (args?.['path'] as string | undefined);
   const isExecuting = status === 'executing';
   const isError = status === 'error';
 
@@ -275,16 +288,24 @@ function renderReadFileTool(
             <Text color="yellow">◉ </Text>
             <Spinner />
             <Text> Reading file</Text>
-            {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
+            {agentName && (
+              <Text color="cyan" dimColor>
+                {' '}
+                [{agentName}]
+              </Text>
+            )}
           </>
         ) : (
           <>
             <Text color={isError ? 'red' : 'green'}>{isError ? '✗' : '✓'} </Text>
             <Text>Read file</Text>
-            {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
-            {duration !== undefined && (
-              <Text dimColor> ({formatDuration(duration)})</Text>
+            {agentName && (
+              <Text color="cyan" dimColor>
+                {' '}
+                [{agentName}]
+              </Text>
             )}
+            {duration !== undefined && <Text dimColor> ({formatDuration(duration)})</Text>}
           </>
         )}
       </Box>
@@ -300,14 +321,16 @@ function renderReadFileTool(
         <Box marginLeft={2} marginTop={1} flexDirection="column">
           <Text dimColor>{truncatedContent}</Text>
           {wasTruncated && (
-            <Text color="gray" italic> (content truncated)</Text>
+            <Text color="gray" italic>
+              {' '}
+              (content truncated)
+            </Text>
           )}
         </Box>
       )}
     </Box>
   );
 }
-
 
 export const ToolCallDisplay = React.memo(function ToolCallDisplay({
   toolName,
@@ -372,16 +395,24 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
               <Text color="yellow">◉ </Text>
               <Spinner />
               <Text> {displayName}</Text>
-              {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
+              {agentName && (
+                <Text color="cyan" dimColor>
+                  {' '}
+                  [{agentName}]
+                </Text>
+              )}
             </>
           ) : (
             <>
               <Text color={statusIcon.color}>{statusIcon.icon} </Text>
               <Text>{displayName}</Text>
-              {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
-              {duration !== undefined && (
-                <Text dimColor> ({formatDuration(duration)})</Text>
+              {agentName && (
+                <Text color="cyan" dimColor>
+                  {' '}
+                  [{agentName}]
+                </Text>
               )}
+              {duration !== undefined && <Text dimColor> ({formatDuration(duration)})</Text>}
             </>
           )}
         </Box>
@@ -424,16 +455,24 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
             <Text color="yellow">◉ </Text>
             <Spinner />
             <Text bold> {displayName}</Text>
-            {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
+            {agentName && (
+              <Text color="cyan" dimColor>
+                {' '}
+                [{agentName}]
+              </Text>
+            )}
           </>
         ) : (
           <>
             <Text color={statusIcon.color}>{statusIcon.icon} </Text>
             <Text bold>{displayName}</Text>
-            {agentName && <Text color="cyan" dimColor> [{agentName}]</Text>}
-            {duration !== undefined && (
-              <Text dimColor> ({formatDuration(duration)})</Text>
+            {agentName && (
+              <Text color="cyan" dimColor>
+                {' '}
+                [{agentName}]
+              </Text>
             )}
+            {duration !== undefined && <Text dimColor> ({formatDuration(duration)})</Text>}
           </>
         )}
       </Box>

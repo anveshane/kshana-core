@@ -39,3 +39,22 @@ export {
   createPlannerTools,
 } from './plannerTools.js';
 export type { PlannerToolContext } from './plannerTools.js';
+
+// Artifact tools - fine-grained control
+export {
+  regenerateArtifactTool,
+  replaceArtifactTool,
+  editPromptTool,
+  comparePromptsTool,
+  restorePromptTool,
+  jumpToArtifactTool,
+  listArtifactsTool,
+  getArtifactStatusTool,
+} from './artifactTools.js';
+
+// External asset tools
+export {
+  uploadExternalAssetTool,
+  listExternalAssetsTool,
+  deleteExternalAssetTool,
+} from './assetTools.js';

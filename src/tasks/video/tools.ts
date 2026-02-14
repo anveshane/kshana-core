@@ -108,6 +108,7 @@ export interface ImageEditParams {
   scene_number: number;
   edit_prompt: string;
   base_image_path: string;
+  reference_images?: string[];
   negative_prompt?: string;
   aspect_ratio?: string;
   seed?: number;
@@ -1284,9 +1285,16 @@ Returns a job ID. Use wait_for_job to check completion.`,
  */
 export const editImageTool: ToolDefinition = createTool(
   'edit_image',
-  `Edit an existing image based on a text prompt using ComfyUI's Qwen Edit workflow.
+  `Edit or compose an image using ComfyUI's Qwen Edit workflow. Supports up to 3 input images.
 
-Uses intelligent editing to modify specific parts of an image.
+The base image becomes "image1" in the prompt. Additional reference_images become "image2" and "image3".
+To reference characters/settings, use natural phrasing like "Parvati from image1" or "the setting from image3".
+
+IMPORTANT: The order of images matters. Match your prompt references to the image order:
+- image1 = base_image_path (primary/base image)
+- image2 = reference_images[0] (e.g. first character reference)
+- image3 = reference_images[1] (e.g. second character or setting reference)
+
 The tool will return a job ID. Use wait_for_job to check completion.`,
   {
     type: 'object',
@@ -1297,11 +1305,16 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       },
       edit_prompt: {
         type: 'string',
-        description: 'Description of the edit to make',
+        description: 'Description of the edit/composition. Reference input images as "image1", "image2", "image3" matching their order.',
       },
       base_image_path: {
         type: 'string',
-        description: 'Path or artifact ID of the image to edit',
+        description: 'Path to the primary image (becomes image1 in prompt)',
+      },
+      reference_images: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Up to 2 additional reference image paths (become image2, image3). Use for character refs, setting refs, or style references.',
       },
       negative_prompt: {
         type: 'string',
@@ -1346,10 +1359,9 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         throw new Error("Workflow 'qwen_edit' not found");
       }
 
-      // Resolve the image path
+      // Resolve the base image path
       let imagePath = params.base_image_path;
       if (!path.isAbsolute(imagePath) && !imagePath.startsWith('.')) {
-        // Assume it's relative to project
         imagePath = path.join(process.cwd(), PROJECT_DIR, imagePath);
       }
 
@@ -1362,8 +1374,24 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         outputDir: assetsDir,
       });
 
-      // Upload the base image
+      // Upload the base image (image1)
       const uploadResult = await client.uploadImage(imagePath, 'input', true);
+
+      // Upload reference images (image2, image3)
+      const referenceImageFilenames: string[] = [];
+      if (params.reference_images) {
+        for (const refPath of params.reference_images.slice(0, 2)) {
+          let resolvedPath = refPath;
+          if (!path.isAbsolute(resolvedPath) && !resolvedPath.startsWith('.')) {
+            resolvedPath = path.join(process.cwd(), PROJECT_DIR, resolvedPath);
+          }
+          if (!fs.existsSync(resolvedPath)) {
+            throw new Error(`Reference image not found: ${refPath}`);
+          }
+          const refUpload = await client.uploadImage(resolvedPath, 'input', true);
+          referenceImageFilenames.push(refUpload.name);
+        }
+      }
 
       // Load and parameterize workflow
       const template = loadWorkflowTemplate(workflowMetadata.filename);
@@ -1374,6 +1402,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         aspectRatio: params.aspect_ratio,
         seed: params.seed,
         inputImageFilename: uploadResult.name,
+        referenceImageFilenames: referenceImageFilenames.length > 0 ? referenceImageFilenames : undefined,
         filenamePrefix: `Scene${params.scene_number}_edit`,
       });
 

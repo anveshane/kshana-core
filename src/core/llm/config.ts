@@ -2,6 +2,9 @@
  * LLM configuration from environment variables.
  * Supports the same env vars as the Python kshana project.
  */
+
+// Load .env when this module is used directly (CLI, scripts)
+import 'dotenv/config';
 import type { LLMClientConfig } from './types.js';
 
 export type LLMProvider = 'gemini' | 'lmstudio' | 'llamacpp' | 'ollama' | 'openai' | 'custom';

@@ -1,6 +1,9 @@
 /**
  * OpenAI-compatible LLM client with streaming support.
  */
+
+// Load environment variables from .env for standalone usage
+import 'dotenv/config';
 import OpenAI from 'openai';
 import type {
   Message,
@@ -36,8 +39,8 @@ export class LLMClient {
     });
     this.model = config.model ?? process.env['LLM_MODEL'] ?? 'local-model';
     // Check config, then env var for implicit thinking capability
-    this._hasImplicitThinking = config.hasImplicitThinking ??
-      (process.env['LLM_IMPLICIT_THINKING']?.toLowerCase() === 'true');
+    this._hasImplicitThinking =
+      config.hasImplicitThinking ?? process.env['LLM_IMPLICIT_THINKING']?.toLowerCase() === 'true';
   }
 
   /**
@@ -87,7 +90,7 @@ export class LLMClient {
         throw new Error(`Failed to fetch models: ${response.status}`);
       }
 
-      const data = await response.json() as {
+      const data = (await response.json()) as {
         data?: Array<{
           id: string;
           context_length?: number;
@@ -98,9 +101,8 @@ export class LLMClient {
       };
 
       // Find our model in the list
-      const modelInfo = data.data?.find(m =>
-        m.id === this.model ||
-        m.id.toLowerCase().includes(this.model.toLowerCase())
+      const modelInfo = data.data?.find(
+        m => m.id === this.model || m.id.toLowerCase().includes(this.model.toLowerCase())
       );
 
       // Try various field names that providers use
@@ -136,11 +138,11 @@ export class LLMClient {
     if (contextLength < MIN_CONTEXT_LENGTH) {
       throw new Error(
         `Context length (${contextLength} tokens) is below minimum required (${MIN_CONTEXT_LENGTH} tokens).\n` +
-        `The agent cannot run effectively with such a small context window.\n` +
-        `Please either:\n` +
-        `  1. Use a model with larger context (recommended: 16000+ tokens)\n` +
-        `  2. Increase the context in LM Studio model settings\n` +
-        `  3. Set LLM_CONTEXT_TOKENS=${MIN_CONTEXT_LENGTH} or higher in .env`
+          `The agent cannot run effectively with such a small context window.\n` +
+          `Please either:\n` +
+          `  1. Use a model with larger context (recommended: 16000+ tokens)\n` +
+          `  2. Increase the context in LM Studio model settings\n` +
+          `  3. Set LLM_CONTEXT_TOKENS=${MIN_CONTEXT_LENGTH} or higher in .env`
       );
     }
   }
@@ -206,7 +208,8 @@ export class LLMClient {
 
     // Accumulate for final logging
     let fullContent = '';
-    const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> = new Map();
+    const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> =
+      new Map();
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;

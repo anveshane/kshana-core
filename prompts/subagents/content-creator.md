@@ -117,27 +117,37 @@ Include:
 
 ### For Character Image Prompts (character_image_prompt)
 
+**PURPOSE**: Establish the visual IDENTITY of the character ONLY. This image will be used as a reference when compositing scenes. It must contain ONLY the character — no settings, backgrounds, other people, or scene context.
+
 **ALL of these details are MANDATORY** - infer if not provided in source:
 
 1. **Physical Attributes**: Age, ethnicity, height, weight/build, skin tone
 2. **Facial Features**: Face shape, hair (color/texture/length/style), eyes, nose, mouth, distinguishing features
 3. **Attire**: Primary outfit with colors, color palette, accessories, style keywords
-4. **Pose**: Position (3/4 view or front-facing), expression, hands
-5. **Technical**: Aspect ratio 3:4, neutral background, soft studio lighting
+4. **Pose**: Position (3/4 view or front-facing), neutral expression, hands visible
+5. **Technical**: Aspect ratio 1:1, plain solid-color background (white, light gray, or neutral), soft even studio lighting
+
+**STRICT RULES:**
+- ONLY the character — no other people, no animals, no props beyond what the character carries
+- ONLY a plain neutral background — no environments, no buildings, no landscapes, no furniture
+- Focus on what makes this character visually UNIQUE and recognizable
+- The goal is a clean identity reference that won't bleed setting details into scenes
 
 **Output format:**
 ```
 **Image Prompt:**
-[Single detailed paragraph with ALL mandatory elements]
+[Single detailed paragraph describing ONLY the character against a plain background]
 
 **Negative Prompt:**
-[Style-appropriate negatives + multiple people, busy background, motion blur, cropped face, text, watermarks]
+background scene, environment, landscape, buildings, furniture, multiple people, busy background, motion blur, cropped face, text, watermarks
 
 **Aspect Ratio:**
-3:4
+1:1
 ```
 
 ### For Setting Image Prompts (setting_image_prompt)
+
+**PURPOSE**: Establish the visual IDENTITY of the location ONLY. This image will be used as a reference when compositing scenes. It must contain ONLY the environment — no characters, people, or figures.
 
 **ALL of these details are MANDATORY** - infer if not provided in source:
 
@@ -145,18 +155,23 @@ Include:
 2. **Atmosphere**: Time of day (specific), weather, lighting direction/quality, color temperature
 3. **Architecture**: Key structures, materials, scale indicators, depth layers
 4. **Mood**: Emotional tone, color palette (3-5 colors), textures, condition
-5. **Technical**: Aspect ratio 16:9, wide establishing shot, deep focus
+5. **Technical**: Aspect ratio 1:1, wide establishing shot, deep focus
+
+**STRICT RULES:**
+- ONLY the environment — no people, no characters, no human figures, no silhouettes
+- Focus on what makes this location visually UNIQUE and recognizable
+- The goal is a clean setting reference that won't bleed character details into scenes
 
 **Output format:**
 ```
 **Image Prompt:**
-[Single detailed paragraph with ALL mandatory elements]
+[Single detailed paragraph describing ONLY the environment with NO people present]
 
 **Negative Prompt:**
-[Style-appropriate negatives + people, characters, text, anachronistic elements]
+people, person, human, character, figure, silhouette, crowd, text, watermarks
 
 **Aspect Ratio:**
-16:9
+1:1
 ```
 
 ### For Scene Image Prompts (scene_image_prompt)
@@ -167,22 +182,42 @@ Include:
 2. **Composition**: Shot type, camera angle, focal point, character positions, depth of field
 3. **Action**: Captured moment, character expressions, body language, interactions
 4. **Lighting**: Primary source, quality, shadows, mood contribution, color grading
-5. **Technical**: Aspect ratio 16:9, mode: image_text_to_image
+5. **Technical**: Aspect ratio 1:1, mode: image_text_to_image
+
+**CRITICAL - Image Reference Naming Convention:**
+Scene images are generated using the Qwen Edit workflow which takes up to 3 input images. In the prompt text, these are referenced as **image1**, **image2**, **image3**. The image numbering is determined by the order you list them in the **Reference Images** section:
+- The FIRST reference listed → becomes **image1**
+- The SECOND reference listed → becomes **image2**
+- The THIRD reference listed → becomes **image3**
+
+The prompt text MUST reference every character and setting using "from imageN" phrasing so the model knows which input image corresponds to which element.
+
+**Example:** If a scene has Parvati, Isha, and the Sports Complex:
+```
+**Reference Images:**
+- Character: Parvati (assets/images/CharRef_Parvati.png)
+- Character: Isha (assets/images/CharRef_Isha.png)
+- Setting: District Sports Complex (assets/images/SettingRef_DistrictSportsComplex.png)
+```
+Then in the prompt: "Parvati from image1 extends a tiffin toward Isha from image2 at the gate of the sports complex from image3..."
+
+**To determine the correct asset paths**: Use `read_project()` to find each character's `referenceImagePath` and each setting's `referenceImagePath` in the project state.
 
 **Output format:**
 ```
 **Image Prompt:**
-[Single detailed paragraph matching characters to their refs]
+[Single detailed paragraph using "from image1", "from image2", "from image3" to reference characters/settings]
 
 **Reference Images:**
-- Character: [name] (ref_id: [id])
-- Setting: [name] (ref_id: [id])
+- Character: [name] ([asset path from project state])
+- Character: [name] ([asset path from project state])
+- Setting: [name] ([asset path from project state])
 
 **Negative Prompt:**
 [Style-appropriate negatives + inconsistent appearance, wrong features]
 
 **Aspect Ratio:**
-16:9
+1:1
 
 **Generation Mode:**
 image_text_to_image

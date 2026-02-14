@@ -10,7 +10,10 @@ import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
-import { createPlannerTools, type PlannerToolContext } from '../../core/tools/builtin/plannerTools.js';
+import {
+  createPlannerTools,
+  type PlannerToolContext,
+} from '../../core/tools/builtin/plannerTools.js';
 import { BackwardPlanner, AssetScanner } from '../../core/planner/index.js';
 import type { UserGoal, ExecutionPlan, AssetRegistry } from '../../core/planner/types.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
@@ -21,6 +24,7 @@ import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import {
   getWorkflowFileTools,
   getAllFileTools,
+  getAllArtifactTools,
   getOrCreateProject,
   loadProject,
   getCurrentPhase,
@@ -59,16 +63,8 @@ export {
 } from './tools.js';
 
 // Re-export state types
-export {
-  resetProjectState,
-  setCurrentProjectId,
-} from './state.js';
-export type {
-  Character,
-  Setting,
-  StoryboardScene,
-  ProjectState,
-} from './state.js';
+export { resetProjectState, setCurrentProjectId } from './state.js';
+export type { Character, Setting, StoryboardScene, ProjectState } from './state.js';
 
 // Re-export workflow module
 export * from './workflow/index.js';
@@ -109,7 +105,12 @@ export function createVideoToolRegistry(): ToolRegistry {
  * This injects the video-specific prompt and tools into the generic agent.
  */
 export function createVideoAgent(config: VideoAgentConfig): GenericAgent {
-  const { llmConfig, maxIterations = 100, includeCharacterGuidelines, includeStoryboardGuidelines } = config;
+  const {
+    llmConfig,
+    maxIterations = 100,
+    includeCharacterGuidelines,
+    includeStoryboardGuidelines,
+  } = config;
 
   // Create tool registry with video tools
   const registry = createVideoToolRegistry();
@@ -181,6 +182,21 @@ export function createWorkflowToolRegistry(): ToolRegistry {
     registry.register(tool);
   }
 
+  // Add artifact tools for fine-grained control
+  for (const tool of getAllArtifactTools()) {
+    registry.register(tool);
+  }
+
+  // Add image/video generation tools so image-generator/video-assembler subagents can submit jobs
+  for (const tool of getVideoGenerationTools()) {
+    registry.register(tool);
+  }
+
+  // Mark complex tools (generate_image, generate_video, edit_image) for confirmation flow
+  for (const toolName of VIDEO_COMPLEX_TOOLS) {
+    registerComplexTool(toolName);
+  }
+
   return registry;
 }
 
@@ -240,12 +256,7 @@ export function loadProjectFilesAsContexts(_basePath: string = process.cwd()): s
  * Uses state-based approach with project files in .kshana/ directory.
  */
 export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): GenericAgent {
-  const {
-    llmConfig,
-    maxIterations = 100,
-    originalInput = '',
-    basePath = process.cwd(),
-  } = config;
+  const { llmConfig, maxIterations = 100, originalInput = '', basePath = process.cwd() } = config;
 
   // Initialize or load project
   const project = getOrCreateProject(originalInput, undefined, basePath);
@@ -289,10 +300,10 @@ function buildWorkflowAgentPrompt(
 
   // Get style and input type display names
   const styleDisplay = project?.style
-    ? STYLE_CONFIGS[project.style]?.displayName ?? project.style
+    ? (STYLE_CONFIGS[project.style]?.displayName ?? project.style)
     : 'Not set';
   const inputTypeDisplay = project?.inputType
-    ? INPUT_TYPE_CONFIGS[project.inputType]?.displayName ?? project.inputType
+    ? (INPUT_TYPE_CONFIGS[project.inputType]?.displayName ?? project.inputType)
     : 'Not set';
 
   // Build loaded contexts section
@@ -432,7 +443,11 @@ export function initializeVideoTemplates(): void {
 /**
  * Get available video templates.
  */
-export function getAvailableTemplates(): Array<{ id: string; displayName: string; description: string }> {
+export function getAvailableTemplates(): Array<{
+  id: string;
+  displayName: string;
+  description: string;
+}> {
   initializeTemplates();
   return listTemplates();
 }
@@ -449,7 +464,7 @@ export function detectVideoTemplate(content: string): TemplateDetectionResult | 
   }
 
   const template = getTemplateOrThrow(result.templateId);
-  const alternatives = listTemplates().filter((t) => t.id !== result.templateId);
+  const alternatives = listTemplates().filter(t => t.id !== result.templateId);
 
   return {
     templateId: result.templateId,
@@ -464,9 +479,7 @@ export function detectVideoTemplate(content: string): TemplateDetectionResult | 
  * Create a GenericAgent configured for template-based video creation.
  * This is the v3.0 template-aware workflow.
  */
-export async function createTemplateVideoAgent(
-  config: TemplateVideoAgentConfig
-): Promise<{
+export async function createTemplateVideoAgent(config: TemplateVideoAgentConfig): Promise<{
   agent: GenericAgent;
   projectManager: GenericProjectManager;
   template: VideoTemplate;
@@ -571,7 +584,7 @@ function buildTemplateAgentPrompt(
   if (loadedContexts.length > 0) {
     loadedContextsSection = `## Available Contexts
 The following project files have been loaded as contexts:
-${loadedContexts.map((c) => `- ${c}`).join('\n')}
+${loadedContexts.map(c => `- ${c}`).join('\n')}
 
 Use the \`generate_content\` tool for creating content - it automatically injects the correct contexts.`;
   }

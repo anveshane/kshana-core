@@ -5,6 +5,9 @@
  * and downloading generated images from the ComfyUI API.
  */
 
+// Load environment variables (e.g., COMFYUI_BASE_URL) from .env when available
+import 'dotenv/config';
+
 import * as fs from 'fs';
 import * as path from 'path';
 import { nanoid } from 'nanoid';
@@ -80,7 +83,6 @@ export class ComfyUIClient {
     formData.append('type', imageType);
     formData.append('overwrite', overwrite.toString());
 
-
     const response = await fetch(url, {
       method: 'POST',
       body: formData,
@@ -110,7 +112,6 @@ export class ComfyUIClient {
       client_id: clientId,
     };
 
-
     const response = await fetch(`${this.baseUrl}/prompt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -122,7 +123,7 @@ export class ComfyUIClient {
       throw new Error(`ComfyUI returned ${response.status}: ${errorText}`);
     }
 
-    const result = await response.json() as { prompt_id?: string };
+    const result = (await response.json()) as { prompt_id?: string };
     const promptId = result.prompt_id;
 
     if (!promptId) {
@@ -144,7 +145,11 @@ export class ComfyUIClient {
 
     // Emit initial progress
     if (progressCallback) {
-      await this.callProgressCallback(progressCallback, 20, 'Generating image (polling for status)...');
+      await this.callProgressCallback(
+        progressCallback,
+        20,
+        'Generating image (polling for status)...'
+      );
     }
 
     while (true) {
@@ -153,7 +158,11 @@ export class ComfyUIClient {
       // Emit progress update during polling
       if (progressCallback) {
         const estimatedPct = Math.min(Math.floor((elapsed / 60) * 80), 80);
-        await this.callProgressCallback(progressCallback, estimatedPct, `Generating... (${Math.floor(elapsed)}s elapsed)`);
+        await this.callProgressCallback(
+          progressCallback,
+          estimatedPct,
+          `Generating... (${Math.floor(elapsed)}s elapsed)`
+        );
       }
 
       if (elapsed > this.timeout) {
@@ -201,7 +210,6 @@ export class ComfyUIClient {
    * Get output images from completed workflow.
    */
   async getOutputImages(promptId: string): Promise<ImageInfo[]> {
-
     const history = await this.getHistory(promptId);
     if (!history) {
       console.warn(`No history found for prompt_id=${promptId}`);
@@ -312,7 +320,9 @@ export class ComfyUIClient {
       await this.waitForCompletion(promptId, progressCallback, pollInterval);
     } catch (e) {
       if (e instanceof Error && e.message.includes('did not complete')) {
-        console.warn(`Timeout waiting for completion, but checking for outputs anyway: ${e.message}`);
+        console.warn(
+          `Timeout waiting for completion, but checking for outputs anyway: ${e.message}`
+        );
       } else {
         throw e;
       }
@@ -344,11 +354,15 @@ export class ComfyUIClient {
     if (!response.ok) {
       return null;
     }
-    const history = await response.json() as Record<string, HistoryEntry>;
+    const history = (await response.json()) as Record<string, HistoryEntry>;
     return history[promptId] || null;
   }
 
-  private async callProgressCallback(callback: ProgressCallback, pct: number, msg: string): Promise<void> {
+  private async callProgressCallback(
+    callback: ProgressCallback,
+    pct: number,
+    msg: string
+  ): Promise<void> {
     try {
       const result = callback(pct, msg);
       if (result instanceof Promise) {

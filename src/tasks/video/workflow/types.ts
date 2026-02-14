@@ -593,6 +593,9 @@ export interface ProjectFile {
     /** Brief summary of file contents (1-2 sentences) for quick reference */
     summary?: string;
   }>;
+
+  /** Artifact-centric state for fine-grained control - individual artifact tracking with versioning */
+  artifacts?: Record<string, ArtifactState>;
 }
 
 /**
@@ -1161,4 +1164,56 @@ export function createDefaultSceneRef(sceneNumber: number, title?: string): Scen
     videoApprovalStatus: 'pending',
     regenerationCount: 0,
   };
+}
+
+// ============================================================================
+// ARTIFACT-CENTRIC STATE (Fine-Grained Control)
+// ============================================================================
+
+export type ArtifactType =
+  | 'scene'
+  | 'character'
+  | 'setting'
+  | 'image'
+  | 'video'
+  | 'audio'
+  | 'overlay';
+
+export type ArtifactStatus = 'pending' | 'generating' | 'complete' | 'needs_review';
+
+export interface PromptVersion {
+  version: number;
+  prompt: string;
+  feedback?: string;
+  createdAt: number;
+  approvedAt?: number;
+}
+
+export interface ArtifactState {
+  id: string;
+  type: ArtifactType;
+  status: ArtifactStatus;
+  prompt: string;
+  promptVersion: number;
+  promptHistory: PromptVersion[];
+  source: 'generated' | 'external';
+  assetPath?: string;
+  dependsOn: string[];
+  createdAt: number;
+  updatedAt: number;
+  approvedAt?: number;
+}
+
+export interface PromptRefinement {
+  currentVersion: number;
+  proposedVersion: number;
+  proposedPrompt: string;
+  changes: string[];
+  explanation: string;
+}
+
+export interface PromptComparison {
+  versionA: PromptVersion;
+  versionB: PromptVersion;
+  diff: string;
 }

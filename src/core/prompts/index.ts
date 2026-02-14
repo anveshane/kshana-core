@@ -196,7 +196,8 @@ export function buildPlanningPrompt(task: string, context?: string): string {
 /**
  * Content types supported by the content agent.
  */
-export type ContentType = 'plot' | 'story' | 'character' | 'setting' | 'scene' | 'narration';
+export type ContentType = 'plot' | 'story' | 'character' | 'setting' | 'scene' | 'narration'
+  | 'character_image_prompt' | 'setting_image_prompt' | 'scene_image_prompt' | 'scene_video_prompt';
 
 /**
  * Build the content creation sub-agent system prompt.

@@ -33,9 +33,7 @@ import {
   shouldCondense,
   LONG_CONTENT_THRESHOLD,
 } from '../context/index.js';
-import {
-  CONTENT_TYPE_OUTPUT_FILES,
-} from '../tools/builtin/generateContentTool.js';
+import { CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
 import { getContentCreatorTools } from '../tools/builtin/contentCreatorTools.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
@@ -49,8 +47,15 @@ import {
   saveTodos,
   loadTodos,
 } from '../../tasks/video/workflow/ProjectManager.js';
-import type { CharacterData, SettingData, ContentTypeName } from '../../tasks/video/workflow/types.js';
-import { createDefaultCharacterData, createDefaultSettingData } from '../../tasks/video/workflow/types.js';
+import type {
+  CharacterData,
+  SettingData,
+  ContentTypeName,
+} from '../../tasks/video/workflow/types.js';
+import {
+  createDefaultCharacterData,
+  createDefaultSettingData,
+} from '../../tasks/video/workflow/types.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -125,7 +130,9 @@ function persistApprovedContent(
       case 'story':
         // Update content registry status
         updateContentStatus(project, contentType as ContentTypeName, 'available');
-        debugLog(`[GenericAgent] Auto-updated ${contentType} status to available in project registry`);
+        debugLog(
+          `[GenericAgent] Auto-updated ${contentType} status to available in project registry`
+        );
         return { persisted: true, action: `update_content_status: ${contentType}` };
 
       default:
@@ -612,7 +619,9 @@ export class GenericAgent extends TypedEventEmitter {
       const toolCalls: ToolCall[] = [];
       const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> =
         new Map();
-      let usage: { promptTokens: number; completionTokens: number; totalTokens: number } | undefined;
+      let usage:
+        | { promptTokens: number; completionTokens: number; totalTokens: number }
+        | undefined;
 
       // Check if LLM has implicit thinking - if so, emit think content to UI
       const hasImplicitThinking = this.llm.hasImplicitThinking;
@@ -622,79 +631,80 @@ export class GenericAgent extends TypedEventEmitter {
 
       try {
         for await (const chunk of this.llm.generateStream({ messages, tools, temperature: 0.7 })) {
-        // Check for abort
-        if (this.aborted) {
-          if (hasImplicitThinking) {
-            this.emit({ type: 'streaming_think', chunk: '', done: true });
-          }
-          this.emit({ type: 'streaming_text', chunk: '', done: true });
-          break;
-        }
-
-        // Handle content chunks
-        if (chunk.content) {
-          // Accumulate raw content for final response
-          content += chunk.content;
-
-          // Separate <think> content from regular output
-          const { output, thinking } = this.processStreamChunk(chunk.content);
-
-          // Emit thinking content if LLM has implicit thinking
-          if (hasImplicitThinking && thinking) {
-            this.emit({ type: 'streaming_think', chunk: thinking, done: false });
+          // Check for abort
+          if (this.aborted) {
+            if (hasImplicitThinking) {
+              this.emit({ type: 'streaming_think', chunk: '', done: true });
+            }
+            this.emit({ type: 'streaming_text', chunk: '', done: true });
+            break;
           }
 
-          // Emit regular content
-          if (output) {
+          // Handle content chunks
+          if (chunk.content) {
+            // Accumulate raw content for final response
+            content += chunk.content;
+
+            // Separate <think> content from regular output
+            const { output, thinking } = this.processStreamChunk(chunk.content);
+
+            // Emit thinking content if LLM has implicit thinking
+            if (hasImplicitThinking && thinking) {
+              this.emit({ type: 'streaming_think', chunk: thinking, done: false });
+            }
+
+            // Emit regular content
+            if (output) {
+              debugLog(
+                `[GenericAgent] streaming_text emit: chunk=${output.length} chars (filtered from ${chunk.content.length}), total=${content.length} chars`
+              );
+              this.emit({ type: 'streaming_text', chunk: output, done: false });
+            }
+          }
+
+          // Handle tool call deltas
+          if (chunk.toolCallDelta) {
+            const delta = chunk.toolCallDelta;
+            let accumulator = toolCallAccumulators.get(delta.index);
+
+            if (!accumulator) {
+              accumulator = { id: delta.id ?? '', name: delta.name ?? '', arguments: '' };
+              toolCallAccumulators.set(delta.index, accumulator);
+            }
+
+            if (delta.id) accumulator.id = delta.id;
+            if (delta.name) accumulator.name = delta.name;
+            if (delta.arguments) accumulator.arguments += delta.arguments;
+          }
+
+          // Handle stream completion and capture usage
+          if (chunk.done) {
+            // Flush any remaining buffered content
+            const { output: remainingOutput, thinking: remainingThinking } =
+              this.flushThinkTagBuffer();
+
+            // Emit any remaining thinking content
+            if (hasImplicitThinking && remainingThinking) {
+              this.emit({ type: 'streaming_think', chunk: remainingThinking, done: false });
+            }
+            if (hasImplicitThinking) {
+              this.emit({ type: 'streaming_think', chunk: '', done: true });
+            }
+
+            // Emit any remaining regular content
+            if (remainingOutput) {
+              this.emit({ type: 'streaming_text', chunk: remainingOutput, done: false });
+            }
+
             debugLog(
-              `[GenericAgent] streaming_text emit: chunk=${output.length} chars (filtered from ${chunk.content.length}), total=${content.length} chars`
+              `[GenericAgent] streaming_text DONE: total content=${content.length} chars, toolCallCount=${toolCallAccumulators.size}`
             );
-            this.emit({ type: 'streaming_text', chunk: output, done: false });
+            this.emit({ type: 'streaming_text', chunk: '', done: true });
+            if (chunk.usage) {
+              usage = chunk.usage;
+            }
           }
         }
-
-        // Handle tool call deltas
-        if (chunk.toolCallDelta) {
-          const delta = chunk.toolCallDelta;
-          let accumulator = toolCallAccumulators.get(delta.index);
-
-          if (!accumulator) {
-            accumulator = { id: delta.id ?? '', name: delta.name ?? '', arguments: '' };
-            toolCallAccumulators.set(delta.index, accumulator);
-          }
-
-          if (delta.id) accumulator.id = delta.id;
-          if (delta.name) accumulator.name = delta.name;
-          if (delta.arguments) accumulator.arguments += delta.arguments;
-        }
-
-        // Handle stream completion and capture usage
-        if (chunk.done) {
-          // Flush any remaining buffered content
-          const { output: remainingOutput, thinking: remainingThinking } = this.flushThinkTagBuffer();
-
-          // Emit any remaining thinking content
-          if (hasImplicitThinking && remainingThinking) {
-            this.emit({ type: 'streaming_think', chunk: remainingThinking, done: false });
-          }
-          if (hasImplicitThinking) {
-            this.emit({ type: 'streaming_think', chunk: '', done: true });
-          }
-
-          // Emit any remaining regular content
-          if (remainingOutput) {
-            this.emit({ type: 'streaming_text', chunk: remainingOutput, done: false });
-          }
-
-          debugLog(
-            `[GenericAgent] streaming_text DONE: total content=${content.length} chars, toolCallCount=${toolCallAccumulators.size}`
-          );
-          this.emit({ type: 'streaming_text', chunk: '', done: true });
-          if (chunk.usage) {
-            usage = chunk.usage;
-          }
-        }
-      }
         // Success! Convert accumulated tool calls to final format
         for (const [, acc] of toolCallAccumulators) {
           if (acc.id && acc.name) {
@@ -846,6 +856,9 @@ export class GenericAgent extends TypedEventEmitter {
           agentName: this.getEffectiveAgentName(),
         });
       } else if (this.contentState?.active) {
+        // Capture toolCallId before handleContentResponse potentially clears contentState
+        const contentToolCallId = this.contentState.toolCallId;
+
         // Handle the content creation response
         const contentResult = await this.handleContentResponse(userResponse);
         const contentResultObj = contentResult as Record<string, unknown>;
@@ -880,12 +893,12 @@ export class GenericAgent extends TypedEventEmitter {
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
 
-        // Add the dispatch_content_agent result to messages
+        // Add the generate_content result to messages
         this.messages.push({
           role: 'tool',
           content: JSON.stringify(contentResult),
-          toolCallId: 'content-result',
-          name: 'dispatch_content_agent',
+          toolCallId: contentToolCallId,
+          name: 'generate_content',
         });
 
         // Emit status change back to thinking
@@ -1499,7 +1512,8 @@ export class GenericAgent extends TypedEventEmitter {
       if (!instruction) {
         const errorResult = {
           error: 'instruction is required for generate_content',
-          suggestion: 'Provide a clear instruction describing what content to create, e.g., "Create a detailed character profile for Alice including physical appearance and personality."'
+          suggestion:
+            'Provide a clear instruction describing what content to create, e.g., "Create a detailed character profile for Alice including physical appearance and personality."',
         };
         FlowRecorder.getSession()?.onToolComplete(toolCall.id, errorResult, true);
         return errorResult;
@@ -1521,7 +1535,10 @@ export class GenericAgent extends TypedEventEmitter {
         // For story, append chapter-{n}.story.md
         const chapter = chapterNumber ?? 1;
         outputFile = `${outputFile.replace(/\/$/, '')}/chapter-${chapter}.story.md`;
-      } else if ((contentType === 'character_image_prompt' || contentType === 'setting_image_prompt') && name) {
+      } else if (
+        (contentType === 'character_image_prompt' || contentType === 'setting_image_prompt') &&
+        name
+      ) {
         // For character/setting image prompts, append {name}.prompt.md
         const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
         outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.prompt.md`;
@@ -1533,23 +1550,32 @@ export class GenericAgent extends TypedEventEmitter {
         outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.motion.md`;
       }
 
-      // Create a synthetic tool call for handleDispatchContentAgent
-      // The instruction is passed as the task - content creator will fetch its own context
-      const syntheticToolCall: ToolCall = {
-        id: toolCall.id,
-        name: 'dispatch_content_agent',
-        arguments: {
-          task: instruction,
-          content_type: contentType,
-          output_file: outputFile,
-          // No context_refs - content creator fetches its own context
-        },
-      };
+      // Build content system prompt and route through contentState loop
+      // This activates streaming + approval + feedback support
+      const contentSystemPrompt = buildContentPrompt(instruction, contentType as ContentType);
+      const subAgentTask = `First, use read_project() to understand the project structure and identify what content you need. Then use read_file() to fetch the relevant content (story, characters, etc.). Finally, generate the ${contentType} content based on this instruction:\n\n${instruction}`;
 
       debugLog(
-        `[GenericAgent] generate_content dispatching with instruction: "${instruction.substring(0, 100)}..."`
+        `[GenericAgent] generate_content initializing contentState for: "${instruction.substring(0, 100)}..."`
       );
-      const result = await this.handleDispatchContentAgent(syntheticToolCall);
+
+      // Initialize contentState for streaming + approval
+      this.contentState = {
+        active: true,
+        task: instruction,
+        contentType: contentType as ContentType,
+        outputFile,
+        messages: [
+          { role: 'system', content: contentSystemPrompt },
+          { role: 'user', content: subAgentTask },
+        ],
+        currentContent: '',
+        iterations: 0,
+        toolCallId: toolCall.id,
+        gatheringContext: true,
+      };
+      this.currentMode = 'content';
+      const result = await this.continueContentLoop();
       const resultObj = result as Record<string, unknown>;
 
       // Check if content needs user verification
@@ -1591,7 +1617,7 @@ export class GenericAgent extends TypedEventEmitter {
 
       // Include loop warning in result if present
       const finalResult = loopWarningMessage
-        ? { ...result as Record<string, unknown>, loop_warning: loopWarningMessage }
+        ? { ...(result as Record<string, unknown>), loop_warning: loopWarningMessage }
         : result;
 
       this.emit({
@@ -2389,7 +2415,15 @@ export class GenericAgent extends TypedEventEmitter {
     const lower = userResponse.toLowerCase().trim();
 
     // Explicit feedback patterns - check first
-    const feedbackPatterns = ['provide feedback', 'feedback', '2', 'no', 'not yet', 'change', 'revise'];
+    const feedbackPatterns = [
+      'provide feedback',
+      'feedback',
+      '2',
+      'no',
+      'not yet',
+      'change',
+      'revise',
+    ];
     if (feedbackPatterns.some(p => lower === p || lower.startsWith(p))) {
       return false;
     }
@@ -2677,7 +2711,8 @@ Respond in JSON format:
     return [
       {
         name: 'read_project',
-        description: 'Read the project structure to understand what content exists (story, characters, settings, etc.)',
+        description:
+          'Read the project structure to understand what content exists (story, characters, settings, etc.)',
         parameters: {
           type: 'object',
           properties: {},
@@ -2720,7 +2755,8 @@ Respond in JSON format:
           properties: {
             path: {
               type: 'string',
-              description: 'Path to the file relative to .kshana directory (e.g., "plans/story.md", "characters/alice.md")',
+              description:
+                'Path to the file relative to .kshana directory (e.g., "plans/story.md", "characters/alice.md")',
             },
           },
           required: ['path'],
@@ -2845,12 +2881,15 @@ Respond in JSON format:
           if (response.toolCalls && response.toolCalls.length > 0) {
             toolCallRounds++;
             if (toolCallRounds > maxToolCallRounds) {
-              debugLog(`[GenericAgent] Content creator exceeded max tool call rounds, proceeding to generation`);
+              debugLog(
+                `[GenericAgent] Content creator exceeded max tool call rounds, proceeding to generation`
+              );
               this.contentState.gatheringContext = false;
               // Add message to proceed with generation
               this.contentState.messages.push({
                 role: 'user',
-                content: 'You have gathered enough context. Now please generate the content based on what you have learned.',
+                content:
+                  'You have gathered enough context. Now please generate the content based on what you have learned.',
               });
               continue;
             }
@@ -2864,7 +2903,9 @@ Respond in JSON format:
 
             // Execute each tool call and add results
             for (const tc of response.toolCalls) {
-              debugLog(`[GenericAgent] Content creator tool call: ${tc.name}(${JSON.stringify(tc.arguments)})`);
+              debugLog(
+                `[GenericAgent] Content creator tool call: ${tc.name}(${JSON.stringify(tc.arguments)})`
+              );
 
               // Emit tool_call event so UI can show sub-agent activity
               this.emit({
@@ -2921,7 +2962,7 @@ Respond in JSON format:
               chunk: chunk.content,
               done: false,
               agentName: this.getEffectiveAgentName(),
-              toolName: 'dispatch_content_agent',
+              toolName: 'generate_content',
               reset: isFirstChunk && shouldReset,
             });
             isFirstChunk = false;
@@ -3184,15 +3225,18 @@ Respond in JSON format:
     // Determine generation mode based on image type and reference availability
     const isSceneImage = imageType === 'scene';
     const hasReferences = referenceImages && referenceImages.length > 0;
-    const generationMode: 'text_to_image' | 'image_text_to_image' =
-      isSceneImage && hasReferences ? 'image_text_to_image' : 'text_to_image';
 
-    // Warn if scene image requested without references
+    // For scenes, always force image+text-to-image mode and require references
+    const generationMode: 'text_to_image' | 'image_text_to_image' = isSceneImage
+      ? 'image_text_to_image'
+      : 'text_to_image';
+
     if (isSceneImage && !hasReferences) {
       return {
-        error: 'Scene images require reference_images for character/setting consistency.',
+        error:
+          'Scene images must include reference_images for all characters in the scene and the setting reference.',
         suggestion:
-          'Please provide reference_images array with character and setting references, or generate reference images first using image_type "character_ref" or "setting_ref".',
+          'Gather approved character_ref and setting_ref images, then retry scene generation with reference_images included.',
         image_type: imageType,
       };
     }
@@ -4237,7 +4281,8 @@ Respond in JSON format:
    */
   private async handleDispatchExplore(toolCall: ToolCall): Promise<unknown> {
     const args = toolCall.arguments;
-    const query = (args['query'] as string) || (args['task'] as string) || (args['prompt'] as string);
+    const query =
+      (args['query'] as string) || (args['task'] as string) || (args['prompt'] as string);
 
     if (!query) {
       return { error: 'No query provided for dispatch_explore' };
@@ -4250,7 +4295,8 @@ Respond in JSON format:
       const explorePrompt = buildExplorePrompt(query);
 
       // Get read_file tool for the explore agent
-      const { readFileTool, readProjectTool } = await import('../tools/builtin/contentCreatorTools.js');
+      const { readFileTool, readProjectTool } =
+        await import('../tools/builtin/contentCreatorTools.js');
       const { thinkTool } = await import('../tools/builtin/think.js');
 
       // Run the explore sub-agent
@@ -4288,7 +4334,8 @@ Respond in JSON format:
   private async handleDispatchSkill(toolCall: ToolCall): Promise<unknown> {
     const args = toolCall.arguments;
     const skillName = (args['skill_name'] as SkillType) || (args['skill'] as SkillType);
-    const task = (args['task'] as string) || (args['instruction'] as string) || (args['prompt'] as string);
+    const task =
+      (args['task'] as string) || (args['instruction'] as string) || (args['prompt'] as string);
     const contextRef = args['context_ref'] as string | undefined;
     const contextRefs = args['context_refs'] as string[] | undefined;
 
@@ -4312,7 +4359,9 @@ Respond in JSON format:
       return { error: `Invalid skill_name: ${skillName}. Valid skills: ${validSkills.join(', ')}` };
     }
 
-    debugLog(`[GenericAgent] dispatch_skill: skill="${skillName}", task="${task.substring(0, 100)}..."`);
+    debugLog(
+      `[GenericAgent] dispatch_skill: skill="${skillName}", task="${task.substring(0, 100)}..."`
+    );
 
     // Resolve context from context store
     let context = '';
@@ -4337,7 +4386,8 @@ Respond in JSON format:
       const skillPrompt = buildSkillPrompt(skillName, task, context || undefined);
 
       // Get tools appropriate for the skill
-      const { readFileTool, readProjectTool } = await import('../tools/builtin/contentCreatorTools.js');
+      const { readFileTool, readProjectTool } =
+        await import('../tools/builtin/contentCreatorTools.js');
       const { thinkTool } = await import('../tools/builtin/think.js');
 
       // Base tools available to all skills
@@ -4353,7 +4403,9 @@ Respond in JSON format:
         parentToolCallId: toolCall.id,
       });
 
-      debugLog(`[GenericAgent] dispatch_skill completed: skill="${skillName}", status=${result.status}`);
+      debugLog(
+        `[GenericAgent] dispatch_skill completed: skill="${skillName}", status=${result.status}`
+      );
 
       return {
         status: 'completed',

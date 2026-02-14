@@ -728,6 +728,14 @@ export function workflowToPrompt(workflow: WorkflowTemplate): Record<string, unk
     else if (nodeType === 'ImageScaleToTotalPixels' && Array.isArray(widgetValues)) {
       convertedInputs['upscale_method'] = widgetValues[0];
       convertedInputs['megapixels'] = widgetValues[1];
+      convertedInputs['resolution_steps'] = widgetValues[2] ?? 1;
+    }
+    // Special handling for ImageScale (explicit width/height)
+    else if (nodeType === 'ImageScale' && Array.isArray(widgetValues)) {
+      convertedInputs['upscale_method'] = widgetValues[0];
+      convertedInputs['width'] = widgetValues[1];
+      convertedInputs['height'] = widgetValues[2];
+      convertedInputs['crop'] = widgetValues[3] ?? 'disabled';
     }
     // Special handling for TextEncodeQwenImageEditPlus
     else if (nodeType === 'TextEncodeQwenImageEditPlus' && Array.isArray(widgetValues)) {

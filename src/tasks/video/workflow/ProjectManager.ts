@@ -41,6 +41,7 @@ import {
   createDefaultSceneRef,
 } from './types.js';
 import { generateProjectTitle, contextStore } from '../../../core/context/index.js';
+import { initializeArtifactsFromFiles, createArtifactFromFile } from './ArtifactManager.js';
 
 /**
  * Get the project directory path for the current working directory.
@@ -97,7 +98,7 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
   const dirs = [
     projectDir,
     join(projectDir, 'plans'),
-    join(projectDir, 'plans', 'chapters'),  // For chapter-based story files
+    join(projectDir, 'plans', 'chapters'), // For chapter-based story files
     join(projectDir, 'characters'),
     join(projectDir, 'settings'),
     join(projectDir, 'assets'),
@@ -233,9 +234,7 @@ export function createProject(
     scenes: [],
     assets: [],
     // Track only files that actually exist
-    files: [
-      { type: 'original_input', path: inputFilePath },
-    ],
+    files: [{ type: 'original_input', path: inputFilePath }],
   };
 
   // Save project file
@@ -401,8 +400,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
   const charactersDir = join(projectDir, 'characters');
   if (existsSync(charactersDir)) {
     // Support both old (.md) and new (.profile.md) naming conventions
-    const charFiles = readdirSync(charactersDir).filter(f =>
-      f.endsWith('.profile.md') || (f.endsWith('.md') && !f.endsWith('.profile.md'))
+    const charFiles = readdirSync(charactersDir).filter(
+      f => f.endsWith('.profile.md') || (f.endsWith('.md') && !f.endsWith('.profile.md'))
     );
 
     for (const charFile of charFiles) {
@@ -410,9 +409,13 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         const charContent = readFileSync(join(charactersDir, charFile), 'utf-8');
         // Extract name from first heading or filename
         const nameMatch = charContent.match(/^#\s*(?:Character[:\-–—\s]*)?(.+)/m);
-        const charName = nameMatch && nameMatch[1]
-          ? nameMatch[1].trim()
-          : charFile.replace(/\.profile\.md$/, '').replace(/\.md$/, '').replace(/[-_]/g, ' ');
+        const charName =
+          nameMatch && nameMatch[1]
+            ? nameMatch[1].trim()
+            : charFile
+                .replace(/\.profile\.md$/, '')
+                .replace(/\.md$/, '')
+                .replace(/[-_]/g, ' ');
 
         // Check if character is already registered
         const existingChar = project.characters.find(
@@ -474,8 +477,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
   const settingsDir = join(projectDir, 'settings');
   if (existsSync(settingsDir)) {
     // Support both old (.md) and new (.profile.md) naming conventions
-    const settingFiles = readdirSync(settingsDir).filter(f =>
-      f.endsWith('.profile.md') || (f.endsWith('.md') && !f.endsWith('.profile.md'))
+    const settingFiles = readdirSync(settingsDir).filter(
+      f => f.endsWith('.profile.md') || (f.endsWith('.md') && !f.endsWith('.profile.md'))
     );
 
     for (const settingFile of settingFiles) {
@@ -483,9 +486,13 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         const settingContent = readFileSync(join(settingsDir, settingFile), 'utf-8');
         // Extract name from first heading or filename
         const nameMatch = settingContent.match(/^#\s*(?:Setting[:\-–—\s]*)?(.+)/m);
-        const settingName = nameMatch && nameMatch[1]
-          ? nameMatch[1].trim()
-          : settingFile.replace(/\.profile\.md$/, '').replace(/\.md$/, '').replace(/[-_]/g, ' ');
+        const settingName =
+          nameMatch && nameMatch[1]
+            ? nameMatch[1].trim()
+            : settingFile
+                .replace(/\.profile\.md$/, '')
+                .replace(/\.md$/, '')
+                .replace(/[-_]/g, ' ');
 
         // Check if setting is already registered
         const existingSetting = project.settings.find(
@@ -626,7 +633,11 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
       // Find matching character (case-insensitive)
       const matchingChar = project.characters.find(
-        c => c.name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === charNameFromFile.toLowerCase().trim()
+        c =>
+          c.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim() === charNameFromFile.toLowerCase().trim()
       );
       if (matchingChar && !matchingChar.imagePromptPath) {
         matchingChar.imagePromptPath = promptPath;
@@ -652,7 +663,11 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       const promptPath = `prompts/images/settings/${promptFile}`;
 
       const matchingSetting = project.settings.find(
-        s => s.name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim() === settingNameFromFile.toLowerCase().trim()
+        s =>
+          s.name
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, ' ')
+            .trim() === settingNameFromFile.toLowerCase().trim()
       );
       if (matchingSetting && !matchingSetting.imagePromptPath) {
         matchingSetting.imagePromptPath = promptPath;
@@ -753,6 +768,9 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
       saveProject(project, basePath);
     }
 
+    // Initialize artifacts from existing files
+    initializeArtifactsFromFiles(project, basePath);
+
     return project as ProjectFile;
   } catch {
     return null;
@@ -842,6 +860,9 @@ export function registerFile(
   } else {
     // Add new entry
     project.files.push(fileEntry);
+
+    // Also create an artifact for the new file
+    createArtifactFromFile(project, filePath, fileType, options.name, options.summary, basePath);
   }
 
   saveProject(project, basePath);
@@ -868,7 +889,10 @@ export function generateFileSummary(content: string, fileType: string): string {
   if (fileType === 'character' || fileType === 'setting') {
     const nameMatch = trimmed.match(/^#\s*(.+)/m);
     const name = nameMatch ? nameMatch[1] : 'Unknown';
-    const descLines = trimmed.split('\n').filter(l => !l.startsWith('#') && l.trim()).slice(0, 2);
+    const descLines = trimmed
+      .split('\n')
+      .filter(l => !l.startsWith('#') && l.trim())
+      .slice(0, 2);
     const desc = descLines.join(' ').trim();
     if (desc.length > 100) {
       return `${name}: ${desc.slice(0, 97)}...`;
@@ -2424,16 +2448,16 @@ export function saveImagePrompt(
   const project = loadProject(basePath);
   if (project) {
     if (type === 'character') {
-      const character = project.characters.find(c =>
-        c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
+      const character = project.characters.find(
+        c => c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
       );
       if (character) {
         character.imagePromptPath = relativePath;
         saveProject(project, basePath);
       }
     } else if (type === 'setting') {
-      const setting = project.settings.find(s =>
-        s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
+      const setting = project.settings.find(
+        s => s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
       );
       if (setting) {
         setting.imagePromptPath = relativePath;
@@ -2539,8 +2563,8 @@ export function updateImagePromptApproval(
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
   if (type === 'character') {
-    const character = project.characters.find(c =>
-      c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
+    const character = project.characters.find(
+      c => c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
     );
     if (character) {
       character.imagePromptApprovalStatus = status;
@@ -2548,8 +2572,8 @@ export function updateImagePromptApproval(
       return true;
     }
   } else if (type === 'setting') {
-    const setting = project.settings.find(s =>
-      s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
+    const setting = project.settings.find(
+      s => s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
     );
     if (setting) {
       setting.imagePromptApprovalStatus = status;
@@ -2600,10 +2624,7 @@ import type { PersistedTodo } from './types.js';
  * Save todos to the project file for resumption.
  * Called after TodoWrite operations to persist the current state.
  */
-export function saveTodos(
-  todos: PersistedTodo[],
-  basePath: string = process.cwd()
-): boolean {
+export function saveTodos(todos: PersistedTodo[], basePath: string = process.cwd()): boolean {
   const project = loadProject(basePath);
   if (!project) {
     return false;
@@ -2645,11 +2666,7 @@ export function clearPersistedTodos(basePath: string = process.cwd()): boolean {
 // Multi-Input Management Functions
 // ============================================================================
 
-import type {
-  ProjectInput,
-  InputPurpose,
-  PrimaryNarrationConfig,
-} from './types.js';
+import type { ProjectInput, InputPurpose, PrimaryNarrationConfig } from './types.js';
 
 /**
  * Add a new input to the project.
@@ -2711,7 +2728,7 @@ export function updateProjectInput(
     return null;
   }
 
-  const index = project.inputs.findIndex((i) => i.id === inputId);
+  const index = project.inputs.findIndex(i => i.id === inputId);
   if (index === -1) {
     return null;
   }
@@ -2742,17 +2759,14 @@ export function updateProjectInput(
  * @param basePath - Base path for the project
  * @returns Whether the deletion was successful
  */
-export function deleteProjectInput(
-  inputId: string,
-  basePath: string = process.cwd()
-): boolean {
+export function deleteProjectInput(inputId: string, basePath: string = process.cwd()): boolean {
   const project = loadProject(basePath);
   if (!project || !project.inputs) {
     return false;
   }
 
   const initialLength = project.inputs.length;
-  project.inputs = project.inputs.filter((i) => i.id !== inputId);
+  project.inputs = project.inputs.filter(i => i.id !== inputId);
 
   if (project.inputs.length === initialLength) {
     return false;
@@ -2782,7 +2796,7 @@ export function getProjectInput(
     return null;
   }
 
-  return project.inputs.find((i) => i.id === inputId) || null;
+  return project.inputs.find(i => i.id === inputId) || null;
 }
 
 /**
@@ -2801,7 +2815,7 @@ export function setPrimaryNarration(
     throw new Error('No project found');
   }
 
-  const input = project.inputs?.find((i) => i.id === inputId);
+  const input = project.inputs?.find(i => i.id === inputId);
   if (!input) {
     throw new Error(`Input not found: ${inputId}`);
   }
@@ -2842,7 +2856,7 @@ export function getInputsByPurpose(
     return [];
   }
 
-  return project.inputs.filter((i) => i.purpose === purpose);
+  return project.inputs.filter(i => i.purpose === purpose);
 }
 
 /**
@@ -2852,9 +2866,7 @@ export function getInputsByPurpose(
  * @param basePath - Base path for the project
  * @returns Narration content or null if no primary narration set
  */
-export function getNarrationContent(
-  basePath: string = process.cwd()
-): {
+export function getNarrationContent(basePath: string = process.cwd()): {
   content: string;
   audioPath?: string;
   timingMarkers?: Array<{ start: number; end: number; text: string }>;
@@ -2864,7 +2876,7 @@ export function getNarrationContent(
     return null;
   }
 
-  const input = project.inputs?.find((i) => i.id === project.primaryNarration?.inputId);
+  const input = project.inputs?.find(i => i.id === project.primaryNarration?.inputId);
   if (!input) {
     return null;
   }
@@ -2945,5 +2957,5 @@ export function getInputsByStatus(
     return [];
   }
 
-  return project.inputs.filter((i) => i.processing.status === status);
+  return project.inputs.filter(i => i.processing.status === status);
 }

@@ -7,6 +7,21 @@ import { existsSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
+import {
+  regenerateArtifactTool,
+  replaceArtifactTool,
+  editPromptTool,
+  comparePromptsTool,
+  restorePromptTool,
+  jumpToArtifactTool,
+  listArtifactsTool,
+  getArtifactStatusTool,
+} from '../../../core/tools/builtin/artifactTools.js';
+import {
+  uploadExternalAssetTool,
+  listExternalAssetsTool,
+  deleteExternalAssetTool,
+} from '../../../core/tools/builtin/assetTools.js';
 import { getWorkflowLogger } from './WorkflowLogger.js';
 import { getPhaseLogger } from '../../../utils/phaseLogger.js';
 import {
@@ -38,8 +53,26 @@ import {
   generateFileSummary,
   getProjectDir,
 } from './ProjectManager.js';
-import type { ProjectFile, CharacterData, SettingData, SceneRef, AssetInfo, PhaseStatus, ItemApprovalStatus, InputType, ContentTypeName } from './types.js';
-import { PlannerStage, createDefaultCharacterData, createDefaultSettingData, createDefaultSceneRef, PHASE_CONFIGS, WorkflowPhase, INPUT_TYPE_CONFIGS } from './types.js';
+import type {
+  ProjectFile,
+  CharacterData,
+  SettingData,
+  SceneRef,
+  AssetInfo,
+  PhaseStatus,
+  ItemApprovalStatus,
+  InputType,
+  ContentTypeName,
+} from './types.js';
+import {
+  PlannerStage,
+  createDefaultCharacterData,
+  createDefaultSettingData,
+  createDefaultSceneRef,
+  PHASE_CONFIGS,
+  WorkflowPhase,
+  INPUT_TYPE_CONFIGS,
+} from './types.js';
 import { LLMClient } from '../../../core/llm/index.js';
 
 /**
@@ -88,7 +121,8 @@ Be lenient - even a short idea like "a detective story" is valid. Only reject ob
     if (result.toUpperCase().startsWith('VALID')) {
       return { valid: true };
     } else if (result.toUpperCase().startsWith('INVALID')) {
-      const reason = result.replace(/^INVALID:\s*/i, '').trim() || 'This does not appear to be a story idea';
+      const reason =
+        result.replace(/^INVALID:\s*/i, '').trim() || 'This does not appear to be a story idea';
       return { valid: false, reason };
     }
 
@@ -161,8 +195,14 @@ export const readFileTool: ToolDefinition = createTool(
   'read_file',
   `Read content from a project file within the .kshana directory.
 
-**CRITICAL: ALWAYS call list_project_files FIRST to get actual file names.**
-**NEVER guess file names like "0.md", "1.md" - files are named by content!**
+**🚫 FORBIDDEN: NEVER guess file paths!**
+- ❌ "0.md", "1.md", "2.md" are NOT valid file paths
+- ❌ NEVER construct paths from array indices
+- ❌ NEVER use numeric suffixes - files are named by CONTENT (e.g., "characters/isha.md")
+
+**REQUIRED WORKFLOW:**
+1. Call \`list_project_files\` FIRST to discover actual file names
+2. Use the EXACT paths returned by \`list_project_files\`
 
 Use this to read:
 - Plan files: plans/plot.md, plans/story.md, plans/scenes.md
@@ -181,7 +221,7 @@ If you get "File not found", STOP and call list_project_files to see what files 
     },
     required: ['file_path'],
   },
-  async (args) => {
+  async args => {
     const filePath = args['file_path'] as string;
 
     // Security: prevent path traversal
@@ -189,6 +229,29 @@ If you get "File not found", STOP and call list_project_files to see what files 
       return {
         status: 'error',
         error: 'Invalid file path. Use relative paths within .kshana directory.',
+      };
+    }
+
+    // HARD REJECTION: Reject numeric index guessing - common LLM mistake
+    const numericIndexPattern = /^(characters|settings|scenes)\/\d+\.md$/;
+    if (numericIndexPattern.test(filePath)) {
+      const indexMatch = filePath.match(/\/(\d+)\.md$/);
+      const index = indexMatch?.[1];
+      return {
+        status: 'error',
+        error: `FORBIDDEN: You used a numeric index "${filePath}".`,
+        instruction: `You MUST call list_project_files FIRST to discover actual file names. Numeric indices like "${index}.md" are NOT valid file paths.`,
+      };
+    }
+
+    // Also reject bare numeric paths like "0.md" without directory
+    const bareNumericPattern = /^\d+\.md$/;
+    if (bareNumericPattern.test(filePath)) {
+      return {
+        status: 'error',
+        error: `FORBIDDEN: You used "${filePath}" - this is NOT a valid file path.`,
+        instruction:
+          'You MUST call list_project_files to get actual file names. Files are named by content, not by index.',
       };
     }
 
@@ -304,15 +367,17 @@ This is the primary way to find available project content.`,
     },
     required: [],
   },
-  async (args) => {
+  async args => {
     const includeSizes = args['include_sizes'] === true;
     const projectDir = getProjectDir();
 
     if (!existsSync(projectDir)) {
       return {
         status: 'no_project',
-        content: '📁 No project directory found.\n\nCreate a project first using update_project with action "create".',
-        message: 'No project directory found. Create a project first using update_project with action "create".',
+        content:
+          '📁 No project directory found.\n\nCreate a project first using update_project with action "create".',
+        message:
+          'No project directory found. Create a project first using update_project with action "create".',
         files: [],
       };
     }
@@ -425,7 +490,8 @@ This is the primary way to find available project content.`,
       project_directory: '.kshana/',
       total_files: fileList.length,
       files: fileList,
-      usage_hint: 'IMPORTANT: Use the EXACT file paths shown above with read_file(). For example: read_file(path="characters/mr_patel.md"). Do NOT use array indices like 0.md or 1.md - use the actual file names.',
+      usage_hint:
+        'IMPORTANT: Use the EXACT file paths shown above with read_file(). For example: read_file(path="characters/mr_patel.md"). Do NOT use array indices like 0.md or 1.md - use the actual file names.',
     };
   }
 );
@@ -458,12 +524,13 @@ For structured data (assets, approvals), use update_project instead.`,
       },
       summary: {
         type: 'string',
-        description: 'Optional brief summary of the content (1-2 sentences). Auto-generated if not provided.',
+        description:
+          'Optional brief summary of the content (1-2 sentences). Auto-generated if not provided.',
       },
     },
     required: ['file_path', 'content'],
   },
-  async (args) => {
+  async args => {
     const filePath = args['file_path'] as string;
     const content = args['content'] as string;
     const summary = args['summary'] as string | undefined;
@@ -573,7 +640,7 @@ Use this at the start of each turn to understand the project state and what acti
     },
     required: [],
   },
-  async (args) => {
+  async args => {
     const includeSummary = args['include_summary'] !== false;
     const includeTransitionPrompt = args['include_transition_prompt'] !== false;
 
@@ -683,7 +750,7 @@ export const updateProjectTool: ToolDefinition = createTool(
     },
     required: ['action', 'data'],
   },
-  async (args) => {
+  async args => {
     const action = args['action'] as string;
     const data = args['data'] as Record<string, unknown>;
 
@@ -702,7 +769,8 @@ export const updateProjectTool: ToolDefinition = createTool(
               status: 'invalid_input',
               rejected: true,
               error: validation.reason,
-              action_required: 'STOP - Do not proceed with the workflow. Display the message below to the user and wait for them to provide a valid story idea.',
+              action_required:
+                'STOP - Do not proceed with the workflow. Display the message below to the user and wait for them to provide a valid story idea.',
               message: `I'd love to help you create a video, but I need a story to work with.
 
 What you shared appears to be: ${validation.reason}
@@ -747,7 +815,11 @@ What story would you like to turn into a video?`,
             return { status: 'error', error: 'phase (or phase_name) and status are required' };
           }
           updatePhaseStatus(project, phase, status);
-          return { status: 'success', message: `Phase ${phase} updated to ${status}`, current_phase: project.currentPhase };
+          return {
+            status: 'success',
+            message: `Phase ${phase} updated to ${status}`,
+            current_phase: project.currentPhase,
+          };
         }
 
         case 'update_planner_stage': {
@@ -765,7 +837,10 @@ What story would you like to turn into a video?`,
           }
           const validStages = ['planning', 'verify', 'refining', 'complete'];
           if (!validStages.includes(stage)) {
-            return { status: 'error', error: `Invalid stage. Must be one of: ${validStages.join(', ')}` };
+            return {
+              status: 'error',
+              error: `Invalid stage. Must be one of: ${validStages.join(', ')}`,
+            };
           }
           updatePlannerStage(project, phase, stage);
 
@@ -789,7 +864,8 @@ What story would you like to turn into a video?`,
               phase_status: project.phases[phase]?.status,
               phase_completed: false,
               requires_per_item_processing: true,
-              next_action: 'Process each item one by one, get individual approvals, then transition when all items are approved.',
+              next_action:
+                'Process each item one by one, get individual approvals, then transition when all items are approved.',
             };
           }
 
@@ -898,7 +974,10 @@ What story would you like to turn into a video?`,
           const approvalStatus = data['status'] as ItemApprovalStatus;
           const approvalType = (data['approval_type'] as 'content' | 'image') || 'content';
           if (!name || !approvalStatus) {
-            return { status: 'error', error: 'name and status are required for update_character_approval' };
+            return {
+              status: 'error',
+              error: 'name and status are required for update_character_approval',
+            };
           }
           if (!projectExists()) {
             return { status: 'error', error: 'No project found' };
@@ -922,7 +1001,10 @@ What story would you like to turn into a video?`,
             return { status: 'error', error: `Character "${name}" not found` };
           }
           const typeLabel = approvalType === 'image' ? 'reference image' : 'content';
-          return { status: 'success', message: `Character "${name}" ${typeLabel} approval updated to ${approvalStatus}` };
+          return {
+            status: 'success',
+            message: `Character "${name}" ${typeLabel} approval updated to ${approvalStatus}`,
+          };
         }
 
         case 'add_setting': {
@@ -964,7 +1046,10 @@ What story would you like to turn into a video?`,
           const approvalStatus = data['status'] as ItemApprovalStatus;
           const approvalType = (data['approval_type'] as 'content' | 'image') || 'content';
           if (!name || !approvalStatus) {
-            return { status: 'error', error: 'name and status are required for update_setting_approval' };
+            return {
+              status: 'error',
+              error: 'name and status are required for update_setting_approval',
+            };
           }
           if (!projectExists()) {
             return { status: 'error', error: 'No project found' };
@@ -988,7 +1073,10 @@ What story would you like to turn into a video?`,
             return { status: 'error', error: `Setting "${name}" not found` };
           }
           const typeLabel = approvalType === 'image' ? 'reference image' : 'content';
-          return { status: 'success', message: `Setting "${name}" ${typeLabel} approval updated to ${approvalStatus}` };
+          return {
+            status: 'success',
+            message: `Setting "${name}" ${typeLabel} approval updated to ${approvalStatus}`,
+          };
         }
 
         case 'add_scene': {
@@ -1040,7 +1128,11 @@ What story would you like to turn into a video?`,
           const approvalType = data['approval_type'] as 'content' | 'image' | 'video';
           const approvalStatus = data['status'] as ItemApprovalStatus;
           if (sceneNumber === undefined || !approvalType || !approvalStatus) {
-            return { status: 'error', error: 'scene_number, approval_type, and status are required for update_scene_approval' };
+            return {
+              status: 'error',
+              error:
+                'scene_number, approval_type, and status are required for update_scene_approval',
+            };
           }
           if (!projectExists()) {
             return { status: 'error', error: 'No project found' };
@@ -1064,7 +1156,10 @@ What story would you like to turn into a video?`,
           if (!success) {
             return { status: 'error', error: `Scene ${sceneNumber} not found` };
           }
-          return { status: 'success', message: `Scene ${sceneNumber} ${approvalType} approval updated to ${approvalStatus}` };
+          return {
+            status: 'success',
+            message: `Scene ${sceneNumber} ${approvalType} approval updated to ${approvalStatus}`,
+          };
         }
 
         case 'add_asset': {
@@ -1107,7 +1202,10 @@ What story would you like to turn into a video?`,
           const path = data['path'] as string;
           const duration = data['duration'] as number;
           if (!artifactId || !path) {
-            return { status: 'error', error: 'artifactId and path are required for set_final_video' };
+            return {
+              status: 'error',
+              error: 'artifactId and path are required for set_final_video',
+            };
           }
           project.finalVideo = {
             artifactId,
@@ -1131,9 +1229,8 @@ What story would you like to turn into a video?`,
           }
 
           const inputTypeConfig = INPUT_TYPE_CONFIGS[inputType];
-          const skippedPhases = inputTypeConfig.skipPhases.length > 0
-            ? inputTypeConfig.skipPhases.join(', ')
-            : 'none';
+          const skippedPhases =
+            inputTypeConfig.skipPhases.length > 0 ? inputTypeConfig.skipPhases.join(', ') : 'none';
 
           return {
             status: 'success',
@@ -1141,9 +1238,10 @@ What story would you like to turn into a video?`,
             input_type: inputType,
             current_phase: updatedProject.currentPhase,
             skipped_phases: skippedPhases,
-            note: inputType === 'story'
-              ? 'Plot and Story phases have been skipped. The story has been saved to plans/story.md. Proceeding to Characters & Settings phase.'
-              : 'Starting from Plot phase.',
+            note:
+              inputType === 'story'
+                ? 'Plot and Story phases have been skipped. The story has been saved to plans/story.md. Proceeding to Characters & Settings phase.'
+                : 'Starting from Plot phase.',
           };
         }
 
@@ -1169,4 +1267,23 @@ export function getWorkflowFileTools(): ToolDefinition[] {
  */
 export function getAllFileTools(): ToolDefinition[] {
   return [listProjectFilesTool, readFileTool, writeFileTool, readProjectTool, updateProjectTool];
+}
+
+/**
+ * Get all artifact tools for fine-grained control.
+ */
+export function getAllArtifactTools(): ToolDefinition[] {
+  return [
+    regenerateArtifactTool,
+    replaceArtifactTool,
+    editPromptTool,
+    comparePromptsTool,
+    restorePromptTool,
+    jumpToArtifactTool,
+    listArtifactsTool,
+    getArtifactStatusTool,
+    uploadExternalAssetTool,
+    listExternalAssetsTool,
+    deleteExternalAssetTool,
+  ];
 }

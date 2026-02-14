@@ -15,7 +15,7 @@
         {"name": "MODEL", "type": "MODEL", "links": [1]}
       ],
       "properties": {},
-      "widgets_values": ["Qwen-Image-Edit-2509_fp8_e4m3fn.safetensors", "fp8_e4m3fn"]
+      "widgets_values": ["Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors", "fp8_e4m3fn"]
     },
     {
       "id": 2,
@@ -100,7 +100,7 @@
     },
     {
       "id": 7,
-      "type": "ImageScaleToTotalPixels",
+      "type": "ImageScale",
       "pos": [100, 800],
       "size": [315, 82],
       "flags": {},
@@ -113,7 +113,7 @@
         {"name": "IMAGE", "type": "IMAGE", "links": [12, 13]}
       ],
       "properties": {},
-      "widgets_values": ["lanczos", 1]
+      "widgets_values": ["lanczos", 1024, 1024, "center"]
     },
     {
       "id": 8,
