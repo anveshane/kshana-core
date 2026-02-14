@@ -740,25 +740,40 @@ function parsePromptFile(content: string): PromptFileMetadata {
   if (refSection && refSection[1]) {
     const refLines = refSection[1].split('\n');
     for (const line of refLines) {
-      // Match "- Character: Name" or "- Character: Name (ref_id: xxx)"
-      const charMatch = line.match(/^-\s*Character:\s*([^(]+?)(?:\s*\(ref_id:\s*([^)]+)\))?$/i);
-      if (charMatch && charMatch[1]) {
+      // Match various formats:
+      //   "- Character: Name"
+      //   "- Character: Name (ref_id: xxx)"
+      //   "- Character: Name (assets/images/path.png)"
+      //   "- image1: Name (character) - assets/images/path.png"
+      const charMatch = line.match(/^-\s*(?:image\d+:\s*)?(?:Character:\s*)([^(-]+?)(?:\s*\(.*?\))?(?:\s*-\s*.*)?$/i);
+      if (charMatch && charMatch[1] && /character/i.test(line)) {
         result.references.push({
           type: 'character',
           name: charMatch[1].trim(),
-          refId: charMatch[2]?.trim(),
         });
         continue;
       }
 
-      // Match "- Setting: Name" or "- Setting: Name (ref_id: xxx)"
-      const settingMatch = line.match(/^-\s*Setting:\s*([^(]+?)(?:\s*\(ref_id:\s*([^)]+)\))?$/i);
-      if (settingMatch && settingMatch[1]) {
+      // Match setting references in various formats
+      const settingMatch = line.match(/^-\s*(?:image\d+:\s*)?(?:Setting:\s*)([^(-]+?)(?:\s*\(.*?\))?(?:\s*-\s*.*)?$/i);
+      if (settingMatch && settingMatch[1] && /setting/i.test(line)) {
         result.references.push({
           type: 'setting',
           name: settingMatch[1].trim(),
-          refId: settingMatch[2]?.trim(),
         });
+        continue;
+      }
+
+      // Fallback: match "- imageN: Name (type)" format
+      const imageNMatch = line.match(/^-\s*image\d+:\s*([^(]+?)\s*\((\w+)\)/i);
+      if (imageNMatch && imageNMatch[1] && imageNMatch[2]) {
+        const type = imageNMatch[2].toLowerCase();
+        if (type === 'character' || type === 'setting') {
+          result.references.push({
+            type: type as 'character' | 'setting',
+            name: imageNMatch[1].trim(),
+          });
+        }
       }
     }
   }
