@@ -36,7 +36,9 @@ Generate images for each placement identified in the previous phase.
 1. Call `generate_all_images` in background mode (default)
 2. It returns immediately with `status: "queued"` and `batch_id`
 3. The tool auto-completes `image_generation` and auto-transitions to the next phase when invoked from this phase
-4. Use `read_background_generation` in later phases when you need status
+4. The user should immediately see that image generation is running in background
+5. The user will receive a completion/failure notification when the batch reaches terminal state
+6. Use `read_background_generation` in later phases when you need status
 
 **NEVER:**
 - Manually parse the image-placements.md file
@@ -66,6 +68,7 @@ The tool will:
 - Return immediately with `status`, `batch_id`, and `total_placements`
 
 **Do NOT wait for completion in this phase.**
+**Do NOT claim all images/videos are fully generated just because queueing succeeded.**
 
 **STEP 2: Continue immediately**
 
@@ -101,5 +104,6 @@ update_project(
 - **Queue and continue immediately**
 - **Use `read_background_generation` to inspect progress/failures later**
 - **Retry failed placements only via `generate_all_images(retry_failed_batch_id: "...", run_in_background: true)`**
+- **Do not claim full media completion while any background batch is queued/running/failed**
 - Generated images are automatically stored in `agent/image-placements/` directory
 - Images are automatically registered in the manifest

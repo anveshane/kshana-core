@@ -16,6 +16,7 @@ import {
   type TodoUpdateData,
   type StreamChunkData,
   type AssetAddedData,
+  type BackgroundGenerationData,
   type ErrorData,
   type StartTaskData,
   type UserResponseData,
@@ -25,7 +26,11 @@ import {
   isCancelMessage,
   isPingMessage,
 } from './types.js';
-import { assetEventEmitter, type AssetAddedEvent } from './assetEventEmitter.js';
+import {
+  assetEventEmitter,
+  type AssetAddedEvent,
+  type BackgroundGenerationEvent,
+} from './assetEventEmitter.js';
 
 interface ConnectionState {
   socket: WebSocket;
@@ -82,6 +87,35 @@ export class WebSocketHandler {
         if (state.projectDir === projectDir && state.socket.readyState === 1) {
           this.sendMessage(state.socket, message);
           console.log('[WebSocketHandler] Broadcast asset_added to connection', state.sessionId, 'for project', projectDir);
+        }
+      }
+    });
+
+    // Global background generation listener: broadcast to project-matching connections.
+    assetEventEmitter.onBackgroundGeneration((event: BackgroundGenerationEvent) => {
+      const projectDir = event.projectDirectory;
+      if (!projectDir) return;
+
+      const message = createServerMessage<BackgroundGenerationData>('background_generation', event.sessionId ?? '', {
+        batchId: event.batchId,
+        kind: event.kind,
+        status: event.status,
+        phase: event.phase,
+        totalItems: event.totalItems,
+        completedItems: event.completedItems,
+        failedItems: event.failedItems,
+        projectDirectory: event.projectDirectory,
+      });
+
+      for (const [, state] of this.connections) {
+        if (state.projectDir === projectDir && state.socket.readyState === 1) {
+          this.sendMessage(state.socket, message);
+          console.log(
+            '[WebSocketHandler] Broadcast background_generation to connection',
+            state.sessionId,
+            'for project',
+            projectDir,
+          );
         }
       }
     });

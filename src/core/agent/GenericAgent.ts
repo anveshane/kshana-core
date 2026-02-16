@@ -89,6 +89,29 @@ function isPlanModeTool(name: string): boolean {
   return name === 'EnterPlanMode' || name === 'ExitPlanMode';
 }
 
+function getCompletedWorkflowOutput(): string {
+  const project = loadProject();
+  const backgroundState = project?.backgroundGeneration;
+  const batches = backgroundState?.batches ?? [];
+  const activeBatches = batches.filter(
+    (batch) => batch.status === 'queued' || batch.status === 'running',
+  );
+  const failedBatches = batches.filter((batch) => batch.status === 'failed');
+
+  if (activeBatches.length > 0) {
+    const completedItems = activeBatches.reduce((sum, batch) => sum + batch.completedItems, 0);
+    const totalItems = activeBatches.reduce((sum, batch) => sum + batch.totalItems, 0);
+    return `Workflow advanced to completed, but background generation is still running (${completedItems}/${totalItems} items complete across ${activeBatches.length} active batch${activeBatches.length === 1 ? '' : 'es'}).`;
+  }
+
+  if (failedBatches.length > 0) {
+    const failedItems = failedBatches.reduce((sum, batch) => sum + batch.failedItems, 0);
+    return `Workflow advanced to completed with background generation failures (${failedItems} failed item${failedItems === 1 ? '' : 's'} across ${failedBatches.length} failed batch${failedBatches.length === 1 ? '' : 'es'}). Use read_background_generation and retry_failed_batch_id to resolve remaining failures.`;
+  }
+
+  return 'Workflow complete. All videos and images have been generated successfully.';
+}
+
 export class GenericAgent extends TypedEventEmitter {
   private tools: Map<string, ToolDefinition>;
   private llm: LLMClient;
@@ -737,7 +760,7 @@ export class GenericAgent extends TypedEventEmitter {
           debugLog(`[GenericAgent] COMPLETED phase detected at loop start. Stopping execution immediately.`);
           return {
             status: 'completed',
-            output: 'Workflow complete. All videos and images have been generated successfully.',
+            output: getCompletedWorkflowOutput(),
             todos: this.todoManager.getTodos(),
           };
         }
@@ -796,7 +819,7 @@ export class GenericAgent extends TypedEventEmitter {
           debugLog(`[GenericAgent] COMPLETED phase detected. Stopping execution immediately.`);
           return {
             status: 'completed',
-            output: 'Workflow complete. All videos and images have been generated successfully.',
+            output: getCompletedWorkflowOutput(),
             todos: this.todoManager.getTodos(),
           };
         }
@@ -1122,7 +1145,7 @@ ONLY: Execute the update_project tool call with action="transition_phase" immedi
             debugLog(`[GenericAgent] COMPLETED phase detected after tool execution. Stopping immediately.`);
             return {
               status: 'completed',
-              output: 'Workflow complete. All videos and images have been generated successfully.',
+              output: getCompletedWorkflowOutput(),
               todos: this.todoManager.getTodos(),
             };
           }

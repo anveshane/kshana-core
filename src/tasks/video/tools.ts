@@ -52,6 +52,7 @@ import { getTranscriptSegmentForTimeRange } from './workflow/transcriptSegment.j
 import { expandImagePlacementPrompt, expandVideoPlacementPrompt } from './workflow/placementPromptExpander.js';
 import { expandInfographicPlacementPrompt } from './workflow/infographicPromptExpander.js';
 import { loadRemotionSkillsForInfographicType } from '../../core/prompts/loader.js';
+import { assetEventEmitter } from '../../server/assetEventEmitter.js';
 import type { ComponentCode } from './remotionAgent.js';
 
 /** Callback to run the Remotion sub-agent (placements + skills -> component code). Injected when creating the tool. */
@@ -469,6 +470,58 @@ const jobs = new Map<string, GenerationJob>();
 const activeBatchRunners = new Map<string, Promise<void>>();
 const MAX_BACKGROUND_BATCH_HISTORY = 30;
 
+/**
+ * Module-level AbortController used to cancel all in-flight polling loops
+ * (waitForComfyUIJob → ComfyUIClient.waitForCompletion) on server shutdown.
+ * Calling shutdownVideoTools() aborts this signal and replaces it with a fresh one.
+ */
+let shutdownController = new AbortController();
+
+/**
+ * Gracefully shut down all video generation activity.
+ * - Aborts every in-flight waitForCompletion polling loop via the shared AbortSignal
+ * - Sends /interrupt and /queue clear to ComfyUI so GPU work stops
+ * - Marks all processing jobs as failed
+ * - Clears the jobs Map and batch runner tracking
+ *
+ * Called from the server's graceful-shutdown handler.
+ */
+export async function shutdownVideoTools(): Promise<void> {
+  console.log('[shutdownVideoTools] Shutting down video generation...');
+
+  // 1. Abort all polling loops
+  shutdownController.abort('server_shutdown');
+
+  // 2. Interrupt current ComfyUI job and clear the queue
+  try {
+    await Promise.all([
+      ComfyUIClient.interruptCurrentJob(),
+      ComfyUIClient.clearQueue(),
+    ]);
+  } catch (e) {
+    console.warn('[shutdownVideoTools] Error communicating with ComfyUI during shutdown:', e);
+  }
+
+  // 3. Mark all in-progress jobs as failed
+  for (const [id, job] of jobs) {
+    if (job.status === 'pending' || job.status === 'processing') {
+      job.status = 'failed';
+      job.error = 'Server shutdown';
+      job.updatedAt = Date.now();
+      console.log(`[shutdownVideoTools] Marked job ${id} as failed (server shutdown)`);
+    }
+  }
+
+  // 4. Clear state
+  jobs.clear();
+  activeBatchRunners.clear();
+
+  // 5. Replace the controller so a future server start gets a fresh signal
+  shutdownController = new AbortController();
+
+  console.log('[shutdownVideoTools] Video generation shutdown complete');
+}
+
 interface PreparedImageGenerationPlacement {
   placementNumber: number;
   startTime: string;
@@ -878,11 +931,16 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
       timeout: actualTimeout,
     });
 
-    // Wait for completion
-    const completionResult = await client.waitForCompletion(job.promptId, (pct, msg) => {
-      job.progress = pct;
-      job.updatedAt = Date.now();
-    });
+    // Wait for completion (pass shutdownController.signal so shutdown aborts polling)
+    const completionResult = await client.waitForCompletion(
+      job.promptId,
+      (pct, msg) => {
+        job.progress = pct;
+        job.updatedAt = Date.now();
+      },
+      undefined,
+      shutdownController.signal
+    );
 
     if (completionResult.status !== 'completed' && completionResult.status !== 'completed_with_timeout') {
       job.status = 'failed';
@@ -1288,18 +1346,17 @@ export interface VideoPlacementGenerationParams {
  * LTX-2 requires frame count to be divisible by 8 + 1.
  * Formula: Math.ceil((duration * 25) / 8) * 8 + 1
  * 
- * NOTE: LTX-2 workflows use 24 fps (not 24 fps) as the native frame rate.
- * Using Math.ceil ensures we get at least the requested duration (videos may
- * be slightly longer but never shorter than expected).
+ * NOTE: LTX-2 workflows output at 25 fps. Using Math.ceil ensures we
+ * always get at least the requested duration (videos may be slightly
+ * longer but never shorter than expected).
  * 
- * @param duration Duration in seconds (4-10 seconds maximum)
+ * @param duration Duration in seconds
  * @returns Frame count ensuring at least the requested duration
  */
 function calculateFrameCount(duration: number): number {
-  // 24 fps (LTX-2 native), frame count must be divisible by 8 + 1
-  // Use Math.ceil to ensure we never generate shorter videos than requested
-  const baseFrames = duration * 24;
-  return baseFrames + 1
+  // 25 fps (LTX-2 output rate), frame count must be of the form 8k + 1
+  // Use Math.ceil to round up so videos are never shorter than requested
+  return Math.ceil((duration * 25) / 8) * 8 + 1;
 }
 
 /**
@@ -1357,7 +1414,7 @@ async function submitVideoPlacementGeneration(params: VideoPlacementGenerationPa
     // Get the project style configuration and enhance the prompt
     const styleConfig = getProjectStyleConfig();
     const enhancedPrompt = `${prompt}, ${styleConfig.promptModifier}`;
-    const negativePrompt = 'blurry, low quality, text, watermark, static, no motion, artifacts';
+    const negativePrompt = 'blurry, low quality, text, watermark, frozen pose, motionless subject, still image, artifacts';
 
     // Load and parameterize the workflow
     const template = loadWorkflowTemplate(workflowMetadata.filename);
@@ -1366,8 +1423,8 @@ async function submitVideoPlacementGeneration(params: VideoPlacementGenerationPa
       negativePrompt,
       seed: Math.floor(Math.random() * 2 ** 32),
       filenamePrefix: `Placement${scene_number}_video`,
-      width: 640, // Match test script: 640x640 (LTX-2 default, may help with pan/artifacts)
-      height: 640,
+      width: 1280, // 16:9 HD resolution
+      height: 720,
       frameCount,
     });
 
@@ -2215,6 +2272,22 @@ function recomputeBatchCounts(batch: BackgroundGenerationBatch): void {
   batch.failedItems = batch.items.filter((item) => item.status === 'failed').length;
 }
 
+function emitBackgroundGenerationEvent(
+  basePath: string,
+  batch: BackgroundGenerationBatch,
+): void {
+  assetEventEmitter.emitBackgroundGeneration({
+    batchId: batch.id,
+    kind: batch.kind,
+    status: batch.status,
+    phase: batch.phase,
+    totalItems: batch.totalItems,
+    completedItems: batch.completedItems,
+    failedItems: batch.failedItems,
+    projectDirectory: basePath,
+  });
+}
+
 function startBackgroundBatchRunner(
   basePath: string,
   projectId: string,
@@ -2231,10 +2304,13 @@ function startBackgroundBatchRunner(
     : runVideoBatchSequentially(basePath, batchId))
     .catch((error) => {
       console.error(`[background:${kind}] Batch ${batchId} failed with unhandled error:`, error);
-      persistBatchUpdate(basePath, batchId, (batch) => {
+      const failedBatch = persistBatchUpdate(basePath, batchId, (batch) => {
         batch.status = 'failed';
         batch.finishedAt = Date.now();
       });
+      if (failedBatch) {
+        emitBackgroundGenerationEvent(basePath, failedBatch);
+      }
     })
     .finally(() => {
       activeBatchRunners.delete(key);
@@ -2565,6 +2641,7 @@ async function runImageBatchSequentially(basePath: string, batchId: string): Pro
     }
   });
   if (!batch) return;
+  emitBackgroundGenerationEvent(basePath, batch);
   if (batch.status === 'completed' || batch.status === 'failed') return;
 
   for (const itemSnapshot of batch.items) {
@@ -2633,11 +2710,14 @@ async function runImageBatchSequentially(basePath: string, batchId: string): Pro
     });
   }
 
-  persistBatchUpdate(basePath, batchId, (entry) => {
+  const finalized = persistBatchUpdate(basePath, batchId, (entry) => {
     recomputeBatchCounts(entry);
     entry.status = entry.failedItems > 0 ? 'failed' : 'completed';
     entry.finishedAt = Date.now();
   });
+  if (finalized) {
+    emitBackgroundGenerationEvent(basePath, finalized);
+  }
 }
 
 async function runVideoBatchSequentially(basePath: string, batchId: string): Promise<void> {
@@ -2655,6 +2735,7 @@ async function runVideoBatchSequentially(basePath: string, batchId: string): Pro
     }
   });
   if (!batch) return;
+  emitBackgroundGenerationEvent(basePath, batch);
   if (batch.status === 'completed' || batch.status === 'failed') return;
 
   for (const itemSnapshot of batch.items) {
@@ -2726,6 +2807,9 @@ async function runVideoBatchSequentially(basePath: string, batchId: string): Pro
     entry.status = entry.failedItems > 0 ? 'failed' : 'completed';
     entry.finishedAt = Date.now();
   });
+  if (finalized) {
+    emitBackgroundGenerationEvent(basePath, finalized);
+  }
 
   if (finalized?.status === 'completed' && finalized.failedItems === 0) {
     const project = loadProject(basePath);
@@ -3029,6 +3113,7 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
           error: 'No active project found. Create or load a project before queuing background generation.',
         };
       }
+      emitBackgroundGenerationEvent(basePath, created.batch);
 
       let autoTransitioned = false;
       let currentPhase: WorkflowPhase | undefined;
@@ -3240,6 +3325,7 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
           error: 'No active project found. Create or load a project before queuing background generation.',
         };
       }
+      emitBackgroundGenerationEvent(basePath, created.batch);
 
       startBackgroundBatchRunner(basePath, created.projectId, created.batch.id, 'video');
       return {

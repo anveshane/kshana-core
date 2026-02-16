@@ -7,6 +7,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyCors from '@fastify/cors';
 import { registerRoutes, type RouteOptions } from './routes.js';
 import { resetLLMLogger } from '../core/llm/index.js';
+import { shutdownVideoTools } from '../tasks/video/index.js';
 import type { ConversationManager } from './ConversationManager.js';
 import type { WebSocketHandler } from './WebSocketHandler.js';
 
@@ -77,6 +78,7 @@ export async function createServer(
     console.log('\nShutting down...');
     wsHandler.shutdown();
     conversationManager.shutdown();
+    await shutdownVideoTools();
     await app.close();
   };
 

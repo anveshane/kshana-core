@@ -536,10 +536,10 @@ export function parameterizeLtxT2VWorkflow(
     if (nodeId === 92 && node.widgets_values) {
       node.widgets_values[0] = params.prompt;
       node.widgets_values[1] = params.frameCount || 121;
-      node.widgets_values[2] = params.width || 640;
-      node.widgets_values[3] = params.height || 640;
+      node.widgets_values[2] = params.width || 1280;
+      node.widgets_values[3] = params.height || 720;
       node.widgets_values[4] = seed;
-      console.log(`[LtxT2V] Set subgraph (node 92): prompt="${(params.prompt || '').substring(0, 50)}...", frames=${params.frameCount || 121}, ${params.width || 640}x${params.height || 640}, seed=${seed}`);
+      console.log(`[LtxT2V] Set subgraph (node 92): prompt="${(params.prompt || '').substring(0, 50)}...", frames=${params.frameCount || 121}, ${params.width || 1280}x${params.height || 720}, seed=${seed}`);
     }
     // SaveVideo node
     else if (nodeType === 'SaveVideo' && node.widgets_values) {
@@ -740,8 +740,8 @@ export function parameterizeWorkflowByName(
       negativePrompt: params.negativePrompt,
       seed: params.seed,
       filenamePrefix,
-      width: params.aspectRatio === '16:9' ? 1280 : params.aspectRatio === '9:16' ? 720 : 640,
-      height: params.aspectRatio === '16:9' ? 720 : params.aspectRatio === '9:16' ? 1280 : 640,
+      width: params.aspectRatio === '16:9' ? 1280 : params.aspectRatio === '9:16' ? 720 : 1280,
+      height: params.aspectRatio === '16:9' ? 720 : params.aspectRatio === '9:16' ? 1280 : 720,
       frameCount: (params as { frameCount?: number }).frameCount,
     });
   } else if (workflowName === 'ltx_i2v') {

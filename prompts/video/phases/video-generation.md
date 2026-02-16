@@ -5,9 +5,11 @@ Generate AI videos for each placement identified in the previous phase.
 **SIMPLE WORKFLOW:**
 1. Call `generate_all_videos` in background mode (default)
 2. It returns immediately with `status: "queued"` and `batch_id`
-3. Monitor status with `read_background_generation`
-4. Complete `video_generation` only when all placements in the active batch succeed
-5. If any placements fail, retry failed-only using `retry_failed_batch_id`
+3. The user should immediately see that video generation is running in background
+4. The user will receive a completion/failure notification when the batch reaches terminal state
+5. Monitor status with `read_background_generation`
+6. Complete `video_generation` only when all placements in the active batch succeed
+7. If any placements fail, retry failed-only using `retry_failed_batch_id`
 
 **NEVER:**
 - Manually parse the video-placements.md file
@@ -37,6 +39,7 @@ The tool will:
 - Generate videos sequentially in background
 
 **Do NOT transition immediately after queueing.**
+**Do NOT claim all images/videos are fully generated just because queueing succeeded.**
 
 **STEP 2: Monitor progress**
 
@@ -92,8 +95,10 @@ update_project(
 
 **IMPORTANT:**
 - **Use `generate_all_videos` with background mode**
+- **Expect user-facing background status + completion/failure notifications**
 - **Use `read_background_generation` for status**
 - **Retry with `retry_failed_batch_id` instead of full reruns**
 - **Complete video_generation only when all placements succeed**
+- **Do not claim full media completion while any background batch is queued/running/failed**
 - Generated videos are automatically stored in `agent/video-placements/` directory
 - Videos are automatically registered in the manifest

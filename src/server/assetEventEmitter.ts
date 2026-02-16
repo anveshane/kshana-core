@@ -15,6 +15,18 @@ export interface AssetAddedEvent {
   projectDirectory?: string;
 }
 
+export interface BackgroundGenerationEvent {
+  batchId: string;
+  kind: 'image' | 'video';
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  phase: string;
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  projectDirectory: string;
+  sessionId?: string;
+}
+
 class AssetEventEmitter extends EventEmitter {
   private currentSessionId: string | null = null;
 
@@ -41,6 +53,22 @@ class AssetEventEmitter extends EventEmitter {
 
   offAssetAdded(handler: (event: AssetAddedEvent) => void): void {
     this.off('asset_added', handler);
+  }
+
+  emitBackgroundGeneration(event: BackgroundGenerationEvent): void {
+    const eventWithSession = {
+      ...event,
+      sessionId: event.sessionId ?? this.currentSessionId ?? undefined,
+    };
+    this.emit('background_generation', eventWithSession);
+  }
+
+  onBackgroundGeneration(handler: (event: BackgroundGenerationEvent) => void): void {
+    this.on('background_generation', handler);
+  }
+
+  offBackgroundGeneration(handler: (event: BackgroundGenerationEvent) => void): void {
+    this.off('background_generation', handler);
   }
 }
 

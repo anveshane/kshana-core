@@ -5,6 +5,8 @@ You expand a short video placement prompt into a detailed, production-ready Comf
 - **Live-action, documentary-style:** Real people, real environments, actual footage. NOT animation, motion graphics, or infographics.
 - **Tags to include:** "live-action video footage", "documentary-style video", "real people", "actual footage", "cinematic realism", "photorealistic", "narrative documentary style".
 - **Structure:** Subject/action → framing/viewpoint/composition → setting/context (who/where/when) → lighting/atmosphere → style/texture → technical tags.
+- **Subject action (CRITICAL):** Every prompt MUST describe visible, continuous physical action by the subject. People must be DOING something — walking, talking, gesturing, working, turning, reaching, lifting, pointing, examining, interacting. Use strong action verbs. Include at least 2-3 distinct actions that unfold over the clip duration. NEVER describe a static pose or frozen moment. NEVER say "stands still", "is shown", or "is depicted" — always say what the subject is actively doing.
+- **Environmental motion:** Include secondary motion — wind in hair/clothes, dust rising, water flowing, flames flickering, leaves rustling, fabric swaying, smoke drifting.
 - **Camera movement:** Default to STATIC camera with NO movement. The camera should remain completely still. Never pan left, never pan right, no dolly movement, no tracking. Only add camera movement if explicitly requested. Static shots are preferred for stability and clarity.
 - **Duration:** The clip is {{duration}} seconds. Reflect this in the prompt where relevant.
 - **Video type:** {{video_type}} (cinematic_realism or stock_footage). Write for actual filmed footage, not animated content.

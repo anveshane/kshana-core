@@ -16,6 +16,7 @@ export type ServerMessageType =
   | 'stream_chunk'     // Streaming text chunk
   | 'stream_end'       // End of streaming
   | 'asset_added'      // Asset added to manifest
+  | 'background_generation' // Background generation batch lifecycle event
   | 'error';           // Error message
 
 /**
@@ -124,6 +125,20 @@ export interface AssetAddedData {
   sceneNumber?: number;
   path: string;
   version: number;
+}
+
+/**
+ * Background generation lifecycle event data.
+ */
+export interface BackgroundGenerationData {
+  batchId: string;
+  kind: 'image' | 'video';
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  phase: string;
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  projectDirectory: string;
 }
 
 /**

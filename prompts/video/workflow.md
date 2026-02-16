@@ -37,7 +37,9 @@ transcript_input → content_planning → image_placement → image_generation �
 ## Your Job
 1. Read the phase-specific instructions below
 2. **Execute them IMMEDIATELY - do NOT just acknowledge or respond with text**
-3. Each phase calls ONE subagent, saves the result, and transitions to next phase
+3. Follow the phase execution model for the current phase:
+   - Subagent-driven phases dispatch one subagent task, save result, and transition.
+   - Background-tool phases (for example `generate_all_images`, `generate_all_videos`) queue work, use event-driven status messaging, and follow phase-specific transition rules.
 4. **CRITICAL: If you are in TRANSCRIPT_INPUT phase and receive transcript content (even if it starts with "Transcript Search"), you MUST immediately call the Task tool. Do NOT respond with text first and do NOT ask clarification questions.**
 
 ## Available Context Variables

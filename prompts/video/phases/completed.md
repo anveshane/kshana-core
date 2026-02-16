@@ -2,7 +2,30 @@
 
 **CRITICAL: STOP IMMEDIATELY. DO NOT PERFORM ANY ADDITIONAL OPERATIONS.**
 
-The video generation workflow has completed successfully.
+The workflow has reached the `completed` phase. Your summary MUST match background generation state.
+
+## Messaging Guard (Required)
+
+Before final wording, check background generation state:
+
+```
+read_background_generation()
+```
+
+Then use exactly one outcome:
+
+1. If any batches are `queued` or `running`:
+- Report workflow progressed to completed.
+- Explicitly say generation is still running in background.
+- Do NOT claim all media generated successfully.
+
+2. If no active batches but any batch is `failed`:
+- Report workflow progressed with generation failures.
+- Include failed counts and recommend retry via `retry_failed_batch_id`.
+- Do NOT claim all media generated successfully.
+
+3. Only if no active and no failed batches:
+- You may say all videos/images generated successfully.
 
 **DO NOT:**
 - Generate any more images
@@ -19,7 +42,7 @@ The video generation workflow has completed successfully.
 - Present a brief summary to the user:
   - Videos generated: [count from project state]
   - Images generated: [count from project state]
-  - Status: Complete
+  - Status: Complete / Background running / Complete with failures (based on batch state)
 - Then STOP and exit
 
 **The workflow is DONE. No further action is needed or allowed.**

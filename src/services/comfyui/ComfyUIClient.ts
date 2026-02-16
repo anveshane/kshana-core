@@ -198,11 +198,13 @@ export class ComfyUIClient {
 
   /**
    * Wait for workflow completion using HTTP polling.
+   * Supports an optional AbortSignal to cancel polling (e.g. on server shutdown).
    */
   async waitForCompletion(
     promptId: string,
     progressCallback?: ProgressCallback,
-    pollInterval: number = 10
+    pollInterval: number = 10,
+    abortSignal?: AbortSignal
   ): Promise<CompletionResult> {
     const startTime = Date.now();
 
@@ -212,6 +214,11 @@ export class ComfyUIClient {
     }
 
     while (true) {
+      // Check if we've been asked to abort
+      if (abortSignal?.aborted) {
+        throw new Error(`Polling aborted for workflow ${promptId}: ${abortSignal.reason || 'shutdown'}`);
+      }
+
       const elapsed = (Date.now() - startTime) / 1000;
 
       // Emit progress update during polling
@@ -257,7 +264,8 @@ export class ComfyUIClient {
         console.warn(`Failed to poll history: ${e}`);
       }
 
-      await this.sleep(pollInterval * 1000);
+      // Use abort-aware sleep so we wake up quickly on shutdown
+      await this.abortableSleep(pollInterval * 1000, abortSignal);
     }
   }
 
@@ -480,6 +488,66 @@ export class ComfyUIClient {
 
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Sleep that resolves early if the abort signal fires.
+   */
+  private abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (!signal) return this.sleep(ms);
+    if (signal.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  /**
+   * Interrupt the currently executing ComfyUI job.
+   * Sends POST /interrupt to make ComfyUI stop the in-progress generation.
+   */
+  static async interruptCurrentJob(baseUrl?: string): Promise<void> {
+    const url = baseUrl || process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      await fetch(`${url}/interrupt`, {
+        method: 'POST',
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      console.log('[ComfyUIClient] Sent interrupt to ComfyUI');
+    } catch (e) {
+      console.warn(`[ComfyUIClient] Failed to interrupt ComfyUI: ${e}`);
+    }
+  }
+
+  /**
+   * Clear the ComfyUI queue (both pending and running items).
+   */
+  static async clearQueue(baseUrl?: string): Promise<void> {
+    const url = baseUrl || process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      await fetch(`${url}/queue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clear: true }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      console.log('[ComfyUIClient] Cleared ComfyUI queue');
+    } catch (e) {
+      console.warn(`[ComfyUIClient] Failed to clear ComfyUI queue: ${e}`);
+    }
   }
 
   /**
