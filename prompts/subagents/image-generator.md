@@ -116,6 +116,7 @@ documentary illustration style, informative, clear composition,
 - **Clarity over artistry** - Educational value is more important than artistic flair
 - **No character consistency** - Each image is standalone
 - **Documentary aesthetic** - Photorealistic, clear, informative style
+- **Metadata-first constraints** - When context includes time period / geography / anachronisms to avoid, enforce those constraints strictly in the final prompt.
 
 ### Negative Prompts
 

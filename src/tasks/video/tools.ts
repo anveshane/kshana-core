@@ -51,7 +51,21 @@ import { validatePlacementSets } from './workflow/PlacementValidator.js';
 import { getTranscriptSegmentForTimeRange } from './workflow/transcriptSegment.js';
 import { expandImagePlacementPrompt, expandVideoPlacementPrompt } from './workflow/placementPromptExpander.js';
 import { expandInfographicPlacementPrompt } from './workflow/infographicPromptExpander.js';
+import {
+  deriveVideoMetadata,
+  formatVideoMetadataMarkdown,
+  normalizeVideoMetadata,
+  parseVideoMetadataJson,
+  parseVideoMetadataMarkdown,
+  type VideoMetadata,
+} from './workflow/videoMetadataParser.js';
+import {
+  applyPromptContextGuard,
+  appendMetadataConstraintsToNegativePrompt,
+} from './workflow/promptContextGuard.js';
 import { loadRemotionSkillsForInfographicType } from '../../core/prompts/loader.js';
+import { buildVideoMetadataPrompt } from '../../core/prompts/index.js';
+import { getLLMConfig, LLMClient, validateLLMConfig } from '../../core/llm/index.js';
 import { assetEventEmitter } from '../../server/assetEventEmitter.js';
 import type { ComponentCode } from './remotionAgent.js';
 
@@ -137,6 +151,8 @@ export interface ImageGenerationParams {
 const AUTO_GAP_PREFIX = 'AUTO GAP:';
 const GAP_MIN_SECONDS = 1;
 const GAP_ADJACENT_EPSILON = 0.01;
+const VIDEO_METADATA_JSON_PATH = 'agent/metadata/video-context.json';
+const VIDEO_METADATA_MARKDOWN_PATH = 'agent/metadata/video-context.md';
 
 function timeStringToSeconds(timeStr: string): number {
   const parts = timeStr.split(':');
@@ -2361,6 +2377,121 @@ function getRetryItemsForBatch(
   };
 }
 
+/**
+ * Extract video metadata using LLM for rich, context-aware extraction.
+ * Returns null if LLM is not configured or fails.
+ */
+async function deriveVideoMetadataWithLLM(
+  transcriptContent: string,
+  contentPlanRaw: string | null,
+  logPrefix: string,
+): Promise<VideoMetadata | null> {
+  const validation = validateLLMConfig();
+  if (!validation.valid) {
+    console.log(`${logPrefix} LLM not configured for metadata extraction; using regex fallback.`);
+    return null;
+  }
+
+  try {
+    // Build context from transcript and content plan
+    const contextParts: string[] = [];
+    if (transcriptContent.trim()) {
+      contextParts.push(`## Transcript\n\n${transcriptContent.trim()}`);
+    }
+    if (contentPlanRaw && contentPlanRaw.trim()) {
+      contextParts.push(`## Content Plan\n\n${contentPlanRaw.trim()}`);
+    }
+    if (contextParts.length === 0) return null;
+
+    const systemPrompt = buildVideoMetadataPrompt(contextParts.join('\n\n'));
+
+    const config = getLLMConfig();
+    const client = new LLMClient(config);
+    const response = await client.generate({
+      messages: [
+        { role: 'system', content: systemPrompt },
+        {
+          role: 'user',
+          content:
+            'Analyze the transcript and content plan above. Extract comprehensive video metadata as JSON. Output valid JSON only, no commentary.',
+        },
+      ],
+      temperature: 0.15,
+      maxTokens: 2000,
+    });
+
+    const raw = (response.content ?? '').trim();
+    if (!raw) {
+      console.warn(`${logPrefix} LLM returned empty metadata response.`);
+      return null;
+    }
+
+    // Extract JSON from response (may be wrapped in code fences)
+    const jsonMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/) || [null, raw];
+    const jsonStr = (jsonMatch[1] ?? raw).trim();
+
+    const parsed = JSON.parse(jsonStr) as Partial<VideoMetadata>;
+    if (!parsed || typeof parsed !== 'object') {
+      console.warn(`${logPrefix} LLM metadata response was not a valid object.`);
+      return null;
+    }
+
+    console.log(`${logPrefix} Successfully extracted video metadata via LLM.`);
+    return normalizeVideoMetadata(parsed);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.warn(
+      `${logPrefix} LLM metadata extraction failed; falling back to regex. Error: ${msg}`,
+    );
+    return null;
+  }
+}
+
+async function loadOrCreateVideoMetadata(
+  transcriptContent: string | null,
+  contentPlanRaw: string | null,
+  logPrefix: string,
+): Promise<VideoMetadata | null> {
+  const existingJson = parseVideoMetadataJson(readProjectFile(VIDEO_METADATA_JSON_PATH));
+  if (existingJson) {
+    return existingJson;
+  }
+
+  const existingMarkdown = parseVideoMetadataMarkdown(readProjectFile(VIDEO_METADATA_MARKDOWN_PATH));
+  if (existingMarkdown) {
+    const serializedJson = `${JSON.stringify(existingMarkdown, null, 2)}\n`;
+    writeProjectFile(VIDEO_METADATA_JSON_PATH, serializedJson);
+    return existingMarkdown;
+  }
+
+  // Try AI-based extraction first for richer metadata
+  if (transcriptContent && transcriptContent.trim()) {
+    const llmDerived = await deriveVideoMetadataWithLLM(
+      transcriptContent,
+      contentPlanRaw,
+      logPrefix,
+    );
+    if (llmDerived) {
+      writeProjectFile(VIDEO_METADATA_JSON_PATH, `${JSON.stringify(llmDerived, null, 2)}\n`);
+      writeProjectFile(VIDEO_METADATA_MARKDOWN_PATH, formatVideoMetadataMarkdown(llmDerived));
+      console.log(`${logPrefix} Saved LLM-derived video metadata to ${VIDEO_METADATA_JSON_PATH}`);
+      return llmDerived;
+    }
+  }
+
+  // Fallback to regex-based extraction
+  const derived = deriveVideoMetadata({
+    transcriptContent,
+    contentPlan: contentPlanRaw,
+  });
+  if (!derived) return null;
+
+  writeProjectFile(VIDEO_METADATA_JSON_PATH, `${JSON.stringify(derived, null, 2)}\n`);
+  writeProjectFile(VIDEO_METADATA_MARKDOWN_PATH, formatVideoMetadataMarkdown(derived));
+  console.log(`${logPrefix} Saved regex-derived video metadata to ${VIDEO_METADATA_JSON_PATH}`);
+  return derived;
+}
+
 async function prepareImagePlacementsForGeneration(
   placements: ParsedImagePlacement[],
   options: {
@@ -2371,27 +2502,31 @@ async function prepareImagePlacementsForGeneration(
 ): Promise<PreparedImageGenerationPlacement[]> {
   const defaultNegativePrompt = 'blurry, low quality, text, watermark';
   const transcriptContent = readProjectFile('agent/content/transcript.md');
-  let contentPlanSnippet: string | undefined;
   const contentPlanRaw = readProjectFile('agent/plans/content-plan.md');
-  if (contentPlanRaw && contentPlanRaw.trim()) {
-    contentPlanSnippet = contentPlanRaw.trim().slice(0, 1500);
-  }
+  const contentPlanSnippet =
+    contentPlanRaw && contentPlanRaw.trim() ? contentPlanRaw.trim().slice(0, 1500) : undefined;
+  const videoMetadata = await loadOrCreateVideoMetadata(
+    transcriptContent,
+    contentPlanRaw,
+    options.logPrefix,
+  );
 
   const prepared: PreparedImageGenerationPlacement[] = [];
 
   for (const placement of placements) {
     let prompt = placement.prompt;
-    let negativePrompt = defaultNegativePrompt;
+    const transcriptSegment = getTranscriptSegmentForTimeRange(
+      transcriptContent,
+      placement.startTime,
+      placement.endTime,
+    );
+    let negativePrompt = appendMetadataConstraintsToNegativePrompt(defaultNegativePrompt, videoMetadata);
 
     if (options.expandPrompts) {
-      const transcriptSegment = getTranscriptSegmentForTimeRange(
-        transcriptContent,
-        placement.startTime,
-        placement.endTime,
-      );
       const expanded = await expandImagePlacementPrompt(placement, {
         transcriptSegment,
         contentPlan: contentPlanSnippet,
+        videoMetadata,
       });
       if (expanded && 'error' in expanded) {
         console.warn(
@@ -2400,7 +2535,12 @@ async function prepareImagePlacementsForGeneration(
         );
       } else if (expanded && 'prompt' in expanded) {
         prompt = expanded.prompt;
-        if (expanded.negativePrompt) negativePrompt = expanded.negativePrompt;
+        if (expanded.negativePrompt) {
+          negativePrompt = appendMetadataConstraintsToNegativePrompt(
+            expanded.negativePrompt,
+            videoMetadata,
+          );
+        }
         console.log(`${options.logPrefix} Placement ${placement.placementNumber}: using expanded prompt`);
         if (options.logExpandedPrompts) {
           console.log(
@@ -2430,6 +2570,20 @@ async function prepareImagePlacementsForGeneration(
       }
     }
 
+    const guardResult = applyPromptContextGuard({
+      prompt,
+      mediaType: 'image',
+      metadata: videoMetadata,
+      placementPrompt: placement.prompt,
+      transcriptSegment,
+    });
+    prompt = guardResult.prompt;
+    if (guardResult.reason) {
+      console.warn(
+        `${options.logPrefix} Placement ${placement.placementNumber}: image prompt guard applied (${guardResult.reason})`,
+      );
+    }
+
     prepared.push({
       placementNumber: placement.placementNumber,
       startTime: placement.startTime,
@@ -2450,24 +2604,28 @@ async function prepareVideoPlacementsForGeneration(
   },
 ): Promise<PreparedVideoGenerationPlacement[]> {
   const transcriptContent = readProjectFile('agent/content/transcript.md');
-  let contentPlanSnippet: string | undefined;
   const contentPlanRaw = readProjectFile('agent/plans/content-plan.md');
-  if (contentPlanRaw && contentPlanRaw.trim()) {
-    contentPlanSnippet = contentPlanRaw.trim().slice(0, 1500);
-  }
+  const contentPlanSnippet =
+    contentPlanRaw && contentPlanRaw.trim() ? contentPlanRaw.trim().slice(0, 1500) : undefined;
+  const videoMetadata = await loadOrCreateVideoMetadata(
+    transcriptContent,
+    contentPlanRaw,
+    options.logPrefix,
+  );
 
   const prepared: PreparedVideoGenerationPlacement[] = [];
   for (const placement of placements) {
     let prompt = placement.prompt;
+    const transcriptSegment = getTranscriptSegmentForTimeRange(
+      transcriptContent,
+      placement.startTime,
+      placement.endTime,
+    );
     if (options.expandPrompts) {
-      const transcriptSegment = getTranscriptSegmentForTimeRange(
-        transcriptContent,
-        placement.startTime,
-        placement.endTime,
-      );
       const expanded = await expandVideoPlacementPrompt(placement, {
         transcriptSegment,
         contentPlan: contentPlanSnippet,
+        videoMetadata,
       });
       if (expanded) {
         prompt = expanded;
@@ -2477,6 +2635,20 @@ async function prepareVideoPlacementsForGeneration(
           `${options.logPrefix} Placement ${placement.placementNumber}: prompt expansion unavailable; continuing with original placement prompt`,
         );
       }
+    }
+
+    const guardResult = applyPromptContextGuard({
+      prompt,
+      mediaType: 'video',
+      metadata: videoMetadata,
+      placementPrompt: placement.prompt,
+      transcriptSegment,
+    });
+    prompt = guardResult.prompt;
+    if (guardResult.reason) {
+      console.warn(
+        `${options.logPrefix} Placement ${placement.placementNumber}: video prompt guard applied (${guardResult.reason})`,
+      );
     }
 
     prepared.push({

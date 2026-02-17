@@ -9,17 +9,20 @@ import { validateLLMConfig } from '../../../core/llm/index.js';
 import { loadAndRenderMarkdown } from '../../../core/prompts/loader.js';
 import type { ParsedImagePlacement } from './imagePlacementsParser.js';
 import type { ParsedVideoPlacement } from './videoPlacementsParser.js';
+import type { VideoMetadata } from './videoMetadataParser.js';
 
 const NEGATIVE_MARKER = '---NEGATIVE---';
 
 export interface ExpandImageContext {
   transcriptSegment: string;
   contentPlan?: string;
+  videoMetadata?: VideoMetadata | null;
 }
 
 export interface ExpandVideoContext {
   transcriptSegment: string;
   contentPlan?: string;
+  videoMetadata?: VideoMetadata | null;
 }
 
 export interface ExpandImageResult {
@@ -61,6 +64,18 @@ export async function expandImagePlacementPrompt(
       end_time: placement.endTime,
       transcript_segment: ctx.transcriptSegment || '(none)',
       content_plan: contentPlan ?? '',
+      video_metadata_available: Boolean(ctx.videoMetadata),
+      video_subject_matter: ctx.videoMetadata?.subjectMatter ?? '',
+      video_content_category: ctx.videoMetadata?.contentCategory ?? '',
+      video_tone_and_mood: ctx.videoMetadata?.toneAndMood ?? '',
+      video_key_topics: (ctx.videoMetadata?.keyTopics ?? []).join(', '),
+      video_key_entities: (ctx.videoMetadata?.keyEntities ?? []).join(', '),
+      video_transcript_summary: ctx.videoMetadata?.transcriptSummary ?? '',
+      video_time_period: ctx.videoMetadata?.timePeriod ?? '',
+      video_geographic_context: ctx.videoMetadata?.geographicContext ?? '',
+      video_visual_style: ctx.videoMetadata?.visualStyle ?? '',
+      video_anachronisms_to_avoid: (ctx.videoMetadata?.anachronismsToAvoid ?? []).join(', '),
+      video_visual_consistency: (ctx.videoMetadata?.visualConsistencyRequirements ?? []).join('; '),
     });
 
   const parseExpandedImageResponse = (raw: string): ExpandImageResult | null => {
@@ -140,6 +155,18 @@ export async function expandVideoPlacementPrompt(
     video_type: placement.videoType,
     transcript_segment: ctx.transcriptSegment || '(none)',
     content_plan: ctx.contentPlan ?? '',
+    video_metadata_available: Boolean(ctx.videoMetadata),
+    video_subject_matter: ctx.videoMetadata?.subjectMatter ?? '',
+    video_content_category: ctx.videoMetadata?.contentCategory ?? '',
+    video_tone_and_mood: ctx.videoMetadata?.toneAndMood ?? '',
+    video_key_topics: (ctx.videoMetadata?.keyTopics ?? []).join(', '),
+    video_key_entities: (ctx.videoMetadata?.keyEntities ?? []).join(', '),
+    video_transcript_summary: ctx.videoMetadata?.transcriptSummary ?? '',
+    video_time_period: ctx.videoMetadata?.timePeriod ?? '',
+    video_geographic_context: ctx.videoMetadata?.geographicContext ?? '',
+    video_visual_style: ctx.videoMetadata?.visualStyle ?? '',
+    video_anachronisms_to_avoid: (ctx.videoMetadata?.anachronismsToAvoid ?? []).join(', '),
+    video_visual_consistency: (ctx.videoMetadata?.visualConsistencyRequirements ?? []).join('; '),
   });
 
   try {

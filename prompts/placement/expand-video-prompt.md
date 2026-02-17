@@ -23,6 +23,20 @@ You expand a short video placement prompt into a detailed, production-ready Comf
 {{#if content_plan}}
 - **Content plan (excerpt):** {{content_plan}}
 {{/if}}
+{{#if video_metadata_available}}
+- **Video context metadata:**
+  - Subject matter: {{video_subject_matter}}
+  - Content category: {{video_content_category}}
+  - Tone and mood: {{video_tone_and_mood}}
+  - Key topics: {{video_key_topics}}
+  - Key entities: {{video_key_entities}}
+  - Transcript summary: {{video_transcript_summary}}
+  - Time period: {{video_time_period}}
+  - Geographic/Cultural context: {{video_geographic_context}}
+  - Visual style: {{video_visual_style}}
+  - Anachronisms to avoid (strict): {{video_anachronisms_to_avoid}}
+  - Visual consistency requirements: {{video_visual_consistency}}
+{{/if}}
 
 ## Output format
 

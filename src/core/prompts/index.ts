@@ -271,6 +271,14 @@ export function buildPlacementPlannerPrompt(context?: string): string {
   return [base, sub, planner, contextSection].filter(Boolean).join('\n\n');
 }
 
+export function buildVideoMetadataPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const metadata = loadAndRenderMarkdown('subagents/video-metadata-generator.md', {});
+  return [base, sub, metadata, contextSection].filter(Boolean).join('\n\n');
+}
+
 export function buildImagePlacerPrompt(context?: string): string {
   const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
   const base = loadAndRenderMarkdown('system/base.md', {});

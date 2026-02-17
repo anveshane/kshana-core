@@ -194,6 +194,16 @@ export {
   type ValidateSinglePlacementResult,
 } from './PlacementValidator.js';
 
+export {
+  type VideoMetadata,
+  normalizeVideoMetadata,
+  parseVideoMetadataJson,
+  parseVideoMetadataMarkdown,
+  deriveVideoMetadata,
+  formatVideoMetadataMarkdown,
+  isLikelyHistoricalTimePeriod,
+} from './videoMetadataParser.js';
+
 // Combined tool getter
 import { getWorkflowFileTools } from './FileTools.js';
 import { getStitchingTools } from './StitchVideoTool.js';
