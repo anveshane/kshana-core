@@ -21,7 +21,9 @@ import {
   getCurrentPhase,
   loadProjectFilesAsContexts,
   PHASE_CONFIGS,
+  setCurrentProjectBasePath,
 } from './tasks/video/index.js';
+import { getCLIProjectBasePath } from './tasks/video/workflow/index.js';
 import { LLMClient, type LLMClientConfig } from './core/llm/index.js';
 import { runRemotionAgent } from './tasks/video/remotionAgent.js';
 import type { RunRemotionAgentCallback } from './tasks/video/tools.js';
@@ -69,6 +71,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Check for existing project on mount (video mode only)
   React.useEffect(() => {
     if (taskType === 'video' && !started) {
+      // CLI context: set the global base path before any project operations
+      // Desktop sets this via ConversationManager; the CLI must set it here.
+      setCurrentProjectBasePath(getCLIProjectBasePath());
       if (projectExists()) {
         const project = loadProject();
         setExistingProject(project);
