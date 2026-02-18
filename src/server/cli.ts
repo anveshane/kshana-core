@@ -18,8 +18,8 @@ function parseArgs(): {
   provider?: string;
 } {
   const args = process.argv.slice(2);
-  let host = '0.0.0.0';
-  let port = 8001;
+  let host = process.env['SERVER_HOST'] || '0.0.0.0';
+  let port = parseInt(process.env['SERVER_PORT'] || '8001', 10);
   let help = false;
   let provider: string | undefined;
 
@@ -38,7 +38,7 @@ function parseArgs(): {
         break;
       case '--port':
       case '-p':
-        port = parseInt(nextArg ?? '8001', 10);
+        port = parseInt(nextArg ?? String(port), 10);
         i++;
         break;
       case '--provider':
@@ -67,6 +67,8 @@ Options:
   --provider <name>     LLM provider: gemini, lmstudio, openai, openrouter, custom
 
 Environment Variables:
+  SERVER_HOST           Host to bind to (overrides default 0.0.0.0)
+  SERVER_PORT           Port to listen on (overrides default 8001)
   LLM_PROVIDER          Provider to use (current: ${currentProvider})
   See .env.example for all available configuration options.
 
