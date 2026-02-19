@@ -6,6 +6,7 @@ import type { WebSocket } from '@fastify/websocket';
 import { ConversationManager } from './ConversationManager.js';
 import { WebSocketHandler } from './WebSocketHandler.js';
 import type { LLMClientConfig } from '../core/llm/index.js';
+import { projectExists, loadProject, deleteProject } from '../tasks/video/workflow/ProjectManager.js';
 
 interface ChatRequestBody {
   task: string;
@@ -84,7 +85,7 @@ export async function registerRoutes(
       const { task } = request.body;
 
       // Create a temporary session
-      const session = conversationManager.createSession();
+      const session = await conversationManager.createSession();
 
       try {
         const result = await conversationManager.runTask(session.id, task);
@@ -167,8 +168,59 @@ export async function registerRoutes(
   app.get(
     `${apiPrefix}/ws/chat`,
     { websocket: true },
-    (socket: WebSocket, _request: FastifyRequest) => {
-      wsHandler.handleConnection(socket);
+    async (socket: WebSocket, request: FastifyRequest) => {
+      // Extract query parameters from the request URL
+      console.log('[routes] WebSocket connection request:', {
+        url: request.url,
+        query: request.query,
+        queryType: typeof request.query,
+      });
+      const query = request.query as { project_dir?: string };
+      console.log('[routes] Extracted query:', query);
+      await wsHandler.handleConnection(socket, { query });
+    }
+  );
+
+  // Project management endpoints
+  // Check if project exists and return its data
+  app.get<{ Querystring: { project_dir?: string } }>(
+    `${apiPrefix}/project`,
+    async (request: FastifyRequest<{ Querystring: { project_dir?: string } }>, reply: FastifyReply) => {
+      const { project_dir } = request.query;
+      
+      if (!project_dir) {
+        return reply.status(400).send({
+          error: 'project_dir query parameter is required',
+        });
+      }
+
+      if (!projectExists(project_dir)) {
+        return reply.send({ exists: false });
+      }
+
+      const project = loadProject(project_dir);
+      if (!project) {
+        return reply.send({ exists: false });
+      }
+
+      return reply.send({ exists: true, project });
+    }
+  );
+
+  // Delete project
+  app.delete<{ Querystring: { project_dir?: string } }>(
+    `${apiPrefix}/project`,
+    async (request: FastifyRequest<{ Querystring: { project_dir?: string } }>, reply: FastifyReply) => {
+      const { project_dir } = request.query;
+      
+      if (!project_dir) {
+        return reply.status(400).send({
+          error: 'project_dir query parameter is required',
+        });
+      }
+
+      const success = deleteProject(project_dir);
+      return reply.send({ success });
     }
   );
 

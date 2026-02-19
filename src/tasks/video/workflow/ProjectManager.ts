@@ -3,8 +3,11 @@
  * Manages the .kshana directory structure and project.json index file.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
+import { readFileSync as nodeReadFileSync, existsSync as nodeExistsSync } from 'fs';
+import { getProjectFileOps } from '../../../server/ProjectFileOps.js';
+import { CONTENT_TYPE_OUTPUT_FILES } from '../../../core/tools/builtin/generateContentTool.js';
 import { join } from 'path';
+import { assetEventEmitter } from '../../../server/assetEventEmitter.js';
 import {
   type ProjectFile,
   type PhaseInfo,
@@ -17,19 +20,30 @@ import {
   type ContentEntry,
   type ContentTypeName,
   type ContentStatus,
+  type BackgroundGenerationState,
   type ItemApprovalStatus,
   type ItemApprovalEntry,
   type PhaseConfig,
   type ProjectStyle,
   type StyleConfig,
   type InputType,
-  WorkflowPhase,
+  type ProjectIndex,
+  type SceneRoutingEntry,
+  type EntityRoutingEntry,
+  type ExecutionContext,
   PlannerStage,
+  type TranscriptEntry,
+  type ImagePlacement,
+  WorkflowPhase,
   PHASE_CONFIGS,
   STYLE_CONFIGS,
   INPUT_TYPE_CONFIGS,
   PROJECT_DIR,
+  AGENT_DIR,
+  INDEX_DIR,
   PROJECT_FILE,
+  MANIFEST_FILE,
+  PROJECT_INDEX_FILE,
   PROJECT_VERSION,
   determineNextPhase,
   getPhaseItems,
@@ -40,42 +54,256 @@ import {
   createDefaultSettingData,
   createDefaultSceneRef,
 } from './types.js';
-import { generateProjectTitle } from '../../../core/context/index.js';
+import { getPhaseConfig, getNextPhase, getStartPhase, getWorkflowPhases, isValidPhaseForWorkflow, isYouTubeWorkflow as isYouTubeWorkflowType } from './workflows/workflow-manager.js';
+import { isYouTubePhase } from './workflows/youtube-workflow.js';
+import { generateProjectTitle, contextStore } from '../../../core/context/index.js';
+import { dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+let manifestWriteLock: Promise<void> = Promise.resolve();
+
+function createDefaultBackgroundGenerationState(): BackgroundGenerationState {
+  return {
+    batches: [],
+    activeBatchIds: [],
+  };
+}
+
+async function withManifestWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = manifestWriteLock;
+  let release!: () => void;
+  manifestWriteLock = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
 
 /**
- * Get the project directory path for the current working directory.
+ * Detect the execution context (CLI or Desktop).
+ * CLI: Running in kshana-ink project directory (Node.js process)
+ * Desktop: Running in Electron renderer process (has window.electron)
  */
-export function getProjectDir(basePath: string = process.cwd()): string {
+export function getExecutionContext(): ExecutionContext {
+  // Check if we're in Electron/Desktop environment
+  // In Node.js, window is not defined, so we check for it safely
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    if (typeof (globalThis as any).window !== 'undefined') {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const win = (globalThis as any).window;
+      if (win && win.electron) {
+        return 'desktop';
+      }
+    }
+  } catch {
+    // window not available - we're in Node.js CLI context
+  }
+  // Default to CLI context (Node.js)
+  return 'cli';
+}
+
+/**
+ * Module-level storage for the current project base path.
+ * This allows tools to access the project directory without passing it through every call.
+ * Set by createWorkflowVideoAgent when the agent is initialized.
+ */
+let currentProjectBasePath: string | null = null;
+
+/**
+ * Set the current project base path.
+ * This should be called when creating a workflow video agent to ensure
+ * all subsequent tool calls use the correct project directory.
+ * 
+ * @param basePath - The base path for the current project
+ */
+export function setCurrentProjectBasePath(basePath: string): void {
+  currentProjectBasePath = basePath;
+}
+
+/**
+ * Get the current project base path.
+ * Throws if the base path was never explicitly set via setCurrentProjectBasePath().
+ * 
+ * @returns The current project base path
+ * @throws Error if the base path was never set
+ */
+export function getCurrentProjectBasePath(): string {
+  if (currentProjectBasePath === null) {
+    throw new Error(
+      '[ProjectManager] currentProjectBasePath was never set. ' +
+      'Ensure setCurrentProjectBasePath() is called before any file operations. ' +
+      'This usually means the server was started without taskType: "video" or no project_dir was provided via WebSocket.'
+    );
+  }
+  return currentProjectBasePath;
+}
+
+/**
+ * Get the CLI's own project base path (where kshana-ink is installed).
+ * This is used when CLI manages its own .kshana/agent/* workspace.
+ */
+export function getCLIProjectBasePath(): string {
+  // Try to find the kshana-ink project root by looking for package.json
+  let currentPath = process.cwd();
+  const maxDepth = 10;
+  let depth = 0;
+
+  while (depth < maxDepth) {
+    const packageJsonPath = join(currentPath, 'package.json');
+    if (nodeExistsSync(packageJsonPath)) {
+      try {
+        const packageJson = JSON.parse(nodeReadFileSync(packageJsonPath, 'utf-8') as string);
+        if (packageJson.name === 'kshana-ink') {
+          return currentPath;
+        }
+      } catch {
+        // Continue searching
+      }
+    }
+
+    const parentPath = join(currentPath, '..');
+    if (parentPath === currentPath) {
+      break; // Reached filesystem root
+    }
+    currentPath = parentPath;
+    depth++;
+  }
+
+  // Fallback to current working directory
+  return process.cwd();
+}
+
+/**
+ * Get the project directory path (root .kshana directory).
+ * 
+ * Execution Context:
+ * - CLI: Uses basePath (defaults to CLI's own project directory)
+ * - Desktop: Uses basePath (user-selected project workspace)
+ * 
+ * @param basePath - Base path for the project. In CLI context, defaults to CLI's own directory.
+ *                   In Desktop context, should be the user's project workspace.
+ */
+export function getProjectDir(basePath: string = getCurrentProjectBasePath()): string {
   return join(basePath, PROJECT_DIR);
 }
 
 /**
- * Get the project file path.
+ * Get the agent directory path (.kshana/agent).
+ * 
+ * Execution Context:
+ * - CLI: Returns agent directory in CLI's own project (for CLI's agent workspace)
+ * - Desktop: Returns agent directory in user project workspace (for user's agent files)
+ * 
+ * @param basePath - Base path for the project. In CLI context, defaults to CLI's own directory.
+ *                   In Desktop context, should be the user's project workspace.
  */
-export function getProjectFilePath(basePath: string = process.cwd()): string {
-  return join(getProjectDir(basePath), PROJECT_FILE);
+export function getAgentDir(basePath: string = getCurrentProjectBasePath()): string {
+  return join(getProjectDir(basePath), AGENT_DIR);
+}
+
+/**
+ * Get the CLI's own agent directory path.
+ * This is used when CLI manages its own .kshana/agent/* workspace.
+ * 
+ * CLI Context Only: Returns agent directory in kshana-ink project directory.
+ */
+export function getCLIAgentDir(): string {
+  return getAgentDir(getCLIProjectBasePath());
+}
+
+/**
+ * Get the agent directory path for a user project workspace.
+ * This is used by Desktop to access agent files in user project space.
+ * 
+ * Desktop Context: Returns agent directory in user's project workspace.
+ * 
+ * @param userProjectPath - Path to the user's project workspace
+ */
+export function getUserProjectAgentDir(userProjectPath: string): string {
+  return getAgentDir(userProjectPath);
+}
+
+/**
+ * Get the index directory path (.kshana/index).
+ * 
+ * Execution Context:
+ * - CLI: Returns index directory in CLI's own project
+ * - Desktop: Returns index directory in user project workspace
+ * 
+ * @param basePath - Base path for the project
+ */
+export function getIndexDir(basePath: string = getCurrentProjectBasePath()): string {
+  return join(getProjectDir(basePath), INDEX_DIR);
+}
+
+/**
+ * Get the project file path (.kshana/agent/project.json).
+ * 
+ * Execution Context:
+ * - CLI: Returns project.json in CLI's own agent directory
+ * - Desktop: Returns project.json in user project's agent directory
+ * 
+ * @param basePath - Base path for the project
+ */
+export function getProjectFilePath(basePath: string = getCurrentProjectBasePath()): string {
+  return join(getAgentDir(basePath), PROJECT_FILE);
+}
+
+/**
+ * Get the manifest file path (.kshana/agent/manifest.json).
+ * 
+ * Execution Context:
+ * - CLI: Returns manifest.json in CLI's own agent directory
+ * - Desktop: Returns manifest.json in user project's agent directory
+ * 
+ * @param basePath - Base path for the project
+ */
+export function getManifestFilePath(basePath: string = getCurrentProjectBasePath()): string {
+  return join(getAgentDir(basePath), MANIFEST_FILE);
+}
+
+/**
+ * Get the consolidated project index file path (.kshana/context/index.json).
+ * 
+ * This uses the new consolidated indexing architecture where the index is stored
+ * in the context directory. The project_id is stored inside index.json, not in the folder structure.
+ * 
+ * Execution Context:
+ * - CLI: Returns index.json in CLI's context directory
+ * - Desktop: Returns index.json in user project's context directory
+ * 
+ * @param basePath - Base path for the project
+ */
+export function getProjectIndexPath(basePath: string = getCurrentProjectBasePath()): string {
+  // Use consolidated index location: context/index.json (project_id is inside the file)
+  return join(getProjectDir(basePath), 'context', 'index.json');
 }
 
 /**
  * Check if a project exists in the current directory.
  */
-export function projectExists(basePath: string = process.cwd()): boolean {
-  return existsSync(getProjectFilePath(basePath));
+export function projectExists(basePath: string = getCurrentProjectBasePath()): boolean {
+  return getProjectFileOps().existsSync(getProjectFilePath(basePath));
 }
 
 /**
  * Delete an existing project and all its files.
  * Use with caution - this permanently removes all project data.
  */
-export function deleteProject(basePath: string = process.cwd()): boolean {
+export function deleteProject(basePath: string = getCurrentProjectBasePath()): boolean {
   const projectDir = getProjectDir(basePath);
 
-  if (!existsSync(projectDir)) {
+  if (!getProjectFileOps().existsSync(projectDir)) {
     return false;
   }
 
   try {
-    rmSync(projectDir, { recursive: true, force: true });
+    getProjectFileOps().rmSync(projectDir, { recursive: true, force: true });
     return true;
   } catch {
     return false;
@@ -86,29 +314,40 @@ export function deleteProject(basePath: string = process.cwd()): boolean {
  * Create the initial project directory structure.
  * Only creates directories - plan files are created on first write.
  */
-export function createProjectStructure(basePath: string = process.cwd()): void {
+export function createProjectStructure(basePath: string = getCurrentProjectBasePath()): void {
   const projectDir = getProjectDir(basePath);
+  const agentDir = getAgentDir(basePath);
 
-  // Create main directories only - no empty files
+  // Create main directories
   const dirs = [
     projectDir,
-    join(projectDir, 'plans'),
-    join(projectDir, 'characters'),
-    join(projectDir, 'settings'),
-    join(projectDir, 'assets'),
+    agentDir,
+    join(agentDir, 'plans'),
+    join(agentDir, 'content'),
+    join(agentDir, 'script'), // Unified directory for plot, story, and narration
+    join(agentDir, 'characters'),
+    join(agentDir, 'settings'),
+    join(agentDir, 'scenes'),
+    join(projectDir, 'context'), // Context directory (index will be in context/index.json)
+    // Note: ui/ folder is only created by desktop app, not CLI
+    // Note: index/ folder is deprecated - using context/index.json instead
   ];
 
   for (const dir of dirs) {
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+    if (!getProjectFileOps().existsSync(dir)) {
+      getProjectFileOps().mkdirSync(dir, { recursive: true });
     }
   }
 
-  // Create empty assets manifest (needed for asset tracking)
-  const manifestPath = join(projectDir, 'assets', 'manifest.json');
-  if (!existsSync(manifestPath)) {
-    writeFileSync(manifestPath, JSON.stringify({ assets: [] }, null, 2), 'utf-8');
+  // Create empty manifest in agent/ directory
+  const manifestPath = getManifestFilePath(basePath);
+  if (!getProjectFileOps().existsSync(manifestPath)) {
+    getProjectFileOps().writeFileSync(manifestPath, JSON.stringify({ schema_version: '1', assets: [] }, null, 2), 'utf-8');
   }
+
+  // Initialize empty project index (will be populated on first project save)
+  const indexPath = getProjectIndexPath(basePath);
+  // Index will be generated automatically when project is created/saved
 
   // NOTE: Plan files (plot.md, story.md, etc.) are created on first write
   // via writeProjectFile(), not here. This avoids empty files cluttering the project.
@@ -119,13 +358,13 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
  */
 export function createDefaultContentRegistry(): ContentRegistry {
   return {
-    plot: { status: 'missing', file: 'plans/plot.md' },
-    story: { status: 'missing', file: 'plans/story.md' },
-    characters: { status: 'missing', file: 'plans/characters.md', items: [], itemFiles: {} },
-    settings: { status: 'missing', file: 'plans/settings.md', items: [], itemFiles: {} },
-    scenes: { status: 'missing', file: 'plans/scenes.md', items: [] },
-    images: { status: 'missing', file: 'plans/images.md', items: [] },
-    videos: { status: 'missing', file: 'plans/video.md', items: [] },
+    plot: { status: 'missing', file: 'agent/script/plot.md' },
+    story: { status: 'missing', file: 'agent/script/story.md' },
+    characters: { status: 'missing', file: 'agent/plans/characters.md', items: [], itemFiles: {} },
+    settings: { status: 'missing', file: 'agent/plans/settings.md', items: [], itemFiles: {} },
+    scenes: { status: 'missing', file: 'agent/plans/scenes.md', items: [] },
+    images: { status: 'missing', file: 'agent/plans/images.md', items: [] },
+    videos: { status: 'missing', file: 'agent/plans/video.md', items: [] },
   };
 }
 
@@ -144,6 +383,75 @@ function stripWrapperTags(content: string): string {
     .trim();
 }
 
+export function looksLikeSrt(input: string): boolean {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+  
+  // Check for proper SRT format (numbered entries with "00:00:00,000 --> 00:00:00,000" timestamps)
+  const srtTimestampPattern = /\d{2}:\d{2}:\d{2},\d{3}\s*-->\s*\d{2}:\d{2}:\d{2},\d{3}/;
+  if (srtTimestampPattern.test(trimmed)) {
+    const firstLine = trimmed.split(/\r?\n/, 1)[0] || '';
+    if (/^\d+$/.test(firstLine.trim())) {
+      return true; // Proper SRT format
+    }
+  }
+  
+  // Check for raw transcript format (timestamps embedded in text like "3:53", "4:00", "0:17", "0:00", "0:03")
+  // Patterns to match:
+  // - "Transcript 0:00" or "0:17" at start
+  // - Timestamps like "1:23", "12:34", "0:00", "0:03" anywhere in text
+  // - Multiple timestamps indicate it's a transcript
+  // Updated pattern to better match timestamps with optional newlines: /\d{1,2}:\d{2}/ matches "0:00", "0:03", "3:53", etc.
+  const rawTranscriptPattern = /\d{1,2}:\d{2}/g;
+  const timestampMatches = trimmed.match(rawTranscriptPattern);
+  // If we find 3+ timestamps, it's likely a transcript (reduced threshold to catch shorter transcripts)
+  if (timestampMatches && timestampMatches.length >= 2) {
+    return true; // Raw transcript format - treat as YouTube SRT workflow
+  }
+  
+  // Also check for common transcript prefixes or timestamps at start of lines
+  if (/^(Transcript|transcript)\s*\d{1,2}:\d{2}/i.test(trimmed)) {
+    return true;
+  }
+  
+  // Check if starts with timestamp pattern (like "0:00\nSo, in 2024...")
+  if (/^\d{1,2}:\d{2}(\s|$)/m.test(trimmed)) {
+    return true;
+  }
+  
+  return false;
+}
+
+function isYouTubeInputType(inputType: InputType): boolean {
+  return inputType === 'youtube_srt' || inputType === 'script';
+}
+
+const LEGACY_PHASES = new Set<WorkflowPhase>([
+  WorkflowPhase.PLOT,
+  WorkflowPhase.STORY,
+  WorkflowPhase.CHARACTERS_SETTINGS,
+  WorkflowPhase.SCENES,
+  WorkflowPhase.CHARACTER_SETTING_IMAGES,
+  WorkflowPhase.SCENE_IMAGES,
+  WorkflowPhase.VIDEO,
+]);
+
+export function normalizeCurrentPhaseForInputType(project: ProjectFile): { phase: WorkflowPhase; changed: boolean } {
+  // Use workflow manager to validate phase
+  const currentPhase = project.currentPhase;
+  const isValid = isValidPhaseForWorkflow(currentPhase, project.inputType);
+  
+  // If phase is invalid for this workflow, correct to start phase
+  if (!isValid) {
+    const startPhase = getStartPhase(project.inputType);
+    return { phase: startPhase, changed: true };
+  }
+  
+  return { phase: currentPhase, changed: false };
+}
+
 /**
  * Create a new project file with the given input.
  * Stores originalInput in a separate file, only reference in project.json.
@@ -154,7 +462,7 @@ function stripWrapperTags(content: string): string {
 export function createProject(
   originalInput: string,
   styleOrBasePath: ProjectStyle | string = 'cinematic_realism',
-  basePathMaybe: string = process.cwd()
+  basePathMaybe: string = getCurrentProjectBasePath()
 ): ProjectFile {
   // Back-compat:
   // - Old signature: createProject(originalInput, basePath)
@@ -178,60 +486,127 @@ export function createProject(
   const projectId = `proj-${now}-${Math.random().toString(36).slice(2, 8)}`;
 
   // Save original input to a separate file
-  const inputFilePath = 'original_input.md';
+  const inputFilePath = 'agent/original_input.md';
   const fullInputPath = join(getProjectDir(basePath), inputFilePath);
-  writeFileSync(fullInputPath, cleanInput, 'utf-8');
 
-  // Default to 'idea' input type - agent will analyze and update if it's a full story
+  // Only write if file doesn't exist - preserve existing original input
+  // This prevents overwriting the user's original input if createProject is called multiple times
+  if (!getProjectFileOps().existsSync(fullInputPath)) {
+    getProjectFileOps().writeFileSync(fullInputPath, cleanInput, 'utf-8');
+  } else {
+    // Log warning if trying to overwrite (shouldn't happen in normal flow)
+    console.warn(`[ProjectManager] original_input.md already exists at ${fullInputPath}, preserving existing content.`);
+  }
+
+  // Generate plan ID
+  const planId = `plan-${now}-${Math.random().toString(36).slice(2, 8)}`;
+
+  // Detect input type - check for transcript patterns
+  let detectedInputType: InputType = looksLikeSrt(cleanInput) ? 'youtube_srt' : 'idea';
+  
+  // Double-check: if input has timestamps but wasn't detected, fix it
+  if (detectedInputType === 'idea' && /\d{1,2}:\d{2}/.test(cleanInput)) {
+    // Count timestamp patterns - if 2+, it's likely a transcript (lowered threshold)
+    const timestampMatches = cleanInput.match(/\d{1,2}:\d{2}/g);
+    if (timestampMatches && timestampMatches.length >= 2) {
+      detectedInputType = 'youtube_srt';
+      console.log(`[ProjectManager] Corrected inputType to youtube_srt based on timestamp count: ${timestampMatches.length}`);
+    }
+  }
+  
+  console.log(`[ProjectManager] Detected inputType: ${detectedInputType} for project creation`);
+  const inputTypeConfig = INPUT_TYPE_CONFIGS[detectedInputType];
+
+  // Use workflow manager to get start phase (ensures correct workflow is used)
+  const startPhase = getStartPhase(detectedInputType);
+  
+  // Default to detected input type; agent may update if it detects a full story/script
   const project: ProjectFile = {
     version: '2.0',
     id: projectId,
     title: generateProjectTitle(cleanInput),
     originalInputFile: inputFilePath,
     style,
-    inputType: 'idea',
+    inputType: detectedInputType,
     createdAt: now,
     updatedAt: now,
-    currentPhase: WorkflowPhase.PLOT,
+    currentPhase: startPhase,
+    // Project-level master plan - one plan for all phases
+    plan: {
+      planId,
+      planFile: 'agent/plans/master-plan.md',
+      stage: PlannerStage.PLANNING,
+      refinementCount: 0,
+      createdAt: now,
+      approvedAt: null,
+    },
     phases: {
+      transcript_input: {
+        status: 'pending',
+        completedAt: null,
+      },
+      planning: {
+        status: 'pending',
+        completedAt: null,
+      },
+      image_placement: {
+        status: 'pending',
+        completedAt: null,
+      },
+      image_generation: {
+        status: 'pending',
+        completedAt: null,
+      },
+      infographics_placement: {
+        status: 'pending',
+        completedAt: null,
+      },
+      infographics_generation: {
+        status: 'pending',
+        completedAt: null,
+      },
+      video_placement: {
+        status: 'pending',
+        completedAt: null,
+      },
+      video_generation: {
+        status: 'pending',
+        completedAt: null,
+      },
+      video_replacement: {
+        status: 'pending',
+        completedAt: null,
+      },
       plot: {
         status: 'pending',
-        planFile: 'plans/plot.md',
         completedAt: null,
       },
       story: {
         status: 'pending',
-        planFile: 'plans/story.md',
         completedAt: null,
       },
       characters_settings: {
         status: 'pending',
-        planFile: 'plans/characters-settings.md',
         completedAt: null,
       },
       scenes: {
         status: 'pending',
-        planFile: 'plans/scenes.md',
         completedAt: null,
       },
       character_setting_images: {
         status: 'pending',
-        planFile: 'plans/ref-images.md',
         completedAt: null,
       },
       scene_images: {
         status: 'pending',
-        planFile: 'plans/scene-images.md',
         completedAt: null,
       },
       video: {
         status: 'pending',
-        planFile: 'plans/video.md',
         completedAt: null,
       },
       video_combine: {
         status: 'pending',
-        planFile: 'plans/final-video.md',
         completedAt: null,
       },
     },
@@ -240,7 +615,35 @@ export function createProject(
     settings: [],
     scenes: [],
     assets: [],
+    transcriptEntries: [] as TranscriptEntry[],
+    imagePlacements: [] as ImagePlacement[],
+    backgroundGeneration: createDefaultBackgroundGenerationState(),
   };
+
+  // Mark phases as skipped based on input type
+  // For YouTube workflows, legacy phases (PLOT, STORY, etc.) are automatically skipped
+  // This is handled by INPUT_TYPE_CONFIGS.skipPhases, but we also use workflow manager
+  // to ensure consistency
+  const workflowPhases = getWorkflowPhases(detectedInputType);
+  
+  // Mark all phases not in the workflow as skipped
+  for (const phaseKey of Object.keys(project.phases) as WorkflowPhase[]) {
+    if (!isValidPhaseForWorkflow(phaseKey as WorkflowPhase, detectedInputType)) {
+      project.phases[phaseKey as keyof typeof project.phases].status = 'skipped';
+      project.phases[phaseKey as keyof typeof project.phases].completedAt = now;
+    }
+  }
+  
+  // Also apply skipPhases from INPUT_TYPE_CONFIGS for backward compatibility
+  if (inputTypeConfig.skipPhases.length > 0) {
+    for (const skipPhase of inputTypeConfig.skipPhases) {
+      const phaseKey = skipPhase as keyof typeof project.phases;
+      if (project.phases[phaseKey] && project.phases[phaseKey].status !== 'skipped') {
+        project.phases[phaseKey].status = 'skipped';
+        project.phases[phaseKey].completedAt = now;
+      }
+    }
+  }
 
   // Save project file
   saveProject(project, basePath);
@@ -256,7 +659,7 @@ export function createProject(
  */
 export function setProjectInputType(
   inputType: InputType,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -275,7 +678,6 @@ export function setProjectInputType(
       if (project.phases[phaseKey]) {
         project.phases[phaseKey].status = 'skipped';
         project.phases[phaseKey].completedAt = now;
-        project.phases[phaseKey].plannerStage = PlannerStage.COMPLETE;
       }
     }
 
@@ -285,15 +687,45 @@ export function setProjectInputType(
     // Read the original input and save it as the story
     const originalInput = getOriginalInput(project, basePath);
     if (originalInput) {
-      const storyDir = join(getProjectDir(basePath), 'plans');
-      if (!existsSync(storyDir)) {
-        mkdirSync(storyDir, { recursive: true });
+      const storyDir = join(getAgentDir(basePath), 'script');
+      if (!getProjectFileOps().existsSync(storyDir)) {
+        getProjectFileOps().mkdirSync(storyDir, { recursive: true });
       }
       const storyPath = join(storyDir, 'story.md');
-      writeFileSync(storyPath, `# Story\n\n${originalInput}`, 'utf-8');
+      getProjectFileOps().writeFileSync(storyPath, `# Story\n\n${originalInput}`, 'utf-8');
 
       // Update content registry
       project.content.story.status = 'available';
+    }
+  }
+
+  if (inputType === 'youtube_srt' || inputType === 'script') {
+    for (const skipPhase of inputTypeConfig.skipPhases) {
+      const phaseKey = skipPhase as keyof typeof project.phases;
+      if (project.phases[phaseKey]) {
+        project.phases[phaseKey].status = 'skipped';
+        project.phases[phaseKey].completedAt = now;
+      }
+    }
+    
+    // For youtube_srt, check if transcript_input is already completed
+    if (inputType === 'youtube_srt') {
+      const transcriptPhaseInfo = project.phases?.transcript_input;
+      if (transcriptPhaseInfo && transcriptPhaseInfo.status === 'completed' || 
+          (project.transcriptEntries && project.transcriptEntries.length > 0)) {
+        // Transcript already parsed - go to planning phase
+        project.currentPhase = WorkflowPhase.CONTENT_PLANNING;
+        const planningPhaseKey = WorkflowPhase.CONTENT_PLANNING as keyof typeof project.phases;
+        if (project.phases[planningPhaseKey]) {
+          project.phases[planningPhaseKey].status = 'in_progress';
+        }
+      } else {
+        // Start with transcript_input phase
+        project.currentPhase = inputTypeConfig.startPhase;
+      }
+    } else {
+      // For script type, start with planning (transcript_input is skipped)
+      project.currentPhase = inputTypeConfig.startPhase;
     }
   }
 
@@ -315,19 +747,19 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     needsSave = true;
   }
 
-  const projectDir = getProjectDir(basePath);
+  const agentDir = getAgentDir(basePath);
 
-  // Sync plot content
-  const plotFile = join(projectDir, 'plans', 'plot.md');
-  if (existsSync(plotFile) && project.content.plot.status === 'missing') {
-    project.content.plot.status = 'complete';
+  // Sync plot content (now in script/ directory)
+  const plotFile = join(agentDir, 'script', 'plot.md');
+  if (getProjectFileOps().existsSync(plotFile) && project.content.plot.status === 'missing') {
+    project.content.plot.status = 'available';
     needsSave = true;
   }
 
-  // Sync story content
-  const storyFile = join(projectDir, 'plans', 'story.md');
-  if (existsSync(storyFile) && project.content.story.status === 'missing') {
-    project.content.story.status = 'complete';
+  // Sync story content (now in script/ directory)
+  const storyFile = join(agentDir, 'script', 'story.md');
+  if (getProjectFileOps().existsSync(storyFile) && project.content.story.status === 'missing') {
+    project.content.story.status = 'available';
     needsSave = true;
   }
 
@@ -342,7 +774,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     }
     // Also track file path
     const safeName = char.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const charFile = `characters/${safeName}.md`;
+    const charFile = `agent/characters/${safeName}.md`;
     if (!project.content.characters.itemFiles) {
       project.content.characters.itemFiles = {};
     }
@@ -353,16 +785,16 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
   }
 
   // Sync characters from disk - scan characters/ directory for .md files
-  const charactersDir = join(projectDir, 'characters');
-  if (existsSync(charactersDir)) {
-    const charFiles = readdirSync(charactersDir).filter(f => f.endsWith('.md'));
+  const charactersDir = join(agentDir, 'characters');
+  if (getProjectFileOps().existsSync(charactersDir)) {
+    const charFiles = getProjectFileOps().readdirSync(charactersDir).filter(f => f.endsWith('.md'));
 
     for (const charFile of charFiles) {
       try {
-        const charContent = readFileSync(join(charactersDir, charFile), 'utf-8');
+        const charContent = getProjectFileOps().readFileSync(join(charactersDir, charFile), 'utf-8');
         // Extract name from first heading or filename
         const nameMatch = charContent.match(/^#\s*(?:Character[:\-–—\s]*)?(.+)/m);
-        const charName = nameMatch
+        const charName = nameMatch && nameMatch[1]
           ? nameMatch[1].trim()
           : charFile.replace(/\.md$/, '').replace(/[-_]/g, ' ');
 
@@ -372,13 +804,10 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         );
         if (!existingChar) {
           const character = createDefaultCharacterData(charName);
-          character.file = `characters/${charFile}`;
 
           // If characters_settings phase is complete, mark as approved
-          if (
-            project.phases.characters_settings?.status === 'completed' ||
-            project.phases.characters_settings?.plannerStage === 'complete'
-          ) {
+          const charactersSettingsPhase = project.phases.characters_settings;
+          if (charactersSettingsPhase?.status === 'completed') {
             character.approvalStatus = 'approved';
             character.approvedAt = Date.now();
           }
@@ -408,7 +837,7 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     }
     // Also track file path
     const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const settingFile = `settings/${safeName}.md`;
+    const settingFile = `agent/settings/${safeName}.md`;
     if (!project.content.settings.itemFiles) {
       project.content.settings.itemFiles = {};
     }
@@ -419,16 +848,16 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
   }
 
   // Sync settings from disk - scan settings/ directory for .md files
-  const settingsDir = join(projectDir, 'settings');
-  if (existsSync(settingsDir)) {
-    const settingFiles = readdirSync(settingsDir).filter(f => f.endsWith('.md'));
+  const settingsDir = join(agentDir, 'settings');
+  if (getProjectFileOps().existsSync(settingsDir)) {
+    const settingFiles = getProjectFileOps().readdirSync(settingsDir).filter(f => f.endsWith('.md'));
 
     for (const settingFile of settingFiles) {
       try {
-        const settingContent = readFileSync(join(settingsDir, settingFile), 'utf-8');
+        const settingContent = getProjectFileOps().readFileSync(join(settingsDir, settingFile), 'utf-8');
         // Extract name from first heading or filename
         const nameMatch = settingContent.match(/^#\s*(?:Setting[:\-–—\s]*)?(.+)/m);
-        const settingName = nameMatch
+        const settingName = nameMatch && nameMatch[1]
           ? nameMatch[1].trim()
           : settingFile.replace(/\.md$/, '').replace(/[-_]/g, ' ');
 
@@ -438,13 +867,10 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         );
         if (!existingSetting) {
           const setting = createDefaultSettingData(settingName);
-          setting.file = `settings/${settingFile}`;
 
           // If characters_settings phase is complete, mark as approved
-          if (
-            project.phases.characters_settings?.status === 'completed' ||
-            project.phases.characters_settings?.plannerStage === 'complete'
-          ) {
+          const charactersSettingsPhase = project.phases.characters_settings;
+          if (charactersSettingsPhase?.status === 'completed') {
             setting.approvalStatus = 'approved';
             setting.approvedAt = Date.now();
           }
@@ -479,17 +905,20 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     needsSave = true;
   }
 
-  // Sync scenes from disk - scan scenes/ directory for scene_XX.md files
+  // Sync scenes from disk - scan scenes/ directory for scene-XXX/ folders
   // This catches scenes that were created but never registered in project.scenes
-  const scenesDir = join(projectDir, 'scenes');
-  if (existsSync(scenesDir)) {
-    const sceneFiles = readdirSync(scenesDir)
-      .filter(f => /^scene_\d+\.md$/.test(f))
+  const scenesDir = join(agentDir, 'scenes');
+  if (getProjectFileOps().existsSync(scenesDir)) {
+    const sceneFolders = getProjectFileOps().readdirSync(scenesDir)
+      .filter(f => {
+        const fullPath = join(scenesDir, f);
+        return getProjectFileOps().existsSync(fullPath) && /^scene-\d+$/.test(f);
+      })
       .sort();
 
-    for (const sceneFile of sceneFiles) {
-      const match = sceneFile.match(/^scene_(\d+)\.md$/);
-      if (match) {
+    for (const sceneFolder of sceneFolders) {
+      const match = sceneFolder.match(/^scene-(\d+)$/);
+      if (match && match[1]) {
         const sceneNumber = parseInt(match[1], 10);
 
         // Check if scene is already registered
@@ -497,24 +926,25 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         if (!existingScene) {
           // Create new scene ref
           const sceneRef = createDefaultSceneRef(sceneNumber);
-          sceneRef.file = `scenes/${sceneFile}`;
+          sceneRef.folder = `agent/scenes/${sceneFolder}`;
+          sceneRef.file = `agent/scenes/${sceneFolder}/scene.md`;
 
-          // Extract title from file content
+          // Extract title from scene.md file content
           try {
-            const sceneContent = readFileSync(join(scenesDir, sceneFile), 'utf-8');
-            const titleMatch = sceneContent.match(/^#\s*(?:Scene\s*\d+[:\-–—\s]*)?(.+)/m);
-            if (titleMatch) {
-              sceneRef.title = titleMatch[1].trim();
+            const sceneFilePath = join(scenesDir, sceneFolder, 'scene.md');
+            if (getProjectFileOps().existsSync(sceneFilePath)) {
+              const sceneContent = getProjectFileOps().readFileSync(sceneFilePath, 'utf-8');
+              const titleMatch = sceneContent.match(/^#\s*(?:Scene\s*\d+[:\-–—\s]*)?(.+)/m);
+              if (titleMatch && titleMatch[1]) {
+                sceneRef.title = titleMatch[1].trim();
+              }
             }
           } catch {
             /* ignore read errors */
           }
 
           // If scenes phase is complete, mark scene as approved
-          if (
-            project.phases.scenes?.status === 'completed' ||
-            project.phases.scenes?.plannerStage === 'complete'
-          ) {
+          if (project.phases.scenes?.status === 'completed') {
             sceneRef.contentApprovalStatus = 'approved';
             sceneRef.contentApprovedAt = Date.now();
           }
@@ -551,18 +981,98 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 }
 
 /**
- * Load an existing project file.
- * Returns null if project doesn't exist or is incompatible (old version).
+ * Reload project files into context store after context store reload.
+ * This ensures all file references ($transcript, $content_plan, etc.) are registered with the correct basePath.
+ * This is a simplified version of loadProjectFilesAsContexts() to avoid circular dependency.
  */
-export function loadProject(basePath: string = process.cwd()): ProjectFile | null {
+function reloadProjectFilesAsContexts(basePath: string): void {
+  const projectDir = getProjectDir(basePath);
+  const agentDir = join(projectDir, 'agent');
+  const contentDir = join(agentDir, 'content');
+  const plansDir = join(agentDir, 'plans');
+  
+  // Load $original_input
+  const originalInputPath = join(agentDir, 'original_input.md');
+  if (getProjectFileOps().existsSync(originalInputPath)) {
+    try {
+      const content = getProjectFileOps().readFileSync(originalInputPath, 'utf-8');
+      if (content.trim().length > 0) {
+        contextStore.storeReference(
+          'agent/original_input.md',
+          'Original User Input',
+          '$original_input',
+          'user_input'
+        );
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
+  
+  // Load $transcript for YouTube workflow
+  const transcriptPath = join(contentDir, 'transcript.md');
+  if (getProjectFileOps().existsSync(transcriptPath)) {
+    try {
+      const transcriptContent = getProjectFileOps().readFileSync(transcriptPath, 'utf-8');
+      if (transcriptContent.trim().length > 0) {
+        contextStore.storeReference(
+          'agent/content/transcript.md',
+          'Transcript',
+          '$transcript',
+          'tool'
+        );
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
+  
+  // Load $content_plan
+  const contentPlanPath = join(plansDir, 'content-plan.md');
+  if (getProjectFileOps().existsSync(contentPlanPath)) {
+    try {
+      const content = getProjectFileOps().readFileSync(contentPlanPath, 'utf-8');
+      if (content.trim().length > 0) {
+        contextStore.storeReference(
+          'agent/plans/content-plan.md',
+          'Content Plan',
+          '$content_plan',
+          'tool'
+        );
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
+  
+  // Load $image_placements
+  const imagePlacementsPath = join(contentDir, 'image-placements.md');
+  if (getProjectFileOps().existsSync(imagePlacementsPath)) {
+    try {
+      const content = getProjectFileOps().readFileSync(imagePlacementsPath, 'utf-8');
+      if (content.trim().length > 0) {
+        contextStore.storeReference(
+          'agent/content/image-placements.md',
+          'Image Placement Plan',
+          '$image_placements',
+          'tool'
+        );
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
+}
+
+export function loadProject(basePath: string = getCurrentProjectBasePath()): ProjectFile | null {
   const filePath = getProjectFilePath(basePath);
 
-  if (!existsSync(filePath)) {
+  if (!getProjectFileOps().existsSync(filePath)) {
     return null;
   }
 
   try {
-    const content = readFileSync(filePath, 'utf-8');
+    const content = getProjectFileOps().readFileSync(filePath, 'utf-8');
     const project = JSON.parse(content);
 
     // Check version - must be 2.0 for 8-phase workflow
@@ -572,12 +1082,90 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
       return null;
     }
 
+    // Validate project_id exists and is a valid string for isolation
+    if (!project.id || typeof project.id !== 'string' || project.id.trim().length === 0) {
+      console.warn('[ProjectManager] Invalid project: missing or invalid project ID. Project isolation cannot be guaranteed.');
+      console.warn('[ProjectManager] Please delete the .kshana directory and start a new project.');
+      return null;
+    }
+
+    // Migration: Add plan object if missing (for v2.0 projects created before plan was required)
+    let planMigrated = false;
+    if (!project.plan) {
+      console.warn('[ProjectManager] Project missing plan object. Adding default plan structure.');
+      project.plan = {
+        planId: `plan_${project.id}`,
+        planFile: 'agent/plans/master-plan.md',
+        stage: 'NONE' as PlannerStage,
+        refinementCount: 0,
+        createdAt: Date.now(),
+        approvedAt: null,
+      };
+      planMigrated = true;
+    }
+
+    let backgroundGenerationMigrated = false;
+    if (!project.backgroundGeneration) {
+      project.backgroundGeneration = createDefaultBackgroundGenerationState();
+      backgroundGenerationMigrated = true;
+    } else {
+      if (!Array.isArray(project.backgroundGeneration.batches)) {
+        project.backgroundGeneration.batches = [];
+        backgroundGenerationMigrated = true;
+      }
+      if (!Array.isArray(project.backgroundGeneration.activeBatchIds)) {
+        project.backgroundGeneration.activeBatchIds = [];
+        backgroundGenerationMigrated = true;
+      }
+    }
+
+    const { phase: normalizedPhase, changed } = normalizeCurrentPhaseForInputType(project);
+    if (changed) {
+      project.currentPhase = normalizedPhase;
+    }
+
+    // Migration: Convert PLANNING phase to CONTENT_PLANNING for YouTube workflow
+    let phaseMigrated = false;
+    if (project.currentPhase === 'planning' || project.currentPhase === WorkflowPhase.PLANNING) {
+      console.log('[ProjectManager] Migrating PLANNING phase to CONTENT_PLANNING');
+      project.currentPhase = WorkflowPhase.CONTENT_PLANNING;
+      
+      // Migrate phase status
+      if (project.phases?.planning) {
+        project.phases.content_planning = project.phases.planning;
+        // Keep planning for backward compatibility but mark as skipped
+        project.phases.planning.status = 'skipped';
+      }
+      phaseMigrated = true;
+    }
+    
+    // Migrate phase status key if it exists
+    if (project.phases?.planning && !project.phases?.content_planning) {
+      project.phases.content_planning = project.phases.planning;
+      phaseMigrated = true;
+    }
+
     // Sync content registry for backward compatibility
-    if (syncContentRegistry(project, basePath)) {
+    const syncChanged = syncContentRegistry(project, basePath);
+
+    if (changed || syncChanged || planMigrated || phaseMigrated || backgroundGenerationMigrated) {
       saveProject(project, basePath);
     }
 
-    return project as ProjectFile;
+    // Auto-fix inconsistent phase states
+    const cleanedProject = cleanupPhaseStates(project as ProjectFile, basePath);
+
+    // Reload context store for this project to ensure context isolation
+    // This ensures context references ($transcript, $content_plan, etc.) are loaded from the correct project directory
+    if (cleanedProject && cleanedProject.id) {
+      contextStore.reload(cleanedProject.id, basePath);
+      // Reload project files into context store after reloading the context store
+      // This re-registers all file references ($transcript, $content_plan, etc.) with the correct basePath
+      // We inline the critical parts here to avoid circular dependency
+      reloadProjectFilesAsContexts(basePath);
+    }
+
+    return cleanedProject;
   } catch {
     return null;
   }
@@ -586,15 +1174,15 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
 /**
  * Check if an existing project is compatible with the current workflow.
  */
-export function isProjectCompatible(basePath: string = process.cwd()): { compatible: boolean; version?: string; reason?: string } {
+export function isProjectCompatible(basePath: string = getCurrentProjectBasePath()): { compatible: boolean; version?: string; reason?: string } {
   const filePath = getProjectFilePath(basePath);
 
-  if (!existsSync(filePath)) {
+  if (!getProjectFileOps().existsSync(filePath)) {
     return { compatible: true, reason: 'No existing project' };
   }
 
   try {
-    const content = readFileSync(filePath, 'utf-8');
+    const content = getProjectFileOps().readFileSync(filePath, 'utf-8');
     const project = JSON.parse(content);
 
     if (!project.version) {
@@ -612,21 +1200,326 @@ export function isProjectCompatible(basePath: string = process.cwd()): { compati
 }
 
 /**
- * Save the project file.
+ * Generate the project index from project.json and manifest.json.
+ * The index contains state and pointers only, no content.
+ * Follows Kshana Indexing Architecture invariants:
+ * - Rule 1: Derivable from agent/project.json and agent/manifest.json
+ * - Rule 2: No content in the index (only pointers, versions, state)
+ * - Rule 3: Atomic updates (called after every project state change)
+ * - Rule 4: Files win (filesystem is authoritative, index can be rebuilt)
  */
-export function saveProject(project: ProjectFile, basePath: string = process.cwd()): void {
+export function generateProjectIndex(basePath: string = getCurrentProjectBasePath()): void {
+  const project = loadProject(basePath);
+  if (!project) {
+    return;
+  }
+
+  const manifest = getAssets(basePath);
+  const agentDir = getAgentDir(basePath);
+
+  // Determine completed phases
+  const completedPhases: WorkflowPhase[] = [];
+  for (const [phaseKey, phaseInfo] of Object.entries(project.phases)) {
+    if (phaseInfo.status === 'completed' || phaseInfo.status === 'skipped') {
+      completedPhases.push(phaseKey as WorkflowPhase);
+    }
+  }
+
+  // Detect blocking reasons
+  const blockingReasons: string[] = [];
+  const currentPhase = project.currentPhase;
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
+  if (!phaseConfig) {
+    return; // No config for this phase, no blocking reasons
+  }
+
+  // Check for missing required content based on phase
+  if (currentPhase === WorkflowPhase.VIDEO) {
+    // Check if all scenes have approved images
+    for (const scene of project.scenes) {
+      if (scene.imageApprovalStatus !== 'approved') {
+        blockingReasons.push(`scene-${String(scene.sceneNumber).padStart(3, '0')}:image_not_approved`);
+      }
+    }
+  }
+
+  if (currentPhase === WorkflowPhase.VIDEO_COMBINE) {
+    // Check if all scenes have approved videos
+    for (const scene of project.scenes) {
+      if (scene.videoApprovalStatus !== 'approved') {
+        blockingReasons.push(`scene-${String(scene.sceneNumber).padStart(3, '0')}:video_not_approved`);
+      }
+    }
+  }
+
+  // Build scene routing
+  const sceneRouting: Record<string, SceneRoutingEntry> = {};
+  let totalDuration = 0;
+
+  for (const scene of project.scenes) {
+    const sceneId = `scene-${String(scene.sceneNumber).padStart(3, '0')}`;
+    const sceneFolder = scene.folder || `agent/scenes/${sceneId}`;
+
+    // Find active versions from manifest
+    const sceneVideos = manifest.filter(
+      a => a.type === 'scene_video' && a.metadata && 'sceneNumber' in a.metadata && a.metadata['sceneNumber'] === scene.sceneNumber
+    );
+    const sceneImages = manifest.filter(
+      a => (a.type === 'scene_image' || a.type === 'character_ref' || a.type === 'setting_ref') &&
+        a.metadata && 'sceneNumber' in a.metadata && a.metadata['sceneNumber'] === scene.sceneNumber
+    );
+
+    // Determine active video version
+    let activeVideoVersion: number | undefined;
+    if (sceneVideos.length > 0) {
+      activeVideoVersion = Math.max(...sceneVideos.map(v => {
+        const version = v.metadata && 'version' in v.metadata ? v.metadata['version'] : undefined;
+        return (typeof version === 'number' ? version : 1);
+      }));
+    }
+
+    // Determine active image version
+    let activeImageVersion: number | undefined;
+    if (sceneImages.length > 0) {
+      activeImageVersion = Math.max(...sceneImages.map(i => {
+        const version = i.metadata && 'version' in i.metadata ? i.metadata['version'] : undefined;
+        return (typeof version === 'number' ? version : 1);
+      }));
+    }
+
+    // Check for audio files (scene-specific audio mix)
+    let activeAudio: string | undefined;
+    const sceneAudioPath = join(agentDir, sceneFolder.replace('agent/', ''), 'audio', 'mix.mp3');
+    if (getProjectFileOps().existsSync(sceneAudioPath)) {
+      activeAudio = 'mix.mp3';
+    }
+
+    // Estimate duration (could be enhanced to read actual video duration)
+    const estimatedDuration = 5; // Default 5 seconds per scene
+    totalDuration += estimatedDuration;
+
+    sceneRouting[String(scene.sceneNumber).padStart(3, '0')] = {
+      id: sceneId,
+      folder: sceneFolder,
+      active: {
+        video: activeVideoVersion,
+        audio: activeAudio,
+        image: activeImageVersion,
+      },
+      status: {
+        content: scene.contentApprovalStatus || 'pending',
+        image: scene.imageApprovalStatus || 'pending',
+        video: scene.videoApprovalStatus || 'pending',
+        // Audio approval status is not yet in SceneRef, will be added when audio phase is implemented
+        // audio: scene.audioApprovalStatus,
+      },
+      duration: estimatedDuration,
+    };
+  }
+
+  // Build entity routing (characters and settings)
+  const characterRouting: Record<string, EntityRoutingEntry> = {};
+  for (const char of project.characters) {
+    const safeName = char.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const charPath = `agent/characters/${safeName}`;
+    characterRouting[safeName] = {
+      path: charPath,
+      ready: char.approvalStatus === 'approved',
+      has_ref_image: !!char.referenceImageId && char.referenceImageApprovalStatus === 'approved',
+    };
+  }
+
+  const settingRouting: Record<string, EntityRoutingEntry> = {};
+  for (const setting of project.settings) {
+    const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const settingPath = `agent/settings/${safeName}`;
+    settingRouting[safeName] = {
+      path: settingPath,
+      ready: setting.approvalStatus === 'approved',
+      has_ref_image: !!setting.referenceImageId && setting.referenceImageApprovalStatus === 'approved',
+    };
+  }
+
+  // Calculate asset counts
+  const assetCounts = {
+    video: manifest.filter(a => a.type === 'scene_video' || a.type === 'final_video').length,
+    audio: 0, // Audio files are not in manifest, they're in scene folders
+    image: manifest.filter(a => a.type === 'scene_image' || a.type === 'character_ref' || a.type === 'setting_ref').length,
+  };
+
+  // Count audio files from scene folders
+  for (const scene of project.scenes) {
+    const sceneFolder = scene.folder || `agent/scenes/scene-${String(scene.sceneNumber).padStart(3, '0')}`;
+    const audioDir = join(agentDir, sceneFolder.replace('agent/', ''), 'audio');
+    if (getProjectFileOps().existsSync(audioDir)) {
+      const audioFiles = getProjectFileOps().readdirSync(audioDir).filter(f => f.endsWith('.mp3') || f.endsWith('.wav'));
+      assetCounts.audio += audioFiles.length;
+    }
+  }
+
+  // Load context variables from ContextStore to merge into consolidated index
+  const contextVariables: Record<string, import('../../../core/context/index.js').StoredContextMeta> = {};
+  try {
+    const activeVars = contextStore.getActiveVariables();
+    for (const v of activeVars) {
+      const meta = contextStore.getMeta(v.variableName);
+      if (meta) {
+        contextVariables[v.variableName] = meta;
+      }
+    }
+  } catch {
+    // If ContextStore is not available, use empty object
+  }
+
+  // Create consolidated index with context variables merged
+  const index = {
+    index_version: '1.0' as const,
+    project_id: project.id,
+    last_modified: project.updatedAt,
+
+    // Merge context variables from ContextStore
+    context: {
+      variables: contextVariables,
+    },
+
+    workflow: {
+      current_phase: project.currentPhase,
+      completed_phases: completedPhases,
+      is_blocked: blockingReasons.length > 0,
+      blocking_reasons: blockingReasons,
+    },
+
+    routing: {
+      scenes: sceneRouting,
+      entities: {
+        characters: characterRouting,
+        settings: settingRouting,
+      },
+    },
+
+    stats: {
+      total_scenes: project.scenes.length,
+      total_duration: totalDuration,
+      asset_counts: assetCounts,
+    },
+  };
+
+  // Save to consolidated index location: context/index.json (project_id is inside the file)
+  const indexPath = getProjectIndexPath(basePath);
+  const contextDir = join(getProjectDir(basePath), 'context');
+  if (!getProjectFileOps().existsSync(contextDir)) {
+    getProjectFileOps().mkdirSync(contextDir, { recursive: true });
+  }
+  getProjectFileOps().writeFileSync(indexPath, JSON.stringify(index, null, 2), 'utf-8');
+}
+
+/**
+ * Read the project index.
+ * Returns null if index doesn't exist or is invalid.
+ * 
+ * Reads from consolidated location (context/index.json).
+ * Falls back to old locations for migration:
+ * 1. context/{project_id}/index.json (old subfolder structure)
+ * 2. index/project_index.json (very old location)
+ */
+export function readProjectIndex(basePath: string = getCurrentProjectBasePath()): ProjectIndex | null {
+  const project = loadProject(basePath);
+  if (!project) {
+    return null;
+  }
+
+  // Try new consolidated location first: context/index.json
+  const consolidatedPath = getProjectIndexPath(basePath);
+  if (getProjectFileOps().existsSync(consolidatedPath)) {
+    try {
+      const data = JSON.parse(getProjectFileOps().readFileSync(consolidatedPath, 'utf-8')) as ProjectIndex;
+      // Validate index version
+      if (data.index_version !== '1.0') {
+        console.warn(`[ProjectManager] Incompatible index version: ${data.index_version}. Expected: 1.0`);
+        return null;
+      }
+      // Validate project_id matches
+      if (data.project_id !== project.id) {
+        console.warn(`[ProjectManager] Index project_id (${data.project_id}) doesn't match project.id (${project.id})`);
+        // Still return it, but log the mismatch
+      }
+      return data;
+    } catch (err) {
+      console.warn(`[ProjectManager] Failed to parse consolidated index: ${err}`);
+      // Try fallback locations
+    }
+  }
+
+  // Fallback 1: Old subfolder structure context/{project_id}/index.json
+  const oldSubfolderPath = join(getProjectDir(basePath), 'context', project.id, 'index.json');
+  if (getProjectFileOps().existsSync(oldSubfolderPath)) {
+    try {
+      const data = JSON.parse(getProjectFileOps().readFileSync(oldSubfolderPath, 'utf-8')) as ProjectIndex;
+      // Migrate to new location
+      const contextDir = join(getProjectDir(basePath), 'context');
+      if (!getProjectFileOps().existsSync(contextDir)) {
+        getProjectFileOps().mkdirSync(contextDir, { recursive: true });
+      }
+      getProjectFileOps().writeFileSync(consolidatedPath, JSON.stringify(data, null, 2), 'utf-8');
+      return data;
+    } catch {
+      // Continue to next fallback
+    }
+  }
+
+  // Fallback 2: Very old location index/project_index.json
+  const oldIndexPath = join(getIndexDir(basePath), PROJECT_INDEX_FILE);
+  if (getProjectFileOps().existsSync(oldIndexPath)) {
+    try {
+      const data = JSON.parse(getProjectFileOps().readFileSync(oldIndexPath, 'utf-8')) as ProjectIndex;
+      // Migrate to new location
+      const contextDir = join(getProjectDir(basePath), 'context');
+      if (!getProjectFileOps().existsSync(contextDir)) {
+        getProjectFileOps().mkdirSync(contextDir, { recursive: true });
+      }
+      getProjectFileOps().writeFileSync(consolidatedPath, JSON.stringify(data, null, 2), 'utf-8');
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Rebuild the project index from project.json and manifest.json.
+ * This enforces Rule 4: Files Win - if index is out of sync, rebuild it.
+ * Should be called when index is missing or when filesystem changes are detected.
+ */
+export function rebuildProjectIndex(basePath: string = getCurrentProjectBasePath()): void {
+  generateProjectIndex(basePath);
+}
+
+/**
+ * Save the project file and regenerate the project index.
+ */
+export function saveProject(project: ProjectFile, basePath: string = getCurrentProjectBasePath()): void {
   const filePath = getProjectFilePath(basePath);
   project.updatedAt = Date.now();
-  writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
+  
+  getProjectFileOps().writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
+
+  // Regenerate project index after every save
+  generateProjectIndex(basePath);
 }
 
 /**
  * Read the original user input from its file.
  */
-export function getOriginalInput(project: ProjectFile, basePath: string = process.cwd()): string {
-  const inputPath = join(getProjectDir(basePath), project.originalInputFile);
-  if (existsSync(inputPath)) {
-    return readFileSync(inputPath, 'utf-8');
+export function getOriginalInput(project: ProjectFile, basePath: string = getCurrentProjectBasePath()): string {
+  // Handle both old format (original_input.md) and new format (agent/original_input.md)
+  const inputFile = project.originalInputFile.startsWith('agent/')
+    ? project.originalInputFile
+    : `agent/${project.originalInputFile}`;
+  const inputPath = join(getProjectDir(basePath), inputFile);
+  if (getProjectFileOps().existsSync(inputPath)) {
+    return getProjectFileOps().readFileSync(inputPath, 'utf-8');
   }
   return '';
 }
@@ -637,10 +1530,24 @@ export function getOriginalInput(project: ProjectFile, basePath: string = proces
 export function getOrCreateProject(
   originalInput: string,
   style: ProjectStyle = 'cinematic_realism',
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   const existing = loadProject(basePath);
   if (existing) {
+    // CRITICAL: If originalInput looks like a transcript but project has wrong inputType, fix it
+    if (originalInput && looksLikeSrt(originalInput) && existing.inputType !== 'youtube_srt' && existing.inputType !== 'script') {
+      // Update input type to youtube_srt and normalize phase
+      const updated = setProjectInputType('youtube_srt', basePath);
+      if (updated) {
+        return updated;
+      }
+    }
+    // Normalize phase for existing project (handles legacy phases)
+    const normalized = normalizeCurrentPhaseForInputType(existing);
+    if (normalized.changed) {
+      existing.currentPhase = normalized.phase;
+      saveProject(existing, basePath);
+    }
     return existing;
   }
   return createProject(originalInput, style, basePath);
@@ -650,13 +1557,13 @@ export function getOrCreateProject(
  * Get the current workflow phase from the project.
  */
 export function getCurrentPhase(project: ProjectFile): WorkflowPhase {
-  return project.currentPhase;
+  return normalizeCurrentPhaseForInputType(project).phase;
 }
 
 /**
  * Get the project style.
  */
-export function getProjectStyle(basePath: string = process.cwd()): ProjectStyle {
+export function getProjectStyle(basePath: string = getCurrentProjectBasePath()): ProjectStyle {
   const project = loadProject(basePath);
   return project?.style ?? 'cinematic_realism';
 }
@@ -664,28 +1571,31 @@ export function getProjectStyle(basePath: string = process.cwd()): ProjectStyle 
 /**
  * Get the style configuration for the current project.
  */
-export function getProjectStyleConfig(basePath: string = process.cwd()): StyleConfig {
+export function getProjectStyleConfig(basePath: string = getCurrentProjectBasePath()): StyleConfig {
   const style = getProjectStyle(basePath);
   return STYLE_CONFIGS[style];
 }
 
 /**
  * Update a phase's status.
+ * Note: Planning is done at project level, not per-phase.
  */
 export function updatePhaseStatus(
   project: ProjectFile,
   phase: keyof ProjectFile['phases'],
   status: PhaseStatus,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   const phaseInfo = project.phases[phase];
+  if (!phaseInfo) {
+    console.warn(`[updatePhaseStatus] Phase ${phase} not found in project phases`);
+    return project;
+  }
+  
   phaseInfo.status = status;
 
   if (status === 'completed') {
     phaseInfo.completedAt = Date.now();
-    phaseInfo.plannerStage = PlannerStage.COMPLETE;
-  } else if (status === 'in_progress' && !phaseInfo.plannerStage) {
-    phaseInfo.plannerStage = PlannerStage.PLANNING;
   }
 
   saveProject(project, basePath);
@@ -693,58 +1603,230 @@ export function updatePhaseStatus(
 }
 
 /**
- * Update a phase's planner stage.
+ * Update the project-level master plan stage.
+ * This is the single plan that governs all phases.
  */
-export function updatePlannerStage(
+export function updatePlanStage(
   project: ProjectFile,
-  phase: keyof ProjectFile['phases'],
   stage: PlannerStage,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
-  const phaseInfo = project.phases[phase];
-  phaseInfo.plannerStage = stage;
+  project.plan.stage = stage;
 
   if (stage === PlannerStage.REFINING) {
-    phaseInfo.refinementCount = (phaseInfo.refinementCount ?? 0) + 1;
+    project.plan.refinementCount += 1;
   }
 
-  // When planner stage reaches COMPLETE:
-  // - For per-item phases: Only the PLAN is complete, not the phase itself
-  //   The phase is only complete when all items are approved
-  // - For planning-only phases: The phase is complete
   if (stage === PlannerStage.COMPLETE) {
-    const phaseConfig = PHASE_CONFIGS[phase as WorkflowPhase];
-    const isPerItemPhase = phaseConfig?.requiresPerItemApproval ?? false;
-
-    if (!isPerItemPhase) {
-      // Planning-only phases (plot, story, video_combine) are complete when plan is approved
-      phaseInfo.status = 'completed';
-      phaseInfo.completedAt = Date.now();
+    project.plan.approvedAt = Date.now();
+    // When master plan is approved, mark the first phase as in_progress
+    const firstPhaseKey = project.currentPhase as keyof typeof project.phases;
+    if (project.phases[firstPhaseKey] && project.phases[firstPhaseKey].status === 'pending') {
+      project.phases[firstPhaseKey].status = 'in_progress';
     }
-    // For per-item phases, status remains 'in_progress' until all items are approved
   }
 
   saveProject(project, basePath);
+  return project;
+}
+
+/**
+ * @deprecated Use updatePlanStage instead. Planning is now at project level.
+ */
+export function updatePlannerStage(
+  project: ProjectFile,
+  _phase: keyof ProjectFile['phases'],
+  stage: PlannerStage,
+  basePath: string = getCurrentProjectBasePath()
+): ProjectFile {
+  // Redirect to project-level plan stage update
+  return updatePlanStage(project, stage, basePath);
+}
+
+/**
+ * Clean up inconsistent phase states.
+ * Ensures phases after current phase are reset to pending.
+ * Fixes issues like phases marked as completed before current phase completes.
+ * Also marks phases not in the current workflow as "skipped".
+ */
+export function cleanupPhaseStates(
+  project: ProjectFile,
+  basePath: string = getCurrentProjectBasePath()
+): ProjectFile {
+  if (!isYouTubePhase(project.currentPhase)) {
+    return project; // Only clean YouTube workflow for now
+  }
+  
+  const phases = getWorkflowPhases(project.inputType);
+  const currentIndex = phases.indexOf(project.currentPhase);
+  
+  if (currentIndex === -1) return project;
+  
+  let needsSave = false;
+  
+  // CRITICAL: Mark phases that are NOT in the current workflow as "skipped"
+  // This prevents the agent from trying to complete phases that are not part of the workflow
+  for (const phaseKey in project.phases) {
+    const phase = phaseKey as WorkflowPhase;
+    const phaseInfo = project.phases[phaseKey as keyof typeof project.phases];
+    
+    if (!phaseInfo) continue;
+    
+    // If phase is not in the active workflow, mark it as skipped
+    if (!phases.includes(phase) && phaseInfo.status !== 'skipped') {
+      phaseInfo.status = 'skipped';
+      phaseInfo.completedAt = null;
+      needsSave = true;
+      console.log(`[ProjectManager] Cleanup: Auto-skipping phase ${phase} (not in current workflow)`);
+    }
+  }
+  
+  // Reset all phases after current phase to pending
+  for (let i = currentIndex + 1; i < phases.length; i++) {
+    const phase = phases[i];
+    const phaseKey = phase as keyof typeof project.phases;
+    const phaseInfo = project.phases[phaseKey];
+    
+    if (phaseInfo && phaseInfo.status !== 'pending' && phaseInfo.status !== 'skipped') {
+      phaseInfo.status = 'pending';
+      phaseInfo.completedAt = null;
+      needsSave = true;
+    }
+  }
+  
+  // Fix current phase if it has in_progress status but also a completedAt timestamp
+  const currentPhaseInfo = project.phases[project.currentPhase as keyof typeof project.phases];
+  if (currentPhaseInfo?.status === 'in_progress' && currentPhaseInfo.completedAt !== null) {
+    currentPhaseInfo.completedAt = null;
+    needsSave = true;
+  }
+  
+  if (needsSave) {
+    saveProject(project, basePath);
+  }
+  
   return project;
 }
 
 /**
  * Transition to the next phase based on current state.
+ * Requires project-level plan to be approved before phases can progress.
  */
-export function transitionToNextPhase(
+export async function transitionToNextPhase(
   project: ProjectFile,
-  basePath: string = process.cwd()
-): { project: ProjectFile; transitioned: boolean; reason: string } {
-  const result = determineNextPhase(project);
+  basePath: string = getCurrentProjectBasePath()
+): Promise<{ project: ProjectFile; transitioned: boolean; reason: string }> {
+  // CRITICAL: Auto-correct inputType if project has transcriptEntries but wrong inputType
+  if (project.transcriptEntries && project.transcriptEntries.length > 0) {
+    if (project.inputType !== 'youtube_srt' && project.inputType !== 'script') {
+      console.log(`[ProjectManager] Auto-correcting inputType from ${project.inputType} to youtube_srt (transcriptEntries exist)`);
+      const corrected = setProjectInputType('youtube_srt', basePath);
+      if (corrected) {
+        project = corrected;
+        // If transcript_input phase is already completed, transition to content planning
+        const transcriptPhaseInfo = project.phases?.transcript_input;
+        if (transcriptPhaseInfo && transcriptPhaseInfo.status === 'completed' && project.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+          // Transition to content planning phase since transcript is already parsed
+          project.currentPhase = WorkflowPhase.CONTENT_PLANNING;
+          const planningPhaseKey = WorkflowPhase.CONTENT_PLANNING as keyof typeof project.phases;
+          if (project.phases[planningPhaseKey]) {
+            project.phases[planningPhaseKey].status = 'in_progress';
+          }
+          saveProject(project, basePath);
+        }
+      }
+    }
+  }
+
+  const isYouTubeWorkflow = isYouTubeWorkflowType(project.inputType);
+
+  // Check if master plan is approved (legacy workflow only)
+  // Note: Currently only YouTube workflow is active, so this check is effectively disabled
+  if (!isYouTubeWorkflow && project.plan.stage !== PlannerStage.COMPLETE) {
+    return {
+      project,
+      transitioned: false,
+      reason: 'Master plan must be approved before transitioning phases. Current stage: ' + project.plan.stage
+    };
+  }
+
+  // CRITICAL: Automatically mark phases that are NOT in the current workflow as "skipped"
+  // This prevents the agent from trying to complete phases that are not part of the workflow
+  // (e.g., VIDEO_REPLACEMENT and VIDEO_COMBINE when they're skipped in YOUTUBE_PHASES)
+  const activePhases = getWorkflowPhases(project.inputType);
+  let needsSave = false;
+  
+  for (const phaseKey in project.phases) {
+    const phase = phaseKey as WorkflowPhase;
+    const phaseInfo = project.phases[phaseKey as keyof typeof project.phases];
+    
+    // Skip if phase is already skipped or completed
+    if (!phaseInfo || phaseInfo.status === 'skipped' || phaseInfo.status === 'completed') {
+      continue;
+    }
+    
+    // If phase is not in the active workflow, mark it as skipped
+    if (!activePhases.includes(phase)) {
+      phaseInfo.status = 'skipped';
+      phaseInfo.completedAt = null;
+      needsSave = true;
+      console.log(`[ProjectManager] Auto-skipping phase ${phase} (not in current workflow)`);
+    }
+  }
+  
+  if (needsSave) {
+    saveProject(project, basePath);
+  }
+
+  const currentPhase = project.currentPhase;
+  const currentPhaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+  
+  // VALIDATION: Current phase must be completed (or skipped if not in workflow)
+  if (currentPhaseInfo?.status !== 'completed') {
+    // If current phase is not in the active workflow, mark it as skipped and transition
+    if (!activePhases.includes(currentPhase)) {
+      currentPhaseInfo.status = 'skipped';
+      currentPhaseInfo.completedAt = null;
+      saveProject(project, basePath);
+      // Continue to determine next phase
+    } else {
+      return {
+        project,
+        transitioned: false,
+        reason: `Cannot transition: ${currentPhase} is ${currentPhaseInfo?.status}, not completed`
+      };
+    }
+  }
+
+  const result = await determineNextPhase(project);
+
+  // Workflow invariant: image_generation must always transition to infographics_placement.
+  if (
+    currentPhase === WorkflowPhase.IMAGE_GENERATION &&
+    result.nextPhase !== WorkflowPhase.INFOGRAPHICS_PLACEMENT
+  ) {
+    return {
+      project,
+      transitioned: false,
+      reason:
+        `Invalid phase transition invariant. Expected ${WorkflowPhase.INFOGRAPHICS_PLACEMENT} after ${WorkflowPhase.IMAGE_GENERATION}, ` +
+        `but got ${result.nextPhase}.`,
+    };
+  }
+
+  // No safeguard needed - workflow manager ensures YouTube workflows can never
+  // transition to PLOT/STORY phases since they're not in the YouTube workflow
 
   if (result.nextPhase !== project.currentPhase) {
+    // Update to next phase
     project.currentPhase = result.nextPhase;
 
-    // Mark new phase as in_progress with planning stage
-    const phaseKey = result.nextPhase as keyof typeof project.phases;
-    if (project.phases[phaseKey]) {
-      project.phases[phaseKey].status = 'in_progress';
-      project.phases[phaseKey].plannerStage = PlannerStage.PLANNING;
+    // Mark new phase as in_progress
+    const nextPhaseKey = result.nextPhase as keyof typeof project.phases;
+    if (project.phases[nextPhaseKey]) {
+      project.phases[nextPhaseKey].status = 'in_progress';
+      // Clear any stale completedAt timestamp
+      project.phases[nextPhaseKey].completedAt = null;
     }
 
     saveProject(project, basePath);
@@ -757,48 +1839,74 @@ export function transitionToNextPhase(
 /**
  * Check if a plan file has content.
  */
-export function planFileHasContent(planFile: string, basePath: string = process.cwd()): boolean {
-  const filePath = join(getProjectDir(basePath), planFile);
+export function planFileHasContent(planFile: string, basePath: string = getCurrentProjectBasePath()): boolean {
+  // Handle both old format (plans/...) and new format (agent/plans/...)
+  const normalizedFile = planFile.startsWith('agent/') ? planFile : `agent/${planFile}`;
+  const filePath = join(getProjectDir(basePath), normalizedFile);
 
-  if (!existsSync(filePath)) {
+  if (!getProjectFileOps().existsSync(filePath)) {
     return false;
   }
 
-  const content = readFileSync(filePath, 'utf-8').trim();
+  const content = getProjectFileOps().readFileSync(filePath, 'utf-8').trim();
   return content.length > 0;
 }
 
 /**
- * Read a file from the project directory.
+ * Check if Content Planning phase deliverables exist (content plan only).
+ * Used to determine if Content Planning phase can be marked as completed.
+ * Note: Image placements are handled in IMAGE_PLACEMENT phase, not here.
  */
-export function readProjectFile(relativePath: string, basePath: string = process.cwd()): string | null {
-  const filePath = join(getProjectDir(basePath), relativePath);
+export function checkPlanningDeliverables(project: ProjectFile, basePath: string = getCurrentProjectBasePath()): boolean {
+  const contentPlanPath = join(getProjectDir(basePath), 'agent', 'plans', 'content-plan.md');
+  
+  const contentPlanExists = getProjectFileOps().existsSync(contentPlanPath) && 
+    getProjectFileOps().readFileSync(contentPlanPath, 'utf-8').trim().length > 0;
+  
+  return contentPlanExists;
+}
 
-  if (!existsSync(filePath)) {
+/**
+ * Read a file from the project directory.
+ * Paths should be relative to .kshana/ (e.g., "agent/plans/plot.md" or "context/index.json").
+ */
+export function readProjectFile(relativePath: string, basePath: string = getCurrentProjectBasePath()): string | null {
+  // If path doesn't start with agent/, context/, or index/, assume it's an agent file
+  const normalizedPath = relativePath.startsWith('agent/') || relativePath.startsWith('context/') || relativePath.startsWith('index/')
+    ? relativePath
+    : `agent/${relativePath}`;
+  const filePath = join(getProjectDir(basePath), normalizedPath);
+
+  if (!getProjectFileOps().existsSync(filePath)) {
     return null;
   }
 
-  return readFileSync(filePath, 'utf-8');
+  return getProjectFileOps().readFileSync(filePath, 'utf-8');
 }
 
 /**
  * Write a file to the project directory.
+ * Paths should be relative to .kshana/ (e.g., "agent/plans/plot.md" or "context/index.json").
  */
 export function writeProjectFile(
   relativePath: string,
   content: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): void {
+  // If path doesn't start with agent/, context/, or index/, assume it's an agent file
+  const normalizedPath = relativePath.startsWith('agent/') || relativePath.startsWith('context/') || relativePath.startsWith('index/')
+    ? relativePath
+    : `agent/${relativePath}`;
   const projectDir = getProjectDir(basePath);
-  const filePath = join(projectDir, relativePath);
+  const filePath = join(projectDir, normalizedPath);
 
   // Ensure parent directory exists
   const parentDir = join(filePath, '..');
-  if (!existsSync(parentDir)) {
-    mkdirSync(parentDir, { recursive: true });
+  if (!getProjectFileOps().existsSync(parentDir)) {
+    getProjectFileOps().mkdirSync(parentDir, { recursive: true });
   }
 
-  writeFileSync(filePath, content, 'utf-8');
+  getProjectFileOps().writeFileSync(filePath, content, 'utf-8');
 }
 
 /**
@@ -822,10 +1930,10 @@ function formatCharacterMarkdown(character: CharacterData): string {
  */
 export function saveCharacter(
   character: CharacterData,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): void {
   const safeName = character.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const filePath = `characters/${safeName}.md`;
+  const filePath = `agent/characters/${safeName}.md`;
   writeProjectFile(filePath, formatCharacterMarkdown(character), basePath);
 
   // Update project file's character list (now CharacterData[])
@@ -848,7 +1956,7 @@ export function saveCharacter(
  */
 export function addCharacter(
   name: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): CharacterData {
   const project = loadProject(basePath);
   if (!project) {
@@ -856,7 +1964,7 @@ export function addCharacter(
   }
 
   // Check if character already exists
-  const existing = project.characters.find(c => c.name === name);
+  const existing = project.characters.find(c => c.name.toLowerCase() === name.toLowerCase());
   if (existing) {
     return existing;
   }
@@ -875,12 +1983,12 @@ export function addCharacter(
 export function updateCharacter(
   name: string,
   updates: Partial<CharacterData>,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): CharacterData | null {
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.characters.findIndex(c => c.name === name);
+  const index = project.characters.findIndex(c => c.name.toLowerCase() === name.toLowerCase());
   if (index < 0) return null;
 
   const existing = project.characters[index];
@@ -890,9 +1998,28 @@ export function updateCharacter(
   project.characters[index] = updated;
   saveProject(project, basePath);
 
-  // Also save to markdown file if description changed
+  // Only save to markdown file if:
+  // 1. Description or visual description was updated, AND
+  // 2. The update contains actual content (not variable references or empty), AND
+  // 3. Either the file doesn't exist, or we're explicitly updating with full content
   if (updates.description || updates.visualDescription) {
-    saveCharacter(updated, basePath);
+    // Check if the file already exists with content
+    const existingContent = loadCharacterMarkdown(name, basePath);
+    const fileAlreadyExists = existingContent !== null && existingContent.trim().length > 0;
+
+    // Check if the update is a variable reference (starts with $)
+    const isVariableRef = (updates.description?.startsWith('$') || updates.visualDescription?.startsWith('$'));
+
+    // Only save if:
+    // - File doesn't exist, OR
+    // - File exists but update has actual non-variable-ref content
+    const hasActualContent = (updated.description && !updated.description.startsWith('$')) ||
+      (updated.visualDescription && !updated.visualDescription.startsWith('$'));
+
+    if (!fileAlreadyExists || (hasActualContent && !isVariableRef)) {
+      saveCharacter(updated, basePath);
+    }
+    // Otherwise, just update project.json registry without overwriting the file
   }
 
   return updated;
@@ -907,12 +2034,12 @@ export function updateCharacterApproval(
   status: ItemApprovalStatus,
   approvalType: 'content' | 'image' = 'content',
   feedback?: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): CharacterData | null {
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.characters.findIndex(c => c.name === name);
+  const index = project.characters.findIndex(c => c.name.toLowerCase() === name.toLowerCase());
   if (index < 0) return null;
 
   const character = project.characters[index];
@@ -944,9 +2071,9 @@ export function updateCharacterApproval(
  * Load character markdown from characters/[name].md.
  * Returns the raw markdown content (parsing not needed for index-only approach).
  */
-export function loadCharacterMarkdown(name: string, basePath: string = process.cwd()): string | null {
+export function loadCharacterMarkdown(name: string, basePath: string = getCurrentProjectBasePath()): string | null {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  return readProjectFile(`characters/${safeName}.md`, basePath);
+  return readProjectFile(`agent/characters/${safeName}.md`, basePath);
 }
 
 /**
@@ -968,9 +2095,9 @@ function formatSettingMarkdown(setting: SettingData): string {
 /**
  * Save setting data to settings/[name].md and update project.
  */
-export function saveSetting(setting: SettingData, basePath: string = process.cwd()): void {
+export function saveSetting(setting: SettingData, basePath: string = getCurrentProjectBasePath()): void {
   const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const filePath = `settings/${safeName}.md`;
+  const filePath = `agent/settings/${safeName}.md`;
   writeProjectFile(filePath, formatSettingMarkdown(setting), basePath);
 
   // Update project file's setting list (now SettingData[])
@@ -993,7 +2120,7 @@ export function saveSetting(setting: SettingData, basePath: string = process.cwd
  */
 export function addSetting(
   name: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SettingData {
   const project = loadProject(basePath);
   if (!project) {
@@ -1001,7 +2128,7 @@ export function addSetting(
   }
 
   // Check if setting already exists
-  const existing = project.settings.find(s => s.name === name);
+  const existing = project.settings.find(s => s.name.toLowerCase() === name.toLowerCase());
   if (existing) {
     return existing;
   }
@@ -1020,12 +2147,12 @@ export function addSetting(
 export function updateSetting(
   name: string,
   updates: Partial<SettingData>,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SettingData | null {
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.settings.findIndex(s => s.name === name);
+  const index = project.settings.findIndex(s => s.name.toLowerCase() === name.toLowerCase());
   if (index < 0) return null;
 
   const existing = project.settings[index];
@@ -1035,9 +2162,28 @@ export function updateSetting(
   project.settings[index] = updated;
   saveProject(project, basePath);
 
-  // Also save to markdown file if description changed
+  // Only save to markdown file if:
+  // 1. Description or visual description was updated, AND
+  // 2. The update contains actual content (not variable references or empty), AND
+  // 3. Either the file doesn't exist, or we're explicitly updating with full content
   if (updates.description || updates.visualDescription) {
-    saveSetting(updated, basePath);
+    // Check if the file already exists with content
+    const existingContent = loadSettingMarkdown(name, basePath);
+    const fileAlreadyExists = existingContent !== null && existingContent.trim().length > 0;
+
+    // Check if the update is a variable reference (starts with $)
+    const isVariableRef = (updates.description?.startsWith('$') || updates.visualDescription?.startsWith('$'));
+
+    // Only save if:
+    // - File doesn't exist, OR
+    // - File exists but update has actual non-variable-ref content
+    const hasActualContent = (updated.description && !updated.description.startsWith('$')) ||
+      (updated.visualDescription && !updated.visualDescription.startsWith('$'));
+
+    if (!fileAlreadyExists || (hasActualContent && !isVariableRef)) {
+      saveSetting(updated, basePath);
+    }
+    // Otherwise, just update project.json registry without overwriting the file
   }
 
   return updated;
@@ -1052,12 +2198,12 @@ export function updateSettingApproval(
   status: ItemApprovalStatus,
   approvalType: 'content' | 'image' = 'content',
   feedback?: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SettingData | null {
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.settings.findIndex(s => s.name === name);
+  const index = project.settings.findIndex(s => s.name.toLowerCase() === name.toLowerCase());
   if (index < 0) return null;
 
   const setting = project.settings[index];
@@ -1089,18 +2235,32 @@ export function updateSettingApproval(
  * Load setting markdown from settings/[name].md.
  * Returns the raw markdown content.
  */
-export function loadSettingMarkdown(name: string, basePath: string = process.cwd()): string | null {
+export function loadSettingMarkdown(name: string, basePath: string = getCurrentProjectBasePath()): string | null {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  return readProjectFile(`settings/${safeName}.md`, basePath);
+  return readProjectFile(`agent/settings/${safeName}.md`, basePath);
 }
 
 /**
  * Add a scene reference to the project.
- * Scene content is stored in plans/scenes.md or individual scene files.
+ * Scene content is stored in agent/scenes/scene-XXX/scene.md files.
  */
-export function addScene(sceneRef: SceneRef, basePath: string = process.cwd()): void {
+export function addScene(sceneRef: SceneRef, basePath: string = getCurrentProjectBasePath()): void {
   const project = loadProject(basePath);
   if (!project) return;
+
+  // Ensure scene has folder and file paths
+  if (!sceneRef.folder) {
+    sceneRef.folder = `agent/scenes/scene-${String(sceneRef.sceneNumber).padStart(3, '0')}`;
+  }
+  if (!sceneRef.file) {
+    sceneRef.file = `${sceneRef.folder}/scene.md`;
+  }
+
+  // Create scene directory if it doesn't exist
+  const sceneFolderPath = join(getProjectDir(basePath), sceneRef.folder);
+  if (!getProjectFileOps().existsSync(sceneFolderPath)) {
+    getProjectFileOps().mkdirSync(sceneFolderPath, { recursive: true });
+  }
 
   // Check if scene already exists
   const existingIndex = project.scenes.findIndex((s) => s.sceneNumber === sceneRef.sceneNumber);
@@ -1113,7 +2273,7 @@ export function addScene(sceneRef: SceneRef, basePath: string = process.cwd()): 
 
   // Also track in content registry for persistence across restarts
   const sceneName = sceneRef.title || `Scene ${sceneRef.sceneNumber}`;
-  addContentItem(project, 'scenes', sceneName, undefined, basePath);
+  addContentItem(project, 'scenes', sceneName, sceneRef.file, basePath);
   // Note: addContentItem calls saveProject internally
 }
 
@@ -1130,7 +2290,7 @@ export const MAX_SCENES = 12;
 export function addNewScene(
   sceneNumber: number,
   title?: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SceneRef {
   const project = loadProject(basePath);
   if (!project) {
@@ -1150,6 +2310,13 @@ export function addNewScene(
 
   // Create new scene with default values
   const scene = createDefaultSceneRef(sceneNumber, title);
+
+  // Create scene directory
+  const sceneFolderPath = join(getProjectDir(basePath), scene.folder!);
+  if (!getProjectFileOps().existsSync(sceneFolderPath)) {
+    getProjectFileOps().mkdirSync(sceneFolderPath, { recursive: true });
+  }
+
   project.scenes.push(scene);
   project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
   saveProject(project, basePath);
@@ -1163,7 +2330,7 @@ export function addNewScene(
 export function updateScene(
   sceneNumber: number,
   updates: Partial<SceneRef>,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SceneRef | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -1189,7 +2356,7 @@ export function updateSceneApproval(
   phase: 'content' | 'image' | 'video',
   status: ItemApprovalStatus,
   feedback?: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): SceneRef | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -1235,62 +2402,139 @@ export function updateSceneApproval(
 /**
  * Add an asset to the manifest.
  */
-export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): void {
-  const manifestPath = join(getProjectDir(basePath), 'assets', 'manifest.json');
+export async function addAsset(asset: AssetInfo, basePath: string = getCurrentProjectBasePath()): Promise<void> {
+  await withManifestWriteLock(async () => {
+    const manifestPath = getManifestFilePath(basePath);
 
-  let manifest: { assets: AssetInfo[] } = { assets: [] };
-  if (existsSync(manifestPath)) {
-    try {
-      manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-    } catch {
-      // Use empty manifest on parse error
-    }
-  }
+    console.log(`[addAsset] Registering asset:`, {
+      id: asset.id,
+      type: asset.type,
+      path: asset.path,
+      scene_number: asset.scene_number,
+      placementNumber: asset.metadata?.['placementNumber'],
+      manifestPath,
+      basePath,
+    });
 
-  // Check if asset already exists
-  const existingIndex = manifest.assets.findIndex((a) => a.id === asset.id);
-  if (existingIndex >= 0) {
-    manifest.assets[existingIndex] = asset;
-  } else {
-    manifest.assets.push(asset);
-  }
-
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
-
-  // Update project file's asset list
-  const project = loadProject(basePath);
-  if (project && !project.assets.includes(asset.id)) {
-    project.assets.push(asset.id);
-
-    // Also track in content registry for persistence across restarts
-    // Map asset types to content types
-    const contentType: ContentTypeName | null =
-      asset.type === 'scene_image' || asset.type === 'character_ref' || asset.type === 'setting_ref'
-        ? 'images'
-        : asset.type === 'scene_video' || asset.type === 'final_video'
-          ? 'videos'
-          : null;
-
-    if (contentType) {
-      addContentItem(project, contentType, asset.id, asset.path, basePath);
+    let manifest: { schema_version?: string; assets: AssetInfo[] } = { assets: [] };
+    if (getProjectFileOps().existsSync(manifestPath)) {
+      try {
+        manifest = JSON.parse(getProjectFileOps().readFileSync(manifestPath, 'utf-8'));
+        console.log(`[addAsset] Loaded existing manifest with ${manifest.assets?.length || 0} assets`);
+      } catch (error) {
+        console.error(`[addAsset] Failed to parse existing manifest:`, error);
+        // Use empty manifest on parse error
+      }
     } else {
-      saveProject(project, basePath);
+      console.log(`[addAsset] Manifest file does not exist, creating new one: ${manifestPath}`);
     }
-  }
+
+    // Ensure schema_version is set
+    if (!manifest.schema_version) {
+      manifest.schema_version = '1';
+    }
+
+    // Check if asset already exists
+    const existingIndex = manifest.assets.findIndex((a) => a.id === asset.id);
+    if (existingIndex >= 0) {
+      console.log(`[addAsset] Updating existing asset at index ${existingIndex}`);
+      manifest.assets[existingIndex] = asset;
+    } else {
+      console.log(`[addAsset] Adding new asset (total will be ${manifest.assets.length + 1})`);
+      manifest.assets.push(asset);
+    }
+
+    try {
+      const manifestContent = JSON.stringify(manifest, null, 2);
+      getProjectFileOps().writeFileSync(manifestPath, manifestContent, 'utf-8');
+      console.log(`[addAsset] ✓ Successfully wrote manifest with ${manifest.assets.length} assets to ${manifestPath}`);
+      
+      // Note: File system watcher in desktop app will detect this change and trigger UI refresh
+      // The watcher uses awaitWriteFinish to ensure file is fully written before detecting change
+      
+      // Small delay to ensure OS has flushed the file before verification
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      // Verify the write by reading it back
+      try {
+        const verifyManifest = JSON.parse(getProjectFileOps().readFileSync(manifestPath, 'utf-8'));
+        const assetInManifest = verifyManifest.assets?.find((a: AssetInfo) => a.id === asset.id);
+        if (assetInManifest) {
+          console.log(`[addAsset] ✓ Verified asset ${asset.id} is in manifest`);
+        } else {
+          console.error(`[addAsset] ✗ CRITICAL: Asset ${asset.id} was not found in manifest after write!`);
+        }
+      } catch (verifyError) {
+        console.error(`[addAsset] Failed to verify manifest write:`, verifyError);
+      }
+
+      // Emit asset added event for WebSocket notification
+      try {
+        assetEventEmitter.emitAssetAdded({
+          assetId: asset.id,
+          assetType: asset.type as 'scene_image' | 'scene_video' | 'scene_infographic' | 'character_ref' | 'setting_ref' | 'final_video',
+          placementNumber: asset.metadata?.['placementNumber'] as number | undefined,
+          sceneNumber: asset.scene_number,
+          path: asset.path,
+          version: asset.version ?? 1,
+          projectDirectory: basePath,
+        });
+        console.log(`[addAsset] ✓ Emitted asset_added event for ${asset.id}`);
+      } catch (eventError) {
+        // Don't fail asset registration if event emission fails
+        console.warn(`[addAsset] Failed to emit asset_added event:`, eventError);
+      }
+    } catch (error) {
+      console.error(`[addAsset] ✗ CRITICAL: Failed to write manifest:`, {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+        manifestPath,
+        basePath,
+      });
+      throw error; // Re-throw so caller knows registration failed
+    }
+
+    // Update project file's asset list
+    try {
+      const project = loadProject(basePath);
+      if (project && !project.assets.includes(asset.id)) {
+        project.assets.push(asset.id);
+
+        // Also track in content registry for persistence across restarts
+        // Map asset types to content types
+        const contentType: ContentTypeName | null =
+          asset.type === 'scene_image' || asset.type === 'character_ref' || asset.type === 'setting_ref'
+            ? 'images'
+            : asset.type === 'scene_video' || asset.type === 'final_video'
+              ? 'videos'
+              : null;
+
+        if (contentType) {
+          addContentItem(project, contentType, asset.id, asset.path, basePath);
+        } else {
+          saveProject(project, basePath);
+        }
+        console.log(`[addAsset] Updated project file with asset ${asset.id}`);
+      }
+    } catch (error) {
+      console.warn(`[addAsset] Failed to update project file (non-critical):`, error);
+      // Don't throw - manifest write succeeded, project file update is secondary
+    }
+  });
 }
 
 /**
  * Get all assets from the manifest.
  */
-export function getAssets(basePath: string = process.cwd()): AssetInfo[] {
-  const manifestPath = join(getProjectDir(basePath), 'assets', 'manifest.json');
+export function getAssets(basePath: string = getCurrentProjectBasePath()): AssetInfo[] {
+  const manifestPath = getManifestFilePath(basePath);
 
-  if (!existsSync(manifestPath)) {
+  if (!getProjectFileOps().existsSync(manifestPath)) {
     return [];
   }
 
   try {
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    const manifest = JSON.parse(getProjectFileOps().readFileSync(manifestPath, 'utf-8'));
     return manifest.assets || [];
   } catch {
     return [];
@@ -1300,7 +2544,7 @@ export function getAssets(basePath: string = process.cwd()): AssetInfo[] {
 /**
  * Get the project summary for the main agent.
  */
-export function getProjectSummary(basePath: string = process.cwd()): string {
+export function getProjectSummary(basePath: string = getCurrentProjectBasePath()): string {
   const project = loadProject(basePath);
 
   if (!project) {
@@ -1308,7 +2552,10 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   }
 
   const currentPhase = project.currentPhase;
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
+  if (!phaseConfig) {
+    return `Project: ${project.id}\nPhase: ${currentPhase}\nStatus: Unknown phase configuration`;
+  }
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
 
   const completedPhases = Object.entries(project.phases)
@@ -1320,9 +2567,9 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   const settingNames = project.settings.map(s => s.name);
 
   // Get per-item approval status for current phase if applicable
-  const phaseConfig2 = PHASE_CONFIGS[currentPhase];
+  const phaseConfig2 = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
   let itemProgress = '';
-  if (phaseConfig2.requiresPerItemApproval) {
+  if (phaseConfig2?.requiresPerItemApproval) {
     const { approved, total } = countApprovedItems(project, currentPhase);
     itemProgress = `\nItem Progress: ${approved}/${total} approved`;
   }
@@ -1351,121 +2598,358 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
     }
   }
 
+  // Plan status
+  const planStatus = project.plan?.stage === PlannerStage.COMPLETE
+    ? `✅ Approved (ID: ${project.plan?.planId ?? 'unknown'})`
+    : `⏳ ${project.plan?.stage ?? 'NONE'} (ID: ${project.plan?.planId ?? 'unknown'})`;
+  const backgroundState = project.backgroundGeneration;
+  const activeBackgroundCount = backgroundState?.activeBatchIds?.length ?? 0;
+  const failedBackgroundCount = backgroundState?.batches?.filter((batch) => batch.status === 'failed').length ?? 0;
+  const totalBackgroundCount = backgroundState?.batches?.length ?? 0;
+  const backgroundSummary = `\nBackground Batches: active=${activeBackgroundCount}, failed=${failedBackgroundCount}, total=${totalBackgroundCount}`;
+
+  if (!phaseConfig) {
+    return `
+Project: ${project.title || '(untitled)'}
+ID: ${project.id}
+Version: ${project.version}
+Style: ${styleDisplay}
+Input Type: ${inputTypeDisplay}
+Master Plan: ${planStatus}
+Current Phase: ${currentPhase} (no config)
+`;
+  }
+
   return `
 Project: ${project.title || '(untitled)'}
 ID: ${project.id}
 Version: ${project.version}
 Style: ${styleDisplay}
 Input Type: ${inputTypeDisplay}
+Master Plan: ${planStatus}
 Current Phase: ${phaseConfig.displayName} (${currentPhase})
-Planner Stage: ${phaseInfo?.plannerStage ?? 'not started'}
+Phase Status: ${phaseInfo?.status ?? 'not started'}
 Completed Phases: ${completedPhases.length > 0 ? completedPhases.join(', ') : 'none'}
 Skipped Phases: ${skippedPhases.length > 0 ? skippedPhases.join(', ') : 'none'}
 Characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'none defined'}
 Settings: ${settingNames.length > 0 ? settingNames.join(', ') : 'none defined'}
 Scenes: ${project.scenes.length}/${MAX_SCENES} (max)
 Assets: ${project.assets.length}${itemProgress}${sceneLimitWarning}
+${backgroundSummary}
 `.trim();
 }
 
 /**
  * Get the state transition prompt for the main agent.
  * This tells the agent what phase it's in and what to do next.
+ * Planning is done at project level - all phases execute based on the approved master plan.
  */
-export function getStateTransitionPrompt(basePath: string = process.cwd()): string {
-  const project = loadProject(basePath);
+export function getStateTransitionPrompt(basePath: string = getCurrentProjectBasePath()): string {
+  let project = loadProject(basePath);
 
   if (!project) {
     return 'No project exists. Create a new project first.';
   }
 
+  // CRITICAL: Auto-correct inputType if project has transcriptEntries but wrong inputType
+  if (project.transcriptEntries && project.transcriptEntries.length > 0) {
+    if (project.inputType !== 'youtube_srt' && project.inputType !== 'script') {
+      console.log(`[ProjectManager] Auto-correcting inputType from ${project.inputType} to youtube_srt (transcriptEntries exist)`);
+      const corrected = setProjectInputType('youtube_srt', basePath);
+      if (corrected) {
+        project = corrected;
+        // If transcript_input phase is already completed, transition to content planning
+        const transcriptPhaseInfo = project.phases?.transcript_input;
+        if (transcriptPhaseInfo && transcriptPhaseInfo.status === 'completed' && project.currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+          // Transition to content planning phase since transcript is already parsed
+          project.currentPhase = WorkflowPhase.CONTENT_PLANNING;
+          const planningPhaseKey = WorkflowPhase.CONTENT_PLANNING as keyof typeof project.phases;
+          if (project.phases[planningPhaseKey]) {
+            project.phases[planningPhaseKey].status = 'in_progress';
+          }
+          saveProject(project, basePath);
+        }
+      }
+    }
+  }
+
   const currentPhase = project.currentPhase;
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
+  // Use workflow manager to get phase config (ensures correct workflow is used)
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
   const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
-  const plannerStage = phaseInfo?.plannerStage ?? PlannerStage.PLANNING;
+  const isYouTubeWorkflow = isYouTubeWorkflowType(project.inputType);
+  const masterPlanStage = project.plan?.stage ?? 'NONE';
+  const masterPlanExists = project.plan?.planFile ? planFileHasContent(project.plan.planFile, basePath) : false;
+  const backgroundState = project.backgroundGeneration;
+  const backgroundBatches = backgroundState?.batches ?? [];
+  const activeBackgroundBatches = backgroundBatches.filter(
+    (batch) => batch.status === 'queued' || batch.status === 'running',
+  );
+  const activeImageBatches = activeBackgroundBatches.filter((batch) => batch.kind === 'image');
+  const activeVideoBatches = activeBackgroundBatches.filter((batch) => batch.kind === 'video');
+  const failedVideoBatches = backgroundBatches
+    .filter((batch) => batch.kind === 'video' && batch.status === 'failed')
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 
-  // Check if plan file already has content
-  const planFileExists = phaseConfig.planOutputFile
-    ? planFileHasContent(phaseConfig.planOutputFile, basePath)
-    : false;
-
-  let instruction = `
+  // For YouTube workflow, skip all master plan logic
+  if (isYouTubeWorkflow) {
+    if (!phaseConfig) {
+      return `Error: No configuration found for phase ${currentPhase}`;
+    }
+    
+    let instruction = `
 ## Current State
 - **Phase**: ${phaseConfig.displayName}
-- **Stage**: ${plannerStage}
-- **Plan File**: ${phaseConfig.planOutputFile ?? 'N/A'}
-- **Plan File Has Content**: ${planFileExists ? 'YES' : 'NO'}
+- **Phase Status**: ${phaseInfo?.status ?? 'pending'}
 - **Per-Item Approval Required**: ${phaseConfig.requiresPerItemApproval ? 'YES' : 'NO'}
 
 ## What to Do Next
+`;
+
+    if (activeBackgroundBatches.length > 0 || failedVideoBatches.length > 0) {
+      instruction += `
+- **Background batches active**: ${activeBackgroundBatches.length}
+- **Active image batches**: ${activeImageBatches.length}
+- **Active video batches**: ${activeVideoBatches.length}
+- **Failed video batches**: ${failedVideoBatches.length}
+- Use read_background_generation to inspect batch status and failed placements.
+`;
+    }
+
+    // For YouTube workflow, transcript_input should transition to planning immediately
+    if (currentPhase === WorkflowPhase.TRANSCRIPT_INPUT) {
+      if (phaseInfo?.status === 'completed' || phaseInfo?.status === 'skipped') {
+        instruction += `
+Transcript parsing is complete. Transition to content planning phase.
+1. Call update_project with action "transition_phase" to move to "content_planning"
+`;
+        return instruction.trim();
+      }
+    }
+
+    // Check if Content Planning phase deliverables exist but phase isn't completed
+    if (currentPhase === WorkflowPhase.CONTENT_PLANNING) {
+      const phaseStatus = phaseInfo?.status ?? 'pending';
+      if (phaseStatus === 'in_progress') {
+        const planningDeliverablesExist = checkPlanningDeliverables(project, basePath);
+        if (planningDeliverablesExist) {
+          instruction += `
+The Content Planning phase deliverables are complete (content plan exists).
+1. Call update_project with action "update_phase" to mark "content_planning" as "completed"
+2. Then call update_project with action "transition_phase" to move to the next phase
+`;
+          return instruction.trim();
+        }
+      }
+    }
+
+    if (currentPhase === WorkflowPhase.IMAGE_GENERATION && activeImageBatches.length > 0) {
+      instruction += `
+Image generation is already running in the background.
+1. Call update_project with action "update_phase" to mark "image_generation" as "completed"
+2. Then call update_project with action "transition_phase" to move to the next phase
+3. Continue working while images render in background
+`;
+      return instruction.trim();
+    }
+
+    if (currentPhase === WorkflowPhase.VIDEO_GENERATION && activeVideoBatches.length > 0) {
+      instruction += `
+Video generation is running in the background.
+1. Call read_background_generation to check progress
+2. Do NOT mark video_generation complete until all placements succeed
+3. If background batches are still running, continue monitoring
+`;
+      return instruction.trim();
+    }
+
+    if (currentPhase === WorkflowPhase.VIDEO_GENERATION && failedVideoBatches.length > 0) {
+      const latestFailedBatch = failedVideoBatches[0];
+      instruction += `
+Background video generation has failed placements.
+1. Retry only failed placements:
+   generate_all_videos(retry_failed_batch_id: "${latestFailedBatch?.id}", run_in_background: true)
+2. Use read_background_generation to monitor the retry batch
+3. Mark video_generation complete only after a retry batch finishes with zero failures
+`;
+      return instruction.trim();
+    }
+
+    // Proceed with phase execution for YouTube workflow
+    instruction += `
+✅ **Phase ready** - Executing phase: ${phaseConfig.displayName}
+
+Follow the phase-specific instructions. Each phase should:
+1. Call the appropriate subagent via Task()
+2. Extract result.output and save to the correct file
+3. Mark phase as completed
+4. Transition to next phase
+`;
+
+    // For phases requiring per-item approval, provide specific instructions
+    if (phaseConfig.requiresPerItemApproval) {
+      instruction += getPerItemPhaseInstructions(project, phaseConfig, basePath);
+    } else {
+      // Standard single-item phase flow
+      const phaseStatus = phaseInfo?.status ?? 'pending';
+
+      if (phaseStatus === 'completed') {
+        if (currentPhase === WorkflowPhase.IMAGE_PLACEMENT) {
+          instruction += `
+The Image Placement phase is complete.
+1. Ask the user if they want to proceed with Image Generation.
+2. Only if they approve, call update_project with action "transition_phase".
+`;
+        } else {
+          const nextPhase = getNextPhase(currentPhase, project.inputType);
+          const nextPhaseConfig = nextPhase ? (getPhaseConfig(nextPhase, project.inputType) || (PHASE_CONFIGS[nextPhase] as PhaseConfig | undefined)) : null;
+          instruction += `
+The ${phaseConfig.displayName} phase is complete.
+1. Use transition_phase to move to the next phase: ${nextPhaseConfig ? nextPhaseConfig.displayName : 'DONE'}
+`;
+        }
+      } else {
+        // For YouTube workflow phases, they use Task() with subagents
+        instruction += `
+Execute the ${phaseConfig.displayName} phase.
+1. Follow the phase-specific instructions below
+2. Call the appropriate subagent via Task()
+3. Save the result to the correct file
+4. Mark phase as complete and transition to next phase
+`;
+      }
+    }
+
+    return instruction.trim();
+  }
+
+  // Legacy workflow (non-YouTube) - includes master plan logic
+  if (!phaseConfig) {
+    return `Error: No configuration found for phase ${currentPhase}`;
+  }
+  
+  let instruction = `
+## Current State
+- **Phase**: ${phaseConfig.displayName}
+- **Phase Status**: ${phaseInfo?.status ?? 'pending'}
+- **Master Plan**: ${project.plan?.planFile ?? 'not set'}
+- **Master Plan ID**: ${project.plan?.planId ?? 'unknown'}
+- **Master Plan Stage**: ${masterPlanStage}
+- **Master Plan Has Content**: ${masterPlanExists ? 'YES' : 'NO'}
+- **Per-Item Approval Required**: ${phaseConfig.requiresPerItemApproval ? 'YES' : 'NO'}
+
+## What to Do Next
+`;
+
+  // Check if master plan needs to be created/approved first (legacy workflow only)
+  if (masterPlanStage !== PlannerStage.COMPLETE) {
+    switch (masterPlanStage) {
+      case PlannerStage.PLANNING:
+        if (masterPlanExists) {
+          instruction += `
+The master plan exists. Present it to the user for approval.
+1. Use ask_user to present a summary and ask for approval
+2. If approved, call update_project with action "update_plan_stage" and stage "complete"
+3. If feedback is given, call update_project with action "update_plan_stage" and stage "refining"
+`;
+        } else {
+          instruction += `
+**CREATE MASTER PLAN FIRST**
+
+Before executing any phase, you must create a master plan that covers the entire video generation workflow.
+
+1. Read the user's original input from agent/original_input.md
+2. Create a comprehensive master plan that outlines:
+   - Plot summary and key story beats
+   - Main characters to be visualized
+   - Key settings/locations
+   - Estimated number of scenes
+   - Visual style approach
+3. Write the plan to ${project.plan?.planFile ?? 'agent/plans/master-plan.md'}
+4. Present the plan to the user for approval
+`;
+        }
+        break;
+
+      case PlannerStage.VERIFY:
+        instruction += `
+The master plan is ready for verification. Present it to the user for approval.
+1. Read the plan from ${project.plan?.planFile ?? 'agent/plans/master-plan.md'}
+2. Use ask_user to present a summary and ask for approval
+3. If approved, call update_project with action "update_plan_stage" and stage "complete"
+4. If feedback is given, call update_project with action "update_plan_stage" and stage "refining"
+`;
+        break;
+
+      case PlannerStage.REFINING:
+        instruction += `
+Refine the master plan based on user feedback.
+1. Read the current plan from ${project.plan?.planFile ?? 'agent/plans/master-plan.md'}
+2. Apply user feedback
+3. Update the plan in ${project.plan?.planFile ?? 'agent/plans/master-plan.md'}
+4. Call update_project with action "update_plan_stage" and stage "verify"
+`;
+        break;
+    }
+
+    return instruction.trim();
+  }
+
+  // Proceed with phase execution for legacy workflow
+  if (!phaseConfig) {
+    return `Error: No configuration found for phase ${currentPhase}`;
+  }
+  
+  instruction += `
+✅ **Master plan approved** - Executing phase: ${phaseConfig.displayName}
+
 `;
 
   // For phases requiring per-item approval, provide specific instructions
   if (phaseConfig.requiresPerItemApproval) {
     instruction += getPerItemPhaseInstructions(project, phaseConfig, basePath);
   } else {
-    // Standard single-approval phase flow
-    switch (plannerStage) {
-      case PlannerStage.PLANNING:
-        if (planFileExists) {
-          instruction += `
-You are in the PLANNING stage BUT a plan already exists at ${phaseConfig.planOutputFile}.
+    // Standard single-item phase flow (plot, story, video_combine)
+    const phaseStatus = phaseInfo?.status ?? 'pending';
 
-**IMPORTANT**: An existing plan means it was ALREADY APPROVED previously. Do NOT ask for approval again.
-
-1. Mark this phase as COMPLETE immediately (update_project with action "update_planner_stage", stage "complete")
-2. Then transition to the next phase using transition_phase
-
-DO NOT create a new plan. DO NOT ask for approval - it's already approved.
-`;
-        } else {
-          instruction += `
-You are in the PLANNING stage. Create a plan for ${phaseConfig.displayName}.
-1. Analyze the project context
-2. Create a detailed plan
-3. Write the plan to ${phaseConfig.planOutputFile}
-4. Move to VERIFY stage by updating the planner stage
-`;
-        }
-        break;
-
-      case PlannerStage.VERIFY:
-        if (planFileExists) {
-          instruction += `
-You are in the VERIFY stage and a plan already exists at ${phaseConfig.planOutputFile}.
-
-**IMPORTANT**: An existing plan means it was ALREADY APPROVED previously. Do NOT ask for approval again.
-
-1. Mark this phase as COMPLETE immediately (update_project with action "update_planner_stage", stage "complete")
-2. Then transition to the next phase using transition_phase
-`;
-        } else {
-          instruction += `
-You are in the VERIFY stage. Present the plan to the user for approval.
-1. Read the plan from ${phaseConfig.planOutputFile}
-2. Present a summary to the user using ask_user
-3. If user approves (or 15 seconds pass with no response), move to COMPLETE
-4. If user provides feedback, move to REFINING stage
-`;
-        }
-        break;
-
-      case PlannerStage.REFINING:
-        instruction += `
-You are in the REFINING stage. Update the plan based on user feedback.
-1. Read the current plan
-2. Apply user feedback
-3. Update the plan in ${phaseConfig.planOutputFile}
-4. Move back to VERIFY stage
-`;
-        break;
-
-      case PlannerStage.COMPLETE:
-        instruction += `
+    if (phaseStatus === 'completed') {
+      const nextPhase = getNextPhase(currentPhase, project.inputType);
+      const nextPhaseConfig = nextPhase ? (getPhaseConfig(nextPhase, project.inputType) || (PHASE_CONFIGS[nextPhase] as PhaseConfig | undefined)) : null;
+      instruction += `
 The ${phaseConfig.displayName} phase is complete.
-1. Use transition_phase to move to the next phase: ${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}
+1. Use transition_phase to move to the next phase: ${nextPhaseConfig ? nextPhaseConfig.displayName : 'DONE'}
 `;
-        break;
+    } else {
+      // Check if content exists for content phases
+      if (phaseConfig.agentType === 'content' && phaseConfig.contentType) {
+        const contentFile = CONTENT_TYPE_OUTPUT_FILES[phaseConfig.contentType];
+        if (contentFile) {
+          const contentFilePath = join(basePath, '.kshana', 'agent', contentFile);
+          const contentExists = getProjectFileOps().existsSync(contentFilePath) && getProjectFileOps().readFileSync(contentFilePath, 'utf-8').trim().length > 0;
+
+          if (contentExists) {
+            instruction += `
+The ${phaseConfig.contentType} content already exists. Mark phase as complete and transition.
+1. Call update_project with action "update_phase" to mark "${currentPhase}" as "completed"
+2. Call update_project with action "transition_phase" to move to the next phase
+`;
+          } else {
+            instruction += `
+Generate the ${phaseConfig.contentType} content for this phase.
+1. Use generate_content(content_type: "${phaseConfig.contentType}") to create the content
+2. The tool will handle user approval automatically
+3. After content is approved, mark phase as complete and transition to next phase
+`;
+          }
+        }
+      } else {
+        instruction += `
+Execute the ${phaseConfig.displayName} phase.
+1. Follow the phase-specific instructions from the master plan
+2. When complete, call update_project with action "update_phase" to mark "${currentPhase}" as "completed"
+3. Then transition to the next phase
+`;
+      }
     }
   }
 
@@ -1518,11 +3002,11 @@ You are resuming this phase with ${approvedCount} of ${totalItems} items already
 \`\`\`
 TodoWrite(merge: false, todos: [
 ${allItems
-  .map((item, idx) => {
-    const status = item.status === 'approved' ? 'completed' : idx === allItems.findIndex(i => i.status !== 'approved') ? 'in_progress' : 'pending';
-    return `  { id: "${item.id}", content: "Process ${item.name}", activeForm: "Processing ${item.name}", status: "${status}" },`;
-  })
-  .join('\n')}
+        .map((item, idx) => {
+          const status = item.status === 'approved' ? 'completed' : idx === allItems.findIndex(i => i.status !== 'approved') ? 'in_progress' : 'pending';
+          return `  { id: "${item.id}", content: "Process ${item.name}", activeForm: "Processing ${item.name}", status: "${status}" },`;
+        })
+        .join('\n')}
 ])
 \`\`\`
 
@@ -1556,7 +3040,14 @@ TodoWrite(merge: false, todos: [
 `;
     switch (phaseConfig.phase) {
       case WorkflowPhase.CHARACTERS_SETTINGS:
-        instruction += `Read the story and identify all characters and settings mentioned. Register each one before creating their profiles.
+        instruction += `**CRITICAL: Use $story context directly - DO NOT create tasks to read the story!**
+
+1. Use fetch_context(context_ref: "$story") to get the story content
+2. Identify all characters and settings mentioned in the story
+3. Check read_project() to see which characters/settings already exist
+4. Register each NEW character/setting before creating their profiles
+
+**DO NOT create story_content.md or any temporary story files. Use $story context directly.**
 `;
         break;
       case WorkflowPhase.CHARACTER_SETTING_IMAGES:
@@ -1655,7 +3146,13 @@ After creating, get user approval before moving to the next scene.
         // Default for content creation phases (CHARACTERS_SETTINGS, SCENES)
         instruction += `Create the ${nextItem.type} profile for **${nextItem.name}**.
 
+**BEFORE creating, check if this ${nextItem.type} already exists:**
+- Call read_project() and check if "${nextItem.name}" is already in project.${nextItem.type === 'character' ? 'characters' : 'settings'}
+- If it already exists, skip it and move to the next item
+
 Generate detailed content including description and visual characteristics suitable for image generation.
+
+**Use $story context directly - DO NOT create tasks to read story files!**
 
 After creating, get user approval before moving to the next item.
 
@@ -1664,7 +3161,7 @@ After creating, get user approval before moving to the next item.
 2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current item as 'completed' and the next as 'in_progress'
 3. Then create the next item
 
-**DO NOT skip the TodoWrite call!**
+**DO NOT skip the TodoWrite call! DO NOT create duplicates!**
 `;
         break;
     }
@@ -1672,7 +3169,27 @@ After creating, get user approval before moving to the next item.
     instruction += `
 ## All Items Approved!
 
-All ${totalItems} items have been approved. Mark this phase as complete and move to the next phase: **${phaseConfig.nextPhase && PHASE_CONFIGS[phaseConfig.nextPhase] ? PHASE_CONFIGS[phaseConfig.nextPhase].displayName : 'DONE'}**
+All ${totalItems} items have been approved.
+
+**CRITICAL: Mark all items as COMPLETED in your todo list before transitioning.**
+
+\`\`\`
+TodoWrite(merge: false, todos: [
+${allItems
+        .map((item) => {
+          // Generate IDs consistent with how they are created in the loop
+          // For scenes, IDs are typically 'scene-N'. For others, it's 'item-ID' or just ID if used directly.
+          return `  { id: "${item.id}", content: "Process ${item.name}", status: "completed" },`;
+        })
+        .join('\n')}
+])
+\`\`\`
+
+Then mark this phase as complete and move to the next phase: **${(() => {
+  const nextPhase = getNextPhase(project.currentPhase, project.inputType);
+  const nextPhaseConfig = nextPhase ? (getPhaseConfig(nextPhase, project.inputType) || (PHASE_CONFIGS[nextPhase] as PhaseConfig | undefined)) : null;
+  return nextPhaseConfig ? nextPhaseConfig.displayName : 'DONE';
+})()}**
 `;
   }
 
@@ -1690,7 +3207,7 @@ export function updateContentStatus(
   project: ProjectFile,
   contentType: ContentTypeName,
   status: ContentStatus,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   // Ensure content registry exists (for backwards compatibility)
   if (!project.content) {
@@ -1710,7 +3227,7 @@ export function addContentItem(
   contentType: ContentTypeName,
   itemName: string,
   itemFile?: string,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   // Ensure content registry exists
   if (!project.content) {
@@ -1848,7 +3365,7 @@ export function hasRequiredContent(
 export function markContentAvailable(
   project: ProjectFile,
   contentType: ContentTypeName,
-  basePath: string = process.cwd()
+  basePath: string = getCurrentProjectBasePath()
 ): ProjectFile {
   // Ensure content registry exists
   if (!project.content) {

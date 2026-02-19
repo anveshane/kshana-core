@@ -54,17 +54,25 @@ export OPENAI_API_KEY=your-api-key
 pnpm start
 ```
 
+**OpenRouter:**
+```bash
+export LLM_PROVIDER=openrouter
+export OPENROUTER_API_KEY=your-api-key
+export OPENROUTER_MODEL=z-ai/glm-4.7-flash  # Optional, defaults to z-ai/glm-4.7-flash
+pnpm start
+```
+
 ### Environment Variables
 
 Create a `.env` file (copy from `.env.example`):
 
 ```bash
-# Provider selection: gemini, lmstudio, openai, or custom
+# Provider selection: gemini, lmstudio, openai, openrouter, or custom
 LLM_PROVIDER=lmstudio
 
 # Gemini (when LLM_PROVIDER=gemini)
 GOOGLE_API_KEY=your-google-api-key
-GEMINI_MODEL=gemini-2.0-flash
+GEMINI_MODEL=gemini-2.5-flash
 
 # LM Studio (when LLM_PROVIDER=lmstudio)
 LMSTUDIO_BASE_URL=http://127.0.0.1:1234/v1
@@ -75,6 +83,10 @@ LMSTUDIO_API_KEY=not-needed
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_BASE_URL=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o
+
+# OpenRouter (when LLM_PROVIDER=openrouter)
+OPENROUTER_API_KEY=your-openrouter-api-key
+OPENROUTER_MODEL=z-ai/glm-4.7-flash
 
 # Custom/Fallback (when LLM_PROVIDER=custom or not set)
 LLM_BASE_URL=http://127.0.0.1:1234/v1
@@ -88,7 +100,7 @@ LLM_MODEL=local-model
 Options:
   -h, --help            Show help message
   -t, --task <task>     Initial task to run
-  -p, --provider <name> LLM provider: gemini, lmstudio, openai, custom
+  -p, --provider <name> LLM provider: gemini, lmstudio, openai, openrouter, custom
   -m, --model <model>   LLM model name (overrides env)
   -u, --url <url>       LLM API base URL (overrides env)
   -k, --api-key <key>   LLM API key (overrides env)

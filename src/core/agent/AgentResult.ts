@@ -40,4 +40,5 @@ export interface AgentConfig {
   maxIterations?: number;
   name?: string;
   customPrompt?: string;
+  projectId?: string | null;
 }

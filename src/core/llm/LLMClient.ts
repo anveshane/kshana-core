@@ -18,14 +18,31 @@ export class LLMClient {
   private model: string;
   private baseUrl: string;
   private cachedContextLength: number | null = null;
+  private isGeminiProvider: boolean;
 
   constructor(config: LLMClientConfig = {}) {
-    this.baseUrl = config.baseUrl ?? process.env['LLM_BASE_URL'] ?? 'http://127.0.0.1:1234/v1';
-    this.client = new OpenAI({
-      baseURL: this.baseUrl,
-      apiKey: config.apiKey ?? process.env['LLM_API_KEY'] ?? 'not-needed',
-    });
-    this.model = config.model ?? process.env['LLM_MODEL'] ?? 'local-model';
+    const provider = process.env['LLM_PROVIDER']?.toLowerCase();
+
+    if (provider === 'gemini') {
+      this.baseUrl = config.baseUrl ?? process.env['LLM_BASE_URL'] ?? 'https://generativelanguage.googleapis.com/v1beta/openai/';
+      this.client = new OpenAI({
+        baseURL: this.baseUrl,
+        apiKey: config.apiKey ?? process.env['GEMINI_API_KEY'] ?? process.env['LLM_API_KEY'] ?? 'not-needed',
+      });
+      // Gemini models usually default to gemini-1.5-flash unless specified
+      this.model = config.model ?? process.env['LLM_MODEL'] ?? 'gemini-1.5-flash';
+      this.isGeminiProvider = true;
+    } else {
+      // Default / Local
+      this.baseUrl = config.baseUrl ?? process.env['LLM_BASE_URL'] ?? 'http://127.0.0.1:1234/v1';
+      this.client = new OpenAI({
+        baseURL: this.baseUrl,
+        apiKey: config.apiKey ?? process.env['LLM_API_KEY'] ?? 'not-needed',
+      });
+      this.model = config.model ?? process.env['LLM_MODEL'] ?? 'local-model';
+      // Also check baseUrl to detect Gemini even if provider env var isn't set
+      this.isGeminiProvider = this.baseUrl.includes('generativelanguage.googleapis.com');
+    }
   }
 
   /**
@@ -136,13 +153,40 @@ export class LLMClient {
       request.tools = this.convertTools(tools);
     }
 
-    const response = await this.client.chat.completions.create(request);
-    const result = this.parseResponse(response);
+    try {
+      const response = await this.client.chat.completions.create(request);
+      const result = this.parseResponse(response);
 
-    // Log response
-    logger.logResponse(result);
+      // Log response
+      logger.logResponse(result);
 
-    return result;
+      return result;
+    } catch (error: unknown) {
+      // Log the error with details
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      let statusCode: number | undefined;
+      
+      // Extract status code if available
+      if (error && typeof error === 'object') {
+        if ('status' in error) {
+          statusCode = error.status as number;
+        } else if ('statusCode' in error) {
+          statusCode = error.statusCode as number;
+        } else if ('response' in error && error.response && typeof error.response === 'object' && 'status' in error.response) {
+          statusCode = error.response.status as number;
+        }
+      }
+      
+      // Log error to console for debugging
+      console.error(`[LLMClient] API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`);
+      
+      // Re-throw with more context
+      const enhancedError = new Error(`LLM API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`);
+      if (error instanceof Error && error.stack) {
+        enhancedError.stack = error.stack;
+      }
+      throw enhancedError;
+    }
   }
 
   /**
@@ -157,20 +201,82 @@ export class LLMClient {
     // Log request
     logger.logRequest(messages, tools, { temperature });
 
-    const stream = await this.client.chat.completions.create({
+    // Build request - Gemini may not support stream_options
+    const requestParams: OpenAI.ChatCompletionCreateParamsStreaming = {
       model: this.model,
       messages: this.convertMessages(messages),
       tools: tools ? this.convertTools(tools) : undefined,
       temperature,
       stream: true,
-      stream_options: { include_usage: true },
-    });
+    };
+    
+    // Only include stream_options for non-Gemini providers (Gemini may not support it)
+    if (!this.isGeminiProvider) {
+      requestParams.stream_options = { include_usage: true };
+    }
+
+    let stream: AsyncIterable<OpenAI.ChatCompletionChunk>;
+    try {
+      stream = await this.client.chat.completions.create(requestParams) as AsyncIterable<OpenAI.ChatCompletionChunk>;
+    } catch (error: unknown) {
+      // Log streaming error
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      let statusCode: number | undefined;
+      
+      if (error && typeof error === 'object') {
+        if ('status' in error) {
+          statusCode = error.status as number;
+        } else if ('statusCode' in error) {
+          statusCode = error.statusCode as number;
+        } else if ('response' in error && error.response && typeof error.response === 'object' && 'status' in error.response) {
+          statusCode = error.response.status as number;
+        }
+      }
+      
+      // If we get a 400 error and stream_options was included, retry without it
+      if (statusCode === 400 && requestParams.stream_options) {
+        console.warn(`[LLMClient] Got 400 error with stream_options, retrying without stream_options...`);
+        try {
+          // Create a new request without stream_options
+          const retryParams: OpenAI.ChatCompletionCreateParamsStreaming = {
+            model: requestParams.model,
+            messages: requestParams.messages,
+            tools: requestParams.tools,
+            temperature: requestParams.temperature,
+            stream: true,
+          };
+          stream = await this.client.chat.completions.create(retryParams) as AsyncIterable<OpenAI.ChatCompletionChunk>;
+          console.log(`[LLMClient] Retry without stream_options succeeded`);
+        } catch (retryError) {
+          // If retry also fails, throw the original error
+          console.error(`[LLMClient] Retry without stream_options also failed: ${retryError}`);
+          const enhancedError = new Error(`LLM streaming API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`);
+          if (error instanceof Error && error.stack) {
+            enhancedError.stack = error.stack;
+          }
+          throw enhancedError;
+        }
+      } else {
+        console.error(`[LLMClient] Streaming API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`);
+        const enhancedError = new Error(`LLM streaming API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`);
+        if (error instanceof Error && error.stack) {
+          enhancedError.stack = error.stack;
+        }
+        throw enhancedError;
+      }
+    }
 
     // Accumulate for final logging
     let fullContent = '';
     const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> = new Map();
 
     for await (const chunk of stream) {
+      // Add safety check for stream chunks
+      if (!chunk.choices || !Array.isArray(chunk.choices) || chunk.choices.length === 0) {
+        console.warn('[LLMClient] Stream chunk missing choices array or empty, skipping chunk');
+        continue;
+      }
+
       const delta = chunk.choices[0]?.delta;
 
       if (delta?.content) {
@@ -228,16 +334,16 @@ export class LLMClient {
         logger.logStreamComplete({
           content: fullContent || null,
           toolCalls,
-          finishReason: chunk.choices[0].finish_reason,
+          finishReason: chunk.choices[0]?.finish_reason ?? null,
         });
 
         // Include usage if available (requires stream_options: { include_usage: true })
         const usage = chunk.usage
           ? {
-              promptTokens: chunk.usage.prompt_tokens,
-              completionTokens: chunk.usage.completion_tokens,
-              totalTokens: chunk.usage.total_tokens,
-            }
+            promptTokens: chunk.usage.prompt_tokens,
+            completionTokens: chunk.usage.completion_tokens,
+            totalTokens: chunk.usage.total_tokens,
+          }
           : undefined;
 
         yield { done: true, usage };
@@ -302,9 +408,75 @@ export class LLMClient {
    * Parse OpenAI response to internal format.
    */
   private parseResponse(response: OpenAI.ChatCompletion): LLMResponse {
+    // Validate response structure
+    if (!response || !response.choices || !Array.isArray(response.choices)) {
+      // Check for Gemini content filtering (indicated by completion_tokens: 0)
+      const isContentFiltered = response?.usage?.completion_tokens === 0 && 
+                                 response?.usage?.prompt_tokens > 0 &&
+                                 this.isGeminiProvider;
+      
+      if (isContentFiltered) {
+        console.error('[LLMClient] Gemini API blocked response due to content filtering. The prompt may have triggered safety filters.');
+        console.error('[LLMClient] Response structure:', JSON.stringify(response, null, 2));
+        console.error('[LLMClient] Suggestion: Try rephrasing the prompt or adjusting safety settings in Gemini API.');
+      } else {
+        console.error('[LLMClient] Invalid API response structure:', JSON.stringify(response, null, 2));
+      }
+      
+      return {
+        content: null,
+        toolCalls: [],
+        finishReason: null,
+        usage: response?.usage
+          ? {
+            promptTokens: response.usage.prompt_tokens,
+            completionTokens: response.usage.completion_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
+          : undefined,
+      };
+    }
+
+    if (response.choices.length === 0) {
+      // Check for Gemini content filtering
+      const isContentFiltered = response.usage?.completion_tokens === 0 && 
+                                 response.usage?.prompt_tokens > 0 &&
+                                 this.isGeminiProvider;
+      
+      if (isContentFiltered) {
+        console.warn('[LLMClient] Gemini API returned empty choices array - likely content filtering. completion_tokens: 0 indicates response was blocked.');
+      } else {
+        console.warn('[LLMClient] API returned empty choices array');
+      }
+      
+      return {
+        content: null,
+        toolCalls: [],
+        finishReason: null,
+        usage: response.usage
+          ? {
+            promptTokens: response.usage.prompt_tokens,
+            completionTokens: response.usage.completion_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
+          : undefined,
+      };
+    }
+
     const choice = response.choices[0];
     if (!choice) {
-      return { content: null, toolCalls: [], finishReason: null };
+      return {
+        content: null,
+        toolCalls: [],
+        finishReason: null,
+        usage: response.usage
+          ? {
+            promptTokens: response.usage.prompt_tokens,
+            completionTokens: response.usage.completion_tokens,
+            totalTokens: response.usage.total_tokens,
+          }
+          : undefined,
+      };
     }
 
     const toolCalls: ToolCall[] = (choice.message.tool_calls ?? []).map(tc => ({
@@ -319,10 +491,10 @@ export class LLMClient {
       finishReason: choice.finish_reason,
       usage: response.usage
         ? {
-            promptTokens: response.usage.prompt_tokens,
-            completionTokens: response.usage.completion_tokens,
-            totalTokens: response.usage.total_tokens,
-          }
+          promptTokens: response.usage.prompt_tokens,
+          completionTokens: response.usage.completion_tokens,
+          totalTokens: response.usage.total_tokens,
+        }
         : undefined,
     };
   }

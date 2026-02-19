@@ -2,6 +2,9 @@
 /**
  * Standalone server CLI entry point.
  * Run with: npx tsx src/server/cli.ts
+ *
+ * The server runs as an independent process. Desktop clients and CLI clients
+ * connect to it over HTTP/WebSocket.
  */
 import 'dotenv/config';
 import { createServer } from './index.js';
@@ -15,8 +18,8 @@ function parseArgs(): {
   provider?: string;
 } {
   const args = process.argv.slice(2);
-  let host = '127.0.0.1';
-  let port = 3000;
+  let host = process.env['SERVER_HOST'] || '0.0.0.0';
+  let port = parseInt(process.env['SERVER_PORT'] || '8001', 10);
   let help = false;
   let provider: string | undefined;
 
@@ -35,7 +38,7 @@ function parseArgs(): {
         break;
       case '--port':
       case '-p':
-        port = parseInt(nextArg ?? '3000', 10);
+        port = parseInt(nextArg ?? String(port), 10);
         i++;
         break;
       case '--provider':
@@ -59,11 +62,13 @@ Usage:
 
 Options:
   -h, --help            Show this help message
-  --host <host>         Host to bind to (default: 127.0.0.1)
-  -p, --port <port>     Port to listen on (default: 3000)
-  --provider <name>     LLM provider: gemini, lmstudio, openai, custom
+  --host <host>         Host to bind to (default: 0.0.0.0)
+  -p, --port <port>     Port to listen on (default: 8001)
+  --provider <name>     LLM provider: gemini, lmstudio, openai, openrouter, custom
 
 Environment Variables:
+  SERVER_HOST           Host to bind to (overrides default 0.0.0.0)
+  SERVER_PORT           Port to listen on (overrides default 8001)
   LLM_PROVIDER          Provider to use (current: ${currentProvider})
   See .env.example for all available configuration options.
 
@@ -133,7 +138,7 @@ async function main(): Promise<void> {
 
   try {
     const server = await createServer(
-      { llmConfig },
+      { llmConfig, taskType: 'video' },
       { host, port }
     );
 

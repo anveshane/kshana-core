@@ -3,6 +3,7 @@ export type {
   Message,
   MessageRole,
   ToolCall,
+  ToolContext,
   ToolDefinition,
   ToolParameterSchema,
   LLMResponse,

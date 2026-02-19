@@ -12,10 +12,13 @@ export {
   parameterizeZImageWorkflow,
   parameterizeChromaRadianceWorkflow,
   parameterizeWanWorkflow,
+  parameterizeLtxT2VWorkflow,
+  parameterizeLtxI2VWorkflow,
   workflowToPrompt,
   aspectRatioToDimensions,
   type WorkflowTemplate,
   type WorkflowParams,
+  type LtxWorkflowParams,
 } from './WorkflowLoader.js';
 
 export {

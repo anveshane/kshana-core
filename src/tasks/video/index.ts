@@ -3,17 +3,25 @@
  * Provides video-specific tools, prompts, and agent factory.
  * Supports both legacy mode and new state-based workflow mode.
  */
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { join, relative } from 'path';
+import { getProjectFileOps } from '../../server/ProjectFileOps.js';
 import { GenericAgent } from '../../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
 import { loadAndRenderMarkdown, loadMarkdown } from '../../core/prompts/loader.js';
-import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
+import { getPhaseLogger } from '../../utils/phaseLogger.js';
+import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS, resumePendingBatches, shutdownVideoTools, type RunRemotionAgentCallback } from './tools.js';
+import { runRemotionAgent } from './remotionAgent.js';
+import { getSrtTools } from './tools/srt.js';
+import { getPlacementTools } from './tools/placement.js';
+import { getVideoPlacementTools } from './tools/videoPlacement.js';
+import { getVideoReplacementTools } from './tools/video-replacement.js';
 import { getProjectStateTools } from './state.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
+import { ComfyUIClient } from '../../services/comfyui/ComfyUIClient.js';
+import type { OrchestrationContext } from '../../core/orchestration/index.js';
 
 // Workflow imports
 import {
@@ -24,6 +32,8 @@ import {
   WorkflowPhase,
   PHASE_CONFIGS,
   getProjectDir,
+  setCurrentProjectBasePath,
+  getCurrentProjectBasePath,
 } from './workflow/index.js';
 
 // Re-export prompts
@@ -35,7 +45,10 @@ export {
   generateVideoTool,
   editImageTool,
   waitForJobTool,
+  readBackgroundGenerationTool,
   getVideoGenerationTools,
+  resumePendingBatches,
+  shutdownVideoTools,
   VIDEO_COMPLEX_TOOLS,
 } from './tools.js';
 
@@ -129,8 +142,11 @@ export function getVideoToolNames(): string[] {
   return [
     // Generation tools
     'generate_image',
+    'generate_all_images',
     'generate_video',
+    'generate_all_videos',
     'edit_image',
+    'read_background_generation',
     'wait_for_job',
     // State tools
     'read_project_state',
@@ -157,18 +173,112 @@ export interface WorkflowVideoAgentConfig {
   basePath?: string;
 }
 
+export interface CreateWorkflowToolRegistryOptions {
+  /** When provided, generate_all_infographics will call this to get animation recommendations (Remotion sub-agent). */
+  runRemotionAgent?: RunRemotionAgentCallback;
+  /** Project instance to check current phase for conditional tool registration */
+  project?: ReturnType<typeof loadProject>;
+}
+
+async function ensureComfyUIAvailabilityContext(
+  project?: ReturnType<typeof loadProject>
+): Promise<boolean | null> {
+  if (!project || project.currentPhase !== WorkflowPhase.IMAGE_GENERATION) {
+    return null;
+  }
+
+  const comfyUIAvailable = await ComfyUIClient.isAvailable();
+  console.log(`[registerVideoTools] ComfyUI availability check: ${comfyUIAvailable}`);
+
+  // Inject context variable for agent to check
+  contextStore.store(
+    `ComfyUI Status: ${comfyUIAvailable ? 'Available' : 'Unavailable'}\n\n` +
+      `The ComfyUI service is ${comfyUIAvailable ? 'available and ready for image generation' : 'currently unavailable (connection failed)'}.`,
+    'ComfyUI Availability',
+    {
+      variableBaseName: 'comfyui_available',
+      source: 'tool',
+    }
+  );
+
+  if (!comfyUIAvailable) {
+    console.log('[registerVideoTools] ComfyUI unavailable - image generation tools will not be registered');
+    console.log('[registerVideoTools] Agent should skip image generation and proceed to next phase');
+  }
+
+  return comfyUIAvailable;
+}
+
 /**
  * Create a tool registry with workflow tools for state-based video creation.
  * Orchestrator only needs file/project tools - generation is handled by subagents via Task.
+ * However, generate_image and wait_for_job must be registered so subagent handlers can access them.
  */
-export function createWorkflowToolRegistry(): ToolRegistry {
+export async function createWorkflowToolRegistry(options?: CreateWorkflowToolRegistryOptions): Promise<ToolRegistry> {
   // Start with default generic tools (think, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode, TodoWrite, context tools)
   const registry = createDefaultToolRegistry();
 
   // Add workflow file tools (read_file, write_file, read_project, update_project)
-  // Note: Generation tools (images, videos, stitch) are handled by subagents via Task tool
   for (const tool of getWorkflowFileTools()) {
     registry.register(tool);
+  }
+
+  for (const tool of getSrtTools()) {
+    registry.register(tool);
+  }
+
+  for (const tool of getPlacementTools()) {
+    registry.register(tool);
+  }
+
+  for (const tool of getVideoPlacementTools()) {
+    registry.register(tool);
+  }
+
+  for (const tool of getVideoReplacementTools()) {
+    registry.register(tool);
+  }
+
+  // Add video generation tools (generate_image, wait_for_job, generate_all_*, including generate_all_infographics with optional Remotion agent)
+  const videoGenerationTools = getVideoGenerationTools({ runRemotionAgent: options?.runRemotionAgent });
+  const generateImageTool = videoGenerationTools.find(t => t.name === 'generate_image');
+  const waitForJobTool = videoGenerationTools.find(t => t.name === 'wait_for_job');
+  const generateAllImagesTool = videoGenerationTools.find(t => t.name === 'generate_all_images');
+  const generateAllVideosTool = videoGenerationTools.find(t => t.name === 'generate_all_videos');
+  const generateAllInfographicsTool = videoGenerationTools.find(t => t.name === 'generate_all_infographics');
+  const readBackgroundGenerationTool = videoGenerationTools.find(t => t.name === 'read_background_generation');
+  
+  // Check ComfyUI availability for IMAGE_GENERATION phase
+  // Only register image generation tools if ComfyUI is available
+  let comfyUIAvailable = true;
+  const project = options?.project;
+  const availability = await ensureComfyUIAvailabilityContext(project);
+  if (availability !== null) {
+    comfyUIAvailable = availability;
+  }
+  
+  // Register image generation tools only if ComfyUI is available
+  if (comfyUIAvailable && generateImageTool) {
+    registry.register(generateImageTool);
+  }
+  if (comfyUIAvailable && generateAllImagesTool) {
+    registry.register(generateAllImagesTool);
+  }
+  
+  // Always register wait_for_job tool (might be needed for other purposes)
+  if (waitForJobTool) {
+    registry.register(waitForJobTool);
+  }
+  if (readBackgroundGenerationTool) {
+    registry.register(readBackgroundGenerationTool);
+  }
+  
+  // Always register video and infographic generation tools
+  if (generateAllVideosTool) {
+    registry.register(generateAllVideosTool);
+  }
+  if (generateAllInfographicsTool) {
+    registry.register(generateAllInfographicsTool);
   }
 
   return registry;
@@ -186,9 +296,13 @@ export function createWorkflowToolRegistry(): ToolRegistry {
  * - images: characters, scenes
  * - video: scenes, images
  */
-function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] {
+export function loadProjectFilesAsContexts(basePath: string = getCurrentProjectBasePath()): string[] {
   const projectDir = getProjectDir(basePath);
-  const plansDir = join(projectDir, 'plans');
+  const agentDir = join(projectDir, 'agent');
+  const plansDir = join(agentDir, 'plans');
+  const contentDir = join(agentDir, 'content');
+  const scriptDir = join(agentDir, 'script');
+  const project = loadProject(basePath);
   const loadedContexts: string[] = [];
   let totalChars = 0;
 
@@ -196,15 +310,21 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
 
   // Load the original user input first - this is critical for content generation
   // Variable name MUST be $original_input to match phase prompts
-  const originalInputPath = join(projectDir, 'original_input.md');
-  if (existsSync(originalInputPath)) {
+  // Use storeReference() to avoid duplicating content - file already exists in agent/
+  const originalInputPath = join(agentDir, 'original_input.md');
+  if (getProjectFileOps().existsSync(originalInputPath)) {
     try {
-      const content = readFileSync(originalInputPath, 'utf-8');
+      const content = getProjectFileOps().readFileSync(originalInputPath, 'utf-8');
       if (content.trim().length > 0) {
-        const { variableName } = contextStore.store(content, 'Original User Input', {
-          source: 'user_input',
-          variableBaseName: 'original_input',
-        });
+        // Always re-store reference to ensure it uses the correct basePath
+        // This is important after contextStore.reload() to ensure file paths are resolved correctly
+        const relativePath = 'agent/original_input.md';
+        const { variableName } = contextStore.storeReference(
+          relativePath,
+          'Original User Input',
+          '$original_input',
+          'user_input'
+        );
         loadedContexts.push(variableName);
         contextSizes['original_input'] = content.length;
         totalChars += content.length;
@@ -214,26 +334,76 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
     }
   }
 
-  // Plan files to load with their context labels
-  const planFiles = [
-    { file: 'plot.md', label: 'Plot Outline', varName: 'plot' },
-    { file: 'story.md', label: 'Story', varName: 'story' },
-    { file: 'scenes.md', label: 'Scenes', varName: 'scenes' },
-    { file: 'characters.md', label: 'Characters', varName: 'characters' },
-    { file: 'settings.md', label: 'Settings', varName: 'settings' },
-    { file: 'images.md', label: 'Image Plan', varName: 'images' },
-  ];
+  // Files to load with their context labels
+  // Load different files based on input type (YouTube vs Story workflow)
+  const isYouTubeWorkflow = project?.inputType === 'youtube_srt' || project?.inputType === 'script';
 
-  for (const { file, label, varName } of planFiles) {
-    const filePath = join(plansDir, file);
-    if (existsSync(filePath)) {
+  // Load transcript for YouTube workflow phases that need it
+  // For CONTENT_PLANNING and later phases, load transcript as $transcript context
+  const transcriptPath = join(contentDir, 'transcript.md');
+  if (getProjectFileOps().existsSync(transcriptPath) && isYouTubeWorkflow) {
+    try {
+      const transcriptContent = getProjectFileOps().readFileSync(transcriptPath, 'utf-8');
+      if (transcriptContent.trim().length > 0) {
+        // Always re-store reference to ensure it uses the correct basePath
+        const relativePath = 'agent/content/transcript.md';
+        const { variableName } = contextStore.storeReference(
+          relativePath,
+          'Transcript',
+          '$transcript',
+          'tool'
+        );
+        loadedContexts.push(variableName);
+        contextSizes['transcript'] = transcriptContent.length;
+        totalChars += transcriptContent.length;
+      }
+    } catch {
+      // Skip if can't be read
+    }
+  }
+  
+  const contentFiles = isYouTubeWorkflow
+    ? [
+        // YouTube workflow files
+        { dir: plansDir, file: 'content-plan.md', label: 'Content Plan', varName: 'content_plan' },
+        { dir: contentDir, file: 'image-placements.md', label: 'Image Placement Plan', varName: 'image_placements' },
+        { dir: contentDir, file: 'infographic-placements.md', label: 'Infographic Placement Plan', varName: 'infographic_placements' },
+        { dir: scriptDir, file: 'subtitles_with_images.srt', label: 'SRT with Images', varName: 'srt_with_images' },
+      ]
+    : [
+        // Legacy story workflow files
+        { dir: scriptDir, file: 'plot.md', label: 'Plot Outline', varName: 'plot' },
+        { dir: plansDir, file: 'plot-plan.md', label: 'Plot Creation Plan', varName: 'plot_plan' },
+        { dir: scriptDir, file: 'story.md', label: 'Story', varName: 'story' },
+        { dir: plansDir, file: 'story-plan.md', label: 'Story Development Plan', varName: 'story_plan' },
+        { dir: plansDir, file: 'scenes.md', label: 'Scenes', varName: 'scenes' },
+        { dir: plansDir, file: 'characters.md', label: 'Characters', varName: 'characters' },
+        { dir: plansDir, file: 'settings.md', label: 'Settings', varName: 'settings' },
+        { dir: plansDir, file: 'images.md', label: 'Image Plan', varName: 'images' },
+      ];
+
+  for (const { dir, file, label, varName } of contentFiles) {
+    const filePath = join(dir, file);
+    if (getProjectFileOps().existsSync(filePath)) {
       try {
-        const content = readFileSync(filePath, 'utf-8');
+        const content = getProjectFileOps().readFileSync(filePath, 'utf-8');
         if (content.trim().length > 0) {
-          const { variableName } = contextStore.store(content, label, {
-            source: 'tool',
-            variableBaseName: varName,
-          });
+          // Calculate relative path from .kshana/ directory
+          // filePath is absolute, projectDir is .kshana, so we get relative path from projectDir
+          const relativePath = relative(projectDir, filePath).replace(/\\/g, '/'); // Normalize path separators
+          
+          // Generate variable name from varName to match original behavior
+          // varName is already normalized (e.g., 'content_plan'), so we construct $varName
+          // The storeReference will handle counter logic if variable already exists
+          const variableNameBase = `$${varName}`;
+          
+          // Store reference to existing file instead of duplicating content
+          const { variableName } = contextStore.storeReference(
+            relativePath,
+            label,
+            variableNameBase, // Use varName to generate consistent variable names
+            'tool'
+          );
           loadedContexts.push(variableName);
           contextSizes[varName] = content.length;
           totalChars += content.length;
@@ -246,7 +416,6 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
 
   // Log context loading metrics for phase-aware monitoring
   if (loadedContexts.length > 0) {
-    const { getPhaseLogger } = require('../../utils/phaseLogger.js');
     const phaseLogger = getPhaseLogger();
     // Estimate tokens: ~3 chars per token
     const estimatedTokens = Math.ceil(totalChars / 3);
@@ -264,32 +433,59 @@ function loadProjectFilesAsContexts(basePath: string = process.cwd()): string[] 
 /**
  * Create a GenericAgent configured for workflow-based video creation.
  * Uses state-based approach with project files in .kshana/ directory.
+ * 
+ * Execution Context:
+ * - CLI: Uses CLI's own project directory by default (manages .kshana/agent/* in kshana-ink project)
+ * - Desktop: Should pass user project workspace path as basePath (coordinates with .kshana/agent/* in user space)
+ * 
+ * @param config - Configuration for the workflow video agent
+ * @param config.basePath - Base path for the project. In CLI context, defaults to CLI's own directory.
+ *                          In Desktop context, should be the user's project workspace.
  */
-export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): GenericAgent {
+export async function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Promise<GenericAgent> {
   const {
     llmConfig,
     maxIterations = 100,
     originalInput = '',
-    basePath = process.cwd(),
+    basePath = process.cwd(), // CLI context: defaults to CLI's own directory
   } = config;
 
+  // Set the current project base path so tools can access it
+  // This ensures all tool calls use the correct project directory
+  setCurrentProjectBasePath(basePath);
+
   // Initialize or load project
-  const project = getOrCreateProject(originalInput, basePath);
+  const project = getOrCreateProject(originalInput, 'cinematic_realism', basePath);
   const currentPhase = getCurrentPhase(project);
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
+
+  // Auto-resume any queued/running background image/video batches after startup.
+  await resumePendingBatches(basePath);
+  
+  // Use workflow manager to get phase config (ensures correct workflow is used)
+  const { getPhaseConfig } = await import('./workflow/workflows/workflow-manager.js');
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
+
+  // Reload context store for this project to ensure isolation
+  // This must be done BEFORE loading project files into context store
+  contextStore.reload(project.id, basePath);
 
   // Load existing project files into context store
   // This makes them available to dispatch_agent and dispatch_content_agent
   const loadedContexts = loadProjectFilesAsContexts(basePath);
 
-  // Create tool registry with workflow tools
-  const registry = createWorkflowToolRegistry();
-
-  // Create LLM client
+  // Create LLM client first so we can pass runRemotionAgent into the tool registry
   const llm = new LLMClient(llmConfig);
+  const runRemotionAgentCallback: RunRemotionAgentCallback = (placements, skillsContent, options) =>
+    runRemotionAgent(llm, placements, {
+      skillsContent,
+      userMessageSuffix: options?.userMessageSuffix,
+    });
+
+  // Create tool registry with workflow tools (generate_all_infographics will use Remotion sub-agent when callback is provided)
+  const registry = await createWorkflowToolRegistry({ runRemotionAgent: runRemotionAgentCallback, project });
 
   // Build custom prompt with workflow context (include loaded contexts info)
-  const customPrompt = buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
+  const customPrompt = await buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
 
   // Create the generic agent with workflow customization
   const agent = new GenericAgent(registry.getAll(), llm, {
@@ -305,6 +501,16 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
  * Map workflow phases to their prompt file paths.
  */
 const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
+  [WorkflowPhase.TRANSCRIPT_INPUT]: 'video/phases/transcript-input.md',
+  [WorkflowPhase.PLANNING]: 'video/phases/planning.md',
+  [WorkflowPhase.CONTENT_PLANNING]: 'video/phases/planning.md', // CONTENT_PLANNING uses same prompt as PLANNING
+  [WorkflowPhase.IMAGE_PLACEMENT]: 'video/phases/image-placement.md',
+  [WorkflowPhase.IMAGE_GENERATION]: 'video/phases/image-generation.md',
+  [WorkflowPhase.INFOGRAPHICS_PLACEMENT]: 'video/phases/infographic-placement.md',
+  [WorkflowPhase.INFOGRAPHICS_GENERATION]: 'video/phases/infographic-generation.md',
+  [WorkflowPhase.VIDEO_PLACEMENT]: 'video/phases/video-placement.md',
+  [WorkflowPhase.VIDEO_GENERATION]: 'video/phases/video-generation.md',
+  [WorkflowPhase.VIDEO_REPLACEMENT]: 'video/phases/video-replacement.md',
   [WorkflowPhase.PLOT]: 'video/phases/plot.md',
   [WorkflowPhase.STORY]: 'video/phases/story.md',
   [WorkflowPhase.CHARACTERS_SETTINGS]: 'video/phases/characters-settings.md',
@@ -320,12 +526,26 @@ const PHASE_PROMPT_FILES: Record<WorkflowPhase, string> = {
  * Build the custom prompt for the workflow agent based on current phase.
  * Loads prompts from markdown files for easier maintenance.
  */
-function buildWorkflowAgentPrompt(
+export async function buildWorkflowAgentPrompt(
   project: ReturnType<typeof loadProject>,
   currentPhase: WorkflowPhase,
-  loadedContexts: string[] = []
-): string {
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
+  loadedContexts: string[] = [],
+  orchestrationContext?: OrchestrationContext
+): Promise<string> {
+  if (!project) {
+    throw new Error('Project is required to build workflow agent prompt');
+  }
+
+  // Ensure ComfyUI availability context is refreshed when entering IMAGE_GENERATION
+  await ensureComfyUIAvailabilityContext(project);
+
+  // Use workflow manager to get phase config
+  const { getPhaseConfig } = await import('./workflow/workflows/workflow-manager.js');
+  const phaseConfig = getPhaseConfig(currentPhase, project.inputType) || PHASE_CONFIGS[currentPhase];
+  
+  if (!phaseConfig) {
+    throw new Error(`No phase configuration found for phase: ${currentPhase}`);
+  }
 
   // Build loaded contexts section
   let loadedContextsSection = 'No existing project files loaded yet.';
@@ -334,7 +554,7 @@ function buildWorkflowAgentPrompt(
 The following project files have been loaded as contexts:
 ${loadedContexts.map(c => `- ${c}`).join('\n')}
 
-Use the \`generate_content\` tool for creating content - it automatically injects the correct contexts.
+Use \`generate_content\` for legacy story phases, and \`Task\` with subagents for transcript-first phases.
 For example: \`generate_content(content_type: "plot")\` automatically uses \$original_input.`;
   }
 
@@ -358,15 +578,49 @@ You MUST get user approval before starting generation.
 `;
   }
 
+  const hasStateContext = Boolean(orchestrationContext?.stateAnalysis);
+  const hasContinuationPlan = Boolean(orchestrationContext?.continuationPlan);
+
+  const stateContext = orchestrationContext?.stateAnalysis
+    ? `- Summary: ${orchestrationContext.stateAnalysis.summary}
+- Phase completion: ${orchestrationContext.stateAnalysis.completion.completed}/${orchestrationContext.stateAnalysis.completion.total} (${orchestrationContext.stateAnalysis.completion.percentage}%)
+- Phase status: ${orchestrationContext.stateAnalysis.phaseStatus ?? 'unknown'}`
+    : '';
+
+  const continuationStrategy = orchestrationContext?.continuationPlan
+    ? `${orchestrationContext.continuationPlan.strategy}
+
+${orchestrationContext.continuationPlan.guidanceText}`
+    : '';
+
+  const specificTasks = orchestrationContext?.continuationPlan?.specificTasks?.length
+    ? orchestrationContext.continuationPlan.specificTasks.map(task => `- ${task}`).join('\n')
+    : '';
+
+  const blockers = orchestrationContext?.continuationPlan?.blockers?.length
+    ? orchestrationContext.continuationPlan.blockers
+      .map(blocker => `- [${blocker.severity}] ${blocker.message}`)
+      .join('\n')
+    : '';
+
   // Load and render the base workflow template
   return loadAndRenderMarkdown('video/workflow.md', {
     project_id: project?.id ?? 'new',
     project_title: project?.title || '(not set)',
     phase_display_name: phaseConfig.displayName,
     current_phase: currentPhase,
+    input_type: project?.inputType || 'idea',
     loaded_contexts: loadedContextsSection,
     phase_instructions: phaseInstructions,
     expensive_checkpoint: expensiveCheckpoint,
+    has_state_context: hasStateContext,
+    state_context: stateContext,
+    has_continuation_strategy: hasContinuationPlan,
+    continuation_strategy: continuationStrategy,
+    has_specific_tasks: Boolean(specificTasks),
+    specific_tasks: specificTasks,
+    has_blockers: Boolean(blockers),
+    blockers,
   });
 }
 
@@ -380,6 +634,18 @@ export function getWorkflowToolNames(): string[] {
     'write_file',
     'read_project',
     'update_project',
+    // Transcript tools
+    'parse_srt',
+    'validate_srt',
+    'write_srt_with_images',
+    // Placement tools
+    'create_image_placement',
+    'update_image_placement',
+    'get_placements_by_time',
+    // Video replacement tools
+    'replace_video_segment',
+    'sync_audio_with_images',
+    'generate_replacement_plan',
     // Stitching
     'stitch_videos',
     // Plus all video tools

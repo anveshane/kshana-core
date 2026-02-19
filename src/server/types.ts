@@ -15,6 +15,13 @@ export type ServerMessageType =
   | 'todo_update'      // Todo list changes
   | 'stream_chunk'     // Streaming text chunk
   | 'stream_end'       // End of streaming
+  | 'asset_added'      // Asset added to manifest
+  | 'background_generation' // Background generation batch lifecycle event
+  | 'file_sync_request'    // Request desktop to send project files
+  | 'file_write'           // Write a text file on the desktop
+  | 'file_write_binary'    // Write a binary file on the desktop (base64)
+  | 'file_mkdir'           // Create a directory on the desktop
+  | 'file_rm'              // Remove a file/directory on the desktop
   | 'error';           // Error message
 
 /**
@@ -24,7 +31,8 @@ export type ClientMessageType =
   | 'start_task'       // Start a new task
   | 'user_response'    // Response to agent question
   | 'cancel'           // Cancel current task
-  | 'ping';            // Keep-alive ping
+  | 'ping'             // Keep-alive ping
+  | 'file_sync_init';  // Desktop sends all project files for cache initialization
 
 /**
  * Base message structure for server messages.
@@ -51,6 +59,7 @@ export interface ClientMessage<T = unknown> {
 export interface StatusData {
   status: 'connected' | 'ready' | 'busy' | 'completed' | 'error';
   message?: string;
+  agentName?: string;
 }
 
 /**
@@ -113,12 +122,87 @@ export interface StreamChunkData {
 }
 
 /**
+ * Asset added message data.
+ */
+export interface AssetAddedData {
+  assetId: string;
+  assetType: 'scene_image' | 'scene_video' | 'scene_infographic' | 'character_ref' | 'setting_ref' | 'final_video';
+  placementNumber?: number;
+  sceneNumber?: number;
+  path: string;
+  version: number;
+}
+
+/**
+ * Background generation lifecycle event data.
+ */
+export interface BackgroundGenerationData {
+  batchId: string;
+  kind: 'image' | 'video';
+  status: 'queued' | 'running' | 'completed' | 'failed';
+  phase: string;
+  totalItems: number;
+  completedItems: number;
+  failedItems: number;
+  projectDirectory: string;
+}
+
+/**
  * Error message data.
  */
 export interface ErrorData {
   code: string;
   message: string;
   details?: unknown;
+}
+
+/**
+ * File sync request (server -> client): asks desktop to send all project files.
+ */
+export interface FileSyncRequestData {
+  projectDir: string;
+}
+
+/**
+ * File write (server -> client): write a text file on the desktop.
+ */
+export interface FileWriteData {
+  path: string;
+  content: string;
+}
+
+/**
+ * File write binary (server -> client): write a binary file on the desktop (base64).
+ */
+export interface FileWriteBinaryData {
+  path: string;
+  content: string;
+}
+
+/**
+ * File mkdir (server -> client): create a directory on the desktop.
+ */
+export interface FileMkdirData {
+  path: string;
+}
+
+/**
+ * File rm (server -> client): remove a file or directory on the desktop.
+ */
+export interface FileRmData {
+  path: string;
+  recursive: boolean;
+}
+
+/**
+ * File sync init (client -> server): desktop sends all project files for cache.
+ */
+export interface FileSyncInitData {
+  files: Array<{
+    path: string;
+    content: string;
+    isBinary?: boolean;
+  }>;
 }
 
 /**
@@ -168,6 +252,10 @@ export function isCancelMessage(msg: ClientMessage): msg is ClientMessage<void> 
 
 export function isPingMessage(msg: ClientMessage): msg is ClientMessage<void> {
   return msg.type === 'ping';
+}
+
+export function isFileSyncInitMessage(msg: ClientMessage): msg is ClientMessage<FileSyncInitData> {
+  return msg.type === 'file_sync_init';
 }
 
 /**

@@ -11,12 +11,65 @@
  * - This intentionally avoids bringing in external deps (no runtime install).
  * - Designed for system prompt and tool description composition from separate .md files.
  */
-import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// Get prompts directory - try multiple locations for flexibility
+// When running from dist/core/prompts/loader.js: __dirname = dist/core/prompts/ -> dist/prompts/
+// When running from source: src/core/prompts/loader.ts -> prompts/
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPTS_DIR = join(__dirname, '..', '..', '..', 'prompts');
+
+// Strategy: Find prompt files with deterministic priority:
+// 1) packageRoot/prompts (source prompts, preferred in development)
+// 2) packageRoot/dist/prompts (built prompts, fallback for packaged/runtime use)
+// This avoids stale prompt edits when backend runs from dist but source prompts changed.
+function findPromptsDir(startDir: string): string | null {
+  let currentDir = startDir;
+  const maxDepth = 10; // Prevent infinite loops
+
+  for (let i = 0; i < maxDepth; i++) {
+    // Check if package.json exists (indicates package root)
+    const packageJsonPath = join(currentDir, 'package.json');
+    if (existsSync(packageJsonPath)) {
+      if (existsSync(join(currentDir, 'prompts', 'video', 'main.md'))) {
+        return join(currentDir, 'prompts');
+      }
+      if (existsSync(join(currentDir, 'dist', 'prompts', 'video', 'main.md'))) {
+        return join(currentDir, 'dist', 'prompts');
+      }
+    }
+
+    // Fallbacks while traversing up from nested runtime folders.
+    // Skip "<package>/dist/prompts" when inside dist to avoid preferring stale copied prompts.
+    const promptsPath = join(currentDir, 'prompts');
+    if (
+      basename(currentDir) !== 'dist' &&
+      existsSync(join(promptsPath, 'video', 'main.md'))
+    ) {
+      return promptsPath;
+    }
+
+    const distPromptsPath = join(currentDir, 'dist', 'prompts');
+    if (existsSync(join(distPromptsPath, 'video', 'main.md'))) {
+      return distPromptsPath;
+    }
+
+    // Go up one level
+    const parentDir = dirname(currentDir);
+    if (parentDir === currentDir) {
+      // Reached filesystem root
+      break;
+    }
+    currentDir = parentDir;
+  }
+
+  return null;
+}
+
+// Find prompts directory
+const foundPromptsDir = findPromptsDir(__dirname);
+const PROMPTS_DIR = foundPromptsDir || join(__dirname, '..', '..', '..', 'prompts'); // Fallback
 
 const templateCache = new Map<string, string>();
 
@@ -25,7 +78,10 @@ export type PromptContext = Record<string, unknown>;
 export function loadMarkdown(relativePathFromPromptsDir: string): string {
   const filePath = join(PROMPTS_DIR, relativePathFromPromptsDir);
   if (!existsSync(filePath)) {
-    throw new Error(`Prompt file not found: ${filePath}`);
+    throw new Error(
+      `Prompt file not found: ${filePath}. PROMPTS_DIR=${PROMPTS_DIR}. ` +
+      `Please ensure prompts are copied to dist/prompts/ during build or available in prompts/ for development.`
+    );
   }
   const cached = templateCache.get(filePath);
   if (cached !== undefined) return cached;
@@ -228,4 +284,223 @@ export function clearPromptTemplateCache(): void {
   templateCache.clear();
 }
 
+/** Default rule subset for infographics (animations, timing, charts, text, transitions, sequencing, compositions, parameters). */
+export const REMOTION_SKILLS_INFOGraphics_SUBSET = [
+  'animations',
+  'timing',
+  'charts',
+  'text-animations',
+  'transitions',
+  'sequencing',
+  'compositions',
+  'parameters',
+];
 
+export interface LoadRemotionSkillsOptions {
+  /** If set, only load these rule files (without .md). Otherwise load all rules/*.md. */
+  ruleSubset?: string[];
+}
+
+/**
+ * Load Remotion best-practices skills: SKILL.md + rules (or ruleSubset).
+ * Returns a single concatenated string for use in the Remotion sub-agent prompt.
+ */
+export function loadRemotionSkills(options?: LoadRemotionSkillsOptions): string {
+  const skillsDir = join(PROMPTS_DIR, 'remotion-skills');
+  if (!existsSync(skillsDir)) {
+    return '';
+  }
+  const parts: string[] = [];
+  // Load Remotion fundamentals FIRST (official system prompt foundation)
+  const fundamentalsMd = join(skillsDir, 'REMOTION-FUNDAMENTALS.md');
+  if (existsSync(fundamentalsMd)) {
+    parts.push('## Remotion Fundamentals\n\n', readFileSync(fundamentalsMd, 'utf-8'));
+  }
+  const skillMd = join(skillsDir, 'SKILL.md');
+  if (existsSync(skillMd)) {
+    parts.push('\n## SKILL\n\n', readFileSync(skillMd, 'utf-8'));
+  }
+  const rulesDir = join(skillsDir, 'rules');
+  if (!existsSync(rulesDir)) {
+    return parts.join('');
+  }
+  const subset = options?.ruleSubset;
+  let names: string[] = readdirSync(rulesDir)
+    .filter((f) => f.endsWith('.md'))
+    .map((f) => f.slice(0, -3));
+  if (subset && subset.length > 0) {
+    const set = new Set(subset);
+    names = names.filter((n) => set.has(n));
+  }
+  names.sort();
+  for (const name of names) {
+    const p = join(rulesDir, `${name}.md`);
+    if (existsSync(p)) {
+      parts.push(`\n### rules/${name}.md\n\n`, readFileSync(p, 'utf-8'));
+    }
+  }
+  return parts.join('');
+}
+
+export type InfographicType = 'bar_chart' | 'line_chart' | 'diagram' | 'statistic' | 'list';
+
+export interface InfographicSkillSelection {
+  content: string;
+  selectedRules: string[];
+  selectedExamples: string[];
+}
+
+const INFOGRAPHIC_GENERATION_GUARDRAILS = `
+### kshana-required-infographic-guardrails
+
+- NEVER render \`{prompt}\` or \`{infographicType}\` as visible text. Extract a short, meaningful title from the prompt topic and use \`data\` fields for display content.
+- If \`data\` is provided and non-empty, render at least one label/value derived from \`data\`.
+- Do not use CSS \`animation\`, \`transition\`, or \`@keyframes\`.
+- Use Remotion frame-driven motion only: \`spring\`, \`interpolate\`, \`Sequence\`, \`Series\`, or \`TransitionSeries\`.
+- Do not use remote URLs for assets.
+- Do not use \`Math.random()\`; use deterministic Remotion patterns.
+`.trim();
+
+const BASE_INFOGRAPHIC_RULES = [
+  'animations',
+  'timing',
+  'sequencing',
+  'text-animations',
+  'compositions',
+];
+
+const THREE_D_KEYWORDS = [
+  '3d',
+  'extruded',
+  'depth',
+  'isometric',
+  'orbit',
+  'rotating',
+  'spatial',
+  'particle',
+  'particles',
+];
+
+const TRANSITION_HINT_KEYWORDS = [
+  'step',
+  'steps',
+  'phase',
+  'phases',
+  'timeline',
+  'before',
+  'after',
+  'sequence',
+  'stages',
+  'compare',
+  'comparison',
+];
+
+function hasAnyKeyword(text: string, keywords: string[]): boolean {
+  const lower = text.toLowerCase();
+  return keywords.some((keyword) => {
+    const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`);
+    return pattern.test(lower);
+  });
+}
+
+function inferRulesForInfographicType(type: InfographicType, promptText: string): string[] {
+  const selected = new Set<string>(BASE_INFOGRAPHIC_RULES);
+  if (type === 'bar_chart' || type === 'line_chart') {
+    selected.add('charts');
+  }
+
+  if (type === 'list' && hasAnyKeyword(promptText, TRANSITION_HINT_KEYWORDS)) {
+    selected.add('transitions');
+  }
+
+  if (type === 'diagram' && hasAnyKeyword(promptText, TRANSITION_HINT_KEYWORDS)) {
+    selected.add('transitions');
+  }
+
+  if (hasAnyKeyword(promptText, THREE_D_KEYWORDS)) {
+    selected.add('3d');
+  }
+
+  return Array.from(selected).sort();
+}
+
+function inferExamplesForInfographicType(type: InfographicType, promptText: string): string[] {
+  // Always include multi-beat-sequence as base quality reference
+  const selected = new Set<string>(['multi-beat-sequence']);
+
+  if (type === 'bar_chart' || type === 'line_chart') {
+    selected.add('3d-extruded-bar-chart');
+    selected.add('data-story');
+  }
+  if (type === 'statistic') {
+    selected.add('kinetic-typography');
+    selected.add('cinematic-statistic');
+  }
+  if (type === 'list') {
+    selected.add('transition-series-demo');
+    selected.add('elegant-timeline');
+  }
+  if (type === 'diagram') {
+    selected.add('elegant-timeline');
+  }
+  if (hasAnyKeyword(promptText, THREE_D_KEYWORDS)) {
+    selected.add('3d-rotating-cube');
+  }
+  if (promptText.toLowerCase().includes('particle')) {
+    selected.add('particle-effects');
+  }
+  // Include cinematic-statistic for any type that might have key stats
+  if (hasAnyKeyword(promptText, ['milestone', 'achievement', 'growth', 'revenue', 'total', 'record'])) {
+    selected.add('cinematic-statistic');
+  }
+  // Include timeline example for historical/chronological content
+  if (hasAnyKeyword(promptText, ['timeline', 'history', 'historical', 'treaty', 'era', 'century', 'year', 'date', 'chronolog'])) {
+    selected.add('elegant-timeline');
+  }
+
+  return Array.from(selected).sort();
+}
+
+function loadRemotionExamples(exampleSubset: string[]): string {
+  const examplesDir = join(PROMPTS_DIR, 'remotion-skills', 'examples');
+  if (!existsSync(examplesDir) || exampleSubset.length === 0) {
+    return '';
+  }
+
+  const parts: string[] = [];
+  const selected = new Set(exampleSubset);
+  let names = readdirSync(examplesDir)
+    .filter((f) => f.endsWith('.tsx'))
+    .map((f) => f.slice(0, -4))
+    .filter((name) => selected.has(name));
+  names = names.sort();
+
+  for (const name of names) {
+    const p = join(examplesDir, `${name}.tsx`);
+    if (existsSync(p)) {
+      parts.push(`\n### examples/${name}.tsx\n\n`, readFileSync(p, 'utf-8'));
+    }
+  }
+
+  return parts.join('');
+}
+
+export function loadRemotionSkillsForInfographicType(
+  type: InfographicType,
+  promptText: string,
+): InfographicSkillSelection {
+  const selectedRules = inferRulesForInfographicType(type, promptText);
+  const selectedExamples = inferExamplesForInfographicType(type, promptText);
+  const skillsContent = loadRemotionSkills({ ruleSubset: selectedRules });
+  const examplesContent = loadRemotionExamples(selectedExamples);
+  const content = [skillsContent, examplesContent, INFOGRAPHIC_GENERATION_GUARDRAILS]
+    .filter(Boolean)
+    .join('\n\n');
+
+  return {
+    content,
+    selectedRules,
+    selectedExamples,
+  };
+}

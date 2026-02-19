@@ -17,8 +17,16 @@ import {
   createProject,
   STYLE_CONFIGS,
   type ProjectStyle,
+  buildWorkflowAgentPrompt,
+  getCurrentPhase,
+  loadProjectFilesAsContexts,
+  PHASE_CONFIGS,
+  setCurrentProjectBasePath,
 } from './tasks/video/index.js';
-import type { LLMClientConfig } from './core/llm/index.js';
+import { getCLIProjectBasePath } from './tasks/video/workflow/index.js';
+import { LLMClient, type LLMClientConfig } from './core/llm/index.js';
+import { runRemotionAgent } from './tasks/video/remotionAgent.js';
+import type { RunRemotionAgentCallback } from './tasks/video/tools.js';
 import type { AgentConfig } from './core/agent/index.js';
 import * as uiLogger from './utils/uiLogger.js';
 import { contextStore } from './core/context/ContextStore.js';
@@ -63,39 +71,74 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Check for existing project on mount (video mode only)
   React.useEffect(() => {
     if (taskType === 'video' && !started) {
+      // CLI context: set the global base path before any project operations
+      // Desktop sets this via ConversationManager; the CLI must set it here.
+      setCurrentProjectBasePath(getCLIProjectBasePath());
       if (projectExists()) {
         const project = loadProject();
         setExistingProject(project);
+        // loadProject() already reloads the context store with the correct basePath
         setStartupMode('select_action');
       } else {
-        // No existing project - go to style selection first
-        setStartupMode('select_style');
+        // No existing project - automatically use cinematic_realism and skip to new_story
+        setSelectedStyle('cinematic_realism');
+        setStartupMode('new_story');
       }
     }
   }, [taskType, started]);
 
-  // Create tool registry based on task type
-  const tools = React.useMemo(() => {
+  const [tools, setTools] = React.useState(() => createDefaultToolRegistry().getAll());
+
+  const refreshTools = React.useCallback(async (project?: ReturnType<typeof loadProject>) => {
     if (taskType === 'video') {
-      // Use workflow tool registry for state-based video creation
-      return createWorkflowToolRegistry().getAll();
+      if (llmConfig) {
+        const llm = new LLMClient(llmConfig);
+        const runRemotionAgentCallback: RunRemotionAgentCallback = (placements, skillsContent, options) =>
+          runRemotionAgent(llm, placements, {
+            skillsContent,
+            userMessageSuffix: options?.userMessageSuffix,
+          });
+        const registry = await createWorkflowToolRegistry({ runRemotionAgent: runRemotionAgentCallback, project });
+        setTools(registry.getAll());
+        return;
+      }
+      const registry = await createWorkflowToolRegistry({ project });
+      setTools(registry.getAll());
+      return;
     }
-    return createDefaultToolRegistry().getAll();
-  }, [taskType]);
+    setTools(createDefaultToolRegistry().getAll());
+  }, [taskType, llmConfig]);
+
+  React.useEffect(() => {
+    void refreshTools(existingProject ?? undefined);
+  }, [refreshTools, existingProject]);
 
   // Get custom prompt based on task type
-  const customPrompt = React.useMemo(() => {
+  // For video mode, we build it dynamically based on the current project state
+  const [customPrompt, setCustomPrompt] = React.useState<string | undefined>(agentConfig?.customPrompt);
+  
+  React.useEffect(() => {
     if (taskType === 'video') {
-      return VIDEO_CREATION_SYSTEM_PROMPT;
+      if (existingProject) {
+        // Use dynamic workflow prompt if project exists
+        const currentPhase = getCurrentPhase(existingProject);
+        const loadedContexts = loadProjectFilesAsContexts();
+        // buildWorkflowAgentPrompt is async, so we need to await it
+        void buildWorkflowAgentPrompt(existingProject, currentPhase, loadedContexts).then(setCustomPrompt);
+      } else {
+        // Fallback to static prompt only if no project yet (initial creation)
+        setCustomPrompt(VIDEO_CREATION_SYSTEM_PROMPT);
+      }
+    } else {
+      setCustomPrompt(agentConfig?.customPrompt);
     }
-    return agentConfig?.customPrompt;
-  }, [taskType, agentConfig?.customPrompt]);
+  }, [taskType, agentConfig?.customPrompt, existingProject]);
 
   // Compute effective agent name based on task type
   const agentName = agentConfig?.name ?? (taskType === 'video' ? 'kshana-video' : 'kshana-ink');
 
-  // Event handler for UI logging
-  const handleAgentEvent = React.useCallback((event: import('./events/index.js').AgentEvent) => {
+  // Event handler for UI logger (kept separate to avoid recursion in useAgent)
+  const handleAgentEventsForLogger = React.useCallback((event: import('./events/index.js').AgentEvent) => {
     switch (event.type) {
       case 'agent_status':
         uiLogger.logStatusChange(event.status, event.agentName);
@@ -106,9 +149,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         }
         break;
       case 'streaming_text':
-        if (event.done && event.chunk !== undefined) {
-          // Log completed streaming text - but we'll handle this via state change instead
-        }
+        // Log handled by state change
         break;
       case 'tool_call':
         uiLogger.logToolStart(event.toolName, event.arguments);
@@ -144,6 +185,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     respond,
     stop,
     injectInput,
+    reset,
+    setProjectId,
+    updateCustomPrompt,
   } = useAgent({
     tools,
     llmConfig,
@@ -152,8 +196,33 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       name: agentName,
       customPrompt,
     },
-    onEvent: handleAgentEvent,
+    onEvent: handleAgentEventsForLogger,
+    projectId: existingProject?.id ?? null,
   });
+
+  // Handle phase transitions to update the prompt dynamically
+  // Listen to history updates because useAgent adds phase transitions to history
+  React.useEffect(() => {
+    if (history.length > 0) {
+      const lastEntry = history[history.length - 1];
+      if (lastEntry && lastEntry.type === 'phase_transition' && taskType === 'video') {
+        // Reload project to get fresh state
+        const project = loadProject();
+        if (project) {
+          // Update existingProject state
+          setExistingProject(project);
+
+          // Rebuild prompt with new phase
+          const currentPhase = getCurrentPhase(project);
+          const loadedContexts = loadProjectFilesAsContexts();
+          // buildWorkflowAgentPrompt is async, so we need to await it
+          void buildWorkflowAgentPrompt(project, currentPhase, loadedContexts).then(updateCustomPrompt);
+          // Refresh tools so phase-specific availability checks are applied
+          void refreshTools(project);
+        }
+      }
+    }
+  }, [history, taskType, updateCustomPrompt]);
 
   // Handle global keyboard shortcuts
   useInput((input, key) => {
@@ -187,16 +256,22 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       // For video mode with a new project, create the project with the selected style
       // Input type will be determined by the agent based on the content
       if (taskType === 'video' && !existingProject) {
-        createProject(task, selectedStyle);
+        const newProject = createProject(task, selectedStyle);
+        // Set projectId directly to bypass React state update delay
+        // This ensures the agent is immediately reset with the new projectId
+        setProjectId(newProject.id);
+        // Update existingProject state for UI consistency
+        setExistingProject(newProject);
         uiLogger.logUserInput(`Starting new project with style: ${STYLE_CONFIGS[selectedStyle].displayName}`);
       }
 
       setStarted(true);
       uiLogger.logUserInput(task);
       // Task is added to history by useAgent
+      // Note: run() will create a new agent with the updated projectId from existingProject
       void run(task);
     },
-    [run, exit, taskType, existingProject, selectedStyle]
+    [run, exit, taskType, existingProject, selectedStyle, setProjectId]
   );
 
   // Handle user response (when agent is waiting for input)
@@ -375,19 +450,23 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     if (startupMode === 'select_action') {
       if (index === 0) {
         // Continue existing project
+        // loadProject() already reloads the context store with the correct basePath
         setStarted(true);
         uiLogger.logUserInput('Continue existing project');
         void run('Continue working on the existing project. Call read_project to see current state.');
       } else if (index === 1) {
-        // Start new project - show warning and switch to style selection
+        // Start new project - automatically use cinematic_realism and skip to new_story
         if (existingProject) {
           deleteProject();
           setExistingProject(null);
         }
-        setStartupMode('select_style');
+        // Reset agent state and clear projectId to ensure complete isolation
+        setProjectId(null);
+        setSelectedStyle('cinematic_realism');
+        setStartupMode('new_story');
       }
     }
-  }, [startupMode, existingProject, run]);
+  }, [startupMode, existingProject, run, setProjectId]);
 
   // Handle style selection
   const handleStyleSelect = React.useCallback((index: number) => {
@@ -434,7 +513,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Show welcome screen if not started
   if (!started) {
     const subtitle = taskType === 'video'
-      ? 'Agentic Video Generation System'
+      ? 'YouTube Documentary Video Editor'
       : 'Generic CLI Agent Framework';
 
     if (taskType === 'video') {
@@ -461,7 +540,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
               <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor="yellow" paddingX={1} paddingY={1}>
                 <Text bold color="yellow">📁 {existingProject.title || 'Untitled Project'}</Text>
                 <Text dimColor>ID: {existingProject.id}</Text>
-                <Text dimColor>Phase: {existingProject.currentPhase}</Text>
+                <Text dimColor>Phase: {PHASE_CONFIGS[getCurrentPhase(existingProject)]?.displayName ?? getCurrentPhase(existingProject)}</Text>
                 <Text dimColor>Characters: {existingProject.characters.length}</Text>
                 <Text dimColor>Scenes: {existingProject.scenes.length}</Text>
               </Box>
@@ -533,10 +612,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             <Box flexDirection="column" marginBottom={1} paddingX={2}>
               <Text bold color="cyan">Welcome to Kshana!</Text>
               <Text dimColor>
-                Enter a story idea or paste a complete story/chapter.
+                Paste an SRT transcript or enter a documentary script.
               </Text>
               <Text dimColor>
-                The system will automatically detect what you've provided.
+                The system will detect SRT format automatically.
               </Text>
             </Box>
 
@@ -548,9 +627,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
               <Text bold color="yellow">Example prompts:</Text>
             </Box>
             <Box flexDirection="column" paddingX={4} marginBottom={1}>
-              <Text dimColor>"A story about a robot learning to dance"</Text>
-              <Text dimColor>"Create a video about a magical forest adventure"</Text>
-              <Text dimColor>"An epic tale of a knight and a dragon"</Text>
+              <Text dimColor>1 00:00:00,000 --&gt; 00:00:03,000 Welcome to the story of...</Text>
+              <Text dimColor>Paste a full SRT transcript to begin</Text>
+              <Text dimColor>A 10-minute documentary script about coral reefs</Text>
             </Box>
           </Box>
 
@@ -560,7 +639,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
               mode="text"
               onSubmit={handleTaskSubmit}
               prompt=">"
-              hint={'Enter your story idea and press Enter. Type "exit" to quit.'}
+              hint={'Paste SRT or script and press Enter. Type "exit" to quit.'}
             />
           </Box>
         </Box>
@@ -588,6 +667,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   }
 
   // Main agent view
+  const phaseLabel = taskType === 'video' && existingProject
+    ? (PHASE_CONFIGS[getCurrentPhase(existingProject)]?.displayName ?? getCurrentPhase(existingProject))
+    : undefined;
+
   return (
     <Box flexDirection="column">
       {/* Main content area */}
@@ -595,6 +678,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         agentName={agentName}
         status={status}
         statusMessage={error}
+        phaseLabel={phaseLabel}
         todos={todos}
         streamingText={streamingText}
         isStreaming={isStreaming}

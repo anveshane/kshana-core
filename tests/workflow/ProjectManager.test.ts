@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { join } from 'path';
 import {
+  WorkflowPhase,
   projectExists,
   createProject,
   loadProject,
@@ -16,6 +17,8 @@ import {
   getOriginalInput,
   getStateTransitionPrompt,
   saveProject,
+  setProjectInputType,
+  transitionToNextPhase,
   addCharacter,
   updateCharacterApproval,
   addSetting,
@@ -174,6 +177,41 @@ describe('ProjectManager', () => {
       writeProjectFile('plans/plot.md', 'Test content', TEST_BASE_PATH);
 
       expect(readProjectFile('plans/plot.md', TEST_BASE_PATH)).toBe('Test content');
+    });
+  });
+
+  describe('YouTube workflow phase ordering', () => {
+    it('transitions from image_generation to infographics_placement', async () => {
+      createProject('Test story', TEST_BASE_PATH);
+      setProjectInputType('youtube_srt', TEST_BASE_PATH);
+
+      const project = loadProject(TEST_BASE_PATH)!;
+      project.currentPhase = WorkflowPhase.IMAGE_GENERATION;
+      saveProject(project, TEST_BASE_PATH);
+
+      updatePhaseStatus(project, 'image_generation', 'completed', TEST_BASE_PATH);
+      const reloaded = loadProject(TEST_BASE_PATH)!;
+      const result = await transitionToNextPhase(reloaded, TEST_BASE_PATH);
+      expect(result.transitioned).toBe(true);
+      expect(result.project.currentPhase).toBe(WorkflowPhase.INFOGRAPHICS_PLACEMENT);
+    });
+
+    it('never skips infographics_placement when image_generation is completed', async () => {
+      createProject('Test story', TEST_BASE_PATH);
+      setProjectInputType('youtube_srt', TEST_BASE_PATH);
+
+      const project = loadProject(TEST_BASE_PATH)!;
+      project.currentPhase = WorkflowPhase.IMAGE_GENERATION;
+      project.phases.infographics_placement.status = 'pending';
+      project.phases.infographics_generation.status = 'pending';
+      saveProject(project, TEST_BASE_PATH);
+
+      updatePhaseStatus(project, 'image_generation', 'completed', TEST_BASE_PATH);
+      const reloaded = loadProject(TEST_BASE_PATH)!;
+      const result = await transitionToNextPhase(reloaded, TEST_BASE_PATH);
+
+      expect(result.project.currentPhase).not.toBe(WorkflowPhase.INFOGRAPHICS_GENERATION);
+      expect(result.project.currentPhase).toBe(WorkflowPhase.INFOGRAPHICS_PLACEMENT);
     });
   });
 });
@@ -336,7 +374,7 @@ describe('Disk-Scanning Sync Functionality', () => {
       // Mark characters_settings phase as complete
       project.phases.characters_settings = {
         status: 'completed',
-        plannerStage: 'complete',
+        completedAt: Date.now(),
       };
 
       // Save project with completed phase
@@ -393,7 +431,7 @@ describe('Disk-Scanning Sync Functionality', () => {
 
       project.phases.characters_settings = {
         status: 'completed',
-        plannerStage: 'complete',
+        completedAt: Date.now(),
       };
 
       const filePath = join(projectDir, 'project.json');
@@ -474,7 +512,7 @@ describe('Disk-Scanning Sync Functionality', () => {
 
       project.phases.scenes = {
         status: 'completed',
-        plannerStage: 'complete',
+        completedAt: Date.now(),
       };
 
       const filePath = join(projectDir, 'project.json');
@@ -547,7 +585,7 @@ describe('Disk-Scanning Sync Functionality', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        completedAt: null,
       };
 
       const filePath = join(projectDir, 'project.json');
@@ -603,7 +641,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -633,7 +671,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -663,7 +701,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -694,7 +732,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -725,7 +763,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -756,7 +794,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'scenes';
       project.phases.scenes = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -783,7 +821,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 

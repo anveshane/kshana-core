@@ -11,6 +11,7 @@ interface StatusBarProps {
   agentName?: string;
   status: StatusType;
   message?: string;
+  phaseLabel?: string;
 }
 
 const STATUS_CONFIG: Record<StatusType, { color: string; icon: string; label: string }> = {
@@ -25,6 +26,7 @@ export const StatusBar = React.memo(function StatusBar({
   agentName = 'Agent',
   status,
   message,
+  phaseLabel,
 }: StatusBarProps) {
   const config = STATUS_CONFIG[status];
 
@@ -51,6 +53,11 @@ export const StatusBar = React.memo(function StatusBar({
       {message && (
         <Box marginLeft={2}>
           <Text dimColor>- {message}</Text>
+        </Box>
+      )}
+      {phaseLabel && (
+        <Box marginLeft={2}>
+          <Text dimColor>Phase: {phaseLabel}</Text>
         </Box>
       )}
     </Box>

@@ -14,12 +14,12 @@ For each scene:
 5. Update scene with videoArtifactId using `update_project` action: 'update_scene_approval'
 
 Video clips should include:
-- Subtle camera movement (pan, zoom, etc.)
-- Motion appropriate to the scene action
+- Static camera by default; no movement unless explicitly requested
+- Motion appropriate to the scene action only when explicitly requested
 - Duration matching the scene's pacing (typically 3-6 seconds)
 
 Process ONE scene at a time. Wait for user approval before moving to the next.
 
 After all scene videos are generated:
-1. Update planner stage to 'complete'
-2. Transition to the final video assembly phase
+1. Mark phase complete: `update_project(action: 'update_phase', data: { phase: 'video', status: 'completed' })`
+2. Transition to the final video assembly phase: `update_project(action: 'transition_phase', data: {})`

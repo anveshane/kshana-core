@@ -3,16 +3,21 @@
  * Reads prompts from markdown files in /prompts/ directory.
  */
 import type { ToolDefinition } from '../llm/index.js';
-import { loadAndRenderMarkdown, type PromptContext } from './loader.js';
+import { loadAndRenderMarkdown, loadMarkdown, type PromptContext } from './loader.js';
 
 // NOTE: These are loaded at runtime via buildSystemMessage/build*Prompt functions.
 export const GENERIC_AGENT_BASE_PROMPT = '';
 export const GENERIC_AGENT_ORCHESTRATOR_SECTION = '';
 export const GENERIC_AGENT_SUB_AGENT_SECTION = '';
 export const PLANNING_AGENT_PROMPT = '';
+export const EXPLORE_AGENT_PROMPT = '';
 export const CONTENT_AGENT_PROMPT = '';
 export const IMAGE_GENERATION_AGENT_PROMPT = '';
 export const VIDEO_GENERATION_AGENT_PROMPT = '';
+export const TRANSCRIPT_PARSER_AGENT_PROMPT = '';
+export const PLACEMENT_PLANNER_AGENT_PROMPT = '';
+export const IMAGE_PLACER_AGENT_PROMPT = '';
+export const VIDEO_REPLACER_AGENT_PROMPT = '';
 
 export interface PromptRuntimeContext {
   working_directory?: string;
@@ -167,9 +172,35 @@ export function buildPlanningPrompt(task: string, context?: string): string {
 }
 
 /**
+ * Build the explore sub-agent system prompt.
+ * Used for read-only project content exploration.
+ *
+ * @param task - The exploration task description
+ * @param context - Optional background context (story content, existing files, etc.)
+ * @returns The complete explore system prompt
+ */
+export function buildExplorePrompt(task: string, context?: string): string {
+  const taskSection = `<task>\n${task}\n</task>`;
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const explore = loadAndRenderMarkdown('subagents/explore.md', {});
+  return [base, sub, explore, taskSection, contextSection].filter(Boolean).join('\n\n');
+}
+
+/**
  * Content types supported by the content agent.
  */
-export type ContentType = 'plot' | 'story' | 'character' | 'setting' | 'scene' | 'narration';
+export type ContentType =
+  | 'plot'
+  | 'story'
+  | 'character'
+  | 'setting'
+  | 'scene'
+  | 'narration'
+  | 'transcript_analysis'
+  | 'image_placement_plan'
+  | 'image_prompt';
 
 /**
  * Build the content creation sub-agent system prompt.
@@ -224,6 +255,62 @@ export function buildImageGenerationPrompt(task: string, context?: string): stri
   return [base, sub, img, taskSection, contextSection].filter(Boolean).join('\n\n');
 }
 
+export function buildTranscriptParserPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const parser = loadAndRenderMarkdown('subagents/transcript-parser.md', {});
+  return [base, sub, parser, contextSection].filter(Boolean).join('\n\n');
+}
+
+export function buildPlacementPlannerPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const planner = loadAndRenderMarkdown('subagents/content-planner.md', {});
+  return [base, sub, planner, contextSection].filter(Boolean).join('\n\n');
+}
+
+export function buildVideoMetadataPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const metadata = loadAndRenderMarkdown('subagents/video-metadata-generator.md', {});
+  return [base, sub, metadata, contextSection].filter(Boolean).join('\n\n');
+}
+
+export function buildImagePlacerPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const placer = loadAndRenderMarkdown('subagents/image-placer.md', {});
+  return [base, sub, placer, contextSection].filter(Boolean).join('\n\n');
+}
+
+export function buildVideoPlacerPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const placer = loadAndRenderMarkdown('subagents/video-placer.md', {});
+  return [base, sub, placer, contextSection].filter(Boolean).join('\n\n');
+}
+
+export function buildInfographicsPlacerPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const placer = loadAndRenderMarkdown('subagents/infographics-placer.md', {});
+  return [base, sub, placer, contextSection].filter(Boolean).join('\n\n');
+}
+
+export function buildVideoReplacerPrompt(context?: string): string {
+  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
+  const base = loadAndRenderMarkdown('system/base.md', {});
+  const sub = loadAndRenderMarkdown('system/subagent.md', {});
+  const replacer = loadAndRenderMarkdown('subagents/video-replacer.md', {});
+  return [base, sub, replacer, contextSection].filter(Boolean).join('\n\n');
+}
+
 /**
  * Video generation prompt options.
  */
@@ -257,4 +344,19 @@ export function buildVideoGenerationPrompt(options: VideoGenerationPromptOptions
   const sceneSection = `<scene>\n<scene_number>\n${sceneNumberStr}\n</scene_number>\n<scene_image_artifact_id>\n${sceneImageArtifactId}\n</scene_image_artifact_id>\n<motion_description>\n${motionStr}\n</motion_description>\n</scene>`;
 
   return [base, sub, vid, taskSection, contextSection, sceneSection].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Build the Remotion sub-agent system prompt with placements and skills.
+ * Used for one-shot LLM call to generate complete Remotion component code per placement.
+ *
+ * @param placementsJson - JSON string of placements array
+ * @param skillsContent - Loaded Remotion skills markdown (SKILL + rules)
+ * @returns The complete Remotion agent system prompt
+ */
+export function buildRemotionAgentPrompt(placementsJson: string, skillsContent: string): string {
+  const base = loadMarkdown('subagents/remotion-agent.md');
+  const placementsSection = `<placements>\n${placementsJson}\n</placements>`;
+  const skillsSection = `<remotion_skills>\n${skillsContent}\n</remotion_skills>`;
+  return [base, placementsSection, skillsSection].filter(Boolean).join('\n\n');
 }

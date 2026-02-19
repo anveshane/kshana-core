@@ -9,9 +9,18 @@ export {
   PlannerStage,
   type PhaseStatus,
   type PhaseInfo,
+  type ProjectPlan,
   type CharacterData,
   type SettingData,
   type SceneRef,
+  type TranscriptEntry,
+  type ImagePlacement,
+  type BackgroundGenerationKind,
+  type BackgroundGenerationItemStatus,
+  type BackgroundGenerationBatchStatus,
+  type BackgroundGenerationItem,
+  type BackgroundGenerationBatch,
+  type BackgroundGenerationState,
   type AssetInfo,
   type ProjectFile,
   type PhaseConfig,
@@ -33,6 +42,7 @@ export {
   PHASE_CONFIGS,
   PHASE_ORDER,
   PROJECT_DIR,
+  AGENT_DIR,
   PROJECT_FILE,
   PROJECT_VERSION,
   AUTO_APPROVE_TIMEOUT_MS,
@@ -51,8 +61,22 @@ export {
 
 // Project Manager
 export {
+  // Execution context detection
+  getExecutionContext,
+  getCLIProjectBasePath,
+  getCLIAgentDir,
+  getUserProjectAgentDir,
+  // Project base path management
+  setCurrentProjectBasePath,
+  getCurrentProjectBasePath,
+  // Path utilities (context-aware)
   getProjectDir,
+  getAgentDir,
+  getIndexDir,
+  getManifestFilePath,
+  getProjectIndexPath,
   getProjectFilePath,
+  // Project operations (CLI context: uses CLI's own directory by default)
   projectExists,
   deleteProject,
   createProjectStructure,
@@ -66,7 +90,8 @@ export {
   getProjectStyleConfig,
   setProjectInputType,
   updatePhaseStatus,
-  updatePlannerStage,
+  updatePlanStage,
+  updatePlannerStage, // Deprecated - redirects to updatePlanStage
   transitionToNextPhase,
   planFileHasContent,
   readProjectFile,
@@ -103,6 +128,10 @@ export {
   getContentRegistryJson,
   hasRequiredContent,
   markContentAvailable,
+  // Index functions
+  generateProjectIndex,
+  readProjectIndex,
+  rebuildProjectIndex,
 } from './ProjectManager.js';
 
 // File Tools
@@ -111,6 +140,9 @@ export {
   writeFileTool,
   readProjectTool,
   updateProjectTool,
+  readTranscriptTool,
+  writePlacementPlanTool,
+  writeInfographicPlacementPlanTool,
   getWorkflowFileTools,
 } from './FileTools.js';
 
@@ -128,6 +160,49 @@ export {
   getStitchingTools,
   type VideoTransition,
 } from './StitchVideoTool.js';
+
+// Placement Parsers
+export {
+  parseImagePlacements,
+  type ParsedImagePlacement,
+} from './imagePlacementsParser.js';
+
+export {
+  parseVideoPlacements,
+  parseVideoPlacementsWithErrors,
+  type ParsedVideoPlacement,
+  type VideoParseResult,
+  type VideoParseError,
+} from './videoPlacementsParser.js';
+
+export {
+  parseInfographicPlacements,
+  parseInfographicPlacementsWithErrors,
+  type ParsedInfographicPlacement,
+  type InfographicParseResult,
+  type InfographicParseError,
+} from './infographicPlacementsParser.js';
+
+export {
+  validatePlacementSets,
+  validateSinglePlacementAgainstExisting,
+  type PlacementType,
+  type PlacementValidationConfig,
+  type ValidatePlacementSetsInput,
+  type ValidatePlacementSetsResult,
+  type ValidateSinglePlacementInput,
+  type ValidateSinglePlacementResult,
+} from './PlacementValidator.js';
+
+export {
+  type VideoMetadata,
+  normalizeVideoMetadata,
+  parseVideoMetadataJson,
+  parseVideoMetadataMarkdown,
+  deriveVideoMetadata,
+  formatVideoMetadataMarkdown,
+  isLikelyHistoricalTimePeriod,
+} from './videoMetadataParser.js';
 
 // Combined tool getter
 import { getWorkflowFileTools } from './FileTools.js';

@@ -306,6 +306,104 @@ function formatResult(result: unknown, isError: boolean): string {
     return String(resultObj['warning']);
   }
 
+  // Special handling for subagent file save results (placement-planner, image-placer, etc.)
+  if (resultObj['status'] === 'completed' && (resultObj['file_saved'] || resultObj['file_path'] || resultObj['output_file'])) {
+    const lines: string[] = [];
+    const filePath = (resultObj['file_path'] || resultObj['output_file']) as string | undefined;
+    
+    if (filePath) {
+      lines.push(`✓ Saved: ${filePath}`);
+    }
+    
+    if (resultObj['bytes_written'] !== undefined) {
+      const bytes = Number(resultObj['bytes_written']);
+      const totalLines = resultObj['total_lines'] !== undefined ? Number(resultObj['total_lines']) : 0;
+      lines.push(`  Size: ${bytes.toLocaleString()} bytes (${totalLines} lines)`);
+    }
+    
+    if (resultObj['preview']) {
+      lines.push('');
+      lines.push('  Preview:');
+      lines.push('  ┌────────────────────────────────────────────────────────────');
+      const previewLines = String(resultObj['preview']).split('\n');
+      previewLines.forEach(line => {
+        lines.push(`  │ ${line}`);
+      });
+      lines.push('  └────────────────────────────────────────────────────────────');
+    }
+    
+    return lines.join('\n');
+  }
+  
+  // Special handling for parse_srt results
+  if (resultObj['status'] === 'success' && resultObj['transcript_path']) {
+    const lines: string[] = [];
+    lines.push(`✓ Saved: ${resultObj['transcript_path']}`);
+    
+    if (resultObj['total_entries'] !== undefined) {
+      lines.push(`  Entries: ${resultObj['total_entries']}`);
+    }
+    
+    if (resultObj['total_duration'] !== undefined) {
+      const duration = Number(resultObj['total_duration']);
+      const minutes = Math.floor(duration / 60);
+      const seconds = Math.floor(duration % 60);
+      lines.push(`  Duration: ${minutes}m ${seconds}s`);
+    }
+    
+    if (resultObj['transcript_preview']) {
+      lines.push('');
+      lines.push('  Preview:');
+      lines.push('  ┌────────────────────────────────────────────────────────────');
+      const previewLines = String(resultObj['transcript_preview']).split('\n');
+      previewLines.forEach(line => {
+        lines.push(`  │ ${line}`);
+      });
+      lines.push('  └────────────────────────────────────────────────────────────');
+    }
+    
+    return lines.join('\n');
+  }
+
+  // Special handling for generate_image/generate_video results with job_id
+  if (resultObj['job_id']) {
+    const lines: string[] = [];
+    const jobId = String(resultObj['job_id']);
+    
+    // Prominently display job_id
+    lines.push(`Job ID: ${jobId}`);
+    
+    // Show status if available
+    if (resultObj['status']) {
+      lines.push(`Status: ${resultObj['status']}`);
+    }
+    
+    // Show message if available
+    if (resultObj['message']) {
+      lines.push(`Message: ${resultObj['message']}`);
+    }
+    
+    // Show additional fields (but not job_id again)
+    const otherFields: string[] = [];
+    for (const [key, value] of Object.entries(resultObj)) {
+      if (key !== 'job_id' && key !== 'status' && key !== 'message') {
+        if (value !== null && value !== undefined) {
+          if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+            otherFields.push(`${key}: ${value}`);
+          }
+        }
+      }
+    }
+    
+    if (otherFields.length > 0) {
+      lines.push('');
+      lines.push('Additional info:');
+      otherFields.forEach(field => lines.push(`  ${field}`));
+    }
+    
+    return lines.join('\n');
+  }
+
   // For simple status results
   if (resultObj['status'] === 'success' && resultObj['message']) {
     return String(resultObj['message']);

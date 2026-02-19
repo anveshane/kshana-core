@@ -41,5 +41,25 @@ export {
   GENERIC_AGENT_BASE_PROMPT,
   GENERIC_AGENT_SUB_AGENT_SECTION,
   GENERIC_AGENT_ORCHESTRATOR_SECTION,
-  GENERIC_AGENT_SYSTEM_PROMPT,
 } from './prompts/index.js';
+
+// Orchestration
+export {
+  IntentRouter,
+  StateAnalyzer,
+  ContinuationPlanner,
+} from './orchestration/index.js';
+export type {
+  RouteIntent,
+  ExecutionStrategy,
+  IntentRoute,
+  FileCompletenessCheck,
+  MissingDependency,
+  Blocker,
+  PhaseCompletion,
+  StateAnalysis,
+  ContinuationStrategy,
+  ContinuationPlan,
+  OrchestrationContext,
+  OrchestrationInput,
+} from './orchestration/index.js';

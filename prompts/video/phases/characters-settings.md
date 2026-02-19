@@ -1,12 +1,22 @@
 ### Characters & Settings Phase
 
+**⚠️ CRITICAL: This is a PER-ITEM phase. DO NOT mark phase complete after each item!**
+
+This phase requires creating MULTIPLE items (characters and settings). Each item must be created, approved, and registered individually. Only mark the phase complete when ALL items are done.
+
 ## CORRECT WORKFLOW
 
 ### Step 1: YOU (Orchestrator) Identify Items
 
-**DO NOT dispatch a Task for this step.** YOU must read the `$story` context yourself and identify:
-- All character names mentioned in the story
-- All key locations/settings mentioned in the story
+**CRITICAL: Use `$story` context directly - DO NOT create tasks to read the story!**
+
+**DO NOT dispatch a Task to read the story.** The `$story` context is already available. YOU must:
+1. Use `fetch_context(context_ref: "$story")` to get the story content
+2. Identify all character names mentioned in the story
+3. Identify all key locations/settings mentioned in the story
+4. Check `read_project()` to see which characters/settings already exist (don't recreate them!)
+
+**DO NOT create `story_content.md` or any temporary story files. Use `$story` context directly.**
 
 After identifying them, create a TodoWrite list:
 ```
@@ -20,12 +30,19 @@ TodoWrite(merge: false, todos: [
 
 ### Step 2: Process EACH Item with generate_content
 
-For EACH character (ONE at a time - do not batch!):
+**BEFORE creating each item, check if it already exists:**
+```
+read_project()  // Check project.characters and project.settings arrays
+```
+
+**If the character/setting already exists in the project, SKIP it and move to the next item.**
+
+For EACH character that doesn't exist yet (ONE at a time - do not batch!):
 ```
 generate_content(content_type: "character", name: "<CHARACTER_NAME>")
 ```
 
-For EACH setting (ONE at a time - do not batch!):
+For EACH setting that doesn't exist yet (ONE at a time - do not batch!):
 ```
 generate_content(content_type: "setting", name: "<SETTING_NAME>")
 ```
@@ -35,6 +52,8 @@ The tool automatically:
 - Creates the character/setting profile
 - Handles user approval flow
 - Saves to `characters/<name>.md` or `settings/<name>.md`
+
+**DO NOT create the same character/setting multiple times! Check first, then create.**
 
 ### Step 3: After EACH Approval (MANDATORY)
 
@@ -56,7 +75,7 @@ generate_content(content_type: "character", name: "Marcus")
 
 **DO NOT skip the TodoWrite call!** The todo list MUST be updated after each approval.
 
-**DO NOT call `update_planner_stage(stage: 'complete')` until ALL items are done!**
+**DO NOT mark phase as 'completed' until ALL items are done!**
 
 ## Character Profile Requirements
 Each character profile must include:
@@ -78,19 +97,24 @@ Each setting description must include:
 
 ## Summary
 
-1. **Step 1**: YOU read $story and create TodoWrite (NO Task call)
-2. **Step 2**: ONE generate_content call per character/setting (individual files!)
-3. **Step 3**: Update todo and move to next
-4. **Step 4**: After ALL items done -> call `update_project(action: 'transition_phase', data: { next_phase: 'scenes' })`
+1. **Step 1**: YOU use `$story` context directly (NO Task to read story, NO story_content.md files!)
+2. **Step 2**: Check if item exists, then ONE generate_content call per NEW character/setting
+3. **Step 3**: After each approval: register item, update todo, create next item
+4. **Step 4**: After ALL items done -> mark phase complete and transition
 
-**Remember**: Each character = separate generate_content + separate file. Each setting = separate generate_content + separate file.
+**Remember**: 
+- Use `$story` context directly - DO NOT create tasks to read story files
+- Check if character/setting exists before creating (use `read_project()`)
+- Each character = separate generate_content + separate file
+- Each setting = separate generate_content + separate file
+- DO NOT create duplicates!
 
 ## CRITICAL: After All Items Complete
 
 When the LAST character/setting is approved and registered:
 
 1. Mark final todo as completed: `TodoWrite(merge: true, todos: [{ id: '<last-item-id>', status: 'completed' }])`
-2. Mark phase complete: `update_project(action: 'update_planner_stage', data: { phase: 'characters_settings', stage: 'complete' })`
-3. **IMMEDIATELY** transition: `update_project(action: 'transition_phase', data: { next_phase: 'scenes' })`
+2. Mark phase complete: `update_project(action: 'update_phase', data: { phase: 'characters_settings', status: 'completed' })`
+3. **IMMEDIATELY** transition: `update_project(action: 'transition_phase', data: {})`
 
 **DO NOT** stop after step 2. You MUST call `update_project(action: 'transition_phase', ...)` to move to scenes.

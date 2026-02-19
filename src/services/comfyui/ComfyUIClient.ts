@@ -5,8 +5,8 @@
  * and downloading generated images from the ComfyUI API.
  */
 
-import * as fs from 'fs';
 import * as path from 'path';
+import { getProjectFileOps } from '../../server/ProjectFileOps.js';
 import { nanoid } from 'nanoid';
 
 export interface ComfyUIClientConfig {
@@ -31,13 +31,18 @@ export interface CompletionResult {
   prompt_id: string;
 }
 
-const DEFAULT_CONFIG: ComfyUIClientConfig = {
-  baseUrl: process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188',
-  // outputDir should be explicitly provided by caller (project-specific)
-  // This default is only used if not specified
-  outputDir: './outputs',
-  timeout: parseInt(process.env['COMFYUI_TIMEOUT'] || '300', 10),
-};
+// Read env at call time so backend restarts can pick up new values without process reload
+function getDefaultConfig(): ComfyUIClientConfig {
+  const parsedTimeout = parseInt(process.env['COMFYUI_TIMEOUT'] || '300', 10);
+
+  return {
+    baseUrl: process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188',
+    // outputDir should be explicitly provided by caller (project-specific)
+    // This default is only used if not specified
+    outputDir: './outputs',
+    timeout: Number.isFinite(parsedTimeout) ? parsedTimeout : 300,
+  };
+}
 
 /**
  * Async HTTP client for ComfyUI API.
@@ -47,15 +52,74 @@ export class ComfyUIClient {
   private outputDir: string;
   private timeout: number;
 
+  // Static cache for availability checks
+  private static availabilityCache: { result: boolean; timestamp: number } | null = null;
+  private static readonly CACHE_TTL = 30000; // 30 seconds
+
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
-    const merged = { ...DEFAULT_CONFIG, ...config };
+    const merged = { ...getDefaultConfig(), ...config };
     this.baseUrl = merged.baseUrl.replace(/\/$/, '');
     this.outputDir = merged.outputDir;
     this.timeout = merged.timeout;
 
     // Ensure output directory exists
-    if (!fs.existsSync(this.outputDir)) {
-      fs.mkdirSync(this.outputDir, { recursive: true });
+    if (!getProjectFileOps().existsSync(this.outputDir)) {
+      getProjectFileOps().mkdirSync(this.outputDir, { recursive: true });
+    }
+  }
+
+  /**
+   * Check if ComfyUI service is available.
+   * Uses cached result (30s TTL) to avoid repeated health checks.
+   * 
+   * @param baseUrl - Optional base URL override (defaults to env COMFYUI_BASE_URL)
+   * @returns true if ComfyUI responds to health check, false otherwise
+   */
+  static async isAvailable(baseUrl?: string): Promise<boolean> {
+    // Check cache
+    if (this.availabilityCache && 
+        Date.now() - this.availabilityCache.timestamp < this.CACHE_TTL) {
+      return this.availabilityCache.result;
+    }
+
+    const url = baseUrl || process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
+    
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 2000); // 2s timeout
+
+    try {
+      const response = await fetch(`${url}/system_stats`, {
+        signal: controller.signal,
+        method: 'GET',
+      });
+
+      if (!response.ok) {
+        this.availabilityCache = { result: false, timestamp: Date.now() };
+        return false;
+      }
+
+      // Ensure we got valid JSON back (guards against proxy HTML pages returning 200)
+      if (typeof response.json !== 'function') {
+        this.availabilityCache = { result: false, timestamp: Date.now() };
+        return false;
+      }
+
+      try {
+        const data = await response.json();
+        const isObject = data !== null && typeof data === 'object';
+        this.availabilityCache = { result: isObject, timestamp: Date.now() };
+        return isObject;
+      } catch {
+        this.availabilityCache = { result: false, timestamp: Date.now() };
+        return false;
+      }
+    } catch (error) {
+      // Connection error, timeout, or any other failure
+      // Cache unavailable result
+      this.availabilityCache = { result: false, timestamp: Date.now() };
+      return false;
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
@@ -67,13 +131,13 @@ export class ComfyUIClient {
     imageType: string = 'input',
     overwrite: boolean = true
   ): Promise<{ name: string; subfolder: string; type: string }> {
-    if (!fs.existsSync(filePath)) {
+    if (!getProjectFileOps().existsSync(filePath)) {
       throw new Error(`Image file not found: ${filePath}`);
     }
 
     const url = `${this.baseUrl}/upload/image`;
     const formData = new FormData();
-    const fileBuffer = fs.readFileSync(filePath);
+    const fileBuffer = getProjectFileOps().readFileSync(filePath);
     const fileName = path.basename(filePath);
 
     formData.append('image', new Blob([fileBuffer]), fileName);
@@ -134,11 +198,13 @@ export class ComfyUIClient {
 
   /**
    * Wait for workflow completion using HTTP polling.
+   * Supports an optional AbortSignal to cancel polling (e.g. on server shutdown).
    */
   async waitForCompletion(
     promptId: string,
     progressCallback?: ProgressCallback,
-    pollInterval: number = 10
+    pollInterval: number = 10,
+    abortSignal?: AbortSignal
   ): Promise<CompletionResult> {
     const startTime = Date.now();
 
@@ -148,6 +214,11 @@ export class ComfyUIClient {
     }
 
     while (true) {
+      // Check if we've been asked to abort
+      if (abortSignal?.aborted) {
+        throw new Error(`Polling aborted for workflow ${promptId}: ${abortSignal.reason || 'shutdown'}`);
+      }
+
       const elapsed = (Date.now() - startTime) / 1000;
 
       // Emit progress update during polling
@@ -193,7 +264,8 @@ export class ComfyUIClient {
         console.warn(`Failed to poll history: ${e}`);
       }
 
-      await this.sleep(pollInterval * 1000);
+      // Use abort-aware sleep so we wake up quickly on shutdown
+      await this.abortableSleep(pollInterval * 1000, abortSignal);
     }
   }
 
@@ -286,7 +358,7 @@ export class ComfyUIClient {
     const finalFilename = outputFilename || filename;
     const outputPath = path.join(this.outputDir, finalFilename);
 
-    fs.writeFileSync(outputPath, Buffer.from(buffer));
+    getProjectFileOps().writeFileSync(outputPath, Buffer.from(buffer));
 
     return outputPath;
   }
@@ -339,13 +411,68 @@ export class ComfyUIClient {
 
   // Helper methods
 
+  /**
+   * Fetch with retry logic and timeout.
+   * Retries up to 3 times with exponential backoff for network failures.
+   */
+  private async fetchWithRetry(
+    url: string,
+    options: RequestInit = {},
+    maxRetries: number = 3,
+    retryDelay: number = 2
+  ): Promise<Response> {
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        // Add timeout to fetch request (30 seconds per request)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
+        
+        try {
+          const response = await fetch(url, {
+            ...options,
+            signal: controller.signal,
+          });
+          
+          clearTimeout(timeoutId);
+          return response;
+        } catch (fetchError) {
+          clearTimeout(timeoutId);
+          throw fetchError;
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const isAborted = error instanceof Error && error.name === 'AbortError';
+        
+        // Don't retry on abort (timeout) or if it's the last attempt
+        if (isAborted || attempt === maxRetries) {
+          break;
+        }
+        
+        // Exponential backoff: 2s, 4s, 8s
+        const delay = retryDelay * Math.pow(2, attempt);
+        console.warn(`Fetch attempt ${attempt + 1} failed, retrying in ${delay}s: ${lastError.message}`);
+        await this.sleep(delay * 1000);
+      }
+    }
+    
+    throw lastError || new Error('Fetch failed after retries');
+  }
+
   private async getHistory(promptId: string): Promise<HistoryEntry | null> {
-    const response = await fetch(`${this.baseUrl}/history/${promptId}`);
-    if (!response.ok) {
+    try {
+      const response = await this.fetchWithRetry(`${this.baseUrl}/history/${promptId}`);
+      if (!response.ok) {
+        return null;
+      }
+      const history = await response.json() as Record<string, HistoryEntry>;
+      return history[promptId] || null;
+    } catch (error) {
+      // Return null on error to allow polling to continue
+      console.warn(`Failed to fetch history for ${promptId}: ${error instanceof Error ? error.message : String(error)}`);
       return null;
     }
-    const history = await response.json() as Record<string, HistoryEntry>;
-    return history[promptId] || null;
   }
 
   private async callProgressCallback(callback: ProgressCallback, pct: number, msg: string): Promise<void> {
@@ -361,6 +488,66 @@ export class ComfyUIClient {
 
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Sleep that resolves early if the abort signal fires.
+   */
+  private abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+    if (!signal) return this.sleep(ms);
+    if (signal.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        resolve();
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  /**
+   * Interrupt the currently executing ComfyUI job.
+   * Sends POST /interrupt to make ComfyUI stop the in-progress generation.
+   */
+  static async interruptCurrentJob(baseUrl?: string): Promise<void> {
+    const url = baseUrl || process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      await fetch(`${url}/interrupt`, {
+        method: 'POST',
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      console.log('[ComfyUIClient] Sent interrupt to ComfyUI');
+    } catch (e) {
+      console.warn(`[ComfyUIClient] Failed to interrupt ComfyUI: ${e}`);
+    }
+  }
+
+  /**
+   * Clear the ComfyUI queue (both pending and running items).
+   */
+  static async clearQueue(baseUrl?: string): Promise<void> {
+    const url = baseUrl || process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 3000);
+      await fetch(`${url}/queue`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clear: true }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      console.log('[ComfyUIClient] Cleared ComfyUI queue');
+    } catch (e) {
+      console.warn(`[ComfyUIClient] Failed to clear ComfyUI queue: ${e}`);
+    }
   }
 
   /**

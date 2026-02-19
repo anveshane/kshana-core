@@ -180,7 +180,7 @@ async function processStitchingJob(jobId: string): Promise<void> {
   job.updatedAt = Date.now();
 
   // Register the final video as an asset
-  addAsset({
+  await addAsset({
     id: finalVideoId,
     type: 'final_video',
     path: finalVideoPath,
