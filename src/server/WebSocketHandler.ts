@@ -46,6 +46,8 @@ interface ConnectionState {
   fileSyncDone: boolean;
   fileSyncPromise: Promise<void>;
   resolveFileSync: () => void;
+  sessionReady: Promise<void>;
+  resolveSessionReady: () => void;
 }
 
 /**
@@ -163,6 +165,11 @@ export class WebSocketHandler {
       resolveFileSync = resolve;
     });
 
+    let resolveSessionReady = () => {};
+    const sessionReady = new Promise<void>((resolve) => {
+      resolveSessionReady = resolve;
+    });
+
     const connectionState: ConnectionState = {
       socket,
       sessionId,
@@ -172,6 +179,8 @@ export class WebSocketHandler {
       fileSyncDone: !requiresFileSync,
       fileSyncPromise,
       resolveFileSync,
+      sessionReady,
+      resolveSessionReady,
     };
 
     if (!requiresFileSync) {
@@ -190,36 +199,63 @@ export class WebSocketHandler {
       console.log(`[WebSocketHandler] Sent file_sync_request for project: ${projectDir}`);
     }
 
-    // Create session AFTER remote mode is active so project init writes are proxied.
-    const sessionBasePath = channel === 'chat' ? projectDir : undefined;
-    await this.conversationManager.createSession(sessionBasePath, sessionId);
-
-    this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
-      status: 'connected',
-      message: 'Session created successfully',
-    }));
-
-    // Set up message handler
+    // Register socket handlers BEFORE createSession so that the
+    // file_sync_init response from the desktop can be processed while
+    // we await the file sync promise below.
     socket.on('message', async (data) => {
       connectionState.isAlive = true;
       await this.handleMessage(sessionId, socket, data.toString());
     });
 
-    // Set up close handler
     socket.on('close', () => {
       this.handleDisconnection(sessionId);
     });
 
-    // Set up error handler
     socket.on('error', (error) => {
       console.error(`WebSocket error for session ${sessionId}:`, error);
       this.sendError(socket, sessionId, 'websocket_error', error.message);
     });
 
-    // Set up pong handler for heartbeat
     socket.on('pong', () => {
       connectionState.isAlive = true;
     });
+
+    // Wait for the desktop to send back its project files so the cache
+    // is populated with the real manifest before createSession runs.
+    if (requiresFileSync) {
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error('file_sync_timeout'));
+        }, WebSocketHandler.FILE_SYNC_TIMEOUT_MS);
+      });
+
+      try {
+        await Promise.race([connectionState.fileSyncPromise, timeoutPromise]);
+        console.log(`[WebSocketHandler] File sync completed for session ${sessionId}, proceeding with session creation`);
+      } catch {
+        console.warn(
+          `[WebSocketHandler] File sync timed out for session ${sessionId} ` +
+          `(${WebSocketHandler.FILE_SYNC_TIMEOUT_MS}ms), creating session with empty cache`,
+        );
+      } finally {
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+      }
+    }
+
+    // Create session AFTER file sync so the cache has the real manifest.
+    // createSession -> getOrCreateProject -> createProjectStructure will
+    // now see the existing manifest and skip the empty-manifest write.
+    const sessionBasePath = channel === 'chat' ? projectDir : undefined;
+    await this.conversationManager.createSession(sessionBasePath, sessionId);
+    connectionState.resolveSessionReady();
+
+    this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+      status: 'connected',
+      message: 'Session created successfully',
+    }));
   }
 
   /**
@@ -412,6 +448,10 @@ export class WebSocketHandler {
     const disconnected = this.connections.get(sessionId);
     if (!disconnected) return;
 
+    // Resolve pending gates so nothing hangs after disconnect
+    disconnected.resolveFileSync();
+    disconnected.resolveSessionReady();
+
     // Cancel any running tasks and clean up
     this.conversationManager.deleteSession(sessionId);
     this.connections.delete(sessionId);
@@ -475,6 +515,11 @@ export class WebSocketHandler {
       this.sendError(socket, sessionId, 'session_not_found', 'Session not found');
       return null;
     }
+
+    // Wait for session creation to finish before processing task messages.
+    // Socket handlers are registered before createSession so that file_sync_init
+    // can be received, but start_task/user_response must wait for the session.
+    await conn.sessionReady;
 
     if (conn.channel !== 'chat') {
       this.sendError(
