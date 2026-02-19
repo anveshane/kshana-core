@@ -8,8 +8,8 @@ import type { ToolDefinition } from '../../../core/llm/index.js';
 import { getWorkflowLogger } from './WorkflowLogger.js';
 import { getPhaseLogger } from '../../../utils/phaseLogger.js';
 import { loadAndRenderMarkdown } from '../../../core/prompts/loader.js';
-import { existsSync } from 'fs';
 import { join } from 'path';
+import { getProjectFileOps } from '../../../server/ProjectFileOps.js';
 import {
   loadProject,
   saveProject,
@@ -853,7 +853,7 @@ What story would you like to turn into a video?`,
 
           // VALIDATION: Check for required files before transition
           const requiredFiles = getRequiredFilesForPhase(currentPhase, basePath);
-          const missingFiles = requiredFiles.filter(file => !existsSync(join(basePath, '.kshana', file)));
+          const missingFiles = requiredFiles.filter(file => !getProjectFileOps().existsSync(join(basePath, '.kshana', file)));
 
           if (missingFiles.length > 0) {
             // If we've retried multiple times and files are still missing, provide recovery action

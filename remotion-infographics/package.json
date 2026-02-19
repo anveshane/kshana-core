@@ -6,7 +6,9 @@
   "scripts": {
     "build": "remotion bundle",
     "render": "tsx render.mts",
-    "start": "remotion studio src/index.tsx"
+    "start": "remotion studio src/index.tsx",
+    "setup": "remotion browser ensure",
+    "postinstall": "remotion browser ensure"
   },
   "dependencies": {
     "@remotion/bundler": "4.0.409",

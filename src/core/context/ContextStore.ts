@@ -5,8 +5,8 @@
  * Purpose: Prevent context drift when passing long content (narratives, chapters)
  * to child agents. Instead of summarizing, we store by reference.
  */
-import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { getProjectFileOps } from '../../server/ProjectFileOps.js';
 import { getCurrentProjectBasePath } from '../../tasks/video/workflow/ProjectManager.js';
 
 /**
@@ -161,9 +161,9 @@ export class ContextStore {
    */
   private loadIndex(): void {
     const indexPath = getContextIndexFile(this.basePath);
-    if (existsSync(indexPath)) {
+    if (getProjectFileOps().existsSync(indexPath)) {
       try {
-        const fileContent = readFileSync(indexPath, 'utf-8');
+        const fileContent = getProjectFileOps().readFileSync(indexPath, 'utf-8');
         const parsed = JSON.parse(fileContent);
         
         // Handle both old format (direct object) and new format (with context.variables)
@@ -192,15 +192,15 @@ export class ContextStore {
    */
   private saveIndex(): void {
     const contextDir = getContextDir(this.basePath);
-    if (!existsSync(contextDir)) {
-      mkdirSync(contextDir, { recursive: true });
+    if (!getProjectFileOps().existsSync(contextDir)) {
+      getProjectFileOps().mkdirSync(contextDir, { recursive: true });
     }
     const indexPath = getContextIndexFile(this.basePath);
     
     // Save only context variables (not the full consolidated index)
     // The consolidated index is managed by ProjectIndexManager
     const variablesOnly = Object.fromEntries(this.index);
-    writeFileSync(
+    getProjectFileOps().writeFileSync(
       indexPath,
       JSON.stringify(variablesOnly, null, 2)
     );
@@ -260,13 +260,13 @@ export class ContextStore {
     };
 
     const contextDir = getContextDir(this.basePath);
-    if (!existsSync(contextDir)) {
-      mkdirSync(contextDir, { recursive: true });
+    if (!getProjectFileOps().existsSync(contextDir)) {
+      getProjectFileOps().mkdirSync(contextDir, { recursive: true });
     }
 
     // Use variable name for filename (e.g., "$plan" -> "plan.md")
     const contentFile = join(contextDir, variableToFilename(variableName));
-    writeFileSync(contentFile, content);
+    getProjectFileOps().writeFileSync(contentFile, content);
 
     // Index by variable name
     this.index.set(variableName, meta);
@@ -297,9 +297,9 @@ export class ContextStore {
     const projectDir = this.basePath ? join(this.basePath, '.kshana') : join(getCurrentProjectBasePath(), '.kshana');
     const fullPath = join(projectDir, filePath);
     let charCount = 0;
-    if (existsSync(fullPath)) {
+    if (getProjectFileOps().existsSync(fullPath)) {
       try {
-        const content = readFileSync(fullPath, 'utf-8');
+        const content = getProjectFileOps().readFileSync(fullPath, 'utf-8');
         charCount = content.length;
       } catch {
         // If file doesn't exist or can't be read, charCount remains 0
@@ -338,9 +338,9 @@ export class ContextStore {
       // Use basePath if available, otherwise getCurrentProjectBasePath()
       const projectDir = this.basePath ? join(this.basePath, '.kshana') : join(getCurrentProjectBasePath(), '.kshana');
       const fullPath = join(projectDir, meta.filePath);
-      if (existsSync(fullPath)) {
+      if (getProjectFileOps().existsSync(fullPath)) {
         try {
-          const content = readFileSync(fullPath, 'utf-8');
+          const content = getProjectFileOps().readFileSync(fullPath, 'utf-8');
           return { content, label: meta.label };
         } catch {
           // File exists but can't be read - remove from index
@@ -359,13 +359,13 @@ export class ContextStore {
     // Otherwise, read from context directory
     const contextDir = getContextDir(this.basePath);
     const contentFile = join(contextDir, variableToFilename(variableName));
-    if (!existsSync(contentFile)) {
+    if (!getProjectFileOps().existsSync(contentFile)) {
       this.index.delete(variableName);
       this.saveIndex();
       return null;
     }
 
-    const content = readFileSync(contentFile, 'utf-8');
+    const content = getProjectFileOps().readFileSync(contentFile, 'utf-8');
     return { content, label: meta.label };
   }
 
@@ -398,8 +398,8 @@ export class ContextStore {
 
     const contextDir = getContextDir(this.basePath);
     const contentFile = join(contextDir, variableToFilename(variableName));
-    if (existsSync(contentFile)) {
-      unlinkSync(contentFile);
+    if (getProjectFileOps().existsSync(contentFile)) {
+      getProjectFileOps().unlinkSync(contentFile);
     }
 
     this.index.delete(variableName);
@@ -441,16 +441,16 @@ export class ContextStore {
     const count = this.index.size;
 
     const contextDir = getContextDir(this.basePath);
-    if (existsSync(contextDir)) {
-      const files = readdirSync(contextDir);
+    if (getProjectFileOps().existsSync(contextDir)) {
+      const files = getProjectFileOps().readdirSync(contextDir);
       for (const file of files) {
         // Only delete .md files, not index.json
         if (file.endsWith('.md')) {
           const filePath = join(contextDir, file);
           // Check if file exists before trying to delete (handles race conditions)
-          if (existsSync(filePath)) {
+          if (getProjectFileOps().existsSync(filePath)) {
             try {
-              unlinkSync(filePath);
+              getProjectFileOps().unlinkSync(filePath);
             } catch {
               // Ignore errors (file may have been deleted by another process)
             }

@@ -13,8 +13,8 @@
  * 3. Asset routing (from agent/manifest.json) - file locations and versions
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { getProjectFileOps } from '../../server/ProjectFileOps.js';
 import type { StoredContextMeta } from '../context/ContextStore.js';
 import { getCurrentProjectBasePath } from '../../tasks/video/workflow/ProjectManager.js';
 
@@ -124,12 +124,12 @@ export class ProjectIndexManager {
    */
   load(): ConsolidatedProjectIndex | null {
     const indexPath = getConsolidatedIndexPath(this.basePath);
-    if (!existsSync(indexPath)) {
+    if (!getProjectFileOps().existsSync(indexPath)) {
       return null;
     }
 
     try {
-      const data = JSON.parse(readFileSync(indexPath, 'utf-8')) as ConsolidatedProjectIndex;
+      const data = JSON.parse(getProjectFileOps().readFileSync(indexPath, 'utf-8')) as ConsolidatedProjectIndex;
       // Update projectId from the loaded index
       if (data.project_id) {
         this.projectId = data.project_id;
@@ -155,12 +155,12 @@ export class ProjectIndexManager {
     const indexPath = getConsolidatedIndexPath(this.basePath);
     const contextDir = join(this.basePath, '.kshana', 'context');
     
-    if (!existsSync(contextDir)) {
-      mkdirSync(contextDir, { recursive: true });
+    if (!getProjectFileOps().existsSync(contextDir)) {
+      getProjectFileOps().mkdirSync(contextDir, { recursive: true });
     }
 
     index.last_modified = Date.now();
-    writeFileSync(indexPath, JSON.stringify(index, null, 2), 'utf-8');
+    getProjectFileOps().writeFileSync(indexPath, JSON.stringify(index, null, 2), 'utf-8');
   }
 
   /**

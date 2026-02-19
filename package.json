@@ -41,7 +41,8 @@
     "eval:mock": "tsx scripts/run-evals.ts",
     "lint": "tsc --noEmit && eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "setup:remotion": "cd remotion-infographics && pnpm install && pnpm run setup"
   },
   "keywords": [
     "cli",

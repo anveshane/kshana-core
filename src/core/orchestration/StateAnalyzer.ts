@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { getProjectFileOps } from '../../server/ProjectFileOps.js';
 import { getCurrentPhase, getManifestFilePath, loadProject, readProjectFile } from '../../tasks/video/workflow/index.js';
 import { type AssetInfo, type PhaseStatus, type ProjectFile, WorkflowPhase } from '../../tasks/video/workflow/types.js';
 import type { Blocker, MissingDependency, PhaseCompletion, StateAnalysis } from './types.js';
@@ -86,12 +86,12 @@ export class StateAnalyzer {
 
   private loadManifestAssets(basePath: string): AssetInfo[] {
     const manifestPath = getManifestFilePath(basePath);
-    if (!existsSync(manifestPath)) {
+    if (!getProjectFileOps().existsSync(manifestPath)) {
       return [];
     }
 
     try {
-      const manifestContent = readFileSync(manifestPath, 'utf-8');
+      const manifestContent = getProjectFileOps().readFileSync(manifestPath, 'utf-8');
       const manifest = JSON.parse(manifestContent) as { assets?: AssetInfo[] };
       return manifest.assets ?? [];
     } catch {

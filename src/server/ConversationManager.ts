@@ -78,8 +78,8 @@ export class ConversationManager {
    * Create a new conversation session.
    * @param basePath - Optional base path for the project directory (used for video tasks)
    */
-  async createSession(basePath?: string): Promise<SessionState> {
-    const sessionId = uuidv4();
+  async createSession(basePath?: string, preGeneratedSessionId?: string): Promise<SessionState> {
+    const sessionId = preGeneratedSessionId ?? uuidv4();
     const now = Date.now();
 
     console.log('[ConversationManager] Creating session:', {

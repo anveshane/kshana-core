@@ -4,8 +4,10 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { getProjectFileOps } from '../../server/ProjectFileOps.js';
 import { fileURLToPath } from 'node:url';
 import { spawnSync, spawn, type ChildProcess } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { nanoid } from 'nanoid';
 import { bundle } from '@remotion/bundler';
 import { createTool } from '../../core/tools/index.js';
@@ -660,8 +662,8 @@ function createBackgroundBatch(
 function getAssetsDir(): string {
   const basePath = getCurrentProjectBasePath();
   const assetsDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'assets', 'images');
-  if (!fs.existsSync(assetsDir)) {
-    fs.mkdirSync(assetsDir, { recursive: true });
+  if (!getProjectFileOps().existsSync(assetsDir)) {
+    getProjectFileOps().mkdirSync(assetsDir, { recursive: true });
   }
   return assetsDir;
 }
@@ -670,8 +672,8 @@ function getAssetsDir(): string {
 function getImagePlacementsDir(): string {
   const basePath = getCurrentProjectBasePath();
   const imagePlacementsDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'image-placements');
-  if (!fs.existsSync(imagePlacementsDir)) {
-    fs.mkdirSync(imagePlacementsDir, { recursive: true });
+  if (!getProjectFileOps().existsSync(imagePlacementsDir)) {
+    getProjectFileOps().mkdirSync(imagePlacementsDir, { recursive: true });
   }
   return imagePlacementsDir;
 }
@@ -680,8 +682,8 @@ function getImagePlacementsDir(): string {
 function getVideoPlacementsDir(): string {
   const basePath = getCurrentProjectBasePath();
   const videoPlacementsDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'video-placements');
-  if (!fs.existsSync(videoPlacementsDir)) {
-    fs.mkdirSync(videoPlacementsDir, { recursive: true });
+  if (!getProjectFileOps().existsSync(videoPlacementsDir)) {
+    getProjectFileOps().mkdirSync(videoPlacementsDir, { recursive: true });
   }
   return videoPlacementsDir;
 }
@@ -731,7 +733,7 @@ function checkImageExists(
 
   for (const filename of possibleFilenames) {
     const filePath = path.join(imagePlacementsDir, filename);
-    if (fs.existsSync(filePath)) {
+    if (getProjectFileOps().existsSync(filePath)) {
       // Check manifest for artifact ID
       const assets = getAssets();
       const relativePath = `agent/image-placements/${filename}`;
@@ -847,7 +849,7 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
         if (!refImage) continue;
         const refImagePath = findImagePathFromArtifactId(refImage.image_id);
 
-        if (!refImagePath || !fs.existsSync(refImagePath)) {
+        if (!refImagePath || !getProjectFileOps().existsSync(refImagePath)) {
           continue;
         }
 
@@ -1061,9 +1063,9 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
       let version = 1;
       if (placementNumber !== undefined) {
         const manifestPath = getManifestFilePath();
-        if (fs.existsSync(manifestPath)) {
+        if (getProjectFileOps().existsSync(manifestPath)) {
           try {
-            const manifestContent = fs.readFileSync(manifestPath, 'utf-8');
+            const manifestContent = getProjectFileOps().readFileSync(manifestPath, 'utf-8');
             const manifest = JSON.parse(manifestContent) as { assets: Array<{ type?: string; scene_number?: number; metadata?: Record<string, unknown>; version?: number }> };
             const existingAssets = manifest.assets?.filter((a) => 
               a.type === assetType && (
@@ -1648,7 +1650,7 @@ Returns a job ID. Use wait_for_job to check completion.`,
       // Find the image file from the artifact ID
       const imagePath = findImagePathFromArtifactId(sceneImageArtifactId);
 
-      if (!imagePath || !fs.existsSync(imagePath)) {
+      if (!imagePath || !getProjectFileOps().existsSync(imagePath)) {
         throw new Error(`Image not found for artifact: ${sceneImageArtifactId}`);
       }
 
@@ -1661,8 +1663,8 @@ Returns a job ID. Use wait_for_job to check completion.`,
 
       const basePath = getCurrentProjectBasePath();
       const assetsDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'assets', 'videos');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
+      if (!getProjectFileOps().existsSync(assetsDir)) {
+        getProjectFileOps().mkdirSync(assetsDir, { recursive: true });
       }
 
       const client = new ComfyUIClient({
@@ -1810,11 +1812,11 @@ Returns a job ID. Use wait_for_job to check completion.`,
       const startImagePath = findImagePathFromArtifactId(startImageArtifactId);
       const endImagePath = findImagePathFromArtifactId(endImageArtifactId);
 
-      if (!startImagePath || !fs.existsSync(startImagePath)) {
+      if (!startImagePath || !getProjectFileOps().existsSync(startImagePath)) {
         throw new Error(`Start image not found for artifact: ${startImageArtifactId}`);
       }
 
-      if (!endImagePath || !fs.existsSync(endImagePath)) {
+      if (!endImagePath || !getProjectFileOps().existsSync(endImagePath)) {
         throw new Error(`End image not found for artifact: ${endImageArtifactId}`);
       }
 
@@ -1827,8 +1829,8 @@ Returns a job ID. Use wait_for_job to check completion.`,
 
       const basePath = getCurrentProjectBasePath();
       const assetsDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'assets', 'videos');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
+      if (!getProjectFileOps().existsSync(assetsDir)) {
+        getProjectFileOps().mkdirSync(assetsDir, { recursive: true });
       }
 
       const client = new ComfyUIClient({
@@ -2019,7 +2021,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         }
       }
 
-      if (!fs.existsSync(imagePath)) {
+      if (!getProjectFileOps().existsSync(imagePath)) {
         throw new Error(`Base image not found: ${params.base_image_path}`);
       }
 
@@ -2163,8 +2165,8 @@ export interface StoryboardParams {
 function getStoryboardDir(): string {
   const basePath = getCurrentProjectBasePath();
   const storyboardDir = path.join(basePath, PROJECT_DIR, AGENT_DIR, 'assets', 'storyboard');
-  if (!fs.existsSync(storyboardDir)) {
-    fs.mkdirSync(storyboardDir, { recursive: true });
+  if (!getProjectFileOps().existsSync(storyboardDir)) {
+    getProjectFileOps().mkdirSync(storyboardDir, { recursive: true });
   }
   return storyboardDir;
 }
@@ -3850,6 +3852,7 @@ async function runRemotionRenderAsync(
     const proc = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
+      shell: process.platform === 'win32',
     });
 
     // Track progress for user-friendly updates
@@ -3968,6 +3971,7 @@ async function runBuildAsync(
     const proc = spawn(command, args, {
       cwd: options.cwd,
       env: options.env,
+      shell: process.platform === 'win32',
     });
 
     proc.stdout?.on('data', (data: Buffer) => {
@@ -4465,19 +4469,31 @@ agent/infographic-placements/ and registered in the manifest.`,
         componentName: `Infographic${p.placementNumber}`,
       }));
 
-      const outDir = path.join(basePath, '.kshana', 'agent', 'infographic-placements');
-      console.log(`[generate_all_infographics] Output directory: ${outDir}`);
-      fs.mkdirSync(outDir, { recursive: true });
-      const inputPath = path.join(outDir, '_render_input.json');
-      const outputPath = path.join(outDir, '_render_output.json');
+      const projectOutDir = path.join(basePath, '.kshana', 'agent', 'infographic-placements');
+      getProjectFileOps().mkdirSync(projectOutDir, { recursive: true });
+
+      const isRemote = getProjectFileOps().isRemote();
+      const localOutDir = isRemote
+        ? path.join(tmpdir(), `kshana-render-${Date.now()}`)
+        : projectOutDir;
+      if (isRemote) {
+        fs.mkdirSync(localOutDir, { recursive: true });
+        console.log(`[generate_all_infographics] Remote mode: using local temp dir ${localOutDir}`);
+      }
+      console.log(`[generate_all_infographics] Output directory: ${localOutDir}`);
+
+      const inputPath = path.join(localOutDir, '_render_input.json');
+      const outputPath = path.join(localOutDir, '_render_output.json');
       
       console.log(`[generate_all_infographics] Writing render input with ${payloadPlacements.length} placements...`);
-      fs.writeFileSync(
-        inputPath,
-        JSON.stringify({ placements: payloadPlacements }),
-        'utf-8'
-      );
+      fs.writeFileSync(inputPath, JSON.stringify({ placements: payloadPlacements }), 'utf-8');
       console.log(`[generate_all_infographics] Render input written to ${inputPath}`);
+
+      const cleanupLocalTemp = () => {
+        if (isRemote && localOutDir !== projectOutDir) {
+          try { fs.rmSync(localOutDir, { recursive: true, force: true }); } catch { /* ignore */ }
+        }
+      };
 
       const RENDER_TIMEOUT_MS = 600_000;
       const MAX_REMEDIATION_RETRIES = 2;
@@ -4493,7 +4509,7 @@ agent/infographic-placements/ and registered in the manifest.`,
         
         renderResult = await runRemotionRenderAsync(
           'pnpm',
-          ['run', 'render', '--', '--input', inputPath, '--outDir', outDir, '--output', outputPath],
+          ['run', 'render', '--', '--input', inputPath, '--outDir', localOutDir, '--output', outputPath],
           {
             cwd: remotionDir,
             env: remotionEnv,
@@ -4510,6 +4526,7 @@ agent/infographic-placements/ and registered in the manifest.`,
           console.error(`[generate_all_infographics] Render process error:`, renderResult.error);
           if (isModuleNotFound) {
             console.error('[generate_all_infographics] Module not found error detected');
+            cleanupLocalTemp();
             return {
               status: 'error',
               error: `Remotion render failed: module not found. Dependencies must be pre-installed before running infographic generation.`,
@@ -4517,6 +4534,7 @@ agent/infographic-placements/ and registered in the manifest.`,
             };
           }
 
+          cleanupLocalTemp();
           return {
             status: 'error',
             error: `Remotion render failed: ${String(renderResult.error)}${timeoutMsg}`,
@@ -4537,6 +4555,7 @@ agent/infographic-placements/ and registered in the manifest.`,
 
         if (isModuleNotFound) {
           console.error('[generate_all_infographics] Module not found error detected in stderr/stdout');
+          cleanupLocalTemp();
           return {
             status: 'error',
             error: `Remotion render failed: module not found. Dependencies must be pre-installed before running infographic generation.`,
@@ -4551,6 +4570,7 @@ agent/infographic-placements/ and registered in the manifest.`,
           !failedPlacementNumber ||
           retryAttempt >= MAX_REMEDIATION_RETRIES
         ) {
+          cleanupLocalTemp();
           return {
             status: 'error',
             error: `Remotion render failed (exit ${renderResult.exitCode}). stderr: ${stderr || 'none'}`,
@@ -4567,6 +4587,7 @@ agent/infographic-placements/ and registered in the manifest.`,
 
         const failedPlacement = placementsForGeneration.find((p) => p.placementNumber === failedPlacementNumber);
         if (!failedPlacement) {
+          cleanupLocalTemp();
           return {
             status: 'error',
             error: `Remotion render failed for unknown placement ${failedPlacementNumber}. stderr: ${stderr || 'none'}`,
@@ -4600,6 +4621,7 @@ agent/infographic-placements/ and registered in the manifest.`,
           });
           const retryItem = retryResult.placements.find((item) => item.placementNumber === failedPlacementNumber);
           if (!retryItem) {
+            cleanupLocalTemp();
             return {
               status: 'error',
               error: `Remotion retry failed: sub-agent did not return placement ${failedPlacementNumber}.`,
@@ -4613,6 +4635,7 @@ agent/infographic-placements/ and registered in the manifest.`,
           writeComponentCode(failedPlacement, retryItem.componentCode);
           const retryBuild = await remediateBuildFailure(await rebuildBundle());
           if (!retryBuild.ok) {
+            cleanupLocalTemp();
             return {
               status: 'error',
               error: `Remotion bundle failed after retrying placement ${failedPlacementNumber}. ${retryBuild.error ?? ''}`,
@@ -4625,6 +4648,7 @@ agent/infographic-placements/ and registered in the manifest.`,
           }
           continue;
         } catch (retryErr) {
+          cleanupLocalTemp();
           return {
             status: 'error',
             error: `Failed to regenerate component for placement ${failedPlacementNumber}: ${String(retryErr)}`,
@@ -4662,6 +4686,22 @@ agent/infographic-placements/ and registered in the manifest.`,
       } catch {
         /* ignore */
       }
+    }
+
+    if (isRemote && outputs.length > 0) {
+      console.log(`[generate_all_infographics] Remote mode: proxying ${outputs.length} rendered files to desktop`);
+      for (const outPath of outputs) {
+        if (!outPath || !fs.existsSync(outPath)) continue;
+        try {
+          const fileBuffer = fs.readFileSync(outPath);
+          const destPath = path.join(projectOutDir, path.basename(outPath));
+          getProjectFileOps().writeFileSync(destPath, fileBuffer);
+          console.log(`[generate_all_infographics] Proxied ${path.basename(outPath)} (${(fileBuffer.length / 1024).toFixed(0)} KB)`);
+        } catch (proxyErr) {
+          console.error(`[generate_all_infographics] Failed to proxy ${outPath}:`, proxyErr);
+        }
+      }
+      cleanupLocalTemp();
     }
 
     const results: Array<{ placementNumber: number; status: 'success' | 'failed'; artifactId?: string; filePath?: string; error?: string }> = [];

@@ -2,6 +2,7 @@
  * WebSocket handler for real-time agent communication.
  */
 import type { WebSocket } from '@fastify/websocket';
+import { v4 as uuidv4 } from 'uuid';
 import { ConversationManager, type ConversationEvents } from './ConversationManager.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { AgentStatus } from '../core/agent/index.js';
@@ -20,12 +21,16 @@ import {
   type ErrorData,
   type StartTaskData,
   type UserResponseData,
+  type FileSyncRequestData,
+  type FileSyncInitData,
   createServerMessage,
   isStartTaskMessage,
   isUserResponseMessage,
   isCancelMessage,
   isPingMessage,
+  isFileSyncInitMessage,
 } from './types.js';
+import { getProjectFileOps } from './ProjectFileOps.js';
 import {
   assetEventEmitter,
   type AssetAddedEvent,
@@ -36,7 +41,11 @@ interface ConnectionState {
   socket: WebSocket;
   sessionId: string;
   isAlive: boolean;
+  channel: 'chat' | 'assets';
   projectDir?: string;
+  fileSyncDone: boolean;
+  fileSyncPromise: Promise<void>;
+  resolveFileSync: () => void;
 }
 
 /**
@@ -60,6 +69,7 @@ export class WebSocketHandler {
   private conversationManager: ConversationManager;
   private connections = new Map<string, ConnectionState>();
   private heartbeatInterval?: ReturnType<typeof setInterval>;
+  private static readonly FILE_SYNC_TIMEOUT_MS = 15000;
 
   constructor(conversationManager: ConversationManager) {
     this.conversationManager = conversationManager;
@@ -126,31 +136,64 @@ export class WebSocketHandler {
    * @param socket - The WebSocket connection
    * @param request - The Fastify request object (for accessing query parameters)
    */
-  async handleConnection(socket: WebSocket, request?: { query?: { project_dir?: string } }): Promise<void> {
+  async handleConnection(
+    socket: WebSocket,
+    request?: { query?: { project_dir?: string; channel?: string } },
+  ): Promise<void> {
     // Extract project_dir from query parameters if available
     const projectDir = request?.query?.project_dir;
+    const channel = request?.query?.channel === 'assets' ? 'assets' : 'chat';
+    const requiresFileSync = channel === 'chat' && !!projectDir;
     
     console.log('[WebSocketHandler] New connection:', {
       hasRequest: !!request,
       hasQuery: !!request?.query,
+      channel,
       projectDir,
       queryKeys: request?.query ? Object.keys(request.query) : [],
     });
     
-    // Create a new session for this connection with project directory
-    const session = await this.conversationManager.createSession(projectDir);
-    const sessionId = session.id;
+    // Generate sessionId upfront so we can set remote mode BEFORE createSession.
+    // createSession triggers project initialization (getOrCreateProject) which writes
+    // project.json, manifest.json, etc. -- those writes must go through remote mode.
+    const sessionId = uuidv4();
+
+    let resolveFileSync = () => {};
+    const fileSyncPromise = new Promise<void>((resolve) => {
+      resolveFileSync = resolve;
+    });
 
     const connectionState: ConnectionState = {
       socket,
       sessionId,
       isAlive: true,
+      channel,
       projectDir: projectDir ?? undefined,
+      fileSyncDone: !requiresFileSync,
+      fileSyncPromise,
+      resolveFileSync,
     };
+
+    if (!requiresFileSync) {
+      resolveFileSync();
+    }
 
     this.connections.set(sessionId, connectionState);
 
-    // Send connected status
+    if (requiresFileSync) {
+      const fileOps = getProjectFileOps();
+      fileOps.setRemoteMode(this.createSender(connectionState), sessionId);
+
+      this.sendMessage(socket, createServerMessage<FileSyncRequestData>('file_sync_request', sessionId, {
+        projectDir,
+      }));
+      console.log(`[WebSocketHandler] Sent file_sync_request for project: ${projectDir}`);
+    }
+
+    // Create session AFTER remote mode is active so project init writes are proxied.
+    const sessionBasePath = channel === 'chat' ? projectDir : undefined;
+    await this.conversationManager.createSession(sessionBasePath, sessionId);
+
     this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
       status: 'connected',
       message: 'Session created successfully',
@@ -198,11 +241,15 @@ export class WebSocketHandler {
 
     // Handle different message types
     if (isPingMessage(message)) {
-      // Respond with pong (status message)
       this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
         status: 'ready',
         message: 'pong',
       }));
+      return;
+    }
+
+    if (isFileSyncInitMessage(message)) {
+      this.handleFileSyncInit(sessionId, socket, message.data as FileSyncInitData);
       return;
     }
 
@@ -232,6 +279,12 @@ export class WebSocketHandler {
     socket: WebSocket,
     data: StartTaskData
   ): Promise<void> {
+    const conn = await this.requireChatConnection(sessionId, socket, 'start_task');
+    if (!conn) return;
+
+    const fileSyncReady = await this.waitForFileSyncIfNeeded(sessionId, socket, conn);
+    if (!fileSyncReady) return;
+
     // Send busy status
     this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
       status: 'busy',
@@ -271,6 +324,12 @@ export class WebSocketHandler {
     socket: WebSocket,
     data: UserResponseData
   ): Promise<void> {
+    const conn = await this.requireChatConnection(sessionId, socket, 'user_response');
+    if (!conn) return;
+
+    const fileSyncReady = await this.waitForFileSyncIfNeeded(sessionId, socket, conn);
+    if (!fileSyncReady) return;
+
     // Send busy status
     this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
       status: 'busy',
@@ -319,12 +378,158 @@ export class WebSocketHandler {
   }
 
   /**
+   * Handle file_sync_init message from the desktop app.
+   * Populates the in-memory cache with existing project files.
+   */
+  private handleFileSyncInit(sessionId: string, _socket: WebSocket, data: FileSyncInitData): void {
+    const conn = this.connections.get(sessionId);
+    if (!conn) return;
+    if (conn.channel !== 'chat') {
+      console.warn(`[WebSocketHandler] Ignoring file_sync_init from non-chat channel: ${sessionId}`);
+      return;
+    }
+
+    const fileOps = getProjectFileOps();
+    if (!fileOps.isOwnedBy(sessionId)) {
+      console.warn(
+        `[WebSocketHandler] Ignoring file_sync_init from non-owner session ${sessionId}. ` +
+        `Current owner: ${fileOps.getRemoteOwnerSessionId() ?? 'none'}`,
+      );
+      return;
+    }
+
+    fileOps.populateCache(data.files);
+    conn.fileSyncDone = true;
+    conn.resolveFileSync();
+
+    console.log(`[WebSocketHandler] File sync completed for session ${sessionId}: ${data.files.length} files cached`);
+  }
+
+  /**
    * Handle disconnection.
    */
   private handleDisconnection(sessionId: string): void {
+    const disconnected = this.connections.get(sessionId);
+    if (!disconnected) return;
+
     // Cancel any running tasks and clean up
     this.conversationManager.deleteSession(sessionId);
     this.connections.delete(sessionId);
+
+    const fileOps = getProjectFileOps();
+
+    // If owner disconnected, try rebinding to another live chat connection for same project.
+    if (fileOps.isOwnedBy(sessionId)) {
+      const replacement = [...this.connections.values()].find(
+        (state) =>
+          state.channel === 'chat' &&
+          state.projectDir === disconnected.projectDir &&
+          state.socket.readyState === 1,
+      );
+
+      if (replacement) {
+        fileOps.setRemoteMode(
+          this.createSender(replacement),
+          replacement.sessionId,
+          undefined,
+          { preserveCache: true },
+        );
+        console.log(
+          `[WebSocketHandler] Rebound ProjectFileOps owner from ${sessionId} to ${replacement.sessionId}`,
+        );
+      } else {
+        fileOps.setLocalMode();
+        console.log(
+          `[WebSocketHandler] No replacement chat connection found for owner ${sessionId}; switched to local mode`,
+        );
+      }
+      return;
+    }
+
+    // If no more connections, switch back to local mode
+    if (this.connections.size === 0) {
+      fileOps.setLocalMode();
+    }
+  }
+
+  private createSender(connectionState: ConnectionState): (type: string, msgData: Record<string, unknown>) => void {
+    return (type: string, msgData: Record<string, unknown>) => {
+      if (connectionState.socket.readyState === 1) {
+        connectionState.socket.send(JSON.stringify({
+          type,
+          sessionId: connectionState.sessionId,
+          timestamp: Date.now(),
+          data: msgData,
+        }));
+      }
+    };
+  }
+
+  private async requireChatConnection(
+    sessionId: string,
+    socket: WebSocket,
+    operation: 'start_task' | 'user_response',
+  ): Promise<ConnectionState | null> {
+    const conn = this.connections.get(sessionId);
+    if (!conn) {
+      this.sendError(socket, sessionId, 'session_not_found', 'Session not found');
+      return null;
+    }
+
+    if (conn.channel !== 'chat') {
+      this.sendError(
+        socket,
+        sessionId,
+        'invalid_channel',
+        `${operation} is only allowed on chat channel`,
+      );
+      return null;
+    }
+
+    const fileOps = getProjectFileOps();
+    if (conn.projectDir && fileOps.isRemote() && !fileOps.isOwnedBy(sessionId)) {
+      this.sendError(
+        socket,
+        sessionId,
+        'file_proxy_not_owner',
+        `Session ${sessionId} is not the active file proxy owner`,
+      );
+      return null;
+    }
+
+    return conn;
+  }
+
+  private async waitForFileSyncIfNeeded(
+    sessionId: string,
+    socket: WebSocket,
+    conn: ConnectionState,
+  ): Promise<boolean> {
+    if (!conn.projectDir || conn.fileSyncDone) return true;
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        reject(new Error('file_sync_timeout'));
+      }, WebSocketHandler.FILE_SYNC_TIMEOUT_MS);
+    });
+
+    try {
+      await Promise.race([conn.fileSyncPromise, timeoutPromise]);
+      return true;
+    } catch {
+      this.sendError(
+        socket,
+        sessionId,
+        'file_sync_timeout',
+        `Initial file sync did not complete within ${WebSocketHandler.FILE_SYNC_TIMEOUT_MS}ms`,
+      );
+      return false;
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
   }
 
   /**

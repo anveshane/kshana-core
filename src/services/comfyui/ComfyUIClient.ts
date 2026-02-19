@@ -5,8 +5,8 @@
  * and downloading generated images from the ComfyUI API.
  */
 
-import * as fs from 'fs';
 import * as path from 'path';
+import { getProjectFileOps } from '../../server/ProjectFileOps.js';
 import { nanoid } from 'nanoid';
 
 export interface ComfyUIClientConfig {
@@ -63,8 +63,8 @@ export class ComfyUIClient {
     this.timeout = merged.timeout;
 
     // Ensure output directory exists
-    if (!fs.existsSync(this.outputDir)) {
-      fs.mkdirSync(this.outputDir, { recursive: true });
+    if (!getProjectFileOps().existsSync(this.outputDir)) {
+      getProjectFileOps().mkdirSync(this.outputDir, { recursive: true });
     }
   }
 
@@ -131,13 +131,13 @@ export class ComfyUIClient {
     imageType: string = 'input',
     overwrite: boolean = true
   ): Promise<{ name: string; subfolder: string; type: string }> {
-    if (!fs.existsSync(filePath)) {
+    if (!getProjectFileOps().existsSync(filePath)) {
       throw new Error(`Image file not found: ${filePath}`);
     }
 
     const url = `${this.baseUrl}/upload/image`;
     const formData = new FormData();
-    const fileBuffer = fs.readFileSync(filePath);
+    const fileBuffer = getProjectFileOps().readFileSync(filePath);
     const fileName = path.basename(filePath);
 
     formData.append('image', new Blob([fileBuffer]), fileName);
@@ -358,7 +358,7 @@ export class ComfyUIClient {
     const finalFilename = outputFilename || filename;
     const outputPath = path.join(this.outputDir, finalFilename);
 
-    fs.writeFileSync(outputPath, Buffer.from(buffer));
+    getProjectFileOps().writeFileSync(outputPath, Buffer.from(buffer));
 
     return outputPath;
   }

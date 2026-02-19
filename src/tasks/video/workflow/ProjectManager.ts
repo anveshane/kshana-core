@@ -3,7 +3,8 @@
  * Manages the .kshana directory structure and project.json index file.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync, openSync, fsyncSync, closeSync } from 'fs';
+import { readFileSync as nodeReadFileSync, existsSync as nodeExistsSync } from 'fs';
+import { getProjectFileOps } from '../../../server/ProjectFileOps.js';
 import { CONTENT_TYPE_OUTPUT_FILES } from '../../../core/tools/builtin/generateContentTool.js';
 import { join } from 'path';
 import { assetEventEmitter } from '../../../server/assetEventEmitter.js';
@@ -154,9 +155,9 @@ export function getCLIProjectBasePath(): string {
 
   while (depth < maxDepth) {
     const packageJsonPath = join(currentPath, 'package.json');
-    if (existsSync(packageJsonPath)) {
+    if (nodeExistsSync(packageJsonPath)) {
       try {
-        const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
+        const packageJson = JSON.parse(nodeReadFileSync(packageJsonPath, 'utf-8') as string);
         if (packageJson.name === 'kshana-ink') {
           return currentPath;
         }
@@ -287,7 +288,7 @@ export function getProjectIndexPath(basePath: string = getCurrentProjectBasePath
  * Check if a project exists in the current directory.
  */
 export function projectExists(basePath: string = getCurrentProjectBasePath()): boolean {
-  return existsSync(getProjectFilePath(basePath));
+  return getProjectFileOps().existsSync(getProjectFilePath(basePath));
 }
 
 /**
@@ -297,12 +298,12 @@ export function projectExists(basePath: string = getCurrentProjectBasePath()): b
 export function deleteProject(basePath: string = getCurrentProjectBasePath()): boolean {
   const projectDir = getProjectDir(basePath);
 
-  if (!existsSync(projectDir)) {
+  if (!getProjectFileOps().existsSync(projectDir)) {
     return false;
   }
 
   try {
-    rmSync(projectDir, { recursive: true, force: true });
+    getProjectFileOps().rmSync(projectDir, { recursive: true, force: true });
     return true;
   } catch {
     return false;
@@ -333,15 +334,15 @@ export function createProjectStructure(basePath: string = getCurrentProjectBaseP
   ];
 
   for (const dir of dirs) {
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+    if (!getProjectFileOps().existsSync(dir)) {
+      getProjectFileOps().mkdirSync(dir, { recursive: true });
     }
   }
 
   // Create empty manifest in agent/ directory
   const manifestPath = getManifestFilePath(basePath);
-  if (!existsSync(manifestPath)) {
-    writeFileSync(manifestPath, JSON.stringify({ schema_version: '1', assets: [] }, null, 2), 'utf-8');
+  if (!getProjectFileOps().existsSync(manifestPath)) {
+    getProjectFileOps().writeFileSync(manifestPath, JSON.stringify({ schema_version: '1', assets: [] }, null, 2), 'utf-8');
   }
 
   // Initialize empty project index (will be populated on first project save)
@@ -490,8 +491,8 @@ export function createProject(
 
   // Only write if file doesn't exist - preserve existing original input
   // This prevents overwriting the user's original input if createProject is called multiple times
-  if (!existsSync(fullInputPath)) {
-    writeFileSync(fullInputPath, cleanInput, 'utf-8');
+  if (!getProjectFileOps().existsSync(fullInputPath)) {
+    getProjectFileOps().writeFileSync(fullInputPath, cleanInput, 'utf-8');
   } else {
     // Log warning if trying to overwrite (shouldn't happen in normal flow)
     console.warn(`[ProjectManager] original_input.md already exists at ${fullInputPath}, preserving existing content.`);
@@ -687,11 +688,11 @@ export function setProjectInputType(
     const originalInput = getOriginalInput(project, basePath);
     if (originalInput) {
       const storyDir = join(getAgentDir(basePath), 'script');
-      if (!existsSync(storyDir)) {
-        mkdirSync(storyDir, { recursive: true });
+      if (!getProjectFileOps().existsSync(storyDir)) {
+        getProjectFileOps().mkdirSync(storyDir, { recursive: true });
       }
       const storyPath = join(storyDir, 'story.md');
-      writeFileSync(storyPath, `# Story\n\n${originalInput}`, 'utf-8');
+      getProjectFileOps().writeFileSync(storyPath, `# Story\n\n${originalInput}`, 'utf-8');
 
       // Update content registry
       project.content.story.status = 'available';
@@ -750,14 +751,14 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
   // Sync plot content (now in script/ directory)
   const plotFile = join(agentDir, 'script', 'plot.md');
-  if (existsSync(plotFile) && project.content.plot.status === 'missing') {
+  if (getProjectFileOps().existsSync(plotFile) && project.content.plot.status === 'missing') {
     project.content.plot.status = 'available';
     needsSave = true;
   }
 
   // Sync story content (now in script/ directory)
   const storyFile = join(agentDir, 'script', 'story.md');
-  if (existsSync(storyFile) && project.content.story.status === 'missing') {
+  if (getProjectFileOps().existsSync(storyFile) && project.content.story.status === 'missing') {
     project.content.story.status = 'available';
     needsSave = true;
   }
@@ -785,12 +786,12 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
   // Sync characters from disk - scan characters/ directory for .md files
   const charactersDir = join(agentDir, 'characters');
-  if (existsSync(charactersDir)) {
-    const charFiles = readdirSync(charactersDir).filter(f => f.endsWith('.md'));
+  if (getProjectFileOps().existsSync(charactersDir)) {
+    const charFiles = getProjectFileOps().readdirSync(charactersDir).filter(f => f.endsWith('.md'));
 
     for (const charFile of charFiles) {
       try {
-        const charContent = readFileSync(join(charactersDir, charFile), 'utf-8');
+        const charContent = getProjectFileOps().readFileSync(join(charactersDir, charFile), 'utf-8');
         // Extract name from first heading or filename
         const nameMatch = charContent.match(/^#\s*(?:Character[:\-–—\s]*)?(.+)/m);
         const charName = nameMatch && nameMatch[1]
@@ -848,12 +849,12 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
   // Sync settings from disk - scan settings/ directory for .md files
   const settingsDir = join(agentDir, 'settings');
-  if (existsSync(settingsDir)) {
-    const settingFiles = readdirSync(settingsDir).filter(f => f.endsWith('.md'));
+  if (getProjectFileOps().existsSync(settingsDir)) {
+    const settingFiles = getProjectFileOps().readdirSync(settingsDir).filter(f => f.endsWith('.md'));
 
     for (const settingFile of settingFiles) {
       try {
-        const settingContent = readFileSync(join(settingsDir, settingFile), 'utf-8');
+        const settingContent = getProjectFileOps().readFileSync(join(settingsDir, settingFile), 'utf-8');
         // Extract name from first heading or filename
         const nameMatch = settingContent.match(/^#\s*(?:Setting[:\-–—\s]*)?(.+)/m);
         const settingName = nameMatch && nameMatch[1]
@@ -907,11 +908,11 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
   // Sync scenes from disk - scan scenes/ directory for scene-XXX/ folders
   // This catches scenes that were created but never registered in project.scenes
   const scenesDir = join(agentDir, 'scenes');
-  if (existsSync(scenesDir)) {
-    const sceneFolders = readdirSync(scenesDir)
+  if (getProjectFileOps().existsSync(scenesDir)) {
+    const sceneFolders = getProjectFileOps().readdirSync(scenesDir)
       .filter(f => {
         const fullPath = join(scenesDir, f);
-        return existsSync(fullPath) && /^scene-\d+$/.test(f);
+        return getProjectFileOps().existsSync(fullPath) && /^scene-\d+$/.test(f);
       })
       .sort();
 
@@ -931,8 +932,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
           // Extract title from scene.md file content
           try {
             const sceneFilePath = join(scenesDir, sceneFolder, 'scene.md');
-            if (existsSync(sceneFilePath)) {
-              const sceneContent = readFileSync(sceneFilePath, 'utf-8');
+            if (getProjectFileOps().existsSync(sceneFilePath)) {
+              const sceneContent = getProjectFileOps().readFileSync(sceneFilePath, 'utf-8');
               const titleMatch = sceneContent.match(/^#\s*(?:Scene\s*\d+[:\-–—\s]*)?(.+)/m);
               if (titleMatch && titleMatch[1]) {
                 sceneRef.title = titleMatch[1].trim();
@@ -992,9 +993,9 @@ function reloadProjectFilesAsContexts(basePath: string): void {
   
   // Load $original_input
   const originalInputPath = join(agentDir, 'original_input.md');
-  if (existsSync(originalInputPath)) {
+  if (getProjectFileOps().existsSync(originalInputPath)) {
     try {
-      const content = readFileSync(originalInputPath, 'utf-8');
+      const content = getProjectFileOps().readFileSync(originalInputPath, 'utf-8');
       if (content.trim().length > 0) {
         contextStore.storeReference(
           'agent/original_input.md',
@@ -1010,9 +1011,9 @@ function reloadProjectFilesAsContexts(basePath: string): void {
   
   // Load $transcript for YouTube workflow
   const transcriptPath = join(contentDir, 'transcript.md');
-  if (existsSync(transcriptPath)) {
+  if (getProjectFileOps().existsSync(transcriptPath)) {
     try {
-      const transcriptContent = readFileSync(transcriptPath, 'utf-8');
+      const transcriptContent = getProjectFileOps().readFileSync(transcriptPath, 'utf-8');
       if (transcriptContent.trim().length > 0) {
         contextStore.storeReference(
           'agent/content/transcript.md',
@@ -1028,9 +1029,9 @@ function reloadProjectFilesAsContexts(basePath: string): void {
   
   // Load $content_plan
   const contentPlanPath = join(plansDir, 'content-plan.md');
-  if (existsSync(contentPlanPath)) {
+  if (getProjectFileOps().existsSync(contentPlanPath)) {
     try {
-      const content = readFileSync(contentPlanPath, 'utf-8');
+      const content = getProjectFileOps().readFileSync(contentPlanPath, 'utf-8');
       if (content.trim().length > 0) {
         contextStore.storeReference(
           'agent/plans/content-plan.md',
@@ -1046,9 +1047,9 @@ function reloadProjectFilesAsContexts(basePath: string): void {
   
   // Load $image_placements
   const imagePlacementsPath = join(contentDir, 'image-placements.md');
-  if (existsSync(imagePlacementsPath)) {
+  if (getProjectFileOps().existsSync(imagePlacementsPath)) {
     try {
-      const content = readFileSync(imagePlacementsPath, 'utf-8');
+      const content = getProjectFileOps().readFileSync(imagePlacementsPath, 'utf-8');
       if (content.trim().length > 0) {
         contextStore.storeReference(
           'agent/content/image-placements.md',
@@ -1066,12 +1067,12 @@ function reloadProjectFilesAsContexts(basePath: string): void {
 export function loadProject(basePath: string = getCurrentProjectBasePath()): ProjectFile | null {
   const filePath = getProjectFilePath(basePath);
 
-  if (!existsSync(filePath)) {
+  if (!getProjectFileOps().existsSync(filePath)) {
     return null;
   }
 
   try {
-    const content = readFileSync(filePath, 'utf-8');
+    const content = getProjectFileOps().readFileSync(filePath, 'utf-8');
     const project = JSON.parse(content);
 
     // Check version - must be 2.0 for 8-phase workflow
@@ -1176,12 +1177,12 @@ export function loadProject(basePath: string = getCurrentProjectBasePath()): Pro
 export function isProjectCompatible(basePath: string = getCurrentProjectBasePath()): { compatible: boolean; version?: string; reason?: string } {
   const filePath = getProjectFilePath(basePath);
 
-  if (!existsSync(filePath)) {
+  if (!getProjectFileOps().existsSync(filePath)) {
     return { compatible: true, reason: 'No existing project' };
   }
 
   try {
-    const content = readFileSync(filePath, 'utf-8');
+    const content = getProjectFileOps().readFileSync(filePath, 'utf-8');
     const project = JSON.parse(content);
 
     if (!project.version) {
@@ -1289,7 +1290,7 @@ export function generateProjectIndex(basePath: string = getCurrentProjectBasePat
     // Check for audio files (scene-specific audio mix)
     let activeAudio: string | undefined;
     const sceneAudioPath = join(agentDir, sceneFolder.replace('agent/', ''), 'audio', 'mix.mp3');
-    if (existsSync(sceneAudioPath)) {
+    if (getProjectFileOps().existsSync(sceneAudioPath)) {
       activeAudio = 'mix.mp3';
     }
 
@@ -1350,8 +1351,8 @@ export function generateProjectIndex(basePath: string = getCurrentProjectBasePat
   for (const scene of project.scenes) {
     const sceneFolder = scene.folder || `agent/scenes/scene-${String(scene.sceneNumber).padStart(3, '0')}`;
     const audioDir = join(agentDir, sceneFolder.replace('agent/', ''), 'audio');
-    if (existsSync(audioDir)) {
-      const audioFiles = readdirSync(audioDir).filter(f => f.endsWith('.mp3') || f.endsWith('.wav'));
+    if (getProjectFileOps().existsSync(audioDir)) {
+      const audioFiles = getProjectFileOps().readdirSync(audioDir).filter(f => f.endsWith('.mp3') || f.endsWith('.wav'));
       assetCounts.audio += audioFiles.length;
     }
   }
@@ -1406,10 +1407,10 @@ export function generateProjectIndex(basePath: string = getCurrentProjectBasePat
   // Save to consolidated index location: context/index.json (project_id is inside the file)
   const indexPath = getProjectIndexPath(basePath);
   const contextDir = join(getProjectDir(basePath), 'context');
-  if (!existsSync(contextDir)) {
-    mkdirSync(contextDir, { recursive: true });
+  if (!getProjectFileOps().existsSync(contextDir)) {
+    getProjectFileOps().mkdirSync(contextDir, { recursive: true });
   }
-  writeFileSync(indexPath, JSON.stringify(index, null, 2), 'utf-8');
+  getProjectFileOps().writeFileSync(indexPath, JSON.stringify(index, null, 2), 'utf-8');
 }
 
 /**
@@ -1429,9 +1430,9 @@ export function readProjectIndex(basePath: string = getCurrentProjectBasePath())
 
   // Try new consolidated location first: context/index.json
   const consolidatedPath = getProjectIndexPath(basePath);
-  if (existsSync(consolidatedPath)) {
+  if (getProjectFileOps().existsSync(consolidatedPath)) {
     try {
-      const data = JSON.parse(readFileSync(consolidatedPath, 'utf-8')) as ProjectIndex;
+      const data = JSON.parse(getProjectFileOps().readFileSync(consolidatedPath, 'utf-8')) as ProjectIndex;
       // Validate index version
       if (data.index_version !== '1.0') {
         console.warn(`[ProjectManager] Incompatible index version: ${data.index_version}. Expected: 1.0`);
@@ -1451,15 +1452,15 @@ export function readProjectIndex(basePath: string = getCurrentProjectBasePath())
 
   // Fallback 1: Old subfolder structure context/{project_id}/index.json
   const oldSubfolderPath = join(getProjectDir(basePath), 'context', project.id, 'index.json');
-  if (existsSync(oldSubfolderPath)) {
+  if (getProjectFileOps().existsSync(oldSubfolderPath)) {
     try {
-      const data = JSON.parse(readFileSync(oldSubfolderPath, 'utf-8')) as ProjectIndex;
+      const data = JSON.parse(getProjectFileOps().readFileSync(oldSubfolderPath, 'utf-8')) as ProjectIndex;
       // Migrate to new location
       const contextDir = join(getProjectDir(basePath), 'context');
-      if (!existsSync(contextDir)) {
-        mkdirSync(contextDir, { recursive: true });
+      if (!getProjectFileOps().existsSync(contextDir)) {
+        getProjectFileOps().mkdirSync(contextDir, { recursive: true });
       }
-      writeFileSync(consolidatedPath, JSON.stringify(data, null, 2), 'utf-8');
+      getProjectFileOps().writeFileSync(consolidatedPath, JSON.stringify(data, null, 2), 'utf-8');
       return data;
     } catch {
       // Continue to next fallback
@@ -1468,15 +1469,15 @@ export function readProjectIndex(basePath: string = getCurrentProjectBasePath())
 
   // Fallback 2: Very old location index/project_index.json
   const oldIndexPath = join(getIndexDir(basePath), PROJECT_INDEX_FILE);
-  if (existsSync(oldIndexPath)) {
+  if (getProjectFileOps().existsSync(oldIndexPath)) {
     try {
-      const data = JSON.parse(readFileSync(oldIndexPath, 'utf-8')) as ProjectIndex;
+      const data = JSON.parse(getProjectFileOps().readFileSync(oldIndexPath, 'utf-8')) as ProjectIndex;
       // Migrate to new location
       const contextDir = join(getProjectDir(basePath), 'context');
-      if (!existsSync(contextDir)) {
-        mkdirSync(contextDir, { recursive: true });
+      if (!getProjectFileOps().existsSync(contextDir)) {
+        getProjectFileOps().mkdirSync(contextDir, { recursive: true });
       }
-      writeFileSync(consolidatedPath, JSON.stringify(data, null, 2), 'utf-8');
+      getProjectFileOps().writeFileSync(consolidatedPath, JSON.stringify(data, null, 2), 'utf-8');
       return data;
     } catch {
       return null;
@@ -1502,7 +1503,7 @@ export function saveProject(project: ProjectFile, basePath: string = getCurrentP
   const filePath = getProjectFilePath(basePath);
   project.updatedAt = Date.now();
   
-  writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
+  getProjectFileOps().writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
 
   // Regenerate project index after every save
   generateProjectIndex(basePath);
@@ -1517,8 +1518,8 @@ export function getOriginalInput(project: ProjectFile, basePath: string = getCur
     ? project.originalInputFile
     : `agent/${project.originalInputFile}`;
   const inputPath = join(getProjectDir(basePath), inputFile);
-  if (existsSync(inputPath)) {
-    return readFileSync(inputPath, 'utf-8');
+  if (getProjectFileOps().existsSync(inputPath)) {
+    return getProjectFileOps().readFileSync(inputPath, 'utf-8');
   }
   return '';
 }
@@ -1843,11 +1844,11 @@ export function planFileHasContent(planFile: string, basePath: string = getCurre
   const normalizedFile = planFile.startsWith('agent/') ? planFile : `agent/${planFile}`;
   const filePath = join(getProjectDir(basePath), normalizedFile);
 
-  if (!existsSync(filePath)) {
+  if (!getProjectFileOps().existsSync(filePath)) {
     return false;
   }
 
-  const content = readFileSync(filePath, 'utf-8').trim();
+  const content = getProjectFileOps().readFileSync(filePath, 'utf-8').trim();
   return content.length > 0;
 }
 
@@ -1859,8 +1860,8 @@ export function planFileHasContent(planFile: string, basePath: string = getCurre
 export function checkPlanningDeliverables(project: ProjectFile, basePath: string = getCurrentProjectBasePath()): boolean {
   const contentPlanPath = join(getProjectDir(basePath), 'agent', 'plans', 'content-plan.md');
   
-  const contentPlanExists = existsSync(contentPlanPath) && 
-    readFileSync(contentPlanPath, 'utf-8').trim().length > 0;
+  const contentPlanExists = getProjectFileOps().existsSync(contentPlanPath) && 
+    getProjectFileOps().readFileSync(contentPlanPath, 'utf-8').trim().length > 0;
   
   return contentPlanExists;
 }
@@ -1876,11 +1877,11 @@ export function readProjectFile(relativePath: string, basePath: string = getCurr
     : `agent/${relativePath}`;
   const filePath = join(getProjectDir(basePath), normalizedPath);
 
-  if (!existsSync(filePath)) {
+  if (!getProjectFileOps().existsSync(filePath)) {
     return null;
   }
 
-  return readFileSync(filePath, 'utf-8');
+  return getProjectFileOps().readFileSync(filePath, 'utf-8');
 }
 
 /**
@@ -1901,11 +1902,11 @@ export function writeProjectFile(
 
   // Ensure parent directory exists
   const parentDir = join(filePath, '..');
-  if (!existsSync(parentDir)) {
-    mkdirSync(parentDir, { recursive: true });
+  if (!getProjectFileOps().existsSync(parentDir)) {
+    getProjectFileOps().mkdirSync(parentDir, { recursive: true });
   }
 
-  writeFileSync(filePath, content, 'utf-8');
+  getProjectFileOps().writeFileSync(filePath, content, 'utf-8');
 }
 
 /**
@@ -2257,8 +2258,8 @@ export function addScene(sceneRef: SceneRef, basePath: string = getCurrentProjec
 
   // Create scene directory if it doesn't exist
   const sceneFolderPath = join(getProjectDir(basePath), sceneRef.folder);
-  if (!existsSync(sceneFolderPath)) {
-    mkdirSync(sceneFolderPath, { recursive: true });
+  if (!getProjectFileOps().existsSync(sceneFolderPath)) {
+    getProjectFileOps().mkdirSync(sceneFolderPath, { recursive: true });
   }
 
   // Check if scene already exists
@@ -2312,8 +2313,8 @@ export function addNewScene(
 
   // Create scene directory
   const sceneFolderPath = join(getProjectDir(basePath), scene.folder!);
-  if (!existsSync(sceneFolderPath)) {
-    mkdirSync(sceneFolderPath, { recursive: true });
+  if (!getProjectFileOps().existsSync(sceneFolderPath)) {
+    getProjectFileOps().mkdirSync(sceneFolderPath, { recursive: true });
   }
 
   project.scenes.push(scene);
@@ -2416,9 +2417,9 @@ export async function addAsset(asset: AssetInfo, basePath: string = getCurrentPr
     });
 
     let manifest: { schema_version?: string; assets: AssetInfo[] } = { assets: [] };
-    if (existsSync(manifestPath)) {
+    if (getProjectFileOps().existsSync(manifestPath)) {
       try {
-        manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+        manifest = JSON.parse(getProjectFileOps().readFileSync(manifestPath, 'utf-8'));
         console.log(`[addAsset] Loaded existing manifest with ${manifest.assets?.length || 0} assets`);
       } catch (error) {
         console.error(`[addAsset] Failed to parse existing manifest:`, error);
@@ -2444,15 +2445,8 @@ export async function addAsset(asset: AssetInfo, basePath: string = getCurrentPr
     }
 
     try {
-      // Write file and ensure it's flushed to disk
-      const fd = openSync(manifestPath, 'w');
-      try {
-        writeFileSync(fd, JSON.stringify(manifest, null, 2), 'utf-8');
-        // Force flush to disk
-        fsyncSync(fd);
-      } finally {
-        closeSync(fd);
-      }
+      const manifestContent = JSON.stringify(manifest, null, 2);
+      getProjectFileOps().writeFileSync(manifestPath, manifestContent, 'utf-8');
       console.log(`[addAsset] ✓ Successfully wrote manifest with ${manifest.assets.length} assets to ${manifestPath}`);
       
       // Note: File system watcher in desktop app will detect this change and trigger UI refresh
@@ -2463,7 +2457,7 @@ export async function addAsset(asset: AssetInfo, basePath: string = getCurrentPr
       
       // Verify the write by reading it back
       try {
-        const verifyManifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+        const verifyManifest = JSON.parse(getProjectFileOps().readFileSync(manifestPath, 'utf-8'));
         const assetInManifest = verifyManifest.assets?.find((a: AssetInfo) => a.id === asset.id);
         if (assetInManifest) {
           console.log(`[addAsset] ✓ Verified asset ${asset.id} is in manifest`);
@@ -2535,12 +2529,12 @@ export async function addAsset(asset: AssetInfo, basePath: string = getCurrentPr
 export function getAssets(basePath: string = getCurrentProjectBasePath()): AssetInfo[] {
   const manifestPath = getManifestFilePath(basePath);
 
-  if (!existsSync(manifestPath)) {
+  if (!getProjectFileOps().existsSync(manifestPath)) {
     return [];
   }
 
   try {
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    const manifest = JSON.parse(getProjectFileOps().readFileSync(manifestPath, 'utf-8'));
     return manifest.assets || [];
   } catch {
     return [];
@@ -2931,7 +2925,7 @@ The ${phaseConfig.displayName} phase is complete.
         const contentFile = CONTENT_TYPE_OUTPUT_FILES[phaseConfig.contentType];
         if (contentFile) {
           const contentFilePath = join(basePath, '.kshana', 'agent', contentFile);
-          const contentExists = existsSync(contentFilePath) && readFileSync(contentFilePath, 'utf-8').trim().length > 0;
+          const contentExists = getProjectFileOps().existsSync(contentFilePath) && getProjectFileOps().readFileSync(contentFilePath, 'utf-8').trim().length > 0;
 
           if (contentExists) {
             instruction += `

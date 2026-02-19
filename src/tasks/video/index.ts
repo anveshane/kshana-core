@@ -3,8 +3,8 @@
  * Provides video-specific tools, prompts, and agent factory.
  * Supports both legacy mode and new state-based workflow mode.
  */
-import { existsSync, readFileSync } from 'fs';
 import { join, relative } from 'path';
+import { getProjectFileOps } from '../../server/ProjectFileOps.js';
 import { GenericAgent } from '../../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
@@ -312,9 +312,9 @@ export function loadProjectFilesAsContexts(basePath: string = getCurrentProjectB
   // Variable name MUST be $original_input to match phase prompts
   // Use storeReference() to avoid duplicating content - file already exists in agent/
   const originalInputPath = join(agentDir, 'original_input.md');
-  if (existsSync(originalInputPath)) {
+  if (getProjectFileOps().existsSync(originalInputPath)) {
     try {
-      const content = readFileSync(originalInputPath, 'utf-8');
+      const content = getProjectFileOps().readFileSync(originalInputPath, 'utf-8');
       if (content.trim().length > 0) {
         // Always re-store reference to ensure it uses the correct basePath
         // This is important after contextStore.reload() to ensure file paths are resolved correctly
@@ -341,9 +341,9 @@ export function loadProjectFilesAsContexts(basePath: string = getCurrentProjectB
   // Load transcript for YouTube workflow phases that need it
   // For CONTENT_PLANNING and later phases, load transcript as $transcript context
   const transcriptPath = join(contentDir, 'transcript.md');
-  if (existsSync(transcriptPath) && isYouTubeWorkflow) {
+  if (getProjectFileOps().existsSync(transcriptPath) && isYouTubeWorkflow) {
     try {
-      const transcriptContent = readFileSync(transcriptPath, 'utf-8');
+      const transcriptContent = getProjectFileOps().readFileSync(transcriptPath, 'utf-8');
       if (transcriptContent.trim().length > 0) {
         // Always re-store reference to ensure it uses the correct basePath
         const relativePath = 'agent/content/transcript.md';
@@ -384,9 +384,9 @@ export function loadProjectFilesAsContexts(basePath: string = getCurrentProjectB
 
   for (const { dir, file, label, varName } of contentFiles) {
     const filePath = join(dir, file);
-    if (existsSync(filePath)) {
+    if (getProjectFileOps().existsSync(filePath)) {
       try {
-        const content = readFileSync(filePath, 'utf-8');
+        const content = getProjectFileOps().readFileSync(filePath, 'utf-8');
         if (content.trim().length > 0) {
           // Calculate relative path from .kshana/ directory
           // filePath is absolute, projectDir is .kshana, so we get relative path from projectDir

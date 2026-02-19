@@ -8,8 +8,8 @@
  * - Sub-agent dispatch with isolated state
  */
 import { nanoid } from 'nanoid';
-import * as fs from 'fs';
 import * as path from 'path';
+import { getProjectFileOps } from '../../server/ProjectFileOps.js';
 import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolContext, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
@@ -2858,12 +2858,12 @@ ONLY: Execute the update_project tool call with action="transition_phase" immedi
 
         // Ensure parent directory exists
         const parentDir = path.dirname(filePath);
-        if (!fs.existsSync(parentDir)) {
+        if (!getProjectFileOps().existsSync(parentDir)) {
           debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
-          fs.mkdirSync(parentDir, { recursive: true });
+          getProjectFileOps().mkdirSync(parentDir, { recursive: true });
         }
 
-        fs.writeFileSync(filePath, this.planningState.currentPlan, 'utf-8');
+        getProjectFileOps().writeFileSync(filePath, this.planningState.currentPlan, 'utf-8');
         fileSaved = true;
         debugLog(`[GenericAgent] Successfully saved plan to ${normalizedPath}`);
       } catch (err) {
@@ -3135,8 +3135,8 @@ Respond in JSON format:
     if (ref.includes('/') || ref.endsWith('.md')) {
       const filePath = path.join(projectDir, ref);
       try {
-        if (fs.existsSync(filePath)) {
-          const content = fs.readFileSync(filePath, 'utf-8');
+        if (getProjectFileOps().existsSync(filePath)) {
+          const content = getProjectFileOps().readFileSync(filePath, 'utf-8');
           if (content.trim().length > 0) {
             // Generate label from filename
             const filename = path.basename(ref, '.md');
@@ -3165,8 +3165,8 @@ Respond in JSON format:
     const filePath = path.join(projectDir, mapping.file);
 
     try {
-      if (fs.existsSync(filePath)) {
-        const content = fs.readFileSync(filePath, 'utf-8');
+      if (getProjectFileOps().existsSync(filePath)) {
+        const content = getProjectFileOps().readFileSync(filePath, 'utf-8');
         if (content.trim().length > 0) {
           return {
             label: mapping.label,
@@ -3743,8 +3743,8 @@ Respond in JSON format:
             const hasActualContent = /##\s+\w+[\s\S]{30,}/.test(content) || content.split('\n').filter(line => line.trim() && !line.trim().startsWith('#')).length > 3;
 
             // Check if file already exists with content - don't overwrite with truncated content
-            if (fs.existsSync(filePath)) {
-              const existingContent = fs.readFileSync(filePath, 'utf-8').trim();
+            if (getProjectFileOps().existsSync(filePath)) {
+              const existingContent = getProjectFileOps().readFileSync(filePath, 'utf-8').trim();
               if (existingContent.length > content.length && existingContent.length > 100) {
                 debugLog(`[GenericAgent] WARNING: Existing file has more content (${existingContent.length} vs ${content.length} bytes). Skipping save to prevent truncation.`);
                 fileSaved = false;
@@ -3770,12 +3770,12 @@ Respond in JSON format:
           if (fileSaved) {
             // Ensure parent directory exists
             const parentDir = path.dirname(filePath);
-            if (!fs.existsSync(parentDir)) {
+            if (!getProjectFileOps().existsSync(parentDir)) {
               debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
-              fs.mkdirSync(parentDir, { recursive: true });
+              getProjectFileOps().mkdirSync(parentDir, { recursive: true });
             }
 
-            fs.writeFileSync(filePath, content, 'utf-8');
+            getProjectFileOps().writeFileSync(filePath, content, 'utf-8');
             debugLog(`[GenericAgent] Successfully saved content to ${normalizedContentPath} (${content.length} bytes)`);
           } else {
             debugLog(`[GenericAgent] Skipped saving truncated/incomplete content to ${normalizedContentPath}`);
@@ -4408,12 +4408,12 @@ Respond in JSON format:
 
         // Ensure parent directory exists
         const parentDir = path.dirname(filePath);
-        if (!fs.existsSync(parentDir)) {
+        if (!getProjectFileOps().existsSync(parentDir)) {
           debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
-          fs.mkdirSync(parentDir, { recursive: true });
+          getProjectFileOps().mkdirSync(parentDir, { recursive: true });
         }
 
-        fs.writeFileSync(filePath, output, 'utf-8');
+        getProjectFileOps().writeFileSync(filePath, output, 'utf-8');
         fileSaved = true;
         debugLog(`[GenericAgent] Successfully saved image placement plan to ${normalizedPath}`);
 
@@ -4543,12 +4543,12 @@ Respond in JSON format:
 
         // Ensure parent directory exists
         const parentDir = path.dirname(filePath);
-        if (!fs.existsSync(parentDir)) {
+        if (!getProjectFileOps().existsSync(parentDir)) {
           debugLog(`[GenericAgent] Creating parent directory: ${parentDir}`);
-          fs.mkdirSync(parentDir, { recursive: true });
+          getProjectFileOps().mkdirSync(parentDir, { recursive: true });
         }
 
-        fs.writeFileSync(filePath, output, 'utf-8');
+        getProjectFileOps().writeFileSync(filePath, output, 'utf-8');
         fileSaved = true;
         debugLog(`[GenericAgent] Successfully saved video placement plan to ${normalizedPath}`);
 
@@ -4663,10 +4663,10 @@ Respond in JSON format:
         const projectDir = path.join(basePath, '.kshana');
         const filePath = path.join(projectDir, normalizedPath);
         const parentDir = path.dirname(filePath);
-        if (!fs.existsSync(parentDir)) {
-          fs.mkdirSync(parentDir, { recursive: true });
+        if (!getProjectFileOps().existsSync(parentDir)) {
+          getProjectFileOps().mkdirSync(parentDir, { recursive: true });
         }
-        fs.writeFileSync(filePath, output, 'utf-8');
+        getProjectFileOps().writeFileSync(filePath, output, 'utf-8');
         fileSaved = true;
         const { variableName } = contextStore.storeReference(
           normalizedPath,
