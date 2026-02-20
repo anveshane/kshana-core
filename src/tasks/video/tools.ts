@@ -4472,15 +4472,9 @@ agent/infographic-placements/ and registered in the manifest.`,
       const projectOutDir = path.join(basePath, '.kshana', 'agent', 'infographic-placements');
       getProjectFileOps().mkdirSync(projectOutDir, { recursive: true });
 
-      const isRemote = getProjectFileOps().isRemote();
-      const localOutDir = isRemote
-        ? path.join(tmpdir(), `kshana-render-${Date.now()}`)
-        : projectOutDir;
-      if (isRemote) {
-        fs.mkdirSync(localOutDir, { recursive: true });
-        console.log(`[generate_all_infographics] Remote mode: using local temp dir ${localOutDir}`);
-      }
-      console.log(`[generate_all_infographics] Output directory: ${localOutDir}`);
+      const localOutDir = path.join(tmpdir(), `kshana-render-${Date.now()}`);
+      fs.mkdirSync(localOutDir, { recursive: true });
+      console.log(`[generate_all_infographics] Output directory (temp): ${localOutDir}`);
 
       const inputPath = path.join(localOutDir, '_render_input.json');
       const outputPath = path.join(localOutDir, '_render_output.json');
@@ -4490,9 +4484,7 @@ agent/infographic-placements/ and registered in the manifest.`,
       console.log(`[generate_all_infographics] Render input written to ${inputPath}`);
 
       const cleanupLocalTemp = () => {
-        if (isRemote && localOutDir !== projectOutDir) {
-          try { fs.rmSync(localOutDir, { recursive: true, force: true }); } catch { /* ignore */ }
-        }
+        try { fs.rmSync(localOutDir, { recursive: true, force: true }); } catch { /* ignore */ }
       };
 
       const RENDER_TIMEOUT_MS = 600_000;
@@ -4688,21 +4680,21 @@ agent/infographic-placements/ and registered in the manifest.`,
       }
     }
 
-    if (isRemote && outputs.length > 0) {
-      console.log(`[generate_all_infographics] Remote mode: proxying ${outputs.length} rendered files to desktop`);
+    if (outputs.length > 0) {
+      console.log(`[generate_all_infographics] Copying ${outputs.length} rendered files to project directory`);
       for (const outPath of outputs) {
         if (!outPath || !fs.existsSync(outPath)) continue;
         try {
           const fileBuffer = fs.readFileSync(outPath);
           const destPath = path.join(projectOutDir, path.basename(outPath));
           getProjectFileOps().writeFileSync(destPath, fileBuffer);
-          console.log(`[generate_all_infographics] Proxied ${path.basename(outPath)} (${(fileBuffer.length / 1024).toFixed(0)} KB)`);
-        } catch (proxyErr) {
-          console.error(`[generate_all_infographics] Failed to proxy ${outPath}:`, proxyErr);
+          console.log(`[generate_all_infographics] Wrote ${path.basename(outPath)} (${(fileBuffer.length / 1024).toFixed(0)} KB)`);
+        } catch (copyErr) {
+          console.error(`[generate_all_infographics] Failed to copy ${outPath}:`, copyErr);
         }
       }
-      cleanupLocalTemp();
     }
+    cleanupLocalTemp();
 
     const results: Array<{ placementNumber: number; status: 'success' | 'failed'; artifactId?: string; filePath?: string; error?: string }> = [];
     for (const outPath of outputs) {
