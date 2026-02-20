@@ -42,8 +42,12 @@ function timeToSeconds(timeStr: string): number {
   return parseInt(timeStr, 10) || 5;
 }
 
-function writeOutputs(outputPath: string | null, outputs: string[]): void {
-  const json = JSON.stringify({ outputs });
+function writeOutputs(
+  outputPath: string | null,
+  outputs: string[],
+  errors?: Array<{ placementNumber: number; componentName: string; error: string }>,
+): void {
+  const json = JSON.stringify({ outputs, ...(errors && errors.length > 0 ? { errors } : {}) });
   if (outputPath) {
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.writeFileSync(outputPath, json, 'utf-8');
@@ -80,46 +84,65 @@ async function main() {
   const serveUrl = buildDir;
   const fps = 24;
   const outputs: string[] = [];
+  const errors: Array<{ placementNumber: number; componentName: string; error: string }> = [];
   const total = placements.length;
 
   for (let i = 0; i < placements.length; i++) {
     const p = placements[i]!;
     const progressStart = i / total;
     console.log(`REMOTION_PROGRESS:${JSON.stringify({ placementIndex: i, totalPlacements: total, progress: progressStart, stage: 'rendering' })}`);
-    const durationSeconds = Math.max(1, timeToSeconds(p.endTime) - timeToSeconds(p.startTime));
-    const durationInFrames = Math.round(durationSeconds * fps);
-    const inputProps = {
-      prompt: p.prompt,
-      infographicType: p.infographicType,
-      data: p.data ?? {},
-    };
-    const composition = await selectComposition({
-      serveUrl,
-      id: p.componentName,
-      inputProps,
-    });
-    composition.durationInFrames = durationInFrames;
 
-    const baseName = `info${p.placementNumber}_${Date.now().toString(36)}`;
-    const outFilePath = path.join(outDir, `${baseName}.webm`);
-    fs.mkdirSync(outDir, { recursive: true });
+    try {
+      const durationSeconds = Math.max(1, timeToSeconds(p.endTime) - timeToSeconds(p.startTime));
+      const durationInFrames = Math.round(durationSeconds * fps);
+      const inputProps = {
+        prompt: p.prompt,
+        infographicType: p.infographicType,
+        data: p.data ?? {},
+      };
+      const composition = await selectComposition({
+        serveUrl,
+        id: p.componentName,
+        inputProps,
+        chromiumOptions: { gl: 'angle' },
+      });
+      composition.durationInFrames = durationInFrames;
 
-    await renderMedia({
-      composition,
-      serveUrl,
-      codec: 'vp9',
-      outputLocation: outFilePath,
-      inputProps,
-      logLevel: 'error',
-      pixelFormat: 'yuva420p',
-      imageFormat: 'png',
-    });
-    outputs.push(outFilePath);
+      const baseName = `info${p.placementNumber}_${Date.now().toString(36)}`;
+      const outFilePath = path.join(outDir, `${baseName}.webm`);
+      fs.mkdirSync(outDir, { recursive: true });
+
+      await renderMedia({
+        composition,
+        serveUrl,
+        codec: 'vp9',
+        outputLocation: outFilePath,
+        inputProps,
+        logLevel: 'error',
+        pixelFormat: 'yuva420p',
+        imageFormat: 'png',
+        chromiumOptions: { gl: 'angle' },
+      });
+      outputs.push(outFilePath);
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[render] Infographic ${p.placementNumber} (${p.componentName}) failed: ${errMsg}`);
+      errors.push({ placementNumber: p.placementNumber, componentName: p.componentName, error: errMsg });
+    }
+
     const progressEnd = (i + 1) / total;
     console.log(`REMOTION_PROGRESS:${JSON.stringify({ placementIndex: i, totalPlacements: total, progress: progressEnd, stage: 'rendering' })}`);
   }
 
-  writeOutputs(outputPath, outputs);
+  if (errors.length > 0) {
+    console.warn(`[render] ${errors.length}/${total} infographic(s) failed, ${outputs.length}/${total} succeeded`);
+  }
+
+  writeOutputs(outputPath, outputs, errors);
+
+  if (outputs.length === 0 && errors.length > 0) {
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {
