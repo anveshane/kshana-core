@@ -1,11 +1,6 @@
 import React from 'react';
 import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, spring } from 'remotion';
 
-// Cast to satisfy JSX when @types/react 18 and 19 are mixed (Remotion uses React 18 types)
-const Fill = AbsoluteFill as React.ComponentType<
-  React.HTMLAttributes<HTMLDivElement> & { children?: React.ReactNode }
->;
-
 export interface AnimationHints {
   ruleRefs?: string[];
   suggestion?: string;
@@ -124,7 +119,7 @@ export const Infographic: React.FC<InfographicProps> = ({ prompt, infographicTyp
   }
 
   return (
-    <Fill
+    <AbsoluteFill
       style={{
         backgroundColor: '#0f172a',
         justifyContent: 'center',
@@ -150,6 +145,6 @@ export const Infographic: React.FC<InfographicProps> = ({ prompt, infographicTyp
         </div>
         {displayPrompt}
       </div>
-    </Fill>
+    </AbsoluteFill>
   );
 };

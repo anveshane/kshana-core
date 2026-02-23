@@ -339,9 +339,11 @@ export function createProjectStructure(basePath: string = getCurrentProjectBaseP
     }
   }
 
-  // Create empty manifest in agent/ directory
+  // Create empty manifest in agent/ directory (local mode only).
+  // In remote mode the desktop already owns the manifest on disk;
+  // addAsset() will create it with proper locking if it's missing.
   const manifestPath = getManifestFilePath(basePath);
-  if (!getProjectFileOps().existsSync(manifestPath)) {
+  if (!getProjectFileOps().existsSync(manifestPath) && !getProjectFileOps().isRemote()) {
     getProjectFileOps().writeFileSync(manifestPath, JSON.stringify({ schema_version: '1', assets: [] }, null, 2), 'utf-8');
   }
 
