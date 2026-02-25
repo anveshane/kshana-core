@@ -38,7 +38,7 @@ interface AppProps {
 }
 
 // Startup mode for video task type
-type StartupMode = 'checking' | 'select_action' | 'select_template' | 'select_style' | 'select_duration' | 'new_story' | 'ready';
+type StartupMode = 'checking' | 'select_action' | 'select_template' | 'select_style' | 'select_duration' | 'custom_duration' | 'new_story' | 'ready';
 
 // Duration presets per template (in seconds)
 const DURATION_PRESETS: Record<string, { label: string; seconds: number }[]> = {
@@ -493,12 +493,33 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
 
   // Handle duration selection
   const handleDurationSelect = React.useCallback((index: number) => {
+    if (index === durationOptions.length) {
+      // "Custom" option selected
+      setStartupMode('custom_duration');
+      return;
+    }
     const option = durationOptions[index];
     if (option) {
       setSelectedDuration(option.seconds);
       setStartupMode('new_story');
     }
   }, [durationOptions]);
+
+  // Handle custom duration text input
+  const handleCustomDurationSubmit = React.useCallback((input: string) => {
+    if (input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
+      exit();
+      return;
+    }
+    const seconds = parseInt(input, 10);
+    if (isNaN(seconds) || seconds <= 0) {
+      // Invalid input — go back to duration selection
+      setStartupMode('select_duration');
+      return;
+    }
+    setSelectedDuration(seconds);
+    setStartupMode('new_story');
+  }, [exit]);
 
   // Handle keyboard for startup selection
   useInput((input, key) => {
@@ -549,17 +570,17 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     }
   }, { isActive: !started && taskType === 'video' && startupMode === 'select_style' });
 
-  // Handle keyboard for duration selection
+  // Handle keyboard for duration selection (presets + Custom option)
   useInput((input, key) => {
     if (!started && taskType === 'video' && startupMode === 'select_duration') {
-      const maxIndex = durationOptions.length - 1;
+      const maxIndex = durationOptions.length; // includes "Custom" as last option
       if (key.upArrow) {
         setDurationSelectedIndex(prev => Math.max(0, prev - 1));
       } else if (key.downArrow) {
         setDurationSelectedIndex(prev => Math.min(maxIndex, prev + 1));
       } else if (key.return) {
         handleDurationSelect(durationSelectedIndex);
-      } else if (input >= '1' && input <= String(durationOptions.length)) {
+      } else if (input >= '1' && input <= String(durationOptions.length + 1)) {
         handleDurationSelect(parseInt(input, 10) - 1);
       }
     }
@@ -693,6 +714,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       // Duration selection mode
       if (startupMode === 'select_duration') {
         const templateName = availableTemplates.find(t => t.id === selectedTemplateId)?.displayName ?? 'Video';
+        const totalOptions = durationOptions.length + 1; // presets + Custom
         return (
           <Box flexDirection="column" padding={1}>
             <Banner subtitle={subtitle} />
@@ -715,10 +737,49 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
                   </Box>
                 );
               })}
+              {/* Custom option */}
+              {(() => {
+                const customIndex = durationOptions.length;
+                const isSelected = durationSelectedIndex === customIndex;
+                return (
+                  <Box flexDirection="column" marginBottom={1}>
+                    <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
+                      {isSelected ? '>' : ' '} {customIndex + 1}. Custom (enter seconds)
+                    </Text>
+                  </Box>
+                );
+              })()}
             </Box>
 
             <Box paddingX={2}>
-              <Text dimColor>Use ↑↓ or 1-{durationOptions.length} to select, Enter to confirm. Type "exit" to quit.</Text>
+              <Text dimColor>Use ↑↓ or 1-{totalOptions} to select, Enter to confirm. Type "exit" to quit.</Text>
+            </Box>
+          </Box>
+        );
+      }
+
+      // Custom duration text input mode
+      if (startupMode === 'custom_duration') {
+        return (
+          <Box flexDirection="column">
+            <Box flexDirection="column" padding={1}>
+              <Banner subtitle={subtitle} />
+
+              <Box flexDirection="column" marginBottom={1} paddingX={2}>
+                <Text bold color="cyan">Enter Custom Duration</Text>
+                <Text dimColor>
+                  Type the desired duration in seconds and press Enter.
+                </Text>
+              </Box>
+            </Box>
+
+            <Box paddingX={1} paddingY={1} borderStyle="round" borderColor="cyan">
+              <UnifiedInput
+                mode="text"
+                onSubmit={handleCustomDurationSubmit}
+                prompt=">"
+                hint={'Enter duration in seconds (e.g. 90) and press Enter. Type "exit" to quit.'}
+              />
             </Box>
           </Box>
         );
