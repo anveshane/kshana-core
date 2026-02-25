@@ -2747,9 +2747,9 @@ Respond in JSON format:
     }
 
     if (toolCall.name === 'read_file') {
-      const filePath = toolCall.arguments['path'] as string;
+      const filePath = (toolCall.arguments['file_path'] ?? toolCall.arguments['path']) as string;
       if (!filePath) {
-        return 'Error: path is required';
+        return 'Error: file_path is required';
       }
       try {
         const fullPath = path.join(projectDir, filePath);
