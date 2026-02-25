@@ -213,6 +213,9 @@ export class GenericAgent extends TypedEventEmitter {
   private consecutiveLoopWarnings = 0;
   private static readonly LOOP_DETECTION_WINDOW = 6;
   private static readonly LOOP_THRESHOLD = 3; // Same tool called 3+ times in window
+  // Track consecutive text-only responses (no tool calls) to prevent infinite nudge loops
+  private consecutiveTextOnlyResponses = 0;
+  private static readonly MAX_TEXT_ONLY_NUDGES = 3;
   private static readonly MAX_CONSECUTIVE_LOOP_WARNINGS = 3; // Force stop after this many warnings
 
   // Context window tracking
@@ -1039,6 +1042,7 @@ export class GenericAgent extends TypedEventEmitter {
       ];
       this.iteration = 0;
       this.recentToolCalls = []; // Reset loop detection
+      this.consecutiveTextOnlyResponses = 0; // Reset text-only nudge counter
     }
 
     let finalOutput = '';
@@ -1136,10 +1140,30 @@ export class GenericAgent extends TypedEventEmitter {
         toolCalls: response.toolCalls,
       });
 
-      // If no tool calls, we're done
+      // If no tool calls, check if we should really stop
       if (response.toolCalls.length === 0) {
+        this.consecutiveTextOnlyResponses++;
+        // In video mode, the agent should never complete on its own —
+        // it must always use tools to drive the workflow forward.
+        // Inject a nudge message and continue the loop (up to MAX_TEXT_ONLY_NUDGES times).
+        if (
+          this.name === 'kshana-video' &&
+          !this.isSubAgent &&
+          this.iteration < this.maxIterations - 1 &&
+          this.consecutiveTextOnlyResponses <= GenericAgent.MAX_TEXT_ONLY_NUDGES
+        ) {
+          debugLog(`[GenericAgent] Video mode: LLM responded with text only (${this.consecutiveTextOnlyResponses}/${GenericAgent.MAX_TEXT_ONLY_NUDGES}) — nudging to use tools`);
+          this.messages.push({
+            role: 'user',
+            content: '<system_nudge>You must not stop here. Use your tools (read_project, update_project, create_backward_plan, etc.) to continue driving the workflow. If no project exists, use update_project with action "create" to create one. Never respond with text alone — always use a tool call.</system_nudge>',
+          });
+          continue;
+        }
         finalOutput = response.content ?? '';
         break;
+      } else {
+        // Reset text-only counter when tool calls are made
+        this.consecutiveTextOnlyResponses = 0;
       }
 
       // Execute tool calls

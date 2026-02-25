@@ -236,11 +236,15 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Run initial task if provided
   React.useEffect(() => {
     if (initialTask && !started) {
+      // For video mode, create the project before running (handleTaskSubmit is bypassed)
+      if (taskType === 'video' && !existingProject) {
+        createProject(initialTask, selectedStyle, undefined, selectedDuration, selectedTemplateId);
+      }
       setStarted(true);
       uiLogger.logUserInput(initialTask);
       void run(initialTask);
     }
-  }, [initialTask, started, run]);
+  }, [initialTask, started, run, taskType, existingProject, selectedStyle, selectedDuration, selectedTemplateId]);
 
   // Handle task submission
   const handleTaskSubmit = React.useCallback(
@@ -264,7 +268,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       // Task is added to history by useAgent
       void run(task);
     },
-    [run, exit, taskType, existingProject, selectedStyle, selectedDuration]
+    [run, exit, taskType, existingProject, selectedStyle, selectedDuration, selectedTemplateId, availableTemplates, selectedTemplateStyles]
   );
 
   // Handle user response (when agent is waiting for input)
