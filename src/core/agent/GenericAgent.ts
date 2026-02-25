@@ -1187,6 +1187,16 @@ export class GenericAgent extends TypedEventEmitter {
         const result = await this.executeTool(toolCall);
         const resultObj = result as Record<string, unknown>;
 
+        // Reset iteration counter when project state is updated — this signals real progress
+        // and prevents hitting max_iterations on long-running workflows.
+        if (
+          toolCall.name === 'update_project' &&
+          resultObj['status'] === 'success'
+        ) {
+          debugLog(`[GenericAgent] Progress detected (update_project success) — resetting iteration counter from ${this.iteration}`);
+          this.iteration = 0;
+        }
+
         // Check if tool is waiting for user input (dispatch_agent planning)
         if (resultObj['__awaiting_user_input']) {
           // Return waiting status - the planning loop will handle user response
