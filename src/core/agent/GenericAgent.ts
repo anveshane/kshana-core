@@ -875,6 +875,7 @@ export class GenericAgent extends TypedEventEmitter {
             isConfirmation: false,
             options: contentResultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: contentResultObj['autoApproveTimeoutMs'] as number | undefined,
+            context: contentResultObj['content'] as string,
           });
 
           // Content is shown via ToolCallDisplay
@@ -1603,6 +1604,7 @@ export class GenericAgent extends TypedEventEmitter {
           isConfirmation: false,
           options: questionOptions,
           autoApproveTimeoutMs: questionTimeout,
+          context: resultObj['content'] as string,
         });
 
         this.emit({
@@ -1668,6 +1670,7 @@ export class GenericAgent extends TypedEventEmitter {
           isConfirmation: false,
           options: questionOptions,
           autoApproveTimeoutMs: questionTimeout,
+          context: resultObj['content'] as string,
         });
 
         // Emit status change
@@ -2706,79 +2709,8 @@ Respond in JSON format:
    * These allow it to pull context as needed.
    */
   private getContentCreatorTools(): ToolDefinition[] {
-    const projectDir = path.join(process.cwd(), '.kshana');
-
-    return [
-      {
-        name: 'read_project',
-        description:
-          'Read the project structure to understand what content exists (story, characters, settings, etc.)',
-        parameters: {
-          type: 'object',
-          properties: {},
-          required: [],
-        },
-        handler: async () => {
-          try {
-            const project = loadProject();
-            if (!project) {
-              return 'No project found. The project has not been initialized yet.';
-            }
-            // Return a simplified view of what content exists
-            const summary: Record<string, unknown> = {
-              style: project.style,
-              currentPhase: project.currentPhase,
-              story: project.content?.story ? { file: 'plans/story.md', exists: true } : null,
-              plot: project.content?.plot ? { file: 'plans/plot.md', exists: true } : null,
-              characters: Object.keys(project.characters || {}).map(name => ({
-                name,
-                file: `characters/${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`,
-              })),
-              settings: Object.keys(project.settings || {}).map(name => ({
-                name,
-                file: `settings/${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`,
-              })),
-              // Include files array for more complete picture
-              files: project.files || [],
-            };
-            return JSON.stringify(summary, null, 2);
-          } catch (err) {
-            return `Error reading project: ${String(err)}`;
-          }
-        },
-      },
-      {
-        name: 'read_file',
-        description: 'Read a file from the project. Use paths from read_project output.',
-        parameters: {
-          type: 'object',
-          properties: {
-            path: {
-              type: 'string',
-              description:
-                'Path to the file relative to .kshana directory (e.g., "plans/story.md", "characters/alice.md")',
-            },
-          },
-          required: ['path'],
-        },
-        handler: async (args: Record<string, unknown>) => {
-          const filePath = args['path'] as string;
-          if (!filePath) {
-            return 'Error: path is required';
-          }
-          try {
-            const fullPath = path.join(projectDir, filePath);
-            if (!fs.existsSync(fullPath)) {
-              return `File not found: ${filePath}`;
-            }
-            const content = fs.readFileSync(fullPath, 'utf-8');
-            return content;
-          } catch (err) {
-            return `Error reading file: ${String(err)}`;
-          }
-        },
-      },
-    ];
+    // Use the canonical tools from contentCreatorTools.ts — single source of truth
+    return getContentCreatorTools();
   }
 
   /**

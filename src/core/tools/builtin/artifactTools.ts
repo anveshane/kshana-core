@@ -6,7 +6,7 @@ import type { ToolDefinition } from '../../llm/index.js';
 import { createTool } from '../ToolRegistry.js';
 import { getArtifactManager } from '../../../tasks/video/workflow/ArtifactManager.js';
 import { createPromptRefiner } from '../../../tasks/video/workflow/PromptRefiner.js';
-import { LLMClient } from '../../llm/index.js';
+import { LLMClient, getLLMConfig } from '../../llm/index.js';
 import { existsSync } from 'fs';
 
 function getArtifactIdFromReference(ref: string): string {
@@ -34,7 +34,7 @@ export const regenerateArtifactTool: ToolDefinition = createTool(
   async (args: Record<string, unknown>) => {
     const basePath = process.cwd();
     const manager = await getArtifactManager(basePath);
-    const llm = new LLMClient();
+    const llm = new LLMClient(getLLMConfig());
     const artifactId = getArtifactIdFromReference(args['artifact_id'] as string);
     const artifact = manager.get(artifactId);
 
@@ -108,7 +108,7 @@ export const editPromptTool: ToolDefinition = createTool(
   async (args: Record<string, unknown>) => {
     const basePath = process.cwd();
     const manager = await getArtifactManager(basePath);
-    const llm = new LLMClient();
+    const llm = new LLMClient(getLLMConfig());
     const artifactId = getArtifactIdFromReference(args['artifact_id'] as string);
     const artifact = manager.get(artifactId);
 
@@ -149,7 +149,7 @@ export const comparePromptsTool: ToolDefinition = createTool(
     const artifactId = getArtifactIdFromReference(args['artifact_id'] as string);
 
     try {
-      const refiner = createPromptRefiner(manager, new LLMClient());
+      const refiner = createPromptRefiner(manager, new LLMClient(getLLMConfig()));
       const comparison = refiner.getComparison(
         artifactId,
         args['version_a'] as number,

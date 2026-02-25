@@ -953,6 +953,11 @@ Returns a job ID. Use wait_for_job to check completion.
         type: 'number',
         description: 'Random seed for reproducibility (optional)',
       },
+      model: {
+        type: 'string',
+        enum: ['wan', 'ltx'],
+        description: 'Video generation model to use. "ltx" (default) uses LTX-2 model for fast generation, "wan" uses Wan 2.2 model.',
+      },
     },
     required: ['scene_image_artifact_id', 'scene_number'],
   },
@@ -960,6 +965,7 @@ Returns a job ID. Use wait_for_job to check completion.
     const sceneImageArtifactId = args['scene_image_artifact_id'] as string;
     const sceneNumber = args['scene_number'] as number;
     let motionPrompt = args['motion_prompt'] as string | undefined;
+    const model = (args['model'] as string) || 'ltx';
 
     // If motion_prompt_file is provided, read the prompt from the file
     const motionPromptFile = args['motion_prompt_file'] as string | undefined;
@@ -1011,10 +1017,11 @@ Returns a job ID. Use wait_for_job to check completion.
       }
 
       const registry = getRegistry();
-      const workflowMetadata = registry.get('wan_single_image');
+      const workflowName = model === 'ltx' ? 'ltx_i2v' : 'wan_single_image';
+      const workflowMetadata = registry.get(workflowName);
 
       if (!workflowMetadata) {
-        throw new Error("Workflow 'wan_single_image' not found");
+        throw new Error(`Workflow '${workflowName}' not found`);
       }
 
       const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'videos');
@@ -1031,7 +1038,7 @@ Returns a job ID. Use wait_for_job to check completion.
 
       // Load and parameterize the workflow
       const template = loadWorkflowTemplate(workflowMetadata.filename);
-      const workflow = parameterizeWorkflowByName('wan_single_image', template, {
+      const workflow = parameterizeWorkflowByName(workflowName, template, {
         sceneNumber,
         prompt: motionPrompt,
         negativePrompt,
@@ -1051,12 +1058,13 @@ Returns a job ID. Use wait_for_job to check completion.
       return {
         status: 'submitted',
         job_id: jobId,
-        workflow: 'wan_single_image',
-        message: `Single-image video generation job submitted. Use wait_for_job("${jobId}") to check status.`,
+        workflow: workflowName,
+        message: `Single-image video generation job submitted (${model === 'ltx' ? 'LTX-2' : 'Wan'} model). Use wait_for_job("${jobId}") to check status.`,
         params: {
           scene_number: sceneNumber,
           image_artifact: sceneImageArtifactId,
           motion_prompt: motionPrompt,
+          model,
         },
       };
     } catch (error) {
@@ -1135,6 +1143,11 @@ Returns a job ID. Use wait_for_job to check completion.`,
         type: 'number',
         description: 'Random seed for reproducibility (optional)',
       },
+      model: {
+        type: 'string',
+        enum: ['wan', 'ltx'],
+        description: 'Video generation model to use. "ltx" (default) does NOT support frame interpolation. "wan" supports frame interpolation.',
+      },
     },
     required: ['start_image_artifact_id', 'end_image_artifact_id', 'scene_number', 'transition_prompt'],
   },
@@ -1145,6 +1158,16 @@ Returns a job ID. Use wait_for_job to check completion.`,
     const transitionPrompt = args['transition_prompt'] as string;
     const negativePrompt = args['negative_prompt'] as string | undefined;
     const seed = args['seed'] as number | undefined;
+    const model = (args['model'] as string) || 'ltx';
+
+    // LTX does not support start-end frame interpolation
+    if (model === 'ltx') {
+      return {
+        status: 'error',
+        error: 'The LTX model does not support frame interpolation between start and end images. Use generate_video_from_image with model "ltx" instead to animate a single image.',
+        suggestion: 'Use generate_video_from_image with model: "ltx" for single-image video generation with the LTX model.',
+      };
+    }
 
     // Create job for tracking with context for linking
     const jobId = `vid-${Date.now()}-${nanoid(6)}`;

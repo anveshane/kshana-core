@@ -198,6 +198,49 @@ class WorkflowRegistry {
       estimatedTimeSeconds: 120,
       qualityLevel: 'standard',
     });
+
+    // 7. LTX-2 Image-to-Video - Fast video from single image using LTX model
+    this.register({
+      name: 'ltx_i2v',
+      filename: 'video_ltx2_i2v-final.json',
+      workflowType: WorkflowType.VIDEO_GENERATION,
+      description: 'Generate video from a single image using the LTX-2 model. Fast image-to-video generation with good motion quality. Alternative to Wan for single-image animation.',
+      capabilities: [
+        'single-image-to-video',
+        'motion-from-prompt',
+        'fast-generation',
+        'camera-movement',
+        'character-animation',
+      ],
+      displayName: 'LTX-2 Image-to-Video',
+      requiresBaseImage: true,
+      supportsTextPrompts: true,
+      supportsImageToImage: true,
+      outputFormat: 'video',
+      estimatedTimeSeconds: 60,
+      qualityLevel: 'standard',
+    });
+
+    // 8. LTX-2 Text-to-Video - Video from text prompt only using LTX model
+    this.register({
+      name: 'ltx_t2v',
+      filename: 'video_ltx2_t2v-final.json',
+      workflowType: WorkflowType.VIDEO_GENERATION,
+      description: 'Generate video directly from a text prompt using the LTX-2 model. No input image required. Best for creating video content from scratch based on text descriptions.',
+      capabilities: [
+        'text-to-video',
+        'motion-from-prompt',
+        'fast-generation',
+        'no-input-image-needed',
+      ],
+      displayName: 'LTX-2 Text-to-Video',
+      requiresBaseImage: false,
+      supportsTextPrompts: true,
+      supportsImageToImage: false,
+      outputFormat: 'video',
+      estimatedTimeSeconds: 60,
+      qualityLevel: 'standard',
+    });
   }
 
   /**

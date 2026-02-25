@@ -4,7 +4,9 @@
  * Tools for the goal-driven orchestrator to scan assets and create backward plans.
  */
 
+import { readFileSync } from 'fs';
 import type { ToolDefinition } from '../../llm/index.js';
+import { tryPathVariants } from './contentCreatorTools.js';
 import { BackwardPlanner, AssetScanner } from '../../planner/index.js';
 import type {
   UserGoal,
@@ -22,6 +24,8 @@ export interface PlannerToolContext {
   template: VideoTemplate;
   project: GenericProjectFile;
   projectDir: string;
+  /** Shared registry state across planner tool calls within a session */
+  registry?: AssetRegistry;
 }
 
 /**
@@ -82,6 +86,9 @@ The result shows which artifact types are fully or partially satisfied.`,
       if (additionalPaths && additionalPaths.length > 0) {
         scanner.registerUserAssets(additionalPaths, result.registry);
       }
+
+      // Store registry in shared context for use by other planner tools
+      context.registry = result.registry;
 
       // Build response
       const summary = scanner.getSummary(result.registry);
@@ -193,6 +200,9 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
           satisfiedArtifacts: new Map(Object.entries(registryDataParam.satisfiedArtifacts)),
           lastScanAt: registryDataParam.lastScanAt,
         };
+      } else if (context.registry) {
+        // Use shared registry from previous scan_assets call
+        registry = context.registry;
       } else {
         // Perform fresh scan
         const scanner = new AssetScanner(context.template);
@@ -244,8 +254,12 @@ export function createRegisterContentTool(context: PlannerToolContext): ToolDefi
     name: 'register_user_content',
     description: `Register user-provided content as an existing asset.
 
-Use this when the user provides content directly (e.g., pastes a story, describes characters).
-This marks the corresponding artifact type as satisfied so the planner can skip generation.
+Use this when the user provides content directly (e.g., pastes a story, describes characters)
+or provides a file path to content. This marks the corresponding artifact type as satisfied
+so the planner can skip generation.
+
+You can provide content inline via 'content' or point to a file via 'file_path'.
+At least one of 'content' or 'file_path' must be provided.
 
 Available artifact types:
 ${Object.keys(context.template.artifactTypes).join(', ')}`,
@@ -258,7 +272,11 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
         },
         content: {
           type: 'string',
-          description: 'The content provided by the user',
+          description: 'The content provided by the user (inline text)',
+        },
+        file_path: {
+          type: 'string',
+          description: 'Path to a file containing the content. Can be absolute or relative to the project directory.',
         },
         item_id: {
           type: 'string',
@@ -269,13 +287,35 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
           description: 'Whether to mark this artifact type as fully satisfied (default: true for non-collections)',
         },
       },
-      required: ['artifact_type', 'content'],
+      required: ['artifact_type'],
     },
     handler: async (params: Record<string, unknown>) => {
       const artifactType = params['artifact_type'] as string;
-      const content = params['content'] as string;
+      let content = params['content'] as string | undefined;
+      const filePath = params['file_path'] as string | undefined;
       const itemId = params['item_id'] as string | undefined;
       const markFullySatisfied = params['mark_fully_satisfied'] as boolean | undefined;
+
+      // Resolve content from file_path if provided
+      if (!content && filePath) {
+        const resolvedPath = tryPathVariants(filePath);
+
+        if (!resolvedPath) {
+          return {
+            success: false,
+            error: `File not found: ${filePath}`,
+          };
+        }
+
+        content = readFileSync(resolvedPath, 'utf-8');
+      }
+
+      if (!content) {
+        return {
+          success: false,
+          error: 'Either "content" or "file_path" must be provided',
+        };
+      }
 
       const scanner = new AssetScanner(context.template);
       const asset = scanner.registerContent(content, artifactType, itemId);
@@ -285,6 +325,18 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
           success: false,
           error: `Unknown artifact type: ${artifactType}`,
         };
+      }
+
+      // Add asset to shared registry if it exists
+      if (context.registry) {
+        context.registry.assets.set(asset.id, asset);
+        const typeDef = context.template.artifactTypes[artifactType];
+        const shouldMarkFull = markFullySatisfied ?? (typeDef && !typeDef.isCollection);
+        if (shouldMarkFull) {
+          context.registry.satisfiedArtifacts.set(artifactType, 'full');
+        } else if (!context.registry.satisfiedArtifacts.has(artifactType)) {
+          context.registry.satisfiedArtifacts.set(artifactType, 'partial');
+        }
       }
 
       const typeDef = context.template.artifactTypes[artifactType];
@@ -301,7 +353,8 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
           contentLength: content.length,
         },
         markedFullySatisfied: shouldMarkFull,
-        message: `Registered ${asset.artifactTypeId}${asset.itemId ? ` (${asset.itemId})` : ''} as user-provided content`,
+        loadedFromFile: !!filePath,
+        message: `Registered ${asset.artifactTypeId}${asset.itemId ? ` (${asset.itemId})` : ''} as user-provided content${filePath ? ` (from ${filePath})` : ''}`,
       };
     },
   };

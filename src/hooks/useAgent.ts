@@ -646,6 +646,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('agent_text', event => {
+      if (event.isFinal) return; // Already in history via streaming STREAM_DONE
       if (event.text) {
         dispatch({ type: 'ADD_AGENT_TEXT', text: event.text });
       }

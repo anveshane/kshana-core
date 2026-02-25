@@ -27,7 +27,6 @@ import { getPhaseLogger } from '../../../utils/phaseLogger.js';
 import {
   loadProject,
   saveProject,
-  readProjectFile,
   writeProjectFile,
   getProjectSummary,
   getStateTransitionPrompt,
@@ -73,7 +72,7 @@ import {
   WorkflowPhase,
   INPUT_TYPE_CONFIGS,
 } from './types.js';
-import { LLMClient } from '../../../core/llm/index.js';
+import { LLMClient, getLLMConfig } from '../../../core/llm/index.js';
 
 /**
  * Validates if the input is a valid story idea using an LLM call.
@@ -94,7 +93,7 @@ async function validateStoryInput(input: string): Promise<{ valid: boolean; reas
   }
 
   try {
-    const client = new LLMClient();
+    const client = new LLMClient(getLLMConfig());
 
     // Inline validation prompt (previously loaded from video/validation.md)
     const validationPrompt = `Evaluate if the following user input could be developed into a creative video project (story, documentary, trailer, etc.).
@@ -188,97 +187,9 @@ function detectGarbageInput(input: string): string | null {
   return null;
 }
 
-/**
- * Read file tool - reads content from a project file.
- */
-export const readFileTool: ToolDefinition = createTool(
-  'read_file',
-  `Read content from a project file within the .kshana directory.
-
-**🚫 FORBIDDEN: NEVER guess file paths!**
-- ❌ "0.md", "1.md", "2.md" are NOT valid file paths
-- ❌ NEVER construct paths from array indices
-- ❌ NEVER use numeric suffixes - files are named by CONTENT (e.g., "characters/isha.md")
-
-**REQUIRED WORKFLOW:**
-1. Call \`list_project_files\` FIRST to discover actual file names
-2. Use the EXACT paths returned by \`list_project_files\`
-
-Use this to read:
-- Plan files: plans/plot.md, plans/story.md, plans/scenes.md
-- Character files: characters/{actual_name}.md (e.g., characters/isha.md)
-- Setting files: settings/{actual_name}.md (e.g., settings/living_room.md)
-- Original input: original_input.md
-
-If you get "File not found", STOP and call list_project_files to see what files actually exist.`,
-  {
-    type: 'object',
-    properties: {
-      file_path: {
-        type: 'string',
-        description: 'Relative path within .kshana directory (e.g., "plans/plot.md")',
-      },
-    },
-    required: ['file_path'],
-  },
-  async args => {
-    const filePath = args['file_path'] as string;
-
-    // Security: prevent path traversal
-    if (filePath.includes('..') || filePath.startsWith('/')) {
-      return {
-        status: 'error',
-        error: 'Invalid file path. Use relative paths within .kshana directory.',
-      };
-    }
-
-    // HARD REJECTION: Reject numeric index guessing - common LLM mistake
-    const numericIndexPattern = /^(characters|settings|scenes)\/\d+\.md$/;
-    if (numericIndexPattern.test(filePath)) {
-      const indexMatch = filePath.match(/\/(\d+)\.md$/);
-      const index = indexMatch?.[1];
-      return {
-        status: 'error',
-        error: `FORBIDDEN: You used a numeric index "${filePath}".`,
-        instruction: `You MUST call list_project_files FIRST to discover actual file names. Numeric indices like "${index}.md" are NOT valid file paths.`,
-      };
-    }
-
-    // Also reject bare numeric paths like "0.md" without directory
-    const bareNumericPattern = /^\d+\.md$/;
-    if (bareNumericPattern.test(filePath)) {
-      return {
-        status: 'error',
-        error: `FORBIDDEN: You used "${filePath}" - this is NOT a valid file path.`,
-        instruction:
-          'You MUST call list_project_files to get actual file names. Files are named by content, not by index.',
-      };
-    }
-
-    const content = readProjectFile(filePath);
-
-    if (content === null) {
-      // Check if the user might have used an array index instead of actual filename
-      const indexPattern = /^(characters|settings|scenes)\/\d+\.md$/;
-      const isLikelyIndexError = indexPattern.test(filePath);
-
-      return {
-        status: 'error',
-        error: `File not found: ${filePath}`,
-        hint: isLikelyIndexError
-          ? `It looks like you used a numeric index (e.g., "0.md") instead of the actual file name. Use list_project_files to see the real file names, then use the exact path shown (e.g., "characters/mr_patel.md").`
-          : 'Use list_project_files to see available files and their exact paths.',
-      };
-    }
-
-    return {
-      status: 'success',
-      file_path: filePath,
-      content: content,
-      length: content.length,
-    };
-  }
-);
+// read_file is imported from the canonical source — single definition for the entire system
+import { readFileTool } from '../../../core/tools/builtin/contentCreatorTools.js';
+export { readFileTool };
 
 /**
  * Directories to exclude from project file listing.

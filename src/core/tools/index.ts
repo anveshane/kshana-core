@@ -41,12 +41,12 @@ import {
   exitPlanModeTool,
   todoWriteTool,
   generateContentTool,
+  readFileTool,
 } from './builtin/index.js';
 
 /**
  * Create a registry with the default built-in tools.
- * Note: Context tools (store_context, fetch_context) are REMOVED.
- * Use read_project to see available files, then read_file to access them.
+ * All agents get these tools — they are fundamental capabilities.
  */
 export function createDefaultToolRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
@@ -59,8 +59,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   registry.register(exitPlanModeTool);
   registry.register(todoWriteTool);
   registry.register(generateContentTool);
-  // Note: storeContextTool and fetchContextTool are REMOVED
-  // Use project.json files array with summaries instead
+  registry.register(readFileTool);
 
   return registry;
 }

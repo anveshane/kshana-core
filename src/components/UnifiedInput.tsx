@@ -9,6 +9,42 @@ import type { QuestionOption } from './QuestionPrompt.js';
 
 export type InputMode = 'text' | 'selection' | 'confirmation';
 
+/**
+ * Detect if a string looks like a file path (e.g., from terminal drag-and-drop).
+ * Terminals paste absolute paths when files are dragged onto them.
+ */
+function looksLikeFilePath(text: string): boolean {
+  const trimmed = text.trim();
+  // Absolute path, home-relative, or current-dir-relative
+  if (/^[~./]/.test(trimmed) && trimmed.includes('/')) return true;
+  // Windows-style absolute path
+  if (/^[A-Za-z]:\\/.test(trimmed)) return true;
+  return false;
+}
+
+/**
+ * Clean up terminal-specific file path formatting from drag-and-drop.
+ * Terminals escape special shell characters with backslashes and may wrap in quotes.
+ *
+ * Examples of what terminals produce when dragging files:
+ *   /path/to/my\ file.txt              → /path/to/my file.txt
+ *   /path/with\ commas\,\ here.txt     → /path/with commas, here.txt
+ *   '/path/to/my file.txt'             → /path/to/my file.txt
+ *   /path/to/file\ \(1\).txt           → /path/to/file (1).txt
+ */
+function cleanDroppedPath(text: string): string {
+  let cleaned = text.trim();
+  // Strip surrounding single quotes added by some terminals (wraps entire path)
+  // Only strip if the path starts with quote + slash (to avoid stripping quotes that are part of the name)
+  if (cleaned.startsWith("'/") && cleaned.endsWith("'")) {
+    cleaned = cleaned.slice(1, -1);
+  }
+  // Unescape all backslash-escaped characters (terminals escape spaces, commas, parens, quotes, etc.)
+  // A backslash followed by any character → just that character
+  cleaned = cleaned.replace(/\\(.)/g, '$1');
+  return cleaned;
+}
+
 interface UnifiedInputProps {
   /** Current input mode */
   mode: InputMode;
@@ -232,6 +268,11 @@ export function UnifiedInput({
         sanitized = sanitized.trim();
       }
 
+      // Detect file path from drag-and-drop and clean terminal formatting
+      if (sanitized.length > 1 && looksLikeFilePath(sanitized)) {
+        sanitized = cleanDroppedPath(sanitized);
+      }
+
       if (sanitized) {
         const newValue = textValue.slice(0, cursorPos) + sanitized + textValue.slice(cursorPos);
         setTextValue(newValue);
@@ -283,11 +324,15 @@ export function UnifiedInput({
     }
   };
 
+  // Detect if current text value looks like a file path
+  const isFilePath = textValue.length > 0 && looksLikeFilePath(textValue);
+
   return (
     <Box flexDirection="column">
       <Text dimColor>{getHintText()}</Text>
       <Box>
         <Text color="cyan">{prompt} </Text>
+        {isFilePath && <Text color="yellow" bold>[file] </Text>}
         {renderTextWithCursor()}
       </Box>
     </Box>
