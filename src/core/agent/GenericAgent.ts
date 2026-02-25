@@ -2656,12 +2656,17 @@ Respond in JSON format:
     }
 
     // Validate content_type is one of the allowed types
-    const validContentTypes = ['plot', 'story', 'character', 'setting', 'scene', 'narration'];
+    const validContentTypes = [
+      // Narrative types
+      'plot', 'story', 'character', 'setting', 'scene', 'narration',
+      // Documentary/generic types
+      'outline', 'segment', 'thesis', 'research', 'script',
+    ];
     if (!validContentTypes.includes(contentType)) {
       return {
         error: `Invalid content_type "${contentType}". Must be one of: ${validContentTypes.join(', ')}`,
         suggestion:
-          'Use the appropriate content_type for your task. For example, use "character" for character profiles, "scene" for scene descriptions.',
+          'Use the appropriate content_type for your task. For example, use "character" for character profiles, "scene" for scene descriptions, "segment" for documentary segments.',
       };
     }
 
@@ -2673,7 +2678,7 @@ Respond in JSON format:
     const contentSystemPrompt = buildContentPrompt(task, contentType);
 
     // Build the user task for the sub-agent
-    const subAgentTask = `First, use read_project() to understand the project structure and identify what content you need. Then use read_file() to fetch the relevant content (story, characters, etc.). Finally, generate the ${contentType} content based on this instruction:\n\n${task}`;
+    const subAgentTask = `First, use read_project() to understand the project structure, template type, and available files. Then use read_file() to fetch the relevant source material listed in the project files. Finally, generate the ${contentType} content based on this instruction:\n\n${task}`;
 
     try {
       // Run the sub-agent - it uses the SAME run() loop as the main agent
@@ -2749,20 +2754,22 @@ Respond in JSON format:
         if (!project) {
           return 'No project found. The project has not been initialized yet.';
         }
-        // Return a simplified view of what content exists
+        // Return a template-agnostic view of the project
         const summary: Record<string, unknown> = {
           style: project.style,
+          templateId: project.templateId ?? 'narrative',
           currentPhase: project.currentPhase,
-          story: project.content?.story ? { file: 'plans/story.md', exists: true } : null,
-          plot: project.content?.plot ? { file: 'plans/plot.md', exists: true } : null,
-          characters: Object.keys(project.characters || {}).map(name => ({
-            name,
-            file: `characters/${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`,
+          characters: (project.characters || []).map((char: { name: string }) => ({
+            name: char.name,
+            file: project.content?.characters?.itemFiles?.[char.name] ||
+              `characters/${char.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
           })),
-          settings: Object.keys(project.settings || {}).map(name => ({
-            name,
-            file: `settings/${name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`,
+          settings: (project.settings || []).map((setting: { name: string }) => ({
+            name: setting.name,
+            file: project.content?.settings?.itemFiles?.[setting.name] ||
+              `settings/${setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
           })),
+          files: project.files || [],
         };
         return JSON.stringify(summary, null, 2);
       } catch (err) {

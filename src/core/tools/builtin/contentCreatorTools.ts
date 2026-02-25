@@ -29,9 +29,8 @@ export const readProjectTool: ToolDefinition = {
       }
       const summary: Record<string, unknown> = {
         style: project.style,
+        templateId: (project as unknown as Record<string, unknown>)['templateId'] ?? 'narrative',
         currentPhase: project.currentPhase,
-        story: project.content?.story ? { file: 'plans/story.md', exists: true } : null,
-        plot: project.content?.plot ? { file: 'plans/plot.md', exists: true } : null,
         characters: (project.characters || []).map((char: { name: string }) => ({
           name: char.name,
           file: project.content?.characters?.itemFiles?.[char.name] ||
