@@ -1579,7 +1579,7 @@ export class GenericAgent extends TypedEventEmitter {
       // Build content system prompt and route through contentState loop
       // This activates streaming + approval + feedback support
       const contentSystemPrompt = buildContentPrompt(instruction, contentType as ContentType);
-      const subAgentTask = `First, use read_project() to understand the project structure and identify what content you need. Then use read_file() to fetch the relevant content (story, characters, etc.). Finally, generate the ${contentType} content based on this instruction:\n\n${instruction}`;
+      const subAgentTask = `First, use read_project() to understand the project structure, template type, and available files. Then use read_file() to fetch the relevant source material listed in the project files. Finally, generate the ${contentType} content based on this instruction:\n\n${instruction}`;
 
       debugLog(
         `[GenericAgent] generate_content initializing contentState for: "${instruction.substring(0, 100)}..."`

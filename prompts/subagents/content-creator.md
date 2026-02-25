@@ -171,6 +171,12 @@ people, person, human, character, figure, silhouette, crowd, text, watermarks
 
 ### For Scene Image Prompts (scene_image_prompt)
 
+**IMPORTANT: Check the project templateId first.** The generation mode depends on whether character/setting reference images exist.
+
+#### When reference images EXIST (narrative template with characters/settings)
+
+Use `read_project()` to find each character's `referenceImagePath` and each setting's `referenceImagePath`. Only reference images that actually exist in the project assets.
+
 **ALL of these details are MANDATORY:**
 
 1. **References**: Character ref IDs to use, setting ref ID
@@ -179,24 +185,12 @@ people, person, human, character, figure, silhouette, crowd, text, watermarks
 4. **Lighting**: Primary source, quality, shadows, mood contribution, color grading
 5. **Technical**: Aspect ratio 1:1, mode: image_text_to_image
 
-**CRITICAL - Image Reference Naming Convention:**
 Scene images are generated using the Qwen Edit workflow which takes up to 3 input images. In the prompt text, these are referenced as **image1**, **image2**, **image3**. The image numbering is determined by the order you list them in the **Reference Images** section:
 - The FIRST reference listed → becomes **image1**
 - The SECOND reference listed → becomes **image2**
 - The THIRD reference listed → becomes **image3**
 
-The prompt text MUST reference every character and setting using "from imageN" phrasing so the model knows which input image corresponds to which element.
-
-**Example:** If a scene has Parvati, Isha, and the Sports Complex:
-```
-**Reference Images:**
-- Character: Parvati (assets/images/CharRef_Parvati.png)
-- Character: Isha (assets/images/CharRef_Isha.png)
-- Setting: District Sports Complex (assets/images/SettingRef_DistrictSportsComplex.png)
-```
-Then in the prompt: "Parvati from image1 extends a tiffin toward Isha from image2 at the gate of the sports complex from image3..."
-
-**To determine the correct asset paths**: Use `read_project()` to find each character's `referenceImagePath` and each setting's `referenceImagePath` in the project state.
+The prompt text MUST reference every character and setting using "from imageN" phrasing.
 
 **Output format:**
 ```
@@ -216,6 +210,38 @@ Then in the prompt: "Parvati from image1 extends a tiffin toward Isha from image
 
 **Generation Mode:**
 image_text_to_image
+```
+
+#### When NO reference images exist (documentary, short, or other templates)
+
+For documentaries and other non-narrative templates, scene images are **standalone** — they do NOT reference character or setting images. Use `text_to_image` mode.
+
+**ALL of these details are MANDATORY:**
+
+1. **Composition**: Shot type, camera angle, focal point, depth of field
+2. **Subject**: What is shown — people, objects, landscapes, abstract visuals, b-roll
+3. **Lighting**: Primary source, quality, shadows, mood, color grading
+4. **Atmosphere**: Emotional tone, color palette, textures
+5. **Technical**: Aspect ratio 1:1, mode: text_to_image
+
+**STRICT RULES:**
+- NEVER reference "image1", "image2", etc. — there are no input reference images
+- NEVER include a **Reference Images** section
+- Describe the complete scene in the prompt itself — all visual details must be self-contained
+
+**Output format:**
+```
+**Image Prompt:**
+[Single detailed paragraph describing the complete scene with all visual details]
+
+**Negative Prompt:**
+[Style-appropriate negatives]
+
+**Aspect Ratio:**
+1:1
+
+**Generation Mode:**
+text_to_image
 ```
 
 ### For Scene Video Prompts (scene_video_prompt)
