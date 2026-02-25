@@ -485,8 +485,16 @@ export interface ImageEditParams {
 
 // Job storage (in-memory for now, could be Redis/DB in production)
 const jobs = new Map<string, GenerationJob>();
-const activeBatchRunners = new Map<string, Promise<void>>();
+interface ActiveBatchRunnerState {
+  promise: Promise<void>;
+  basePath: string;
+  batchId: string;
+  kind: BackgroundGenerationKind;
+}
+const activeBatchRunners = new Map<string, ActiveBatchRunnerState>();
 const MAX_BACKGROUND_BATCH_HISTORY = 30;
+let runtimeCancelToken = 0;
+let lastRuntimeCancelReason = 'Generation cancelled';
 
 /**
  * Module-level AbortController used to cancel all in-flight polling loops
@@ -494,6 +502,146 @@ const MAX_BACKGROUND_BATCH_HISTORY = 30;
  * Calling shutdownVideoTools() aborts this signal and replaces it with a fresh one.
  */
 let shutdownController = new AbortController();
+
+function getRuntimeCancelReason(reason: 'user_stop' | 'project_switch'): string {
+  return reason === 'project_switch'
+    ? 'Cancelled due to project switch'
+    : 'Cancelled by user';
+}
+
+function isCancellationReason(reason: unknown): boolean {
+  if (typeof reason !== 'string') return false;
+  const normalized = reason.toLowerCase();
+  return (
+    normalized.includes('cancelled by user') ||
+    normalized.includes('cancelled due to project switch') ||
+    normalized.includes('generation cancelled')
+  );
+}
+
+function normalizeCancellationReason(reason: unknown): string {
+  if (typeof reason !== 'string') {
+    return lastRuntimeCancelReason;
+  }
+  const normalized = reason.toLowerCase();
+  if (normalized.includes('project switch')) {
+    return 'Cancelled due to project switch';
+  }
+  if (normalized.includes('cancelled by user')) {
+    return 'Cancelled by user';
+  }
+  return lastRuntimeCancelReason;
+}
+
+function hasRuntimeCancellationSince(token: number): boolean {
+  return runtimeCancelToken !== token;
+}
+
+function isRuntimeCancellationError(reason: unknown, token: number): boolean {
+  return hasRuntimeCancellationSince(token) || isCancellationReason(reason);
+}
+
+function failBatchAsCancelled(
+  basePath: string,
+  batchId: string,
+  reason: string,
+): BackgroundGenerationBatch | null {
+  return persistBatchUpdate(basePath, batchId, (entry) => {
+    for (const item of entry.items) {
+      if (item.status === 'pending' || item.status === 'processing') {
+        item.status = 'failed';
+        item.error = reason;
+        item.updatedAt = Date.now();
+      }
+    }
+    recomputeBatchCounts(entry);
+    entry.status = 'failed';
+    entry.finishedAt = Date.now();
+  });
+}
+
+function failAllQueuedOrRunningBatches(
+  basePath: string,
+  reason: string,
+): BackgroundGenerationBatch[] {
+  const project = loadProject(basePath);
+  if (!project?.backgroundGeneration) {
+    return [];
+  }
+
+  const batchesToFail = project.backgroundGeneration.batches
+    .filter((batch) => batch.status === 'queued' || batch.status === 'running')
+    .map((batch) => batch.id);
+
+  const failed: BackgroundGenerationBatch[] = [];
+  for (const batchId of batchesToFail) {
+    const cancelledBatch = failBatchAsCancelled(basePath, batchId, reason);
+    if (cancelledBatch) {
+      failed.push(cancelledBatch);
+    }
+  }
+
+  return failed;
+}
+
+/**
+ * Runtime cancel path used by user-initiated stops (including project switch).
+ * Cancels in-flight polling, interrupts ComfyUI, clears queue, and marks active
+ * jobs/batches as failed with a cancellation reason.
+ */
+export async function cancelVideoRuntime(
+  reason: 'user_stop' | 'project_switch',
+): Promise<void> {
+  const cancelReason = getRuntimeCancelReason(reason);
+  console.log(`[cancelVideoRuntime] Cancelling video runtime: ${cancelReason}`);
+  lastRuntimeCancelReason = cancelReason;
+  runtimeCancelToken += 1;
+
+  // Abort all in-flight waitForCompletion loops.
+  shutdownController.abort(cancelReason);
+
+  // Stop ComfyUI execution and clear all queued prompts.
+  try {
+    await Promise.all([
+      ComfyUIClient.interruptCurrentJob(),
+      ComfyUIClient.clearQueue(),
+    ]);
+  } catch (e) {
+    console.warn('[cancelVideoRuntime] Error communicating with ComfyUI:', e);
+  }
+
+  // Mark active generation jobs as cancelled.
+  for (const job of jobs.values()) {
+    if (job.status === 'pending' || job.status === 'processing') {
+      job.status = 'failed';
+      job.error = cancelReason;
+      job.updatedAt = Date.now();
+    }
+  }
+
+  // Mark active queued/running background batches as cancelled and emit updates.
+  const affectedBatchKeys = new Set<string>();
+  const candidateBasePaths = new Set<string>();
+
+  for (const runner of activeBatchRunners.values()) {
+    candidateBasePaths.add(runner.basePath);
+    affectedBatchKeys.add(`${runner.basePath}:${runner.batchId}`);
+  }
+  candidateBasePaths.add(getCurrentProjectBasePath());
+
+  for (const basePath of candidateBasePaths) {
+    for (const batch of failAllQueuedOrRunningBatches(basePath, cancelReason)) {
+      const batchKey = `${basePath}:${batch.id}`;
+      if (affectedBatchKeys.has(batchKey)) continue;
+      affectedBatchKeys.add(batchKey);
+      emitBackgroundGenerationEvent(basePath, batch);
+    }
+  }
+
+  // Give subsequent jobs a fresh controller after current cancellations settle.
+  shutdownController = new AbortController();
+  console.log('[cancelVideoRuntime] Runtime cancellation complete');
+}
 
 /**
  * Gracefully shut down all video generation activity.
@@ -917,6 +1065,7 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
   artifactId?: string;
   filePath?: string;
   error?: string;
+  cancelled?: boolean;
 }> {
   const job = jobs.get(jobId);
   if (!job) {
@@ -926,6 +1075,8 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
   if (!job.promptId) {
     return { status: 'error', error: 'Job has no ComfyUI prompt ID' };
   }
+
+  const cancelTokenAtStart = runtimeCancelToken;
 
   try {
     // Determine output directory based on job type and context
@@ -1175,13 +1326,28 @@ async function waitForComfyUIJob(jobId: string, timeout: number | undefined = un
       filePath: absolutePath, // Return full absolute path for immediate use
     };
   } catch (error) {
+    const errorMessage = String(error);
+    if (isRuntimeCancellationError(errorMessage, cancelTokenAtStart)) {
+      const cancelReason = normalizeCancellationReason(errorMessage);
+
+      job.status = 'failed';
+      job.error = cancelReason;
+      job.updatedAt = Date.now();
+
+      return {
+        status: 'failed',
+        error: cancelReason,
+        cancelled: true,
+      };
+    }
+
     job.status = 'failed';
-    job.error = String(error);
+    job.error = errorMessage;
     job.updatedAt = Date.now();
 
     return {
       status: 'error',
-      error: String(error),
+      error: errorMessage,
     };
   }
 }
@@ -2317,10 +2483,14 @@ function startBackgroundBatchRunner(
     return false;
   }
 
+  const cancelTokenAtStart = runtimeCancelToken;
   const runner = (kind === 'image'
     ? runImageBatchSequentially(basePath, batchId)
     : runVideoBatchSequentially(basePath, batchId))
     .catch((error) => {
+      if (isRuntimeCancellationError(error, cancelTokenAtStart)) {
+        return;
+      }
       console.error(`[background:${kind}] Batch ${batchId} failed with unhandled error:`, error);
       const failedBatch = persistBatchUpdate(basePath, batchId, (batch) => {
         batch.status = 'failed';
@@ -2334,7 +2504,12 @@ function startBackgroundBatchRunner(
       activeBatchRunners.delete(key);
     });
 
-  activeBatchRunners.set(key, runner);
+  activeBatchRunners.set(key, {
+    promise: runner,
+    basePath,
+    batchId,
+    kind,
+  });
   return true;
 }
 
@@ -2683,8 +2858,18 @@ async function runImageGenerationSequentially(
     filePath?: string;
     error?: string;
   }> = [];
+  const cancelTokenAtStart = runtimeCancelToken;
 
   for (const placement of placements) {
+    if (hasRuntimeCancellationSince(cancelTokenAtStart)) {
+      results.push({
+        placementNumber: placement.placementNumber,
+        status: 'failed',
+        error: lastRuntimeCancelReason,
+      });
+      continue;
+    }
+
     try {
       console.log(`${logPrefix} Submitting image generation for Placement ${placement.placementNumber}`);
       const submitResult = await submitImageGeneration({
@@ -2721,6 +2906,9 @@ async function runImageGenerationSequentially(
           status: 'failed',
           error: waitResult.error || 'Image generation did not complete',
         });
+        if (isRuntimeCancellationError(waitResult.error, cancelTokenAtStart)) {
+          break;
+        }
       }
     } catch (error) {
       results.push({
@@ -2728,6 +2916,9 @@ async function runImageGenerationSequentially(
         status: 'failed',
         error: String(error),
       });
+      if (isRuntimeCancellationError(error, cancelTokenAtStart)) {
+        break;
+      }
     }
   }
 
@@ -2751,8 +2942,18 @@ async function runVideoGenerationSequentially(
     filePath?: string;
     error?: string;
   }> = [];
+  const cancelTokenAtStart = runtimeCancelToken;
 
   for (const placement of placements) {
+    if (hasRuntimeCancellationSince(cancelTokenAtStart)) {
+      results.push({
+        placementNumber: placement.placementNumber,
+        status: 'failed',
+        error: lastRuntimeCancelReason,
+      });
+      continue;
+    }
+
     try {
       console.log(`${logPrefix} Submitting video generation for Placement ${placement.placementNumber}`);
       const submitResult = await submitVideoPlacementGeneration({
@@ -2787,6 +2988,9 @@ async function runVideoGenerationSequentially(
           status: 'failed',
           error: waitResult.error || 'Video generation did not complete',
         });
+        if (isRuntimeCancellationError(waitResult.error, cancelTokenAtStart)) {
+          break;
+        }
       }
     } catch (error) {
       results.push({
@@ -2794,6 +2998,9 @@ async function runVideoGenerationSequentially(
         status: 'failed',
         error: String(error),
       });
+      if (isRuntimeCancellationError(error, cancelTokenAtStart)) {
+        break;
+      }
     }
   }
 
@@ -2801,6 +3008,18 @@ async function runVideoGenerationSequentially(
 }
 
 async function runImageBatchSequentially(basePath: string, batchId: string): Promise<void> {
+  const cancelTokenAtStart = runtimeCancelToken;
+  const stopForCancellation = (): boolean => {
+    if (!hasRuntimeCancellationSince(cancelTokenAtStart)) {
+      return false;
+    }
+    const cancelledBatch = failBatchAsCancelled(basePath, batchId, lastRuntimeCancelReason);
+    if (cancelledBatch) {
+      emitBackgroundGenerationEvent(basePath, cancelledBatch);
+    }
+    return true;
+  };
+
   let batch = persistBatchUpdate(basePath, batchId, (entry) => {
     if (entry.status !== 'completed' && entry.status !== 'failed') {
       entry.status = 'running';
@@ -2819,6 +3038,7 @@ async function runImageBatchSequentially(basePath: string, batchId: string): Pro
   if (batch.status === 'completed' || batch.status === 'failed') return;
 
   for (const itemSnapshot of batch.items) {
+    if (stopForCancellation()) return;
     if (itemSnapshot.status === 'completed') continue;
     if (itemSnapshot.status === 'failed') continue;
 
@@ -2856,6 +3076,9 @@ async function runImageBatchSequentially(basePath: string, batchId: string): Pro
         target.updatedAt = Date.now();
         recomputeBatchCounts(entry);
       });
+      if (isRuntimeCancellationError(submitResult.error, cancelTokenAtStart)) {
+        if (stopForCancellation()) return;
+      }
       continue;
     }
 
@@ -2882,6 +3105,9 @@ async function runImageBatchSequentially(basePath: string, batchId: string): Pro
       target.updatedAt = Date.now();
       recomputeBatchCounts(entry);
     });
+    if (isRuntimeCancellationError(waitResult.error, cancelTokenAtStart)) {
+      if (stopForCancellation()) return;
+    }
   }
 
   const finalized = persistBatchUpdate(basePath, batchId, (entry) => {
@@ -2895,6 +3121,18 @@ async function runImageBatchSequentially(basePath: string, batchId: string): Pro
 }
 
 async function runVideoBatchSequentially(basePath: string, batchId: string): Promise<void> {
+  const cancelTokenAtStart = runtimeCancelToken;
+  const stopForCancellation = (): boolean => {
+    if (!hasRuntimeCancellationSince(cancelTokenAtStart)) {
+      return false;
+    }
+    const cancelledBatch = failBatchAsCancelled(basePath, batchId, lastRuntimeCancelReason);
+    if (cancelledBatch) {
+      emitBackgroundGenerationEvent(basePath, cancelledBatch);
+    }
+    return true;
+  };
+
   let batch = persistBatchUpdate(basePath, batchId, (entry) => {
     if (entry.status !== 'completed' && entry.status !== 'failed') {
       entry.status = 'running';
@@ -2913,6 +3151,7 @@ async function runVideoBatchSequentially(basePath: string, batchId: string): Pro
   if (batch.status === 'completed' || batch.status === 'failed') return;
 
   for (const itemSnapshot of batch.items) {
+    if (stopForCancellation()) return;
     if (itemSnapshot.status === 'completed') continue;
     if (itemSnapshot.status === 'failed') continue;
 
@@ -2948,6 +3187,9 @@ async function runVideoBatchSequentially(basePath: string, batchId: string): Pro
         target.updatedAt = Date.now();
         recomputeBatchCounts(entry);
       });
+      if (isRuntimeCancellationError(submitResult.error, cancelTokenAtStart)) {
+        if (stopForCancellation()) return;
+      }
       continue;
     }
 
@@ -2974,6 +3216,9 @@ async function runVideoBatchSequentially(basePath: string, batchId: string): Pro
       target.updatedAt = Date.now();
       recomputeBatchCounts(entry);
     });
+    if (isRuntimeCancellationError(waitResult.error, cancelTokenAtStart)) {
+      if (stopForCancellation()) return;
+    }
   }
 
   const finalized = persistBatchUpdate(basePath, batchId, (entry) => {
@@ -3031,6 +3276,10 @@ export function __getActiveBatchRunnerCountForTests(): number {
 
 export function __resetActiveBatchRunnersForTests(): void {
   activeBatchRunners.clear();
+  jobs.clear();
+  runtimeCancelToken = 0;
+  lastRuntimeCancelReason = 'Generation cancelled';
+  shutdownController = new AbortController();
 }
 
 export const readBackgroundGenerationTool: ToolDefinition = createTool(

@@ -5,6 +5,7 @@ import { ComfyUIClient } from '../../src/services/comfyui/ComfyUIClient.js';
 import {
   __getActiveBatchRunnerCountForTests,
   __resetActiveBatchRunnersForTests,
+  cancelVideoRuntime,
   getVideoGenerationTools,
   resumePendingBatches,
 } from '../../src/tasks/video/tools.js';
@@ -242,5 +243,94 @@ describe('Background generation batches', () => {
     }, 8000, 100);
 
     expect(transitioned).toBe(true);
+  });
+
+  it('cancels active background work, interrupts ComfyUI, clears queue, and fails remaining items', async () => {
+    createProject('0:00 intro\n0:12 body', TEST_BASE_PATH);
+    writeProjectFile(
+      'agent/content/image-placements.md',
+      [
+        'IMAGE_PLACER:',
+        '- Placement 1: 0:00-0:06 | A cinematic frame of a city sunrise.',
+        '- Placement 2: 0:06-0:12 | A detailed close-up of morning traffic.',
+      ].join('\n'),
+      TEST_BASE_PATH,
+    );
+
+    vi.spyOn(ComfyUIClient, 'isAvailable').mockResolvedValue(true);
+    const queueSpy = vi
+      .spyOn(ComfyUIClient.prototype, 'queueWorkflow')
+      .mockResolvedValue('prompt-image-cancel-1');
+    vi.spyOn(ComfyUIClient.prototype, 'waitForCompletion').mockImplementation(
+      async (_promptId, _progress, _pollInterval, abortSignal) => {
+        return await new Promise((_resolve, reject) => {
+          if (abortSignal?.aborted) {
+            reject(
+              new Error(
+                `Polling aborted for workflow ${_promptId}: ${String(abortSignal.reason ?? 'shutdown')}`,
+              ),
+            );
+            return;
+          }
+          abortSignal?.addEventListener(
+            'abort',
+            () => {
+              reject(
+                new Error(
+                  `Polling aborted for workflow ${_promptId}: ${String(abortSignal.reason ?? 'shutdown')}`,
+                ),
+              );
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+    const interruptSpy = vi
+      .spyOn(ComfyUIClient, 'interruptCurrentJob')
+      .mockResolvedValue();
+    const clearQueueSpy = vi.spyOn(ComfyUIClient, 'clearQueue').mockResolvedValue();
+
+    const generateAllImages = getToolHandler('generate_all_images');
+    const queued = (await generateAllImages({
+      file_path: 'agent/content/image-placements.md',
+      run_in_background: true,
+      expand_prompts: false,
+    })) as { status: string };
+    expect(queued.status).toBe('queued');
+
+    const runnerStarted = await waitFor(
+      () => __getActiveBatchRunnerCountForTests() === 1,
+      2000,
+      25,
+    );
+    expect(runnerStarted).toBe(true);
+
+    await cancelVideoRuntime('project_switch');
+
+    const runnerStopped = await waitFor(
+      () => __getActiveBatchRunnerCountForTests() === 0,
+      3000,
+      25,
+    );
+    expect(runnerStopped).toBe(true);
+
+    expect(interruptSpy).toHaveBeenCalledTimes(1);
+    expect(clearQueueSpy).toHaveBeenCalledTimes(1);
+    expect(queueSpy).toHaveBeenCalledTimes(1);
+
+    const refreshed = loadProject(TEST_BASE_PATH);
+    const batch = refreshed?.backgroundGeneration?.batches.find(
+      (entry) => entry.kind === 'image',
+    );
+    expect(batch).toBeDefined();
+    expect(batch?.status).toBe('failed');
+    expect(batch?.failedItems).toBe(2);
+    expect(batch?.items.every((item) => item.status === 'failed')).toBe(true);
+    expect(
+      batch?.items.every(
+        (item) => item.error === 'Cancelled due to project switch',
+      ),
+    ).toBe(true);
   });
 });

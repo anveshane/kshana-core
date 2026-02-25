@@ -12,7 +12,7 @@ import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
 import { loadAndRenderMarkdown, loadMarkdown } from '../../core/prompts/loader.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
-import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS, resumePendingBatches, shutdownVideoTools, type RunRemotionAgentCallback } from './tools.js';
+import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS, cancelVideoRuntime, resumePendingBatches, shutdownVideoTools, type RunRemotionAgentCallback } from './tools.js';
 import { runRemotionAgent } from './remotionAgent.js';
 import { getSrtTools } from './tools/srt.js';
 import { getPlacementTools } from './tools/placement.js';
@@ -46,6 +46,7 @@ export {
   editImageTool,
   waitForJobTool,
   readBackgroundGenerationTool,
+  cancelVideoRuntime,
   getVideoGenerationTools,
   resumePendingBatches,
   shutdownVideoTools,

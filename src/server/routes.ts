@@ -175,7 +175,11 @@ export async function registerRoutes(
         query: request.query,
         queryType: typeof request.query,
       });
-      const query = request.query as { project_dir?: string };
+      const query = request.query as {
+        project_dir?: string;
+        session_id?: string;
+        channel?: string;
+      };
       console.log('[routes] Extracted query:', query);
       await wsHandler.handleConnection(socket, { query });
     }

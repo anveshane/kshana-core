@@ -76,7 +76,7 @@ export interface ProgressData {
  */
 export interface AgentResponseData {
   output: string;
-  status: 'completed' | 'awaiting_input' | 'error' | 'max_iterations';
+  status: 'completed' | 'awaiting_input' | 'cancelled' | 'error' | 'max_iterations';
 }
 
 /**
@@ -224,6 +224,10 @@ export interface UserResponseData {
   toolCallId?: string;
 }
 
+export interface CancelData {
+  reason?: 'user_stop' | 'project_switch';
+}
+
 /**
  * Session state for tracking active conversations.
  */
@@ -246,7 +250,7 @@ export function isUserResponseMessage(msg: ClientMessage): msg is ClientMessage<
   return msg.type === 'user_response';
 }
 
-export function isCancelMessage(msg: ClientMessage): msg is ClientMessage<void> {
+export function isCancelMessage(msg: ClientMessage): msg is ClientMessage<CancelData | void> {
   return msg.type === 'cancel';
 }
 

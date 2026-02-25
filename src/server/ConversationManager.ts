@@ -9,6 +9,7 @@ import { createDefaultToolRegistry } from '../core/tools/index.js';
 import { ContinuationPlanner, IntentRouter, StateAnalyzer, type OrchestrationContext } from '../core/orchestration/index.js';
 import {
   buildWorkflowAgentPrompt,
+  cancelVideoRuntime,
   createVideoToolRegistry,
   VIDEO_CREATION_SYSTEM_PROMPT,
   createWorkflowVideoAgent,
@@ -177,6 +178,13 @@ export class ConversationManager {
    */
   hasSession(sessionId: string): boolean {
     return this.sessions.has(sessionId);
+  }
+
+  /**
+   * Return the project directory associated with a session, if any.
+   */
+  getSessionProjectDir(sessionId: string): string | undefined {
+    return this.sessions.get(sessionId)?.basePath;
   }
 
   /**
@@ -511,26 +519,38 @@ export class ConversationManager {
   /**
    * Cancel a running task.
    */
-  cancelTask(sessionId: string): boolean {
+  async cancelTask(
+    sessionId: string,
+    reason: 'user_stop' | 'project_switch' = 'user_stop',
+  ): Promise<boolean> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return false;
     }
 
-    if (session.abortController) {
-      session.abortController.abort();
-
-      // Stop the agent to set the aborted flag and interrupt execution
-      if (session.agent) {
-        session.agent.stop();
-      }
-
-      session.state.status = 'idle';
-      session.state.lastActivity = Date.now();
-      return true;
+    if (!session.abortController) {
+      return false;
     }
 
-    return false;
+    session.abortController.abort(reason);
+
+    // Stop the agent to set the aborted flag and interrupt execution
+    if (session.agent) {
+      session.agent.stop();
+    }
+
+    if (this.taskType === 'video') {
+      try {
+        await cancelVideoRuntime(reason);
+      } catch (error) {
+        console.error('[ConversationManager] Failed to cancel video runtime:', error);
+        return false;
+      }
+    }
+
+    session.state.status = 'idle';
+    session.state.lastActivity = Date.now();
+    return true;
   }
 
   /**
