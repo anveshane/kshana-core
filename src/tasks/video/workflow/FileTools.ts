@@ -396,6 +396,7 @@ For structured data (assets, approvals), use update_project instead.`,
         file_path: filePath,
         bytes_written: content.length,
         summary: fileSummary,
+        content,
       };
     } catch (error) {
       return {
