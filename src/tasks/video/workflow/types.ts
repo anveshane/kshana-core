@@ -569,6 +569,9 @@ export interface ProjectFile {
   /** Final video information (populated after VIDEO_COMBINE phase) */
   finalVideo?: FinalVideoInfo;
 
+  /** Target video duration in seconds (selected by user at startup) */
+  targetDuration?: number;
+
   /** Persisted todo list for resuming work */
   todos?: PersistedTodo[];
 

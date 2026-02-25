@@ -9,8 +9,7 @@ import { Banner } from './components/Banner.js';
 import { useAgent } from './hooks/useAgent.js';
 import { createDefaultToolRegistry } from './core/tools/index.js';
 import {
-  createWorkflowToolRegistry,
-  VIDEO_CREATION_SYSTEM_PROMPT,
+  createGoalDrivenToolRegistry,
   projectExists,
   loadProject,
   deleteProject,
@@ -39,7 +38,35 @@ interface AppProps {
 }
 
 // Startup mode for video task type
-type StartupMode = 'checking' | 'select_action' | 'select_template' | 'select_style' | 'new_story' | 'ready';
+type StartupMode = 'checking' | 'select_action' | 'select_template' | 'select_style' | 'select_duration' | 'new_story' | 'ready';
+
+// Duration presets per template (in seconds)
+const DURATION_PRESETS: Record<string, { label: string; seconds: number }[]> = {
+  short: [
+    { label: '15 seconds', seconds: 15 },
+    { label: '30 seconds', seconds: 30 },
+    { label: '45 seconds', seconds: 45 },
+    { label: '60 seconds', seconds: 60 },
+  ],
+  infomercial: [
+    { label: '1 minute', seconds: 60 },
+    { label: '1.5 minutes', seconds: 90 },
+    { label: '2 minutes', seconds: 120 },
+    { label: '3 minutes', seconds: 180 },
+  ],
+  narrative: [
+    { label: '1 minute', seconds: 60 },
+    { label: '2 minutes', seconds: 120 },
+    { label: '3 minutes', seconds: 180 },
+    { label: '5 minutes', seconds: 300 },
+  ],
+  documentary: [
+    { label: '2 minutes', seconds: 120 },
+    { label: '3 minutes', seconds: 180 },
+    { label: '5 minutes', seconds: 300 },
+    { label: '10 minutes', seconds: 600 },
+  ],
+};
 
 export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' }: AppProps) {
   const { exit } = useApp();
@@ -62,6 +89,10 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   const [templateSelectedIndex, setTemplateSelectedIndex] = React.useState(0);
   const [availableTemplates, setAvailableTemplates] = React.useState<{ id: string; displayName: string; description: string }[]>([]);
   const [selectedTemplateStyles, setSelectedTemplateStyles] = React.useState<TemplateStyleConfig[]>([]);
+  // Duration selection state
+  const [selectedDuration, setSelectedDuration] = React.useState<number>(120);
+  const [durationSelectedIndex, setDurationSelectedIndex] = React.useState(0);
+  const [durationOptions, setDurationOptions] = React.useState<{ label: string; seconds: number }[]>([]);
 
   // Initialize UI logger on mount
   React.useEffect(() => {
@@ -104,18 +135,25 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   const tools = React.useMemo(() => {
     if (taskType === 'video') {
       // Use workflow tool registry for state-based video creation
-      return createWorkflowToolRegistry().getAll();
+      return createGoalDrivenToolRegistry(selectedTemplateId).getAll();
     }
     return createDefaultToolRegistry().getAll();
-  }, [taskType]);
+  }, [taskType, selectedTemplateId]);
 
   // Get custom prompt based on task type
   const customPrompt = React.useMemo(() => {
     if (taskType === 'video') {
-      return VIDEO_CREATION_SYSTEM_PROMPT;
+      const templateName = availableTemplates.find(t => t.id === selectedTemplateId)?.displayName ?? selectedTemplateId;
+      const styleName = selectedTemplateStyles.find(s => s.id === selectedStyle)?.displayName ?? selectedStyle;
+      const minutes = Math.floor(selectedDuration / 60);
+      const seconds = selectedDuration % 60;
+      const durationStr = minutes > 0
+        ? seconds > 0 ? `${minutes} minute${minutes > 1 ? 's' : ''} ${seconds} seconds` : `${minutes} minute${minutes > 1 ? 's' : ''}`
+        : `${seconds} seconds`;
+      return `You are working on a **${templateName}** project with **${styleName}** visual style.\nTarget duration: **${durationStr} (${selectedDuration} seconds)**.\nThe user already selected these — do not ask about project type, style, or duration. Proceed directly with the planning workflow.`;
     }
     return agentConfig?.customPrompt;
-  }, [taskType, agentConfig?.customPrompt]);
+  }, [taskType, agentConfig?.customPrompt, selectedTemplateId, selectedStyle, selectedDuration, availableTemplates, selectedTemplateStyles]);
 
   // Compute effective agent name based on task type
   const agentName = agentConfig?.name ?? (taskType === 'video' ? 'kshana-video' : 'kshana-ink');
@@ -216,7 +254,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       // Input type will be determined by the agent based on the content
       if (taskType === 'video' && !existingProject) {
         // TODO: Update createProject to support templateId for full v3.0 template support
-        createProject(task, selectedStyle);
+        createProject(task, selectedStyle, undefined, selectedDuration);
         const templateName = availableTemplates.find(t => t.id === selectedTemplateId)?.displayName ?? selectedTemplateId;
         const styleName = selectedTemplateStyles.find(s => s.id === selectedStyle)?.displayName ?? selectedStyle;
         uiLogger.logUserInput(`Starting new ${templateName} project with ${styleName} style`);
@@ -227,7 +265,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       // Task is added to history by useAgent
       void run(task);
     },
-    [run, exit, taskType, existingProject, selectedStyle]
+    [run, exit, taskType, existingProject, selectedStyle, selectedDuration]
   );
 
   // Handle user response (when agent is waiting for input)
@@ -432,6 +470,13 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       if (fullTemplate.styles.length > 0 && fullTemplate.styles[0]) {
         setSelectedStyle(fullTemplate.defaultStyle as ProjectStyle);
       }
+      // Compute duration options for this template
+      const presets = DURATION_PRESETS[template.id] ?? DURATION_PRESETS['narrative'] ?? [];
+      setDurationOptions(presets);
+      if (presets.length > 0 && presets[0]) {
+        setSelectedDuration(presets[0].seconds);
+      }
+      setDurationSelectedIndex(0);
       setStyleSelectedIndex(0);
       setStartupMode('select_style');
     }
@@ -442,9 +487,18 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     const style = selectedTemplateStyles[index];
     if (style) {
       setSelectedStyle(style.id as ProjectStyle);
-      setStartupMode('new_story');
+      setStartupMode('select_duration');
     }
   }, [selectedTemplateStyles]);
+
+  // Handle duration selection
+  const handleDurationSelect = React.useCallback((index: number) => {
+    const option = durationOptions[index];
+    if (option) {
+      setSelectedDuration(option.seconds);
+      setStartupMode('new_story');
+    }
+  }, [durationOptions]);
 
   // Handle keyboard for startup selection
   useInput((input, key) => {
@@ -494,6 +548,22 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       }
     }
   }, { isActive: !started && taskType === 'video' && startupMode === 'select_style' });
+
+  // Handle keyboard for duration selection
+  useInput((input, key) => {
+    if (!started && taskType === 'video' && startupMode === 'select_duration') {
+      const maxIndex = durationOptions.length - 1;
+      if (key.upArrow) {
+        setDurationSelectedIndex(prev => Math.max(0, prev - 1));
+      } else if (key.downArrow) {
+        setDurationSelectedIndex(prev => Math.min(maxIndex, prev + 1));
+      } else if (key.return) {
+        handleDurationSelect(durationSelectedIndex);
+      } else if (input >= '1' && input <= String(durationOptions.length)) {
+        handleDurationSelect(parseInt(input, 10) - 1);
+      }
+    }
+  }, { isActive: !started && taskType === 'video' && startupMode === 'select_duration' });
 
   // Show welcome screen if not started
   if (!started) {
@@ -620,6 +690,40 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         );
       }
 
+      // Duration selection mode
+      if (startupMode === 'select_duration') {
+        const templateName = availableTemplates.find(t => t.id === selectedTemplateId)?.displayName ?? 'Video';
+        return (
+          <Box flexDirection="column" padding={1}>
+            <Banner subtitle={subtitle} />
+
+            <Box flexDirection="column" marginBottom={1} paddingX={2}>
+              <Text bold color="cyan">Choose Target Duration for {templateName}</Text>
+              <Text dimColor>
+                Select how long you want your video to be. This guides the planning process.
+              </Text>
+            </Box>
+
+            <Box flexDirection="column" marginBottom={1} paddingX={2}>
+              {durationOptions.map((option, index) => {
+                const isSelected = durationSelectedIndex === index;
+                return (
+                  <Box key={option.seconds} flexDirection="column" marginBottom={1}>
+                    <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
+                      {isSelected ? '>' : ' '} {index + 1}. {option.label}
+                    </Text>
+                  </Box>
+                );
+              })}
+            </Box>
+
+            <Box paddingX={2}>
+              <Text dimColor>Use ↑↓ or 1-{durationOptions.length} to select, Enter to confirm. Type "exit" to quit.</Text>
+            </Box>
+          </Box>
+        );
+      }
+
       // New story mode - show text input with same style as main agent view
       const templateInfo = availableTemplates.find(t => t.id === selectedTemplateId);
       const styleInfo = selectedTemplateStyles.find(s => s.id === selectedStyle);
@@ -670,6 +774,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             <Box marginBottom={1} paddingX={2} flexDirection="column">
               <Text bold color="magenta">Template: {templateInfo?.displayName ?? 'Unknown'}</Text>
               <Text bold color="magenta">Style: {styleInfo?.displayName ?? 'Unknown'}</Text>
+              <Text bold color="magenta">Duration: {durationOptions.find(d => d.seconds === selectedDuration)?.label ?? `${selectedDuration}s`}</Text>
             </Box>
 
             <Box marginBottom={1} paddingX={2}>

@@ -175,11 +175,12 @@ function stripWrapperTags(content: string): string {
 export function createProject(
   originalInput: string,
   styleOrBasePath: ProjectStyle | string = 'cinematic_realism',
-  basePathMaybe: string = process.cwd()
+  basePathMaybe: string = process.cwd(),
+  targetDuration?: number
 ): ProjectFile {
   // Back-compat:
   // - Old signature: createProject(originalInput, basePath)
-  // - New signature: createProject(originalInput, style, basePath?)
+  // - New signature: createProject(originalInput, style, basePath?, targetDuration?)
   const style: ProjectStyle =
     styleOrBasePath === 'cinematic_realism' || styleOrBasePath === 'anime'
       ? styleOrBasePath
@@ -212,6 +213,7 @@ export function createProject(
     originalInputFile: inputFilePath,
     style,
     inputType: 'idea',
+    ...(targetDuration != null ? { targetDuration } : {}),
     createdAt: now,
     updatedAt: now,
     currentPhase: WorkflowPhase.PLOT,
