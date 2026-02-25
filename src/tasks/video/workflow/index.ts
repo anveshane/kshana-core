@@ -116,7 +116,7 @@ export {
 // File Tools
 export {
   readFileTool,
-  writeFileTool,
+  importFileTool,
   readProjectTool,
   updateProjectTool,
   getWorkflowFileTools,

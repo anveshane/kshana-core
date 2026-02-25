@@ -1,5 +1,5 @@
 /**
- * File tools for the workflow - read_file, write_file, read_project, update_project.
+ * File tools for the workflow - read_file, import_file, read_project, update_project.
  * These tools allow agents to read/write project files and manage project state.
  */
 
@@ -293,33 +293,31 @@ This is the primary way to find available project content.`,
 );
 
 /**
- * Write file tool - writes content to a project file.
+ * Import file tool - imports/copies content into a project file.
  */
-export const writeFileTool: ToolDefinition = createTool(
-  'write_file',
-  `Write content to a project file within the .kshana directory.
+export const importFileTool: ToolDefinition = createTool(
+  'import_file',
+  `Import/copy content into the project's .kshana directory.
 
-IMPORTANT: For creative content that needs user review (characters, settings, scenes,
-image prompts, video prompts), use generate_content instead — it shows the content to the
-user for approval before saving. Only use write_file for plan/outline files and metadata
-that don't need user approval.
+Use this ONLY for importing external files or user-referenced content into the project:
+- Copying a user-provided file (story, transcript, reference material) into the project
+- Saving plan/outline metadata that doesn't need user review
 
-Use this to write:
-- Plan files: plans/plot.md, plans/story.md, plans/scenes.md, etc.
-- Outline and research files
+DO NOT use this for creative content (characters, settings, scenes, image prompts,
+video prompts). Use generate_content instead — it shows the content to the user for
+approval before saving.
 
-Files are automatically registered in project.json with a summary for easy discovery.
-For structured data (assets, approvals), use update_project instead.`,
+Files are automatically registered in project.json with a summary for easy discovery.`,
   {
     type: 'object',
     properties: {
       file_path: {
         type: 'string',
-        description: 'Relative path within .kshana directory (e.g., "plans/plot.md")',
+        description: 'Relative path within .kshana directory (e.g., "plans/outline.md")',
       },
       content: {
         type: 'string',
-        description: 'Content to write to the file',
+        description: 'Content to import into the project file',
       },
       summary: {
         type: 'string',
@@ -1049,10 +1047,10 @@ export function getWorkflowFileTools(): ToolDefinition[] {
 }
 
 /**
- * Get all file tools including read_file/write_file (for subagents that need direct file access).
+ * Get all file tools including read_file/import_file (for subagents that need direct file access).
  */
 export function getAllFileTools(): ToolDefinition[] {
-  return [listProjectFilesTool, readFileTool, writeFileTool, readProjectTool, updateProjectTool];
+  return [listProjectFilesTool, readFileTool, importFileTool, readProjectTool, updateProjectTool];
 }
 
 /**

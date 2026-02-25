@@ -2062,7 +2062,7 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Check for tool call patterns in todo content (forbidden)
     const toolCallPatterns = [
-      /\b(dispatch_\w+|update_project|read_project|write_file|read_file|todo_write|TodoWrite|ask_user|AskUserQuestion)\b/i,
+      /\b(dispatch_\w+|update_project|read_project|import_file|read_file|todo_write|TodoWrite|ask_user|AskUserQuestion)\b/i,
       /\baction:\s*["']?\w+["']?/i,
       /\buse\s+(the\s+)?[\w_]+\s+tool/i,
       /\bcall\s+[\w_]+/i,

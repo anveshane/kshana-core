@@ -234,7 +234,7 @@ const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
   read_project: { gerund: 'Reading project', past: 'Read project' },
   update_project: { gerund: 'Updating project', past: 'Updated project' },
   read_file: { gerund: 'Reading file', past: 'Read file' },
-  write_file: { gerund: 'Writing file', past: 'Wrote file' },
+  import_file: { gerund: 'Importing file', past: 'Imported file' },
   TodoWrite: { gerund: 'Updating todos', past: 'Updated todos' },
   todo_write: { gerund: 'Updating todos', past: 'Updated todos' },
 };

@@ -175,7 +175,7 @@ export function createWorkflowToolRegistry(): ToolRegistry {
   // Start with default generic tools (think, AskUserQuestion, Task, EnterPlanMode, ExitPlanMode, TodoWrite, context tools)
   const registry = createDefaultToolRegistry();
 
-  // Add ALL file tools (read_file, write_file, read_project, update_project)
+  // Add ALL file tools (read_file, import_file, read_project, update_project)
   // read_file is needed for orchestrator to read story content before creating character/setting todos
   // Generation tools (images, videos, stitch) are handled by subagents via Task tool
   for (const tool of getAllFileTools()) {
@@ -389,7 +389,7 @@ export function getWorkflowToolNames(): string[] {
   return [
     // File tools
     'read_file',
-    'write_file',
+    'import_file',
     'read_project',
     'update_project',
     // Stitching
@@ -635,7 +635,7 @@ You are an orchestrator guiding the user through the video creation process.
 - **read_project**: Read current project state
 - **update_project**: Update project state (artifacts, phases)
 - **read_file**: Read project files
-- **write_file**: Write project files
+- **import_file**: Import/copy external files into the project
 - **generate_content**: Generate content using AI (with automatic context injection)
 - **ask_user**: Ask user for input or confirmation
 - **Task**: Dispatch subagents for complex tasks
