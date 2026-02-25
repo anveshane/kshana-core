@@ -299,11 +299,14 @@ export const writeFileTool: ToolDefinition = createTool(
   'write_file',
   `Write content to a project file within the .kshana directory.
 
+IMPORTANT: For creative content that needs user review (characters, settings, scenes,
+image prompts, video prompts), use generate_content instead — it shows the content to the
+user for approval before saving. Only use write_file for plan/outline files and metadata
+that don't need user approval.
+
 Use this to write:
 - Plan files: plans/plot.md, plans/story.md, plans/scenes.md, etc.
-- Character files: characters/[name].md
-- Setting files: settings/[name].md
-- Scene files: scenes/scene_[N].md
+- Outline and research files
 
 Files are automatically registered in project.json with a summary for easy discovery.
 For structured data (assets, approvals), use update_project instead.`,
