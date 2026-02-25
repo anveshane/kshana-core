@@ -4,7 +4,8 @@
  * Tools for the goal-driven orchestrator to scan assets and create backward plans.
  */
 
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
 import type { ToolDefinition } from '../../llm/index.js';
 import { tryPathVariants } from './contentCreatorTools.js';
 import { BackwardPlanner, AssetScanner } from '../../planner/index.js';
@@ -15,6 +16,7 @@ import type {
   ProvidedAsset,
 } from '../../planner/types.js';
 import type { VideoTemplate, GenericProjectFile } from '../../templates/types.js';
+import { registerFile } from '../../../tasks/video/workflow/ProjectManager.js';
 
 /**
  * Context required for planner tools.
@@ -342,6 +344,31 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
       const typeDef = context.template.artifactTypes[artifactType];
       const shouldMarkFull = markFullySatisfied ?? (typeDef && !typeDef.isCollection);
 
+      // Persist content to disk in .kshana/plans/<artifact_type>.md
+      // This ensures intermediate artifacts survive session restarts.
+      let persistedPath: string | undefined;
+      if (content && context.projectDir) {
+        try {
+          const fileName = itemId
+            ? `plans/${artifactType}_${itemId.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`
+            : `plans/${artifactType}.md`;
+          const fullPath = join(context.projectDir, fileName);
+          const parentDir = dirname(fullPath);
+          if (!existsSync(parentDir)) {
+            mkdirSync(parentDir, { recursive: true });
+          }
+          writeFileSync(fullPath, content, 'utf-8');
+          persistedPath = fileName;
+          // Register in project.json files array so other tools can discover it
+          registerFile(fileName, artifactType, {
+            name: typeDef?.displayName ?? artifactType,
+            summary: content.slice(0, 200).trim(),
+          });
+        } catch {
+          // Non-fatal — content is still in memory registry
+        }
+      }
+
       return {
         success: true,
         asset: {
@@ -354,7 +381,8 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
         },
         markedFullySatisfied: shouldMarkFull,
         loadedFromFile: !!filePath,
-        message: `Registered ${asset.artifactTypeId}${asset.itemId ? ` (${asset.itemId})` : ''} as user-provided content${filePath ? ` (from ${filePath})` : ''}`,
+        persistedTo: persistedPath,
+        message: `Registered ${asset.artifactTypeId}${asset.itemId ? ` (${asset.itemId})` : ''} as user-provided content${filePath ? ` (from ${filePath})` : ''}${persistedPath ? ` — saved to ${persistedPath}` : ''}`,
       };
     },
   };

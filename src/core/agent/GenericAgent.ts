@@ -46,6 +46,7 @@ import {
   projectExists,
   saveTodos,
   loadTodos,
+  registerFile,
 } from '../../tasks/video/workflow/ProjectManager.js';
 import type {
   CharacterData,
@@ -2695,11 +2696,12 @@ Respond in JSON format:
       // Extract the generated content from the sub-agent's output
       const generatedContent = result.output || '';
 
-      // Save to file if outputFile is specified
-      if (outputFile && generatedContent) {
+      // Always save content to disk — auto-generate outputFile if not specified
+      const effectiveOutputFile = outputFile || `plans/${contentType}.md`;
+      if (generatedContent) {
         try {
           const projectDir = path.join(process.cwd(), '.kshana');
-          const filePath = path.join(projectDir, outputFile);
+          const filePath = path.join(projectDir, effectiveOutputFile);
 
           // Ensure parent directory exists
           const parentDir = path.dirname(filePath);
@@ -2711,7 +2713,14 @@ Respond in JSON format:
           debugLog(`[GenericAgent] Saved content to ${filePath}`);
 
           // Auto-persist to project registry
-          persistApprovedContent(contentType, undefined, generatedContent, outputFile);
+          persistApprovedContent(contentType, undefined, generatedContent, effectiveOutputFile);
+
+          // Register file in project so other tools can discover it
+          if (projectExists()) {
+            registerFile(effectiveOutputFile, contentType, {
+              summary: generatedContent.slice(0, 200).trim(),
+            });
+          }
         } catch (saveError) {
           debugLog(`[GenericAgent] Error saving content to file: ${String(saveError)}`);
         }
@@ -2721,8 +2730,8 @@ Respond in JSON format:
         status: result.status,
         content: generatedContent,
         content_type: contentType,
-        output_file: outputFile,
-        message: `Content generated successfully`,
+        output_file: effectiveOutputFile,
+        message: `Content generated successfully — saved to ${effectiveOutputFile}`,
       };
     } catch (error) {
       return {
