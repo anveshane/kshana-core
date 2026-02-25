@@ -253,8 +253,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       // For video mode with a new project, create the project with the selected template and style
       // Input type will be determined by the agent based on the content
       if (taskType === 'video' && !existingProject) {
-        // TODO: Update createProject to support templateId for full v3.0 template support
-        createProject(task, selectedStyle, undefined, selectedDuration);
+        createProject(task, selectedStyle, undefined, selectedDuration, selectedTemplateId);
         const templateName = availableTemplates.find(t => t.id === selectedTemplateId)?.displayName ?? selectedTemplateId;
         const styleName = selectedTemplateStyles.find(s => s.id === selectedStyle)?.displayName ?? selectedStyle;
         uiLogger.logUserInput(`Starting new ${templateName} project with ${styleName} style`);

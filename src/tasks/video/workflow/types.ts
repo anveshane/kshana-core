@@ -540,19 +540,13 @@ export interface ProjectFile {
   updatedAt: number;
 
   /** Current workflow phase */
-  currentPhase: WorkflowPhase;
+  currentPhase: WorkflowPhase | string;
 
-  /** Phase status tracking for all 8 phases */
-  phases: {
-    plot: PhaseInfo;
-    story: PhaseInfo;
-    characters_settings: PhaseInfo;
-    scenes: PhaseInfo;
-    character_setting_images: PhaseInfo;
-    scene_images: PhaseInfo;
-    video: PhaseInfo;
-    video_combine: PhaseInfo;
-  };
+  /** Template ID used to create this project (undefined for legacy narrative projects) */
+  templateId?: string;
+
+  /** Phase status tracking - dynamic based on template (narrative has 8 fixed phases, others derived from template) */
+  phases: Record<string, PhaseInfo>;
 
   /** Content registry - tracks what creative content is available */
   content: ContentRegistry;
@@ -909,8 +903,8 @@ export const AUTO_APPROVE_TIMEOUT_MS = 15000;
  * State transition rules - determines what phase to go to next.
  */
 export interface StateTransitionResult {
-  /** Next phase to transition to */
-  nextPhase: WorkflowPhase;
+  /** Next phase to transition to (WorkflowPhase for narrative, string for template-driven) */
+  nextPhase: WorkflowPhase | string;
   /** Reason for the transition */
   reason: string;
   /** Whether this is an automatic transition (no user input needed) */
@@ -922,12 +916,17 @@ export interface StateTransitionResult {
  */
 export function determineNextPhase(project: ProjectFile): StateTransitionResult {
   const currentPhase = project.currentPhase;
-  const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+  const phaseInfo = project.phases[currentPhase];
 
-  // If current phase is completed, move to next
+  // Non-narrative template: use template phase ordering
+  if (project.templateId && project.templateId !== 'narrative') {
+    return determineNextPhaseFromTemplate(project, currentPhase, phaseInfo);
+  }
+
+  // Narrative (legacy) path: use PHASE_CONFIGS
   if (phaseInfo?.status === 'completed') {
-    const config = PHASE_CONFIGS[currentPhase];
-    if (config.nextPhase) {
+    const config = PHASE_CONFIGS[currentPhase as WorkflowPhase];
+    if (config?.nextPhase) {
       return {
         nextPhase: config.nextPhase,
         reason: `${config.displayName} completed, moving to ${PHASE_CONFIGS[config.nextPhase].displayName}`,
@@ -936,25 +935,22 @@ export function determineNextPhase(project: ProjectFile): StateTransitionResult 
     }
   }
 
-  // If current phase is in progress, stay in it
   if (phaseInfo?.status === 'in_progress') {
     return {
       nextPhase: currentPhase,
-      reason: `${PHASE_CONFIGS[currentPhase].displayName} is in progress`,
+      reason: `${PHASE_CONFIGS[currentPhase as WorkflowPhase]?.displayName ?? currentPhase} is in progress`,
       isAutomatic: false,
     };
   }
 
-  // If current phase is pending, start it
   if (phaseInfo?.status === 'pending') {
     return {
       nextPhase: currentPhase,
-      reason: `Starting ${PHASE_CONFIGS[currentPhase].displayName}`,
+      reason: `Starting ${PHASE_CONFIGS[currentPhase as WorkflowPhase]?.displayName ?? currentPhase}`,
       isAutomatic: true,
     };
   }
 
-  // Default: stay in current phase
   return {
     nextPhase: currentPhase,
     reason: 'No transition needed',
@@ -963,11 +959,63 @@ export function determineNextPhase(project: ProjectFile): StateTransitionResult 
 }
 
 /**
+ * Determine next phase for template-driven (non-narrative) projects.
+ * Uses the template's phase ordering to find the next phase.
+ */
+function determineNextPhaseFromTemplate(
+  project: ProjectFile,
+  currentPhase: WorkflowPhase | string,
+  phaseInfo: PhaseInfo | undefined
+): StateTransitionResult {
+  // Get ordered phase keys from the project's phases (they were inserted in order)
+  const phaseKeys = Object.keys(project.phases);
+
+  if (phaseInfo?.status === 'completed') {
+    const currentIndex = phaseKeys.indexOf(currentPhase as string);
+    if (currentIndex >= 0 && currentIndex < phaseKeys.length - 1) {
+      const nextPhase = phaseKeys[currentIndex + 1] as string;
+      return {
+        nextPhase: nextPhase as WorkflowPhase,
+        reason: `${currentPhase} completed, moving to ${nextPhase}`,
+        isAutomatic: true,
+      };
+    }
+    // Last phase completed
+    return {
+      nextPhase: 'completed' as WorkflowPhase,
+      reason: `All phases completed`,
+      isAutomatic: true,
+    };
+  }
+
+  if (phaseInfo?.status === 'in_progress') {
+    return {
+      nextPhase: currentPhase as WorkflowPhase,
+      reason: `${currentPhase} is in progress`,
+      isAutomatic: false,
+    };
+  }
+
+  if (phaseInfo?.status === 'pending') {
+    return {
+      nextPhase: currentPhase as WorkflowPhase,
+      reason: `Starting ${currentPhase}`,
+      isAutomatic: true,
+    };
+  }
+
+  return {
+    nextPhase: currentPhase as WorkflowPhase,
+    reason: 'No transition needed',
+    isAutomatic: false,
+  };
+}
+
+/**
  * Check if a phase can transition to the next phase.
  */
-export function canTransitionToNextPhase(project: ProjectFile, phase: WorkflowPhase): boolean {
-  const phaseKey = phase as keyof typeof project.phases;
-  const phaseInfo = project.phases[phaseKey];
+export function canTransitionToNextPhase(project: ProjectFile, phase: WorkflowPhase | string): boolean {
+  const phaseInfo = project.phases[phase];
 
   if (!phaseInfo) return false;
 

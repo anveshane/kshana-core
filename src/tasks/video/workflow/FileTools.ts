@@ -458,7 +458,7 @@ Use this at the start of each turn to understand the project state and what acti
 
     // Set phase context in phaseLogger for all subsequent logs
     const phaseLogger = getPhaseLogger();
-    const currentPhaseInfo = project.phases[project.currentPhase as keyof typeof project.phases];
+    const currentPhaseInfo = project.phases[project.currentPhase];
     phaseLogger.setContext({
       phase: project.currentPhase,
       stage: currentPhaseInfo?.plannerStage,
@@ -583,10 +583,13 @@ export const updateProjectTool: ToolDefinition = createTool(
             return { status: 'error', error: 'No project found' };
           }
           // Accept both 'phase' and 'phase_name' for compatibility
-          const phase = (data['phase'] || data['phase_name']) as keyof ProjectFile['phases'];
+          const phase = (data['phase'] || data['phase_name']) as string;
           const status = data['status'] as PhaseStatus;
           if (!phase || !status) {
             return { status: 'error', error: 'phase (or phase_name) and status are required' };
+          }
+          if (!project.phases[phase]) {
+            return { status: 'error', error: `Phase '${phase}' does not exist in this project. Available phases: ${Object.keys(project.phases).join(', ')}` };
           }
           updatePhaseStatus(project, phase, status);
           return {
@@ -604,10 +607,13 @@ export const updateProjectTool: ToolDefinition = createTool(
             return { status: 'error', error: 'No project found' };
           }
           // Accept both 'phase' and 'phase_name' for compatibility
-          const phase = (data['phase'] || data['phase_name']) as keyof ProjectFile['phases'];
+          const phase = (data['phase'] || data['phase_name']) as string;
           const stage = data['stage'] as PlannerStage;
           if (!phase || !stage) {
             return { status: 'error', error: 'phase (or phase_name) and stage are required' };
+          }
+          if (!project.phases[phase]) {
+            return { status: 'error', error: `Phase '${phase}' does not exist in this project. Available phases: ${Object.keys(project.phases).join(', ')}` };
           }
           const validStages = ['planning', 'verify', 'refining', 'complete'];
           if (!validStages.includes(stage)) {
@@ -665,7 +671,7 @@ export const updateProjectTool: ToolDefinition = createTool(
             return { status: 'error', error: 'No project found' };
           }
           const beforePhase = project.currentPhase;
-          const beforeStatus = project.phases[beforePhase as keyof typeof project.phases]?.status;
+          const beforeStatus = project.phases[beforePhase]?.status;
 
           const result = transitionToNextPhase(project);
           logger.logPhaseTransition(
@@ -680,17 +686,19 @@ export const updateProjectTool: ToolDefinition = createTool(
             phaseLogger.phaseTransition(beforePhase, result.project.currentPhase, result.reason);
           }
 
-          // Get the new phase config for the next action instruction
-          const newPhaseConfig = PHASE_CONFIGS[result.project.currentPhase as WorkflowPhase];
+          // Get the new phase display name (works for both narrative and template phases)
+          const newPhaseKey = result.project.currentPhase;
+          const narrativePhaseConfig = PHASE_CONFIGS[newPhaseKey as WorkflowPhase];
+          const newPhaseName = narrativePhaseConfig?.displayName ?? newPhaseKey;
 
           return {
             status: 'success',
             transitioned: result.transitioned,
             reason: result.reason,
             current_phase: result.project.currentPhase,
-            new_phase_name: newPhaseConfig?.displayName ?? result.project.currentPhase,
+            new_phase_name: newPhaseName,
             next_action: result.transitioned
-              ? `IMPORTANT: You have transitioned to a new phase. Update your todo list (mark the previous phase complete, mark the new phase in_progress), then call read_project immediately to get the instructions for the ${newPhaseConfig?.displayName ?? 'new'} phase and continue working.`
+              ? `IMPORTANT: You have transitioned to a new phase. Update your todo list (mark the previous phase complete, mark the new phase in_progress), then call read_project immediately to get the instructions for the ${newPhaseName} phase and continue working.`
               : 'Phase transition not needed. Call read_project to check current state.',
             debug: {
               before_phase: beforePhase,
@@ -702,8 +710,8 @@ export const updateProjectTool: ToolDefinition = createTool(
               _phaseTransition: {
                 fromPhase: beforePhase,
                 toPhase: result.project.currentPhase,
-                displayName: newPhaseConfig?.displayName,
-                description: `Working on ${newPhaseConfig?.displayName ?? result.project.currentPhase}`,
+                displayName: narrativePhaseConfig?.displayName,
+                description: `Working on ${newPhaseName}`,
               },
             }),
           };
@@ -864,7 +872,7 @@ export const updateProjectTool: ToolDefinition = createTool(
           if (sceneNumber > MAX_SCENES) {
             return {
               status: 'error',
-              error: `⛔ SCENE LIMIT EXCEEDED: Maximum ${MAX_SCENES} scenes allowed. You are trying to create scene ${sceneNumber}. STOP creating scenes and transition to the next phase immediately using update_project(action: 'transition_phase', data: { next_phase: 'character_setting_images' })`,
+              error: `⛔ SCENE LIMIT EXCEEDED: Maximum ${MAX_SCENES} scenes allowed. You are trying to create scene ${sceneNumber}. STOP creating scenes and transition to the next phase immediately using update_project(action: 'transition_phase').`,
               limit_exceeded: true,
               max_scenes: MAX_SCENES,
               attempted_scene: sceneNumber,
@@ -1014,8 +1022,8 @@ export const updateProjectTool: ToolDefinition = createTool(
             skipped_phases: skippedPhases,
             note:
               inputType === 'story'
-                ? 'Plot and Story phases have been skipped. The story has been saved to plans/story.md. Proceeding to Characters & Settings phase.'
-                : 'Starting from Plot phase.',
+                ? `Skipped phases: ${skippedPhases}. The story has been saved to plans/story.md. Proceeding to ${updatedProject.currentPhase} phase.`
+                : 'Starting from the first phase.',
           };
         }
 

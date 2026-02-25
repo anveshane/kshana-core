@@ -261,7 +261,7 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
   // Initialize or load project
   const project = getOrCreateProject(originalInput, undefined, basePath);
   const currentPhase = getCurrentPhase(project);
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
+  const phaseConfig = PHASE_CONFIGS[currentPhase as WorkflowPhase];
 
   // Load existing project files into context store
   // This makes them available to dispatch_agent and dispatch_content_agent
@@ -274,7 +274,7 @@ export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): Gene
   const llm = new LLMClient(llmConfig);
 
   // Build custom prompt with workflow context (include loaded contexts info)
-  const customPrompt = buildWorkflowAgentPrompt(project, currentPhase, loadedContexts);
+  const customPrompt = buildWorkflowAgentPrompt(project, currentPhase as WorkflowPhase, loadedContexts);
 
   // Create the generic agent with workflow customization
   const agent = new GenericAgent(registry.getAll(), llm, {

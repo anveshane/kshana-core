@@ -42,6 +42,8 @@ import {
 } from './types.js';
 import { generateProjectTitle, contextStore } from '../../../core/context/index.js';
 import { initializeArtifactsFromFiles, createArtifactFromFile } from './ArtifactManager.js';
+import { TemplateRegistry } from '../../../core/templates/TemplateRegistry.js';
+import type { PhaseDefinition } from '../../../core/templates/types.js';
 
 /**
  * Get the project directory path for the current working directory.
@@ -166,21 +168,40 @@ function stripWrapperTags(content: string): string {
 }
 
 /**
+ * Build the fixed 8-phase structure for narrative projects.
+ */
+function buildNarrativePhases(): Record<string, import('./types.js').PhaseInfo> {
+  return {
+    plot: { status: 'pending', completedAt: null },
+    story: { status: 'pending', completedAt: null },
+    characters_settings: { status: 'pending', completedAt: null },
+    scenes: { status: 'pending', completedAt: null },
+    character_setting_images: { status: 'pending', completedAt: null },
+    scene_images: { status: 'pending', completedAt: null },
+    video: { status: 'pending', completedAt: null },
+    video_combine: { status: 'pending', completedAt: null },
+  };
+}
+
+/**
  * Create a new project file with the given input.
  * Stores originalInput in a separate file, only reference in project.json.
  * @param originalInput - The original story/prompt input
  * @param style - The visual style for the project (cinematic_realism or anime)
  * @param basePath - Base path for the project
+ * @param targetDuration - Target video duration in seconds
+ * @param templateId - Template to use for phase structure (default: narrative)
  */
 export function createProject(
   originalInput: string,
   styleOrBasePath: ProjectStyle | string = 'cinematic_realism',
   basePathMaybe: string = process.cwd(),
-  targetDuration?: number
+  targetDuration?: number,
+  templateId?: string
 ): ProjectFile {
   // Back-compat:
   // - Old signature: createProject(originalInput, basePath)
-  // - New signature: createProject(originalInput, style, basePath?, targetDuration?)
+  // - New signature: createProject(originalInput, style, basePath?, targetDuration?, templateId?)
   const style: ProjectStyle =
     styleOrBasePath === 'cinematic_realism' || styleOrBasePath === 'anime'
       ? styleOrBasePath
@@ -193,8 +214,20 @@ export function createProject(
   // Ensure directory structure exists
   createProjectStructure(basePath);
 
+  // If input looks like a file path and the file exists, read its contents
+  let resolvedInput = originalInput;
+  const trimmedInput = originalInput.trim();
+  if (!trimmedInput.includes('\n') && (trimmedInput.startsWith('/') || trimmedInput.startsWith('~') || trimmedInput.startsWith('./'))) {
+    const expandedPath = trimmedInput.startsWith('~')
+      ? join(process.env['HOME'] || '', trimmedInput.slice(1))
+      : trimmedInput;
+    if (existsSync(expandedPath)) {
+      resolvedInput = readFileSync(expandedPath, 'utf-8');
+    }
+  }
+
   // Clean the input - remove any XML tags or wrapper formats
-  const cleanInput = stripWrapperTags(originalInput);
+  const cleanInput = stripWrapperTags(resolvedInput);
 
   const now = Date.now();
   const projectId = `proj-${now}-${Math.random().toString(36).slice(2, 8)}`;
@@ -203,6 +236,31 @@ export function createProject(
   const inputFilePath = 'original_input.md';
   const fullInputPath = join(getProjectDir(basePath), inputFilePath);
   writeFileSync(fullInputPath, cleanInput, 'utf-8');
+
+  // Build phases based on template
+  const isNonNarrativeTemplate = templateId && templateId !== 'narrative';
+  let phases: Record<string, import('./types.js').PhaseInfo>;
+  let initialPhase: string;
+
+  if (isNonNarrativeTemplate) {
+    const template = TemplateRegistry.getInstance().get(templateId);
+    if (template?.phases && template.phases.length > 0) {
+      // Sort template phases by order, build dynamic phases
+      const sortedPhases = [...template.phases].sort((a, b) => a.order - b.order);
+      phases = {};
+      for (const phase of sortedPhases) {
+        phases[phase.id] = { status: 'pending', completedAt: null };
+      }
+      initialPhase = sortedPhases[0]!.id;
+    } else {
+      // Template exists but has no phases — fall back to narrative defaults
+      phases = buildNarrativePhases();
+      initialPhase = WorkflowPhase.PLOT;
+    }
+  } else {
+    phases = buildNarrativePhases();
+    initialPhase = WorkflowPhase.PLOT;
+  }
 
   // Default to 'idea' input type - agent will analyze and update if it's a full story
   // Simplified structure: only track phase status, no file references for non-existent files
@@ -214,20 +272,11 @@ export function createProject(
     style,
     inputType: 'idea',
     ...(targetDuration != null ? { targetDuration } : {}),
+    ...(templateId ? { templateId } : {}),
     createdAt: now,
     updatedAt: now,
-    currentPhase: WorkflowPhase.PLOT,
-    // Minimal phase tracking - no planFile references (files created on demand)
-    phases: {
-      plot: { status: 'pending', completedAt: null },
-      story: { status: 'pending', completedAt: null },
-      characters_settings: { status: 'pending', completedAt: null },
-      scenes: { status: 'pending', completedAt: null },
-      character_setting_images: { status: 'pending', completedAt: null },
-      scene_images: { status: 'pending', completedAt: null },
-      video: { status: 'pending', completedAt: null },
-      video_combine: { status: 'pending', completedAt: null },
-    },
+    currentPhase: initialPhase as import('./types.js').WorkflowPhase,
+    phases,
     // Empty content registry - entries added when content is created
     content: createDefaultContentRegistry(),
     // Empty arrays - populated as items are created
@@ -268,11 +317,11 @@ export function setProjectInputType(
   if (inputType === 'story') {
     // Mark skipped phases
     for (const skipPhase of inputTypeConfig.skipPhases) {
-      const phaseKey = skipPhase as keyof typeof project.phases;
-      if (project.phases[phaseKey]) {
-        project.phases[phaseKey].status = 'skipped';
-        project.phases[phaseKey].completedAt = now;
-        project.phases[phaseKey].plannerStage = PlannerStage.COMPLETE;
+      const phaseInfo = project.phases[skipPhase];
+      if (phaseInfo) {
+        phaseInfo.status = 'skipped';
+        phaseInfo.completedAt = now;
+        phaseInfo.plannerStage = PlannerStage.COMPLETE;
       }
     }
 
@@ -307,6 +356,11 @@ export function setProjectInputType(
  * have their content registry properly populated.
  */
 function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
+  // Non-narrative templates don't use the narrative content registry
+  if (project.templateId && project.templateId !== 'narrative') {
+    return false;
+  }
+
   let needsSave = false;
 
   // Ensure content registry exists
@@ -428,8 +482,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
           // If characters_settings phase is complete, mark as approved
           if (
-            project.phases.characters_settings?.status === 'completed' ||
-            project.phases.characters_settings?.plannerStage === 'complete'
+            project.phases['characters_settings']?.status === 'completed' ||
+            project.phases['characters_settings']?.plannerStage === 'complete'
           ) {
             character.approvalStatus = 'approved';
             character.approvedAt = Date.now();
@@ -505,8 +559,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
           // If characters_settings phase is complete, mark as approved
           if (
-            project.phases.characters_settings?.status === 'completed' ||
-            project.phases.characters_settings?.plannerStage === 'complete'
+            project.phases['characters_settings']?.status === 'completed' ||
+            project.phases['characters_settings']?.plannerStage === 'complete'
           ) {
             setting.approvalStatus = 'approved';
             setting.approvedAt = Date.now();
@@ -586,8 +640,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
           // If scenes phase is complete, mark scene as approved
           if (
-            project.phases.scenes?.status === 'completed' ||
-            project.phases.scenes?.plannerStage === 'complete'
+            project.phases['scenes']?.status === 'completed' ||
+            project.phases['scenes']?.plannerStage === 'complete'
           ) {
             sceneRef.contentApprovalStatus = 'approved';
             sceneRef.contentApprovedAt = Date.now();
@@ -645,8 +699,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         matchingChar.imagePromptPath = promptPath;
         // If character_setting_images phase is in progress or complete, mark prompt as approved
         if (
-          project.phases.character_setting_images?.status === 'in_progress' ||
-          project.phases.character_setting_images?.status === 'completed'
+          project.phases['character_setting_images']?.status === 'in_progress' ||
+          project.phases['character_setting_images']?.status === 'completed'
         ) {
           matchingChar.imagePromptApprovalStatus = 'approved';
         }
@@ -674,8 +728,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       if (matchingSetting && !matchingSetting.imagePromptPath) {
         matchingSetting.imagePromptPath = promptPath;
         if (
-          project.phases.character_setting_images?.status === 'in_progress' ||
-          project.phases.character_setting_images?.status === 'completed'
+          project.phases['character_setting_images']?.status === 'in_progress' ||
+          project.phases['character_setting_images']?.status === 'completed'
         ) {
           matchingSetting.imagePromptApprovalStatus = 'approved';
         }
@@ -700,8 +754,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         if (matchingScene && !matchingScene.imagePromptPath) {
           matchingScene.imagePromptPath = promptPath;
           if (
-            project.phases.scene_images?.status === 'in_progress' ||
-            project.phases.scene_images?.status === 'completed'
+            project.phases['scene_images']?.status === 'in_progress' ||
+            project.phases['scene_images']?.status === 'completed'
           ) {
             matchingScene.imagePromptApprovalStatus = 'approved';
           }
@@ -726,8 +780,8 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
         if (matchingScene && !matchingScene.videoPromptPath) {
           matchingScene.videoPromptPath = promptPath;
           if (
-            project.phases.video?.status === 'in_progress' ||
-            project.phases.video?.status === 'completed'
+            project.phases['video']?.status === 'in_progress' ||
+            project.phases['video']?.status === 'completed'
           ) {
             matchingScene.videoPromptApprovalStatus = 'approved';
           }
@@ -945,7 +999,7 @@ export function getOrCreateProject(
 /**
  * Get the current workflow phase from the project.
  */
-export function getCurrentPhase(project: ProjectFile): WorkflowPhase {
+export function getCurrentPhase(project: ProjectFile): WorkflowPhase | string {
   return project.currentPhase;
 }
 
@@ -971,11 +1025,14 @@ export function getProjectStyleConfig(basePath: string = process.cwd()): StyleCo
  */
 export function updatePhaseStatus(
   project: ProjectFile,
-  phase: keyof ProjectFile['phases'],
+  phase: string,
   status: PhaseStatus,
   basePath: string = process.cwd()
 ): ProjectFile {
   const phaseInfo = project.phases[phase];
+  if (!phaseInfo) {
+    throw new Error(`Phase '${phase}' does not exist in project`);
+  }
   phaseInfo.status = status;
 
   if (status === 'completed') {
@@ -1003,11 +1060,14 @@ export function updatePhaseStatus(
  */
 export function updatePlannerStage(
   project: ProjectFile,
-  phase: keyof ProjectFile['phases'],
+  phase: string,
   stage: PlannerStage,
   basePath: string = process.cwd()
 ): ProjectFile {
   const phaseInfo = project.phases[phase];
+  if (!phaseInfo) {
+    throw new Error(`Phase '${phase}' does not exist in project`);
+  }
   phaseInfo.plannerStage = stage;
 
   if (stage === PlannerStage.REFINING) {
@@ -1053,10 +1113,10 @@ export function transitionToNextPhase(
     project.currentPhase = result.nextPhase;
 
     // Mark new phase as in_progress with planning stage
-    const phaseKey = result.nextPhase as keyof typeof project.phases;
-    if (project.phases[phaseKey]) {
-      project.phases[phaseKey].status = 'in_progress';
-      project.phases[phaseKey].plannerStage = PlannerStage.PLANNING;
+    const phaseInfo = project.phases[result.nextPhase];
+    if (phaseInfo) {
+      phaseInfo.status = 'in_progress';
+      phaseInfo.plannerStage = PlannerStage.PLANNING;
     }
 
     // Clear persisted todos from previous phase
@@ -1625,8 +1685,8 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   }
 
   const currentPhase = project.currentPhase;
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
-  const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+  const phaseConfig = PHASE_CONFIGS[currentPhase as WorkflowPhase];
+  const phaseInfo = project.phases[currentPhase];
 
   const completedPhases = Object.entries(project.phases)
     .filter(([, info]) => info.status === 'completed')
@@ -1637,10 +1697,9 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   const settingNames = project.settings.map(s => s.name);
 
   // Get per-item approval status for current phase if applicable
-  const phaseConfig2 = PHASE_CONFIGS[currentPhase];
   let itemProgress = '';
-  if (phaseConfig2.requiresPerItemApproval) {
-    const { approved, total } = countApprovedItems(project, currentPhase);
+  if (phaseConfig?.requiresPerItemApproval) {
+    const { approved, total } = countApprovedItems(project, currentPhase as WorkflowPhase);
     itemProgress = `\nItem Progress: ${approved}/${total} approved`;
   }
 
@@ -1685,7 +1744,7 @@ ID: ${project.id}
 Version: ${project.version}
 Style: ${styleDisplay}
 Input Type: ${inputTypeDisplay}
-Current Phase: ${phaseConfig.displayName} (${currentPhase})
+Current Phase: ${phaseConfig?.displayName ?? currentPhase} (${currentPhase})
 Planner Stage: ${phaseInfo?.plannerStage ?? 'not started'}
 Completed Phases: ${completedPhases.length > 0 ? completedPhases.join(', ') : 'none'}
 Skipped Phases: ${skippedPhases.length > 0 ? skippedPhases.join(', ') : 'none'}
@@ -1693,6 +1752,48 @@ Characters: ${characterNames.length > 0 ? characterNames.join(', ') : 'none defi
 Settings: ${settingNames.length > 0 ? settingNames.join(', ') : 'none defined'}
 Scenes: ${project.scenes.length}/${MAX_SCENES} (max)
 Assets: ${project.assets.length}${itemProgress}${sceneLimitWarning}${filesSection}
+`.trim();
+}
+
+/**
+ * Get state transition prompt for non-narrative template projects.
+ * Returns a generic prompt that points to backward planner tools.
+ */
+function getTemplateStateTransitionPrompt(project: ProjectFile): string {
+  const currentPhase = project.currentPhase;
+  const phaseInfo = project.phases[currentPhase];
+  const template = TemplateRegistry.getInstance().get(project.templateId!);
+  const phaseDef = template?.phases?.find((p: PhaseDefinition) => p.id === currentPhase);
+  const phaseName = phaseDef?.displayName ?? currentPhase;
+  const plannerStage = phaseInfo?.plannerStage ?? 'planning';
+
+  // Build phase status summary
+  const phaseKeys = Object.keys(project.phases);
+  const statusLines = phaseKeys.map(key => {
+    const info = project.phases[key];
+    const def = template?.phases?.find((p: PhaseDefinition) => p.id === key);
+    const name = def?.displayName ?? key;
+    const marker = key === currentPhase ? ' ← current' : '';
+    return `- **${name}** (${key}): ${info?.status ?? 'unknown'}${marker}`;
+  });
+
+  return `
+## Current State
+- **Template**: ${template?.displayName ?? project.templateId}
+- **Phase**: ${phaseName} (${currentPhase})
+- **Status**: ${phaseInfo?.status ?? 'unknown'}
+- **Planner Stage**: ${plannerStage}
+
+## All Phases
+${statusLines.join('\n')}
+
+## What to Do Next
+
+Use the backward planner tools to work on the current phase.
+The artifact dependency graph defines what needs to be created and in what order.
+Use \`read_project\` to understand available artifacts and \`update_project\` to track progress.
+
+When this phase is complete, use \`update_project(action: 'transition_phase')\` to advance to the next phase.
 `.trim();
 }
 
@@ -1707,9 +1808,14 @@ export function getStateTransitionPrompt(basePath: string = process.cwd()): stri
     return 'No project exists. Create a new project first.';
   }
 
+  // Non-narrative templates: return a generic prompt pointing to backward planner tools
+  if (project.templateId && project.templateId !== 'narrative') {
+    return getTemplateStateTransitionPrompt(project);
+  }
+
   const currentPhase = project.currentPhase;
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
-  const phaseInfo = project.phases[currentPhase as keyof typeof project.phases];
+  const phaseConfig = PHASE_CONFIGS[currentPhase as WorkflowPhase];
+  const phaseInfo = project.phases[currentPhase];
 
   // Check if this phase was skipped
   if (phaseInfo?.status === 'skipped') {
