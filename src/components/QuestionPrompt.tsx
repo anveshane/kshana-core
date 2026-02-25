@@ -100,8 +100,11 @@ export function QuestionPrompt({
   const ContextDisplay = () => {
     if (!context) return null;
     return (
-      <Box flexDirection="column" marginBottom={1} borderStyle="single" borderColor="gray" paddingX={1}>
-        <Text dimColor wrap="wrap">{context}</Text>
+      <Box flexDirection="column" marginBottom={1} borderStyle="single" borderColor="yellow" paddingX={1}>
+        <Box marginBottom={1}>
+          <Text bold color="yellow">Content to review:</Text>
+        </Box>
+        <Text wrap="wrap">{context}</Text>
       </Box>
     );
   };
