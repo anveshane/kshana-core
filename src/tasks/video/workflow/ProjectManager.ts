@@ -199,17 +199,19 @@ export function createProject(
   targetDuration?: number,
   templateId?: string
 ): ProjectFile {
-  // Back-compat:
-  // - Old signature: createProject(originalInput, basePath)
-  // - New signature: createProject(originalInput, style, basePath?, targetDuration?, templateId?)
-  const style: ProjectStyle =
-    styleOrBasePath === 'cinematic_realism' || styleOrBasePath === 'anime'
-      ? styleOrBasePath
-      : 'cinematic_realism';
-  const basePath: string =
-    styleOrBasePath === 'cinematic_realism' || styleOrBasePath === 'anime'
-      ? basePathMaybe
-      : String(styleOrBasePath);
+  // Determine style and basePath.
+  // If styleOrBasePath looks like a filesystem path, treat it as basePath (old signature).
+  // Otherwise treat it as a style name.
+  const looksLikePath =
+    styleOrBasePath.startsWith('/') ||
+    styleOrBasePath.startsWith('./') ||
+    styleOrBasePath.startsWith('~');
+  const style: ProjectStyle = looksLikePath
+    ? 'cinematic_realism'
+    : (styleOrBasePath as ProjectStyle);
+  const basePath: string = looksLikePath
+    ? String(styleOrBasePath)
+    : basePathMaybe;
 
   // Ensure directory structure exists
   createProjectStructure(basePath);
@@ -1016,7 +1018,7 @@ export function getProjectStyle(basePath: string = process.cwd()): ProjectStyle 
  */
 export function getProjectStyleConfig(basePath: string = process.cwd()): StyleConfig {
   const style = getProjectStyle(basePath);
-  return STYLE_CONFIGS[style];
+  return STYLE_CONFIGS[style as keyof typeof STYLE_CONFIGS] ?? STYLE_CONFIGS['cinematic_realism'];
 }
 
 /**

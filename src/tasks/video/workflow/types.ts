@@ -12,7 +12,7 @@ export const PROJECT_VERSION = '2.0';
  * Visual style for the project.
  * This determines the overall aesthetic of generated images and videos.
  */
-export type ProjectStyle = 'cinematic_realism' | 'anime';
+export type ProjectStyle = 'cinematic_realism' | 'anime' | (string & {});
 
 /**
  * Style configuration with display names and prompt modifiers.
