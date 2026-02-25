@@ -69,6 +69,8 @@ Options:
 Environment Variables:
   SERVER_HOST           Host to bind to (overrides default 0.0.0.0)
   SERVER_PORT           Port to listen on (overrides default 8001)
+  KSHANA_MAX_ITERATIONS Default max iterations per task (default: 100)
+  KSHANA_WS_RECONNECT_GRACE_MS Detached session reconnect grace window in ms (default: 1800000)
   LLM_PROVIDER          Provider to use (current: ${currentProvider})
   See .env.example for all available configuration options.
 

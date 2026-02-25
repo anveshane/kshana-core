@@ -279,6 +279,23 @@ export class GenericAgent extends TypedEventEmitter {
   }
 
   /**
+   * Update the max-iteration limit for subsequent runs.
+   */
+  setMaxIterations(maxIterations: number): void {
+    const normalized = Number.isFinite(maxIterations)
+      ? Math.max(1, Math.floor(maxIterations))
+      : this.maxIterations;
+    this.maxIterations = normalized;
+  }
+
+  /**
+   * Get the max-iteration limit configured for this agent.
+   */
+  getMaxIterations(): number {
+    return this.maxIterations;
+  }
+
+  /**
    * Generate LLM response with streaming, emitting chunks as they arrive.
    * Accumulates content and tool calls, returning the complete response.
    */
@@ -810,6 +827,13 @@ export class GenericAgent extends TypedEventEmitter {
       }
 
       this.iteration++;
+      this.emit({
+        type: 'progress',
+        percentage: Math.round((this.iteration / this.maxIterations) * 100),
+        message: `Iteration ${this.iteration}/${this.maxIterations}`,
+        iteration: this.iteration,
+        maxIterations: this.maxIterations,
+      });
 
       // CRITICAL: Stop immediately if we're in COMPLETED phase
       try {
@@ -1243,7 +1267,7 @@ ONLY: Execute the update_project tool call with action="transition_phase" immedi
       this.emit({ type: 'agent_status', status: 'error', agentName: this.getEffectiveAgentName() });
       return {
         status: 'interrupted',
-        output: 'Agent reached maximum iterations without completing.',
+        output: `Agent reached maximum iterations (${this.maxIterations}) without completing.`,
         todos: this.todoManager.getTodos(),
         error: 'max_iterations_reached',
       };

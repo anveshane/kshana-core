@@ -10,6 +10,8 @@ export interface ProgressEvent {
   type: 'progress';
   percentage: number;
   message: string;
+  iteration?: number;
+  maxIterations?: number;
 }
 
 /**

@@ -155,6 +155,27 @@ const GAP_MIN_SECONDS = 1;
 const GAP_ADJACENT_EPSILON = 0.01;
 const VIDEO_METADATA_JSON_PATH = 'agent/metadata/video-context.json';
 const VIDEO_METADATA_MARKDOWN_PATH = 'agent/metadata/video-context.md';
+const EXPANDED_PLACEMENT_PROMPTS_PATH =
+  'agent/content/expanded-placement-prompts.json';
+
+type ExpandedPlacementPromptKind = 'image' | 'video';
+
+interface ExpandedPlacementPromptEntry {
+  placementNumber: number;
+  startTime: string;
+  endTime: string;
+  originalPrompt: string;
+  expandedPrompt: string;
+  isExpanded: boolean;
+  negativePrompt?: string;
+}
+
+interface ExpandedPlacementPromptsFile {
+  schemaVersion: 1;
+  updatedAt: string;
+  image: ExpandedPlacementPromptEntry[];
+  video: ExpandedPlacementPromptEntry[];
+}
 
 function timeStringToSeconds(timeStr: string): number {
   const parts = timeStr.split(':');
@@ -301,6 +322,165 @@ function buildInfographicPlacementsMarkdown(placements: ParsedInfographicPlaceme
   }
   lines.push('');
   return lines.join('\n');
+}
+
+function createDefaultExpandedPlacementPromptsFile(): ExpandedPlacementPromptsFile {
+  return {
+    schemaVersion: 1,
+    updatedAt: new Date().toISOString(),
+    image: [],
+    video: [],
+  };
+}
+
+function sanitizeExpandedPlacementPromptEntry(
+  entry: unknown,
+): ExpandedPlacementPromptEntry | null {
+  if (!entry || typeof entry !== 'object') return null;
+  const value = entry as Record<string, unknown>;
+  const placementNumberRaw = value['placementNumber'];
+  const startTimeRaw = value['startTime'];
+  const endTimeRaw = value['endTime'];
+  const originalPromptRaw = value['originalPrompt'];
+  const expandedPromptRaw = value['expandedPrompt'];
+  const isExpandedRaw = value['isExpanded'];
+  const negativePromptRaw = value['negativePrompt'];
+
+  if (
+    typeof placementNumberRaw !== 'number' ||
+    !Number.isFinite(placementNumberRaw) ||
+    placementNumberRaw < 1
+  ) {
+    return null;
+  }
+  if (typeof startTimeRaw !== 'string' || typeof endTimeRaw !== 'string') {
+    return null;
+  }
+  if (
+    typeof originalPromptRaw !== 'string' ||
+    typeof expandedPromptRaw !== 'string' ||
+    typeof isExpandedRaw !== 'boolean'
+  ) {
+    return null;
+  }
+
+  const entryValue: ExpandedPlacementPromptEntry = {
+    placementNumber: placementNumberRaw,
+    startTime: startTimeRaw,
+    endTime: endTimeRaw,
+    originalPrompt: originalPromptRaw,
+    expandedPrompt: expandedPromptRaw,
+    isExpanded: isExpandedRaw,
+  };
+
+  if (typeof negativePromptRaw === 'string' && negativePromptRaw.trim()) {
+    entryValue.negativePrompt = negativePromptRaw;
+  }
+
+  return entryValue;
+}
+
+function readExpandedPlacementPromptsFile(
+  basePath: string,
+): ExpandedPlacementPromptsFile {
+  const content = readProjectFile(EXPANDED_PLACEMENT_PROMPTS_PATH, basePath);
+  if (!content || !content.trim()) {
+    return createDefaultExpandedPlacementPromptsFile();
+  }
+
+  try {
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    const imageRaw = Array.isArray(parsed['image']) ? parsed['image'] : [];
+    const videoRaw = Array.isArray(parsed['video']) ? parsed['video'] : [];
+    const image = imageRaw
+      .map((entry) => sanitizeExpandedPlacementPromptEntry(entry))
+      .filter((entry): entry is ExpandedPlacementPromptEntry => entry !== null);
+    const video = videoRaw
+      .map((entry) => sanitizeExpandedPlacementPromptEntry(entry))
+      .filter((entry): entry is ExpandedPlacementPromptEntry => entry !== null);
+
+    return {
+      schemaVersion: 1,
+      updatedAt:
+        typeof parsed['updatedAt'] === 'string'
+          ? parsed['updatedAt']
+          : new Date().toISOString(),
+      image,
+      video,
+    };
+  } catch (error) {
+    console.warn(
+      '[expanded-prompts] Failed to parse expanded-placement-prompts.json; recreating file.',
+      error,
+    );
+    return createDefaultExpandedPlacementPromptsFile();
+  }
+}
+
+function writeExpandedPlacementPromptsFile(
+  basePath: string,
+  payload: ExpandedPlacementPromptsFile,
+): void {
+  writeProjectFile(
+    EXPANDED_PLACEMENT_PROMPTS_PATH,
+    `${JSON.stringify(payload, null, 2)}\n`,
+    basePath,
+  );
+}
+
+function persistExpandedPromptsForKind(
+  basePath: string,
+  kind: ExpandedPlacementPromptKind,
+  preparedPlacements: PreparedImageGenerationPlacement[] | PreparedVideoGenerationPlacement[],
+  mode: 'replace' | 'upsert',
+): void {
+  try {
+    const current = readExpandedPlacementPromptsFile(basePath);
+    const entries: ExpandedPlacementPromptEntry[] = preparedPlacements
+      .map((placement) => {
+        const baseEntry: ExpandedPlacementPromptEntry = {
+          placementNumber: placement.placementNumber,
+          startTime: placement.startTime,
+          endTime: placement.endTime,
+          originalPrompt: placement.originalPrompt,
+          expandedPrompt: placement.expandedPrompt,
+          isExpanded: placement.isExpanded,
+        };
+        if (kind === 'image' && 'negativePrompt' in placement) {
+          baseEntry.negativePrompt = placement.negativePrompt;
+        }
+        return baseEntry;
+      })
+      .sort((left, right) => left.placementNumber - right.placementNumber);
+
+    const next: ExpandedPlacementPromptsFile = {
+      ...current,
+      schemaVersion: 1,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (mode === 'replace') {
+      next[kind] = entries;
+    } else {
+      const merged = new Map<number, ExpandedPlacementPromptEntry>();
+      current[kind].forEach((entry) => {
+        merged.set(entry.placementNumber, entry);
+      });
+      entries.forEach((entry) => {
+        merged.set(entry.placementNumber, entry);
+      });
+      next[kind] = [...merged.values()].sort(
+        (left, right) => left.placementNumber - right.placementNumber,
+      );
+    }
+
+    writeExpandedPlacementPromptsFile(basePath, next);
+  } catch (error) {
+    console.warn(
+      `[expanded-prompts] Failed to persist ${kind} expanded prompts. Continuing generation without persistence.`,
+      error,
+    );
+  }
 }
 
 async function autoFillVideoPlacementGaps(
@@ -693,6 +873,9 @@ interface PreparedImageGenerationPlacement {
   startTime: string;
   endTime: string;
   prompt: string;
+  originalPrompt: string;
+  expandedPrompt: string;
+  isExpanded: boolean;
   negativePrompt: string;
 }
 
@@ -701,6 +884,9 @@ interface PreparedVideoGenerationPlacement {
   startTime: string;
   endTime: string;
   prompt: string;
+  originalPrompt: string;
+  expandedPrompt: string;
+  isExpanded: boolean;
   duration: number;
   videoType: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
 }
@@ -2692,6 +2878,7 @@ async function prepareImagePlacementsForGeneration(
 
   for (const placement of placements) {
     let prompt = placement.prompt;
+    let isExpanded = false;
     const transcriptSegment = getTranscriptSegmentForTimeRange(
       transcriptContent,
       placement.startTime,
@@ -2712,6 +2899,7 @@ async function prepareImagePlacementsForGeneration(
         );
       } else if (expanded && 'prompt' in expanded) {
         prompt = expanded.prompt;
+        isExpanded = true;
         if (expanded.negativePrompt) {
           negativePrompt = appendMetadataConstraintsToNegativePrompt(
             expanded.negativePrompt,
@@ -2766,6 +2954,9 @@ async function prepareImagePlacementsForGeneration(
       startTime: placement.startTime,
       endTime: placement.endTime,
       prompt,
+      originalPrompt: placement.prompt,
+      expandedPrompt: prompt,
+      isExpanded,
       negativePrompt,
     });
   }
@@ -2793,6 +2984,7 @@ async function prepareVideoPlacementsForGeneration(
   const prepared: PreparedVideoGenerationPlacement[] = [];
   for (const placement of placements) {
     let prompt = placement.prompt;
+    let isExpanded = false;
     const transcriptSegment = getTranscriptSegmentForTimeRange(
       transcriptContent,
       placement.startTime,
@@ -2806,6 +2998,7 @@ async function prepareVideoPlacementsForGeneration(
       });
       if (expanded) {
         prompt = expanded;
+        isExpanded = true;
         console.log(`${options.logPrefix} Placement ${placement.placementNumber}: using expanded prompt`);
       } else {
         console.warn(
@@ -2833,6 +3026,9 @@ async function prepareVideoPlacementsForGeneration(
       startTime: placement.startTime,
       endTime: placement.endTime,
       prompt,
+      originalPrompt: placement.prompt,
+      expandedPrompt: prompt,
+      isExpanded,
       duration: placement.duration,
       videoType: placement.videoType,
     });
@@ -3437,6 +3633,9 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
         startTime: item.startTime,
         endTime: item.endTime,
         prompt: item.prompt,
+        originalPrompt: item.metadata?.originalPrompt ?? item.prompt,
+        expandedPrompt: item.metadata?.expandedPrompt ?? item.prompt,
+        isExpanded: item.metadata?.isExpanded === true,
         negativePrompt: item.metadata?.negativePrompt ?? 'blurry, low quality, text, watermark',
       }));
     } else {
@@ -3508,6 +3707,13 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
       };
     }
 
+    persistExpandedPromptsForKind(
+      basePath,
+      'image',
+      preparedPlacements,
+      retryFailedBatchId ? 'upsert' : 'replace',
+    );
+
     if (runInBackground) {
       const now = Date.now();
       const batchItems: BackgroundGenerationItem[] = preparedPlacements.map((placement) => ({
@@ -3520,6 +3726,9 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
         updatedAt: now,
         metadata: {
           negativePrompt: placement.negativePrompt,
+          originalPrompt: placement.originalPrompt,
+          expandedPrompt: placement.expandedPrompt,
+          isExpanded: placement.isExpanded,
         },
       }));
 
@@ -3657,6 +3866,9 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
         startTime: item.startTime,
         endTime: item.endTime,
         prompt: item.prompt,
+        originalPrompt: item.metadata?.originalPrompt ?? item.prompt,
+        expandedPrompt: item.metadata?.expandedPrompt ?? item.prompt,
+        isExpanded: item.metadata?.isExpanded === true,
         duration: item.metadata?.duration ?? 6,
         videoType: item.metadata?.videoType ?? 'cinematic_realism',
       }));
@@ -3718,6 +3930,13 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
       };
     }
 
+    persistExpandedPromptsForKind(
+      basePath,
+      'video',
+      preparedPlacements,
+      retryFailedBatchId ? 'upsert' : 'replace',
+    );
+
     if (runInBackground) {
       const now = Date.now();
       const batchItems: BackgroundGenerationItem[] = preparedPlacements.map((placement) => ({
@@ -3731,6 +3950,9 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
         metadata: {
           duration: placement.duration,
           videoType: placement.videoType,
+          originalPrompt: placement.originalPrompt,
+          expandedPrompt: placement.expandedPrompt,
+          isExpanded: placement.isExpanded,
         },
       }));
 

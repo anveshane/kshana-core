@@ -6,6 +6,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
 import { createDefaultToolRegistry } from '../core/tools/index.js';
+import type { ProgressEvent } from '../events/events.js';
 import { ContinuationPlanner, IntentRouter, StateAnalyzer, type OrchestrationContext } from '../core/orchestration/index.js';
 import {
   buildWorkflowAgentPrompt,
@@ -26,13 +27,17 @@ type TaskType = 'generic' | 'video';
 export interface ConversationManagerConfig {
   llmConfig: LLMClientConfig;
   sessionTimeoutMs?: number;  // Default: 30 minutes
-  maxIterations?: number;     // Default: 50
+  maxIterations?: number;     // Default: 100
   taskType?: TaskType;        // Default: 'generic'
   enableOrchestration?: boolean; // Default: true for video tasks
 }
 
+export interface RunTaskOptions {
+  maxIterations?: number;
+}
+
 export interface ConversationEvents {
-  onProgress?: (sessionId: string, percentage: number, message: string) => void;
+  onProgress?: (sessionId: string, progress: ProgressEvent) => void;
   onToolCall?: (sessionId: string, toolName: string, args: Record<string, unknown>) => void;
   onToolResult?: (sessionId: string, toolName: string, result: unknown) => void;
   onTodoUpdate?: (sessionId: string, todos: ExpandableTodoItem[]) => void;
@@ -45,6 +50,7 @@ export interface ConversationEvents {
 interface ActiveSession {
   state: SessionState;
   agent: GenericAgent;
+  currentMaxIterations: number;
   abortController?: AbortController;
   initialized?: boolean;
   basePath?: string; // Store basePath for video tasks to save original input
@@ -67,7 +73,7 @@ export class ConversationManager {
   constructor(config: ConversationManagerConfig) {
     this.llmConfig = config.llmConfig;
     this.sessionTimeoutMs = config.sessionTimeoutMs ?? 30 * 60 * 1000; // 30 minutes
-    this.maxIterations = config.maxIterations ?? 50;
+    this.maxIterations = this.normalizeMaxIterations(config.maxIterations, 100);
     this.taskType = config.taskType ?? 'generic';
     this.enableOrchestration = config.enableOrchestration ?? this.taskType === 'video';
 
@@ -143,7 +149,13 @@ export class ConversationManager {
       }
     };
 
-    const activeSession: ActiveSession = { state, agent, basePath, assetEventHandler };
+    const activeSession: ActiveSession = {
+      state,
+      agent,
+      currentMaxIterations: this.maxIterations,
+      basePath,
+      assetEventHandler,
+    };
     if (this.taskType === 'video' && this.enableOrchestration && basePath) {
       activeSession.intentRouter = new IntentRouter();
       activeSession.stateAnalyzer = new StateAnalyzer();
@@ -181,6 +193,28 @@ export class ConversationManager {
   }
 
   /**
+   * Get the effective max-iteration limit for a session.
+   */
+  getSessionMaxIterations(sessionId: string): number {
+    return this.sessions.get(sessionId)?.currentMaxIterations ?? this.maxIterations;
+  }
+
+  /**
+   * Check whether a session is currently running.
+   */
+  isSessionRunning(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return session?.state.status === 'running';
+  }
+
+  /**
+   * Mark a session as active to prevent stale cleanup during long runs.
+   */
+  touchSession(sessionId: string): void {
+    this.touchSessionActivity(sessionId);
+  }
+
+  /**
    * Return the project directory associated with a session, if any.
    */
   getSessionProjectDir(sessionId: string): string | undefined {
@@ -193,7 +227,8 @@ export class ConversationManager {
   async runTask(
     sessionId: string,
     task: string,
-    events?: ConversationEvents
+    events?: ConversationEvents,
+    options?: RunTaskOptions,
   ): Promise<GenericAgentResult> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -237,6 +272,13 @@ export class ConversationManager {
     }
 
     // Update session state
+    const effectiveMaxIterations = this.normalizeMaxIterations(
+      options?.maxIterations,
+      this.maxIterations,
+    );
+    session.currentMaxIterations = effectiveMaxIterations;
+    session.agent.setMaxIterations(effectiveMaxIterations);
+
     session.state.status = 'running';
     session.state.lastActivity = Date.now();
     session.state.taskHistory.push(task);
@@ -274,7 +316,9 @@ export class ConversationManager {
         }
       } else if (result.status === 'completed') {
         session.state.status = 'completed';
-      } else if (result.status === 'error' || result.status === 'interrupted') {
+      } else if (result.status === 'interrupted') {
+        session.state.status = result.error === 'user_stopped' ? 'idle' : 'error';
+      } else if (result.status === 'error') {
         session.state.status = 'error';
       }
 
@@ -308,6 +352,7 @@ export class ConversationManager {
     }
 
     // Update session state
+    session.agent.setMaxIterations(session.currentMaxIterations);
     session.state.status = 'running';
     session.state.lastActivity = Date.now();
 
@@ -344,7 +389,9 @@ export class ConversationManager {
         }
       } else if (result.status === 'completed') {
         session.state.status = 'completed';
-      } else if (result.status === 'error' || result.status === 'interrupted') {
+      } else if (result.status === 'interrupted') {
+        session.state.status = result.error === 'user_stopped' ? 'idle' : 'error';
+      } else if (result.status === 'error') {
         session.state.status = 'error';
       }
 
@@ -393,35 +440,41 @@ export class ConversationManager {
 
     if (events.onProgress) {
       agent.on('progress', (data) => {
-        events.onProgress!(sessionId, data.percentage, data.message);
+        this.touchSessionActivity(sessionId);
+        events.onProgress!(sessionId, data);
       });
     }
 
     if (events.onToolCall) {
       agent.on('tool_call', (data) => {
+        this.touchSessionActivity(sessionId);
         events.onToolCall!(sessionId, data.toolName, data.arguments);
       });
     }
 
     if (events.onToolResult) {
       agent.on('tool_result', (data) => {
+        this.touchSessionActivity(sessionId);
         events.onToolResult!(sessionId, data.toolName, data.result);
       });
     }
 
     if (events.onTodoUpdate) {
       agent.on('todo_update', (data) => {
+        this.touchSessionActivity(sessionId);
         events.onTodoUpdate!(sessionId, data.todos);
       });
     }
 
     if (events.onAgentText) {
       agent.on('agent_text', (data) => {
+        this.touchSessionActivity(sessionId);
         events.onAgentText!(sessionId, data.text, data.isFinal);
       });
 
       // Also handle streaming_text events for real-time streaming
       agent.on('streaming_text', (data) => {
+        this.touchSessionActivity(sessionId);
         if (data.chunk !== undefined) {
           console.log('[ConversationManager] streaming_text event:', {
             sessionId,
@@ -434,6 +487,7 @@ export class ConversationManager {
 
       // Also handle tool_streaming events (used by dispatch_agent and dispatch_content_agent)
       agent.on('tool_streaming', (data) => {
+        this.touchSessionActivity(sessionId);
         // Always forward tool_streaming events (even empty chunks when done: true)
         const chunk = data.chunk ?? '';
         console.log('[ConversationManager] tool_streaming event:', {
@@ -449,15 +503,32 @@ export class ConversationManager {
 
     if (events.onAgentStatus) {
       agent.on('agent_status', (data) => {
+        this.touchSessionActivity(sessionId);
         events.onAgentStatus!(sessionId, data.status, data.agentName);
       });
     }
 
     if (events.onQuestion) {
       agent.on('question', (data) => {
+        this.touchSessionActivity(sessionId);
         events.onQuestion!(sessionId, data.question, data.isConfirmation);
       });
     }
+  }
+
+  private touchSessionActivity(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+    session.state.lastActivity = Date.now();
+  }
+
+  private normalizeMaxIterations(value: number | undefined, fallback: number): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return fallback;
+    }
+    return Math.max(1, Math.floor(value));
   }
 
   private async refreshWorkflowPrompt(session: ActiveSession, userInput: string): Promise<void> {
@@ -583,6 +654,9 @@ export class ConversationManager {
   private cleanupStaleSessions(): void {
     const now = Date.now();
     for (const [sessionId, session] of this.sessions) {
+      if (session.state.status === 'running') {
+        continue;
+      }
       if (now - session.state.lastActivity > this.sessionTimeoutMs) {
         this.deleteSession(sessionId);
       }

@@ -445,6 +445,9 @@ export interface BackgroundGenerationItem {
     duration?: number;
     videoType?: 'cinematic_realism' | 'stock_footage' | 'motion_graphics';
     negativePrompt?: string;
+    originalPrompt?: string;
+    expandedPrompt?: string;
+    isExpanded?: boolean;
   };
 }
 

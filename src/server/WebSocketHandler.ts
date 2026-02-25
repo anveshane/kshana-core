@@ -5,10 +5,11 @@ import type { WebSocket } from '@fastify/websocket';
 import { v4 as uuidv4 } from 'uuid';
 import { ConversationManager, type ConversationEvents } from './ConversationManager.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
-import type { AgentStatus } from '../core/agent/index.js';
+import type { GenericAgentResult } from '../core/agent/index.js';
 import {
   type ClientMessage,
   type ServerMessage,
+  type ServerMessageType,
   type StatusData,
   type ProgressData,
   type AgentResponseData,
@@ -62,10 +63,14 @@ interface DetachedSessionState {
 }
 
 /**
- * Map AgentStatus to the response status type.
+ * Map GenericAgentResult to the response status type.
  */
-function mapAgentStatus(status: AgentStatus): AgentResponseData['status'] {
-  switch (status) {
+function mapAgentResultStatus(result: Pick<GenericAgentResult, 'status' | 'error'>): AgentResponseData['status'] {
+  if (result.status === 'interrupted' && result.error === 'max_iterations_reached') {
+    return 'max_iterations';
+  }
+
+  switch (result.status) {
     case 'completed':
       return 'completed';
     case 'waiting_for_user':
@@ -79,13 +84,23 @@ function mapAgentStatus(status: AgentStatus): AgentResponseData['status'] {
   }
 }
 
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
 export class WebSocketHandler {
   private conversationManager: ConversationManager;
   private connections = new Map<string, ConnectionState>();
   private detachedSessions = new Map<string, DetachedSessionState>();
   private heartbeatInterval?: ReturnType<typeof setInterval>;
   private static readonly FILE_SYNC_TIMEOUT_MS = 15000;
-  private static readonly RECONNECT_GRACE_MS = 5 * 60 * 1000;
+  private static readonly RECONNECT_GRACE_MS = parsePositiveInt(
+    process.env['KSHANA_WS_RECONNECT_GRACE_MS'],
+    30 * 60 * 1000,
+  );
   private static readonly DETACHED_EVENT_BUFFER_CAP = 1000;
   private readonly assetAddedListener: (event: AssetAddedEvent) => void;
   private readonly backgroundGenerationListener: (event: BackgroundGenerationEvent) => void;
@@ -150,6 +165,19 @@ export class WebSocketHandler {
     assetEventEmitter.onBackgroundGeneration(this.backgroundGenerationListener);
   }
 
+  private isTransientNetworkErrorMessage(message: string): boolean {
+    return (
+      /ECONNRESET/i.test(message) ||
+      /ETIMEDOUT/i.test(message) ||
+      /EAI_AGAIN/i.test(message) ||
+      /ENOTFOUND/i.test(message) ||
+      /socket hang up/i.test(message) ||
+      /connection reset/i.test(message) ||
+      /network error/i.test(message) ||
+      /fetch failed/i.test(message)
+    );
+  }
+
   /**
    * Handle a new WebSocket connection.
    * @param socket - The WebSocket connection
@@ -210,12 +238,12 @@ export class WebSocketHandler {
       }
     }
 
-    let resolveFileSync = () => {};
+    let resolveFileSync = () => { };
     const fileSyncPromise = new Promise<void>((resolve) => {
       resolveFileSync = resolve;
     });
 
-    let resolveSessionReady = () => {};
+    let resolveSessionReady = () => { };
     const sessionReady = new Promise<void>((resolve) => {
       resolveSessionReady = resolve;
     });
@@ -405,18 +433,34 @@ export class WebSocketHandler {
     const events = this.createEventHandlers(sessionId);
 
     try {
-      const result = await this.conversationManager.runTask(sessionId, data.task, events);
+      const result = await this.conversationManager.runTask(
+        sessionId,
+        data.task,
+        events,
+        { maxIterations: data.options?.maxIterations },
+      );
 
       // Send final response
       this.emitToSession(sessionId, createServerMessage<AgentResponseData>('agent_response', sessionId, {
         output: result.output,
-        status: mapAgentStatus(result.status),
+        status: mapAgentResultStatus(result),
       }));
 
-      this.emitTerminalStatusForResult(sessionId, result.status);
+      this.emitTerminalStatusForResult(sessionId, result);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.sendErrorToSession(sessionId, 'task_error', errorMessage);
+      const isTransient = this.isTransientNetworkErrorMessage(errorMessage);
+      if (isTransient) {
+        this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
+          status: 'ready',
+          message: 'Transient network issue while contacting LLM. Ready to retry.',
+        }));
+      }
+      this.sendErrorToSession(
+        sessionId,
+        isTransient ? 'transient_network_error' : 'task_error',
+        errorMessage,
+      );
     }
   }
 
@@ -449,13 +493,24 @@ export class WebSocketHandler {
       // Send final response
       this.emitToSession(sessionId, createServerMessage<AgentResponseData>('agent_response', sessionId, {
         output: result.output,
-        status: mapAgentStatus(result.status),
+        status: mapAgentResultStatus(result),
       }));
 
-      this.emitTerminalStatusForResult(sessionId, result.status);
+      this.emitTerminalStatusForResult(sessionId, result);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      this.sendErrorToSession(sessionId, 'response_error', errorMessage);
+      const isTransient = this.isTransientNetworkErrorMessage(errorMessage);
+      if (isTransient) {
+        this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
+          status: 'ready',
+          message: 'Transient network issue while contacting LLM. Ready to retry.',
+        }));
+      }
+      this.sendErrorToSession(
+        sessionId,
+        isTransient ? 'transient_network_error' : 'response_error',
+        errorMessage,
+      );
     }
   }
 
@@ -482,13 +537,21 @@ export class WebSocketHandler {
 
   private emitTerminalStatusForResult(
     sessionId: string,
-    resultStatus: AgentStatus,
+    result: Pick<GenericAgentResult, 'status' | 'error'>,
   ): void {
+    const { status: resultStatus, error: resultError } = result;
     if (resultStatus === 'waiting_for_user') {
       return;
     }
 
     if (resultStatus === 'interrupted') {
+      if (resultError === 'max_iterations_reached') {
+        this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
+          status: 'error',
+          message: 'Agent reached maximum iterations.',
+        }));
+        return;
+      }
       this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
         status: 'ready',
         message: 'Task cancelled',
@@ -552,6 +615,8 @@ export class WebSocketHandler {
     this.connections.delete(sessionId);
 
     const fileOps = getProjectFileOps();
+    const isChatSession = disconnected.channel === 'chat';
+    const isDetachable = isChatSession && this.conversationManager.hasSession(sessionId);
 
     // If owner disconnected, try rebinding to another live chat connection for same project.
     if (fileOps.isOwnedBy(sessionId)) {
@@ -572,16 +637,20 @@ export class WebSocketHandler {
         console.log(
           `[WebSocketHandler] Rebound ProjectFileOps owner from ${sessionId} to ${replacement.sessionId}`,
         );
-      } else {
+      } else if (!isDetachable) {
         fileOps.setLocalMode();
         console.log(
           `[WebSocketHandler] No replacement chat connection found for owner ${sessionId}; switched to local mode`,
         );
+      } else {
+        console.log(
+          `[WebSocketHandler] Owner ${sessionId} disconnected but session is detachable; ` +
+          `keeping remote mode (cache: ${fileOps.isRemote()})`,
+        );
       }
     }
 
-    const isChatSession = disconnected.channel === 'chat';
-    if (isChatSession && this.conversationManager.hasSession(sessionId)) {
+    if (isDetachable) {
       this.markSessionDetached(disconnected);
       return;
     }
@@ -600,25 +669,40 @@ export class WebSocketHandler {
       clearTimeout(existing.ttlTimer);
     }
 
-    const detachedAt = Date.now();
-    const ttlTimer = setTimeout(() => {
-      this.expireDetachedSession(connection.sessionId);
-    }, WebSocketHandler.RECONNECT_GRACE_MS);
-
-    this.detachedSessions.set(connection.sessionId, {
-      sessionId: connection.sessionId,
-      channel: connection.channel,
-      projectDir: connection.projectDir,
-      detachedAt,
-      expiresAt: detachedAt + WebSocketHandler.RECONNECT_GRACE_MS,
-      ttlTimer,
-      queuedEvents: existing?.queuedEvents ?? [],
-    });
+    const queuedEvents = existing?.queuedEvents ?? [];
+    this.scheduleDetachedExpiry(
+      connection.sessionId,
+      connection.channel,
+      connection.projectDir,
+      queuedEvents,
+    );
 
     console.log(
       `[WebSocketHandler] Session ${connection.sessionId} detached. ` +
       `Will expire in ${WebSocketHandler.RECONNECT_GRACE_MS}ms`,
     );
+  }
+
+  private scheduleDetachedExpiry(
+    sessionId: string,
+    channel: 'chat' | 'assets',
+    projectDir: string | undefined,
+    queuedEvents: Array<ServerMessage<unknown>>,
+  ): void {
+    const detachedAt = Date.now();
+    const ttlTimer = setTimeout(() => {
+      this.expireDetachedSession(sessionId);
+    }, WebSocketHandler.RECONNECT_GRACE_MS);
+
+    this.detachedSessions.set(sessionId, {
+      sessionId,
+      channel,
+      projectDir,
+      detachedAt,
+      expiresAt: detachedAt + WebSocketHandler.RECONNECT_GRACE_MS,
+      ttlTimer,
+      queuedEvents,
+    });
   }
 
   private expireDetachedSession(sessionId: string): void {
@@ -627,8 +711,27 @@ export class WebSocketHandler {
       return;
     }
 
+    if (this.isSessionRunning(sessionId)) {
+      this.scheduleDetachedExpiry(
+        detached.sessionId,
+        detached.channel,
+        detached.projectDir,
+        detached.queuedEvents,
+      );
+      console.log(
+        `[WebSocketHandler] Detached session still running, extending grace window: ${sessionId}`,
+      );
+      return;
+    }
+
     this.detachedSessions.delete(sessionId);
     this.conversationManager.deleteSession(sessionId);
+
+    const fileOps = getProjectFileOps();
+    if (fileOps.isOwnedBy(sessionId)) {
+      fileOps.setLocalMode();
+      console.log(`[WebSocketHandler] Detached session expired; switched to local mode`);
+    }
 
     console.log(
       `[WebSocketHandler] Detached session expired and was removed: ${sessionId}`,
@@ -654,7 +757,7 @@ export class WebSocketHandler {
     ) {
       detached.queuedEvents = detached.queuedEvents.slice(
         detached.queuedEvents.length -
-          WebSocketHandler.DETACHED_EVENT_BUFFER_CAP,
+        WebSocketHandler.DETACHED_EVENT_BUFFER_CAP,
       );
     }
   }
@@ -676,15 +779,14 @@ export class WebSocketHandler {
   }
 
   private createSender(connectionState: ConnectionState): (type: string, msgData: Record<string, unknown>) => void {
+    const sessionId = connectionState.sessionId;
     return (type: string, msgData: Record<string, unknown>) => {
-      if (connectionState.socket.readyState === 1) {
-        connectionState.socket.send(JSON.stringify({
-          type,
-          sessionId: connectionState.sessionId,
-          timestamp: Date.now(),
-          data: msgData,
-        }));
-      }
+      this.emitToSession(sessionId, {
+        type: type as ServerMessageType,
+        sessionId,
+        timestamp: Date.now(),
+        data: msgData,
+      });
     };
   }
 
@@ -721,6 +823,15 @@ export class WebSocketHandler {
         sessionId,
         'file_proxy_not_owner',
         `Session ${sessionId} is not the active file proxy owner`,
+      );
+      return null;
+    }
+    if (conn.projectDir && !fileOps.isRemote()) {
+      this.sendError(
+        socket,
+        sessionId,
+        'file_proxy_unavailable',
+        'File proxy is not active for this remote project session. Reconnect and retry.',
       );
       return null;
     }
@@ -765,11 +876,16 @@ export class WebSocketHandler {
    */
   private createEventHandlers(sessionId: string): ConversationEvents {
     return {
-      onProgress: (sid, percentage, message) => {
+      onProgress: (sid, progress) => {
+        const iteration = progress.iteration ?? Math.round(progress.percentage);
+        const maxIterations =
+          progress.maxIterations ??
+          this.getSessionMaxIterations(sid);
+
         this.emitToSession(sid, createServerMessage<ProgressData>('progress', sid, {
-          iteration: Math.round(percentage),
-          maxIterations: 100,
-          status: message,
+          iteration,
+          maxIterations,
+          status: progress.message,
         }));
       },
 
@@ -823,7 +939,7 @@ export class WebSocketHandler {
         // Map agent status to status message format
         let statusType: StatusData['status'];
         let message: string;
-        
+
         switch (status) {
           case 'started':
           case 'thinking':
@@ -851,7 +967,7 @@ export class WebSocketHandler {
             statusType = 'busy';
             message = 'Processing...';
         }
-        
+
         this.emitToSession(sid, createServerMessage<StatusData>('status', sid, {
           status: statusType,
           message,
@@ -870,6 +986,34 @@ export class WebSocketHandler {
         }));
       },
     };
+  }
+
+  private getSessionMaxIterations(sessionId: string): number {
+    const manager = this.conversationManager as unknown as {
+      getSessionMaxIterations?: (id: string) => number;
+    };
+    if (typeof manager.getSessionMaxIterations === 'function') {
+      return manager.getSessionMaxIterations(sessionId);
+    }
+    return 100;
+  }
+
+  private isSessionRunning(sessionId: string): boolean {
+    const manager = this.conversationManager as unknown as {
+      isSessionRunning?: (id: string) => boolean;
+      getSession?: (id: string) => { status?: string } | undefined;
+    };
+
+    if (typeof manager.isSessionRunning === 'function') {
+      return manager.isSessionRunning(sessionId);
+    }
+
+    if (typeof manager.getSession === 'function') {
+      const state = manager.getSession(sessionId);
+      return state?.status === 'running';
+    }
+
+    return false;
   }
 
   /**

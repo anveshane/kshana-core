@@ -31,6 +31,13 @@ export interface RouteOptions {
   taskType?: TaskType;
 }
 
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return parsed;
+}
+
 /**
  * Register all routes on the Fastify instance.
  */
@@ -39,12 +46,16 @@ export async function registerRoutes(
   options: RouteOptions
 ): Promise<{ conversationManager: ConversationManager; wsHandler: WebSocketHandler }> {
   const { llmConfig, apiPrefix = '/api/v1', taskType = 'generic' } = options;
+  const defaultMaxIterations = parsePositiveInt(
+    process.env['KSHANA_MAX_ITERATIONS'],
+    100,
+  );
 
   // Create conversation manager with task type
   const conversationManager = new ConversationManager({
     llmConfig,
     sessionTimeoutMs: 30 * 60 * 1000, // 30 minutes
-    maxIterations: 50,
+    maxIterations: defaultMaxIterations,
     taskType,
   });
 
@@ -82,13 +93,18 @@ export async function registerRoutes(
       },
     },
     async (request: FastifyRequest<{ Body: ChatRequestBody }>, reply: FastifyReply) => {
-      const { task } = request.body;
+      const { task, options: requestOptions } = request.body;
 
       // Create a temporary session
       const session = await conversationManager.createSession();
 
       try {
-        const result = await conversationManager.runTask(session.id, task);
+        const result = await conversationManager.runTask(
+          session.id,
+          task,
+          undefined,
+          { maxIterations: requestOptions?.maxIterations },
+        );
 
         const response: ChatResponse = {
           sessionId: session.id,

@@ -13,6 +13,20 @@ import type {
 } from './types.js';
 import { getLLMLogger } from './LLMLogger.js';
 
+const DEFAULT_TRANSIENT_RETRIES = 2;
+const RETRYABLE_STATUS_CODES = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_ERROR_PATTERNS = [
+  /ECONNRESET/i,
+  /ETIMEDOUT/i,
+  /EAI_AGAIN/i,
+  /ENOTFOUND/i,
+  /ECONNREFUSED/i,
+  /socket hang up/i,
+  /network error/i,
+  /fetch failed/i,
+  /connection reset/i,
+];
+
 export class LLMClient {
   private client: OpenAI;
   private model: string;
@@ -42,6 +56,108 @@ export class LLMClient {
       this.model = config.model ?? process.env['LLM_MODEL'] ?? 'local-model';
       // Also check baseUrl to detect Gemini even if provider env var isn't set
       this.isGeminiProvider = this.baseUrl.includes('generativelanguage.googleapis.com');
+    }
+  }
+
+  private getMaxTransientRetries(): number {
+    const rawValue = process.env['LLM_TRANSIENT_RETRIES'];
+    if (!rawValue) return DEFAULT_TRANSIENT_RETRIES;
+    const parsed = Number.parseInt(rawValue, 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return DEFAULT_TRANSIENT_RETRIES;
+    }
+    return parsed;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  private getRetryDelayMs(attempt: number): number {
+    const baseDelay = Math.min(500 * 2 ** attempt, 4000);
+    const jitter = Math.floor(Math.random() * 250);
+    return baseDelay + jitter;
+  }
+
+  private getErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  private extractStatusCode(error: unknown): number | undefined {
+    if (!error || typeof error !== 'object') {
+      return undefined;
+    }
+
+    if ('status' in error) {
+      return error.status as number;
+    }
+    if ('statusCode' in error) {
+      return error.statusCode as number;
+    }
+    if (
+      'response' in error &&
+      error.response &&
+      typeof error.response === 'object' &&
+      'status' in error.response
+    ) {
+      return error.response.status as number;
+    }
+    return undefined;
+  }
+
+  private isRetryableError(
+    error: unknown,
+    statusCode?: number,
+  ): boolean {
+    if (typeof statusCode === 'number' && RETRYABLE_STATUS_CODES.has(statusCode)) {
+      return true;
+    }
+
+    const message = this.getErrorMessage(error);
+    return RETRYABLE_ERROR_PATTERNS.some((pattern) => pattern.test(message));
+  }
+
+  private buildEnhancedError(
+    prefix: string,
+    error: unknown,
+    statusCode?: number,
+  ): Error {
+    const errorMessage = this.getErrorMessage(error);
+    const enhancedError = new Error(
+      `${prefix}: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`,
+    );
+    if (error instanceof Error && error.stack) {
+      enhancedError.stack = error.stack;
+    }
+    return enhancedError;
+  }
+
+  private async createStreamingCompletion(
+    requestParams: OpenAI.ChatCompletionCreateParamsStreaming,
+  ): Promise<AsyncIterable<OpenAI.ChatCompletionChunk>> {
+    try {
+      return await this.client.chat.completions.create(requestParams) as AsyncIterable<OpenAI.ChatCompletionChunk>;
+    } catch (error: unknown) {
+      const statusCode = this.extractStatusCode(error);
+
+      // If we get a 400 and stream_options was included, retry once without it.
+      if (statusCode === 400 && requestParams.stream_options) {
+        console.warn(
+          '[LLMClient] Got 400 with stream_options, retrying streaming request without stream_options...',
+        );
+        const retryParams: OpenAI.ChatCompletionCreateParamsStreaming = {
+          model: requestParams.model,
+          messages: requestParams.messages,
+          tools: requestParams.tools,
+          temperature: requestParams.temperature,
+          stream: true,
+        };
+        return await this.client.chat.completions.create(retryParams) as AsyncIterable<OpenAI.ChatCompletionChunk>;
+      }
+
+      throw error;
     }
   }
 
@@ -153,40 +269,40 @@ export class LLMClient {
       request.tools = this.convertTools(tools);
     }
 
-    try {
-      const response = await this.client.chat.completions.create(request);
-      const result = this.parseResponse(response);
+    const maxRetries = this.getMaxTransientRetries();
 
-      // Log response
-      logger.logResponse(result);
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      try {
+        const response = await this.client.chat.completions.create(request);
+        const result = this.parseResponse(response);
 
-      return result;
-    } catch (error: unknown) {
-      // Log the error with details
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      let statusCode: number | undefined;
-      
-      // Extract status code if available
-      if (error && typeof error === 'object') {
-        if ('status' in error) {
-          statusCode = error.status as number;
-        } else if ('statusCode' in error) {
-          statusCode = error.statusCode as number;
-        } else if ('response' in error && error.response && typeof error.response === 'object' && 'status' in error.response) {
-          statusCode = error.response.status as number;
+        // Log response
+        logger.logResponse(result);
+
+        return result;
+      } catch (error: unknown) {
+        const statusCode = this.extractStatusCode(error);
+        const retryable = this.isRetryableError(error, statusCode);
+        const errorMessage = this.getErrorMessage(error);
+
+        if (retryable && attempt < maxRetries) {
+          const delayMs = this.getRetryDelayMs(attempt);
+          console.warn(
+            `[LLMClient] Transient generate() failure (attempt ${attempt + 1}/${maxRetries + 1}): ${errorMessage}. Retrying in ${delayMs}ms...`,
+          );
+          await this.sleep(delayMs);
+          continue;
         }
+
+        console.error(
+          `[LLMClient] API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`,
+        );
+        throw this.buildEnhancedError('LLM API call failed', error, statusCode);
       }
-      
-      // Log error to console for debugging
-      console.error(`[LLMClient] API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`);
-      
-      // Re-throw with more context
-      const enhancedError = new Error(`LLM API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`);
-      if (error instanceof Error && error.stack) {
-        enhancedError.stack = error.stack;
-      }
-      throw enhancedError;
     }
+
+    // This is unreachable, but keeps TypeScript happy.
+    throw new Error('LLM API call failed: retries exhausted');
   }
 
   /**
@@ -201,152 +317,182 @@ export class LLMClient {
     // Log request
     logger.logRequest(messages, tools, { temperature });
 
-    // Build request - Gemini may not support stream_options
-    const requestParams: OpenAI.ChatCompletionCreateParamsStreaming = {
-      model: this.model,
-      messages: this.convertMessages(messages),
-      tools: tools ? this.convertTools(tools) : undefined,
-      temperature,
-      stream: true,
-    };
-    
-    // Only include stream_options for non-Gemini providers (Gemini may not support it)
-    if (!this.isGeminiProvider) {
-      requestParams.stream_options = { include_usage: true };
-    }
+    const maxRetries = this.getMaxTransientRetries();
 
-    let stream: AsyncIterable<OpenAI.ChatCompletionChunk>;
-    try {
-      stream = await this.client.chat.completions.create(requestParams) as AsyncIterable<OpenAI.ChatCompletionChunk>;
-    } catch (error: unknown) {
-      // Log streaming error
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      let statusCode: number | undefined;
-      
-      if (error && typeof error === 'object') {
-        if ('status' in error) {
-          statusCode = error.status as number;
-        } else if ('statusCode' in error) {
-          statusCode = error.statusCode as number;
-        } else if ('response' in error && error.response && typeof error.response === 'object' && 'status' in error.response) {
-          statusCode = error.response.status as number;
-        }
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      // Build request - Gemini may not support stream_options
+      const requestParams: OpenAI.ChatCompletionCreateParamsStreaming = {
+        model: this.model,
+        messages: this.convertMessages(messages),
+        tools: tools ? this.convertTools(tools) : undefined,
+        temperature,
+        stream: true,
+      };
+
+      if (!this.isGeminiProvider) {
+        requestParams.stream_options = { include_usage: true };
       }
-      
-      // If we get a 400 error and stream_options was included, retry without it
-      if (statusCode === 400 && requestParams.stream_options) {
-        console.warn(`[LLMClient] Got 400 error with stream_options, retrying without stream_options...`);
-        try {
-          // Create a new request without stream_options
-          const retryParams: OpenAI.ChatCompletionCreateParamsStreaming = {
-            model: requestParams.model,
-            messages: requestParams.messages,
-            tools: requestParams.tools,
-            temperature: requestParams.temperature,
-            stream: true,
-          };
-          stream = await this.client.chat.completions.create(retryParams) as AsyncIterable<OpenAI.ChatCompletionChunk>;
-          console.log(`[LLMClient] Retry without stream_options succeeded`);
-        } catch (retryError) {
-          // If retry also fails, throw the original error
-          console.error(`[LLMClient] Retry without stream_options also failed: ${retryError}`);
-          const enhancedError = new Error(`LLM streaming API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`);
-          if (error instanceof Error && error.stack) {
-            enhancedError.stack = error.stack;
+
+      // Accumulate for final logging
+      let fullContent = '';
+      let emittedStreamChunk = false;
+      let streamCompleted = false;
+      const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> = new Map();
+
+      try {
+        const stream = await this.createStreamingCompletion(requestParams);
+
+        for await (const chunk of stream) {
+          // Add safety check for stream chunks
+          if (!chunk.choices || !Array.isArray(chunk.choices) || chunk.choices.length === 0) {
+            console.warn('[LLMClient] Stream chunk missing choices array or empty, skipping chunk');
+            continue;
           }
-          throw enhancedError;
-        }
-      } else {
-        console.error(`[LLMClient] Streaming API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`);
-        const enhancedError = new Error(`LLM streaming API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`);
-        if (error instanceof Error && error.stack) {
-          enhancedError.stack = error.stack;
-        }
-        throw enhancedError;
-      }
-    }
 
-    // Accumulate for final logging
-    let fullContent = '';
-    const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> = new Map();
+          const delta = chunk.choices[0]?.delta;
 
-    for await (const chunk of stream) {
-      // Add safety check for stream chunks
-      if (!chunk.choices || !Array.isArray(chunk.choices) || chunk.choices.length === 0) {
-        console.warn('[LLMClient] Stream chunk missing choices array or empty, skipping chunk');
-        continue;
-      }
-
-      const delta = chunk.choices[0]?.delta;
-
-      if (delta?.content) {
-        fullContent += delta.content;
-        logger.logStreamChunk(delta.content);
-        yield { content: delta.content, done: false };
-      }
-
-      if (delta?.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          // Accumulate tool calls for logging
-          let acc = toolCallAccumulators.get(tc.index);
-          if (!acc) {
-            acc = { id: tc.id ?? '', name: tc.function?.name ?? '', arguments: '' };
-            toolCallAccumulators.set(tc.index, acc);
+          if (delta?.content) {
+            fullContent += delta.content;
+            emittedStreamChunk = true;
+            logger.logStreamChunk(delta.content);
+            yield { content: delta.content, done: false };
           }
-          if (tc.id) acc.id = tc.id;
-          if (tc.function?.name) acc.name = tc.function.name;
-          if (tc.function?.arguments) acc.arguments += tc.function.arguments;
 
-          yield {
-            toolCallDelta: {
-              index: tc.index,
-              id: tc.id,
-              name: tc.function?.name,
-              arguments: tc.function?.arguments,
-            },
-            done: false,
-          };
-        }
-      }
+          if (delta?.tool_calls) {
+            emittedStreamChunk = true;
+            for (const tc of delta.tool_calls) {
+              // Accumulate tool calls for logging
+              let acc = toolCallAccumulators.get(tc.index);
+              if (!acc) {
+                acc = { id: tc.id ?? '', name: tc.function?.name ?? '', arguments: '' };
+                toolCallAccumulators.set(tc.index, acc);
+              }
+              if (tc.id) acc.id = tc.id;
+              if (tc.function?.name) acc.name = tc.function.name;
+              if (tc.function?.arguments) acc.arguments += tc.function.arguments;
 
-      if (chunk.choices[0]?.finish_reason) {
-        // Build final tool calls for logging
-        const toolCalls: ToolCall[] = [];
-        for (const [, acc] of toolCallAccumulators) {
-          if (acc.id && acc.name) {
-            try {
-              toolCalls.push({
-                id: acc.id,
-                name: acc.name,
-                arguments: acc.arguments ? JSON.parse(acc.arguments) : {},
-              });
-            } catch {
-              toolCalls.push({
-                id: acc.id,
-                name: acc.name,
-                arguments: {},
-              });
+              yield {
+                toolCallDelta: {
+                  index: tc.index,
+                  id: tc.id,
+                  name: tc.function?.name,
+                  arguments: tc.function?.arguments,
+                },
+                done: false,
+              };
             }
           }
+
+          if (chunk.choices[0]?.finish_reason) {
+            // Build final tool calls for logging
+            const toolCalls: ToolCall[] = [];
+            for (const [, acc] of toolCallAccumulators) {
+              if (acc.id && acc.name) {
+                try {
+                  toolCalls.push({
+                    id: acc.id,
+                    name: acc.name,
+                    arguments: acc.arguments ? JSON.parse(acc.arguments) : {},
+                  });
+                } catch {
+                  toolCalls.push({
+                    id: acc.id,
+                    name: acc.name,
+                    arguments: {},
+                  });
+                }
+              }
+            }
+
+            // Log complete response
+            logger.logStreamComplete({
+              content: fullContent || null,
+              toolCalls,
+              finishReason: chunk.choices[0]?.finish_reason ?? null,
+            });
+
+            // Include usage if available (requires stream_options: { include_usage: true })
+            const usage = chunk.usage
+              ? {
+                promptTokens: chunk.usage.prompt_tokens,
+                completionTokens: chunk.usage.completion_tokens,
+                totalTokens: chunk.usage.total_tokens,
+              }
+              : undefined;
+
+            streamCompleted = true;
+            yield { done: true, usage };
+          }
         }
 
-        // Log complete response
-        logger.logStreamComplete({
-          content: fullContent || null,
-          toolCalls,
-          finishReason: chunk.choices[0]?.finish_reason ?? null,
-        });
-
-        // Include usage if available (requires stream_options: { include_usage: true })
-        const usage = chunk.usage
-          ? {
-            promptTokens: chunk.usage.prompt_tokens,
-            completionTokens: chunk.usage.completion_tokens,
-            totalTokens: chunk.usage.total_tokens,
+        // Some providers can end the stream without a finish chunk.
+        if (!streamCompleted) {
+          const toolCalls: ToolCall[] = [];
+          for (const [, acc] of toolCallAccumulators) {
+            if (acc.id && acc.name) {
+              try {
+                toolCalls.push({
+                  id: acc.id,
+                  name: acc.name,
+                  arguments: acc.arguments ? JSON.parse(acc.arguments) : {},
+                });
+              } catch {
+                toolCalls.push({
+                  id: acc.id,
+                  name: acc.name,
+                  arguments: {},
+                });
+              }
+            }
           }
-          : undefined;
+          logger.logStreamComplete({
+            content: fullContent || null,
+            toolCalls,
+            finishReason: 'stop',
+          });
+          yield { done: true };
+        }
 
-        yield { done: true, usage };
+        return;
+      } catch (error: unknown) {
+        const statusCode = this.extractStatusCode(error);
+        const retryable = this.isRetryableError(error, statusCode);
+        const errorMessage = this.getErrorMessage(error);
+
+        if (
+          streamCompleted ||
+          (retryable && emittedStreamChunk && toolCallAccumulators.size === 0 && fullContent.trim().length > 0)
+        ) {
+          // If the stream was interrupted after emitting only text, preserve already streamed content.
+          console.warn(
+            `[LLMClient] Streaming interrupted after partial text (${errorMessage}). Preserving partial response.`,
+          );
+          logger.logStreamComplete({
+            content: fullContent || null,
+            toolCalls: [],
+            finishReason: 'network_interrupted',
+          });
+          yield { done: true };
+          return;
+        }
+
+        if (retryable && !emittedStreamChunk && attempt < maxRetries) {
+          const delayMs = this.getRetryDelayMs(attempt);
+          console.warn(
+            `[LLMClient] Transient generateStream() failure (attempt ${attempt + 1}/${maxRetries + 1}): ${errorMessage}. Retrying in ${delayMs}ms...`,
+          );
+          await this.sleep(delayMs);
+          continue;
+        }
+
+        console.error(
+          `[LLMClient] Streaming API call failed: ${errorMessage}${statusCode ? ` (status: ${statusCode})` : ''}`,
+        );
+        throw this.buildEnhancedError(
+          'LLM streaming API call failed',
+          error,
+          statusCode,
+        );
       }
     }
   }

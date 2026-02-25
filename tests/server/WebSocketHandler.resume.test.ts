@@ -312,4 +312,85 @@ describe('WebSocketHandler session resume', () => {
     expect(errorMessage?.data?.code).toBe('session_in_use');
     expect(socket2.readyState).toBe(3);
   });
+
+  it('keeps remote mode when owner disconnects with detachable session (no premature local fallback)', async () => {
+    const socket1 = new FakeSocket();
+    const sessionId = await connectChatSession(handler, socket1, {
+      project_dir: '/tmp/project-detach-remote',
+    });
+
+    const fileOps = getProjectFileOps();
+    expect(fileOps.isRemote()).toBe(true);
+    expect(fileOps.isOwnedBy(sessionId)).toBe(true);
+
+    // Disconnect — session should be detachable (hasSession is true)
+    socket1.close(1006, 'network_lost');
+
+    // Remote mode must still be active since the session is detachable
+    expect(fileOps.isRemote()).toBe(true);
+    expect(fileOps.isOwnedBy(sessionId)).toBe(true);
+  });
+
+  it('flushes file_write events queued during detach on reconnect', async () => {
+    // Make agent write files mid-run via ProjectFileOps
+    manager.runTaskImpl = async (sessionId, _task, events) => {
+      const fileOps = getProjectFileOps();
+      await sleep(15);
+      // These writes happen while socket is dead (detached) — should be queued
+      fileOps.writeFileSync('/tmp/project-file-flush/.kshana/agent/transcript.md', '# Transcript');
+      events?.onAgentText?.(sessionId, 'wrote file', true);
+      return { output: 'done', status: 'completed' };
+    };
+
+    const socket1 = new FakeSocket();
+    const sessionId = await connectChatSession(handler, socket1, {
+      project_dir: '/tmp/project-file-flush',
+    });
+
+    // Start task then disconnect immediately so writes happen while detached
+    socket1.emitMessage({
+      type: 'start_task',
+      data: { task: 'generate transcript' },
+    });
+    await sleep(5);
+    socket1.close(1006, 'network_lost');
+
+    // Wait for the agent to finish writing
+    await sleep(60);
+
+    // Reconnect
+    const socket2 = new FakeSocket();
+    await connectChatSession(handler, socket2, {
+      project_dir: '/tmp/project-file-flush',
+      session_id: sessionId,
+    });
+
+    const messages = parseSocketMessages(socket2);
+    const fileWriteMessages = messages.filter((m) => m.type === 'file_write');
+    expect(fileWriteMessages.length).toBeGreaterThanOrEqual(1);
+    expect(fileWriteMessages[0].data.path).toContain('transcript.md');
+  });
+
+  it('switches to local mode when detached session expires', async () => {
+    (WebSocketHandler as any).RECONNECT_GRACE_MS = 25;
+
+    const socket1 = new FakeSocket();
+    const sessionId = await connectChatSession(handler, socket1, {
+      project_dir: '/tmp/project-detach-expire',
+    });
+
+    const fileOps = getProjectFileOps();
+    expect(fileOps.isRemote()).toBe(true);
+
+    socket1.close(1006, 'network_lost');
+
+    // Remote mode should still be active right after disconnect
+    expect(fileOps.isRemote()).toBe(true);
+
+    // Wait for detach expiry
+    await sleep(60);
+
+    // Now local mode should be active
+    expect(fileOps.isRemote()).toBe(false);
+  });
 });

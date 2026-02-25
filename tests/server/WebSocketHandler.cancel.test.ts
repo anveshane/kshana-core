@@ -12,6 +12,7 @@ type AgentResultStatus =
 interface MockAgentResult {
   output: string;
   status: AgentResultStatus;
+  error?: string;
 }
 
 class MockConversationManager {
@@ -285,5 +286,42 @@ describe('WebSocketHandler cancel semantics', () => {
       .find((message) => message.type === 'status');
     expect(terminalStatus?.data?.status).toBe('ready');
     expect(terminalStatus?.data?.message).toBe('Task cancelled');
+  });
+
+  it('maps max-iteration interruptions to max_iterations status semantics', async () => {
+    manager.runTaskImpl = async () => ({
+      output: 'maxed',
+      status: 'interrupted',
+      error: 'max_iterations_reached',
+    });
+
+    const socket = new FakeSocket();
+    await connectChatSession(handler, socket, {
+      project_dir: '/tmp/max-iterations-mapping',
+    });
+
+    socket.emitMessage({
+      type: 'start_task',
+      data: { task: 'run' },
+    });
+
+    await waitFor(() =>
+      parseSocketMessages(socket).some(
+        (message) => message.type === 'agent_response',
+      ),
+    );
+
+    const agentResponse = parseSocketMessages(socket).find(
+      (message) => message.type === 'agent_response',
+    );
+    expect(agentResponse?.data?.status).toBe('max_iterations');
+
+    const terminalStatus = [...parseSocketMessages(socket)]
+      .reverse()
+      .find((message) => message.type === 'status');
+    expect(terminalStatus?.data?.status).toBe('error');
+    expect(terminalStatus?.data?.message).toBe(
+      'Agent reached maximum iterations.',
+    );
   });
 });
