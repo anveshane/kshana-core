@@ -219,6 +219,44 @@ describe('WebSocketHandler session resume', () => {
     expect(statusMessage).toBeDefined();
   });
 
+  it('includes filePathProtocolVersion capability in status messages', async () => {
+    const socket = new FakeSocket();
+    await connectChatSession(handler, socket, {
+      project_dir: '/tmp/project-capabilities',
+    });
+
+    const connectedStatus = parseSocketMessages(socket).find(
+      (message) =>
+        message.type === 'status' &&
+        message.data?.status === 'connected',
+    );
+    expect(connectedStatus?.data?.capabilities?.filePathProtocolVersion).toBe(2);
+
+    socket.emitMessage({
+      type: 'ping',
+      data: {},
+    });
+
+    await waitFor(() =>
+      parseSocketMessages(socket).some(
+        (message) =>
+          message.type === 'status' &&
+          message.data?.status === 'ready' &&
+          message.data?.message === 'pong',
+      ),
+    );
+
+    const pongStatus = [...parseSocketMessages(socket)]
+      .reverse()
+      .find(
+        (message) =>
+          message.type === 'status' &&
+          message.data?.status === 'ready' &&
+          message.data?.message === 'pong',
+      );
+    expect(pongStatus?.data?.capabilities?.filePathProtocolVersion).toBe(2);
+  });
+
   it('flushes buffered server events in order when reconnecting within grace TTL', async () => {
     manager.runTaskImpl = async (sessionId, _task, events) => {
       await sleep(15);

@@ -48,6 +48,13 @@ describe('ProjectFileOps — path normalization in remote mode', () => {
             ops.writeFileSync(path, 'content');
             expect(sent[0].data.path).toBe(path);
         });
+
+        it('preserves linux paths unchanged', () => {
+            const { ops, sent } = makeRemoteFileOps();
+            const path = '/home/demo/project/.kshana/context/index.json';
+            ops.writeFileSync(path, 'content');
+            expect(sent[0].data.path).toBe(path);
+        });
     });
 
     describe('mkdirSync', () => {

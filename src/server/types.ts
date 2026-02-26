@@ -60,6 +60,9 @@ export interface StatusData {
   status: 'connected' | 'ready' | 'busy' | 'completed' | 'error';
   message?: string;
   agentName?: string;
+  capabilities?: {
+    filePathProtocolVersion: number;
+  };
 }
 
 /**

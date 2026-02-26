@@ -91,6 +91,8 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
+const FILE_PATH_PROTOCOL_VERSION = 2;
+
 export class WebSocketHandler {
   private conversationManager: ConversationManager;
   private connections = new Map<string, ConnectionState>();
@@ -347,12 +349,13 @@ export class WebSocketHandler {
 
     this.sendMessage(
       socket,
-      createServerMessage<StatusData>('status', sessionId, {
-        status: 'connected',
-        message: shouldResumeSession
+      this.createStatusMessage(
+        sessionId,
+        'connected',
+        shouldResumeSession
           ? 'Session resumed successfully'
           : 'Session created successfully',
-      }),
+      ),
     );
   }
 
@@ -375,10 +378,7 @@ export class WebSocketHandler {
 
     // Handle different message types
     if (isPingMessage(message)) {
-      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
-        status: 'ready',
-        message: 'pong',
-      }));
+      this.sendMessage(socket, this.createStatusMessage(sessionId, 'ready', 'pong'));
       return;
     }
 
@@ -424,10 +424,10 @@ export class WebSocketHandler {
     if (!fileSyncReady) return;
 
     // Send busy status
-    this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
-      status: 'busy',
-      message: 'Processing task...',
-    }));
+    this.emitToSession(
+      sessionId,
+      this.createStatusMessage(sessionId, 'busy', 'Processing task...'),
+    );
 
     // Create event handlers
     const events = this.createEventHandlers(sessionId);
@@ -451,10 +451,14 @@ export class WebSocketHandler {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const isTransient = this.isTransientNetworkErrorMessage(errorMessage);
       if (isTransient) {
-        this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
-          status: 'ready',
-          message: 'Transient network issue while contacting LLM. Ready to retry.',
-        }));
+        this.emitToSession(
+          sessionId,
+          this.createStatusMessage(
+            sessionId,
+            'ready',
+            'Transient network issue while contacting LLM. Ready to retry.',
+          ),
+        );
       }
       this.sendErrorToSession(
         sessionId,
@@ -479,10 +483,10 @@ export class WebSocketHandler {
     if (!fileSyncReady) return;
 
     // Send busy status
-    this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
-      status: 'busy',
-      message: 'Processing response...',
-    }));
+    this.emitToSession(
+      sessionId,
+      this.createStatusMessage(sessionId, 'busy', 'Processing response...'),
+    );
 
     // Create event handlers
     const events = this.createEventHandlers(sessionId);
@@ -501,10 +505,14 @@ export class WebSocketHandler {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const isTransient = this.isTransientNetworkErrorMessage(errorMessage);
       if (isTransient) {
-        this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
-          status: 'ready',
-          message: 'Transient network issue while contacting LLM. Ready to retry.',
-        }));
+        this.emitToSession(
+          sessionId,
+          this.createStatusMessage(
+            sessionId,
+            'ready',
+            'Transient network issue while contacting LLM. Ready to retry.',
+          ),
+        );
       }
       this.sendErrorToSession(
         sessionId,
@@ -526,10 +534,10 @@ export class WebSocketHandler {
     const cancelled = await this.conversationManager.cancelTask(sessionId, reason);
 
     if (cancelled) {
-      this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
-        status: 'ready',
-        message: 'Task cancelled',
-      }));
+      this.emitToSession(
+        sessionId,
+        this.createStatusMessage(sessionId, 'ready', 'Task cancelled'),
+      );
     } else {
       this.sendError(socket, sessionId, 'cancel_failed', 'No running task to cancel');
     }
@@ -546,31 +554,35 @@ export class WebSocketHandler {
 
     if (resultStatus === 'interrupted') {
       if (resultError === 'max_iterations_reached') {
-        this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
-          status: 'error',
-          message: 'Agent reached maximum iterations.',
-        }));
+        this.emitToSession(
+          sessionId,
+          this.createStatusMessage(
+            sessionId,
+            'error',
+            'Agent reached maximum iterations.',
+          ),
+        );
         return;
       }
-      this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
-        status: 'ready',
-        message: 'Task cancelled',
-      }));
+      this.emitToSession(
+        sessionId,
+        this.createStatusMessage(sessionId, 'ready', 'Task cancelled'),
+      );
       return;
     }
 
     if (resultStatus === 'completed') {
-      this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
-        status: 'completed',
-        message: 'Task completed',
-      }));
+      this.emitToSession(
+        sessionId,
+        this.createStatusMessage(sessionId, 'completed', 'Task completed'),
+      );
       return;
     }
 
-    this.emitToSession(sessionId, createServerMessage<StatusData>('status', sessionId, {
-      status: 'error',
-      message: 'Error occurred',
-    }));
+    this.emitToSession(
+      sessionId,
+      this.createStatusMessage(sessionId, 'error', 'Error occurred'),
+    );
   }
 
   /**
@@ -778,6 +790,39 @@ export class WebSocketHandler {
     );
   }
 
+  private createStatusData(
+    status: StatusData['status'],
+    message?: string,
+    agentName?: string,
+  ): StatusData {
+    const data: StatusData = {
+      status,
+      capabilities: {
+        filePathProtocolVersion: FILE_PATH_PROTOCOL_VERSION,
+      },
+    };
+    if (message !== undefined) {
+      data.message = message;
+    }
+    if (agentName !== undefined) {
+      data.agentName = agentName;
+    }
+    return data;
+  }
+
+  private createStatusMessage(
+    sessionId: string,
+    status: StatusData['status'],
+    message?: string,
+    agentName?: string,
+  ): ServerMessage<StatusData> {
+    return createServerMessage<StatusData>(
+      'status',
+      sessionId,
+      this.createStatusData(status, message, agentName),
+    );
+  }
+
   private createSender(connectionState: ConnectionState): (type: string, msgData: Record<string, unknown>) => void {
     const sessionId = connectionState.sessionId;
     return (type: string, msgData: Record<string, unknown>) => {
@@ -968,11 +1013,10 @@ export class WebSocketHandler {
             message = 'Processing...';
         }
 
-        this.emitToSession(sid, createServerMessage<StatusData>('status', sid, {
-          status: statusType,
-          message,
-          agentName, // Include agent name if available
-        }));
+        this.emitToSession(
+          sid,
+          this.createStatusMessage(sid, statusType, message, agentName),
+        );
       },
 
       onAssetAdded: (sid, assetId, assetType, path, version, placementNumber, sceneNumber) => {
