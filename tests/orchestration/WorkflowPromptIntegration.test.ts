@@ -8,6 +8,7 @@ import {
   createProject,
   getCurrentPhase,
   loadProject,
+  setCurrentProjectBasePath,
 } from '../../src/tasks/video/workflow/index.js';
 
 const TEST_BASE_PATH = join(process.cwd(), 'test-temp-orchestration-prompt');
@@ -16,10 +17,12 @@ describe('Workflow prompt orchestration integration', () => {
   beforeEach(() => {
     rmSync(TEST_BASE_PATH, { recursive: true, force: true });
     mkdirSync(TEST_BASE_PATH, { recursive: true });
+    setCurrentProjectBasePath(TEST_BASE_PATH);
   });
 
   afterEach(() => {
     rmSync(TEST_BASE_PATH, { recursive: true, force: true });
+    setCurrentProjectBasePath(process.cwd());
   });
 
   it('injects continuation context into workflow prompt', async () => {

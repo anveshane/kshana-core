@@ -11,6 +11,10 @@ Generate AI videos for each placement identified in the previous phase.
 6. Complete `video_generation` only when all placements in the active batch succeed
 7. If any placements fail, retry failed-only using `retry_failed_batch_id`
 
+`generate_all_videos` now resumes safely by default:
+- It generates only missing placements (already-generated placements are skipped).
+- Use `force_regenerate: true` only when the user explicitly wants a full rerun.
+
 **NEVER:**
 - Manually parse the video-placements.md file
 - Call `generate_video` tool for individual placements
@@ -28,6 +32,18 @@ generate_all_videos(
   expand_prompts: true,
   run_in_background: true,
   auto_fill_gaps: true
+)
+```
+
+Full rerun (explicit):
+
+```
+generate_all_videos(
+  file_path: 'agent/content/video-placements.md',
+  expand_prompts: true,
+  run_in_background: true,
+  auto_fill_gaps: true,
+  force_regenerate: true
 )
 ```
 

@@ -335,6 +335,52 @@ describe('WebSocketHandler session resume', () => {
     expect(manager.hasSession(newSessionId)).toBe(true);
   });
 
+  it('auto-restores a missing session before start_task on an active socket', async () => {
+    manager.runTaskImpl = async (sessionId, _task, events) => {
+      if (!manager.hasSession(sessionId)) {
+        throw new Error(`Session not found: ${sessionId}`);
+      }
+      events?.onAgentText?.(sessionId, 'restored', true);
+      return { output: 'restored-ok', status: 'completed' };
+    };
+
+    const socket = new FakeSocket();
+    const sessionId = await connectChatSession(handler, socket, {
+      project_dir: '/tmp/project-auto-restore',
+    });
+
+    expect(manager.hasSession(sessionId)).toBe(true);
+    manager.deleteSession(sessionId);
+    expect(manager.hasSession(sessionId)).toBe(false);
+
+    socket.emitMessage({
+      type: 'start_task',
+      data: { task: 'resume after idle' },
+    });
+
+    await waitFor(() =>
+      parseSocketMessages(socket).some(
+        (message) => message.type === 'agent_response',
+      ),
+    );
+
+    const messages = parseSocketMessages(socket);
+    const restoreFailure = messages.find(
+      (message) =>
+        message.type === 'error' &&
+        message.data?.code === 'session_restore_failed',
+    );
+    const sessionNotFound = messages.find(
+      (message) =>
+        message.type === 'error' &&
+        message.data?.code === 'session_not_found',
+    );
+
+    expect(restoreFailure).toBeUndefined();
+    expect(sessionNotFound).toBeUndefined();
+    expect(manager.hasSession(sessionId)).toBe(true);
+  });
+
   it('rejects a second active connection with the same session_id', async () => {
     const socket1 = new FakeSocket();
     const sessionId = await connectChatSession(handler, socket1, {

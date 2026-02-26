@@ -861,6 +861,27 @@ export class WebSocketHandler {
     // can be received, but start_task/user_response must wait for the session.
     await conn.sessionReady;
 
+    // Session can be cleaned up while socket remains connected (idle gap).
+    // Recreate transparently so the next task can proceed without forcing reconnect.
+    if (!this.conversationManager.hasSession(sessionId)) {
+      try {
+        await this.conversationManager.createSession(conn.projectDir, sessionId);
+        console.warn(
+          `[WebSocketHandler] Restored missing session ${sessionId} for ${operation}`,
+        );
+      } catch (error) {
+        const details =
+          error instanceof Error ? error.message : String(error);
+        this.sendError(
+          socket,
+          sessionId,
+          'session_restore_failed',
+          `Session expired and could not be restored: ${details}`,
+        );
+        return null;
+      }
+    }
+
     if (conn.channel !== 'chat') {
       this.sendError(
         socket,

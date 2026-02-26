@@ -40,6 +40,10 @@ Generate images for each placement identified in the previous phase.
 5. The user will receive a completion/failure notification when the batch reaches terminal state
 6. Use `read_background_generation` in later phases when you need status
 
+`generate_all_images` now resumes safely by default:
+- It generates only missing placements (already-generated placements are skipped).
+- Use `force_regenerate: true` only when the user explicitly wants a full rerun.
+
 **NEVER:**
 - Manually parse the image-placements.md file
 - Call `Task` with image-generator subagent for individual placements
@@ -57,6 +61,17 @@ generate_all_images(
   file_path: 'agent/content/image-placements.md',
   expand_prompts: true,
   run_in_background: true
+)
+```
+
+Full rerun (explicit):
+
+```
+generate_all_images(
+  file_path: 'agent/content/image-placements.md',
+  expand_prompts: true,
+  run_in_background: true,
+  force_regenerate: true
 )
 ```
 

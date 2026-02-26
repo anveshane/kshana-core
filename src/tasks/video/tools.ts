@@ -50,6 +50,10 @@ import { parseImagePlacementsWithErrors, type ParsedImagePlacement } from './wor
 import { parseVideoPlacementsWithErrors, type ParsedVideoPlacement } from './workflow/videoPlacementsParser.js';
 import { parseInfographicPlacementsWithErrors, type ParsedInfographicPlacement } from './workflow/infographicPlacementsParser.js';
 import { validatePlacementSets } from './workflow/PlacementValidator.js';
+import {
+  buildPlacementProgressFromNumbers,
+  getGeneratedPlacementNumbersFromAssets,
+} from './workflow/placementProgress.js';
 import { getTranscriptSegmentForTimeRange } from './workflow/transcriptSegment.js';
 import { expandImagePlacementPrompt, expandVideoPlacementPrompt } from './workflow/placementPromptExpander.js';
 import { expandInfographicPlacementPrompt } from './workflow/infographicPromptExpander.js';
@@ -528,6 +532,8 @@ async function autoFillVideoPlacementGaps(
     {
       allowImageInfographicOverlap: true,
       requireInfographicWithinImage: true,
+      // Keep 1-second auto-gap/manual video placements instead of dropping them.
+      minDurationSeconds: 1,
     },
   );
 
@@ -3595,6 +3601,11 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
         type: 'string',
         description: 'Retry only failed placements from this prior image batch id.',
       },
+      force_regenerate: {
+        type: 'boolean',
+        description:
+          'If true, regenerate all parsed placements even when assets already exist. Default false generates only missing placements.',
+      },
     },
     required: [],
   },
@@ -3614,6 +3625,7 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
     const expandPrompts = (args['expand_prompts'] as boolean | undefined) !== false;
     const runInBackground = (args['run_in_background'] as boolean | undefined) !== false;
     const retryFailedBatchId = args['retry_failed_batch_id'] as string | undefined;
+    const forceRegenerate = args['force_regenerate'] === true;
     const basePath = getCurrentProjectBasePath();
     const logExpandedPrompts =
       (args['log_expanded_prompts'] as boolean | undefined) === true ||
@@ -3621,6 +3633,9 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
 
     let preparedPlacements: PreparedImageGenerationPlacement[] = [];
     let sourceFile = filePath;
+    let sourceTotalPlacements = 0;
+    let skippedExistingNumbers: number[] = [];
+    let queuedNumbers: number[] = [];
 
     if (retryFailedBatchId) {
       const retry = getRetryItemsForBatch(basePath, retryFailedBatchId, 'image');
@@ -3638,6 +3653,7 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
         isExpanded: item.metadata?.isExpanded === true,
         negativePrompt: item.metadata?.negativePrompt ?? 'blurry, low quality, text, watermark',
       }));
+      sourceTotalPlacements = preparedPlacements.length;
     } else {
       const content = readProjectFile(filePath);
       if (!content) {
@@ -3693,7 +3709,43 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
         };
       }
 
-      preparedPlacements = await prepareImagePlacementsForGeneration(placements, {
+      sourceTotalPlacements = placements.length;
+      let placementsForGeneration = placements;
+
+      if (!forceRegenerate) {
+        const assets = getAssets(basePath);
+        const generatedNumbers = getGeneratedPlacementNumbersFromAssets(assets, 'scene_image');
+        const progress = buildPlacementProgressFromNumbers(
+          placements.map((placement) => placement.placementNumber),
+          generatedNumbers,
+        );
+        const missingSet = new Set(progress.missingNumbers);
+        skippedExistingNumbers = progress.completedNumbers;
+        placementsForGeneration = placements.filter((placement) =>
+          missingSet.has(placement.placementNumber),
+        );
+      }
+
+      queuedNumbers = placementsForGeneration
+        .map((placement) => placement.placementNumber)
+        .sort((left, right) => left - right);
+
+      if (placementsForGeneration.length === 0) {
+        return {
+          status: 'completed',
+          total_placements: 0,
+          source_total_placements: sourceTotalPlacements,
+          skipped_existing_count: skippedExistingNumbers.length,
+          skipped_existing_numbers: skippedExistingNumbers,
+          queued_numbers: [],
+          message:
+            sourceTotalPlacements > 0
+              ? 'All image placements already have generated assets. No new images were queued.'
+              : 'No image placements available to generate.',
+        };
+      }
+
+      preparedPlacements = await prepareImagePlacementsForGeneration(placementsForGeneration, {
         expandPrompts,
         logExpandedPrompts,
         logPrefix: '[generate_all_images]',
@@ -3707,11 +3759,18 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
       };
     }
 
+    queuedNumbers = preparedPlacements
+      .map((placement) => placement.placementNumber)
+      .sort((left, right) => left - right);
+    if (sourceTotalPlacements === 0) {
+      sourceTotalPlacements = preparedPlacements.length;
+    }
+
     persistExpandedPromptsForKind(
       basePath,
       'image',
       preparedPlacements,
-      retryFailedBatchId ? 'upsert' : 'replace',
+      retryFailedBatchId || skippedExistingNumbers.length > 0 ? 'upsert' : 'replace',
     );
 
     if (runInBackground) {
@@ -3771,6 +3830,10 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
         status: 'queued',
         batch_id: created.batch.id,
         total_placements: preparedPlacements.length,
+        source_total_placements: sourceTotalPlacements,
+        skipped_existing_count: skippedExistingNumbers.length,
+        skipped_existing_numbers: skippedExistingNumbers,
+        queued_numbers: queuedNumbers,
         transitioned: autoTransitioned,
         current_phase: currentPhase,
         next_action: autoTransitioned
@@ -3789,6 +3852,10 @@ The tool handles parsing, optional prompt expansion, background persistence, ret
     return {
       status: 'completed',
       total_placements: preparedPlacements.length,
+      source_total_placements: sourceTotalPlacements,
+      skipped_existing_count: skippedExistingNumbers.length,
+      skipped_existing_numbers: skippedExistingNumbers,
+      queued_numbers: queuedNumbers,
       successful: successful.length,
       failed: failed.length,
       results,
@@ -3841,6 +3908,11 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
         type: 'string',
         description: 'Retry only failed placements from this prior video batch id.',
       },
+      force_regenerate: {
+        type: 'boolean',
+        description:
+          'If true, regenerate all parsed placements even when assets already exist. Default false generates only missing placements.',
+      },
     },
     required: [],
   },
@@ -3850,10 +3922,14 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
     const autoFillGaps = (args['auto_fill_gaps'] as boolean | undefined) !== false;
     const runInBackground = (args['run_in_background'] as boolean | undefined) !== false;
     const retryFailedBatchId = args['retry_failed_batch_id'] as string | undefined;
+    const forceRegenerate = args['force_regenerate'] === true;
     const basePath = getCurrentProjectBasePath();
 
     let preparedPlacements: PreparedVideoGenerationPlacement[] = [];
     let sourceFile = filePath;
+    let sourceTotalPlacements = 0;
+    let skippedExistingNumbers: number[] = [];
+    let queuedNumbers: number[] = [];
 
     if (retryFailedBatchId) {
       const retry = getRetryItemsForBatch(basePath, retryFailedBatchId, 'video');
@@ -3872,6 +3948,7 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
         duration: item.metadata?.duration ?? 6,
         videoType: item.metadata?.videoType ?? 'cinematic_realism',
       }));
+      sourceTotalPlacements = preparedPlacements.length;
     } else {
       if (autoFillGaps) {
         await autoFillVideoPlacementGaps(filePath);
@@ -3887,7 +3964,13 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
 
       let placements: ParsedVideoPlacement[];
       try {
-        const parseResult = parseVideoPlacementsWithErrors(content, false, { validateOverlaps: true });
+        const parseResult = parseVideoPlacementsWithErrors(content, false, {
+          validateOverlaps: true,
+          validationConfig: {
+            // Preserve short (1s) video placements, especially AUTO GAP entries.
+            minDurationSeconds: 1,
+          },
+        });
         placements = parseResult.placements;
         if (parseResult.warnings.length > 0) {
           console.warn('[generate_all_videos] Parser warnings:', parseResult.warnings);
@@ -3917,7 +4000,43 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
         };
       }
 
-      preparedPlacements = await prepareVideoPlacementsForGeneration(placements, {
+      sourceTotalPlacements = placements.length;
+      let placementsForGeneration = placements;
+
+      if (!forceRegenerate) {
+        const assets = getAssets(basePath);
+        const generatedNumbers = getGeneratedPlacementNumbersFromAssets(assets, 'scene_video');
+        const progress = buildPlacementProgressFromNumbers(
+          placements.map((placement) => placement.placementNumber),
+          generatedNumbers,
+        );
+        const missingSet = new Set(progress.missingNumbers);
+        skippedExistingNumbers = progress.completedNumbers;
+        placementsForGeneration = placements.filter((placement) =>
+          missingSet.has(placement.placementNumber),
+        );
+      }
+
+      queuedNumbers = placementsForGeneration
+        .map((placement) => placement.placementNumber)
+        .sort((left, right) => left - right);
+
+      if (placementsForGeneration.length === 0) {
+        return {
+          status: 'completed',
+          total_placements: 0,
+          source_total_placements: sourceTotalPlacements,
+          skipped_existing_count: skippedExistingNumbers.length,
+          skipped_existing_numbers: skippedExistingNumbers,
+          queued_numbers: [],
+          message:
+            sourceTotalPlacements > 0
+              ? 'All video placements already have generated assets. No new videos were queued.'
+              : 'No video placements available to generate.',
+        };
+      }
+
+      preparedPlacements = await prepareVideoPlacementsForGeneration(placementsForGeneration, {
         expandPrompts,
         logPrefix: '[generate_all_videos]',
       });
@@ -3930,11 +4049,18 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
       };
     }
 
+    queuedNumbers = preparedPlacements
+      .map((placement) => placement.placementNumber)
+      .sort((left, right) => left - right);
+    if (sourceTotalPlacements === 0) {
+      sourceTotalPlacements = preparedPlacements.length;
+    }
+
     persistExpandedPromptsForKind(
       basePath,
       'video',
       preparedPlacements,
-      retryFailedBatchId ? 'upsert' : 'replace',
+      retryFailedBatchId || skippedExistingNumbers.length > 0 ? 'upsert' : 'replace',
     );
 
     if (runInBackground) {
@@ -3977,6 +4103,10 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
         status: 'queued',
         batch_id: created.batch.id,
         total_placements: preparedPlacements.length,
+        source_total_placements: sourceTotalPlacements,
+        skipped_existing_count: skippedExistingNumbers.length,
+        skipped_existing_numbers: skippedExistingNumbers,
+        queued_numbers: queuedNumbers,
         next_action:
           'Background video generation started. Continue workflow and use read_background_generation to monitor progress. video_generation will auto-complete only when all placements succeed.',
         message: `Queued ${preparedPlacements.length} video placements in background batch ${created.batch.id}.`,
@@ -3990,6 +4120,10 @@ Videos are generated from text prompts (no scene_image_artifact_id required).`,
     return {
       status: 'completed',
       total_placements: preparedPlacements.length,
+      source_total_placements: sourceTotalPlacements,
+      skipped_existing_count: skippedExistingNumbers.length,
+      skipped_existing_numbers: skippedExistingNumbers,
+      queued_numbers: queuedNumbers,
       successful: successful.length,
       failed: failed.length,
       results,

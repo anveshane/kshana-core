@@ -22,6 +22,18 @@ import {
 const ROOT = process.cwd();
 const TEST_BASE_PATH = join(ROOT, 'test-temp-background-generation');
 
+function writeManifestAssets(
+  assets: Array<Record<string, unknown>>,
+): void {
+  const manifestPath = join(TEST_BASE_PATH, '.kshana', 'agent', 'manifest.json');
+  mkdirSync(dirname(manifestPath), { recursive: true });
+  writeFileSync(
+    manifestPath,
+    `${JSON.stringify({ schema_version: '1', assets }, null, 2)}\n`,
+    'utf-8',
+  );
+}
+
 function getToolHandler(name: string): (args: Record<string, unknown>) => Promise<unknown> {
   const tool = getVideoGenerationTools().find((entry) => entry.name === name);
   if (!tool?.handler) {
@@ -512,6 +524,49 @@ describe('Background generation batches', () => {
     expect(transitioned).toBe(true);
   });
 
+  it('keeps 1-second video placements in queued background batch totals', async () => {
+    createProject('0:00 intro\n0:53 outro', TEST_BASE_PATH);
+    writeProjectFile(
+      'agent/content/video-placements.md',
+      `VIDEO_PLACER:
+- Placement 1: 0:08-0:10 | type=cinematic_realism | Cornering shot
+- Placement 2: 0:10-0:11 | type=cinematic_realism | AUTO GAP: short transition
+- Placement 3: 0:11-0:21 | type=stock_footage | Grid launch shot
+- Placement 4: 0:21-0:23 | type=stock_footage | Brake glow close-up
+- Placement 5: 0:23-0:24 | type=cinematic_realism | AUTO GAP: short bridge
+- Placement 6: 0:24-0:30 | type=stock_footage | Factory engineers
+- Placement 7: 0:38-0:42 | type=cinematic_realism | Strategy montage
+- Placement 8: 0:49-0:53 | type=stock_footage | High-speed straight`,
+      TEST_BASE_PATH,
+    );
+
+    vi.spyOn(ComfyUIClient.prototype, 'queueWorkflow').mockResolvedValue('prompt-video-short-gaps');
+    vi.spyOn(ComfyUIClient.prototype, 'waitForCompletion').mockImplementation(
+      async () => await new Promise(() => {}),
+    );
+
+    const generateAllVideos = getToolHandler('generate_all_videos');
+    const result = (await generateAllVideos({
+      file_path: 'agent/content/video-placements.md',
+      auto_fill_gaps: false,
+      expand_prompts: false,
+      run_in_background: true,
+    })) as { status: string; total_placements?: number; batch_id?: string };
+
+    expect(result.status).toBe('queued');
+    expect(result.total_placements).toBe(8);
+    expect(result.batch_id).toBeDefined();
+
+    const project = loadProject(TEST_BASE_PATH);
+    const batch = project?.backgroundGeneration?.batches.find(
+      (entry) => entry.id === result.batch_id,
+    );
+    expect(batch?.totalItems).toBe(8);
+    expect(batch?.items.map((item) => item.placementNumber)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8,
+    ]);
+  });
+
   it('persists expanded video prompts to project content JSON when queueing', async () => {
     createProject('0:00 intro\n0:04 body', TEST_BASE_PATH);
     writeProjectFile(
@@ -662,6 +717,225 @@ describe('Background generation batches', () => {
     const placementTwo = parsed.video.find((entry) => entry.placementNumber === 2);
     expect(placementOne?.isExpanded).toBe(false);
     expect(placementTwo?.isExpanded).toBe(false);
+  });
+
+  it('queues only missing image placements by default', async () => {
+    createProject('0:00 intro\n0:24 end', TEST_BASE_PATH);
+    writeProjectFile(
+      'agent/content/image-placements.md',
+      [
+        'IMAGE_PLACER:',
+        '- Placement 1: 0:00-0:04 | Prompt 1',
+        '- Placement 2: 0:04-0:08 | Prompt 2',
+        '- Placement 3: 0:08-0:12 | Prompt 3',
+        '- Placement 4: 0:12-0:16 | Prompt 4',
+        '- Placement 5: 0:16-0:20 | Prompt 5',
+        '- Placement 6: 0:20-0:24 | Prompt 6',
+      ].join('\n'),
+      TEST_BASE_PATH,
+    );
+
+    writeManifestAssets([
+      { id: 'img-1', type: 'scene_image', path: 'agent/image-placements/image1_old.png', createdAt: Date.now(), metadata: { placementNumber: 1 } },
+      { id: 'img-2', type: 'scene_image', path: 'agent/image-placements/image2_old.png', createdAt: Date.now(), metadata: { placementNumber: 2 } },
+      { id: 'img-3', type: 'scene_image', path: 'agent/image-placements/image3_old.png', createdAt: Date.now(), metadata: { placementNumber: 3 } },
+    ]);
+
+    vi.spyOn(ComfyUIClient, 'isAvailable').mockResolvedValue(true);
+    vi.spyOn(ComfyUIClient.prototype, 'queueWorkflow').mockResolvedValue('prompt-image-missing');
+    vi.spyOn(ComfyUIClient.prototype, 'waitForCompletion').mockImplementation(
+      async () => await new Promise(() => {}),
+    );
+
+    const generateAllImages = getToolHandler('generate_all_images');
+    const result = (await generateAllImages({
+      file_path: 'agent/content/image-placements.md',
+      run_in_background: true,
+      expand_prompts: false,
+    })) as {
+      status: string;
+      batch_id?: string;
+      total_placements?: number;
+      source_total_placements?: number;
+      skipped_existing_count?: number;
+      skipped_existing_numbers?: number[];
+      queued_numbers?: number[];
+    };
+
+    expect(result.status).toBe('queued');
+    expect(result.total_placements).toBe(3);
+    expect(result.source_total_placements).toBe(6);
+    expect(result.skipped_existing_count).toBe(3);
+    expect(result.skipped_existing_numbers).toEqual([1, 2, 3]);
+    expect(result.queued_numbers).toEqual([4, 5, 6]);
+
+    const project = loadProject(TEST_BASE_PATH);
+    const batch = project?.backgroundGeneration?.batches.find(
+      (entry) => entry.id === result.batch_id,
+    );
+    expect(batch?.totalItems).toBe(3);
+    expect(batch?.items.map((item) => item.placementNumber)).toEqual([4, 5, 6]);
+  });
+
+  it('queues only missing video placements by default', async () => {
+    createProject('0:00 intro\n0:53 outro', TEST_BASE_PATH);
+    writeProjectFile(
+      'agent/content/video-placements.md',
+      [
+        'VIDEO_PLACER:',
+        '- Placement 1: 0:00-0:05 | type=cinematic_realism | Prompt 1',
+        '- Placement 2: 0:05-0:10 | type=cinematic_realism | Prompt 2',
+        '- Placement 3: 0:10-0:15 | type=cinematic_realism | Prompt 3',
+        '- Placement 4: 0:15-0:20 | type=cinematic_realism | Prompt 4',
+        '- Placement 5: 0:20-0:25 | type=cinematic_realism | Prompt 5',
+        '- Placement 6: 0:25-0:30 | type=cinematic_realism | Prompt 6',
+        '- Placement 7: 0:30-0:35 | type=cinematic_realism | Prompt 7',
+        '- Placement 8: 0:35-0:40 | type=cinematic_realism | Prompt 8',
+      ].join('\n'),
+      TEST_BASE_PATH,
+    );
+
+    writeManifestAssets([
+      { id: 'vid-1', type: 'scene_video', path: 'agent/video-placements/video1_old.mp4', createdAt: Date.now(), metadata: { placementNumber: 1 } },
+      { id: 'vid-2', type: 'scene_video', path: 'agent/video-placements/video2_old.mp4', createdAt: Date.now(), metadata: { placementNumber: 2 } },
+      { id: 'vid-3', type: 'scene_video', path: 'agent/video-placements/video3_old.mp4', createdAt: Date.now(), metadata: { placementNumber: 3 } },
+      { id: 'vid-4', type: 'scene_video', path: 'agent/video-placements/video4_old.mp4', createdAt: Date.now(), metadata: { placementNumber: 4 } },
+      { id: 'vid-5', type: 'scene_video', path: 'agent/video-placements/video5_old.mp4', createdAt: Date.now(), metadata: { placementNumber: 5 } },
+    ]);
+
+    vi.spyOn(ComfyUIClient.prototype, 'queueWorkflow').mockResolvedValue('prompt-video-missing');
+    vi.spyOn(ComfyUIClient.prototype, 'waitForCompletion').mockImplementation(
+      async () => await new Promise(() => {}),
+    );
+
+    const generateAllVideos = getToolHandler('generate_all_videos');
+    const result = (await generateAllVideos({
+      file_path: 'agent/content/video-placements.md',
+      run_in_background: true,
+      auto_fill_gaps: false,
+      expand_prompts: false,
+    })) as {
+      status: string;
+      batch_id?: string;
+      total_placements?: number;
+      source_total_placements?: number;
+      skipped_existing_count?: number;
+      skipped_existing_numbers?: number[];
+      queued_numbers?: number[];
+    };
+
+    expect(result.status).toBe('queued');
+    expect(result.total_placements).toBe(3);
+    expect(result.source_total_placements).toBe(8);
+    expect(result.skipped_existing_count).toBe(5);
+    expect(result.skipped_existing_numbers).toEqual([1, 2, 3, 4, 5]);
+    expect(result.queued_numbers).toEqual([6, 7, 8]);
+
+    const project = loadProject(TEST_BASE_PATH);
+    const batch = project?.backgroundGeneration?.batches.find(
+      (entry) => entry.id === result.batch_id,
+    );
+    expect(batch?.totalItems).toBe(3);
+    expect(batch?.items.map((item) => item.placementNumber)).toEqual([6, 7, 8]);
+  });
+
+  it('returns completed no-op when all image placements already exist', async () => {
+    createProject('0:00 intro\n0:12 end', TEST_BASE_PATH);
+    writeProjectFile(
+      'agent/content/image-placements.md',
+      [
+        'IMAGE_PLACER:',
+        '- Placement 1: 0:00-0:04 | Prompt 1',
+        '- Placement 2: 0:04-0:08 | Prompt 2',
+        '- Placement 3: 0:08-0:12 | Prompt 3',
+      ].join('\n'),
+      TEST_BASE_PATH,
+    );
+    writeManifestAssets([
+      { id: 'img-1', type: 'scene_image', path: 'agent/image-placements/image1_old.png', createdAt: Date.now(), metadata: { placementNumber: 1 } },
+      { id: 'img-2', type: 'scene_image', path: 'agent/image-placements/image2_old.png', createdAt: Date.now(), metadata: { placementNumber: 2 } },
+      { id: 'img-3', type: 'scene_image', path: 'agent/image-placements/image3_old.png', createdAt: Date.now(), metadata: { placementNumber: 3 } },
+    ]);
+
+    vi.spyOn(ComfyUIClient, 'isAvailable').mockResolvedValue(true);
+
+    const generateAllImages = getToolHandler('generate_all_images');
+    const result = (await generateAllImages({
+      file_path: 'agent/content/image-placements.md',
+      run_in_background: true,
+      expand_prompts: false,
+    })) as {
+      status: string;
+      total_placements?: number;
+      source_total_placements?: number;
+      skipped_existing_count?: number;
+      skipped_existing_numbers?: number[];
+      queued_numbers?: number[];
+    };
+
+    expect(result.status).toBe('completed');
+    expect(result.total_placements).toBe(0);
+    expect(result.source_total_placements).toBe(3);
+    expect(result.skipped_existing_count).toBe(3);
+    expect(result.skipped_existing_numbers).toEqual([1, 2, 3]);
+    expect(result.queued_numbers).toEqual([]);
+
+    const project = loadProject(TEST_BASE_PATH);
+    expect(project?.backgroundGeneration?.batches.length ?? 0).toBe(0);
+  });
+
+  it('queues all image placements when force_regenerate is true', async () => {
+    createProject('0:00 intro\n0:12 end', TEST_BASE_PATH);
+    writeProjectFile(
+      'agent/content/image-placements.md',
+      [
+        'IMAGE_PLACER:',
+        '- Placement 1: 0:00-0:04 | Prompt 1',
+        '- Placement 2: 0:04-0:08 | Prompt 2',
+        '- Placement 3: 0:08-0:12 | Prompt 3',
+      ].join('\n'),
+      TEST_BASE_PATH,
+    );
+    writeManifestAssets([
+      { id: 'img-1', type: 'scene_image', path: 'agent/image-placements/image1_old.png', createdAt: Date.now(), metadata: { placementNumber: 1 } },
+      { id: 'img-2', type: 'scene_image', path: 'agent/image-placements/image2_old.png', createdAt: Date.now(), metadata: { placementNumber: 2 } },
+    ]);
+
+    vi.spyOn(ComfyUIClient, 'isAvailable').mockResolvedValue(true);
+    vi.spyOn(ComfyUIClient.prototype, 'queueWorkflow').mockResolvedValue('prompt-image-force');
+    vi.spyOn(ComfyUIClient.prototype, 'waitForCompletion').mockImplementation(
+      async () => await new Promise(() => {}),
+    );
+
+    const generateAllImages = getToolHandler('generate_all_images');
+    const result = (await generateAllImages({
+      file_path: 'agent/content/image-placements.md',
+      run_in_background: true,
+      expand_prompts: false,
+      force_regenerate: true,
+    })) as {
+      status: string;
+      batch_id?: string;
+      total_placements?: number;
+      source_total_placements?: number;
+      skipped_existing_count?: number;
+      skipped_existing_numbers?: number[];
+      queued_numbers?: number[];
+    };
+
+    expect(result.status).toBe('queued');
+    expect(result.total_placements).toBe(3);
+    expect(result.source_total_placements).toBe(3);
+    expect(result.skipped_existing_count).toBe(0);
+    expect(result.skipped_existing_numbers).toEqual([]);
+    expect(result.queued_numbers).toEqual([1, 2, 3]);
+
+    const project = loadProject(TEST_BASE_PATH);
+    const batch = project?.backgroundGeneration?.batches.find(
+      (entry) => entry.id === result.batch_id,
+    );
+    expect(batch?.totalItems).toBe(3);
+    expect(batch?.items.map((item) => item.placementNumber)).toEqual([1, 2, 3]);
   });
 
   it('cancels active background work, interrupts ComfyUI, clears queue, and fails remaining items', async () => {

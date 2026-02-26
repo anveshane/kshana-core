@@ -39,7 +39,7 @@ const DEFAULT_PRIORITIES: Record<PlacementType, number> = {
 };
 
 const DEFAULT_MIN_GAP_SECONDS = 0;
-const DEFAULT_MIN_DURATION_SECONDS = 2;
+const DEFAULT_MIN_DURATION_SECONDS = 1;
 
 function sanitizeTimeToken(timeStr: string): string {
   return timeStr

@@ -1,5 +1,10 @@
 import { getProjectFileOps } from '../../server/ProjectFileOps.js';
 import { getCurrentPhase, getManifestFilePath, loadProject, readProjectFile } from '../../tasks/video/workflow/index.js';
+import {
+  buildPlacementProgressFromNumbers,
+  getGeneratedPlacementNumbersFromAssets,
+  parsePlacementNumbersFromMarkdown,
+} from '../../tasks/video/workflow/placementProgress.js';
 import { type AssetInfo, type PhaseStatus, type ProjectFile, WorkflowPhase } from '../../tasks/video/workflow/types.js';
 import type { Blocker, MissingDependency, PhaseCompletion, StateAnalysis } from './types.js';
 
@@ -129,11 +134,23 @@ export class StateAnalyzer {
       case WorkflowPhase.CONTENT_PLANNING:
         return this.getSingleFileCompletion('agent/plans/content-plan.md', basePath, phaseStatus);
       case WorkflowPhase.IMAGE_GENERATION:
-        return this.getPlacementAssetCompletion(project.imagePlacements?.length ?? 0, assets, 'scene_image');
+        return this.getPlacementAssetCompletionFromPlacementFile({
+          placementFilePath: 'agent/content/image-placements.md',
+          fallbackTotalPlacements: project.imagePlacements?.length ?? 0,
+          assets,
+          assetType: 'scene_image',
+          kind: 'image',
+        }, basePath);
       case WorkflowPhase.INFOGRAPHICS_GENERATION:
         return this.getPlacementAssetCompletion(project.infographicPlacements?.length ?? 0, assets, 'scene_infographic');
       case WorkflowPhase.VIDEO_GENERATION:
-        return this.getPlacementAssetCompletion(project.videoPlacements?.length ?? 0, assets, 'scene_video');
+        return this.getPlacementAssetCompletionFromPlacementFile({
+          placementFilePath: 'agent/content/video-placements.md',
+          fallbackTotalPlacements: project.videoPlacements?.length ?? 0,
+          assets,
+          assetType: 'scene_video',
+          kind: 'video',
+        }, basePath);
       case WorkflowPhase.VIDEO_PLACEMENT:
         return this.getVideoPlacementCompletion(project);
       default:
@@ -157,6 +174,66 @@ export class StateAnalyzer {
       pending: completed === 1 ? 0 : 1,
       percentage: completed === 1 ? 100 : 0,
       missingItems: completed === 1 ? [] : [filePath],
+    };
+  }
+
+  private getPlacementAssetCompletionFromPlacementFile(
+    params: {
+      placementFilePath: string;
+      fallbackTotalPlacements: number;
+      assets: AssetInfo[];
+      assetType: Extract<AssetInfo['type'], 'scene_image' | 'scene_video'>;
+      kind: 'image' | 'video';
+    },
+    basePath: string,
+  ): PhaseCompletion {
+    const content = readProjectFile(params.placementFilePath, basePath);
+    if (typeof content !== 'string' || content.trim().length === 0) {
+      return this.getPlacementAssetCompletion(
+        params.fallbackTotalPlacements,
+        params.assets,
+        params.assetType,
+      );
+    }
+
+    const parsed = parsePlacementNumbersFromMarkdown(params.kind, content);
+    if (!parsed.parseable) {
+      return this.getPlacementAssetCompletion(
+        params.fallbackTotalPlacements,
+        params.assets,
+        params.assetType,
+      );
+    }
+
+    if (parsed.numbers.length === 0) {
+      if (params.fallbackTotalPlacements > 0) {
+        return this.getPlacementAssetCompletion(
+          params.fallbackTotalPlacements,
+          params.assets,
+          params.assetType,
+        );
+      }
+      return this.getPlacementAssetCompletion(0, params.assets, params.assetType);
+    }
+
+    const generatedNumbers = getGeneratedPlacementNumbersFromAssets(
+      params.assets,
+      params.assetType,
+    );
+    const progress = buildPlacementProgressFromNumbers(
+      parsed.numbers,
+      generatedNumbers,
+    );
+
+    return {
+      total: progress.total,
+      completed: progress.completed,
+      pending: progress.pending,
+      percentage: progress.percentage,
+      missingItems:
+        progress.missingNumbers.length > 0
+          ? progress.missingNumbers.map((number) => `Placement ${number}`)
+          : [],
     };
   }
 
