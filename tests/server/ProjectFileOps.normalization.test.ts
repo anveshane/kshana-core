@@ -1,98 +1,110 @@
 /**
  * Tests for ProjectFileOps path normalization in remote mode.
  *
- * The critical invariant: paths sent to the desktop via the WebSocket sender
- * must ALWAYS use forward slashes, regardless of the platform running the server.
- * The desktop's IPC handler (project:write-file in main.ts) uses path.normalize()
- * on receipt, so forward-slash paths work correctly on both macOS and Windows.
+ * Protocol v3 invariant:
+ * - outbound payloads must include relativePath (project-relative POSIX path)
+ * - path is a temporary compatibility mirror of relativePath
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ProjectFileOps } from '../../src/server/ProjectFileOps.js';
 
-function makeRemoteFileOps() {
-    const sent: Array<{ type: string; data: Record<string, unknown> }> = [];
-    const sender = (type: string, data: Record<string, unknown>) => {
-        sent.push({ type, data });
-    };
-    const ops = new ProjectFileOps();
-    ops.setRemoteMode(sender, 'test-session');
-    return { ops, sent };
+function makeRemoteFileOps(projectRoot: string) {
+  const sent: Array<{ type: string; data: Record<string, unknown> }> = [];
+  const sender = (type: string, data: Record<string, unknown>) => {
+    sent.push({ type, data });
+  };
+  const ops = new ProjectFileOps();
+  ops.setRemoteMode(sender, 'test-session', undefined, { projectRoot });
+  return { ops, sent };
 }
 
 describe('ProjectFileOps — path normalization in remote mode', () => {
-    describe('writeFileSync', () => {
-        it('sends forward-slash path for text content even when input has backslashes', () => {
-            const { ops, sent } = makeRemoteFileOps();
-            // Simulate a Windows-style path reaching the server
-            ops.writeFileSync('C:\\Users\\demo\\.kshana\\context\\index.json', 'content');
-            expect(sent).toHaveLength(1);
-            expect(sent[0].type).toBe('file_write');
-            expect(sent[0].data.path as string).not.toContain('\\');
-            expect(sent[0].data.path as string).toContain('/');
-        });
-
-        it('sends forward-slash path for binary content even when input has backslashes', () => {
-            const { ops, sent } = makeRemoteFileOps();
-            const buf = Buffer.from('hello');
-            ops.writeFileSync('C:\\Users\\demo\\.kshana\\agent\\image.png', buf);
-            expect(sent).toHaveLength(1);
-            expect(sent[0].type).toBe('file_write_binary');
-            expect(sent[0].data.path as string).not.toContain('\\');
-            expect(sent[0].data.path as string).toContain('/');
-        });
-
-        it('preserves forward-slash paths unchanged (macOS/Linux paths)', () => {
-            const { ops, sent } = makeRemoteFileOps();
-            const path = '/Users/indhicdev/Documents/Demo-3/.kshana/context/index.json';
-            ops.writeFileSync(path, 'content');
-            expect(sent[0].data.path).toBe(path);
-        });
-
-        it('preserves linux paths unchanged', () => {
-            const { ops, sent } = makeRemoteFileOps();
-            const path = '/home/demo/project/.kshana/context/index.json';
-            ops.writeFileSync(path, 'content');
-            expect(sent[0].data.path).toBe(path);
-        });
+  describe('writeFileSync', () => {
+    it('sends project-relative POSIX path for windows absolute input', () => {
+      const { ops, sent } = makeRemoteFileOps('C:/Users/demo');
+      ops.writeFileSync(
+        'C:\\Users\\demo\\.kshana\\context\\index.json',
+        'content',
+      );
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('file_write');
+      expect(sent[0].data.relativePath).toBe('.kshana/context/index.json');
+      expect(sent[0].data.path).toBe('.kshana/context/index.json');
     });
 
-    describe('mkdirSync', () => {
-        it('sends forward-slash path even when input has backslashes', () => {
-            const { ops, sent } = makeRemoteFileOps();
-            ops.mkdirSync('C:\\Users\\demo\\.kshana\\context', { recursive: true });
-            expect(sent).toHaveLength(1);
-            expect(sent[0].type).toBe('file_mkdir');
-            expect(sent[0].data.path as string).not.toContain('\\');
-        });
-
-        it('preserves forward-slash paths unchanged', () => {
-            const { ops, sent } = makeRemoteFileOps();
-            ops.mkdirSync('/Users/demo/.kshana/context', { recursive: true });
-            expect(sent[0].data.path).toBe('/Users/demo/.kshana/context');
-        });
+    it('sends project-relative POSIX path for binary content', () => {
+      const { ops, sent } = makeRemoteFileOps('/Users/demo/project');
+      const buf = Buffer.from('hello');
+      ops.writeFileSync('/Users/demo/project/.kshana/agent/image.png', buf);
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('file_write_binary');
+      expect(sent[0].data.relativePath).toBe('.kshana/agent/image.png');
+      expect(sent[0].data.path).toBe('.kshana/agent/image.png');
     });
 
-    describe('rmSync', () => {
-        it('sends forward-slash path even when input has backslashes', () => {
-            const { ops, sent } = makeRemoteFileOps();
-            // Pre-populate cache so the file "exists"
-            ops.populateCache([{ path: 'C:\\Users\\demo\\.kshana\\old.md', content: '', isBinary: false }]);
-            ops.rmSync('C:\\Users\\demo\\.kshana\\old.md');
-            expect(sent).toHaveLength(1);
-            expect(sent[0].type).toBe('file_rm');
-            expect(sent[0].data.path as string).not.toContain('\\');
-        });
+    it('preserves relative POSIX paths unchanged', () => {
+      const { ops, sent } = makeRemoteFileOps('/Users/demo/project');
+      ops.writeFileSync('.kshana/context/index.json', 'content');
+      expect(sent[0].data.relativePath).toBe('.kshana/context/index.json');
     });
 
-    describe('unlinkSync', () => {
-        it('sends forward-slash path even when input has backslashes', () => {
-            const { ops, sent } = makeRemoteFileOps();
-            ops.populateCache([{ path: 'C:\\Users\\demo\\.kshana\\file.md', content: '', isBinary: false }]);
-            ops.unlinkSync('C:\\Users\\demo\\.kshana\\file.md');
-            expect(sent).toHaveLength(1);
-            expect(sent[0].type).toBe('file_rm');
-            expect(sent[0].data.path as string).not.toContain('\\');
-        });
+    it('converts linux absolute paths to project-relative paths', () => {
+      const { ops, sent } = makeRemoteFileOps('/home/demo/project');
+      ops.writeFileSync('/home/demo/project/.kshana/context/index.json', 'content');
+      expect(sent[0].data.relativePath).toBe('.kshana/context/index.json');
     });
+
+    it('rejects outbound writes outside project root', () => {
+      const { ops } = makeRemoteFileOps('/home/demo/project');
+      expect(() =>
+        ops.writeFileSync('/etc/passwd', 'content'),
+      ).toThrow(/outside project root/i);
+    });
+  });
+
+  describe('mkdirSync', () => {
+    it('sends relativePath for directory creation', () => {
+      const { ops, sent } = makeRemoteFileOps('/Users/demo/project');
+      ops.mkdirSync('/Users/demo/project/.kshana/context', { recursive: true });
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('file_mkdir');
+      expect(sent[0].data.relativePath).toBe('.kshana/context');
+      expect(sent[0].data.path).toBe('.kshana/context');
+    });
+  });
+
+  describe('rmSync', () => {
+    it('sends relativePath for removals', () => {
+      const { ops, sent } = makeRemoteFileOps('/Users/demo/project');
+      ops.populateCache([
+        {
+          path: '/Users/demo/project/.kshana/old.md',
+          content: '',
+          isBinary: false,
+        },
+      ]);
+      ops.rmSync('/Users/demo/project/.kshana/old.md');
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('file_rm');
+      expect(sent[0].data.relativePath).toBe('.kshana/old.md');
+    });
+  });
+
+  describe('unlinkSync', () => {
+    it('sends relativePath for unlink', () => {
+      const { ops, sent } = makeRemoteFileOps('/Users/demo/project');
+      ops.populateCache([
+        {
+          path: '/Users/demo/project/.kshana/file.md',
+          content: '',
+          isBinary: false,
+        },
+      ]);
+      ops.unlinkSync('/Users/demo/project/.kshana/file.md');
+      expect(sent).toHaveLength(1);
+      expect(sent[0].type).toBe('file_rm');
+      expect(sent[0].data.relativePath).toBe('.kshana/file.md');
+    });
+  });
 });

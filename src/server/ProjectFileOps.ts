@@ -8,7 +8,7 @@
  * This preserves the synchronous API used throughout the codebase.
  */
 import * as fs from 'fs';
-import { dirname, normalize } from 'path';
+import { posix as pathPosix } from 'path';
 
 type FileWriteSender = (type: string, data: Record<string, unknown>) => void;
 
@@ -18,6 +18,8 @@ class ProjectFileOps {
   private dirCache: Set<string> = new Set();
   private sender: FileWriteSender | null = null;
   private ownerSessionId: string | null = null;
+  private remoteProjectRoot: string | null = null;
+  private fileOpSequence = 0;
 
   /**
    * Switch to remote mode. All project file operations will use the in-memory
@@ -27,13 +29,16 @@ class ProjectFileOps {
     sender: FileWriteSender,
     ownerSessionId: string,
     initialFiles?: Array<{ path: string; content: string; isBinary?: boolean }>,
-    options?: { preserveCache?: boolean },
+    options?: { preserveCache?: boolean; projectRoot?: string },
   ): void {
     const wasRemote = this.mode === 'remote';
     const ownerChanged = this.ownerSessionId !== ownerSessionId;
     this.mode = 'remote';
     this.sender = sender;
     this.ownerSessionId = ownerSessionId;
+    this.remoteProjectRoot = options?.projectRoot
+      ? this.normalizePortablePath(options.projectRoot)
+      : null;
 
     if (!wasRemote || (ownerChanged && !options?.preserveCache)) {
       this.cache.clear();
@@ -57,6 +62,7 @@ class ProjectFileOps {
     this.mode = 'local';
     this.sender = null;
     this.ownerSessionId = null;
+    this.remoteProjectRoot = null;
     this.cache.clear();
     this.dirCache.clear();
     console.log('[ProjectFileOps] Switched to local mode');
@@ -67,7 +73,9 @@ class ProjectFileOps {
    */
   populateCache(files: Array<{ path: string; content: string; isBinary?: boolean }>): void {
     for (const file of files) {
-      const normalizedPath = this.normalizePath(file.path);
+      const normalizedPath = this.mode === 'remote'
+        ? this.toRelativePosixPath(file.path)
+        : this.normalizePortablePath(file.path);
       if (file.isBinary) {
         this.cache.set(normalizedPath, Buffer.from(file.content, 'base64'));
       } else {
@@ -91,21 +99,25 @@ class ProjectFileOps {
   }
 
   writeFileSync(filePath: string, content: string | Buffer, encoding?: BufferEncoding): void {
-    const normalizedPath = this.normalizePath(filePath);
-
     if (this.mode === 'remote') {
-      this.cache.set(normalizedPath, content);
-      this.ensureDirCached(normalizedPath);
+      const relativePath = this.toRelativePosixPath(filePath);
+      this.cache.set(relativePath, content);
+      this.ensureDirCached(relativePath);
+      const opId = this.nextOpId('file_write');
 
       if (this.sender) {
         if (Buffer.isBuffer(content)) {
           this.sender('file_write_binary', {
-            path: normalizedPath,
+            relativePath,
+            path: relativePath,
+            opId,
             content: content.toString('base64'),
           });
         } else {
           this.sender('file_write', {
-            path: normalizedPath,
+            relativePath,
+            path: relativePath,
+            opId,
             content,
           });
         }
@@ -132,10 +144,9 @@ class ProjectFileOps {
   readFileSync(filePath: string, encoding: BufferEncoding): string;
   readFileSync(filePath: string): Buffer;
   readFileSync(filePath: string, encoding?: BufferEncoding): string | Buffer {
-    const normalizedPath = this.normalizePath(filePath);
-
     if (this.mode === 'remote') {
-      const data = this.cache.get(normalizedPath);
+      const relativePath = this.toRelativePosixPath(filePath);
+      const data = this.cache.get(relativePath);
       if (data === undefined) {
         const err = new Error(`ENOENT: no such file or directory, open '${filePath}'`) as NodeJS.ErrnoException;
         err.code = 'ENOENT';
@@ -157,10 +168,14 @@ class ProjectFileOps {
   }
 
   existsSync(filePath: string): boolean {
-    const normalizedPath = this.normalizePath(filePath);
-
     if (this.mode === 'remote') {
-      return this.cache.has(normalizedPath) || this.dirCache.has(normalizedPath);
+      const relativePath = this.toRelativePosixPathInternal(filePath, {
+        allowProjectRoot: true,
+      });
+      if (relativePath === '.') {
+        return true;
+      }
+      return this.cache.has(relativePath) || this.dirCache.has(relativePath);
     }
 
     return fs.existsSync(filePath);
@@ -168,19 +183,24 @@ class ProjectFileOps {
 
   mkdirSync(dirPath: string, options?: fs.MakeDirectoryOptions): void {
     if (this.mode === 'remote') {
-      const normalizedPath = this.normalizePath(dirPath);
-      this.dirCache.add(normalizedPath);
+      const relativePath = this.toRelativePosixPath(dirPath);
+      this.dirCache.add(relativePath);
 
       if (options?.recursive) {
-        let current = normalizedPath;
-        while (current && current !== dirname(current)) {
+        let current = relativePath;
+        while (current && current !== pathPosix.dirname(current)) {
           this.dirCache.add(current);
-          current = dirname(current);
+          current = pathPosix.dirname(current);
         }
       }
 
       if (this.sender) {
-        this.sender('file_mkdir', { path: normalizedPath });
+        const opId = this.nextOpId('file_mkdir');
+        this.sender('file_mkdir', {
+          relativePath,
+          path: relativePath,
+          opId,
+        });
       }
       return;
     }
@@ -189,10 +209,15 @@ class ProjectFileOps {
   }
 
   readdirSync(dirPath: string): string[] {
-    const normalizedPath = this.normalizePath(dirPath);
-
     if (this.mode === 'remote') {
-      const prefix = normalizedPath.endsWith('/') ? normalizedPath : normalizedPath + '/';
+      const relativePath = this.toRelativePosixPathInternal(dirPath, {
+        allowProjectRoot: true,
+      });
+      const prefix = relativePath === '.'
+        ? ''
+        : relativePath.endsWith('/')
+          ? relativePath
+          : `${relativePath}/`;
       const entries = new Set<string>();
 
       for (const key of this.cache.keys()) {
@@ -220,27 +245,32 @@ class ProjectFileOps {
   }
 
   rmSync(filePath: string, options?: fs.RmOptions): void {
-    const normalizedPath = this.normalizePath(filePath);
-
     if (this.mode === 'remote') {
+      const relativePath = this.toRelativePosixPath(filePath);
       if (options?.recursive) {
-        const prefix = normalizedPath.endsWith('/') ? normalizedPath : normalizedPath + '/';
+        const prefix = relativePath.endsWith('/') ? relativePath : `${relativePath}/`;
         for (const key of this.cache.keys()) {
-          if (key === normalizedPath || key.startsWith(prefix)) {
+          if (key === relativePath || key.startsWith(prefix)) {
             this.cache.delete(key);
           }
         }
         for (const key of this.dirCache) {
-          if (key === normalizedPath || key.startsWith(prefix)) {
+          if (key === relativePath || key.startsWith(prefix)) {
             this.dirCache.delete(key);
           }
         }
       } else {
-        this.cache.delete(normalizedPath);
+        this.cache.delete(relativePath);
       }
 
       if (this.sender) {
-        this.sender('file_rm', { path: normalizedPath, recursive: !!options?.recursive });
+        const opId = this.nextOpId('file_rm');
+        this.sender('file_rm', {
+          relativePath,
+          path: relativePath,
+          opId,
+          recursive: !!options?.recursive,
+        });
       }
       return;
     }
@@ -249,12 +279,17 @@ class ProjectFileOps {
   }
 
   unlinkSync(filePath: string): void {
-    const normalizedPath = this.normalizePath(filePath);
-
     if (this.mode === 'remote') {
-      this.cache.delete(normalizedPath);
+      const relativePath = this.toRelativePosixPath(filePath);
+      this.cache.delete(relativePath);
       if (this.sender) {
-        this.sender('file_rm', { path: normalizedPath, recursive: false });
+        const opId = this.nextOpId('file_rm');
+        this.sender('file_rm', {
+          relativePath,
+          path: relativePath,
+          opId,
+          recursive: false,
+        });
       }
       return;
     }
@@ -284,23 +319,128 @@ class ProjectFileOps {
     fs.closeSync(fd);
   }
 
+  private nextOpId(type: string): string {
+    this.fileOpSequence += 1;
+    return `${type}-${Date.now()}-${this.fileOpSequence}`;
+  }
+
   /**
-   * Normalize a path for consistent cache key lookup.
-   * Converts backslashes to forward slashes for cross-platform consistency.
+   * Normalize paths into portable slash-separated form.
    */
-  private normalizePath(p: string): string {
-    return normalize(p).replace(/\\/g, '/');
+  private normalizePortablePath(inputPath: string): string {
+    let normalized = inputPath.trim().replace(/\\/g, '/');
+    if (/^\/[A-Za-z]:\//.test(normalized)) {
+      normalized = normalized.slice(1);
+    }
+    if (normalized.startsWith('//')) {
+      normalized = `/${normalized.replace(/^\/+/, '')}`;
+    }
+    return pathPosix.normalize(normalized);
+  }
+
+  private isAbsolutePortablePath(inputPath: string): boolean {
+    return inputPath.startsWith('/') || /^[A-Za-z]:\//.test(inputPath);
+  }
+
+  private ensurePathWithinProjectRoot(
+    absolutePath: string,
+    projectRoot: string,
+  ): string {
+    const normalizedRoot = this.normalizePortablePath(projectRoot);
+    const normalizedAbsolutePath = this.normalizePortablePath(absolutePath);
+    const windowsLike = /^[A-Za-z]:\//.test(normalizedAbsolutePath);
+
+    const rootComparable = windowsLike
+      ? normalizedRoot.toLowerCase()
+      : normalizedRoot;
+    const pathComparable = windowsLike
+      ? normalizedAbsolutePath.toLowerCase()
+      : normalizedAbsolutePath;
+
+    const rootWithSep = rootComparable.endsWith('/')
+      ? rootComparable
+      : `${rootComparable}/`;
+
+    if (
+      pathComparable !== rootComparable &&
+      !pathComparable.startsWith(rootWithSep)
+    ) {
+      throw new Error(
+        `[ProjectFileOps] Path "${absolutePath}" is outside project root "${projectRoot}"`,
+      );
+    }
+
+    if (pathComparable === rootComparable) {
+      return '.';
+    }
+
+    const relative = normalizedAbsolutePath.slice(rootWithSep.length);
+    return relative;
+  }
+
+  private validateRelativePosixPath(
+    relativePath: string,
+    originalPath: string,
+    options?: { allowProjectRoot?: boolean },
+  ): string {
+    const normalized = pathPosix
+      .normalize(relativePath.replace(/^\.\/+/, ''))
+      .replace(/\\/g, '/');
+
+    if (normalized === '.' && options?.allowProjectRoot) {
+      return normalized;
+    }
+
+    if (
+      !normalized ||
+      normalized === '.' ||
+      normalized === '..' ||
+      normalized.startsWith('../') ||
+      normalized.startsWith('/') ||
+      /^[A-Za-z]:\//.test(normalized)
+    ) {
+      throw new Error(
+        `[ProjectFileOps] Invalid relative project path "${originalPath}" -> "${normalized}"`,
+      );
+    }
+
+    return normalized;
+  }
+
+  private toRelativePosixPath(inputPath: string): string {
+    return this.toRelativePosixPathInternal(inputPath);
+  }
+
+  private toRelativePosixPathInternal(
+    inputPath: string,
+    options?: { allowProjectRoot?: boolean },
+  ): string {
+    const normalizedPath = this.normalizePortablePath(inputPath);
+    if (this.isAbsolutePortablePath(normalizedPath)) {
+      if (!this.remoteProjectRoot) {
+        throw new Error(
+          `[ProjectFileOps] Cannot convert absolute path "${inputPath}" to relative path: remote project root is not set.`,
+        );
+      }
+      const relative = this.ensurePathWithinProjectRoot(
+        normalizedPath,
+        this.remoteProjectRoot,
+      );
+      return this.validateRelativePosixPath(relative, inputPath, options);
+    }
+
+    return this.validateRelativePosixPath(normalizedPath, inputPath, options);
   }
 
   /**
    * Ensure all parent directories of a file path are registered in the dir cache.
    */
   private ensureDirCached(filePath: string): void {
-    let dir = dirname(filePath);
-    while (dir && dir !== dirname(dir)) {
+    let dir = pathPosix.dirname(filePath);
+    while (dir && dir !== pathPosix.dirname(dir)) {
       if (this.dirCache.has(dir)) break;
       this.dirCache.add(dir);
-      dir = dirname(dir);
+      dir = pathPosix.dirname(dir);
     }
   }
 }

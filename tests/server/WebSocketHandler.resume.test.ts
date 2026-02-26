@@ -219,7 +219,7 @@ describe('WebSocketHandler session resume', () => {
     expect(statusMessage).toBeDefined();
   });
 
-  it('includes filePathProtocolVersion capability in status messages', async () => {
+  it('includes filePath protocol capabilities in status messages', async () => {
     const socket = new FakeSocket();
     await connectChatSession(handler, socket, {
       project_dir: '/tmp/project-capabilities',
@@ -230,7 +230,10 @@ describe('WebSocketHandler session resume', () => {
         message.type === 'status' &&
         message.data?.status === 'connected',
     );
-    expect(connectedStatus?.data?.capabilities?.filePathProtocolVersion).toBe(2);
+    expect(connectedStatus?.data?.capabilities?.filePathProtocolVersion).toBe(3);
+    expect(connectedStatus?.data?.capabilities?.filePathTransport).toBe(
+      'relative_posix',
+    );
 
     socket.emitMessage({
       type: 'ping',
@@ -254,7 +257,10 @@ describe('WebSocketHandler session resume', () => {
           message.data?.status === 'ready' &&
           message.data?.message === 'pong',
       );
-    expect(pongStatus?.data?.capabilities?.filePathProtocolVersion).toBe(2);
+    expect(pongStatus?.data?.capabilities?.filePathProtocolVersion).toBe(3);
+    expect(pongStatus?.data?.capabilities?.filePathTransport).toBe(
+      'relative_posix',
+    );
   });
 
   it('flushes buffered server events in order when reconnecting within grace TTL', async () => {
@@ -406,7 +412,12 @@ describe('WebSocketHandler session resume', () => {
     const messages = parseSocketMessages(socket2);
     const fileWriteMessages = messages.filter((m) => m.type === 'file_write');
     expect(fileWriteMessages.length).toBeGreaterThanOrEqual(1);
-    expect(fileWriteMessages[0].data.path).toContain('transcript.md');
+    expect(fileWriteMessages[0].data.relativePath).toBe(
+      '.kshana/agent/transcript.md',
+    );
+    expect(fileWriteMessages[0].data.path).toBe(
+      '.kshana/agent/transcript.md',
+    );
   });
 
   it('switches to local mode when detached session expires', async () => {

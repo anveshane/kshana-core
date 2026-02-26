@@ -62,6 +62,7 @@ export interface StatusData {
   agentName?: string;
   capabilities?: {
     filePathProtocolVersion: number;
+    filePathTransport: 'relative_posix';
   };
 }
 
@@ -170,7 +171,12 @@ export interface FileSyncRequestData {
  * File write (server -> client): write a text file on the desktop.
  */
 export interface FileWriteData {
-  path: string;
+  /** Protocol v3 primary path contract (project-relative POSIX path). */
+  relativePath: string;
+  /** Legacy compatibility path field (same value as relativePath during transition). */
+  path?: string;
+  /** Optional correlation id for tracing end-to-end file operations. */
+  opId?: string;
   content: string;
 }
 
@@ -178,7 +184,12 @@ export interface FileWriteData {
  * File write binary (server -> client): write a binary file on the desktop (base64).
  */
 export interface FileWriteBinaryData {
-  path: string;
+  /** Protocol v3 primary path contract (project-relative POSIX path). */
+  relativePath: string;
+  /** Legacy compatibility path field (same value as relativePath during transition). */
+  path?: string;
+  /** Optional correlation id for tracing end-to-end file operations. */
+  opId?: string;
   content: string;
 }
 
@@ -186,14 +197,24 @@ export interface FileWriteBinaryData {
  * File mkdir (server -> client): create a directory on the desktop.
  */
 export interface FileMkdirData {
-  path: string;
+  /** Protocol v3 primary path contract (project-relative POSIX path). */
+  relativePath: string;
+  /** Legacy compatibility path field (same value as relativePath during transition). */
+  path?: string;
+  /** Optional correlation id for tracing end-to-end file operations. */
+  opId?: string;
 }
 
 /**
  * File rm (server -> client): remove a file or directory on the desktop.
  */
 export interface FileRmData {
-  path: string;
+  /** Protocol v3 primary path contract (project-relative POSIX path). */
+  relativePath: string;
+  /** Legacy compatibility path field (same value as relativePath during transition). */
+  path?: string;
+  /** Optional correlation id for tracing end-to-end file operations. */
+  opId?: string;
   recursive: boolean;
 }
 

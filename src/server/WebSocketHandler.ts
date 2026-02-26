@@ -91,7 +91,10 @@ function parsePositiveInt(value: string | undefined, fallback: number): number {
   return parsed;
 }
 
-const FILE_PATH_PROTOCOL_VERSION = 2;
+const FILE_PATH_PROTOCOL_VERSION = 3;
+const FILE_PATH_TRANSPORT: NonNullable<
+  StatusData['capabilities']
+>['filePathTransport'] = 'relative_posix';
 
 export class WebSocketHandler {
   private conversationManager: ConversationManager;
@@ -275,7 +278,10 @@ export class WebSocketHandler {
         this.createSender(connectionState),
         sessionId,
         undefined,
-        shouldResumeSession ? { preserveCache: true } : undefined,
+        {
+          preserveCache: shouldResumeSession,
+          projectRoot: projectDir ?? undefined,
+        },
       );
 
       this.sendMessage(socket, createServerMessage<FileSyncRequestData>('file_sync_request', sessionId, {
@@ -644,7 +650,10 @@ export class WebSocketHandler {
           this.createSender(replacement),
           replacement.sessionId,
           undefined,
-          { preserveCache: true },
+          {
+            preserveCache: true,
+            projectRoot: replacement.projectDir,
+          },
         );
         console.log(
           `[WebSocketHandler] Rebound ProjectFileOps owner from ${sessionId} to ${replacement.sessionId}`,
@@ -799,6 +808,7 @@ export class WebSocketHandler {
       status,
       capabilities: {
         filePathProtocolVersion: FILE_PATH_PROTOCOL_VERSION,
+        filePathTransport: FILE_PATH_TRANSPORT,
       },
     };
     if (message !== undefined) {
