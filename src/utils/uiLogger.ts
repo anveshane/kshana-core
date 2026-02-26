@@ -186,6 +186,18 @@ export function logAutoApprove(selectedOption: string): void {
 }
 
 /**
+ * Log context usage update.
+ */
+export function logContextUsage(percentage: number, promptTokens: number, maxTokens: number, iteration: number, wasCompressed: boolean): void {
+  const barWidth = 20;
+  const filled = Math.round((percentage / 100) * barWidth);
+  const empty = barWidth - filled;
+  const bar = '█'.repeat(filled) + '░'.repeat(empty);
+  const compressedLabel = wasCompressed ? ' [COMPRESSED]' : '';
+  writeLog(`CTX [${bar}] ${percentage}% (${promptTokens}/${maxTokens}) #${iteration}${compressedLabel}`);
+}
+
+/**
  * Log error display - matches error state in AgentView.
  */
 export function logError(error: string): void {

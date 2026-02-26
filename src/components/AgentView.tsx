@@ -13,7 +13,7 @@ import { QuestionPrompt } from './QuestionPrompt.js';
 import { Spinner } from './Spinner.js';
 import { TruncatedText } from './TruncatedText.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
-import type { HistoryEntry, CurrentAction } from '../hooks/useAgent.js';
+import type { HistoryEntry, CurrentAction, ContextUsageInfo } from '../hooks/useAgent.js';
 
 /** Maximum lines to show before truncation */
 const MAX_LINES_TRUNCATED = 3;
@@ -76,6 +76,10 @@ interface AgentViewProps {
   currentAction?: CurrentAction | null;
   maxHeight?: number;
   expanded?: boolean;
+  /** Context window usage info */
+  contextUsage?: ContextUsageInfo | null;
+  /** Notification message (e.g., context compression) */
+  notification?: string | null;
 }
 
 // Maximum visible history items - increased for better scrollback
@@ -102,6 +106,8 @@ export function AgentView({
   history = [],
   currentAction = null,
   expanded = false,
+  contextUsage,
+  notification,
 }: AgentViewProps) {
   // Determine if scroll is enabled (when agent is idle, completed, or waiting)
   const scrollEnabled = status === 'idle' || status === 'completed' || status === 'waiting';
@@ -109,7 +115,7 @@ export function AgentView({
   return (
     <Box flexDirection="column" paddingX={1}>
       {/* Status Bar */}
-      <StatusBar agentName={agentName} status={status} message={statusMessage} />
+      <StatusBar agentName={agentName} status={status} message={statusMessage} contextUsage={contextUsage} notification={notification} />
 
       {/* Scrollable History (includes user messages, tool calls, agent text) */}
       <ScrollableHistory

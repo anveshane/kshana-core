@@ -300,6 +300,7 @@ export class GenericAgent extends TypedEventEmitter {
     subAgent.on('agent_status', event => this.emit(event));
     subAgent.on('agent_text', event => this.emit(event));
     subAgent.on('notification', event => this.emit(event));
+    subAgent.on('context_usage', event => this.emit(event));
 
     // Track sub-agent context for flow recording
     if (config.parentToolCallId) {
@@ -1132,6 +1133,17 @@ export class GenericAgent extends TypedEventEmitter {
           response.usage.promptTokens,
           this.maxContextTokens
         );
+
+        // Emit context usage event for UI display
+        const percentage = Math.round((response.usage.promptTokens / this.maxContextTokens) * 100);
+        this.emit({
+          type: 'context_usage',
+          promptTokens: response.usage.promptTokens,
+          maxTokens: this.maxContextTokens,
+          percentage,
+          wasCompressed: false,
+          iteration: this.iteration,
+        });
       }
 
       // Add assistant message to history
@@ -4444,11 +4456,23 @@ Respond in JSON format:
         maxContextTokens: this.maxContextTokens,
       });
 
-      // Emit event so UI can show compression occurred
+      // Emit notification so UI can show compression occurred
       this.emit({
         type: 'notification',
         level: 'info',
         message: `Context compressed: ${result.removedCount} messages summarized to stay within limits`,
+      });
+
+      // Emit context usage event showing post-compression state
+      this.emit({
+        type: 'context_usage',
+        promptTokens: this.tokenUsage.lastPromptTokens,
+        maxTokens: this.maxContextTokens,
+        percentage: this.tokenUsage.lastPromptTokens > 0
+          ? Math.round((this.tokenUsage.lastPromptTokens / this.maxContextTokens) * 100)
+          : 0,
+        wasCompressed: true,
+        iteration: this.iteration,
       });
     }
   }

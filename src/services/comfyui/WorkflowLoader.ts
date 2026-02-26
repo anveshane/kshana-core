@@ -9,6 +9,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
+// Debug logging to file instead of console to avoid polluting Ink UI
+const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+function debugLog(message: string): void {
+  try {
+    const timestamp = new Date().toISOString();
+    fs.appendFileSync(DEBUG_LOG_PATH, `[${timestamp}] ${message}\n`);
+  } catch {
+    // Ignore logging errors
+  }
+}
+
 // Get __dirname equivalent for ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -371,28 +382,28 @@ export function parameterizeWanWorkflow(
     if (nodeType === 'LoadImage') {
       if (params.inputImageFilename && node.widgets_values) {
         node.widgets_values[0] = params.inputImageFilename;
-        console.log(`[WanWorkflow] Set LoadImage (node ${nodeId}) image to: ${params.inputImageFilename}`);
+        debugLog(`[WanWorkflow] Set LoadImage (node ${nodeId}) image to: ${params.inputImageFilename}`);
       }
     }
     // Positive prompt (Node 6) - identified by title containing "Positive"
     else if (nodeType === 'CLIPTextEncode' && node.title?.includes('Positive')) {
       if (node.widgets_values) {
         node.widgets_values[0] = params.prompt || '';
-        console.log(`[WanWorkflow] Set positive prompt (node ${nodeId}) to: ${(params.prompt || '').substring(0, 50)}...`);
+        debugLog(`[WanWorkflow] Set positive prompt (node ${nodeId}) to: ${(params.prompt || '').substring(0, 50)}...`);
       }
     }
     // Negative prompt (Node 7) - identified by title containing "Negative"
     else if (nodeType === 'CLIPTextEncode' && node.title?.includes('Negative')) {
       if (params.negativePrompt && node.widgets_values) {
         node.widgets_values[0] = params.negativePrompt;
-        console.log(`[WanWorkflow] Set negative prompt (node ${nodeId})`);
+        debugLog(`[WanWorkflow] Set negative prompt (node ${nodeId})`);
       }
     }
     // Seed (rgthree) node - set seed value
     else if (nodeType === 'Seed (rgthree)') {
       if (node.widgets_values && Array.isArray(node.widgets_values)) {
         node.widgets_values[0] = seed;
-        console.log(`[WanWorkflow] Set seed (node ${nodeId}) to: ${seed}`);
+        debugLog(`[WanWorkflow] Set seed (node ${nodeId}) to: ${seed}`);
       }
     }
     // KSamplerAdvanced - Seed control (for workflows without Seed rgthree node)
@@ -406,7 +417,7 @@ export function parameterizeWanWorkflow(
       if (node.widgets_values && typeof node.widgets_values === 'object') {
         if (!Array.isArray(node.widgets_values)) {
           (node.widgets_values as Record<string, unknown>)['filename_prefix'] = params.filenamePrefix || 'Wan';
-          console.log(`[WanWorkflow] Set VHS_VideoCombine (node ${nodeId}) filename_prefix to: ${params.filenamePrefix || 'Wan'}`);
+          debugLog(`[WanWorkflow] Set VHS_VideoCombine (node ${nodeId}) filename_prefix to: ${params.filenamePrefix || 'Wan'}`);
         }
       }
     }
@@ -422,7 +433,7 @@ export function parameterizeWanWorkflow(
     if (loadImageNode && loadImageNode.class_type === 'LoadImage' && params.inputImageFilename) {
       loadImageNode.inputs = loadImageNode.inputs || {};
       loadImageNode.inputs['image'] = params.inputImageFilename;
-      console.log(`[WanWorkflow] API format - Set LoadImage (node ${nodeIdStr}) inputs.image to: ${params.inputImageFilename}`);
+      debugLog(`[WanWorkflow] API format - Set LoadImage (node ${nodeIdStr}) inputs.image to: ${params.inputImageFilename}`);
     }
   }
 
@@ -438,7 +449,7 @@ export function parameterizeWanWorkflow(
     const nodeData = node as { class_type?: string };
     if (nodesToRemove.includes(nodeData.class_type || '')) {
       delete apiWorkflow[nodeId];
-      console.log(`[WanWorkflow] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
+      debugLog(`[WanWorkflow] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
     }
   }
 
@@ -466,28 +477,28 @@ export function parameterizeWanStartEndWorkflow(
     if (nodeId === 110 && nodeType === 'LoadImage') {
       if (node.widgets_values) {
         node.widgets_values[0] = params.startImageFilename;
-        console.log(`[WanStartEnd] Set start image (node 110) to: ${params.startImageFilename}`);
+        debugLog(`[WanStartEnd] Set start image (node 110) to: ${params.startImageFilename}`);
       }
     }
     // LoadImage for end image (Node 112)
     else if (nodeId === 112 && nodeType === 'LoadImage') {
       if (node.widgets_values) {
         node.widgets_values[0] = params.endImageFilename;
-        console.log(`[WanStartEnd] Set end image (node 112) to: ${params.endImageFilename}`);
+        debugLog(`[WanStartEnd] Set end image (node 112) to: ${params.endImageFilename}`);
       }
     }
     // Positive prompt (Node 99) - identified by title containing "Positive"
     else if (nodeType === 'CLIPTextEncode' && node.title?.includes('Positive')) {
       if (node.widgets_values) {
         node.widgets_values[0] = params.prompt || '';
-        console.log(`[WanStartEnd] Set positive prompt (node ${nodeId}) to: ${(params.prompt || '').substring(0, 50)}...`);
+        debugLog(`[WanStartEnd] Set positive prompt (node ${nodeId}) to: ${(params.prompt || '').substring(0, 50)}...`);
       }
     }
     // Negative prompt (Node 91) - identified by title containing "Negative"
     else if (nodeType === 'CLIPTextEncode' && node.title?.includes('Negative')) {
       if (params.negativePrompt && node.widgets_values) {
         node.widgets_values[0] = params.negativePrompt;
-        console.log(`[WanStartEnd] Set negative prompt (node ${nodeId})`);
+        debugLog(`[WanStartEnd] Set negative prompt (node ${nodeId})`);
       }
     }
     // KSamplerAdvanced - Seed control
@@ -500,7 +511,7 @@ export function parameterizeWanStartEndWorkflow(
     else if (nodeType === 'SaveVideo') {
       if (node.widgets_values && Array.isArray(node.widgets_values)) {
         node.widgets_values[0] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/ComfyUI';
-        console.log(`[WanStartEnd] Set SaveVideo filename_prefix to: ${node.widgets_values[0]}`);
+        debugLog(`[WanStartEnd] Set SaveVideo filename_prefix to: ${node.widgets_values[0]}`);
       }
     }
   }
@@ -513,14 +524,14 @@ export function parameterizeWanStartEndWorkflow(
   if (startImageNode && startImageNode.class_type === 'LoadImage') {
     startImageNode.inputs = startImageNode.inputs || {};
     startImageNode.inputs['image'] = params.startImageFilename;
-    console.log(`[WanStartEnd] API format - Set start image (node 110) to: ${params.startImageFilename}`);
+    debugLog(`[WanStartEnd] API format - Set start image (node 110) to: ${params.startImageFilename}`);
   }
 
   const endImageNode = apiWorkflow['112'] as { class_type?: string; inputs?: Record<string, unknown> } | undefined;
   if (endImageNode && endImageNode.class_type === 'LoadImage') {
     endImageNode.inputs = endImageNode.inputs || {};
     endImageNode.inputs['image'] = params.endImageFilename;
-    console.log(`[WanStartEnd] API format - Set end image (node 112) to: ${params.endImageFilename}`);
+    debugLog(`[WanStartEnd] API format - Set end image (node 112) to: ${params.endImageFilename}`);
   }
 
   // Remove non-essential nodes
@@ -529,7 +540,7 @@ export function parameterizeWanStartEndWorkflow(
     const nodeData = node as { class_type?: string };
     if (nodesToRemove.includes(nodeData.class_type || '')) {
       delete apiWorkflow[nodeId];
-      console.log(`[WanStartEnd] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
+      debugLog(`[WanStartEnd] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
     }
   }
 
@@ -563,12 +574,12 @@ export function parameterizeLtxT2VWorkflow(
       node.widgets_values[2] = params.width || 1280;
       node.widgets_values[3] = params.height || 720;
       node.widgets_values[4] = seed;
-      console.log(`[LtxT2V] Set subgraph (node 92): prompt="${(params.prompt || '').substring(0, 50)}...", frames=${params.frameCount || 121}, ${params.width || 1280}x${params.height || 720}, seed=${seed}`);
+      debugLog(`[LtxT2V] Set subgraph (node 92): prompt="${(params.prompt || '').substring(0, 50)}...", frames=${params.frameCount || 121}, ${params.width || 1280}x${params.height || 720}, seed=${seed}`);
     }
     // SaveVideo node
     else if (nodeType === 'SaveVideo' && node.widgets_values) {
       node.widgets_values[0] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX_T2V';
-      console.log(`[LtxT2V] Set SaveVideo filename_prefix to: ${node.widgets_values[0]}`);
+      debugLog(`[LtxT2V] Set SaveVideo filename_prefix to: ${node.widgets_values[0]}`);
     }
   }
 
@@ -585,7 +596,7 @@ export function parameterizeLtxT2VWorkflow(
     const nodeData = node as { class_type?: string };
     if (nodesToRemove.includes(nodeData.class_type || '')) {
       delete apiWorkflow[nodeId];
-      console.log(`[LtxT2V] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
+      debugLog(`[LtxT2V] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
     }
   }
 
@@ -617,7 +628,7 @@ export function parameterizeLtxI2VWorkflow(
     // LoadImage node (node 98)
     if (nodeId === 98 && nodeType === 'LoadImage' && node.widgets_values) {
       node.widgets_values[0] = params.inputImageFilename;
-      console.log(`[LtxI2V] Set LoadImage (node 98) to: ${params.inputImageFilename}`);
+      debugLog(`[LtxI2V] Set LoadImage (node 98) to: ${params.inputImageFilename}`);
     }
     // Subgraph node (node 92) - LTX 2.0 generation
     // widgets_values for i2v: [prompt, frame_count, seed]
@@ -625,12 +636,12 @@ export function parameterizeLtxI2VWorkflow(
       node.widgets_values[0] = params.prompt;
       node.widgets_values[1] = params.frameCount || 241;
       node.widgets_values[2] = seed;
-      console.log(`[LtxI2V] Set subgraph (node 92): prompt="${(params.prompt || '').substring(0, 50)}...", frames=${params.frameCount || 241}, seed=${seed}`);
+      debugLog(`[LtxI2V] Set subgraph (node 92): prompt="${(params.prompt || '').substring(0, 50)}...", frames=${params.frameCount || 241}, seed=${seed}`);
     }
     // SaveVideo node
     else if (nodeType === 'SaveVideo' && node.widgets_values) {
       node.widgets_values[0] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX_I2V';
-      console.log(`[LtxI2V] Set SaveVideo filename_prefix to: ${node.widgets_values[0]}`);
+      debugLog(`[LtxI2V] Set SaveVideo filename_prefix to: ${node.widgets_values[0]}`);
     }
   }
 
@@ -647,7 +658,7 @@ export function parameterizeLtxI2VWorkflow(
   if (loadImageNode && loadImageNode.class_type === 'LoadImage' && params.inputImageFilename) {
     loadImageNode.inputs = loadImageNode.inputs || {};
     loadImageNode.inputs['image'] = params.inputImageFilename;
-    console.log(`[LtxI2V] API format - Set LoadImage (node 98) inputs.image to: ${params.inputImageFilename}`);
+    debugLog(`[LtxI2V] API format - Set LoadImage (node 98) inputs.image to: ${params.inputImageFilename}`);
   }
 
   // Remove non-essential nodes
@@ -656,7 +667,7 @@ export function parameterizeLtxI2VWorkflow(
     const nodeData = node as { class_type?: string };
     if (nodesToRemove.includes(nodeData.class_type || '')) {
       delete apiWorkflow[nodeId];
-      console.log(`[LtxI2V] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
+      debugLog(`[LtxI2V] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
     }
   }
 
@@ -814,11 +825,11 @@ export function expandSubgraphs(workflow: WorkflowTemplate): WorkflowTemplate {
   for (const subgraphNode of subgraphNodes) {
     const subgraphDef = definitions.find(d => d.id === subgraphNode.type);
     if (!subgraphDef) {
-      console.log(`[expandSubgraphs] Warning: No definition found for subgraph ${subgraphNode.type}`);
+      debugLog(`[expandSubgraphs] Warning: No definition found for subgraph ${subgraphNode.type}`);
       continue;
     }
 
-    console.log(`[expandSubgraphs] Expanding subgraph "${subgraphDef.name}" (node ${subgraphNode.id})`);
+    debugLog(`[expandSubgraphs] Expanding subgraph "${subgraphDef.name}" (node ${subgraphNode.id})`);
 
     // Get nodes and links from the subgraph definition
     const subNodes = (subgraphDef as { nodes?: Array<{ id: number; type: string; inputs?: Array<{ name: string; link?: number | null }>; widgets_values?: unknown[]; [key: string]: unknown }> }).nodes || [];
@@ -883,7 +894,7 @@ export function expandSubgraphs(workflow: WorkflowTemplate): WorkflowTemplate {
           const [, , , targetNode, targetSlot] = link;
           if (targetNode > 0) {
             inputValueMap.set(`${targetNode}:${targetSlot}`, value);
-            console.log(`[expandSubgraphs] Mapped widget "${inputName}" -> node ${targetNode} slot ${targetSlot}: "${String(value).substring(0, 40)}..."`);
+            debugLog(`[expandSubgraphs] Mapped widget "${inputName}" -> node ${targetNode} slot ${targetSlot}: "${String(value).substring(0, 40)}..."`);
           }
         }
       }
@@ -912,7 +923,7 @@ export function expandSubgraphs(workflow: WorkflowTemplate): WorkflowTemplate {
             // Set the widget value at the appropriate position
             if (Array.isArray(newNode.widgets_values)) {
               updateNodeWidgetValue(newNode, input.name, mappedValue);
-              console.log(`[expandSubgraphs] Set node ${newNode.id} (${node.type}) input "${input.name}" = "${String(mappedValue).substring(0, 40)}..."`);
+              debugLog(`[expandSubgraphs] Set node ${newNode.id} (${node.type}) input "${input.name}" = "${String(mappedValue).substring(0, 40)}..."`);
             }
             // Clear the link since we're providing the value via widget
             input.link = null;
@@ -986,7 +997,7 @@ export function expandSubgraphs(workflow: WorkflowTemplate): WorkflowTemplate {
                   const linkIndex = mainLinks.findIndex(l => l[0] === linkId);
                   if (linkIndex >= 0) {
                     mainLinks[linkIndex] = [linkId, newFromNode, subFromSlot, toNode, toSlot, type];
-                    console.log(`[expandSubgraphs] Output: Rerouted link ${linkId} from subgraph to internal node ${newFromNode}`);
+                    debugLog(`[expandSubgraphs] Output: Rerouted link ${linkId} from subgraph to internal node ${newFromNode}`);
                   }
                 }
               }
@@ -1031,7 +1042,7 @@ export function expandSubgraphs(workflow: WorkflowTemplate): WorkflowTemplate {
                   targetNode.inputs[internalToSlot].link = newLinkId;
                 }
 
-                console.log(`[expandSubgraphs] Input: Connected external node ${fromNode} to internal node ${newToNode}:${internalToSlot}`);
+                debugLog(`[expandSubgraphs] Input: Connected external node ${fromNode} to internal node ${newToNode}:${internalToSlot}`);
               }
             }
           }
@@ -1053,7 +1064,7 @@ export function expandSubgraphs(workflow: WorkflowTemplate): WorkflowTemplate {
     const nodeIndex = mainNodes.findIndex(n => n.id === subgraphNode.id);
     if (nodeIndex >= 0) {
       mainNodes.splice(nodeIndex, 1);
-      console.log(`[expandSubgraphs] Removed subgraph node ${subgraphNode.id}`);
+      debugLog(`[expandSubgraphs] Removed subgraph node ${subgraphNode.id}`);
     }
   }
 
@@ -1102,11 +1113,11 @@ function bypassLoraLoaderNodesWithNone(apiWorkflow: Record<string, unknown>): vo
       for (const [inputName, inputVal] of Object.entries(inputs)) {
         if (!Array.isArray(inputVal) || inputVal[0] !== nodeId) continue;
         (consumer.inputs as Record<string, unknown>)[inputName] = [...modelSource];
-        console.log(`[bypassLoraLoaderNodesWithNone] Rerouted ${consumerId}.${inputName} from [${nodeId},0] to [${modelSource[0]},${modelSource[1]}]`);
+        debugLog(`[bypassLoraLoaderNodesWithNone] Rerouted ${consumerId}.${inputName} from [${nodeId},0] to [${modelSource[0]},${modelSource[1]}]`);
       }
     }
     delete apiWorkflow[nodeId];
-    console.log(`[bypassLoraLoaderNodesWithNone] Removed LoraLoaderModelOnly node ${nodeId} (lora_name="None")`);
+    debugLog(`[bypassLoraLoaderNodesWithNone] Removed LoraLoaderModelOnly node ${nodeId} (lora_name="None")`);
   }
 }
 
@@ -1123,7 +1134,7 @@ function collapseRerouteNodesInternal(workflow: WorkflowTemplate): void {
   if (rerouteNodes.length === 0) return;
 
   const rerouteIds = new Set(rerouteNodes.map(n => n.id));
-  console.log(`[collapseRerouteNodesInternal] Found ${rerouteNodes.length} Reroute nodes`);
+  debugLog(`[collapseRerouteNodesInternal] Found ${rerouteNodes.length} Reroute nodes`);
 
   // Build link lookup: linkId -> link tuple
   const linkById = new Map<number, [number, number, number, number, number, string]>();
@@ -1161,7 +1172,7 @@ function collapseRerouteNodesInternal(workflow: WorkflowTemplate): void {
   for (const rerouteNode of rerouteNodes) {
     const originalSource = findOriginalSource(rerouteNode.id);
     if (!originalSource) {
-      console.log(`[collapseRerouteNodesInternal] Could not find source for Reroute ${rerouteNode.id}`);
+      debugLog(`[collapseRerouteNodesInternal] Could not find source for Reroute ${rerouteNode.id}`);
       continue;
     }
 
@@ -1173,7 +1184,7 @@ function collapseRerouteNodesInternal(workflow: WorkflowTemplate): void {
         const oldFrom = link[1];
         link[1] = sourceNode;
         link[2] = sourceSlot;
-        console.log(`[collapseRerouteNodesInternal] Reroute ${oldFrom}: rerouted link ${link[0]} to source ${sourceNode}:${sourceSlot}`);
+        debugLog(`[collapseRerouteNodesInternal] Reroute ${oldFrom}: rerouted link ${link[0]} to source ${sourceNode}:${sourceSlot}`);
       }
     }
   }
@@ -1184,7 +1195,7 @@ function collapseRerouteNodesInternal(workflow: WorkflowTemplate): void {
   // Remove links that go INTO Reroute nodes
   workflow.links = links.filter(link => !rerouteIds.has(link[3]));
 
-  console.log(`[collapseRerouteNodesInternal] Removed ${rerouteIds.size} Reroute nodes`);
+  debugLog(`[collapseRerouteNodesInternal] Removed ${rerouteIds.size} Reroute nodes`);
 }
 
 /**
@@ -1226,7 +1237,7 @@ function removeUIOnlyNodes(workflow: WorkflowTemplate): WorkflowTemplate {
         targetInput.link = null;
         // For certain node types, we can set the widget value directly
         updateNodeWidgetValue(targetNode, targetInput.name, value);
-        console.log(`[removeUIOnlyNodes] PrimitiveNode ${primNode.id}: propagated "${String(value).substring(0, 30)}" to node ${targetNodeId}`);
+        debugLog(`[removeUIOnlyNodes] PrimitiveNode ${primNode.id}: propagated "${String(value).substring(0, 30)}" to node ${targetNodeId}`);
       }
     }
   }
@@ -1243,7 +1254,7 @@ function removeUIOnlyNodes(workflow: WorkflowTemplate): WorkflowTemplate {
     // Remove links involving UI-only nodes
     links = links.filter(link => !uiOnlyNodeIds.has(link[1]) && !uiOnlyNodeIds.has(link[3]));
 
-    console.log(`[removeUIOnlyNodes] Removed ${uiOnlyNodeIds.size} UI-only nodes`);
+    debugLog(`[removeUIOnlyNodes] Removed ${uiOnlyNodeIds.size} UI-only nodes`);
   }
 
   workflow.nodes = nodes;
@@ -1307,7 +1318,7 @@ function updateNodeWidgetValue(
     else if (inputName === 'strength_model') node.widgets_values[1] = value;
   } else {
     // Generic fallback: try to find the widget index from input position
-    console.log(`[updateNodeWidgetValue] Unknown node type ${nodeType}, skipping widget update for "${inputName}"`);
+    debugLog(`[updateNodeWidgetValue] Unknown node type ${nodeType}, skipping widget update for "${inputName}"`);
   }
 }
 
@@ -1483,7 +1494,7 @@ export function workflowToPrompt(workflow: WorkflowTemplate): Record<string, unk
           }
         }
       }
-      console.log(`[workflowToPrompt] Handled subgraph node ${nodeId} (${nodeType.substring(0, 8)}...) with ${Object.keys(convertedInputs).length} inputs`);
+      debugLog(`[workflowToPrompt] Handled subgraph node ${nodeId} (${nodeType.substring(0, 8)}...) with ${Object.keys(convertedInputs).length} inputs`);
     }
     // Special handling for LoraLoaderModelOnly
     else if (nodeType === 'LoraLoaderModelOnly' && Array.isArray(widgetValues)) {

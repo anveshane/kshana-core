@@ -12,6 +12,17 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { nanoid } from 'nanoid';
 
+// Debug logging to file instead of console to avoid polluting Ink UI
+const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+function debugLog(message: string): void {
+  try {
+    const timestamp = new Date().toISOString();
+    fs.appendFileSync(DEBUG_LOG_PATH, `[${timestamp}] ${message}\n`);
+  } catch {
+    // Ignore logging errors
+  }
+}
+
 export interface ComfyUIClientConfig {
   baseUrl: string;
   outputDir: string;
@@ -309,11 +320,11 @@ export class ComfyUIClient {
     pollInterval: number = 10
   ): Promise<string> {
     const clientId = nanoid();
-    console.log(`Starting generate_and_download | client_id=${clientId}`);
+    debugLog(`Starting generate_and_download | client_id=${clientId}`);
 
     // Step 1: Queue workflow
     const promptId = await this.queueWorkflow(workflowJson, clientId);
-    console.log(`Workflow queued | prompt_id=${promptId}`);
+    debugLog(`Workflow queued | prompt_id=${promptId}`);
 
     // Step 2: Wait for completion
     try {
@@ -343,7 +354,7 @@ export class ComfyUIClient {
       outputFilename
     );
 
-    console.log(`generate_and_download complete | prompt_id=${promptId} | saved=${savedPath}`);
+    debugLog(`generate_and_download complete | prompt_id=${promptId} | saved=${savedPath}`);
     return savedPath;
   }
 

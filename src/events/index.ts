@@ -11,6 +11,7 @@ export type {
   StreamingThinkEvent,
   ToolStreamingEvent,
   NotificationEvent,
+  ContextUsageEvent,
   QuestionEvent,
   QuestionOption,
   AgentStatusEvent,

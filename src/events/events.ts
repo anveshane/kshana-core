@@ -112,6 +112,24 @@ export interface NotificationEvent {
 }
 
 /**
+ * Context usage event emitted after each LLM call.
+ * Allows UI to display how much of the context window is being used.
+ */
+export interface ContextUsageEvent {
+  type: 'context_usage';
+  /** Prompt tokens used in the last LLM call */
+  promptTokens: number;
+  /** Maximum context tokens available */
+  maxTokens: number;
+  /** Usage percentage (0-100) */
+  percentage: number;
+  /** Whether compression just occurred */
+  wasCompressed: boolean;
+  /** Current iteration number */
+  iteration: number;
+}
+
+/**
  * Option for multiple choice questions.
  */
 export interface QuestionOption {
@@ -177,6 +195,7 @@ export type AgentEvent =
   | StreamingThinkEvent
   | ToolStreamingEvent
   | NotificationEvent
+  | ContextUsageEvent
   | QuestionEvent
   | AgentStatusEvent
   | UserInputInjectedEvent

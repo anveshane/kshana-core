@@ -417,11 +417,11 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
           )}
         </Box>
         <Box marginLeft={2}>
-          <Text dimColor>{toolCallStr}</Text>
+          <Text dimColor wrap="wrap">{toolCallStr}</Text>
         </Box>
         {status === 'error' && result !== undefined && (
           <Box marginLeft={2}>
-            <Text color="red">
+            <Text color="red" wrap="wrap">
               Error: {typeof result === 'object' ? JSON.stringify(result) : String(result)}
             </Text>
           </Box>

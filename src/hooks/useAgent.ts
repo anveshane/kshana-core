@@ -119,6 +119,15 @@ export interface QuestionOption {
   description?: string;
 }
 
+/** Context usage info for UI display */
+export interface ContextUsageInfo {
+  promptTokens: number;
+  maxTokens: number;
+  percentage: number;
+  wasCompressed: boolean;
+  iteration: number;
+}
+
 interface AgentState {
   status: AgentStatus;
   todos: ExpandableTodoItem[];
@@ -144,6 +153,10 @@ interface AgentState {
   currentAction: CurrentAction | null;
   /** Current agent name (for tracking across streaming) */
   currentAgentName: string | undefined;
+  /** Context window usage info */
+  contextUsage: ContextUsageInfo | null;
+  /** Notification message to display briefly */
+  notification: string | null;
 }
 
 type AgentAction =
@@ -166,7 +179,10 @@ type AgentAction =
   | { type: 'CLEAR_CURRENT_ACTION' }
   | { type: 'RESET' }
   | { type: 'START_TASK'; task: string }
-  | { type: 'ADD_PHASE_TRANSITION'; fromPhase: string; toPhase: string; displayName?: string; description?: string };
+  | { type: 'ADD_PHASE_TRANSITION'; fromPhase: string; toPhase: string; displayName?: string; description?: string }
+  | { type: 'SET_CONTEXT_USAGE'; usage: ContextUsageInfo }
+  | { type: 'SET_NOTIFICATION'; message: string }
+  | { type: 'CLEAR_NOTIFICATION' };
 
 const MAX_VISIBLE_TOOLS = 15;
 const MAX_HISTORY = 500; // Keep more history for scrolling
@@ -189,6 +205,8 @@ const initialState: AgentState = {
   history: [],
   currentAction: null,
   currentAgentName: undefined,
+  contextUsage: null,
+  notification: null,
 };
 
 function agentReducer(state: AgentState, action: AgentAction): AgentState {
@@ -561,6 +579,15 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
         ],
       };
 
+    case 'SET_CONTEXT_USAGE':
+      return { ...state, contextUsage: action.usage };
+
+    case 'SET_NOTIFICATION':
+      return { ...state, notification: action.message };
+
+    case 'CLEAR_NOTIFICATION':
+      return { ...state, notification: null };
+
     default:
       return state;
   }
@@ -586,6 +613,10 @@ interface UseAgentReturn {
   recentTools: ToolCallHistoryItem[];
   history: HistoryEntry[];
   currentAction: CurrentAction | null;
+  /** Context window usage info */
+  contextUsage: ContextUsageInfo | null;
+  /** Notification message (e.g., context compression) */
+  notification: string | null;
   run: (task: string) => Promise<GenericAgentResult>;
   respond: (userInput: string) => Promise<GenericAgentResult>;
   reset: () => void;
@@ -742,6 +773,31 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
       onEvent?.(event);
     });
 
+    agent.on('context_usage', event => {
+      debugLog(`[useAgent] context_usage event: ${event.percentage}% (${event.promptTokens}/${event.maxTokens}), compressed=${event.wasCompressed}, iter=${event.iteration}`);
+      dispatch({
+        type: 'SET_CONTEXT_USAGE',
+        usage: {
+          promptTokens: event.promptTokens,
+          maxTokens: event.maxTokens,
+          percentage: event.percentage,
+          wasCompressed: event.wasCompressed,
+          iteration: event.iteration,
+        },
+      });
+      onEvent?.(event);
+    });
+
+    agent.on('notification', event => {
+      debugLog(`[useAgent] notification event: [${event.level}] ${event.message}`);
+      dispatch({ type: 'SET_NOTIFICATION', message: event.message });
+      // Auto-clear notification after 8 seconds
+      setTimeout(() => {
+        dispatch({ type: 'CLEAR_NOTIFICATION' });
+      }, 8000);
+      onEvent?.(event);
+    });
+
     agentRef.current = agent;
     return agent;
   }, [tools, agentConfig, getLLM, onEvent]);
@@ -876,6 +932,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     recentTools: state.recentTools,
     history: state.history,
     currentAction: state.currentAction,
+    contextUsage: state.contextUsage,
+    notification: state.notification,
     run,
     respond,
     reset,

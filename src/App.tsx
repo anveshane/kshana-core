@@ -186,6 +186,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       case 'todo_update':
         uiLogger.logTodoUpdate(event.todos.map(t => ({ content: t.content, status: t.status })));
         break;
+      case 'context_usage':
+        uiLogger.logContextUsage(event.percentage, event.promptTokens, event.maxTokens, event.iteration, event.wasCompressed);
+        break;
     }
   }, []);
 
@@ -206,6 +209,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     recentTools,
     history,
     currentAction,
+    contextUsage,
+    notification,
     run,
     respond,
     stop,
@@ -909,6 +914,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         history={history}
         currentAction={currentAction}
         expanded={expandedView}
+        contextUsage={contextUsage}
+        notification={notification}
       />
 
       {/* Unified Input - always visible at bottom */}
