@@ -100,12 +100,12 @@ class ProjectFileOps {
       if (this.sender) {
         if (Buffer.isBuffer(content)) {
           this.sender('file_write_binary', {
-            path: filePath,
+            path: normalizedPath,
             content: content.toString('base64'),
           });
         } else {
           this.sender('file_write', {
-            path: filePath,
+            path: normalizedPath,
             content,
           });
         }
@@ -180,7 +180,7 @@ class ProjectFileOps {
       }
 
       if (this.sender) {
-        this.sender('file_mkdir', { path: dirPath });
+        this.sender('file_mkdir', { path: normalizedPath });
       }
       return;
     }
@@ -240,7 +240,7 @@ class ProjectFileOps {
       }
 
       if (this.sender) {
-        this.sender('file_rm', { path: filePath, recursive: !!options?.recursive });
+        this.sender('file_rm', { path: normalizedPath, recursive: !!options?.recursive });
       }
       return;
     }
@@ -254,7 +254,7 @@ class ProjectFileOps {
     if (this.mode === 'remote') {
       this.cache.delete(normalizedPath);
       if (this.sender) {
-        this.sender('file_rm', { path: filePath, recursive: false });
+        this.sender('file_rm', { path: normalizedPath, recursive: false });
       }
       return;
     }
