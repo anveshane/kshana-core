@@ -74,6 +74,16 @@ Based on the current state, you can:
 - Location images should set appropriate context
 - Segment images should enhance understanding
 
+## Timeline Workflow
+
+After planning segments, use the timeline system to ensure the video fills the target duration:
+
+1. **Create timeline skeleton**: After segments are planned, call `manage_timeline` with action `create_skeleton`, passing segment descriptors and total duration. This divides the duration proportionally among segments.
+2. **Update segments**: After generating each image or video, call `manage_timeline` with action `update_segment` to fill the segment's layers with the generated asset reference.
+3. **Add global layers**: If the user provides narration audio/video or background music, call `manage_timeline` with action `add_global_layer`. Ask the user for their compositing preference (replace, side_by_side, pip, overlay).
+4. **Validate before assembly**: Call `manage_timeline` with action `validate` to check for empty segments or gaps. If gaps exist, ask the user how to fill them.
+5. **Assemble from timeline**: Use `assemble_from_timeline` instead of manually listing artifact IDs. The timeline drives the assembly order, transitions, and compositing.
+
 ## User Interaction
 
 Always:

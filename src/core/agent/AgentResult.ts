@@ -30,6 +30,8 @@ export interface GenericAgentResult {
   options?: QuestionOption[];
   /** Auto-approve timeout in milliseconds */
   autoApproveTimeoutMs?: number;
+  /** Context content to display with the question (e.g., generated content for review) */
+  questionContext?: string;
 }
 
 /**

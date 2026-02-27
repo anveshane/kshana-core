@@ -122,6 +122,9 @@ export interface ExecutionPlan {
 
   /** Whether user approval is recommended before execution */
   requiresApproval: boolean;
+
+  /** Duration-aware planning hints (present when goal has duration preference) */
+  timelineHints?: TimelineHints;
 }
 
 /**
@@ -165,6 +168,23 @@ export interface PlanStep {
 
   /** Estimated relative cost (for ordering/prioritization) */
   estimatedCost: number;
+}
+
+/**
+ * Duration-aware hints for the agent to plan enough content.
+ * Computed when the goal has a duration preference.
+ */
+export interface TimelineHints {
+  /** Recommended number of segments to fill the duration */
+  suggestedSegmentCount: number;
+  /** Recommended duration per segment (seconds) */
+  suggestedSegmentDuration: number;
+  /** Total target duration (seconds) */
+  totalDuration: number;
+  /** Maximum duration for a single generated clip (seconds) */
+  maxClipDuration: number;
+  /** Human-readable explanation for the agent */
+  reasoning: string;
 }
 
 /**

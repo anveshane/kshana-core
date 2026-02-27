@@ -16,6 +16,56 @@ import type {
 } from './types.js';
 import { getLLMLogger } from './LLMLogger.js';
 
+/**
+ * Known context lengths for common model families.
+ * Used as a fallback when the provider doesn't report context length.
+ * Patterns are matched case-insensitively against the model ID.
+ */
+const KNOWN_MODEL_CONTEXT_LENGTHS: Array<{ pattern: RegExp; contextLength: number }> = [
+  // Qwen models
+  { pattern: /qwen.*2\.5.*coder.*32b/i, contextLength: 32768 },
+  { pattern: /qwen.*2\.5/i, contextLength: 32768 },
+  { pattern: /qwen.*3/i, contextLength: 32768 },
+  // Llama models
+  { pattern: /llama.*3\.3/i, contextLength: 131072 },
+  { pattern: /llama.*3\.2/i, contextLength: 131072 },
+  { pattern: /llama.*3\.1/i, contextLength: 131072 },
+  { pattern: /llama.*3/i, contextLength: 8192 },
+  // Mistral / Mixtral
+  { pattern: /mistral.*large/i, contextLength: 131072 },
+  { pattern: /mistral.*nemo/i, contextLength: 131072 },
+  { pattern: /mixtral/i, contextLength: 32768 },
+  { pattern: /mistral/i, contextLength: 32768 },
+  // DeepSeek
+  { pattern: /deepseek.*v3/i, contextLength: 65536 },
+  { pattern: /deepseek.*v2/i, contextLength: 32768 },
+  { pattern: /deepseek.*coder/i, contextLength: 32768 },
+  { pattern: /deepseek/i, contextLength: 32768 },
+  // Gemma
+  { pattern: /gemma.*2.*27b/i, contextLength: 8192 },
+  { pattern: /gemma.*2/i, contextLength: 8192 },
+  { pattern: /gemma/i, contextLength: 8192 },
+  // Phi
+  { pattern: /phi.*4/i, contextLength: 16384 },
+  { pattern: /phi.*3/i, contextLength: 131072 },
+  // Command R
+  { pattern: /command.*r.*plus/i, contextLength: 131072 },
+  { pattern: /command.*r/i, contextLength: 131072 },
+];
+
+/**
+ * Try to infer context length from the model name/ID.
+ * Returns null if no match is found.
+ */
+function inferContextLengthFromModel(modelId: string): number | null {
+  for (const { pattern, contextLength } of KNOWN_MODEL_CONTEXT_LENGTHS) {
+    if (pattern.test(modelId)) {
+      return contextLength;
+    }
+  }
+  return null;
+}
+
 export class LLMClient {
   private client: OpenAI;
   private model: string;
@@ -83,6 +133,16 @@ export class LLMClient {
     const DEFAULT_CONTEXT = 16000;
     const envContextLength = process.env['LLM_CONTEXT_TOKENS'];
 
+    // Env var takes priority — it's the user's explicit override
+    if (envContextLength) {
+      const parsed = parseInt(envContextLength, 10);
+      if (parsed > 0) {
+        this.cachedContextLength = parsed;
+        this.validateContextLength(parsed);
+        return parsed;
+      }
+    }
+
     try {
       // Query the models endpoint
       const response = await fetch(`${this.baseUrl}/models`);
@@ -121,12 +181,23 @@ export class LLMClient {
       // Silently fall back - many providers don't support this endpoint
     }
 
-    // Fall back to env var or default
-    const fallback = envContextLength ? parseInt(envContextLength, 10) : DEFAULT_CONTEXT;
-    this.cachedContextLength = fallback;
-    this.validateContextLength(fallback);
+    // Try to infer from model name as a better fallback than 16000
+    const inferred = inferContextLengthFromModel(this.model);
+    if (inferred) {
+      this.cachedContextLength = inferred;
+      this.validateContextLength(inferred);
+      return inferred;
+    }
 
-    return fallback;
+    // Last resort fallback
+    console.warn(
+      `[LLMClient] Could not determine context length for model "${this.model}". ` +
+      `Falling back to ${DEFAULT_CONTEXT} tokens. Set LLM_CONTEXT_TOKENS env var to override.`
+    );
+    this.cachedContextLength = DEFAULT_CONTEXT;
+    this.validateContextLength(DEFAULT_CONTEXT);
+
+    return DEFAULT_CONTEXT;
   }
 
   /**

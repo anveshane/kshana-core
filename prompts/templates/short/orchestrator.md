@@ -80,6 +80,16 @@ Based on the current state, you can:
 - Consistent visual style
 - Mobile-optimized clarity
 
+## Timeline Workflow
+
+After planning key visuals, use the timeline system to ensure the short fills its duration:
+
+1. **Create timeline skeleton**: After visuals are planned, call `manage_timeline` with action `create_skeleton`, passing visual descriptors and total duration (max 60s). This divides the duration proportionally.
+2. **Update segments**: After generating each visual image or clip, call `manage_timeline` with action `update_segment` to fill the segment's layers.
+3. **Add global layers**: If the user provides voiceover or music, call `manage_timeline` with action `add_global_layer`.
+4. **Validate before assembly**: Call `manage_timeline` with action `validate` to check for gaps.
+5. **Assemble from timeline**: Use `assemble_from_timeline` instead of manually listing artifact IDs.
+
 ## User Interaction
 
 Always:

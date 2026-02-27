@@ -837,6 +837,7 @@ export class GenericAgent extends TypedEventEmitter {
             pendingQuestion: planResultObj['question'] as string,
             options: planResultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: planResultObj['autoApproveTimeoutMs'] as number | undefined,
+            questionContext: planResultObj['content'] as string | undefined,
           };
         }
 
@@ -891,6 +892,7 @@ export class GenericAgent extends TypedEventEmitter {
             pendingQuestion: contentResultObj['question'] as string,
             options: contentResultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: contentResultObj['autoApproveTimeoutMs'] as number | undefined,
+            questionContext: contentResultObj['content'] as string | undefined,
           };
         }
 
@@ -941,6 +943,7 @@ export class GenericAgent extends TypedEventEmitter {
             pendingQuestion: imageResultObj['question'] as string,
             options: imageResultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: imageResultObj['autoApproveTimeoutMs'] as number | undefined,
+            questionContext: imageResultObj['content'] as string | undefined,
           };
         }
 
@@ -989,6 +992,7 @@ export class GenericAgent extends TypedEventEmitter {
             pendingQuestion: videoResultObj['question'] as string,
             options: videoResultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: videoResultObj['autoApproveTimeoutMs'] as number | undefined,
+            questionContext: videoResultObj['content'] as string | undefined,
           };
         }
 
@@ -1220,6 +1224,7 @@ export class GenericAgent extends TypedEventEmitter {
             pendingQuestion: resultObj['question'] as string,
             options: resultObj['options'] as Array<{ label: string; description?: string }>,
             autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
+            questionContext: resultObj['content'] as string | undefined,
           };
         }
 

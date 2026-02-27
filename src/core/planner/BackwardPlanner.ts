@@ -16,6 +16,7 @@ import type {
   SkippedArtifact,
   PlannerOptions,
   PlanValidation,
+  TimelineHints,
 } from './types.js';
 
 /**
@@ -342,6 +343,42 @@ export class BackwardPlanner {
       valid: errors.length === 0,
       errors,
       warnings,
+    };
+  }
+
+  /**
+   * Compute timeline hints based on the goal's duration preference.
+   *
+   * Returns hints about how many segments are needed and how long each should be,
+   * given the target duration and generation constraints.
+   */
+  computeTimelineHints(goal: UserGoal, maxClipDuration: number = 10): TimelineHints {
+    const totalDuration = goal.preferences.duration as number;
+
+    if (!totalDuration || totalDuration <= 0) {
+      return {
+        suggestedSegmentCount: 1,
+        suggestedSegmentDuration: 0,
+        totalDuration: 0,
+        maxClipDuration,
+        reasoning: 'No duration specified in goal preferences.',
+      };
+    }
+
+    const suggestedSegmentCount = Math.ceil(totalDuration / maxClipDuration);
+    const suggestedSegmentDuration = Math.round((totalDuration / suggestedSegmentCount) * 100) / 100;
+
+    const reasoning =
+      `For a ${totalDuration}s video with ${maxClipDuration}s max clip duration, ` +
+      `you need at least ${suggestedSegmentCount} segment(s) of ~${suggestedSegmentDuration}s each. ` +
+      `After planning segments, call manage_timeline create_skeleton to create the timeline structure.`;
+
+    return {
+      suggestedSegmentCount,
+      suggestedSegmentDuration,
+      totalDuration,
+      maxClipDuration,
+      reasoning,
     };
   }
 

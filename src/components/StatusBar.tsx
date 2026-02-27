@@ -30,7 +30,8 @@ const STATUS_CONFIG: Record<StatusType, { color: string; icon: string; label: st
  */
 function ContextBar({ usage }: { usage: ContextUsageInfo }) {
   const barWidth = 20;
-  const filled = Math.round((usage.percentage / 100) * barWidth);
+  const clampedPercentage = Math.max(0, Math.min(usage.percentage, 100));
+  const filled = Math.round((clampedPercentage / 100) * barWidth);
   const empty = barWidth - filled;
   const bar = '█'.repeat(filled) + '░'.repeat(empty);
 

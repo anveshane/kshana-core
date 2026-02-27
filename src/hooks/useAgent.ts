@@ -824,6 +824,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
             isConfirmation: result.isConfirmation ?? false,
             options: result.options,
             autoApproveTimeoutMs: result.autoApproveTimeoutMs,
+            context: result.questionContext,
           });
         } else if (result.status === 'completed') {
           dispatch({ type: 'SET_STATUS', status: 'completed' });
@@ -874,6 +875,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
             isConfirmation: result.isConfirmation ?? false,
             options: result.options,
             autoApproveTimeoutMs: result.autoApproveTimeoutMs,
+            context: result.questionContext,
           });
         } else if (result.status === 'completed') {
           dispatch({ type: 'SET_STATUS', status: 'completed' });

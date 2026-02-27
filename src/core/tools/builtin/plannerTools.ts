@@ -225,6 +225,11 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
         includeOptional,
       });
 
+      // Compute timeline hints if duration is specified
+      if (goal.preferences.duration) {
+        plan.timelineHints = planner.computeTimelineHints(goal);
+      }
+
       // Validate plan
       const validation = planner.validatePlan(plan);
 
@@ -237,6 +242,7 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
           summary: plan.summary,
           expensiveStepCount: plan.expensiveStepCount,
           requiresApproval: plan.requiresApproval,
+          timelineHints: plan.timelineHints,
         },
         validation: {
           valid: validation.valid,

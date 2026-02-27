@@ -14,6 +14,10 @@ import {
   createPlannerTools,
   type PlannerToolContext,
 } from '../../core/tools/builtin/plannerTools.js';
+import {
+  createTimelineTools,
+  type TimelineToolContext,
+} from '../../core/timeline/index.js';
 import { BackwardPlanner, AssetScanner } from '../../core/planner/index.js';
 import type { UserGoal, ExecutionPlan, AssetRegistry } from '../../core/planner/types.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
@@ -234,6 +238,14 @@ export function createGoalDrivenToolRegistry(
     registry.register(tool);
   }
 
+  // Add timeline tools
+  const timelineContext: TimelineToolContext = {
+    projectDir: getProjectDir(basePath),
+  };
+  for (const tool of createTimelineTools(timelineContext)) {
+    registry.register(tool);
+  }
+
   return registry;
 }
 
@@ -394,6 +406,9 @@ export function getWorkflowToolNames(): string[] {
     'update_project',
     // Stitching
     'stitch_videos',
+    // Timeline
+    'manage_timeline',
+    'assemble_from_timeline',
     // Plus all video tools
     ...getVideoToolNames(),
   ];
