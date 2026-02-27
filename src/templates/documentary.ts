@@ -243,6 +243,56 @@ const segmentImageArtifact: ArtifactTypeDefinition = {
   },
 };
 
+const infographicPlacementArtifact: ArtifactTypeDefinition = {
+  id: 'infographic_placement',
+  displayName: 'Infographic Placements',
+  category: 'structure',
+  description: 'Identify where animated infographics should appear in the documentary',
+  isCollection: false,
+  outputFormat: 'markdown',
+  filePattern: 'plans/infographic-placements.md',
+  agentType: 'planning',
+  promptFile: 'video/phases/infographic-placement.md',
+  isExpensive: false,
+  requiresPerItemApproval: false,
+  dependencies: [
+    {
+      artifactTypeId: 'segment',
+      required: true,
+      usage: 'context',
+      scope: 'all',
+    },
+  ],
+};
+
+const segmentInfographicArtifact: ArtifactTypeDefinition = {
+  id: 'segment_infographic',
+  displayName: 'Segment Infographics',
+  category: 'clip',
+  description: 'Animated infographic overlays rendered via Remotion',
+  isCollection: true,
+  itemName: 'infographic',
+  outputFormat: 'video',
+  filePattern: 'assets/infographics/info{{index}}_{{id}}.webm',
+  agentType: 'infographic',
+  promptFile: 'video/phases/infographic-generation.md',
+  isExpensive: true,
+  requiresPerItemApproval: true,
+  dependencies: [
+    {
+      artifactTypeId: 'infographic_placement',
+      required: true,
+      usage: 'context',
+    },
+    {
+      artifactTypeId: 'segment',
+      required: true,
+      usage: 'context',
+      scope: 'all',
+    },
+  ],
+};
+
 const segmentVideoArtifact: ArtifactTypeDefinition = {
   id: 'segment_video',
   displayName: 'Segment Videos',
@@ -401,6 +451,24 @@ const phases: PhaseDefinition[] = [
     promptFile: 'documentary/phases/segments.md',
   },
   {
+    id: 'infographic_planning',
+    displayName: 'Infographic Planning',
+    description: 'Identify data-driven segments that benefit from animated infographics',
+    order: 4.5,
+    artifactTypes: ['infographic_placement'],
+    requiresConfirmation: false,
+    promptFile: 'video/phases/infographic-placement.md',
+  },
+  {
+    id: 'infographic_generation',
+    displayName: 'Infographic Generation',
+    description: 'Generate animated infographic overlays via Remotion',
+    order: 4.6,
+    artifactTypes: ['segment_infographic'],
+    requiresConfirmation: true,
+    promptFile: 'video/phases/infographic-generation.md',
+  },
+  {
     id: 'visuals',
     displayName: 'Visual Assets',
     description: 'Generate graphics and location images',
@@ -536,6 +604,8 @@ export const documentaryTemplate: VideoTemplate = {
     source_graphic: sourceGraphicArtifact,
     location_image: locationImageArtifact,
     segment_image: segmentImageArtifact,
+    infographic_placement: infographicPlacementArtifact,
+    segment_infographic: segmentInfographicArtifact,
     segment_video: segmentVideoArtifact,
     final_video: finalVideoArtifact,
   },

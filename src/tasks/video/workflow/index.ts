@@ -147,6 +147,25 @@ export {
   type CreateProjectOptions,
 } from './GenericProjectManager.js';
 
+// Infographic Placements Parser
+export {
+  parseInfographicPlacements,
+  parseInfographicPlacementsWithErrors,
+  type ParsedInfographicPlacement,
+  type InfographicParseResult,
+  type InfographicParseError,
+  type InfographicType,
+  INFOGRAPHIC_TYPES,
+} from './infographicPlacementsParser.js';
+
+// Infographic Prompt Expander
+export {
+  expandInfographicPlacementPrompt,
+  type ExpandInfographicContext,
+  type ExpandInfographicResult,
+  type ExpandInfographicError,
+} from './infographicPromptExpander.js';
+
 // Combined tool getter
 import { getWorkflowFileTools } from './FileTools.js';
 import { getStitchingTools } from './StitchVideoTool.js';

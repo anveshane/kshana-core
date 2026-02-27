@@ -21,6 +21,7 @@ import {
 import { BackwardPlanner, AssetScanner } from '../../core/planner/index.js';
 import type { UserGoal, ExecutionPlan, AssetRegistry } from '../../core/planner/types.js';
 import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
+import { getInfographicTools, INFOGRAPHIC_COMPLEX_TOOLS } from './infographic-tools.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
@@ -65,6 +66,12 @@ export {
   getVideoGenerationTools,
   VIDEO_COMPLEX_TOOLS,
 } from './tools.js';
+
+// Re-export infographic tools
+export {
+  getInfographicTools,
+  INFOGRAPHIC_COMPLEX_TOOLS,
+} from './infographic-tools.js';
 
 // Re-export state types
 export { resetProjectState, setCurrentProjectId } from './state.js';
@@ -244,6 +251,16 @@ export function createGoalDrivenToolRegistry(
   };
   for (const tool of createTimelineTools(timelineContext)) {
     registry.register(tool);
+  }
+
+  // Add infographic tools only for documentary template
+  if (finalTemplateId === TEMPLATE_IDS.DOCUMENTARY || finalTemplateId === 'documentary') {
+    for (const tool of getInfographicTools()) {
+      registry.register(tool);
+    }
+    for (const toolName of INFOGRAPHIC_COMPLEX_TOOLS) {
+      registerComplexTool(toolName);
+    }
   }
 
   return registry;

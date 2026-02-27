@@ -450,7 +450,7 @@ export interface SceneRef {
  */
 export interface AssetInfo {
   id: string;
-  type: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'final_video';
+  type: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'scene_infographic' | 'final_video';
   path: string;
   createdAt: number;
   metadata?: Record<string, unknown>;

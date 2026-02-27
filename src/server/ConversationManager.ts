@@ -325,6 +325,10 @@ export class ConversationManager {
       if (session.abortController) {
         session.abortController.abort();
       }
+      // Clean up Remotion session resources (temp dirs, jobs) — fire and forget
+      import('../services/remotion/index.js')
+        .then(({ RemotionRenderer }) => RemotionRenderer.getInstance().cleanupSession(sessionId))
+        .catch(() => { /* Remotion service may not be initialized */ });
       this.sessions.delete(sessionId);
       return true;
     }

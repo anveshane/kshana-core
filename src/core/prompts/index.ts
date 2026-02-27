@@ -3,7 +3,7 @@
  * Reads prompts from markdown files in /prompts/ directory.
  */
 import type { ToolDefinition } from '../llm/index.js';
-import { loadAndRenderMarkdown, type PromptContext } from './loader.js';
+import { loadAndRenderMarkdown, loadMarkdown, type PromptContext } from './loader.js';
 import os from 'os';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -321,6 +321,21 @@ export function buildExplorePrompt(query: string): string {
  * @param context - Optional context (project state, previous content, etc.)
  * @returns The complete skill agent system prompt
  */
+/**
+ * Build the Remotion infographic agent system prompt.
+ * Combines the agent prompt with placement data and skill rules.
+ *
+ * @param placementsJson - JSON string of placements to generate
+ * @param skillsContent - Markdown string of selected Remotion skills/rules
+ * @returns The complete Remotion agent system prompt
+ */
+export function buildRemotionAgentPrompt(placementsJson: string, skillsContent: string): string {
+  const base = loadMarkdown('subagents/remotion-agent.md');
+  const placementsSection = `<placements>\n${placementsJson}\n</placements>`;
+  const skillsSection = `<remotion_skills>\n${skillsContent}\n</remotion_skills>`;
+  return [base, placementsSection, skillsSection].filter(Boolean).join('\n\n');
+}
+
 export function buildSkillPrompt(
   skillName: SkillType,
   task: string,

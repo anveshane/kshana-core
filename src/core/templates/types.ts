@@ -31,7 +31,7 @@ export type ArtifactOutputFormat = 'markdown' | 'json' | 'image' | 'video';
 /**
  * Agent types that can create artifacts
  */
-export type ArtifactAgentType = 'planning' | 'content' | 'image' | 'video';
+export type ArtifactAgentType = 'planning' | 'content' | 'image' | 'video' | 'infographic';
 
 /**
  * Artifact scope determines where artifacts are stored and shared.

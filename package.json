@@ -23,7 +23,8 @@
     "eval:mock": "tsx scripts/run-evals.ts",
     "lint": "tsc --noEmit && eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "remotion:studio": "cd remotion-infographics && remotion studio src/index.tsx"
   },
   "keywords": [
     "cli",
