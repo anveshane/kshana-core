@@ -93,6 +93,12 @@ export class AssetScanner {
     // 2. Scan artifact directories for files
     this.scanArtifactDirectories(projectDir, registry, issues);
 
+    // 3. Scan prompt directories for existing prompt files
+    this.scanPromptDirectories(projectDir, registry);
+
+    // 4. Check for critical project files
+    this.checkCriticalFiles(projectDir, issues);
+
     return {
       registry,
       assetCount: registry.assets.size,
@@ -247,6 +253,139 @@ export class AssetScanner {
           location: dirPath,
         });
       }
+    }
+  }
+
+  /**
+   * Scan prompts/ directory tree for existing prompt files (.prompt.md, .motion.md).
+   * Registers them as assets so the planner knows they exist and can skip regeneration.
+   */
+  private scanPromptDirectories(projectDir: string, registry: AssetRegistry): void {
+    const promptsDir = path.join(projectDir, 'prompts');
+    if (!fs.existsSync(promptsDir)) {
+      return;
+    }
+
+    // Map filename patterns to artifact types
+    const PROMPT_FILE_PATTERNS: Array<{ suffix: string; artifactType: string }> = [
+      { suffix: '.prompt.md', artifactType: 'scene_image_prompt' },
+      { suffix: '.motion.json', artifactType: 'scene_video_prompt' },
+      { suffix: '.motion.md', artifactType: 'scene_video_prompt' },
+      { suffix: '.profile.md', artifactType: 'character' },
+    ];
+
+    // Recursively walk prompts/ directory
+    const walkDir = (dir: string): void => {
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) {
+            walkDir(fullPath);
+          } else if (entry.isFile()) {
+            for (const pattern of PROMPT_FILE_PATTERNS) {
+              if (entry.name.endsWith(pattern.suffix)) {
+                const itemId = entry.name.replace(pattern.suffix, '');
+                const assetId = `detected_${pattern.artifactType}_${itemId}`;
+
+                // Only add if not already in registry
+                if (!registry.assets.has(assetId)) {
+                  registry.assets.set(assetId, {
+                    id: assetId,
+                    artifactTypeId: pattern.artifactType,
+                    itemId,
+                    path: fullPath,
+                    source: 'detected',
+                    registeredAt: Date.now(),
+                  });
+                }
+                break;
+              }
+            }
+          }
+        }
+      } catch {
+        // Ignore errors reading prompt directories
+      }
+    };
+
+    walkDir(promptsDir);
+  }
+
+  /**
+   * Check for critical project-level files that must exist for the workflow to complete.
+   */
+  private checkCriticalFiles(projectDir: string, issues: ScanIssue[]): void {
+    const timelinePath = path.join(projectDir, 'timeline.json');
+    if (!fs.existsSync(timelinePath)) {
+      issues.push({
+        type: 'error',
+        message: 'CRITICAL: timeline.json is missing. This file is required for video assembly. Call manage_timeline with action "create_skeleton" to create it from your segments before proceeding to video assembly.',
+        location: timelinePath,
+      });
+      return;
+    }
+
+    // Validate timeline.json contents
+    try {
+      const raw = fs.readFileSync(timelinePath, 'utf-8').trim();
+      if (!raw || raw === '{}' || raw === '[]') {
+        issues.push({
+          type: 'error',
+          message: 'CRITICAL: timeline.json is empty or contains a blank object. Call manage_timeline with action "create_skeleton" to recreate it.',
+          location: timelinePath,
+        });
+        return;
+      }
+
+      const timeline = JSON.parse(raw);
+
+      if (!timeline.version) {
+        issues.push({
+          type: 'error',
+          message: 'CRITICAL: timeline.json is corrupted (missing version). Call manage_timeline with action "create_skeleton" to recreate it.',
+          location: timelinePath,
+        });
+        return;
+      }
+
+      if (!timeline.totalDuration || timeline.totalDuration <= 0) {
+        issues.push({
+          type: 'error',
+          message: 'CRITICAL: timeline.json has no totalDuration. Call manage_timeline with action "create_skeleton" to recreate it with the correct duration.',
+          location: timelinePath,
+        });
+        return;
+      }
+
+      if (!Array.isArray(timeline.segments) || timeline.segments.length === 0) {
+        issues.push({
+          type: 'error',
+          message: 'CRITICAL: timeline.json has no segments. Call manage_timeline with action "create_skeleton" to recreate it from your project segments.',
+          location: timelinePath,
+        });
+        return;
+      }
+
+      // Check for segments with no content (all empty)
+      const filledCount = timeline.segments.filter(
+        (s: { fillStatus?: string }) => s.fillStatus === 'filled'
+      ).length;
+      const emptyCount = timeline.segments.length - filledCount;
+
+      if (emptyCount > 0) {
+        issues.push({
+          type: 'warning',
+          message: `timeline.json has ${emptyCount}/${timeline.segments.length} segments without content. Use manage_timeline with action "update_segment" to fill them with visual assets before assembly.`,
+          location: timelinePath,
+        });
+      }
+    } catch {
+      issues.push({
+        type: 'error',
+        message: 'CRITICAL: timeline.json contains invalid JSON. Call manage_timeline with action "create_skeleton" to recreate it.',
+        location: timelinePath,
+      });
     }
   }
 

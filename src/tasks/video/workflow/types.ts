@@ -884,12 +884,7 @@ export const PHASE_ORDER: WorkflowPhase[] = [
 ];
 
 /**
- * Default project directory name.
- */
-export const PROJECT_DIR = '.kshana';
-
-/**
- * Project file name within PROJECT_DIR.
+ * Project file name within the active project directory.
  */
 export const PROJECT_FILE = 'project.json';
 

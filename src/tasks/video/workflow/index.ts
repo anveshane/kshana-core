@@ -33,7 +33,6 @@ export {
   type PersistedTodo,
   PHASE_CONFIGS,
   PHASE_ORDER,
-  PROJECT_DIR,
   PROJECT_FILE,
   PROJECT_VERSION,
   AUTO_APPROVE_TIMEOUT_MS,
@@ -50,12 +49,21 @@ export {
   createDefaultSceneRef,
 } from './types.js';
 
+// Active Project
+export {
+  getActiveProjectDir,
+  setActiveProjectDir,
+} from './activeProject.js';
+
 // Project Manager
 export {
   getProjectDir,
   getProjectFilePath,
   projectExists,
   deleteProject,
+  scanProjects,
+  inferProjectDirName,
+  type ProjectInfo,
   createProjectStructure,
   createProject,
   loadProject,

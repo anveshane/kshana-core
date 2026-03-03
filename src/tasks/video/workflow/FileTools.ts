@@ -140,7 +140,7 @@ function listDirectoryContents(
  */
 export const listProjectFilesTool: ToolDefinition = createTool(
   'list_project_files',
-  `List all files in the project directory (.kshana/).
+  `List all files in the project directory.
 
 Returns the directory structure with file information:
 - plans/ - Plot, story, scenes, and other planning documents
@@ -231,7 +231,7 @@ This is the primary way to find available project content.`,
 
     // Build summary sections
     const summaryLines: string[] = [];
-    summaryLines.push(`📁 Project Files (.kshana/) - ${fileList.length} files total`);
+    summaryLines.push(`📁 Project Files - ${fileList.length} files total`);
     summaryLines.push('');
 
     if (categorized['plans'] && categorized['plans'].length > 0) {
@@ -283,7 +283,7 @@ This is the primary way to find available project content.`,
     return {
       status: 'success',
       content, // This field is displayed in the UI
-      project_directory: '.kshana/',
+      project_directory: 'project/',
       total_files: fileList.length,
       files: fileList,
       usage_hint:
@@ -297,7 +297,7 @@ This is the primary way to find available project content.`,
  */
 export const importFileTool: ToolDefinition = createTool(
   'import_file',
-  `Import/copy content into the project's .kshana directory.
+  `Import/copy content into the project directory.
 
 Use this ONLY for importing external files or user-referenced content into the project:
 - Copying a user-provided file (story, transcript, reference material) into the project
@@ -313,7 +313,7 @@ Files are automatically registered in project.json with a summary for easy disco
     properties: {
       file_path: {
         type: 'string',
-        description: 'Relative path within .kshana directory (e.g., "plans/outline.md")',
+        description: 'Relative path within the project directory (e.g., "plans/outline.md")',
       },
       content: {
         type: 'string',
@@ -336,7 +336,7 @@ Files are automatically registered in project.json with a summary for easy disco
     if (filePath.includes('..') || filePath.startsWith('/')) {
       return {
         status: 'error',
-        error: 'Invalid file path. Use relative paths within .kshana directory.',
+        error: 'Invalid file path. Use relative paths within the project directory.',
       };
     }
 

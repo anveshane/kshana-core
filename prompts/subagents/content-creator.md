@@ -198,9 +198,9 @@ The prompt text MUST reference every character and setting using "from imageN" p
 [Single detailed paragraph using "from image1", "from image2", "from image3" to reference characters/settings]
 
 **Reference Images:**
-- Character: [name] ([asset path from project state])
-- Character: [name] ([asset path from project state])
-- Setting: [name] ([asset path from project state])
+- Character: [name]
+- Character: [name]
+- Setting: [name]
 
 **Negative Prompt:**
 [Style-appropriate negatives + inconsistent appearance, wrong features]
@@ -246,40 +246,135 @@ text_to_image
 
 ### For Scene Video Prompts (scene_video_prompt)
 
-**ALL of these details are MANDATORY:**
+**PURPOSE**: Break a scene into 2-4 cinematic shots, each optimized for the LTX-2 video generation model. LTX-2 generates 4-8 second clips effectively, so each shot must describe focused motion for a single clip. Real video production uses multiple shots per scene — establishing, close-up, medium, reaction, etc.
 
-1. **Source**: Image artifact ID, duration (4-8 seconds), frame rate
-2. **Camera Motion**: Type, speed, start/end positions, easing, motivation
-3. **Subject Motion**: Character movement, facial animation, body motion, intensity
-4. **Environmental Motion**: Atmospheric effects, background motion, foreground elements, lighting changes
-5. **Technical**: Workflow: wan_single_image
+**Multi-Shot Breakdown Rules:**
+
+1. **2-4 shots per scene**: Break the scene action into distinct cinematic shots
+2. **4-8 seconds each**: Each shot's motion must be achievable in this window
+3. **Shot type vocabulary**:
+   - **By distance**: extreme_wide, wide, medium_wide, medium, medium_close_up, close_up, extreme_close_up
+   - **By angle**: eye_level, low_angle, high_angle, dutch_angle, birds_eye, worms_eye
+   - **By purpose**: establishing, reaction, over_the_shoulder, two_shot, pov, insert, cutaway, tracking
+4. **Shot sequencing**: Start with establishing/wide shots, move to medium/close-ups for key moments, use reaction shots for emotional beats
+5. **Per-shot referenceImages**: Only include references relevant to that specific shot (e.g., close-up of Alice → only Alice's reference)
+
+**LTX-2 Prompt Rules (apply to EACH shot's prompt):**
+
+1. **Single flowing paragraph**: Each shot prompt is ONE continuous paragraph
+2. **Present tense, descriptive language**: "a woman walks" not "a woman walking"
+3. **Chronological flow**: Describe how the shot starts, what unfolds, and how it resolves
+4. **Show, don't label emotions**: "tears stream down her face" not "she is sad"
+5. **Explicit camera work in cameraWork field**: Define the camera motion separately
+6. **Match detail to shot scale**: More facial detail for close-ups, environmental detail for wide shots
+7. **Environmental motion**: Wind, water, smoke, light — these add life
+8. **No clutter**: No text, logos, or chaotic motion
+
+**Dialogue Support:**
+- If the scene description includes character dialogue, distribute the lines across the appropriate shots
+- Set the `dialogue` field to the character's spoken line for that shot (LTX-2 generates with audio)
+- Set `dialogue` to `null` if the shot has no spoken dialogue
 
 **Output format:**
+
+Output ONLY a JSON object (no markdown fences):
 ```
-**Motion Prompt:**
-[Single paragraph describing all motion elements]
-
-**Camera Motion:**
-Type: [type]
-Direction: [direction]
-Speed: [slow/medium/fast]
-Duration: [seconds]
-
-**Subject Motion:**
-[List each character's motion]
-
-**Environmental Motion:**
-[List atmospheric movements]
-
-**Technical Parameters:**
-- Source: [image artifact ID]
-- Duration: [X] seconds
-- Workflow: wan_single_image
-- Frame Rate: 24fps
-
-**Motion Intensity:**
-[minimal | subtle | moderate | significant]
+{
+  "sceneNumber": 3,
+  "sceneTitle": "The Confrontation",
+  "shots": [
+    {
+      "shotNumber": 1,
+      "shotType": "establishing",
+      "duration": 5,
+      "prompt": "A wide view of the dimly lit study as two figures stand facing each other across a mahogany desk, candlelight flickering across leather-bound books on tall shelves, dust motes drifting through a shaft of golden afternoon light from the tall window.",
+      "dialogue": null,
+      "cameraWork": "slow push-in from wide to medium",
+      "referenceImages": ["assets/images/characters/sarah.png", "assets/images/characters/marcus.png", "assets/images/settings/study.png"]
+    },
+    {
+      "shotNumber": 2,
+      "shotType": "close-up",
+      "duration": 6,
+      "prompt": "Sarah's face fills the frame, her jaw tightens and her eyes narrow with controlled fury, a subtle tremor passes through her crossed arms, the warm candlelight catches a glint of moisture at the corner of her eye as she draws a slow breath.",
+      "dialogue": "You had no right to make that decision alone.",
+      "cameraWork": "static close-up with subtle drift right",
+      "referenceImages": ["assets/images/characters/sarah.png"]
+    },
+    {
+      "shotNumber": 3,
+      "shotType": "reaction",
+      "duration": 5,
+      "prompt": "Marcus shifts his weight from one foot to the other, his jaw set firm while his fingers curl and uncurl at his sides, a faint twitch tugs at the corner of his mouth as he absorbs her words, the shadows from the flickering candles play across his tense expression.",
+      "dialogue": null,
+      "cameraWork": "medium shot, slight pan left",
+      "referenceImages": ["assets/images/characters/marcus.png"]
+    }
+  ],
+  "totalSceneDuration": 16,
+  "referenceImages": ["assets/images/characters/sarah.png", "assets/images/characters/marcus.png", "assets/images/settings/study.png"]
+}
 ```
+
+**referenceImages** (top-level): List ALL `referenceImagePath` values from `read_project()` for every character and setting in the scene. Per-shot `referenceImages` should only include refs relevant to that specific shot.
+
+### For Shot Image Prompts (shot_image_prompt)
+
+**PURPOSE**: Generate an image prompt for a specific shot within a multi-shot scene. Each shot has its own framing (establishing wide, close-up, medium, reaction) and uses only the reference images relevant to that shot. The resulting image will be used as the source frame for video generation of that shot.
+
+**This works like `scene_image_prompt` but tailored to a specific shot's framing.**
+
+**The instruction will include shot details**: shot number, shot type, camera work, and which characters/settings appear. Use this information to compose the image appropriately.
+
+**Shot-specific composition rules:**
+
+| Shot Type | Composition |
+|-----------|-------------|
+| **extreme_wide** | Vast environment, character tiny or absent, establishes scale |
+| **wide / establishing** | Full environment with characters head-to-toe, establishes location and context |
+| **medium_wide** | Character from knees up, some environment visible, good for physical action |
+| **medium** | Waist-up of character(s), conversational distance, balanced environment context |
+| **medium_close_up** | Chest and head, intimate but not intense, captures expression and gesture |
+| **close_up** | Face fills frame, maximum emotional impact, shallow depth of field |
+| **extreme_close_up** | Single feature (eyes, hands, object), very intense, reveals key details |
+| **low_angle** | Camera looking up at subject — appears powerful, dominant, imposing |
+| **high_angle** | Camera looking down at subject — appears smaller, vulnerable |
+| **dutch_angle** | Tilted frame, creates unease and tension |
+| **birds_eye** | Directly above, unusual perspective, abstract/removed feel |
+| **reaction** | Character responding — focus on facial expression and body language |
+| **over_the_shoulder** | From behind one character looking at another, foreground character blurred |
+| **two_shot** | Two characters in frame together, showing their spatial relationship |
+| **pov** | Point-of-view — what a character sees, subjective perspective |
+| **insert** | Detail shot of object or action (hands, letter, clock, weapon) |
+| **cutaway** | Brief shot of related element outside the main action |
+| **tracking** | Camera follows moving subject, dynamic composition |
+
+**Reference image handling:**
+- Use ONLY the character/setting references listed for this specific shot
+- For close-ups: only the featured character's reference
+- For establishing: all character + setting references
+- Use the same "from image1", "from image2", "from image3" referencing as scene_image_prompt
+
+**Output format** (same as scene_image_prompt):
+```
+**Image Prompt:**
+[Single detailed paragraph matching the shot's framing. Reference characters/settings with "from imageN" phrasing.]
+
+**Reference Images:**
+- Character: [name] (only if in this shot)
+- Setting: [name] (only if in this shot)
+
+**Negative Prompt:**
+[Style-appropriate negatives + inconsistent appearance, wrong features]
+
+**Aspect Ratio:**
+1:1
+
+**Generation Mode:**
+image_text_to_image
+```
+
+If NO reference images are available (documentary/non-narrative), use `text_to_image` mode with no "from imageN" references, same as scene_image_prompt.
 
 ## What You Do NOT Do
 

@@ -274,6 +274,37 @@ export class ComfyUIClient {
       }
     }
 
+    // Fallback: if no outputs found via standard keys, check status messages.
+    // SaveVideo nodes don't populate history.outputs but ComfyUI includes
+    // saved file info in status.messages under "execution_cached" or via
+    // the prompt's executed node output metadata.
+    if (images.length === 0 && history.status?.messages) {
+      for (const [msgType, msgData] of history.status.messages) {
+        if (msgType === 'executed' && msgData) {
+          const output = msgData['output'] as Record<string, unknown> | undefined;
+          if (output) {
+            // Check for videos/images/gifs in the executed node output
+            for (const key of ['videos', 'images', 'gifs']) {
+              const items = output[key] as Array<{ filename: string; subfolder?: string; type?: string }> | undefined;
+              if (items) {
+                for (const item of items) {
+                  images.push({
+                    filename: item.filename,
+                    subfolder: item.subfolder || '',
+                    type: item.type || 'output',
+                    node_id: String(msgData['node'] || ''),
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+      if (images.length > 0) {
+        debugLog(`[getOutputImages] Found ${images.length} output(s) via status messages fallback`);
+      }
+    }
+
     return images;
   }
 
@@ -497,5 +528,9 @@ interface WorkflowFormat {
 
 interface HistoryEntry {
   outputs?: Record<string, unknown>;
-  status?: { completed?: boolean };
+  status?: {
+    completed?: boolean;
+    status_str?: string;
+    messages?: Array<[string, Record<string, unknown>]>;
+  };
 }

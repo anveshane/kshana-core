@@ -7,6 +7,8 @@
  * Follows the single-tool-with-action pattern (like update_project).
  */
 
+import { existsSync } from 'fs';
+import { join } from 'path';
 import type { ToolDefinition } from '../llm/index.js';
 import type {
   CompositingMode,
@@ -30,6 +32,7 @@ import {
   validateTimeline,
   loadTimeline,
   saveTimeline,
+  splitSegmentIntoShots,
 } from './TimelineManager.js';
 
 /**
@@ -54,19 +57,20 @@ export function createManageTimelineTool(context: TimelineToolContext): ToolDefi
 Actions:
 - **create_skeleton**: Create initial timeline from segment descriptors + total duration. Call after segments are planned.
 - **update_segment**: Fill a segment's layers with generated/imported asset references. Call after each image/video is generated.
+- **split_segment**: Split a scene segment into multiple shot sub-segments. Call after multi-shot motion prompt is approved to create per-shot timeline entries.
 - **add_global_layer**: Add narration audio/video or background music spanning the full video.
 - **set_compositing**: Set compositing mode for a segment (user choice during approval).
 - **set_transition**: Set transition between segments.
 - **validate**: Check for empty segments, return gaps. Use before assembly.
 - **get**: Read current timeline state.
 
-The timeline is saved to .kshana/timeline.json and persists across sessions.`,
+The timeline is saved to timeline.json in the project directory and persists across sessions.`,
     parameters: {
       type: 'object' as const,
       properties: {
         action: {
           type: 'string',
-          enum: ['create_skeleton', 'update_segment', 'add_global_layer', 'set_compositing', 'set_transition', 'validate', 'get'],
+          enum: ['create_skeleton', 'update_segment', 'split_segment', 'add_global_layer', 'set_compositing', 'set_transition', 'validate', 'get'],
           description: 'The timeline action to perform',
         },
         // create_skeleton params
@@ -96,10 +100,24 @@ The timeline is saved to .kshana/timeline.json and persists across sessions.`,
           enum: ['replace', 'side_by_side', 'pip', 'overlay'],
           description: '(create_skeleton) Default compositing mode (default: replace)',
         },
+        // split_segment params
+        shots: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              label: { type: 'string', description: 'Shot label (e.g., "Shot 1: Establishing wide")' },
+              duration: { type: 'number', description: 'Shot duration in seconds (4-8s typical)' },
+              metadata: { type: 'object', description: 'Optional metadata (e.g., shot_type, prompt text)' },
+            },
+            required: ['label', 'duration'],
+          },
+          description: '(split_segment) Array of shot descriptors to split the segment into',
+        },
         // update_segment params
         segment_id: {
           type: 'string',
-          description: '(update_segment, set_compositing, set_transition) ID of the segment to update',
+          description: '(update_segment, split_segment, set_compositing, set_transition) ID of the segment to update/split',
         },
         layers: {
           type: 'array',
@@ -429,10 +447,55 @@ The timeline is saved to .kshana/timeline.json and persists across sessions.`,
           };
         }
 
+        case 'split_segment': {
+          const segmentId = params['segment_id'] as string | undefined;
+          const shotsParam = params['shots'] as Array<{
+            label: string;
+            duration: number;
+            metadata?: Record<string, unknown>;
+          }> | undefined;
+
+          if (!segmentId) {
+            return { success: false, error: 'segment_id is required for split_segment' };
+          }
+          if (!shotsParam || shotsParam.length === 0) {
+            return { success: false, error: 'shots array is required and must not be empty' };
+          }
+
+          let timeline = loadTimeline(context.projectDir);
+          if (!timeline) {
+            return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
+          }
+
+          try {
+            timeline = splitSegmentIntoShots(timeline, segmentId, shotsParam);
+          } catch (e) {
+            return { success: false, error: String(e) };
+          }
+
+          saveTimeline(context.projectDir, timeline);
+
+          const newSegments = timeline.segments.filter(s => s.id.startsWith(`${segmentId}_shot_`));
+          return {
+            success: true,
+            original_segment_id: segmentId,
+            shot_count: newSegments.length,
+            segments: newSegments.map(s => ({
+              id: s.id,
+              label: s.label,
+              startTime: s.startTime,
+              endTime: s.endTime,
+              duration: s.duration,
+              fillStatus: s.fillStatus,
+            })),
+            message: `Split "${segmentId}" into ${newSegments.length} shot segments`,
+          };
+        }
+
         default:
           return {
             success: false,
-            error: `Unknown action: ${action}. Valid actions: create_skeleton, update_segment, add_global_layer, set_compositing, set_transition, validate, get`,
+            error: `Unknown action: ${action}. Valid actions: create_skeleton, update_segment, split_segment, add_global_layer, set_compositing, set_transition, validate, get`,
           };
       }
     },
@@ -450,7 +513,7 @@ export function createAssembleFromTimelineTool(context: TimelineToolContext): To
     name: 'assemble_from_timeline',
     description: `Assemble the final video from the timeline.
 
-Reads .kshana/timeline.json and:
+Reads timeline.json from the project directory and:
 1. Validates all segments are filled (no gaps)
 2. Resolves artifact IDs to file paths via the asset manifest
 3. Builds an assembly job based on compositing modes per segment
@@ -565,11 +628,130 @@ The timeline must be fully validated (all segments filled) before assembly.`,
 }
 
 /**
+ * Create the preview_from_timeline tool.
+ *
+ * Reads the timeline and produces a preview manifest or FFmpeg command.
+ * Filled segments use actual assets; unfilled segments render as placeholders
+ * showing the segment label, time range, and prompt text.
+ */
+export function createPreviewFromTimelineTool(context: TimelineToolContext): ToolDefinition {
+  return {
+    name: 'preview_from_timeline',
+    description: `Generate a preview from the current timeline state.
+
+For each segment:
+- **Filled segments** (have video/image): references the actual asset file
+- **Unfilled/planned segments**: generates a placeholder description showing segment label, time range, and prompt text
+
+Returns a preview manifest with segment details, and optionally an FFmpeg command to produce a preview video (if FFmpeg is available). Useful for reviewing the video structure before all clips are generated.`,
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        output_name: {
+          type: 'string',
+          description: 'Name for the preview output file (default: "preview")',
+        },
+        resolution: {
+          type: 'string',
+          enum: ['1280x720', '854x480', '640x360'],
+          description: 'Preview resolution (default: "1280x720")',
+        },
+      },
+    },
+    handler: async (params: Record<string, unknown>) => {
+      const outputName = (params['output_name'] as string) ?? 'preview';
+      const resolution = (params['resolution'] as string) ?? '1280x720';
+      const [width, height] = resolution.split('x').map(Number);
+
+      const timeline = loadTimeline(context.projectDir);
+      if (!timeline) {
+        return { success: false, error: 'No timeline exists. Create and populate a timeline first.' };
+      }
+
+      // Build preview manifest
+      const previewSegments = timeline.segments.map(segment => {
+        const visualLayer = segment.layers.find(
+          l => l.type === 'visual' || l.type === 'narration_video'
+        );
+
+        const hasAsset = visualLayer && (visualLayer.filePath || visualLayer.artifactId);
+        let assetPath: string | null = null;
+
+        if (hasAsset && visualLayer.filePath) {
+          const fullPath = join(context.projectDir, visualLayer.filePath);
+          if (existsSync(fullPath)) {
+            assetPath = fullPath;
+          }
+        }
+
+        const promptText = visualLayer?.metadata?.['prompt'] as string | undefined;
+
+        return {
+          segmentId: segment.id,
+          label: segment.label,
+          startTime: segment.startTime,
+          endTime: segment.endTime,
+          duration: segment.duration,
+          fillStatus: segment.fillStatus,
+          type: assetPath ? 'asset' as const : 'placeholder' as const,
+          assetPath,
+          placeholderText: !assetPath
+            ? `${segment.label}\n${segment.startTime.toFixed(1)}s - ${segment.endTime.toFixed(1)}s\n${promptText ?? '(no prompt)'}`
+            : null,
+        };
+      });
+
+      // Build FFmpeg concat command for preview generation
+      const ffmpegInputs: string[] = [];
+      const filterParts: string[] = [];
+      let inputIndex = 0;
+
+      for (const seg of previewSegments) {
+        if (seg.type === 'asset' && seg.assetPath) {
+          ffmpegInputs.push(`-i "${seg.assetPath}"`);
+          filterParts.push(`[${inputIndex}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS,trim=duration=${seg.duration}[v${inputIndex}]`);
+        } else {
+          // Placeholder: black screen with white text
+          const escapedText = (seg.placeholderText ?? seg.label).replace(/'/g, "'\\''").replace(/\n/g, '\\n');
+          ffmpegInputs.push(`-f lavfi -i "color=black:s=${width}x${height}:d=${seg.duration}"`);
+          filterParts.push(`[${inputIndex}:v]drawtext=text='${escapedText}':fontcolor=white:fontsize=24:x=(w-text_w)/2:y=(h-text_h)/2[v${inputIndex}]`);
+        }
+        inputIndex++;
+      }
+
+      const concatInputs = previewSegments.map((_, i) => `[v${i}]`).join('');
+      const concatFilter = `${concatInputs}concat=n=${previewSegments.length}:v=1:a=0[outv]`;
+      const allFilters = [...filterParts, concatFilter].join('; ');
+
+      const outputPath = join(context.projectDir, 'assets', 'videos', `${outputName}.mp4`);
+      const ffmpegCommand = `ffmpeg ${ffmpegInputs.join(' ')} -filter_complex "${allFilters}" -map "[outv]" -c:v libx264 -preset fast -y "${outputPath}"`;
+
+      return {
+        success: true,
+        preview_manifest: {
+          totalDuration: timeline.totalDuration,
+          segmentCount: previewSegments.length,
+          filledCount: previewSegments.filter(s => s.type === 'asset').length,
+          placeholderCount: previewSegments.filter(s => s.type === 'placeholder').length,
+          segments: previewSegments,
+        },
+        ffmpeg_command: ffmpegCommand,
+        output_path: outputPath,
+        resolution: { width, height },
+        message: `Preview manifest created: ${previewSegments.filter(s => s.type === 'asset').length} filled, ${previewSegments.filter(s => s.type === 'placeholder').length} placeholders. ` +
+          `Run the ffmpeg_command to generate the preview video, or review the manifest to see timeline structure.`,
+      };
+    },
+  };
+}
+
+/**
  * Get all timeline tools with the given context.
  */
 export function createTimelineTools(context: TimelineToolContext): ToolDefinition[] {
   return [
     createManageTimelineTool(context),
     createAssembleFromTimelineTool(context),
+    createPreviewFromTimelineTool(context),
   ];
 }

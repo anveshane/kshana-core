@@ -229,7 +229,7 @@ export class LLMClient {
    * Generate a response from the LLM.
    */
   async generate(options: GenerateOptions): Promise<LLMResponse> {
-    const { messages, tools, temperature = 0.7, maxTokens } = options;
+    const { messages, tools, temperature = 0.7, maxTokens, responseFormat } = options;
     const logger = getLLMLogger();
 
     // Log request
@@ -245,6 +245,9 @@ export class LLMClient {
     if (maxTokens) request.max_tokens = maxTokens;
     if (tools && tools.length > 0) {
       request.tools = this.convertTools(tools);
+    }
+    if (responseFormat) {
+      request.response_format = responseFormat;
     }
 
     const response = await this.client.chat.completions.create(request);
@@ -262,20 +265,25 @@ export class LLMClient {
   async *generateStream(
     options: Omit<GenerateOptions, 'stream'>
   ): AsyncGenerator<StreamChunk, void, unknown> {
-    const { messages, tools, temperature = 0.7 } = options;
+    const { messages, tools, temperature = 0.7, responseFormat } = options;
     const logger = getLLMLogger();
 
     // Log request
     logger.logRequest(messages, tools, { temperature });
 
-    const stream = await this.client.chat.completions.create({
+    const request: OpenAI.ChatCompletionCreateParamsStreaming = {
       model: this.model,
       messages: this.convertMessages(messages),
       tools: tools ? this.convertTools(tools) : undefined,
       temperature,
       stream: true,
       stream_options: { include_usage: true },
-    });
+    };
+    if (responseFormat) {
+      request.response_format = responseFormat;
+    }
+
+    const stream = await this.client.chat.completions.create(request);
 
     // Accumulate for final logging
     let fullContent = '';
@@ -361,14 +369,28 @@ export class LLMClient {
    * Convert internal messages to OpenAI format.
    */
   private convertMessages(messages: Message[]): OpenAI.ChatCompletionMessageParam[] {
-    return messages.map(msg => {
+    // Consolidate all system messages into a single one at the start.
+    // Many local models (Llama, etc.) require exactly one system message at the beginning.
+    const systemParts: string[] = [];
+    const nonSystemMessages: Message[] = [];
+    for (const msg of messages) {
       if (msg.role === 'system') {
-        return { role: 'system' as const, content: msg.content ?? '' };
+        if (msg.content) systemParts.push(msg.content);
+      } else {
+        nonSystemMessages.push(msg);
       }
+    }
+
+    const result: OpenAI.ChatCompletionMessageParam[] = [];
+
+    if (systemParts.length > 0) {
+      result.push({ role: 'system' as const, content: systemParts.join('\n\n') });
+    }
+
+    for (const msg of nonSystemMessages) {
       if (msg.role === 'user') {
-        return { role: 'user' as const, content: msg.content ?? '' };
-      }
-      if (msg.role === 'assistant') {
+        result.push({ role: 'user' as const, content: msg.content ?? '' });
+      } else if (msg.role === 'assistant') {
         const assistantMsg: OpenAI.ChatCompletionAssistantMessageParam = {
           role: 'assistant',
           content: msg.content ?? '',
@@ -383,17 +405,19 @@ export class LLMClient {
             },
           }));
         }
-        return assistantMsg;
-      }
-      if (msg.role === 'tool') {
-        return {
+        result.push(assistantMsg);
+      } else if (msg.role === 'tool') {
+        result.push({
           role: 'tool' as const,
           tool_call_id: msg.toolCallId ?? '',
           content: msg.content ?? '',
-        };
+        });
+      } else {
+        throw new Error(`Unknown message role: ${msg.role}`);
       }
-      throw new Error(`Unknown message role: ${msg.role}`);
-    });
+    }
+
+    return result;
   }
 
   /**

@@ -16,7 +16,7 @@ import { createTool } from '../ToolRegistry.js';
  * - Character profiles: {name}.profile.md
  * - Setting profiles: {name}.profile.md
  * - Image prompts: {name}.prompt.md or scene-{n}.prompt.md
- * - Video prompts: scene-{n}.motion.md
+ * - Video prompts: scene-{n}.motion.json
  * - Story chapters: chapter-{n}.story.md
  */
 export const CONTENT_TYPE_OUTPUT_FILES: Record<string, string> = {
@@ -34,7 +34,10 @@ export const CONTENT_TYPE_OUTPUT_FILES: Record<string, string> = {
   scene_image_prompt: 'prompts/images/scenes/',          // Will be appended with scene-{n}.prompt.md
 
   // Video prompt generation - saved to prompts directory for review/refinement
-  scene_video_prompt: 'prompts/videos/scenes/',          // Will be appended with scene-{n}.motion.md
+  scene_video_prompt: 'prompts/videos/scenes/',          // Will be appended with scene-{n}.motion.json
+
+  // Per-shot image prompts - saved alongside scene prompts
+  shot_image_prompt: 'prompts/images/shots/',             // Will be appended with scene-{n}-shot-{m}.prompt.md
 };
 
 export const generateContentTool = createTool(
@@ -67,7 +70,8 @@ The content creator will:
 | character_image_prompt | prompts/images/characters/{name}.prompt.md |
 | setting_image_prompt | prompts/images/settings/{name}.prompt.md |
 | scene_image_prompt | prompts/images/scenes/scene-{n}.prompt.md |
-| scene_video_prompt | prompts/videos/scenes/scene-{n}.motion.md |
+| scene_video_prompt | prompts/videos/scenes/scene-{n}.motion.json |
+| shot_image_prompt | prompts/images/shots/scene-{n}-shot-{m}.prompt.md |
 
 ## Examples
 
@@ -107,7 +111,8 @@ generate_content(
         enum: [
           'plot', 'story', 'character', 'setting', 'scene', 'narration',
           'character_image_prompt', 'setting_image_prompt', 'scene_image_prompt',
-          'scene_video_prompt'
+          'scene_video_prompt',
+          'shot_image_prompt'
         ],
         description: 'Type of content to generate - determines output file path',
       },
@@ -121,11 +126,19 @@ generate_content(
       },
       scene_number: {
         type: 'number',
-        description: 'For scene_image_prompt/scene_video_prompt: the scene number to generate a prompt for',
+        description: 'For scene_image_prompt/scene_video_prompt/shot_image_prompt: the scene number to generate a prompt for',
+      },
+      shot_number: {
+        type: 'number',
+        description: 'For shot_image_prompt: the shot number within the scene (required for shot_image_prompt)',
       },
       chapter_number: {
         type: 'number',
         description: 'For story content: the chapter number (default: 1)',
+      },
+      overwrite: {
+        type: 'boolean',
+        description: 'If true, regenerate even if the content file already exists. Default: false (returns existing content if found).',
       },
     },
     required: ['content_type', 'instruction'],

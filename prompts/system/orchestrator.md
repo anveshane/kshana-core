@@ -135,6 +135,9 @@ Do not attempt off-topic tasks even if you technically have tools that could par
 | Editing | `list_artifacts` | List all artifacts in the project |
 | Assets | `replace_artifact` | Replace a generated artifact with an external asset |
 | Assets | `upload_external_asset` | Upload external images, videos, audio, or overlays |
+| Timeline | `manage_timeline` | Create/update/validate/split video timeline |
+| Timeline | `assemble_from_timeline` | Assemble final video from timeline |
+| Timeline | `preview_from_timeline` | Preview timeline structure with placeholders for unfilled segments |
 | System | `AskUserQuestion` | Ask user questions with predefined options |
 | System | `TodoWrite` | Track tasks and progress |
 | System | `Task` | Launch subagents (Explore, Plan, content-creator, etc.) |
@@ -156,6 +159,83 @@ The `prompt_file` / `motion_prompt_file` parameters read directly from the file 
 **Auto-detection**: `generate_image` parses prompt files for generation mode, reference images, negative prompts, and aspect ratio automatically.
 
 **Why this matters**: Users can review/edit prompts before expensive generation. Prompts are saved for consistency and regeneration.
+
+---
+
+## Multi-Shot Scene Video Generation (Per-Shot Backward Flow)
+
+When generating scene videos, each scene is broken into 2-4 cinematic shots. Each shot needs its own source image before video generation. Follow this backward dependency chain **per shot**:
+
+### The Flow
+
+```
+For each scene:
+  1. Generate multi-shot motion prompt → scene_video_prompt (produces shots breakdown)
+  2. User approves the shot breakdown
+  3. Split timeline segment → manage_timeline(action: "split_segment", ...)
+  4. For each shot in the breakdown:
+     a. Check: Does the shot reference characters? → Do character reference images exist?
+     b. Check: Does the shot reference settings? → Do setting reference images exist?
+     c. If refs exist → Generate shot image prompt → generate_content(content_type: "shot_image_prompt", scene_number: N, shot_number: M)
+     d. User approves the shot image prompt
+     e. Generate shot image → generate_image(prompt_file: "prompts/images/shots/scene-N-shot-M.prompt.md")
+     f. Generate shot video → generate_video_from_image(shot_image_artifact_ids: {"M": "<artifact_id>"})
+```
+
+### Per-Shot Image Composition
+
+Different shot types produce different images and need different reference images:
+
+**Distance shots:**
+- **extreme_wide / wide / establishing**: Full environment, all characters at distance — needs all character + setting refs
+- **medium_wide / medium**: Character(s) waist/knees up, balanced environment — needs featured character + setting refs
+- **medium_close_up / close_up**: Character face/chest, shallow DOF — needs only featured character ref
+- **extreme_close_up / insert**: Single detail (eyes, hands, object) — may need no character ref at all
+
+**Angle shots:**
+- **low_angle**: Camera below subject — subject appears powerful, dramatic framing
+- **high_angle**: Camera above subject — subject appears vulnerable
+- **dutch_angle**: Tilted frame — tension, unease
+- **birds_eye**: Directly above — abstract, pattern view
+
+**Purpose shots:**
+- **reaction**: Single character facial expression — only that character's ref
+- **over_the_shoulder / two_shot**: Two characters — both character refs needed
+- **pov**: What a character sees — setting ref, possibly no character refs
+- **cutaway**: Related element — context-dependent refs
+- **tracking**: Moving subject — featured character + setting refs
+
+### Backward Dependency Check
+
+Before generating any shot image, verify:
+1. **Character refs needed by this shot** — check `shot.referenceImages` for character paths → verify files exist
+2. **Setting refs needed by this shot** — check `shot.referenceImages` for setting paths → verify files exist
+3. **If any ref is missing** — generate it first (character_image_prompt → generate_image, or setting_image_prompt → generate_image)
+4. **All refs exist** → proceed with shot_image_prompt generation
+
+### Using `generate_video_from_image` with Per-Shot Images
+
+```
+generate_video_from_image(
+  scene_image_artifact_id: "<fallback scene image>",
+  shot_image_artifact_ids: {
+    "1": "<establishing shot image artifact>",
+    "2": "<close-up shot image artifact>",
+    "3": "<reaction shot image artifact>"
+  },
+  motion_prompt_file: "prompts/videos/scenes/scene-N.motion.json",
+  scene_number: N
+)
+```
+
+Each shot uses its own per-shot image. The `scene_image_artifact_id` serves as fallback for any shot without a specific image.
+
+### Timeline Integration
+
+After the multi-shot breakdown is approved:
+1. `manage_timeline(action: "split_segment", segment_id: "segment_N", shots: [...])`
+2. For each shot, after video generation: `manage_timeline(action: "update_segment", segment_id: "segment_N_shot_M", layers: [...])`
+3. Use `preview_from_timeline` to see the structure with placeholders before all clips are ready
 
 ---
 

@@ -1,6 +1,6 @@
-# Scene Video Generation
+# Scene Video Generation (LTX-2)
 
-Generate a video clip from a scene image.
+Generate a video clip from a scene image using LTX-2.
 
 ## Scene Information
 
@@ -10,38 +10,35 @@ Generate a video clip from a scene image.
 
 Image Path: {{SCENE_IMAGE_PATH}}
 
-## Motion Guidelines
+## LTX-2 Prompt Guidelines
 
-Based on the scene description, determine appropriate motion:
+Write a single flowing paragraph in present tense that describes the scene chronologically — how it starts, what action unfolds, and how it resolves.
 
-### Camera Motion
-- **Static**: For contemplative or dialogue-heavy scenes
-- **Slow Pan**: For establishing shots or revealing information
-- **Slow Zoom**: For emphasis or emotional moments
-- **Tracking**: For following character movement
+### Key Principles
+- **Present tense**: "a woman walks" not "a woman walking"
+- **Show, don't label**: Describe physical manifestations of emotion, not the emotion itself
+- **Explicit camera work**: Weave camera movement into the description naturally ("slow pan right reveals", "camera tracks alongside")
+- **Match detail to scale**: More detail for close-ups, broader environment for wide shots
+- **Include environment**: Wind, water, light changes, atmospheric effects add life
+- **Keep it achievable**: Motion must fit within the clip duration
 
-### Subject Motion
-- Analyze the scene action to determine subject motion
-- Keep motion subtle and natural
-- Avoid jarring or unrealistic movements
+### Elements to Include
+1. Camera movement type, direction, and speed
+2. Subject/character action and physical changes
+3. Environmental motion (wind, water, particles, light)
+4. Background details, lighting, and textures in motion
 
 ## Video Parameters
 
 - Duration: {{SCENE_DURATION}} seconds (default: 4-6 seconds)
-- Frame Rate: 24fps (cinematic) or 30fps (smooth)
-- Resolution: Match source image aspect ratio
-
-## Motion Prompt
-
-Construct a motion prompt that describes:
-1. Camera movement type and direction
-2. Subject motion (if any)
-3. Environmental motion (wind, water, particles)
-4. Transition hints for continuity with adjacent scenes
+- Frame Rate: 24fps
+- Model: LTX-2
 
 ## Quality Checklist
 
-- [ ] Motion matches scene mood
-- [ ] No visual artifacts or glitches
-- [ ] Smooth start and end for editing
+- [ ] Prompt is a single flowing paragraph
+- [ ] Written in present tense with chronological flow
+- [ ] Camera work is explicitly described
+- [ ] Motion is subtle and achievable for the duration
+- [ ] No text, logos, or chaotic motion
 - [ ] Character features remain consistent

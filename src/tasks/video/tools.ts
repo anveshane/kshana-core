@@ -14,7 +14,7 @@ import {
   getRegistry,
 } from '../../services/comfyui/index.js';
 import {
-  PROJECT_DIR,
+  getProjectDir,
   addAsset,
   loadProject,
   updateCharacter,
@@ -25,6 +25,100 @@ import {
 } from './workflow/index.js';
 
 /**
+ * A single shot within a multi-shot scene breakdown.
+ */
+export interface ShotPrompt {
+  shotNumber: number;
+  shotType: string;  // By distance: extreme_wide, wide, medium_wide, medium, medium_close_up, close_up, extreme_close_up. By angle: low_angle, high_angle, dutch_angle, birds_eye. By purpose: establishing, reaction, over_the_shoulder, two_shot, pov, insert, cutaway, tracking.
+  duration: number;  // 4-8 seconds
+  prompt: string;    // single flowing paragraph for this shot only
+  dialogue: string | null;  // character dialogue for LTX-2 audio, null if none
+  cameraWork: string;  // e.g. "slow push-in", "static close-up with subtle drift"
+  referenceImages: string[];  // character/setting ref paths relevant to this shot
+}
+
+/**
+ * Multi-shot motion prompt for a scene.
+ * Each scene is broken into 2-4 shots of 4-8 seconds each.
+ */
+export interface MultiShotMotionPrompt {
+  sceneNumber: number;
+  sceneTitle: string;
+  shots: ShotPrompt[];
+  totalSceneDuration: number;
+  referenceImages: string[];  // all ref images for the scene
+}
+
+/**
+ * JSON schema for structured motion prompt output from the LLM.
+ * Used with OpenAI's response_format to guarantee valid JSON.
+ * Now supports multi-shot scene breakdowns with dialogue.
+ */
+export const MOTION_PROMPT_SCHEMA = {
+  type: 'json_schema' as const,
+  json_schema: {
+    name: 'motion_prompt',
+    strict: true,
+    schema: {
+      type: 'object',
+      properties: {
+        sceneNumber: { type: 'number' },
+        sceneTitle: { type: 'string' },
+        shots: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              shotNumber: { type: 'number' },
+              shotType: { type: 'string' },
+              duration: { type: 'number' },
+              prompt: { type: 'string' },
+              dialogue: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+              cameraWork: { type: 'string' },
+              referenceImages: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['shotNumber', 'shotType', 'duration', 'prompt', 'dialogue', 'cameraWork', 'referenceImages'],
+            additionalProperties: false,
+          },
+        },
+        totalSceneDuration: { type: 'number' },
+        referenceImages: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['sceneNumber', 'sceneTitle', 'shots', 'totalSceneDuration', 'referenceImages'],
+      additionalProperties: false,
+    },
+  },
+};
+
+/**
+ * Parse a motion prompt file, handling both legacy single-prompt and new multi-shot formats.
+ * Legacy format: { prompt: string, referenceImages: string[] }
+ * Multi-shot format: { sceneNumber, sceneTitle, shots: [...], ... }
+ */
+export function parseMotionPrompt(raw: string): MultiShotMotionPrompt {
+  const parsed = JSON.parse(raw);
+  if (parsed.shots && Array.isArray(parsed.shots)) {
+    return parsed as MultiShotMotionPrompt;
+  }
+  // Legacy single-prompt format
+  return {
+    sceneNumber: 0,
+    sceneTitle: 'Untitled',
+    shots: [{
+      shotNumber: 1,
+      shotType: 'full_scene',
+      duration: 6,
+      prompt: parsed.prompt,
+      dialogue: null,
+      cameraWork: 'as described',
+      referenceImages: parsed.referenceImages ?? [],
+    }],
+    totalSceneDuration: 6,
+    referenceImages: parsed.referenceImages ?? [],
+  };
+}
+
+/**
  * Context for linking artifacts to project entities.
  */
 export interface ArtifactContext {
@@ -32,6 +126,8 @@ export interface ArtifactContext {
   entityType: 'scene' | 'character' | 'setting';
   /** Scene number (for scene images/videos) */
   sceneNumber?: number;
+  /** Shot number within a scene (for multi-shot video generation) */
+  shotNumber?: number;
   /** Character name (for character reference images) */
   characterName?: string;
   /** Setting name (for setting reference images) */
@@ -119,7 +215,7 @@ const jobs = new Map<string, GenerationJob>();
 
 // Get the project assets directory
 function getAssetsDir(): string {
-  const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'images');
+  const assetsDir = path.join(getProjectDir(), 'assets', 'images');
   if (!fs.existsSync(assetsDir)) {
     fs.mkdirSync(assetsDir, { recursive: true });
   }
@@ -335,7 +431,7 @@ async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<
     const artifactId = `img_${nanoid(8)}`;
 
     // Get relative path for storage
-    const projectDir = path.join(process.cwd(), PROJECT_DIR);
+    const projectDir = getProjectDir();
     let relativePath: string;
     try {
       relativePath = path.relative(projectDir, savedPath);
@@ -528,7 +624,7 @@ The tool will return a job ID. Use wait_for_job to check completion.
     // If prompt_file is provided, read and parse the prompt from the file
     const promptFile = args['prompt_file'] as string | undefined;
     if (promptFile) {
-      const fullPath = path.join(process.cwd(), PROJECT_DIR, promptFile);
+      const fullPath = path.join(getProjectDir(), promptFile);
       if (!fs.existsSync(fullPath)) {
         return {
           status: 'error',
@@ -660,6 +756,14 @@ interface PromptFileMetadata {
  * The actual prompt is typically the first paragraph after the header.
  */
 function extractPromptFromMarkdown(content: string): string {
+  // Try structured prompt headers first (used by .motion.md and .prompt.md)
+  const motionMatch = content.match(/\*\*Motion Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i);
+  if (motionMatch?.[1]?.trim()) return motionMatch[1].trim();
+
+  const imageMatch = content.match(/\*\*Image Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i);
+  if (imageMatch?.[1]?.trim()) return imageMatch[1].trim();
+
+  // Existing line-by-line fallback for plain text prompts
   const lines = content.split('\n');
   const promptLines: string[] = [];
   let startIndex = 0;
@@ -815,7 +919,7 @@ function resolveReferencesToPaths(
       );
       if (character?.referenceImagePath) {
         resolved.push({
-          image_id: path.join(process.cwd(), PROJECT_DIR, character.referenceImagePath),
+          image_id: path.join(getProjectDir(), character.referenceImagePath),
           type: 'character',
           name: character.name,
         });
@@ -824,7 +928,7 @@ function resolveReferencesToPaths(
         const imagePath = project.content?.images?.itemFiles?.[character.referenceImageId];
         if (imagePath) {
           resolved.push({
-            image_id: path.join(process.cwd(), PROJECT_DIR, imagePath),
+            image_id: path.join(getProjectDir(), imagePath),
             type: 'character',
             name: character.name,
           });
@@ -838,7 +942,7 @@ function resolveReferencesToPaths(
       );
       if (setting?.referenceImagePath) {
         resolved.push({
-          image_id: path.join(process.cwd(), PROJECT_DIR, setting.referenceImagePath),
+          image_id: path.join(getProjectDir(), setting.referenceImagePath),
           type: 'setting',
           name: setting.name,
         });
@@ -847,7 +951,7 @@ function resolveReferencesToPaths(
         const imagePath = project.content?.images?.itemFiles?.[setting.referenceImageId];
         if (imagePath) {
           resolved.push({
-            image_id: path.join(process.cwd(), PROJECT_DIR, imagePath),
+            image_id: path.join(getProjectDir(), imagePath),
             type: 'setting',
             name: setting.name,
           });
@@ -867,13 +971,13 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
   if (!project) return undefined;
 
   // Check project assets manifest
-  const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets');
+  const assetsDir = path.join(getProjectDir(), 'assets');
   const manifestPath = path.join(assetsDir, 'manifest.json');
   if (fs.existsSync(manifestPath)) {
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
     const asset = manifest.assets?.find((a: { id: string }) => a.id === artifactId);
     if (asset) {
-      return path.join(process.cwd(), PROJECT_DIR, asset.path);
+      return path.join(getProjectDir(), asset.path);
     }
   }
 
@@ -885,7 +989,7 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
         const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
         const asset = manifest.assets?.find((a: { id: string }) => a.id === artifactId);
         if (asset) {
-          return path.join(process.cwd(), PROJECT_DIR, asset.path);
+          return path.join(getProjectDir(), asset.path);
         }
       }
     }
@@ -902,17 +1006,13 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
  */
 export const generateVideoFromImageTool: ToolDefinition = createTool(
   'generate_video_from_image',
-  `Animate a SINGLE scene image with motion effects.
+  `Animate a SINGLE scene image with motion effects using the LTX-2 model.
 
 **USE THIS TOOL WHEN:**
 - Creating video for ONE scene (e.g., "animate Scene 3")
 - The scene has internal motion but doesn't transition to another scene
 - Adding camera movement within the same scene composition
 - Adding character movement, environmental effects within ONE frame
-
-**DO NOT USE THIS TOOL WHEN:**
-- You need to transition BETWEEN two different scene images
-- You want to connect Scene N to Scene N+1 (use generate_video_from_frames instead)
 
 **Input:** Single scene image artifact
 **Output:** Video clip of that scene with motion
@@ -925,13 +1025,19 @@ export const generateVideoFromImageTool: ToolDefinition = createTool(
 
 Returns a job ID. Use wait_for_job to check completion.
 
-**Motion prompt source**: Provide EITHER \`motion_prompt\` (inline text) OR \`motion_prompt_file\` (path to .motion.md file). Using \`motion_prompt_file\` is preferred as it reads from approved prompt files.`,
+**Motion prompt source**: Provide EITHER \`motion_prompt\` (inline text) OR \`motion_prompt_file\` (path to .motion.json file). Using \`motion_prompt_file\` is preferred as it reads from approved prompt files.
+
+**Multi-shot support**: When \`motion_prompt_file\` points to a multi-shot JSON file (with \`shots\` array), each shot is submitted as a separate ComfyUI job. Use \`shot_number\` to regenerate a specific shot only.`,
   {
     type: 'object',
     properties: {
       scene_image_artifact_id: {
         type: 'string',
-        description: 'Artifact ID of the scene image to animate',
+        description: 'Artifact ID of the scene image to animate (used as default for all shots, or for single-shot mode)',
+      },
+      shot_image_artifact_ids: {
+        type: 'object',
+        description: 'Per-shot image artifact IDs mapping shot number to artifact ID (e.g., {"1": "art_abc", "2": "art_def"}). When provided, each shot uses its own image instead of the shared scene image.',
       },
       scene_number: {
         type: 'number',
@@ -943,7 +1049,11 @@ Returns a job ID. Use wait_for_job to check completion.
       },
       motion_prompt_file: {
         type: 'string',
-        description: 'Path to motion prompt file (e.g., "prompts/videos/scenes/scene-1.motion.md"). Reads the prompt from this file instead of requiring inline text.',
+        description: 'Path to motion prompt file (e.g., "prompts/videos/scenes/scene-1.motion.json"). Reads the prompt from this file instead of requiring inline text.',
+      },
+      shot_number: {
+        type: 'number',
+        description: 'Generate only this specific shot number from a multi-shot prompt file (optional — omit to generate all shots)',
       },
       negative_prompt: {
         type: 'string',
@@ -953,11 +1063,6 @@ Returns a job ID. Use wait_for_job to check completion.
         type: 'number',
         description: 'Random seed for reproducibility (optional)',
       },
-      model: {
-        type: 'string',
-        enum: ['wan', 'ltx'],
-        description: 'Video generation model to use. "ltx" (default) uses LTX-2 model for fast generation, "wan" uses Wan 2.2 model.',
-      },
     },
     required: ['scene_image_artifact_id', 'scene_number'],
   },
@@ -965,12 +1070,12 @@ Returns a job ID. Use wait_for_job to check completion.
     const sceneImageArtifactId = args['scene_image_artifact_id'] as string;
     const sceneNumber = args['scene_number'] as number;
     let motionPrompt = args['motion_prompt'] as string | undefined;
-    const model = (args['model'] as string) || 'ltx';
+    const shotNumber = args['shot_number'] as number | undefined;
 
-    // If motion_prompt_file is provided, read the prompt from the file
+    // If motion_prompt_file is provided, read and parse using multi-shot parser
     const motionPromptFile = args['motion_prompt_file'] as string | undefined;
     if (motionPromptFile) {
-      const fullPath = path.join(process.cwd(), PROJECT_DIR, motionPromptFile);
+      const fullPath = path.join(getProjectDir(), motionPromptFile);
       if (!fs.existsSync(fullPath)) {
         return {
           status: 'error',
@@ -979,10 +1084,136 @@ Returns a job ID. Use wait_for_job to check completion.
         };
       }
       const promptContent = fs.readFileSync(fullPath, 'utf-8');
-      motionPrompt = extractPromptFromMarkdown(promptContent);
+
+      if (motionPromptFile.endsWith('.json')) {
+        // Use multi-shot parser (handles both legacy and new formats)
+        const motionData = parseMotionPrompt(promptContent);
+        const targetShots = shotNumber !== undefined
+          ? motionData.shots.filter(s => s.shotNumber === shotNumber)
+          : motionData.shots;
+
+        if (targetShots.length === 0) {
+          return {
+            status: 'error',
+            error: shotNumber !== undefined
+              ? `Shot ${shotNumber} not found in motion prompt file`
+              : 'No shots found in motion prompt file',
+          };
+        }
+
+        // Multi-shot: submit one job per shot
+        const negativePrompt = args['negative_prompt'] as string | undefined;
+        const seed = args['seed'] as number | undefined;
+        const shotImageArtifactIds = args['shot_image_artifact_ids'] as Record<string, string> | undefined;
+
+        // Resolve default scene image (fallback for shots without per-shot images)
+        const defaultImagePath = findImagePathFromArtifactId(sceneImageArtifactId);
+        if (!defaultImagePath || !fs.existsSync(defaultImagePath)) {
+          return { status: 'error', error: `Image not found for artifact: ${sceneImageArtifactId}` };
+        }
+
+        const registry = getRegistry();
+        const workflowName = 'ltx_i2v';
+        const workflowMetadata = registry.get(workflowName);
+        if (!workflowMetadata) {
+          return { status: 'error', error: `Workflow '${workflowName}' not found` };
+        }
+
+        const assetsDir = path.join(getProjectDir(), 'assets', 'videos');
+        if (!fs.existsSync(assetsDir)) {
+          fs.mkdirSync(assetsDir, { recursive: true });
+        }
+
+        const client = new ComfyUIClient({ outputDir: assetsDir });
+        const template = loadWorkflowTemplate(workflowMetadata.filename);
+
+        // Cache uploaded images to avoid re-uploading the same image
+        const uploadCache = new Map<string, { name: string }>();
+
+        const jobIds: string[] = [];
+        for (const shot of targetShots) {
+          let fullPrompt = shot.prompt;
+          if (shot.dialogue) {
+            fullPrompt += ` The character speaks: "${shot.dialogue}"`;
+          }
+
+          // Resolve per-shot image: use shot-specific image if available, otherwise fall back to scene image
+          let shotImagePath = defaultImagePath;
+          const shotArtifactId = shotImageArtifactIds?.[String(shot.shotNumber)];
+          if (shotArtifactId) {
+            const resolved = findImagePathFromArtifactId(shotArtifactId);
+            if (resolved && fs.existsSync(resolved)) {
+              shotImagePath = resolved;
+            }
+          }
+
+          // Upload the image (use cache to avoid re-uploading same file)
+          let uploadResult = uploadCache.get(shotImagePath);
+          if (!uploadResult) {
+            uploadResult = await client.uploadImage(shotImagePath, 'input', true);
+            uploadCache.set(shotImagePath, uploadResult);
+          }
+
+          const jobId = `vid-${Date.now()}-${nanoid(6)}`;
+          const job: GenerationJob = {
+            id: jobId,
+            type: 'video',
+            status: 'pending',
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            context: {
+              entityType: 'scene',
+              sceneNumber,
+              shotNumber: shot.shotNumber,
+              artifactType: 'video',
+            },
+          };
+          jobs.set(jobId, job);
+
+          try {
+            const workflow = parameterizeWorkflowByName(workflowName, template, {
+              sceneNumber,
+              prompt: fullPrompt,
+              negativePrompt,
+              seed: seed !== undefined ? seed + shot.shotNumber : undefined,
+              inputImageFilename: uploadResult.name,
+              filenamePrefix: `Scene${sceneNumber}_shot${shot.shotNumber}_video`,
+            });
+
+            const promptId = await client.queueWorkflow(workflow as Record<string, unknown>);
+            job.promptId = promptId;
+            job.status = 'processing';
+            job.updatedAt = Date.now();
+            jobIds.push(jobId);
+          } catch (error) {
+            job.status = 'failed';
+            job.error = String(error);
+            job.updatedAt = Date.now();
+            jobIds.push(jobId);
+          }
+        }
+
+        return {
+          status: 'submitted',
+          job_ids: jobIds,
+          shot_count: targetShots.length,
+          workflow: workflowName,
+          message: `${targetShots.length} shot(s) submitted for Scene ${sceneNumber}. Use wait_for_job() on each job ID to check status.`,
+          shots: targetShots.map((s, i) => ({
+            shot_number: s.shotNumber,
+            shot_type: s.shotType,
+            duration: s.duration,
+            job_id: jobIds[i],
+            has_dialogue: !!s.dialogue,
+            has_per_shot_image: !!shotImageArtifactIds?.[String(s.shotNumber)],
+          })),
+        };
+      } else {
+        motionPrompt = extractPromptFromMarkdown(promptContent);
+      }
     }
 
-    // Validate that we have a motion prompt from either source
+    // Single-prompt fallback (inline motion_prompt or markdown file)
     if (!motionPrompt) {
       return {
         status: 'error',
@@ -1017,14 +1248,14 @@ Returns a job ID. Use wait_for_job to check completion.
       }
 
       const registry = getRegistry();
-      const workflowName = model === 'ltx' ? 'ltx_i2v' : 'wan_single_image';
+      const workflowName = 'ltx_i2v';
       const workflowMetadata = registry.get(workflowName);
 
       if (!workflowMetadata) {
         throw new Error(`Workflow '${workflowName}' not found`);
       }
 
-      const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'videos');
+      const assetsDir = path.join(getProjectDir(), 'assets', 'videos');
       if (!fs.existsSync(assetsDir)) {
         fs.mkdirSync(assetsDir, { recursive: true });
       }
@@ -1059,195 +1290,11 @@ Returns a job ID. Use wait_for_job to check completion.
         status: 'submitted',
         job_id: jobId,
         workflow: workflowName,
-        message: `Single-image video generation job submitted (${model === 'ltx' ? 'LTX-2' : 'Wan'} model). Use wait_for_job("${jobId}") to check status.`,
+        message: `Single-image video generation job submitted (LTX-2 model). Use wait_for_job("${jobId}") to check status.`,
         params: {
           scene_number: sceneNumber,
           image_artifact: sceneImageArtifactId,
           motion_prompt: motionPrompt,
-          model,
-        },
-      };
-    } catch (error) {
-      job.status = 'failed';
-      job.error = String(error);
-      job.updatedAt = Date.now();
-
-      return {
-        status: 'error',
-        job_id: jobId,
-        error: String(error),
-      };
-    }
-  }
-);
-
-/**
- * Generate video from start and end frames tool.
- * This is a COMPLEX tool - requires user confirmation.
- *
- * Use this for TRANSITIONS between two different scene images.
- */
-export const generateVideoFromFramesTool: ToolDefinition = createTool(
-  'generate_video_from_frames',
-  `Create a TRANSITION video between TWO different scene images.
-
-**USE THIS TOOL WHEN:**
-- Connecting Scene N to Scene N+1 (e.g., "transition from Scene 3 to Scene 4")
-- You have TWO different scene images and need smooth motion between them
-- Creating a video that starts at one composition and ends at another
-- The character/camera needs to move from position A (start image) to position B (end image)
-
-**DO NOT USE THIS TOOL WHEN:**
-- You only have ONE scene image (use generate_video_from_image instead)
-- You want to animate a single scene without transitioning to another
-
-**Input:** TWO scene image artifacts (start_image + end_image)
-**Output:** Video that smoothly transitions from start to end
-
-**Example transition prompts:**
-- "character walks from the doorway to the window"
-- "camera smoothly dollies from wide shot to close-up"
-- "smooth transition as the scene shifts from day to night"
-- "the character turns and walks toward the camera"
-
-**Typical workflow:**
-1. Scene 3 image → generate_video_from_image (animate Scene 3)
-2. Scene 3 + Scene 4 images → generate_video_from_frames (transition 3→4)
-3. Scene 4 image → generate_video_from_image (animate Scene 4)
-
-Returns a job ID. Use wait_for_job to check completion.`,
-  {
-    type: 'object',
-    properties: {
-      start_image_artifact_id: {
-        type: 'string',
-        description: 'Artifact ID of the starting frame image',
-      },
-      end_image_artifact_id: {
-        type: 'string',
-        description: 'Artifact ID of the ending frame image',
-      },
-      scene_number: {
-        type: 'number',
-        description: 'Scene number (use the scene number of the start frame)',
-      },
-      transition_prompt: {
-        type: 'string',
-        description: 'Description of the transition/motion between the two frames',
-      },
-      negative_prompt: {
-        type: 'string',
-        description: 'What to avoid in the video (optional)',
-      },
-      seed: {
-        type: 'number',
-        description: 'Random seed for reproducibility (optional)',
-      },
-      model: {
-        type: 'string',
-        enum: ['wan', 'ltx'],
-        description: 'Video generation model to use. "ltx" (default) does NOT support frame interpolation. "wan" supports frame interpolation.',
-      },
-    },
-    required: ['start_image_artifact_id', 'end_image_artifact_id', 'scene_number', 'transition_prompt'],
-  },
-  async (args) => {
-    const startImageArtifactId = args['start_image_artifact_id'] as string;
-    const endImageArtifactId = args['end_image_artifact_id'] as string;
-    const sceneNumber = args['scene_number'] as number;
-    const transitionPrompt = args['transition_prompt'] as string;
-    const negativePrompt = args['negative_prompt'] as string | undefined;
-    const seed = args['seed'] as number | undefined;
-    const model = (args['model'] as string) || 'ltx';
-
-    // LTX does not support start-end frame interpolation
-    if (model === 'ltx') {
-      return {
-        status: 'error',
-        error: 'The LTX model does not support frame interpolation between start and end images. Use generate_video_from_image with model "ltx" instead to animate a single image.',
-        suggestion: 'Use generate_video_from_image with model: "ltx" for single-image video generation with the LTX model.',
-      };
-    }
-
-    // Create job for tracking with context for linking
-    const jobId = `vid-${Date.now()}-${nanoid(6)}`;
-    const job: GenerationJob = {
-      id: jobId,
-      type: 'video',
-      status: 'pending',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      context: {
-        entityType: 'scene',
-        sceneNumber,
-        artifactType: 'video',
-      },
-    };
-    jobs.set(jobId, job);
-
-    try {
-      // Find both image files from artifact IDs
-      const startImagePath = findImagePathFromArtifactId(startImageArtifactId);
-      const endImagePath = findImagePathFromArtifactId(endImageArtifactId);
-
-      if (!startImagePath || !fs.existsSync(startImagePath)) {
-        throw new Error(`Start image not found for artifact: ${startImageArtifactId}`);
-      }
-
-      if (!endImagePath || !fs.existsSync(endImagePath)) {
-        throw new Error(`End image not found for artifact: ${endImageArtifactId}`);
-      }
-
-      const registry = getRegistry();
-      const workflowMetadata = registry.get('wan_start_end');
-
-      if (!workflowMetadata) {
-        throw new Error("Workflow 'wan_start_end' not found");
-      }
-
-      const assetsDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'videos');
-      if (!fs.existsSync(assetsDir)) {
-        fs.mkdirSync(assetsDir, { recursive: true });
-      }
-
-      const client = new ComfyUIClient({
-        outputDir: assetsDir,
-      });
-
-      // Upload both images to ComfyUI
-      const startUploadResult = await client.uploadImage(startImagePath, 'input', true);
-      const endUploadResult = await client.uploadImage(endImagePath, 'input', true);
-
-      // Load and parameterize the workflow
-      const template = loadWorkflowTemplate(workflowMetadata.filename);
-      const workflow = parameterizeWorkflowByName('wan_start_end', template, {
-        sceneNumber,
-        prompt: transitionPrompt,
-        negativePrompt,
-        seed,
-        startImageFilename: startUploadResult.name,
-        endImageFilename: endUploadResult.name,
-        filenamePrefix: `Scene${sceneNumber}_transition`,
-      });
-
-      // Queue workflow
-      const promptId = await client.queueWorkflow(workflow as Record<string, unknown>);
-
-      // Update job
-      job.promptId = promptId;
-      job.status = 'processing';
-      job.updatedAt = Date.now();
-
-      return {
-        status: 'submitted',
-        job_id: jobId,
-        workflow: 'wan_start_end',
-        message: `Start-end video generation job submitted. Use wait_for_job("${jobId}") to check status.`,
-        params: {
-          scene_number: sceneNumber,
-          start_image_artifact: startImageArtifactId,
-          end_image_artifact: endImageArtifactId,
-          transition_prompt: transitionPrompt,
         },
       };
     } catch (error) {
@@ -1272,13 +1319,9 @@ Returns a job ID. Use wait_for_job to check completion.`,
  */
 export const generateVideoTool: ToolDefinition = createTool(
   'generate_video',
-  `[LEGACY - prefer generate_video_from_image or generate_video_from_frames]
+  `[LEGACY - prefer generate_video_from_image]
 
 Generate a video from a scene image. This is a legacy tool that wraps generate_video_from_image.
-
-For new implementations, use:
-- generate_video_from_image: When you have ONE image to animate
-- generate_video_from_frames: When you have TWO images (start/end) to interpolate
 
 Returns a job ID. Use wait_for_job to check completion.`,
   {
@@ -1400,7 +1443,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       // Resolve the base image path
       let imagePath = params.base_image_path;
       if (!path.isAbsolute(imagePath) && !imagePath.startsWith('.')) {
-        imagePath = path.join(process.cwd(), PROJECT_DIR, imagePath);
+        imagePath = path.join(getProjectDir(), imagePath);
       }
 
       if (!fs.existsSync(imagePath)) {
@@ -1421,7 +1464,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         for (const refPath of params.reference_images.slice(0, 2)) {
           let resolvedPath = refPath;
           if (!path.isAbsolute(resolvedPath) && !resolvedPath.startsWith('.')) {
-            resolvedPath = path.join(process.cwd(), PROJECT_DIR, resolvedPath);
+            resolvedPath = path.join(getProjectDir(), resolvedPath);
           }
           if (!fs.existsSync(resolvedPath)) {
             throw new Error(`Reference image not found: ${refPath}`);
@@ -1597,7 +1640,7 @@ export interface StoryboardParams {
  * Get storyboard directory for storing preview images.
  */
 function getStoryboardDir(): string {
-  const storyboardDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'storyboard');
+  const storyboardDir = path.join(getProjectDir(), 'assets', 'storyboard');
   if (!fs.existsSync(storyboardDir)) {
     fs.mkdirSync(storyboardDir, { recursive: true });
   }
@@ -1725,7 +1768,6 @@ export function getVideoGenerationTools(): ToolDefinition[] {
   return [
     generateImageTool,
     generateVideoFromImageTool,
-    generateVideoFromFramesTool,
     editImageTool,
     generateStoryboardTool,
     waitForJobTool,
@@ -1739,7 +1781,6 @@ export function getVideoGenerationTools(): ToolDefinition[] {
 export const VIDEO_COMPLEX_TOOLS = new Set([
   'generate_image',
   'generate_video_from_image',
-  'generate_video_from_frames',
   'edit_image',
   'generate_storyboard',
 ]);

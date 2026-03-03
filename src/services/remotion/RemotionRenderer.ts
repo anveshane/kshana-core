@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { nanoid } from 'nanoid';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
+import { getProjectDir } from '../../tasks/video/workflow/ProjectManager.js';
 import type {
   RenderRequest,
   RenderJob,
@@ -120,7 +121,7 @@ export class RemotionRenderer {
    * Get the session working directory for generated components.
    */
   private getSessionDir(sessionId: string): string {
-    return path.join(process.cwd(), '.kshana', 'sessions', sessionId, 'remotion');
+    return path.join(getProjectDir(), 'sessions', sessionId, 'remotion');
   }
 
   /**

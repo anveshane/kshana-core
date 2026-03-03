@@ -6,7 +6,7 @@
  * Do NOT define read_file or read_project anywhere else.
  */
 import type { ToolDefinition } from '../../llm/index.js';
-import { loadProject } from '../../../tasks/video/workflow/ProjectManager.js';
+import { getProjectDir, loadProject } from '../../../tasks/video/workflow/ProjectManager.js';
 import fs from 'fs';
 import path from 'path';
 
@@ -64,7 +64,7 @@ function normalizeQuotes(s: string): string {
  */
 export function tryPathVariants(filePath: string): string | null {
   const toFull = (p: string) =>
-    path.isAbsolute(p) ? p : path.join(process.cwd(), '.kshana', p);
+    path.isAbsolute(p) ? p : path.join(getProjectDir(), p);
 
   // 1. Try as-is
   const fullPath = toFull(filePath);
@@ -146,7 +146,7 @@ export const readFileTool: ToolDefinition = {
   name: 'read_file',
   description: `Read a file from the project or from an absolute path on the filesystem.
 
-For project files: use relative paths like "characters/alice.md" (resolved under .kshana/).
+For project files: use relative paths like "characters/alice.md" (resolved under the project directory).
 For external files: use absolute paths like "/Users/alice/Documents/story.txt".
 
 **IMPORTANT for project files**: ALWAYS call read_project or list_project_files FIRST to get actual file names.
@@ -158,7 +158,7 @@ If this returns "File not found", call read_project or list_project_files to see
     properties: {
       file_path: {
         type: 'string',
-        description: 'File path. Absolute paths (starting with /) read from the filesystem directly. Relative paths read from the .kshana project directory.',
+        description: 'File path. Absolute paths (starting with /) read from the filesystem directly. Relative paths read from the project directory.',
       },
     },
     required: ['file_path'],
@@ -176,7 +176,7 @@ If this returns "File not found", call read_project or list_project_files to see
       if (filePath.includes('..')) {
         return {
           status: 'error',
-          error: 'Invalid file path. Use relative paths within .kshana directory or absolute paths for external files.',
+          error: 'Invalid file path. Use relative paths within the project directory or absolute paths for external files.',
         };
       }
 

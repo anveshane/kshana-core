@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
+import { getProjectDir } from '../../tasks/video/workflow/ProjectManager.js';
 import * as http from 'http';
 import { spawn } from 'child_process';
 import type { InputMediaType, ProjectInput } from '../../tasks/video/workflow/types.js';
@@ -114,7 +115,7 @@ export interface InputProcessorConfig {
  * Default configuration.
  */
 const DEFAULT_CONFIG: InputProcessorConfig = {
-  inputsDir: '.kshana/inputs',
+  inputsDir: 'inputs',
   ytDlpPath: 'yt-dlp',
   ffmpegPath: 'ffmpeg',
   ffprobePath: 'ffprobe',
@@ -705,7 +706,7 @@ export class InputProcessor {
    * Ensure a subdirectory exists under the inputs directory.
    */
   private ensureInputsDir(subdir: string): string {
-    const dir = path.join(this.config.inputsDir, subdir);
+    const dir = path.join(getProjectDir(), this.config.inputsDir, subdir);
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }

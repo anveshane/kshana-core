@@ -133,78 +133,12 @@ class WorkflowRegistry {
       qualityLevel: 'ultra',
     });
 
-    // 4. Wan 2.2 Lightning - Video generation (legacy - kept for compatibility)
-    this.register({
-      name: 'wan_lightning',
-      filename: 'Wan 2.2 Lightning Standard.json',
-      workflowType: WorkflowType.VIDEO_GENERATION,
-      description: 'Fast video generation using Wan 2.2 Lightning model. Convert image sequences into smooth videos with motion and transitions.',
-      capabilities: [
-        'image-to-video',
-        'motion-generation',
-        'fast-processing',
-        'smooth-transitions',
-        'sequence-animation',
-      ],
-      displayName: 'Wan Lightning Video',
-      requiresBaseImage: true,
-      supportsTextPrompts: false,
-      supportsImageToImage: true,
-      outputFormat: 'video',
-      estimatedTimeSeconds: 60,
-      qualityLevel: 'standard',
-    });
-
-    // 5. Wan Single Image - Video from single image with motion prompt
-    this.register({
-      name: 'wan_single_image',
-      filename: 'wan-singleimage.json',
-      workflowType: WorkflowType.VIDEO_GENERATION,
-      description: 'Generate video from a single image with motion guided by a text prompt. Best for animating static images with camera movements, character motion, or environmental effects.',
-      capabilities: [
-        'single-image-to-video',
-        'motion-from-prompt',
-        'camera-movement',
-        'character-animation',
-        'environmental-effects',
-      ],
-      displayName: 'Wan Single Image Video',
-      requiresBaseImage: true,
-      supportsTextPrompts: true,
-      supportsImageToImage: true,
-      outputFormat: 'video',
-      estimatedTimeSeconds: 90,
-      qualityLevel: 'standard',
-    });
-
-    // 6. Wan Start-End - Video interpolation between two frames
-    this.register({
-      name: 'wan_start_end',
-      filename: 'wan start-end.json',
-      workflowType: WorkflowType.VIDEO_GENERATION,
-      description: 'Generate video by interpolating between a start frame and end frame. Best for creating smooth transitions between two keyframes, scene transitions, or morphing effects.',
-      capabilities: [
-        'frame-interpolation',
-        'start-end-video',
-        'smooth-transitions',
-        'keyframe-animation',
-        'scene-morphing',
-      ],
-      displayName: 'Wan Start-End Video',
-      requiresBaseImage: true,
-      supportsTextPrompts: true,
-      supportsImageToImage: true,
-      outputFormat: 'video',
-      estimatedTimeSeconds: 120,
-      qualityLevel: 'standard',
-    });
-
-    // 7. LTX-2 Image-to-Video - Fast video from single image using LTX model
+    // 4. LTX-2 Image-to-Video - Fast video from single image using LTX model
     this.register({
       name: 'ltx_i2v',
       filename: 'video_ltx2_i2v-final.json',
       workflowType: WorkflowType.VIDEO_GENERATION,
-      description: 'Generate video from a single image using the LTX-2 model. Fast image-to-video generation with good motion quality. Alternative to Wan for single-image animation.',
+      description: 'Generate video from a single image using the LTX-2 model. Fast image-to-video generation with good motion quality.',
       capabilities: [
         'single-image-to-video',
         'motion-from-prompt',

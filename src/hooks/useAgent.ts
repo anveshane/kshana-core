@@ -68,7 +68,7 @@ export interface ToolCallHistoryItem {
  */
 export interface HistoryEntry {
   id: string;
-  type: 'user_input' | 'agent_text' | 'tool_completed' | 'error' | 'phase_transition' | 'thinking';
+  type: 'user_input' | 'agent_text' | 'tool_completed' | 'error' | 'phase_transition' | 'thinking' | 'question';
   content: string;
   timestamp: number;
   toolName?: string;
@@ -87,6 +87,10 @@ export interface HistoryEntry {
   phaseDisplayName?: string;
   /** For phase_transition entries: description of the phase */
   phaseDescription?: string;
+  /** For question entries: the options that were presented */
+  questionOptions?: QuestionOption[];
+  /** For question entries: whether it was a yes/no confirmation */
+  isConfirmation?: boolean;
 }
 
 /**
@@ -409,19 +413,33 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       };
     }
 
-    case 'ADD_USER_INPUT':
+    case 'ADD_USER_INPUT': {
+      // If there's an active question, persist it to history before the user's answer
+      const newEntries: HistoryEntry[] = [];
+      if (state.question) {
+        newEntries.push({
+          id: `question-${Date.now()}`,
+          type: 'question',
+          content: state.question,
+          timestamp: Date.now(),
+          questionOptions: state.questionOptions,
+          isConfirmation: state.isConfirmation,
+        });
+      }
+      newEntries.push({
+        id: `user-${Date.now()}`,
+        type: 'user_input',
+        content: action.text,
+        timestamp: Date.now(),
+      });
       return {
         ...state,
         history: [
-          ...state.history.slice(-MAX_HISTORY + 1),
-          {
-            id: `user-${Date.now()}`,
-            type: 'user_input',
-            content: action.text,
-            timestamp: Date.now(),
-          },
+          ...state.history.slice(-MAX_HISTORY + newEntries.length),
+          ...newEntries,
         ],
       };
+    }
 
     case 'STREAM_CHUNK':
       debugLog(`[useAgent] STREAM_CHUNK: chunk=${action.chunk.length} chars, newTotal=${(state.streamingText + action.chunk).length} chars`);
@@ -858,7 +876,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         };
       }
 
-      // Add user response to history
+      // Add user response to history (reducer will also persist the question if one is active)
       dispatch({ type: 'ADD_USER_INPUT', text: userInput });
       dispatch({ type: 'SET_THINKING' });
       dispatch({ type: 'CLEAR_QUESTION' });

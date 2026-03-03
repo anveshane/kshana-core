@@ -10,17 +10,20 @@ import { useAgent } from './hooks/useAgent.js';
 import { createDefaultToolRegistry } from './core/tools/index.js';
 import {
   createGoalDrivenToolRegistry,
-  projectExists,
   loadProject,
-  deleteProject,
   createProject,
   loadProjectFilesAsContexts,
+  loadTemplateOrchestratorPrompt,
   type ProjectStyle,
   // Template system imports
   initializeVideoTemplates,
   getAvailableTemplates,
   getVideoTemplate,
   TEMPLATE_IDS,
+  // Multi-project support
+  scanProjects,
+  setActiveProjectDir,
+  type ProjectInfo,
 } from './tasks/video/index.js';
 import type { StyleConfig as TemplateStyleConfig } from './core/templates/types.js';
 import type { LLMClientConfig } from './core/llm/index.js';
@@ -38,7 +41,7 @@ interface AppProps {
 }
 
 // Startup mode for video task type
-type StartupMode = 'checking' | 'select_action' | 'select_template' | 'select_style' | 'select_duration' | 'custom_duration' | 'new_story' | 'ready';
+type StartupMode = 'checking' | 'select_project' | 'select_action' | 'select_template' | 'select_style' | 'select_duration' | 'custom_duration' | 'new_story' | 'ready';
 
 // Duration presets per template (in seconds)
 const DURATION_PRESETS: Record<string, { label: string; seconds: number }[]> = {
@@ -93,6 +96,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   const [selectedDuration, setSelectedDuration] = React.useState<number>(120);
   const [durationSelectedIndex, setDurationSelectedIndex] = React.useState(0);
   const [durationOptions, setDurationOptions] = React.useState<{ label: string; seconds: number }[]>([]);
+  // Multi-project selection state
+  const [availableProjects, setAvailableProjects] = React.useState<ProjectInfo[]>([]);
+  const [projectSelectedIndex, setProjectSelectedIndex] = React.useState(0);
 
   // Initialize UI logger on mount
   React.useEffect(() => {
@@ -102,7 +108,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     };
   }, []);
 
-  // Check for existing project on mount (video mode only)
+  // Check for existing projects on mount (video mode only)
   React.useEffect(() => {
     if (taskType === 'video' && !started) {
       // Initialize templates first
@@ -110,13 +116,23 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       const templates = getAvailableTemplates();
       setAvailableTemplates(templates);
 
-      if (projectExists()) {
+      // Scan for all *.kshana project directories
+      const projects = scanProjects();
+      setAvailableProjects(projects);
+
+      if (projects.length === 0) {
+        // No projects - go to template selection to create new
+        setStartupMode('select_template');
+      } else if (projects.length === 1) {
+        // Single project - set it active and show continue/new
+        const proj = projects[0]!;
+        setActiveProjectDir(proj.dirName);
         const project = loadProject();
         setExistingProject(project);
         setStartupMode('select_action');
       } else {
-        // No existing project - go to template selection first
-        setStartupMode('select_template');
+        // Multiple projects - show project selection
+        setStartupMode('select_project');
       }
     }
   }, [taskType, started]);
@@ -125,11 +141,11 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // This ensures $story, $plot, etc. are available for fetch_context calls
   const contextsLoadedRef = React.useRef(false);
   React.useEffect(() => {
-    if (taskType === 'video' && projectExists() && !contextsLoadedRef.current) {
+    if (taskType === 'video' && existingProject && !contextsLoadedRef.current) {
       contextsLoadedRef.current = true;
       loadProjectFilesAsContexts();
     }
-  }, [taskType]);
+  }, [taskType, existingProject]);
 
   // Create tool registry based on task type
   const tools = React.useMemo(() => {
@@ -150,7 +166,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       const durationStr = minutes > 0
         ? seconds > 0 ? `${minutes} minute${minutes > 1 ? 's' : ''} ${seconds} seconds` : `${minutes} minute${minutes > 1 ? 's' : ''}`
         : `${seconds} seconds`;
-      return `You are working on a **${templateName}** project with **${styleName}** visual style.\nTarget duration: **${durationStr} (${selectedDuration} seconds)**.\nThe user already selected these — do not ask about project type, style, or duration. Proceed directly with the planning workflow.`;
+      const metaPrompt = `You are working on a **${templateName}** project with **${styleName}** visual style.\nTarget duration: **${durationStr} (${selectedDuration} seconds)**.\nThe user already selected these — do not ask about project type, style, or duration. Proceed directly with the planning workflow.`;
+      const templatePrompt = loadTemplateOrchestratorPrompt(selectedTemplateId);
+      return templatePrompt ? `${metaPrompt}\n\n${templatePrompt}` : metaPrompt;
     }
     return agentConfig?.customPrompt;
   }, [taskType, agentConfig?.customPrompt, selectedTemplateId, selectedStyle, selectedDuration, availableTemplates, selectedTemplateStyles]);
@@ -447,6 +465,24 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     }
   }, [status, questionOptions, isConfirmation, awaitingFeedbackText, handleInjectedInput, handleUserInput, handleFeedbackSubmit, handleNewTask]);
 
+  // Handle project selection (multi-project mode)
+  const handleProjectSelect = React.useCallback((index: number) => {
+    if (index < availableProjects.length) {
+      // Selected an existing project - continue it directly
+      const proj = availableProjects[index]!;
+      setActiveProjectDir(proj.dirName);
+      const project = loadProject();
+      setExistingProject(project);
+      setStarted(true);
+      uiLogger.logUserInput('Continue existing project');
+      void run('Continue working on the existing project. The project state is already injected - proceed with the next step.');
+    } else {
+      // "New project" option
+      setExistingProject(null);
+      setStartupMode('select_template');
+    }
+  }, [availableProjects, run]);
+
   // Handle startup action selection for video mode
   const handleStartupSelect = React.useCallback((index: number) => {
     if (startupMode === 'select_action') {
@@ -456,15 +492,12 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         uiLogger.logUserInput('Continue existing project');
         void run('Continue working on the existing project. The project state is already injected - proceed with the next step.');
       } else if (index === 1) {
-        // Start new project - show warning and switch to template selection
-        if (existingProject) {
-          deleteProject();
-          setExistingProject(null);
-        }
+        // Start new project - don't delete existing, just go to template selection
+        setExistingProject(null);
         setStartupMode('select_template');
       }
     }
-  }, [startupMode, existingProject, run]);
+  }, [startupMode, run]);
 
   // Handle template selection
   const handleTemplateSelect = React.useCallback((index: number) => {
@@ -529,6 +562,22 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     setStartupMode('new_story');
   }, [exit]);
 
+  // Handle keyboard for project selection (multi-project mode)
+  useInput((input, key) => {
+    if (!started && taskType === 'video' && startupMode === 'select_project') {
+      const maxIndex = availableProjects.length; // includes "New project" as last option
+      if (key.upArrow) {
+        setProjectSelectedIndex(prev => Math.max(0, prev - 1));
+      } else if (key.downArrow) {
+        setProjectSelectedIndex(prev => Math.min(maxIndex, prev + 1));
+      } else if (key.return) {
+        handleProjectSelect(projectSelectedIndex);
+      } else if (input >= '1' && input <= String(availableProjects.length + 1)) {
+        handleProjectSelect(parseInt(input, 10) - 1);
+      }
+    }
+  }, { isActive: !started && taskType === 'video' && startupMode === 'select_project' });
+
   // Handle keyboard for startup selection
   useInput((input, key) => {
     if (!started && taskType === 'video' && startupMode === 'select_action') {
@@ -558,6 +607,12 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         handleTemplateSelect(templateSelectedIndex);
       } else if (input >= '1' && input <= String(availableTemplates.length)) {
         handleTemplateSelect(parseInt(input, 10) - 1);
+      } else if (key.escape) {
+        if (existingProject) {
+          setStartupMode('select_action');
+        } else if (availableProjects.length > 0) {
+          setStartupMode('select_project');
+        }
       }
     }
   }, { isActive: !started && taskType === 'video' && startupMode === 'select_template' });
@@ -574,6 +629,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         handleStyleSelect(styleSelectedIndex);
       } else if (input >= '1' && input <= String(selectedTemplateStyles.length)) {
         handleStyleSelect(parseInt(input, 10) - 1);
+      } else if (key.escape) {
+        setStyleSelectedIndex(0);
+        setStartupMode('select_template');
       }
     }
   }, { isActive: !started && taskType === 'video' && startupMode === 'select_style' });
@@ -590,6 +648,9 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         handleDurationSelect(durationSelectedIndex);
       } else if (input >= '1' && input <= String(durationOptions.length + 1)) {
         handleDurationSelect(parseInt(input, 10) - 1);
+      } else if (key.escape) {
+        setDurationSelectedIndex(0);
+        setStartupMode('select_style');
       }
     }
   }, { isActive: !started && taskType === 'video' && startupMode === 'select_duration' });
@@ -608,6 +669,54 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             <Banner subtitle={subtitle} />
             <Box paddingX={2}>
               <Text dimColor>Checking for existing project...</Text>
+            </Box>
+          </Box>
+        );
+      }
+
+      // Multiple projects found - show project selection
+      if (startupMode === 'select_project') {
+        const totalOptions = availableProjects.length + 1; // projects + "New project"
+        return (
+          <Box flexDirection="column" padding={1}>
+            <Banner subtitle={subtitle} />
+
+            <Box flexDirection="column" marginBottom={1} paddingX={2}>
+              <Text bold color="cyan">Select a Project</Text>
+              <Text dimColor>
+                Found {availableProjects.length} project{availableProjects.length > 1 ? 's' : ''}. Choose one to continue or start a new project.
+              </Text>
+            </Box>
+
+            <Box flexDirection="column" marginBottom={1} paddingX={2}>
+              {availableProjects.map((proj, index) => {
+                const isSelected = projectSelectedIndex === index;
+                const updatedDate = new Date(proj.updatedAt).toLocaleDateString();
+                return (
+                  <Box key={proj.dirName} flexDirection="column" marginBottom={1}>
+                    <Text color={isSelected ? 'cyan' : undefined} bold={isSelected}>
+                      {isSelected ? '>' : ' '} {index + 1}. {proj.title}
+                    </Text>
+                    <Text dimColor>     {proj.templateId} | Phase: {proj.currentPhase} | Updated: {updatedDate}</Text>
+                  </Box>
+                );
+              })}
+              {/* New project option */}
+              {(() => {
+                const newIndex = availableProjects.length;
+                const isSelected = projectSelectedIndex === newIndex;
+                return (
+                  <Box flexDirection="column" marginBottom={1}>
+                    <Text color={isSelected ? 'green' : undefined} bold={isSelected}>
+                      {isSelected ? '>' : ' '} {newIndex + 1}. Start new project
+                    </Text>
+                  </Box>
+                );
+              })()}
+            </Box>
+
+            <Box paddingX={2}>
+              <Text dimColor>Use ↑↓ or 1-{totalOptions} to select, Enter to confirm. Type "exit" to quit.</Text>
             </Box>
           </Box>
         );
@@ -636,9 +745,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
                 <Text color={startupSelectedIndex === 0 ? 'cyan' : undefined}>
                   {startupSelectedIndex === 0 ? '>' : ' '} 1. Continue existing project
                 </Text>
-                <Text color={startupSelectedIndex === 1 ? 'red' : undefined}>
+                <Text color={startupSelectedIndex === 1 ? 'cyan' : undefined}>
                   {startupSelectedIndex === 1 ? '>' : ' '} 2. Start new project
-                  <Text dimColor> (will delete current project)</Text>
                 </Text>
               </Box>
             </Box>
@@ -678,7 +786,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             </Box>
 
             <Box paddingX={2}>
-              <Text dimColor>Use ↑↓ or 1-{availableTemplates.length} to select, Enter to confirm. Type "exit" to quit.</Text>
+              <Text dimColor>Use ↑↓ or 1-{availableTemplates.length} to select, Enter to confirm.{existingProject || availableProjects.length > 0 ? ' Esc to go back.' : ''} Type "exit" to quit.</Text>
             </Box>
           </Box>
         );
@@ -713,7 +821,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             </Box>
 
             <Box paddingX={2}>
-              <Text dimColor>Use ↑↓ or 1-{selectedTemplateStyles.length} to select, Enter to confirm. Type "exit" to quit.</Text>
+              <Text dimColor>Use ↑↓ or 1-{selectedTemplateStyles.length} to select, Enter to confirm, Esc to go back.</Text>
             </Box>
           </Box>
         );
@@ -760,7 +868,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
             </Box>
 
             <Box paddingX={2}>
-              <Text dimColor>Use ↑↓ or 1-{totalOptions} to select, Enter to confirm. Type "exit" to quit.</Text>
+              <Text dimColor>Use ↑↓ or 1-{totalOptions} to select, Enter to confirm, Esc to go back.</Text>
             </Box>
           </Box>
         );

@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ActualFlow, ActualStep } from './flowTypes.js';
+import { getProjectDir } from '../tasks/video/workflow/ProjectManager.js';
 
 const FLOW_VERSION = '1.0';
 
@@ -172,7 +173,7 @@ export class FlowRecorder {
     const flow = this.buildFlow(this.activeSteps.size > 0 ? 'running' : 'completed');
 
     // Ensure directory exists
-    const flowDir = path.join(process.cwd(), '.kshana', 'flows', 'actual');
+    const flowDir = path.join(getProjectDir(), 'flows', 'actual');
     if (!fs.existsSync(flowDir)) {
       fs.mkdirSync(flowDir, { recursive: true });
     }

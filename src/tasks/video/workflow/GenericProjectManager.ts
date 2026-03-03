@@ -27,11 +27,7 @@ import { ArtifactGraph } from '../../../core/artifacts/ArtifactGraph.js';
 import type { CreateArtifactOptions } from '../../../core/artifacts/ArtifactManager.js';
 import { ArtifactManager } from '../../../core/artifacts/ArtifactManager.js';
 import { ArtifactResolver } from '../../../core/artifacts/ArtifactResolver.js';
-
-/**
- * Project directory name
- */
-export const PROJECT_DIR = '.kshana';
+import { getActiveProjectDir } from './activeProject.js';
 
 /**
  * Project file name
@@ -77,7 +73,7 @@ export class GenericProjectManager {
   private resolver: ArtifactResolver | null = null;
 
   constructor(basePath: string) {
-    this.projectPath = path.join(basePath, PROJECT_DIR);
+    this.projectPath = path.join(basePath, getActiveProjectDir());
   }
 
   /**

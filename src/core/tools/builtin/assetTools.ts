@@ -7,7 +7,7 @@ import { createTool } from '../ToolRegistry.js';
 import { getArtifactManager } from '../../../tasks/video/workflow/ArtifactManager.js';
 import { existsSync, mkdirSync, copyFileSync } from 'fs';
 import { join, extname } from 'path';
-import { PROJECT_DIR } from '../../../tasks/video/workflow/types.js';
+import { getActiveProjectDir } from '../../../tasks/video/workflow/activeProject.js';
 
 interface OverlayConfig {
   target_artifact_id: string;
@@ -60,7 +60,7 @@ The file will be copied to the project's assets/external directory.`,
     }
 
     const subdir = assetType === 'overlay' ? 'overlays' : `${assetType}s`;
-    const destDir = join(basePath, PROJECT_DIR, 'assets', 'external', subdir);
+    const destDir = join(basePath, getActiveProjectDir(), 'assets', 'external', subdir);
     mkdirSync(destDir, { recursive: true });
 
     const ext = extname(filePath);
@@ -112,7 +112,7 @@ export const listExternalAssetsTool: ToolDefinition = createTool(
     const { readdirSync, statSync } = await import('fs');
     const { join } = await import('path');
 
-    const ext = join(basePath, PROJECT_DIR, 'assets', 'external');
+    const ext = join(basePath, getActiveProjectDir(), 'assets', 'external');
     if (!existsSync(ext)) {
       return { status: 'success', assets: [], message: 'No external assets yet.' };
     }
@@ -156,7 +156,7 @@ export const deleteExternalAssetTool: ToolDefinition = createTool(
     const { join } = await import('path');
 
     for (const subdir of ['images', 'videos', 'audio', 'overlays']) {
-      const dir = join(basePath, PROJECT_DIR, 'assets', 'external', subdir);
+      const dir = join(basePath, getActiveProjectDir(), 'assets', 'external', subdir);
       if (existsSync(dir)) {
         for (const file of readdirSync(dir)) {
           if (file.startsWith(assetId) || file.includes(assetId)) {

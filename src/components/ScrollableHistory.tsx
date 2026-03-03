@@ -74,6 +74,22 @@ function HistoryItem({ entry, expanded }: { entry: HistoryEntry; expanded: boole
     );
   }
 
+  if (entry.type === 'question') {
+    return (
+      <Box marginBottom={1} borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
+        <Text color="cyan" bold>Question: </Text>
+        <Text>{entry.content}</Text>
+        {entry.questionOptions && entry.questionOptions.length > 0 && (
+          <Box flexDirection="column" marginTop={1}>
+            {entry.questionOptions.map((opt, i) => (
+              <Text key={i} color="gray">  {i + 1}. {opt.label}{opt.description ? ` - ${opt.description}` : ''}</Text>
+            ))}
+          </Box>
+        )}
+      </Box>
+    );
+  }
+
   if (entry.type === 'thinking') {
     return (
       <Box marginBottom={1} paddingLeft={1} borderStyle="single" borderColor="gray" flexDirection="column">

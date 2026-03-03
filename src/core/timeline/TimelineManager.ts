@@ -326,6 +326,79 @@ export function validateTimeline(timeline: Timeline): TimelineValidation {
 }
 
 /**
+ * Split a scene segment into multiple shot sub-segments.
+ *
+ * Replaces the target segment with N shot segments, proportionally scaling
+ * shot durations to fill the scene's allocated time. New segment IDs follow
+ * the pattern `{sceneSegmentId}_shot_{n}`.
+ *
+ * @param timeline - The current timeline
+ * @param sceneSegmentId - ID of the scene segment to split
+ * @param shots - Array of shot descriptors with label, duration, and optional metadata
+ * @returns Updated timeline with shot segments replacing the scene segment
+ */
+export function splitSegmentIntoShots(
+  timeline: Timeline,
+  sceneSegmentId: string,
+  shots: Array<{ label: string; duration: number; metadata?: Record<string, unknown> }>
+): Timeline {
+  const segmentIndex = timeline.segments.findIndex(s => s.id === sceneSegmentId);
+  if (segmentIndex === -1) {
+    throw new Error(`Segment not found: ${sceneSegmentId}`);
+  }
+  if (shots.length === 0) {
+    throw new Error('shots array must not be empty');
+  }
+
+  const sceneSegment = timeline.segments[segmentIndex]!;
+  const sceneStart = sceneSegment.startTime;
+  const sceneDuration = sceneSegment.duration;
+
+  // Proportionally scale shot durations to fill the scene's allocated time
+  const totalShotDuration = shots.reduce((sum, s) => sum + s.duration, 0);
+  const scale = sceneDuration / totalShotDuration;
+
+  const shotSegments: TimelineSegment[] = [];
+  let currentTime = sceneStart;
+
+  for (let i = 0; i < shots.length; i++) {
+    const shot = shots[i]!;
+    const isLast = i === shots.length - 1;
+    const shotDuration = isLast
+      ? Math.round((sceneSegment.endTime - currentTime) * 100) / 100
+      : Math.round(shot.duration * scale * 100) / 100;
+
+    shotSegments.push({
+      id: `${sceneSegmentId}_shot_${i + 1}`,
+      label: shot.label,
+      startTime: Math.round(currentTime * 100) / 100,
+      endTime: Math.round((currentTime + shotDuration) * 100) / 100,
+      duration: shotDuration,
+      compositingMode: sceneSegment.compositingMode,
+      fillStatus: 'planned',
+      layers: [],
+      ...(shot.metadata ? { metadata: shot.metadata } : {}),
+    });
+
+    currentTime += shotDuration;
+  }
+
+  // Replace the scene segment with the shot segments
+  const updatedSegments = [
+    ...timeline.segments.slice(0, segmentIndex),
+    ...shotSegments,
+    ...timeline.segments.slice(segmentIndex + 1),
+  ];
+
+  const updated: Timeline = {
+    ...timeline,
+    segments: updatedSegments,
+  };
+  updated.validation = validateTimeline(updated);
+  return updated;
+}
+
+/**
  * Load a timeline from disk.
  * Returns null if the file doesn't exist.
  */

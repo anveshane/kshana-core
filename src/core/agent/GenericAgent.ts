@@ -39,6 +39,7 @@ import { buildContextVariablesSection, type ContextVariable } from '../prompts/i
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { FlowRecorder } from '../../utils/FlowRecorder.js';
 import {
+  getProjectDir,
   loadProject,
   saveCharacter,
   saveSetting,
@@ -1554,6 +1555,7 @@ export class GenericAgent extends TypedEventEmitter {
       const name = args['name'] as string | undefined;
       const instruction = args['instruction'] as string | undefined;
       const sceneNumber = args['scene_number'] as number | undefined;
+      const shotNumber = args['shot_number'] as number | undefined;
       const chapterNumber = args['chapter_number'] as number | undefined;
 
       if (!contentType) {
@@ -1599,14 +1601,71 @@ export class GenericAgent extends TypedEventEmitter {
         // For scene image prompts, append scene-{n}.prompt.md
         outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.prompt.md`;
       } else if (contentType === 'scene_video_prompt' && sceneNumber !== undefined) {
-        // For scene video prompts, append scene-{n}.motion.md
-        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.motion.md`;
+        // For scene video prompts, append scene-{n}.motion.json
+        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.motion.json`;
+      } else if (contentType === 'shot_image_prompt' && sceneNumber !== undefined && shotNumber !== undefined) {
+        // For shot image prompts, append scene-{n}-shot-{m}.prompt.md
+        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}-shot-${shotNumber}.prompt.md`;
+      }
+
+      // Check if the output file already exists (skip regeneration unless overwrite is true)
+      const overwrite = args['overwrite'] as boolean | undefined;
+      if (!overwrite) {
+        const projectDir = getProjectDir();
+        const fullOutputPath = path.join(projectDir, outputFile);
+        if (fs.existsSync(fullOutputPath)) {
+          try {
+            const existingContent = fs.readFileSync(fullOutputPath, 'utf-8');
+            if (existingContent.trim().length > 0) {
+              debugLog(
+                `[GenericAgent] generate_content: file already exists at ${outputFile}, returning existing content`
+              );
+              const result = {
+                already_exists: true,
+                content_type: contentType,
+                output_file: outputFile,
+                content: existingContent,
+                message: `Content already exists at ${outputFile}. Use overwrite: true to regenerate.`,
+              };
+              FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
+              return result;
+            }
+          } catch {
+            // File exists but can't be read — fall through to regeneration
+          }
+        }
       }
 
       // Build content system prompt and route through contentState loop
       // This activates streaming + approval + feedback support
       const contentSystemPrompt = buildContentPrompt(instruction, contentType as ContentType);
-      const subAgentTask = `First, use read_project() to understand the project structure, template type, and available files. Then use read_file() to fetch the relevant source material listed in the project files. Finally, generate the ${contentType} content based on this instruction:\n\n${instruction}`;
+      let subAgentTask = `First, use read_project() to understand the project structure, template type, and available files. Then use read_file() to fetch the relevant source material listed in the project files. Finally, generate the ${contentType} content based on this instruction:\n\n${instruction}`;
+
+      // For scene_video_prompt and shot_image_prompt, inject reference image context
+      if ((contentType === 'scene_video_prompt' || contentType === 'shot_image_prompt') && sceneNumber !== undefined) {
+        const project = loadProject();
+        if (project) {
+          const scene = project.scenes?.find((s: { sceneNumber: number }) => s.sceneNumber === sceneNumber);
+          const charRefs = (project.characters ?? [])
+            .filter((c: { referenceImagePath?: string }) => c.referenceImagePath)
+            .map((c: { name: string; referenceImagePath?: string }) => `- ${c.name}: ${c.referenceImagePath}`)
+            .join('\n');
+          const settingRefs = (project.settings ?? [])
+            .filter((s: { referenceImagePath?: string }) => s.referenceImagePath)
+            .map((s: { name: string; referenceImagePath?: string }) => `- ${s.name}: ${s.referenceImagePath}`)
+            .join('\n');
+
+          subAgentTask += `\n\n## Available Reference Images\n`;
+          subAgentTask += `**Scene Image:** artifact ${scene?.imageArtifactId ?? 'not yet generated'}\n`;
+          subAgentTask += `**Characters:**\n${charRefs || 'None'}\n`;
+          subAgentTask += `**Settings:**\n${settingRefs || 'None'}\n`;
+
+          if (contentType === 'shot_image_prompt' && shotNumber !== undefined) {
+            subAgentTask += `\n**Shot Number:** ${shotNumber}\n`;
+            subAgentTask += `**Note:** Generate an image prompt specifically for this shot's framing and composition. Use only the reference images relevant to this shot.\n`;
+          }
+        }
+      }
 
       debugLog(
         `[GenericAgent] generate_content initializing contentState for: "${instruction.substring(0, 100)}..."`
@@ -2611,7 +2670,7 @@ Respond in JSON format:
       $original_input: { file: 'original_input.md', label: 'Original Input' },
     };
 
-    const projectDir = path.join(process.cwd(), '.kshana');
+    const projectDir = getProjectDir();
 
     // Check if ref is a direct file path (e.g., "plans/story.md")
     if (ref.includes('/') || ref.endsWith('.md')) {
@@ -2727,7 +2786,7 @@ Respond in JSON format:
       const effectiveOutputFile = outputFile || `plans/${contentType}.md`;
       if (generatedContent) {
         try {
-          const projectDir = path.join(process.cwd(), '.kshana');
+          const projectDir = getProjectDir();
           const filePath = path.join(projectDir, effectiveOutputFile);
 
           // Ensure parent directory exists
@@ -2782,7 +2841,7 @@ Respond in JSON format:
    * Execute a tool call from the content creator.
    */
   private async executeContentCreatorTool(toolCall: ToolCall): Promise<string> {
-    const projectDir = path.join(process.cwd(), '.kshana');
+    const projectDir = getProjectDir();
 
     if (toolCall.name === 'read_project') {
       try {
@@ -2795,15 +2854,22 @@ Respond in JSON format:
           style: project.style,
           templateId: project.templateId ?? 'narrative',
           currentPhase: project.currentPhase,
-          characters: (project.characters || []).map((char: { name: string }) => ({
+          characters: (project.characters || []).map((char: { name: string; referenceImagePath?: string }) => ({
             name: char.name,
             file: project.content?.characters?.itemFiles?.[char.name] ||
               `characters/${char.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
+            referenceImagePath: char.referenceImagePath,
           })),
-          settings: (project.settings || []).map((setting: { name: string }) => ({
+          settings: (project.settings || []).map((setting: { name: string; referenceImagePath?: string }) => ({
             name: setting.name,
             file: project.content?.settings?.itemFiles?.[setting.name] ||
               `settings/${setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
+            referenceImagePath: setting.referenceImagePath,
+          })),
+          scenes: (project.scenes || []).map((scene: { sceneNumber: number; title?: string; imageArtifactId?: string }) => ({
+            sceneNumber: scene.sceneNumber,
+            title: scene.title,
+            imageArtifactId: scene.imageArtifactId,
           })),
           files: project.files || [],
         };
@@ -2893,6 +2959,15 @@ Respond in JSON format:
               continue;
             }
 
+            // Emit any text the content creator produced while deciding on tool calls
+            if (response.content && response.content.trim()) {
+              this.emit({
+                type: 'agent_text',
+                text: response.content.trim(),
+                isFinal: false,
+              });
+            }
+
             // Add assistant message with tool calls
             this.contentState.messages.push({
               role: 'assistant',
@@ -2937,7 +3012,14 @@ Respond in JSON format:
             continue;
           }
 
-          // No tool calls during gathering - switch to content generation
+          // No tool calls during gathering - emit any text and switch to content generation
+          if (response.content && response.content.trim()) {
+            this.emit({
+              type: 'agent_text',
+              text: response.content.trim(),
+              isFinal: false,
+            });
+          }
           this.contentState.gatheringContext = false;
         }
 
@@ -2948,10 +3030,16 @@ Respond in JSON format:
 
         debugLog(`[GenericAgent] Starting content generation with streaming`);
 
-        for await (const chunk of this.llm.generateStream({
+        const streamOptions: Parameters<typeof this.llm.generateStream>[0] = {
           messages: this.contentState.messages,
           temperature: 0.8,
-        })) {
+        };
+        if (this.contentState.contentType === 'scene_video_prompt') {
+          const { MOTION_PROMPT_SCHEMA } = await import('../../tasks/video/tools.js');
+          streamOptions.responseFormat = MOTION_PROMPT_SCHEMA;
+        }
+
+        for await (const chunk of this.llm.generateStream(streamOptions)) {
           // Handle content chunks
           if (chunk.content) {
             content += chunk.content;
@@ -2987,6 +3075,43 @@ Respond in JSON format:
               .replace(/<\/think>/g, '') // Orphan closing tag
               .trim()
           : '';
+
+        // For scene_video_prompt, emit a formatted display to replace raw JSON stream
+        if (this.contentState.contentType === 'scene_video_prompt' && cleanedContent) {
+          try {
+            const parsed = JSON.parse(cleanedContent);
+            let display: string;
+            if (parsed.shots && Array.isArray(parsed.shots)) {
+              // Multi-shot display
+              display = `**Scene ${parsed.sceneNumber}: ${parsed.sceneTitle}** (${parsed.totalSceneDuration}s)\n\n`;
+              for (const shot of parsed.shots) {
+                display += `---\n**Shot ${shot.shotNumber}** [${shot.shotType}] (${shot.duration}s)\n`;
+                display += `**Camera:** ${shot.cameraWork}\n`;
+                display += `**Prompt:** ${shot.prompt}\n`;
+                if (shot.dialogue) display += `**Dialogue:** "${shot.dialogue}"\n`;
+                if (shot.referenceImages?.length) display += `**Refs:** ${shot.referenceImages.join(', ')}\n`;
+                display += '\n';
+              }
+              display += `**Reference Images:** ${parsed.referenceImages?.join(', ') || 'None'}`;
+            } else {
+              // Legacy single-prompt display
+              display = `**Motion Prompt:**\n${parsed.prompt}\n\n**Reference Images:** ${
+                parsed.referenceImages?.length ? parsed.referenceImages.join(', ') : 'None'
+              }`;
+            }
+            this.emit({
+              type: 'tool_streaming',
+              toolCallId: this.contentState.toolCallId,
+              chunk: display,
+              done: true,
+              agentName: this.getEffectiveAgentName(),
+              toolName: 'generate_content',
+              reset: true,
+            });
+          } catch {
+            // Keep raw display if JSON parse fails
+          }
+        }
 
         this.contentState.currentContent = cleanedContent || 'No content generated';
 
@@ -3060,7 +3185,7 @@ Respond in JSON format:
       let fileSaved = false;
       if (this.contentState.outputFile) {
         try {
-          const projectDir = path.join(process.cwd(), '.kshana');
+          const projectDir = getProjectDir();
           const filePath = path.join(projectDir, this.contentState.outputFile);
 
           // Ensure parent directory exists
@@ -4205,17 +4330,20 @@ Respond in JSON format:
       parts.push(buildContextVariablesSection(this.activeContextVariables));
     }
 
-    const reminder: Message = {
-      role: 'system',
-      content: parts.join('\n\n'),
-    };
+    const reminderContent = parts.join('\n\n');
 
-    // Insert after the first system message
+    // Merge reminder into the first system message to maintain compatibility
+    // with LLMs (like Llama) that require a single system message at the start
     const firstMsg = this.messages[0];
-    if (firstMsg) {
-      return [firstMsg, reminder, ...this.messages.slice(1)];
+    if (firstMsg && firstMsg.role === 'system') {
+      const mergedSystem: Message = {
+        role: 'system',
+        content: (firstMsg.content ?? '') + '\n\n' + reminderContent,
+      };
+      return [mergedSystem, ...this.messages.slice(1)];
     }
-    return [reminder, ...this.messages];
+    // If no system message exists, add reminder as system message at the start
+    return [{ role: 'system', content: reminderContent }, ...this.messages];
   }
 
   /**

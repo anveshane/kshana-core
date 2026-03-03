@@ -11,9 +11,9 @@ import {
   type PromptVersion,
   type PromptRefinement,
   type PromptComparison,
-  PROJECT_DIR,
   PROJECT_FILE,
 } from './types.js';
+import { getActiveProjectDir } from './activeProject.js';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'fs';
 import { join, basename, extname } from 'path';
 import { loadProject, saveProject } from './ProjectManager.js';
@@ -193,7 +193,7 @@ export class ArtifactManager {
 
     const ext = extname(filePath);
     const subdir = assetType === 'overlay' ? 'overlays' : `${assetType}s`;
-    const destDir = join(this.basePath, PROJECT_DIR, 'assets', 'external', subdir);
+    const destDir = join(this.basePath, getActiveProjectDir(), 'assets', 'external', subdir);
     const destPath = join(destDir, `${id}${ext}`);
 
     mkdirSync(destDir, { recursive: true });

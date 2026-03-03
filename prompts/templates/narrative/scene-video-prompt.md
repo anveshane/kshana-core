@@ -1,6 +1,6 @@
-# Scene Video Prompt Template
+# Scene Video Prompt Template (LTX-2 Multi-Shot)
 
-Generate a comprehensive motion/animation prompt for converting a scene image into a video clip.
+Break this scene into 2-4 cinematic shots, each optimized for the LTX-2 video generation model which transforms a scene image into a short video clip.
 
 ## Scene Information
 
@@ -8,118 +8,119 @@ Generate a comprehensive motion/animation prompt for converting a scene image in
 
 ## Source Image
 
-Image Artifact ID: {{IMAGE_ARTIFACT_ID}}
-Image Path: {{IMAGE_PATH}}
+The source image is managed by the orchestrator.
 
-## MANDATORY Motion Specifications
+## Multi-Shot Breakdown
 
-The prompt MUST include ALL of the following details. This will be used with the video generation workflow (wan_single_image).
+Each scene should be broken into 2-4 shots of 4-8 seconds each. LTX-2 generates short clips effectively — a single prompt trying to describe too much action produces poor results. Real video production uses multiple shots per scene.
 
-### 1. Source Reference (ALL REQUIRED)
+### Shot Type Vocabulary
 
-- **Source Image ID**: The artifact ID of the image to animate
-- **Duration**: Target video length (4-8 seconds typical)
-- **Frame Rate**: 24fps (cinematic) or 30fps (smooth)
+**By distance:**
+- **extreme_wide**: Vast environment, character tiny or absent, establishes scale
+- **wide**: Full environment, character head-to-toe, establishes location
+- **medium_wide**: Character from knees up, physical action with environment context
+- **medium**: Waist-up of character(s), conversational, most common shot
+- **medium_close_up**: Chest and head, intimate, captures expression and gesture
+- **close_up**: Face fills frame, maximum emotional impact
+- **extreme_close_up**: Single feature (eyes, hands, object), intense detail
 
-### 2. Camera Motion (ALL REQUIRED)
+**By angle:**
+- **low_angle**: Camera looks up — subject appears powerful, dominant
+- **high_angle**: Camera looks down — subject appears vulnerable, diminished
+- **dutch_angle**: Tilted frame — unease, tension, psychological distress
+- **birds_eye**: Directly above — abstract, pattern, god's view
 
-- **Movement Type**: (static, pan, tilt, zoom, dolly, tracking, crane, handheld)
-- **Movement Speed**: (slow/subtle, medium, fast/dramatic)
-- **Start Position**: Camera's initial state relative to scene
-- **End Position**: Camera's final state
-- **Easing**: (linear, ease-in, ease-out, ease-in-out)
-- **Movement Motivation**: Why the camera moves (following action, revealing information, creating tension)
+**By purpose:**
+- **establishing**: Sets context for the scene (usually wide)
+- **reaction**: Character responding, focus on expression and body language
+- **over_the_shoulder**: Behind one character looking at another
+- **two_shot**: Two characters together, showing relationship
+- **pov**: Point-of-view, what a character sees
+- **insert**: Detail shot of object or action
+- **cutaway**: Brief shot of related element outside main action
+- **tracking**: Camera follows moving subject
 
-### 3. Subject Motion (ALL REQUIRED)
+### Shot Sequencing Principles
+- Start with an establishing/wide shot to set the scene
+- Move to medium shots for action and dialogue
+- Use close-ups for emotional peaks
+- Use reaction shots to show impact on characters
+- End with a shot that transitions naturally to the next scene
 
-- **Character Movement**: What each character does (subtle breathing, gestures, turning head, walking, etc.)
-- **Facial Animation**: Eye movements, expressions changing, mouth movement
-- **Body Motion**: Posture shifts, hand gestures, weight shifts
-- **Motion Intensity**: (minimal/subtle, moderate, significant)
+## LTX-2 Prompt Engineering Rules
 
-### 4. Environmental Motion (ALL REQUIRED)
+Each shot's prompt must follow these rules:
 
-- **Atmospheric Effects**: (dust particles, fog drift, light flicker, lens flare movement)
-- **Background Motion**: (swaying trees, moving clouds, distant activity)
-- **Foreground Elements**: (hair movement from wind, cloth flutter, smoke wisps)
-- **Lighting Changes**: (light source movement, shadow progression, flickering)
+### Structure
+- Write each shot prompt as a **single flowing paragraph**
+- Use **present tense, descriptive language**: "a woman walks toward the door" not "a woman walking"
+- Describe the shot **chronologically**: how it starts, what action unfolds, what the result is
 
-### 5. Technical Specifications (REQUIRED)
+### Core Elements per Shot
 
-- **Workflow**: wan_single_image (single image animation)
-- **Duration**: Specific seconds (default: 5 seconds)
-- **Loop Consideration**: Whether end should smoothly connect to start
-- **Motion Quality**: Smooth, natural, no jarring transitions
+1. **Subject/Character**: Specifics on appearance, clothing, and posture relevant to the motion
+2. **Action/Movement**: Clear, detailed descriptions of gestures and physical changes
+3. **Environment**: Background details, lighting, colors, and textures — all in motion
+4. **Camera Work**: Defined separately in the `cameraWork` field
 
-## Motion Prompt Guidelines
+### Techniques
 
-### Do's:
-- Describe continuous, fluid motion
-- Keep movements subtle and natural
-- Match motion to scene mood
-- Consider what would naturally move in the scene
+- **Show, don't label emotions**: "tears stream down her face" not "she is sad"
+- **Match detail to shot scale**: More facial detail for close-ups, environmental detail for wide shots
+- **Avoid clutter**: No text, logos, or chaotic disorganized motion
+- **Keep it achievable**: All described motion must fit naturally within 4-8 seconds
+- **Environmental motion adds life**: Wind in hair, drifting smoke, flickering light, rippling water
 
-### Don'ts:
-- Don't describe drastic position changes
-- Don't add elements not in the source image
+### Dialogue
+- If the scene description includes dialogue, distribute character lines across the appropriate shots
+- Set `dialogue` to the spoken line for that shot — LTX-2 generates with audio
+- Set `dialogue` to `null` for shots without spoken words
+
+### Don'ts
+- Don't describe drastic position changes — motion should be subtle per shot
+- Don't add elements not visible in the source image
 - Don't request impossible physics
-- Don't specify motion that would distort the image
+- Don't use bullet points or section headers in the prompt text
+- Don't label emotions — describe their physical expression
 
 ## Output Format
 
-Generate the prompt in this exact structure:
+Output ONLY a JSON object (no markdown fences, no extra text):
 
 ```
-**Motion Prompt:**
-[Single paragraph describing all motion elements. Be specific about direction, speed, and nature of movement. Focus on what CAN move naturally in the scene.]
-
-**Camera Motion:**
-Type: [movement type]
-Direction: [specific direction]
-Speed: [slow/medium/fast]
-Duration: [seconds]
-
-**Subject Motion:**
-[List each character's motion]
-
-**Environmental Motion:**
-[List atmospheric and environmental movements]
-
-**Technical Parameters:**
-- Source: [image artifact ID]
-- Duration: [X] seconds
-- Workflow: wan_single_image
-- Frame Rate: 24fps
-
-**Motion Intensity:**
-[minimal | subtle | moderate | significant]
+{
+  "sceneNumber": 1,
+  "sceneTitle": "Scene Title Here",
+  "shots": [
+    {
+      "shotNumber": 1,
+      "shotType": "establishing",
+      "duration": 5,
+      "prompt": "[single flowing paragraph for this shot]",
+      "dialogue": null,
+      "cameraWork": "slow push-in from wide",
+      "referenceImages": ["path/to/relevant-ref.png"]
+    },
+    {
+      "shotNumber": 2,
+      "shotType": "close-up",
+      "duration": 6,
+      "prompt": "[single flowing paragraph for this shot]",
+      "dialogue": "Character's spoken line here",
+      "cameraWork": "static with subtle drift",
+      "referenceImages": ["path/to/character-ref.png"]
+    }
+  ],
+  "totalSceneDuration": 11,
+  "referenceImages": ["path/to/all-refs.png"]
+}
 ```
+
+**referenceImages** (top-level): Include the `referenceImagePath` for every character and setting that appears in this scene. Get these paths from `read_project()`. If no reference images exist, use an empty array.
+
+**Per-shot referenceImages**: Only include refs relevant to that specific shot.
 
 ## Example Output
 
-**Motion Prompt:**
-Slow push-in camera movement toward the two figures as they stand in tense confrontation. Dr. Sarah Chen's chest rises and falls with controlled breathing, her eyes narrowing slightly, a subtle tightening of her crossed arms. Marcus Webb shifts his weight almost imperceptibly from one foot to the other, his gaze steady but a slight twitch at the corner of his mouth. Golden light through the windows creates slowly drifting dust particles in the air. The flames in a distant candelabra flicker gently, casting dancing shadows on the mahogany bookshelves. A subtle breeze stirs the edge of a curtain at the window's edge.
-
-**Camera Motion:**
-Type: Slow push-in/dolly
-Direction: Forward toward subjects
-Speed: Slow (subtle)
-Duration: 5 seconds
-
-**Subject Motion:**
-- Dr. Sarah Chen: Breathing animation, slight eye narrowing, arm tension
-- Marcus Webb: Weight shift, steady gaze with mouth twitch
-
-**Environmental Motion:**
-- Floating dust particles in light beams
-- Candle flame flicker and shadow dance
-- Subtle curtain movement at window edge
-
-**Technical Parameters:**
-- Source: scene_01_image_001
-- Duration: 5 seconds
-- Workflow: wan_single_image
-- Frame Rate: 24fps
-
-**Motion Intensity:**
-subtle
+{ "sceneNumber": 2, "sceneTitle": "The Candlelit Study", "shots": [{ "shotNumber": 1, "shotType": "establishing", "duration": 5, "prompt": "The camera reveals a warmly lit study where two figures stand in tense silence across a mahogany desk, candlelight from tall brass holders casts dancing shadows across leather-bound spines on floor-to-ceiling shelves, golden afternoon light streams through tall windows illuminating dust motes that drift lazily through the heavy air between them.", "dialogue": null, "cameraWork": "slow push-in from wide to medium", "referenceImages": ["assets/images/characters/sarah_chen.png", "assets/images/characters/marcus_webb.png", "assets/images/settings/candlelit_study.png"] }, { "shotNumber": 2, "shotType": "close-up", "duration": 6, "prompt": "Sarah's face fills the frame in warm candlelight, her chest rises with a controlled breath as her eyes narrow and her crossed arms tighten imperceptibly, a subtle tremor passes through her jaw as moisture catches at the corner of her eye, the flickering light plays across the determination hardening her features.", "dialogue": "You had no right to make that decision without me.", "cameraWork": "static close-up with subtle drift right", "referenceImages": ["assets/images/characters/sarah_chen.png"] }, { "shotNumber": 3, "shotType": "reaction", "duration": 5, "prompt": "Marcus shifts his weight from one foot to the other, his jaw set firm while a subtle twitch tugs at the corner of his mouth, his fingers curl and uncurl at his sides as he absorbs the weight of her words, behind him candle flames flicker gently casting soft dancing shadows across the mahogany shelves.", "dialogue": null, "cameraWork": "medium shot, slight pan left", "referenceImages": ["assets/images/characters/marcus_webb.png"] }], "totalSceneDuration": 16, "referenceImages": ["assets/images/characters/sarah_chen.png", "assets/images/characters/marcus_webb.png", "assets/images/settings/candlelit_study.png"] }

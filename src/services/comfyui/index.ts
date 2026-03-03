@@ -11,7 +11,6 @@ export {
   parameterizeWorkflowByName,
   parameterizeZImageWorkflow,
   parameterizeChromaRadianceWorkflow,
-  parameterizeWanWorkflow,
   workflowToPrompt,
   aspectRatioToDimensions,
   type WorkflowTemplate,

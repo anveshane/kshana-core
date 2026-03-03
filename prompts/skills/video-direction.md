@@ -169,18 +169,48 @@ Consider attention span and pacing of overall video.
 - Small movements can be powerful
 - Not every shot needs dramatic motion
 
-## Output Format
+## Output Format (LTX-2 Multi-Shot)
 
-```
-## Motion Direction: [Scene Name/Number]
+Break each scene into **2-4 shots** of **4-8 seconds** each. Each shot has its own focused prompt, camera work, and optional dialogue. This produces better results than a single prompt trying to cover all action.
 
-**Camera Movement**: [Type and description]
-**Duration**: [Seconds]
-**Subject Motion**: [What moves in the scene]
-**Atmosphere**: [Environmental effects]
-**Pacing**: [Fast/normal/slow and why]
-**Purpose**: [What this motion achieves narratively]
+Output ONLY a JSON object (no markdown fences, no extra text):
 ```
+{
+  "sceneNumber": 1,
+  "sceneTitle": "Scene Title",
+  "shots": [
+    {
+      "shotNumber": 1,
+      "shotType": "establishing",
+      "duration": 5,
+      "prompt": "[Single flowing paragraph for THIS shot only]",
+      "dialogue": null,
+      "cameraWork": "slow push-in from wide",
+      "referenceImages": ["assets/images/characters/name.png"]
+    }
+  ],
+  "totalSceneDuration": 16,
+  "referenceImages": ["assets/images/characters/name.png", "assets/images/settings/name.png"]
+}
+```
+
+**Shot types by distance**: extreme_wide, wide, medium_wide, medium, medium_close_up, close_up, extreme_close_up
+**Shot types by angle**: low_angle, high_angle, dutch_angle, birds_eye
+**Shot types by purpose**: establishing, reaction, over_the_shoulder, two_shot, pov, insert, cutaway, tracking
+
+**Sequencing**: Start establishing → medium for action/dialogue → close-ups for emotion → reaction for impact
+
+**Dialogue**: If the scene has character dialogue, set the `dialogue` field on the appropriate shot. LTX-2 generates with audio. Set to `null` for non-dialogue shots.
+
+**referenceImages**: Top-level lists ALL refs for the scene. Per-shot lists only refs relevant to that shot.
+
+### LTX-2 Prompt Writing Rules (per shot)
+
+- **Present tense**: "a woman walks" not "a woman walking"
+- **Show, don't label**: "tears stream down her face" not "she is sad"
+- **Camera in cameraWork field**: Describe camera motion separately from the prompt text
+- **Match detail to shot**: Close-ups need facial detail, wide shots need environmental detail
+- **No clutter**: Avoid text, logos, or chaotic disorganized motion
 
 ## Tips
 
@@ -191,3 +221,4 @@ Consider attention span and pacing of overall video.
 - Think about what comes before and after
 - Environmental motion adds life even in still scenes
 - Faces tell stories with tiny movements
+- Less is often more — small movements can be powerful

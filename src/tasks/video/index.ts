@@ -10,6 +10,7 @@ import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
 import { contextStore } from '../../core/context/index.js';
+import { loadAndRenderMarkdown } from '../../core/prompts/loader.js';
 import {
   createPlannerTools,
   type PlannerToolContext,
@@ -694,3 +695,27 @@ export function getVideoTemplate(templateId: string): VideoTemplate {
  * Re-export template IDs for convenience.
  */
 export { TEMPLATE_IDS } from '../../templates/index.js';
+
+/**
+ * Load the template-specific orchestrator prompt with context variables rendered.
+ * Returns the rendered markdown string, or empty string if no prompt is defined.
+ */
+export function loadTemplateOrchestratorPrompt(
+  templateId: string,
+  projectState?: string,
+): string {
+  initializeTemplates();
+  const template = getTemplateOrThrow(templateId);
+  const promptPath = template.orchestratorPrompt;
+  if (!promptPath) return '';
+
+  try {
+    return loadAndRenderMarkdown(`templates/${promptPath}`, {
+      PROJECT_STATE: projectState ?? 'No project loaded yet.',
+      AVAILABLE_ACTIONS: 'Use scan_assets and create_backward_plan to determine available actions.',
+    });
+  } catch {
+    // Template prompt file missing — fall back silently
+    return '';
+  }
+}

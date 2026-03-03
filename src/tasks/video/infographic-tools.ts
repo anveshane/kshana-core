@@ -22,7 +22,7 @@ import {
   type ExpandInfographicContext,
 } from './workflow/infographicPromptExpander.js';
 import { runRemotionAgent, type ComponentCodeItem } from './remotionAgent.js';
-import { PROJECT_DIR } from './workflow/index.js';
+import { getProjectDir } from './workflow/index.js';
 
 const logger = getPhaseLogger();
 
@@ -161,7 +161,7 @@ ONLY available in documentary template projects.`,
       const effectiveSessionId = sessionId || `cli-${nanoid(6)}`;
 
       // 1. Read and parse placements
-      const fullPath = path.join(process.cwd(), PROJECT_DIR, filePath);
+      const fullPath = path.join(getProjectDir(), filePath);
       if (!fs.existsSync(fullPath)) {
         return {
           status: 'error',
@@ -246,7 +246,7 @@ ONLY available in documentary template projects.`,
       }
 
       // 5. Submit to renderer
-      const outputDir = path.join(process.cwd(), PROJECT_DIR, 'assets', 'infographics');
+      const outputDir = path.join(getProjectDir(), 'assets', 'infographics');
       fs.mkdirSync(outputDir, { recursive: true });
 
       const renderer = RemotionRenderer.getInstance();

@@ -1,6 +1,6 @@
 /**
  * ProjectManager - Handles project file creation, reading, and updating.
- * Manages the .kshana directory structure and project.json index file.
+ * Manages the *.kshana directory structure and project.json index file.
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
@@ -28,7 +28,6 @@ import {
   PHASE_CONFIGS,
   STYLE_CONFIGS,
   INPUT_TYPE_CONFIGS,
-  PROJECT_DIR,
   PROJECT_FILE,
   PROJECT_VERSION,
   determineNextPhase,
@@ -44,12 +43,86 @@ import { generateProjectTitle, contextStore } from '../../../core/context/index.
 import { initializeArtifactsFromFiles, createArtifactFromFile } from './ArtifactManager.js';
 import { TemplateRegistry } from '../../../core/templates/TemplateRegistry.js';
 import type { PhaseDefinition } from '../../../core/templates/types.js';
+import { getActiveProjectDir, setActiveProjectDir } from './activeProject.js';
 
 /**
  * Get the project directory path for the current working directory.
  */
 export function getProjectDir(basePath: string = process.cwd()): string {
-  return join(basePath, PROJECT_DIR);
+  return join(basePath, getActiveProjectDir());
+}
+
+/**
+ * Summary info returned by scanProjects().
+ */
+export interface ProjectInfo {
+  /** Directory name (e.g., "story.kshana") */
+  dirName: string;
+  /** Project title from project.json */
+  title: string;
+  /** Template ID (e.g., "narrative", "documentary") */
+  templateId: string;
+  /** Current workflow phase */
+  currentPhase: string;
+  /** Last updated timestamp */
+  updatedAt: number;
+}
+
+/**
+ * Scan for all *.kshana project directories under basePath.
+ * Returns an array of project summaries sorted by most recently updated.
+ */
+export function scanProjects(basePath: string = process.cwd()): ProjectInfo[] {
+  if (!existsSync(basePath)) return [];
+
+  const entries = readdirSync(basePath, { withFileTypes: true });
+  const projects: ProjectInfo[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.endsWith('.kshana')) continue;
+
+    const projectJsonPath = join(basePath, entry.name, PROJECT_FILE);
+    if (!existsSync(projectJsonPath)) continue;
+
+    try {
+      const raw = readFileSync(projectJsonPath, 'utf-8');
+      const data = JSON.parse(raw);
+      projects.push({
+        dirName: entry.name,
+        title: entry.name.replace(/\.kshana$/, ''),
+        templateId: data.templateId ?? 'narrative',
+        currentPhase: data.currentPhase ?? 'unknown',
+        updatedAt: data.updatedAt ?? 0,
+      });
+    } catch {
+      // Skip malformed project files
+    }
+  }
+
+  // Sort by most recently updated first
+  projects.sort((a, b) => b.updatedAt - a.updatedAt);
+  return projects;
+}
+
+/**
+ * Infer a project directory name from the user's input content.
+ * Uses generateProjectTitle() to create a slug, appends ".kshana",
+ * and handles collisions by appending a number suffix.
+ */
+export function inferProjectDirName(content: string, basePath: string = process.cwd()): string {
+  const slug = generateProjectTitle(content);
+  const base = `${slug}.kshana`;
+
+  if (!existsSync(join(basePath, base))) {
+    return base;
+  }
+
+  // Handle collision
+  let counter = 2;
+  while (existsSync(join(basePath, `${slug}-${counter}.kshana`))) {
+    counter++;
+  }
+  return `${slug}-${counter}.kshana`;
 }
 
 /**
@@ -212,6 +285,10 @@ export function createProject(
   const basePath: string = looksLikePath
     ? String(styleOrBasePath)
     : basePathMaybe;
+
+  // Infer project directory name from input and set it as active
+  const inferredDir = inferProjectDirName(originalInput, basePath);
+  setActiveProjectDir(inferredDir);
 
   // Ensure directory structure exists
   createProjectStructure(basePath);
