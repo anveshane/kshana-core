@@ -29,12 +29,12 @@ import {
  */
 export interface ShotPrompt {
   shotNumber: number;
-  shotType: string;  // By distance: extreme_wide, wide, medium_wide, medium, medium_close_up, close_up, extreme_close_up. By angle: low_angle, high_angle, dutch_angle, birds_eye. By purpose: establishing, reaction, over_the_shoulder, two_shot, pov, insert, cutaway, tracking.
-  duration: number;  // 4-8 seconds
-  prompt: string;    // single flowing paragraph for this shot only
-  dialogue: string | null;  // character dialogue for LTX-2 audio, null if none
-  cameraWork: string;  // e.g. "slow push-in", "static close-up with subtle drift"
-  referenceImages: string[];  // character/setting ref paths relevant to this shot
+  shotType: string; // By distance: extreme_wide, wide, medium_wide, medium, medium_close_up, close_up, extreme_close_up. By angle: low_angle, high_angle, dutch_angle, birds_eye. By purpose: establishing, reaction, over_the_shoulder, two_shot, pov, insert, cutaway, tracking.
+  duration: number; // 4-8 seconds
+  prompt: string; // single flowing paragraph for this shot only
+  dialogue: string | null; // character dialogue for LTX-2 audio, null if none
+  cameraWork: string; // e.g. "slow push-in", "static close-up with subtle drift"
+  referenceImages: string[]; // character/setting ref paths relevant to this shot
 }
 
 /**
@@ -46,7 +46,7 @@ export interface MultiShotMotionPrompt {
   sceneTitle: string;
   shots: ShotPrompt[];
   totalSceneDuration: number;
-  referenceImages: string[];  // all ref images for the scene
+  referenceImages: string[]; // all ref images for the scene
 }
 
 /**
@@ -77,7 +77,15 @@ export const MOTION_PROMPT_SCHEMA = {
               cameraWork: { type: 'string' },
               referenceImages: { type: 'array', items: { type: 'string' } },
             },
-            required: ['shotNumber', 'shotType', 'duration', 'prompt', 'dialogue', 'cameraWork', 'referenceImages'],
+            required: [
+              'shotNumber',
+              'shotType',
+              'duration',
+              'prompt',
+              'dialogue',
+              'cameraWork',
+              'referenceImages',
+            ],
             additionalProperties: false,
           },
         },
@@ -104,15 +112,17 @@ export function parseMotionPrompt(raw: string): MultiShotMotionPrompt {
   return {
     sceneNumber: 0,
     sceneTitle: 'Untitled',
-    shots: [{
-      shotNumber: 1,
-      shotType: 'full_scene',
-      duration: 6,
-      prompt: parsed.prompt,
-      dialogue: null,
-      cameraWork: 'as described',
-      referenceImages: parsed.referenceImages ?? [],
-    }],
+    shots: [
+      {
+        shotNumber: 1,
+        shotType: 'full_scene',
+        duration: 6,
+        prompt: parsed.prompt,
+        dialogue: null,
+        cameraWork: 'as described',
+        referenceImages: parsed.referenceImages ?? [],
+      },
+    ],
     totalSceneDuration: 6,
     referenceImages: parsed.referenceImages ?? [],
   };
@@ -293,13 +303,15 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
     // Fail early if image_text_to_image mode is requested but no reference images are provided
     if (generation_mode === 'image_text_to_image' && reference_images.length === 0) {
       job.status = 'failed';
-      job.error = 'generation_mode is image_text_to_image but no reference images were provided or could be resolved.';
+      job.error =
+        'generation_mode is image_text_to_image but no reference images were provided or could be resolved.';
       job.updatedAt = Date.now();
       return {
         jobId,
         status: 'error',
         error: job.error,
-        suggestion: 'Ensure reference images are specified with actual file paths in the prompt file, or provide reference_images in the tool call.',
+        suggestion:
+          'Ensure reference images are specified with actual file paths in the prompt file, or provide reference_images in the tool call.',
       };
     }
 
@@ -326,7 +338,9 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
         const refImagePath = findImagePathFromArtifactId(refImage.image_id);
 
         if (!refImagePath || !fs.existsSync(refImagePath)) {
-          console.warn(`[generate_image] Failed to resolve ref image: id="${refImage.image_id}" type=${refImage.type} name="${refImage.name}" → path: ${refImagePath ?? 'null'}`);
+          console.warn(
+            `[generate_image] Failed to resolve ref image: id="${refImage.image_id}" type=${refImage.type} name="${refImage.name}" → path: ${refImagePath ?? 'null'}`
+          );
           continue;
         }
 
@@ -351,8 +365,13 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
         jobId,
         status: 'error',
         error: job.error,
-        suggestion: 'Ensure character/setting reference images exist and referenceImagePath is set in project.json.',
-        failedReferences: reference_images.map(r => ({ image_id: r.image_id, type: r.type, name: r.name })),
+        suggestion:
+          'Ensure character/setting reference images exist and referenceImagePath is set in project.json.',
+        failedReferences: reference_images.map(r => ({
+          image_id: r.image_id,
+          type: r.type,
+          name: r.name,
+        })),
       };
     }
 
@@ -373,7 +392,8 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
       seed,
       filenamePrefix,
       inputImageFilename,
-      referenceImageFilenames: referenceImageFilenames.length > 0 ? referenceImageFilenames : undefined,
+      referenceImageFilenames:
+        referenceImageFilenames.length > 0 ? referenceImageFilenames : undefined,
     });
 
     const promptId = await client.queueWorkflow(workflow as Record<string, unknown>);
@@ -403,7 +423,10 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
 /**
  * Wait for a ComfyUI job to complete and download the result.
  */
-async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<{
+async function waitForComfyUIJob(
+  jobId: string,
+  timeout: number = 300
+): Promise<{
   status: string;
   artifactId?: string;
   filePath?: string;
@@ -431,7 +454,10 @@ async function waitForComfyUIJob(jobId: string, timeout: number = 300): Promise<
       job.updatedAt = Date.now();
     });
 
-    if (completionResult.status !== 'completed' && completionResult.status !== 'completed_with_timeout') {
+    if (
+      completionResult.status !== 'completed' &&
+      completionResult.status !== 'completed_with_timeout'
+    ) {
       job.status = 'failed';
       job.error = 'Job did not complete';
       job.updatedAt = Date.now();
@@ -585,11 +611,13 @@ The tool will return a job ID. Use wait_for_job to check completion.
       },
       prompt: {
         type: 'string',
-        description: 'Detailed image generation prompt describing the visual (use prompt_file instead if prompt exists in a file)',
+        description:
+          'Detailed image generation prompt describing the visual (use prompt_file instead if prompt exists in a file)',
       },
       prompt_file: {
         type: 'string',
-        description: 'Path to prompt file (e.g., "prompts/images/characters/alice.prompt.md"). Reads the prompt from this file instead of requiring inline prompt text.',
+        description:
+          'Path to prompt file (e.g., "prompts/images/characters/alice.prompt.md"). Reads the prompt from this file instead of requiring inline prompt text.',
       },
       negative_prompt: {
         type: 'string',
@@ -619,12 +647,14 @@ The tool will return a job ID. Use wait_for_job to check completion.
       },
       generation_mode: {
         type: 'string',
-        description: 'Generation mode: text_to_image for refs, image_text_to_image for scenes with refs',
+        description:
+          'Generation mode: text_to_image for refs, image_text_to_image for scenes with refs',
         enum: ['text_to_image', 'image_text_to_image'],
       },
       reference_images: {
         type: 'array',
-        description: 'ONLY character and setting reference images for visual consistency (required for image_text_to_image mode). Do NOT include other scene images or shot images — only character_ref and setting_ref artifacts.',
+        description:
+          'ONLY character and setting reference images for visual consistency (required for image_text_to_image mode). Do NOT include other scene images or shot images — only character_ref and setting_ref artifacts.',
         items: {
           type: 'object',
           properties: {
@@ -648,7 +678,7 @@ The tool will return a job ID. Use wait_for_job to check completion.
     },
     required: ['scene_number'],
   },
-  async (args) => {
+  async args => {
     let params = args as unknown as ImageGenerationParams;
 
     // If prompt_file is provided, read and parse the prompt from the file
@@ -697,7 +727,8 @@ The tool will return a job ID. Use wait_for_job to check completion.
           return {
             status: 'error',
             error: `Prompt file specifies image_text_to_image mode with references (${parsed.references.map(r => r.name).join(', ')}), but reference images could not be found in project state.`,
-            suggestion: 'Ensure character/setting reference images have been generated and are tracked in project.json.',
+            suggestion:
+              'Ensure character/setting reference images have been generated and are tracked in project.json.',
             requested_references: parsed.references,
           };
         }
@@ -708,22 +739,29 @@ The tool will return a job ID. Use wait_for_job to check completion.
     if (!params.prompt) {
       return {
         status: 'error',
-        error: 'No prompt provided. Supply either "prompt" (inline text) or "prompt_file" (path to prompt file).',
+        error:
+          'No prompt provided. Supply either "prompt" (inline text) or "prompt_file" (path to prompt file).',
       };
     }
 
     // Determine generation mode based on image_type and reference_images
-    const generationMode = params.generation_mode ??
+    const generationMode =
+      params.generation_mode ??
       (params.image_type === 'scene' && params.reference_images?.length
         ? 'image_text_to_image'
         : 'text_to_image');
 
     // Validate reference images for image_text_to_image mode
-    if (generationMode === 'image_text_to_image' && (!params.reference_images || params.reference_images.length === 0)) {
+    if (
+      generationMode === 'image_text_to_image' &&
+      (!params.reference_images || params.reference_images.length === 0)
+    ) {
       return {
         status: 'error',
-        error: 'Reference images are required for image_text_to_image mode. Please generate character and setting reference images first.',
-        suggestion: 'Use dispatch_image_agent with image_type "character_ref" or "setting_ref" to create reference images first.',
+        error:
+          'Reference images are required for image_text_to_image mode. Please generate character and setting reference images first.',
+        suggestion:
+          'Use dispatch_image_agent with image_type "character_ref" or "setting_ref" to create reference images first.',
       };
     }
 
@@ -742,9 +780,10 @@ The tool will return a job ID. Use wait_for_job to check completion.
       status: 'submitted',
       job_id: result.jobId,
       generation_mode: generationMode,
-      message: generationMode === 'text_to_image'
-        ? `Text-to-image generation job submitted. Use wait_for_job("${result.jobId}") to check status.`
-        : `Image+text-to-image generation job submitted with ${params.reference_images?.length ?? 0} reference images. Use wait_for_job("${result.jobId}") to check status.`,
+      message:
+        generationMode === 'text_to_image'
+          ? `Text-to-image generation job submitted. Use wait_for_job("${result.jobId}") to check status.`
+          : `Image+text-to-image generation job submitted with ${params.reference_images?.length ?? 0} reference images. Use wait_for_job("${result.jobId}") to check status.`,
       params: {
         scene_number: params.scene_number,
         image_type: params.image_type ?? 'scene',
@@ -789,7 +828,9 @@ interface PromptFileMetadata {
  */
 function extractPromptFromMarkdown(content: string): string {
   // Try structured prompt headers first (used by .motion.md and .prompt.md)
-  const motionMatch = content.match(/\*\*Motion Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i);
+  const motionMatch = content.match(
+    /\*\*Motion Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
+  );
   if (motionMatch?.[1]?.trim()) return motionMatch[1].trim();
 
   const imageMatch = content.match(/\*\*Image Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i);
@@ -856,7 +897,9 @@ function parsePromptFile(content: string): PromptFileMetadata {
   };
 
   // Check for structured prompt format (scene prompts)
-  const imagePromptMatch = content.match(/\*\*Image Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i);
+  const imagePromptMatch = content.match(
+    /\*\*Image Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
+  );
   if (imagePromptMatch && imagePromptMatch[1]) {
     result.prompt = imagePromptMatch[1].trim();
   } else {
@@ -865,7 +908,9 @@ function parsePromptFile(content: string): PromptFileMetadata {
   }
 
   // Parse generation mode
-  const modeMatch = content.match(/\*\*Generation Mode:\*\*\s*\n\s*(text_to_image|image_text_to_image)/i);
+  const modeMatch = content.match(
+    /\*\*Generation Mode:\*\*\s*\n\s*(text_to_image|image_text_to_image)/i
+  );
   if (modeMatch && modeMatch[1]) {
     result.generationMode = modeMatch[1].toLowerCase() as 'text_to_image' | 'image_text_to_image';
   }
@@ -877,17 +922,23 @@ function parsePromptFile(content: string): PromptFileMetadata {
   //   "- Setting: Name [path/to/image.png]"
   //   "- Character: Name (ref_id: xxx)"
   //   "- image1: Name (character) - path/to/image.png"
-  const refSection = content.match(/\*\*Reference Images:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i);
+  const refSection = content.match(
+    /\*\*Reference Images:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
+  );
   if (refSection && refSection[1]) {
     const refLines = refSection[1].split('\n');
     for (const line of refLines) {
       // Extract inline path from [path] brackets or trailing "- path" format
       const bracketPathMatch = line.match(/\[([^\]]+\.(?:png|jpg|jpeg|webp))\]/i);
-      const trailingPathMatch = line.match(/[-–]\s*((?:assets|characters|settings)\/[^\s]+\.(?:png|jpg|jpeg|webp))\s*$/i);
+      const trailingPathMatch = line.match(
+        /[-–]\s*((?:assets|characters|settings)\/[^\s]+\.(?:png|jpg|jpeg|webp))\s*$/i
+      );
       const inlinePath = bracketPathMatch?.[1] || trailingPathMatch?.[1] || undefined;
 
       // Match character references
-      const charMatch = line.match(/^-\s*(?:image\d+:\s*)?(?:Character:\s*)([^(\[-]+?)(?:\s*[\[(-].*)?$/i);
+      const charMatch = line.match(
+        /^-\s*(?:image\d+:\s*)?(?:Character:\s*)([^(\[-]+?)(?:\s*[\[(-].*)?$/i
+      );
       if (charMatch && charMatch[1] && /character/i.test(line)) {
         result.references.push({
           type: 'character',
@@ -898,7 +949,9 @@ function parsePromptFile(content: string): PromptFileMetadata {
       }
 
       // Match setting references
-      const settingMatch = line.match(/^-\s*(?:image\d+:\s*)?(?:Setting:\s*)([^(\[-]+?)(?:\s*[\[(-].*)?$/i);
+      const settingMatch = line.match(
+        /^-\s*(?:image\d+:\s*)?(?:Setting:\s*)([^(\[-]+?)(?:\s*[\[(-].*)?$/i
+      );
       if (settingMatch && settingMatch[1] && /setting/i.test(line)) {
         result.references.push({
           type: 'setting',
@@ -924,7 +977,9 @@ function parsePromptFile(content: string): PromptFileMetadata {
   }
 
   // Parse negative prompt
-  const negativeMatch = content.match(/\*\*Negative Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i);
+  const negativeMatch = content.match(
+    /\*\*Negative Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
+  );
   if (negativeMatch && negativeMatch[1]) {
     result.negativePrompt = negativeMatch[1].trim();
   }
@@ -965,14 +1020,17 @@ function resolveReferencesToPaths(
         continue;
       }
       // Path specified but doesn't exist — warn and fall through to other methods
-      console.warn(`[resolveReferencesToPaths] Direct path not found: ${fullPath} (ref: ${ref.type}:${ref.name})`);
+      console.warn(
+        `[resolveReferencesToPaths] Direct path not found: ${fullPath} (ref: ${ref.type}:${ref.name})`
+      );
     }
 
     // Priority 2: Lookup from project.characters / project.settings arrays
     if (ref.type === 'character') {
       const character = project.characters.find(
-        c => c.name.toLowerCase().includes(ref.name.toLowerCase()) ||
-             ref.name.toLowerCase().includes(c.name.toLowerCase())
+        c =>
+          c.name.toLowerCase().includes(ref.name.toLowerCase()) ||
+          ref.name.toLowerCase().includes(c.name.toLowerCase())
       );
       if (character?.referenceImagePath) {
         resolved.push({
@@ -994,8 +1052,9 @@ function resolveReferencesToPaths(
       }
     } else if (ref.type === 'setting') {
       const setting = project.settings.find(
-        s => s.name.toLowerCase().includes(ref.name.toLowerCase()) ||
-             ref.name.toLowerCase().includes(s.name.toLowerCase())
+        s =>
+          s.name.toLowerCase().includes(ref.name.toLowerCase()) ||
+          ref.name.toLowerCase().includes(s.name.toLowerCase())
       );
       if (setting?.referenceImagePath) {
         resolved.push({
@@ -1024,7 +1083,10 @@ function resolveReferencesToPaths(
       const refPrefix = ref.type === 'character' ? 'CharRef' : 'SettingRef';
       const searchName = ref.name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
       for (const [_imgId, imgPath] of Object.entries(itemFiles)) {
-        const filename = path.basename(imgPath as string).toLowerCase().replace(/[^a-z0-9]/g, '');
+        const filename = path
+          .basename(imgPath as string)
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, '');
         if (filename.includes(refPrefix.toLowerCase()) && filename.includes(searchName)) {
           const fullPath = path.join(projectDir, imgPath as string);
           if (fs.existsSync(fullPath)) {
@@ -1125,11 +1187,13 @@ Returns a job ID. Use wait_for_job to check completion.
       },
       motion_prompt: {
         type: 'string',
-        description: 'Description of the motion/animation to apply (use motion_prompt_file instead if prompt exists in a file)',
+        description:
+          'Description of the motion/animation to apply (use motion_prompt_file instead if prompt exists in a file)',
       },
       motion_prompt_file: {
         type: 'string',
-        description: 'Path to motion prompt file. If JSON with multiple shots, shot_number is used to select the correct prompt.',
+        description:
+          'Path to motion prompt file. If JSON with multiple shots, shot_number is used to select the correct prompt.',
       },
       negative_prompt: {
         type: 'string',
@@ -1142,7 +1206,7 @@ Returns a job ID. Use wait_for_job to check completion.
     },
     required: ['shot_image_artifact_id', 'scene_number', 'shot_number'],
   },
-  async (args) => {
+  async args => {
     const shotImageArtifactId = args['shot_image_artifact_id'] as string;
     const sceneNumber = args['scene_number'] as number;
     const shotNumber = args['shot_number'] as number;
@@ -1186,7 +1250,8 @@ Returns a job ID. Use wait_for_job to check completion.
     if (!motionPrompt) {
       return {
         status: 'error',
-        error: 'No motion prompt provided. Supply either "motion_prompt" (inline text) or "motion_prompt_file" (path to prompt file).',
+        error:
+          'No motion prompt provided. Supply either "motion_prompt" (inline text) or "motion_prompt_file" (path to prompt file).',
       };
     }
 
@@ -1304,7 +1369,7 @@ Returns a job ID. Use wait_for_job to check completion.`,
     },
     required: ['scene_image_artifact_id', 'scene_number'],
   },
-  async (args) => {
+  async args => {
     // Route to the new generate_video_from_image tool
     const newArgs = {
       scene_image_artifact_id: args['scene_image_artifact_id'],
@@ -1346,7 +1411,8 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       },
       edit_prompt: {
         type: 'string',
-        description: 'Description of the edit/composition. Reference input images as "image1", "image2", "image3" matching their order.',
+        description:
+          'Description of the edit/composition. Reference input images as "image1", "image2", "image3" matching their order.',
       },
       base_image_path: {
         type: 'string',
@@ -1355,7 +1421,8 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
       reference_images: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Up to 2 additional reference image paths (become image2, image3). Use for character refs, setting refs, or style references.',
+        description:
+          'Up to 2 additional reference image paths (become image2, image3). Use for character refs, setting refs, or style references.',
       },
       negative_prompt: {
         type: 'string',
@@ -1373,7 +1440,7 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
     },
     required: ['scene_number', 'edit_prompt', 'base_image_path'],
   },
-  async (args) => {
+  async args => {
     const params = args as unknown as ImageEditParams;
 
     // Create job for tracking with context for linking
@@ -1443,7 +1510,8 @@ The tool will return a job ID. Use wait_for_job to check completion.`,
         aspectRatio: params.aspect_ratio,
         seed: params.seed,
         inputImageFilename: uploadResult.name,
-        referenceImageFilenames: referenceImageFilenames.length > 0 ? referenceImageFilenames : undefined,
+        referenceImageFilenames:
+          referenceImageFilenames.length > 0 ? referenceImageFilenames : undefined,
         filenamePrefix: `Scene${params.scene_number}_edit`,
       });
 
@@ -1504,7 +1572,7 @@ Supports both ComfyUI jobs and Remotion infographic jobs (prefixed with "remotio
     },
     required: ['job_id'],
   },
-  async (args) => {
+  async args => {
     const jobId = args['job_id'] as string;
     const timeout = (args['timeout'] as number) || 300;
 
@@ -1534,7 +1602,7 @@ Supports both ComfyUI jobs and Remotion infographic jobs (prefixed with "remotio
         }
 
         // Poll every 2 seconds
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
 
       return { status: 'error', error: `Remotion job timed out after ${timeout}s`, job_id: jobId };
@@ -1661,7 +1729,7 @@ Returns an array of job IDs that can be tracked with wait_for_job.`,
     },
     required: ['act_number', 'scene_summaries'],
   },
-  async (args) => {
+  async args => {
     const actNumber = args['act_number'] as number;
     const sceneSummaries = args['scene_summaries'] as StoryboardParams['scene_summaries'];
     const maxImages = (args['max_images'] as number) || 6;
@@ -1675,12 +1743,16 @@ Returns an array of job IDs that can be tracked with wait_for_job.`,
 
     // Select up to maxImages scenes evenly distributed across the summaries
     const step = Math.max(1, Math.ceil(sceneSummaries.length / maxImages));
-    const selectedScenes = sceneSummaries.filter((_, index) => index % step === 0).slice(0, maxImages);
+    const selectedScenes = sceneSummaries
+      .filter((_, index) => index % step === 0)
+      .slice(0, maxImages);
 
     const jobIds: string[] = [];
     const storyboardDir = getStoryboardDir();
 
-    console.log(`[Storyboard] Generating ${selectedScenes.length} preview images for Act ${actNumber}`);
+    console.log(
+      `[Storyboard] Generating ${selectedScenes.length} preview images for Act ${actNumber}`
+    );
 
     for (const scene of selectedScenes) {
       try {
@@ -1703,7 +1775,9 @@ Returns an array of job IDs that can be tracked with wait_for_job.`,
           jobIds.push(result.jobId);
           console.log(`[Storyboard] Queued scene ${scene.scene_number}: ${result.jobId}`);
         } else {
-          console.error(`[Storyboard] Failed to queue scene ${scene.scene_number}: ${result.error}`);
+          console.error(
+            `[Storyboard] Failed to queue scene ${scene.scene_number}: ${result.error}`
+          );
         }
       } catch (error) {
         console.error(`[Storyboard] Error generating scene ${scene.scene_number}:`, error);
@@ -1745,44 +1819,46 @@ Use this instead of edit_image or generate_image for adding text to panels. It i
     properties: {
       image_path: {
         type: 'string',
-        description: 'Absolute path to the source shot image',
+        description: 'Path to the source shot image (absolute or relative to project root)',
       },
       dialogue: {
-        oneOf: [
-          { type: 'string' },
-          { type: 'array', items: { type: 'string' } },
-        ],
-        description: 'Character dialogue text (displayed in quotes). String or array of strings for multiple dialogue lines.',
+        oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
+        description:
+          'Character dialogue text (displayed in quotes). String or array of strings for multiple dialogue lines.',
       },
       narrator: {
-        oneOf: [
-          { type: 'string' },
-          { type: 'array', items: { type: 'string' } },
-        ],
+        oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
         description: 'Narration text (displayed in italics). String or array of strings.',
       },
       sfx: {
-        oneOf: [
-          { type: 'string' },
-          { type: 'array', items: { type: 'string' } },
-        ],
+        oneOf: [{ type: 'string' }, { type: 'array', items: { type: 'string' } }],
         description: 'Sound effect text (displayed in bold uppercase). String or array of strings.',
       },
       output_path: {
         type: 'string',
-        description: 'Absolute path where the composed panel image will be saved',
+        description:
+          'Path where the composed panel image will be saved (absolute or relative to project root)',
       },
     },
     required: ['image_path', 'output_path'],
   },
-  async (args) => {
-    const imagePath = args['image_path'] as string;
-    const outputPath = args['output_path'] as string;
+  async args => {
+    let imagePath = args['image_path'] as string;
+    let outputPath = args['output_path'] as string;
+
+    // Resolve relative paths to absolute paths (similar to editImageTool)
+    if (!path.isAbsolute(imagePath) && !imagePath.startsWith('.')) {
+      imagePath = path.join(getProjectDir(), imagePath);
+    }
+    if (!path.isAbsolute(outputPath) && !outputPath.startsWith('.')) {
+      outputPath = path.join(getProjectDir(), outputPath);
+    }
 
     // Normalize inputs: accept string or array of strings
     const toArray = (val: unknown): string[] => {
       if (!val) return [];
-      if (Array.isArray(val)) return val.filter((s): s is string => typeof s === 'string' && s.length > 0);
+      if (Array.isArray(val))
+        return val.filter((s): s is string => typeof s === 'string' && s.length > 0);
       if (typeof val === 'string' && val.length > 0) return [val];
       return [];
     };
@@ -1848,7 +1924,9 @@ Use this instead of edit_image or generate_image for adding text to panels. It i
       // Cap wrapped lines so overlay doesn't exceed 40% of image height
       const interLineGap = Math.round(lineHeight * 0.3);
       const maxOverlayHeight = Math.round(imgHeight * 0.4);
-      const maxLines = Math.floor((maxOverlayHeight - padding * 2 + interLineGap) / (lineHeight + interLineGap));
+      const maxLines = Math.floor(
+        (maxOverlayHeight - padding * 2 + interLineGap) / (lineHeight + interLineGap)
+      );
       let truncated = false;
       if (wrappedLines.length > maxLines && maxLines > 0) {
         wrappedLines.length = maxLines;
@@ -1858,20 +1936,27 @@ Use this instead of edit_image or generate_image for adding text to panels. It i
         truncated = true;
       }
 
-      const finalStripHeight = padding * 2 + wrappedLines.length * lineHeight + (wrappedLines.length - 1) * interLineGap;
+      const finalStripHeight =
+        padding * 2 + wrappedLines.length * lineHeight + (wrappedLines.length - 1) * interLineGap;
 
       // Escape XML special characters for SVG
       const escapeXml = (str: string) =>
-        str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        str
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
 
       // Build SVG text elements
       const fontSize = Math.round(lineHeight * 0.85);
-      const svgTextElements = wrappedLines.map((line, i) => {
-        const y = padding + (i + 1) * lineHeight + i * interLineGap;
-        const fontStyle = line.style === 'italic' ? ' font-style="italic"' : '';
-        const fontWeight = line.style === 'bold' ? ' font-weight="bold"' : '';
-        return `<text x="${imgWidth / 2}" y="${y}" text-anchor="middle" fill="white" font-family="sans-serif" font-size="${fontSize}"${fontStyle}${fontWeight}>${escapeXml(line.text)}</text>`;
-      }).join('\n    ');
+      const svgTextElements = wrappedLines
+        .map((line, i) => {
+          const y = padding + (i + 1) * lineHeight + i * interLineGap;
+          const fontStyle = line.style === 'italic' ? ' font-style="italic"' : '';
+          const fontWeight = line.style === 'bold' ? ' font-weight="bold"' : '';
+          return `<text x="${imgWidth / 2}" y="${y}" text-anchor="middle" fill="white" font-family="sans-serif" font-size="${fontSize}"${fontStyle}${fontWeight}>${escapeXml(line.text)}</text>`;
+        })
+        .join('\n    ');
 
       // Overlay translucent black bar at the bottom of the image (no extension)
       const overlayTop = imgHeight - finalStripHeight;
@@ -1883,11 +1968,13 @@ Use this instead of edit_image or generate_image for adding text to panels. It i
   </svg>`;
 
       await sharp(imagePath)
-        .composite([{
-          input: Buffer.from(svgOverlay),
-          top: 0,
-          left: 0,
-        }])
+        .composite([
+          {
+            input: Buffer.from(svgOverlay),
+            top: 0,
+            left: 0,
+          },
+        ])
         .toFile(outputPath);
 
       return {
@@ -1938,12 +2025,13 @@ Run this after all panels have been composed with compose_panel.`,
       mode: {
         type: 'string',
         enum: ['pages', 'webtoon'],
-        description: 'Output mode: "pages" for numbered individual files, "webtoon" for a single vertical image. Defaults to "pages".',
+        description:
+          'Output mode: "pages" for numbered individual files, "webtoon" for a single vertical image. Defaults to "pages".',
       },
     },
     required: ['panels_dir', 'output_dir'],
   },
-  async (args) => {
+  async args => {
     const panelsDir = args['panels_dir'] as string;
     const outputDir = args['output_dir'] as string;
     const mode = (args['mode'] as string) || 'pages';
@@ -1962,9 +2050,7 @@ Run this after all panels have been composed with compose_panel.`,
 
       // Find all panel images and sort by scene/shot number
       // Expected naming: panel-scene-N-shot-M.png or scene-N-shot-M-panel.png
-      const files = fs.readdirSync(panelsDir).filter(f =>
-        /\.(png|jpg|jpeg|webp)$/i.test(f)
-      );
+      const files = fs.readdirSync(panelsDir).filter(f => /\.(png|jpg|jpeg|webp)$/i.test(f));
 
       if (files.length === 0) {
         return { status: 'error', error: `No panel images found in ${panelsDir}` };
@@ -2083,12 +2169,7 @@ Run this after all panels have been composed with compose_panel.`,
  * Get all video generation tools.
  */
 export function getVideoGenerationTools(): ToolDefinition[] {
-  return [
-    generateImageTool,
-    generateVideoFromImageTool,
-    editImageTool,
-    waitForJobTool,
-  ];
+  return [generateImageTool, generateVideoFromImageTool, editImageTool, waitForJobTool];
 }
 
 /**
@@ -2096,10 +2177,7 @@ export function getVideoGenerationTools(): ToolDefinition[] {
  * These are only relevant for the graphic_novel template.
  */
 export function getGraphicNovelTools(): ToolDefinition[] {
-  return [
-    composePanelTool,
-    assembleGraphicNovelTool,
-  ];
+  return [composePanelTool, assembleGraphicNovelTool];
 }
 
 /**
