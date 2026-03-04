@@ -9,11 +9,10 @@ import { Banner } from './components/Banner.js';
 import { useAgent } from './hooks/useAgent.js';
 import { createDefaultToolRegistry } from './core/tools/index.js';
 import {
-  createGoalDrivenToolRegistry,
   loadProject,
   createProject,
   loadProjectFilesAsContexts,
-  loadTemplateOrchestratorPrompt,
+  createAgentForProject,
   type ProjectStyle,
   // Template system imports
   initializeVideoTemplates,
@@ -41,7 +40,7 @@ interface AppProps {
 }
 
 // Startup mode for video task type
-type StartupMode = 'checking' | 'select_project' | 'select_action' | 'select_template' | 'select_style' | 'select_duration' | 'custom_duration' | 'new_story' | 'ready';
+type StartupMode = 'checking' | 'select_project' | 'select_action' | 'select_template' | 'select_style' | 'select_duration' | 'custom_duration' | 'custom_template' | 'new_story' | 'ready';
 
 // Duration presets per template (in seconds)
 const DURATION_PRESETS: Record<string, { label: string; seconds: number }[]> = {
@@ -68,6 +67,12 @@ const DURATION_PRESETS: Record<string, { label: string; seconds: number }[]> = {
     { label: '3 minutes', seconds: 180 },
     { label: '5 minutes', seconds: 300 },
     { label: '10 minutes', seconds: 600 },
+  ],
+  graphic_novel: [
+    { label: '8 panels', seconds: 8 },
+    { label: '16 panels', seconds: 16 },
+    { label: '24 panels', seconds: 24 },
+    { label: '32 panels', seconds: 32 },
   ],
 };
 
@@ -99,6 +104,8 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Multi-project selection state
   const [availableProjects, setAvailableProjects] = React.useState<ProjectInfo[]>([]);
   const [projectSelectedIndex, setProjectSelectedIndex] = React.useState(0);
+  // Custom template description (for "Other" option)
+  const [customProjectDescription, setCustomProjectDescription] = React.useState('');
 
   // Initialize UI logger on mount
   React.useEffect(() => {
@@ -147,31 +154,23 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     }
   }, [taskType, existingProject]);
 
-  // Create tool registry based on task type
-  const tools = React.useMemo(() => {
+  // Create tools and prompt via shared factory (same as web UI)
+  const { tools, customPrompt } = React.useMemo(() => {
     if (taskType === 'video') {
-      // Use workflow tool registry for state-based video creation
-      return createGoalDrivenToolRegistry(selectedTemplateId).getAll();
+      const result = createAgentForProject({
+        templateId: selectedTemplateId,
+        style: selectedStyle,
+        duration: selectedDuration,
+        llmConfig: llmConfig!,
+        customProjectDescription,
+      });
+      return { tools: result.tools, customPrompt: result.customPrompt };
     }
-    return createDefaultToolRegistry().getAll();
-  }, [taskType, selectedTemplateId]);
-
-  // Get custom prompt based on task type
-  const customPrompt = React.useMemo(() => {
-    if (taskType === 'video') {
-      const templateName = availableTemplates.find(t => t.id === selectedTemplateId)?.displayName ?? selectedTemplateId;
-      const styleName = selectedTemplateStyles.find(s => s.id === selectedStyle)?.displayName ?? selectedStyle;
-      const minutes = Math.floor(selectedDuration / 60);
-      const seconds = selectedDuration % 60;
-      const durationStr = minutes > 0
-        ? seconds > 0 ? `${minutes} minute${minutes > 1 ? 's' : ''} ${seconds} seconds` : `${minutes} minute${minutes > 1 ? 's' : ''}`
-        : `${seconds} seconds`;
-      const metaPrompt = `You are working on a **${templateName}** project with **${styleName}** visual style.\nTarget duration: **${durationStr} (${selectedDuration} seconds)**.\nThe user already selected these — do not ask about project type, style, or duration. Proceed directly with the planning workflow.`;
-      const templatePrompt = loadTemplateOrchestratorPrompt(selectedTemplateId);
-      return templatePrompt ? `${metaPrompt}\n\n${templatePrompt}` : metaPrompt;
-    }
-    return agentConfig?.customPrompt;
-  }, [taskType, agentConfig?.customPrompt, selectedTemplateId, selectedStyle, selectedDuration, availableTemplates, selectedTemplateStyles]);
+    return {
+      tools: createDefaultToolRegistry().getAll(),
+      customPrompt: agentConfig?.customPrompt,
+    };
+  }, [taskType, agentConfig?.customPrompt, selectedTemplateId, selectedStyle, selectedDuration, customProjectDescription, llmConfig]);
 
   // Compute effective agent name based on task type
   const agentName = agentConfig?.name ?? (taskType === 'video' ? 'kshana-video' : 'kshana-ink');
@@ -501,6 +500,21 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
 
   // Handle template selection
   const handleTemplateSelect = React.useCallback((index: number) => {
+    if (index === availableTemplates.length) {
+      // "Other" option selected — go to custom description input
+      // Default to narrative template internally
+      setSelectedTemplateId(TEMPLATE_IDS.NARRATIVE);
+      const fullTemplate = getVideoTemplate(TEMPLATE_IDS.NARRATIVE);
+      setSelectedTemplateStyles(fullTemplate.styles);
+      setSelectedStyle(fullTemplate.defaultStyle as ProjectStyle);
+      const presets = DURATION_PRESETS['narrative'] ?? [];
+      setDurationOptions(presets);
+      if (presets.length > 0 && presets[0]) {
+        setSelectedDuration(presets[0].seconds);
+      }
+      setStartupMode('custom_template');
+      return;
+    }
     const template = availableTemplates[index];
     if (template) {
       setSelectedTemplateId(template.id);
@@ -562,6 +576,21 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     setStartupMode('new_story');
   }, [exit]);
 
+  // Handle custom template description submission
+  const handleCustomTemplateSubmit = React.useCallback((input: string) => {
+    if (input.toLowerCase() === 'exit' || input.toLowerCase() === 'quit') {
+      exit();
+      return;
+    }
+    if (!input.trim()) {
+      // Empty input — stay on the same screen
+      return;
+    }
+    setCustomProjectDescription(input.trim());
+    // Skip style/duration selection — go straight to story input
+    setStartupMode('new_story');
+  }, [exit]);
+
   // Handle keyboard for project selection (multi-project mode)
   useInput((input, key) => {
     if (!started && taskType === 'video' && startupMode === 'select_project') {
@@ -598,14 +627,14 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   // Handle keyboard for template selection
   useInput((input, key) => {
     if (!started && taskType === 'video' && startupMode === 'select_template') {
-      const maxIndex = availableTemplates.length - 1;
+      const maxIndex = availableTemplates.length; // includes "Other" as last option
       if (key.upArrow) {
         setTemplateSelectedIndex(prev => Math.max(0, prev - 1));
       } else if (key.downArrow) {
         setTemplateSelectedIndex(prev => Math.min(maxIndex, prev + 1));
       } else if (key.return) {
         handleTemplateSelect(templateSelectedIndex);
-      } else if (input >= '1' && input <= String(availableTemplates.length)) {
+      } else if (input >= '1' && input <= String(availableTemplates.length + 1)) {
         handleTemplateSelect(parseInt(input, 10) - 1);
       } else if (key.escape) {
         if (existingProject) {
@@ -783,10 +812,23 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
                   </Box>
                 );
               })}
+              {/* "Other" option */}
+              {(() => {
+                const otherIndex = availableTemplates.length;
+                const isSelected = templateSelectedIndex === otherIndex;
+                return (
+                  <Box flexDirection="column" marginBottom={1}>
+                    <Text color={isSelected ? 'green' : undefined} bold={isSelected}>
+                      {isSelected ? '>' : ' '} {otherIndex + 1}. Other (describe your own)
+                    </Text>
+                    <Text dimColor>     Describe what you want to create in your own words.</Text>
+                  </Box>
+                );
+              })()}
             </Box>
 
             <Box paddingX={2}>
-              <Text dimColor>Use ↑↓ or 1-{availableTemplates.length} to select, Enter to confirm.{existingProject || availableProjects.length > 0 ? ' Esc to go back.' : ''} Type "exit" to quit.</Text>
+              <Text dimColor>Use ↑↓ or 1-{availableTemplates.length + 1} to select, Enter to confirm.{existingProject || availableProjects.length > 0 ? ' Esc to go back.' : ''} Type "exit" to quit.</Text>
             </Box>
           </Box>
         );
@@ -901,6 +943,33 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         );
       }
 
+      // Custom template description mode
+      if (startupMode === 'custom_template') {
+        return (
+          <Box flexDirection="column">
+            <Box flexDirection="column" padding={1}>
+              <Banner subtitle={subtitle} />
+
+              <Box flexDirection="column" marginBottom={1} paddingX={2}>
+                <Text bold color="cyan">Describe Your Project</Text>
+                <Text dimColor>
+                  Describe what you want to create in your own words. The system will use the narrative workflow and adapt to your description.
+                </Text>
+              </Box>
+            </Box>
+
+            <Box paddingX={1} paddingY={1} borderStyle="round" borderColor="cyan">
+              <UnifiedInput
+                mode="text"
+                onSubmit={handleCustomTemplateSubmit}
+                prompt=">"
+                hint={'Describe what you want to create and press Enter. Type "exit" to quit.'}
+              />
+            </Box>
+          </Box>
+        );
+      }
+
       // New story mode - show text input with same style as main agent view
       const templateInfo = availableTemplates.find(t => t.id === selectedTemplateId);
       const styleInfo = selectedTemplateStyles.find(s => s.id === selectedStyle);
@@ -927,6 +996,11 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
           '"Ergonomic keyboard with customizable keys"',
           '"Solar-powered phone charger for outdoor use"',
         ],
+        graphic_novel: [
+          '"A cyberpunk detective story in a neon-lit city"',
+          '"A coming-of-age tale set in a magical academy"',
+          '"An ancient myth retold with modern characters"',
+        ],
       };
       const examples = examplePrompts[selectedTemplateId] ?? examplePrompts['narrative'] ?? [];
 
@@ -942,6 +1016,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
                 {selectedTemplateId === 'documentary' && 'Enter a topic, question, or research outline.'}
                 {selectedTemplateId === 'short' && 'Enter a hook, idea, or script for your short video.'}
                 {selectedTemplateId === 'infomercial' && 'Enter product information or a marketing brief.'}
+                {selectedTemplateId === 'graphic_novel' && 'Enter a story idea or paste a complete story for your graphic novel.'}
               </Text>
               <Text dimColor>
                 The system will automatically detect what you've provided.

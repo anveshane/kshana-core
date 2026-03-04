@@ -15,6 +15,9 @@ export type ServerMessageType =
   | 'todo_update'      // Todo list changes
   | 'stream_chunk'     // Streaming text chunk
   | 'stream_end'       // End of streaming
+  | 'context_usage'    // Context window usage stats
+  | 'phase_transition' // Workflow phase change
+  | 'notification'     // User-facing notification
   | 'error';           // Error message
 
 /**
@@ -24,6 +27,8 @@ export type ClientMessageType =
   | 'start_task'       // Start a new task
   | 'user_response'    // Response to agent question
   | 'cancel'           // Cancel current task
+  | 'select_project'   // Select active project
+  | 'create_project'   // Create a new project
   | 'ping';            // Keep-alive ping
 
 /**
@@ -76,6 +81,9 @@ export interface AgentResponseData {
 export interface AgentQuestionData {
   question: string;
   toolCallId: string;
+  options?: Array<{ label: string; description?: string }>;
+  isConfirmation?: boolean;
+  autoApproveTimeoutMs?: number;
 }
 
 /**
@@ -127,6 +135,53 @@ export interface ErrorData {
 }
 
 /**
+ * Context usage message data.
+ */
+export interface ContextUsageData {
+  promptTokens: number;
+  maxTokens: number;
+  percentage: number;
+  wasCompressed: boolean;
+  iteration: number;
+}
+
+/**
+ * Phase transition message data.
+ */
+export interface PhaseTransitionData {
+  fromPhase: string;
+  toPhase: string;
+  displayName?: string;
+  description?: string;
+}
+
+/**
+ * Notification message data.
+ */
+export interface NotificationData {
+  level: 'info' | 'warning' | 'error';
+  message: string;
+}
+
+/**
+ * Select project client message data.
+ */
+export interface SelectProjectData {
+  projectName: string;
+}
+
+/**
+ * Create project client message data.
+ */
+export interface CreateProjectData {
+  title: string;
+  templateId: string;
+  style: string;
+  duration: number;
+  content: string;
+}
+
+/**
  * Start task client message data.
  */
 export interface StartTaskData {
@@ -173,6 +228,14 @@ export function isCancelMessage(msg: ClientMessage): msg is ClientMessage<void> 
 
 export function isPingMessage(msg: ClientMessage): msg is ClientMessage<void> {
   return msg.type === 'ping';
+}
+
+export function isSelectProjectMessage(msg: ClientMessage): msg is ClientMessage<SelectProjectData> {
+  return msg.type === 'select_project';
+}
+
+export function isCreateProjectMessage(msg: ClientMessage): msg is ClientMessage<CreateProjectData> {
+  return msg.type === 'create_project';
 }
 
 /**

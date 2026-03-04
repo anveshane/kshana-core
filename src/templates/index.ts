@@ -13,12 +13,14 @@ import { narrativeTemplate } from './narrative.js';
 import { documentaryTemplate } from './documentary.js';
 import { shortTemplate } from './short.js';
 import { infomercialTemplate } from './infomercial.js';
+import { graphicNovelTemplate } from './graphicNovel.js';
 
 // Export individual templates
 export { narrativeTemplate } from './narrative.js';
 export { documentaryTemplate } from './documentary.js';
 export { shortTemplate } from './short.js';
 export { infomercialTemplate } from './infomercial.js';
+export { graphicNovelTemplate } from './graphicNovel.js';
 
 /**
  * All built-in templates
@@ -28,6 +30,7 @@ export const builtInTemplates: VideoTemplate[] = [
   documentaryTemplate,
   shortTemplate,
   infomercialTemplate,
+  graphicNovelTemplate,
 ];
 
 /**
@@ -38,6 +41,7 @@ export const TEMPLATE_IDS = {
   DOCUMENTARY: 'documentary',
   SHORT: 'short',
   INFOMERCIAL: 'infomercial',
+  GRAPHIC_NOVEL: 'graphic_novel',
 } as const;
 
 export type BuiltInTemplateId = (typeof TEMPLATE_IDS)[keyof typeof TEMPLATE_IDS];

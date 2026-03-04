@@ -38,10 +38,12 @@ import {
 /**
  * Context required for timeline tools.
  * Injected when creating the tool handlers.
+ * Uses a getter function so the project directory is resolved at execution time,
+ * not at tool creation time (avoids routing to the wrong .kshana project).
  */
 export interface TimelineToolContext {
-  /** Path to the .kshana project directory */
-  projectDir: string;
+  /** Returns the path to the active .kshana project directory */
+  getProjectDir: () => string;
 }
 
 /**
@@ -212,7 +214,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
           }));
 
           const timeline = createTimelineSkeleton(totalDuration, descriptors, defaultMode);
-          saveTimeline(context.projectDir, timeline);
+          saveTimeline(context.getProjectDir(), timeline);
 
           return {
             success: true,
@@ -252,7 +254,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'layers array is required and must not be empty' };
           }
 
-          let timeline = loadTimeline(context.projectDir);
+          let timeline = loadTimeline(context.getProjectDir());
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -272,7 +274,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: String(e) };
           }
 
-          saveTimeline(context.projectDir, timeline);
+          saveTimeline(context.getProjectDir(), timeline);
 
           const segment = timeline.segments.find(s => s.id === segmentId)!;
           return {
@@ -301,7 +303,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'global_layer is required' };
           }
 
-          let timeline = loadTimeline(context.projectDir);
+          let timeline = loadTimeline(context.getProjectDir());
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -315,7 +317,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
           };
 
           timeline = addGlobalLayer(timeline, layer);
-          saveTimeline(context.projectDir, timeline);
+          saveTimeline(context.getProjectDir(), timeline);
 
           return {
             success: true,
@@ -336,7 +338,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'compositing_mode is required' };
           }
 
-          let timeline = loadTimeline(context.projectDir);
+          let timeline = loadTimeline(context.getProjectDir());
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -347,7 +349,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: String(e) };
           }
 
-          saveTimeline(context.projectDir, timeline);
+          saveTimeline(context.getProjectDir(), timeline);
 
           return {
             success: true,
@@ -374,7 +376,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'transition is required' };
           }
 
-          let timeline = loadTimeline(context.projectDir);
+          let timeline = loadTimeline(context.getProjectDir());
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -398,7 +400,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: String(e) };
           }
 
-          saveTimeline(context.projectDir, timeline);
+          saveTimeline(context.getProjectDir(), timeline);
 
           return {
             success: true,
@@ -407,7 +409,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
         }
 
         case 'validate': {
-          const timeline = loadTimeline(context.projectDir);
+          const timeline = loadTimeline(context.getProjectDir());
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -431,7 +433,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
         }
 
         case 'get': {
-          const timeline = loadTimeline(context.projectDir);
+          const timeline = loadTimeline(context.getProjectDir());
           if (!timeline) {
             return {
               success: true,
@@ -462,7 +464,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'shots array is required and must not be empty' };
           }
 
-          let timeline = loadTimeline(context.projectDir);
+          let timeline = loadTimeline(context.getProjectDir());
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -473,7 +475,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: String(e) };
           }
 
-          saveTimeline(context.projectDir, timeline);
+          saveTimeline(context.getProjectDir(), timeline);
 
           const newSegments = timeline.segments.filter(s => s.id.startsWith(`${segmentId}_shot_`));
           return {
@@ -541,7 +543,7 @@ The timeline must be fully validated (all segments filled) before assembly.`,
       const defaultTransition = (params['default_transition'] as string) ?? 'crossfade';
 
       // Load and validate timeline
-      const timeline = loadTimeline(context.projectDir);
+      const timeline = loadTimeline(context.getProjectDir());
       if (!timeline) {
         return { success: false, error: 'No timeline exists. Create and populate a timeline first.' };
       }
@@ -663,7 +665,7 @@ Returns a preview manifest with segment details, and optionally an FFmpeg comman
       const resolution = (params['resolution'] as string) ?? '1280x720';
       const [width, height] = resolution.split('x').map(Number);
 
-      const timeline = loadTimeline(context.projectDir);
+      const timeline = loadTimeline(context.getProjectDir());
       if (!timeline) {
         return { success: false, error: 'No timeline exists. Create and populate a timeline first.' };
       }
@@ -678,7 +680,7 @@ Returns a preview manifest with segment details, and optionally an FFmpeg comman
         let assetPath: string | null = null;
 
         if (hasAsset && visualLayer.filePath) {
-          const fullPath = join(context.projectDir, visualLayer.filePath);
+          const fullPath = join(context.getProjectDir(), visualLayer.filePath);
           if (existsSync(fullPath)) {
             assetPath = fullPath;
           }
@@ -723,7 +725,7 @@ Returns a preview manifest with segment details, and optionally an FFmpeg comman
       const concatFilter = `${concatInputs}concat=n=${previewSegments.length}:v=1:a=0[outv]`;
       const allFilters = [...filterParts, concatFilter].join('; ');
 
-      const outputPath = join(context.projectDir, 'assets', 'videos', `${outputName}.mp4`);
+      const outputPath = join(context.getProjectDir(), 'assets', 'videos', `${outputName}.mp4`);
       const ffmpegCommand = `ffmpeg ${ffmpegInputs.join(' ')} -filter_complex "${allFilters}" -map "[outv]" -c:v libx264 -preset fast -y "${outputPath}"`;
 
       return {

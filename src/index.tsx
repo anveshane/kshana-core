@@ -9,6 +9,7 @@ import { App } from './App.js';
 import { getLLMConfig, getLLMProvider, validateLLMConfig, resetLLMLogger, type LLMClientConfig } from './core/llm/index.js';
 import { resetPhaseLogger } from './utils/phaseLogger.js';
 import { resetDebugLog } from './hooks/useAgent.js';
+import { startAnalyticsDashboard } from './server/analytics.js';
 
 // Task type for agent specialization
 type TaskType = 'generic' | 'video';
@@ -19,7 +20,7 @@ function parseArgs(): {
   llmOverrides: Partial<LLMClientConfig>;
   help: boolean;
   provider?: string;
-  server: boolean;
+  cli: boolean;
   serverHost: string;
   serverPort: number;
   taskType: TaskType;
@@ -28,7 +29,7 @@ function parseArgs(): {
   let task: string | undefined;
   let help = false;
   let provider: string | undefined;
-  let server = false;
+  let cli = false;
   let serverHost = '127.0.0.1';
   let serverPort = 3000;
   let taskType: TaskType = 'video';
@@ -69,9 +70,8 @@ function parseArgs(): {
         llmOverrides.apiKey = nextArg;
         i++;
         break;
-      case '-s':
-      case '--server':
-        server = true;
+      case '--cli':
+        cli = true;
         break;
       case '--host':
         serverHost = nextArg ?? serverHost;
@@ -96,7 +96,7 @@ function parseArgs(): {
     }
   }
 
-  return { task, llmOverrides, help, provider, server, serverHost, serverPort, taskType };
+  return { task, llmOverrides, help, provider, cli, serverHost, serverPort, taskType };
 }
 
 function printHelp(): void {
@@ -120,8 +120,8 @@ Task Types:
   --type <type>         Agent type: generic, video (default: video)
   --generic             Shorthand for --type generic
 
-Server Mode:
-  -s, --server          Start HTTP/WebSocket server instead of CLI
+Modes:
+  --cli                 Use terminal UI (React Ink) instead of web UI
   --host <host>         Server host (default: 127.0.0.1)
   --port <port>         Server port (default: 3000)
 
@@ -152,21 +152,17 @@ Task Types:
   generic               General-purpose autonomous agent with todo management
 
 Examples:
-  kshana-ink                               # Interactive video creation mode
-  kshana-ink "A zombie apocalypse story"   # Video with initial story idea
+  kshana-ink                               # Start web UI (default)
+  kshana-ink --port 8080                   # Web UI on custom port
+  kshana-ink --cli                         # Terminal UI mode
+  kshana-ink --cli "A zombie apocalypse"   # Terminal UI with initial task
   kshana-ink --generic "Create a todo app" # Generic agent mode
-  kshana-ink -p lmstudio "Help me"         # Use LM Studio
-  kshana-ink -s                            # Start video server mode
-  kshana-ink -s --generic --port 8080      # Generic server on custom port
-
-Interactive Commands:
-  Type your task and press Enter to start the agent.
-  Type "exit" or "quit" to exit the application.
+  kshana-ink -p lmstudio                   # Use LM Studio
 `);
 }
 
 // Main entry point
-const { task, llmOverrides, help, provider, server, serverHost, serverPort, taskType } = parseArgs();
+const { task, llmOverrides, help, provider, cli, serverHost, serverPort, taskType } = parseArgs();
 
 if (help) {
   printHelp();
@@ -204,24 +200,12 @@ console.log(`API Key: ${maskedApiKey}`);
 console.log(`Task type: ${taskType}`);
 console.log('');
 
-// Start in server mode or CLI mode
-if (server) {
-  // Server mode - import and start the server
-  import('./server/index.js').then(async ({ createServer }) => {
-    try {
-      const serverInstance = await createServer(
-        { llmConfig, taskType },
-        { host: serverHost, port: serverPort }
-      );
-      await serverInstance.start();
-    } catch (error) {
-      console.error('Failed to start server:', error);
-      process.exit(1);
-    }
-  });
-} else {
+// Start analytics dashboard (non-blocking, fire-and-forget)
+startAnalyticsDashboard(3001).catch(() => {});
+
+// Start in CLI mode or server mode (default)
+if (cli) {
   // CLI mode - clear screen and render the React Ink app
-  // Clear the screen
   process.stdout.write('\x1B[2J\x1B[0f');
 
   // Reset loggers (creates fresh log files for this session)
@@ -231,4 +215,18 @@ if (server) {
 
   // Render with fullscreen mode enabled
   render(<App llmConfig={llmConfig} initialTask={task} taskType={taskType} />);
+} else {
+  // Server mode (default) - import and start the server with web UI
+  import('./server/index.js').then(async ({ createServer }) => {
+    try {
+      const serverInstance = await createServer(
+        { llmConfig },
+        { host: serverHost, port: serverPort }
+      );
+      await serverInstance.start();
+    } catch (error) {
+      console.error('Failed to start server:', error);
+      process.exit(1);
+    }
+  });
 }

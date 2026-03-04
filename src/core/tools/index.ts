@@ -37,8 +37,6 @@ import {
   thinkTool,
   askUserQuestionTool,
   taskTool,
-  enterPlanModeTool,
-  exitPlanModeTool,
   todoWriteTool,
   generateContentTool,
   readFileTool,
@@ -55,8 +53,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   registry.register(thinkTool);
   registry.register(askUserQuestionTool);
   registry.register(taskTool);
-  registry.register(enterPlanModeTool);
-  registry.register(exitPlanModeTool);
+  // enterPlanModeTool and exitPlanModeTool removed — unused, saves tokens
   registry.register(todoWriteTool);
   registry.register(generateContentTool);
   registry.register(readFileTool);

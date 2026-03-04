@@ -55,6 +55,12 @@ export async function createServer(
         },
       },
     },
+    bodyLimit: 50 * 1024 * 1024, // 50MB for file uploads
+  });
+
+  // Register raw body parser for file uploads
+  app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_req, body, done) => {
+    done(null, body);
   });
 
   // Register plugins
@@ -84,8 +90,8 @@ export async function createServer(
     async start(): Promise<string> {
       const address = await app.listen({ host, port });
       console.log(`Server listening at ${address}`);
-      console.log(`WebSocket endpoint: ws://${host}:${port}/api/v1/ws/chat`);
-      console.log(`HTTP endpoint: ${address}/api/v1/chat`);
+      console.log(`Web UI: ${address}`);
+      console.log(`WebSocket: ws://${host}:${port}/api/v1/ws/chat`);
       return address;
     },
 

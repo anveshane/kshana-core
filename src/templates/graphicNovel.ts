@@ -1,10 +1,11 @@
 /**
- * Narrative Video Template
+ * Graphic Novel Template
  *
- * Template for creating narrative/story-based videos.
- * This is a refactoring of the original 8-phase workflow into the generic template system.
+ * Template for creating graphic novels / comic-style panel sequences.
+ * Reuses the narrative pipeline up to scene_image, then diverges into
+ * panel composition (text overlay on shot images) and final assembly.
  *
- * Flow: plot → story → characters/settings → scenes → ref_images → scene_images → videos → final
+ * Flow: plot -> story -> characters/settings -> scenes -> ref_images -> scene_images -> panels -> graphic_novel
  */
 
 import type {
@@ -214,12 +215,12 @@ const settingImageArtifact: ArtifactTypeDefinition = {
 
 const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
   id: 'scene_video_prompt',
-  displayName: 'Multi-Shot Motion Prompts',
+  displayName: 'Multi-Shot Panel Breakdown',
   category: 'structure',
-  description: 'Multi-shot breakdown of each scene into 2-4 cinematic shots with motion/camera direction',
+  description: 'Multi-shot breakdown of each scene into 2-4 panel shots with framing, subtitle text, and display duration',
   scope: 'chapter',
   isCollection: true,
-  itemName: 'motion prompt',
+  itemName: 'panel breakdown',
   outputFormat: 'json',
   filePattern: 'prompts/videos/scenes/scene-{{index}}.motion.json',
   agentType: 'content',
@@ -302,65 +303,66 @@ const sceneImageArtifact: ArtifactTypeDefinition = {
   },
 };
 
-const sceneVideoArtifact: ArtifactTypeDefinition = {
-  id: 'scene_video',
-  displayName: 'Scene Videos',
-  category: 'clip',
-  description: 'Video clips for each scene generated from scene images',
+const panelArtifact: ArtifactTypeDefinition = {
+  id: 'panel',
+  displayName: 'Panels',
+  category: 'visual_ref',
+  description: 'Composed panel images with text overlays (dialogue, narration) on scene images',
   scope: 'chapter',
   isCollection: true,
-  itemName: 'scene video',
-  outputFormat: 'video',
-  filePattern: 'chapters/{{chapter}}/assets/videos/scenes/scene_{{index}}.mp4',
-  agentType: 'video',
-  promptFile: 'common/scene-video.md',
+  itemName: 'panel',
+  maxItems: 32,
+  outputFormat: 'image',
+  filePattern: 'chapters/{{chapter}}/assets/images/panels/panel_{{index}}.png',
+  agentType: 'image',
+  promptFile: 'narrative/panel.md',
   isExpensive: true,
   requiresPerItemApproval: true,
   dependencies: [
-    {
-      artifactTypeId: 'scene',
-      required: true,
-      usage: 'context',
-      scope: 'matching',
-    },
     {
       artifactTypeId: 'scene_image',
       required: true,
       usage: 'input',
       scope: 'matching',
     },
+    {
+      artifactTypeId: 'scene',
+      required: true,
+      usage: 'context',
+      scope: 'matching',
+    },
   ],
   metadataSchema: {
     sceneId: { type: 'string', required: true, description: 'ID of the source scene' },
     imageId: { type: 'string', required: true, description: 'Source scene image ID' },
-    duration: { type: 'number', required: false, description: 'Video duration in seconds' },
+    dialogueText: { type: 'string', required: false, description: 'Dialogue or narration text overlaid' },
   },
 };
 
-const finalVideoArtifact: ArtifactTypeDefinition = {
-  id: 'final_video',
-  displayName: 'Final Video',
+const graphicNovelArtifact: ArtifactTypeDefinition = {
+  id: 'graphic_novel',
+  displayName: 'Graphic Novel',
   category: 'final',
-  description: 'The assembled final video combining all scene videos',
+  description: 'The assembled graphic novel slideshow video combining all composed panels with transitions',
   scope: 'chapter',
   isCollection: false,
   outputFormat: 'video',
   filePattern: 'chapters/{{chapter}}/assets/videos/final/{{name}}.mp4',
   agentType: 'video',
-  promptFile: 'common/final-video.md',
+  promptFile: 'graphic_novel/phases/assembly.md',
   isExpensive: true,
   requiresPerItemApproval: false,
   dependencies: [
     {
-      artifactTypeId: 'scene_video',
+      artifactTypeId: 'panel',
       required: true,
       usage: 'input',
       scope: 'all',
     },
   ],
   metadataSchema: {
-    totalDuration: { type: 'number', required: false, description: 'Total video duration' },
-    resolution: { type: 'object', required: false, description: 'Video resolution' },
+    totalPanels: { type: 'number', required: false, description: 'Total number of panels' },
+    resolution: { type: 'object', required: false, description: 'Output resolution' },
   },
 };
 
@@ -371,7 +373,7 @@ const finalVideoArtifact: ArtifactTypeDefinition = {
 const ideaInput: InputTypeConfig = {
   id: 'idea',
   displayName: 'Story Idea',
-  description: 'A brief story idea, concept, or premise that will be developed into a full narrative',
+  description: 'A brief story idea, concept, or premise that will be developed into a full graphic novel narrative',
   examples: [
     'A robot learns to love',
     'Two strangers meet on a train and discover they share a secret',
@@ -405,40 +407,35 @@ const storyInput: InputTypeConfig = {
   skipsArtifacts: ['plot', 'story'],
   mapsToArtifact: 'story',
   detectionPatterns: [
-    // Long content is likely a story (>800 chars)
     {
       type: 'length',
       config: { minLength: 800 },
       weight: 3,
     },
-    // Even longer content is very likely a story (>2000 chars)
     {
       type: 'length',
       config: { minLength: 2000 },
       weight: 2,
     },
-    // Has paragraphs (at least 2 paragraph breaks)
     {
       type: 'structure',
       config: { hasParagraphs: true },
       weight: 2,
     },
-    // Has dialogue markers
     {
       type: 'structure',
       config: { hasDialogue: true },
       weight: 2,
     },
-    // Contains narrative keywords (only need 2 matches)
     {
       type: 'keywords',
       config: {
         keywords: [
-          'said', 'asked', 'replied', 'whispered', 'shouted',  // dialogue tags
-          'walked', 'looked', 'turned', 'ran', 'sat', 'stood',  // action verbs
-          'chapter', 'scene', 'INT.', 'EXT.',  // structure markers
-          'she', 'he', 'they', 'her', 'his', 'their',  // pronouns (narrative)
-          'morning', 'evening', 'night', 'day',  // time markers
+          'said', 'asked', 'replied', 'whispered', 'shouted',
+          'walked', 'looked', 'turned', 'ran', 'sat', 'stood',
+          'chapter', 'scene', 'INT.', 'EXT.',
+          'she', 'he', 'they', 'her', 'his', 'their',
+          'morning', 'evening', 'night', 'day',
         ],
         minMatches: 2,
       },
@@ -495,11 +492,11 @@ const phases: PhaseDefinition[] = [
     order: 5,
     artifactTypes: ['scene_video_prompt', 'shot_image_prompt'],
     requiresConfirmation: true,
-    promptFile: 'narrative/phases/shot-breakdown.md',
+    promptFile: 'graphic_novel/phases/shot-breakdown.md',
   },
   {
     id: 'scene_images',
-    displayName: 'Scene Image Generation',
+    displayName: 'Shot Image Generation',
     description: 'Generate images for each scene using reference images',
     order: 6,
     artifactTypes: ['scene_image'],
@@ -507,22 +504,22 @@ const phases: PhaseDefinition[] = [
     promptFile: 'narrative/phases/scene-images.md',
   },
   {
-    id: 'video_generation',
-    displayName: 'Video Generation',
-    description: 'Generate video clips for each scene',
+    id: 'panel_composition',
+    displayName: 'Panel Composition',
+    description: 'Compose panels by overlaying dialogue and narration text onto scene images',
     order: 7,
-    artifactTypes: ['scene_video'],
+    artifactTypes: ['panel'],
     requiresConfirmation: true,
-    promptFile: 'narrative/phases/video-generation.md',
+    promptFile: 'graphic_novel/phases/panel-composition.md',
   },
   {
-    id: 'final_assembly',
-    displayName: 'Final Assembly',
-    description: 'Assemble all scene videos into the final video',
+    id: 'assembly',
+    displayName: 'Assembly',
+    description: 'Assemble all panels into the final graphic novel',
     order: 8,
-    artifactTypes: ['final_video'],
+    artifactTypes: ['graphic_novel'],
     requiresConfirmation: true,
-    promptFile: 'narrative/phases/final-assembly.md',
+    promptFile: 'graphic_novel/phases/assembly.md',
   },
 ];
 
@@ -647,14 +644,14 @@ const styles: StyleConfig[] = [
 ];
 
 // =============================================================================
-// NARRATIVE TEMPLATE
+// GRAPHIC NOVEL TEMPLATE
 // =============================================================================
 
-export const narrativeTemplate: VideoTemplate = {
-  id: 'narrative',
-  displayName: 'Narrative Story Video',
-  description: 'Create a video from a story idea or complete narrative. Perfect for short films, animated stories, and visual storytelling.',
-  version: '3.0.0',
+export const graphicNovelTemplate: VideoTemplate = {
+  id: 'graphic_novel',
+  displayName: 'Graphic Novel',
+  description: 'Create a graphic novel from a story idea or complete narrative. Perfect for comics, manga, and visual storytelling with text overlays.',
+  version: '1.0.0',
   defaultStyle: 'cinematic_realism',
   styles,
   inputTypes: [ideaInput, storyInput],
@@ -669,24 +666,24 @@ export const narrativeTemplate: VideoTemplate = {
     scene_video_prompt: sceneVideoPromptArtifact,
     shot_image_prompt: shotImagePromptArtifact,
     scene_image: sceneImageArtifact,
-    scene_video: sceneVideoArtifact,
-    final_video: finalVideoArtifact,
+    panel: panelArtifact,
+    graphic_novel: graphicNovelArtifact,
   },
   phases,
   constraints: {
     maxSegments: 12,
     maxEntities: 10,
-    maxDuration: 300, // 5 minutes
+    maxDuration: 32, // max panels (reusing duration field as panel count)
   },
   contextVariables: {
-    $original_input: 'plot', // Original input maps to plot processing
+    $original_input: 'plot',
     $plot: 'plot',
     $story: 'story',
     $characters: 'character',
     $settings: 'setting',
     $scenes: 'scene',
   },
-  orchestratorPrompt: 'narrative/orchestrator.md',
+  orchestratorPrompt: 'graphic_novel/orchestrator.md',
 };
 
-export default narrativeTemplate;
+export default graphicNovelTemplate;

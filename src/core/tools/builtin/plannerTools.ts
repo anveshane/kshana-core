@@ -25,7 +25,8 @@ import { registerFile } from '../../../tasks/video/workflow/ProjectManager.js';
 export interface PlannerToolContext {
   template: VideoTemplate;
   project: GenericProjectFile;
-  projectDir: string;
+  /** Returns the path to the active .kshana project directory (resolved at call time) */
+  getProjectDir: () => string;
   /** Shared registry state across planner tool calls within a session */
   registry?: AssetRegistry;
 }
@@ -82,7 +83,7 @@ The result shows which artifact types are fully or partially satisfied.`,
       const additionalPaths = params['additional_paths'] as string[] | undefined;
 
       const scanner = new AssetScanner(context.template);
-      const result = scanner.scan(context.projectDir, context.project);
+      const result = scanner.scan(context.getProjectDir(), context.project);
 
       // Register any additional user paths
       if (additionalPaths && additionalPaths.length > 0) {
@@ -208,7 +209,7 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
       } else {
         // Perform fresh scan
         const scanner = new AssetScanner(context.template);
-        const scanResult = scanner.scan(context.projectDir, context.project);
+        const scanResult = scanner.scan(context.getProjectDir(), context.project);
         registry = scanResult.registry;
       }
 
@@ -353,12 +354,12 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
       // Persist content to disk in .kshana/plans/<artifact_type>.md
       // This ensures intermediate artifacts survive session restarts.
       let persistedPath: string | undefined;
-      if (content && context.projectDir) {
+      if (content && context.getProjectDir()) {
         try {
           const fileName = itemId
             ? `plans/${artifactType}_${itemId.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`
             : `plans/${artifactType}.md`;
-          const fullPath = join(context.projectDir, fileName);
+          const fullPath = join(context.getProjectDir(), fileName);
           const parentDir = dirname(fullPath);
           if (!existsSync(parentDir)) {
             mkdirSync(parentDir, { recursive: true });

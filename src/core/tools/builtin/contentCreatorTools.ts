@@ -224,8 +224,26 @@ If this returns "File not found", call read_project or list_project_files to see
 };
 
 /**
- * Get all content creator tools (read_project + read_file).
+ * List project files tool definition for the content creator sub-agent.
+ * This is a lightweight schema-only definition (handler is in GenericAgent.executeContentCreatorTool).
+ * Avoids circular imports with FileTools.ts which imports readFileTool from this file.
+ */
+export const contentCreatorListProjectFilesTool: ToolDefinition = {
+  name: 'list_project_files',
+  description: `List all files in the project directory. Returns file paths organized by category (plans, characters, settings, scenes, assets).
+
+Use this to discover what files actually exist on disk — especially asset files like reference images.
+IMPORTANT: Only reference image paths that appear in this listing actually exist. Do NOT fabricate or guess paths.`,
+  parameters: {
+    type: 'object',
+    properties: {},
+    required: [],
+  },
+};
+
+/**
+ * Get all content creator tools (read_project + read_file + list_project_files).
  */
 export function getContentCreatorTools(): ToolDefinition[] {
-  return [readProjectTool, readFileTool];
+  return [readProjectTool, readFileTool, contentCreatorListProjectFilesTool];
 }

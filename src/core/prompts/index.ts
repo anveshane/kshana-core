@@ -148,9 +148,7 @@ export function buildSystemMessage(
   const roleSection = isSubAgent
     ? loadAndRenderMarkdown('system/subagent.md', toPromptContext(envContext))
     : loadAndRenderMarkdown('system/orchestrator.md', toPromptContext(envContext));
-  const env = loadAndRenderMarkdown('system/env.md', toPromptContext(envContext));
-
-  let prompt = [base, roleSection, env].filter(Boolean).join('\n\n');
+  let prompt = [base, roleSection].filter(Boolean).join('\n\n');
 
   // NOTE: Tool descriptions are NOT included here - they are provided via the LLM API's tools parameter.
   // This avoids duplicating tool info in both the system message and the API tools array.

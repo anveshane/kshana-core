@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { WebSocket } from '@fastify/websocket';
 import { ConversationManager } from './ConversationManager.js';
 import { WebSocketHandler } from './WebSocketHandler.js';
+import { registerWebUIRoutes } from './webui-routes.js';
 import type { LLMClientConfig } from '../core/llm/index.js';
 
 interface ChatRequestBody {
@@ -22,12 +23,9 @@ interface ChatResponse {
   todos?: unknown[];
 }
 
-type TaskType = 'generic' | 'video';
-
 export interface RouteOptions {
   llmConfig: LLMClientConfig;
   apiPrefix?: string;
-  taskType?: TaskType;
 }
 
 /**
@@ -37,14 +35,13 @@ export async function registerRoutes(
   app: FastifyInstance,
   options: RouteOptions
 ): Promise<{ conversationManager: ConversationManager; wsHandler: WebSocketHandler }> {
-  const { llmConfig, apiPrefix = '/api/v1', taskType = 'generic' } = options;
+  const { llmConfig, apiPrefix = '/api/v1' } = options;
 
-  // Create conversation manager with task type
+  // Create conversation manager (agent configured lazily per-project)
   const conversationManager = new ConversationManager({
     llmConfig,
     sessionTimeoutMs: 30 * 60 * 1000, // 30 minutes
     maxIterations: 50,
-    taskType,
   });
 
   // Create WebSocket handler
@@ -162,6 +159,9 @@ export async function registerRoutes(
       });
     }
   );
+
+  // Register web UI routes (SPA + project/asset endpoints)
+  await registerWebUIRoutes(app);
 
   // WebSocket endpoint for real-time communication
   app.get(

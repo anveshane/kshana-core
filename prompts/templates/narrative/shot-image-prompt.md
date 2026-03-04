@@ -46,8 +46,8 @@ When reference images EXIST:
 [Single detailed paragraph matching the shot's framing. Use "from image1/image2/image3" to reference characters and settings.]
 
 **Reference Images:**
-- Character: [name]
-- Setting: [name]
+- Character: [name] [path/to/character_ref.png]
+- Setting: [name] [path/to/setting_ref.png]
 
 **Negative Prompt:**
 [Style-appropriate negatives + inconsistent appearance, wrong features]
@@ -58,6 +58,8 @@ When reference images EXIST:
 **Generation Mode:**
 image_text_to_image
 ```
+
+**IMPORTANT**: Always include the actual file path in square brackets after each reference name. Use `list_project_files` to find the exact paths of character and setting reference images. The path should be relative to the project directory (e.g., `assets/images/0jZCrE-k_CharRef_Parvati_00001_.png`). This ensures reliable image resolution during generation.
 
 When NO reference images exist:
 ```

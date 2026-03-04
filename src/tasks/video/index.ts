@@ -21,7 +21,7 @@ import {
 } from '../../core/timeline/index.js';
 import { BackwardPlanner, AssetScanner } from '../../core/planner/index.js';
 import type { UserGoal, ExecutionPlan, AssetRegistry } from '../../core/planner/types.js';
-import { getVideoGenerationTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
+import { getVideoGenerationTools, getGraphicNovelTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
 import { getInfographicTools, INFOGRAPHIC_COMPLEX_TOOLS } from './infographic-tools.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
@@ -30,7 +30,6 @@ import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import {
   getWorkflowFileTools,
   getAllFileTools,
-  getAllArtifactTools,
   getOrCreateProject,
   loadProject,
   getCurrentPhase,
@@ -65,6 +64,7 @@ export {
   editImageTool,
   waitForJobTool,
   getVideoGenerationTools,
+  getGraphicNovelTools,
   VIDEO_COMPLEX_TOOLS,
 } from './tools.js';
 
@@ -194,10 +194,7 @@ export function createWorkflowToolRegistry(): ToolRegistry {
     registry.register(tool);
   }
 
-  // Add artifact tools for fine-grained control
-  for (const tool of getAllArtifactTools()) {
-    registry.register(tool);
-  }
+  // Artifact tools removed — rarely used, saves significant tokens
 
   // Add image/video generation tools so image-generator/video-assembler subagents can submit jobs
   for (const tool of getVideoGenerationTools()) {
@@ -234,11 +231,11 @@ export function createGoalDrivenToolRegistry(
     ? projectManager.loadProjectSync()
     : projectManager.createEmptyProject(finalTemplateId);
 
-  // Create planner tool context
+  // Create planner tool context — use getter so project dir is resolved at execution time
   const plannerContext: PlannerToolContext = {
     template,
     project,
-    projectDir: getProjectDir(basePath),
+    getProjectDir: () => getProjectDir(basePath),
   };
 
   // Add planner tools
@@ -246,9 +243,9 @@ export function createGoalDrivenToolRegistry(
     registry.register(tool);
   }
 
-  // Add timeline tools
+  // Add timeline tools — use getter so project dir is resolved at execution time
   const timelineContext: TimelineToolContext = {
-    projectDir: getProjectDir(basePath),
+    getProjectDir: () => getProjectDir(basePath),
   };
   for (const tool of createTimelineTools(timelineContext)) {
     registry.register(tool);
@@ -261,6 +258,13 @@ export function createGoalDrivenToolRegistry(
     }
     for (const toolName of INFOGRAPHIC_COMPLEX_TOOLS) {
       registerComplexTool(toolName);
+    }
+  }
+
+  // Add graphic novel tools (compose_panel, assemble_graphic_novel) only for graphic_novel template
+  if (finalTemplateId === TEMPLATE_IDS.GRAPHIC_NOVEL || finalTemplateId === 'graphic_novel') {
+    for (const tool of getGraphicNovelTools()) {
+      registry.register(tool);
     }
   }
 
@@ -681,6 +685,69 @@ You are an orchestrator guiding the user through the video creation process.
 4. Get user approval for completed artifacts
 5. Proceed to the next artifact or phase
 `;
+}
+
+/**
+ * Options for the shared agent factory used by both CLI and web UI.
+ */
+export interface CreateAgentForProjectOptions {
+  templateId: string;
+  style: string;
+  duration: number;
+  llmConfig: LLMClientConfig;
+  maxIterations?: number;
+  customProjectDescription?: string;
+}
+
+/**
+ * Result of createAgentForProject — everything needed to construct a GenericAgent.
+ */
+export interface AgentForProjectResult {
+  tools: Map<string, import('../../core/llm/types.js').ToolDefinition>;
+  customPrompt: string;
+  agentName: string;
+}
+
+/**
+ * Shared entry point for creating an agent configured for a project.
+ * Both CLI (App.tsx) and web UI (ConversationManager) call this to ensure
+ * identical tools, orchestrator prompt, and meta prompt.
+ */
+export function createAgentForProject(options: CreateAgentForProjectOptions): AgentForProjectResult {
+  const { templateId, style, duration, customProjectDescription } = options;
+
+  // 1. Full tool registry (file, planner, timeline, video, infographic)
+  const registry = createGoalDrivenToolRegistry(templateId);
+
+  // 2. Template-specific orchestrator prompt
+  const templatePrompt = loadTemplateOrchestratorPrompt(templateId);
+
+  // 3. Build meta prompt with project parameters
+  initializeTemplates();
+  const template = getTemplateOrThrow(templateId);
+  const templateName = template.displayName;
+  const styleConfig = template.styles?.find((s: { id: string }) => s.id === style);
+  const styleName = styleConfig?.displayName ?? style;
+
+  const minutes = Math.floor(duration / 60);
+  const seconds = duration % 60;
+  const durationStr = minutes > 0
+    ? seconds > 0 ? `${minutes} minute${minutes > 1 ? 's' : ''} ${seconds} seconds` : `${minutes} minute${minutes > 1 ? 's' : ''}`
+    : `${seconds} seconds`;
+
+  const customDesc = customProjectDescription
+    ? `\n\n**Custom project description from user:** ${customProjectDescription}\nInterpret this description and adapt your workflow accordingly.`
+    : '';
+
+  const metaPrompt = `You are working on a **${templateName}** project with **${styleName}** visual style.\nTarget duration: **${durationStr} (${duration} seconds)**.\nThe user already selected these — do not ask about project type, style, or duration. Proceed directly with the planning workflow.${customDesc}`;
+
+  const customPrompt = templatePrompt ? `${metaPrompt}\n\n${templatePrompt}` : metaPrompt;
+
+  return {
+    tools: registry.getAll(),
+    customPrompt,
+    agentName: 'kshana-video',
+  };
 }
 
 /**

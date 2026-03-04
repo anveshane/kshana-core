@@ -2,6 +2,8 @@
  * WebSocket handler for real-time agent communication.
  */
 import type { WebSocket } from '@fastify/websocket';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 import { ConversationManager, type ConversationEvents } from './ConversationManager.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { AgentStatus } from '../core/agent/index.js';
@@ -15,6 +17,9 @@ import {
   type ToolCallData,
   type TodoUpdateData,
   type StreamChunkData,
+  type ContextUsageData,
+  type PhaseTransitionData,
+  type NotificationData,
   type ErrorData,
   type StartTaskData,
   type UserResponseData,
@@ -23,6 +28,9 @@ import {
   isUserResponseMessage,
   isCancelMessage,
   isPingMessage,
+  isSelectProjectMessage,
+  isCreateProjectMessage,
+  type CreateProjectData,
 } from './types.js';
 
 interface ConnectionState {
@@ -147,6 +155,47 @@ export class WebSocketHandler {
       return;
     }
 
+    if (isSelectProjectMessage(message)) {
+      const projectName = message.data.projectName;
+      const projectDirName = `${projectName}.kshana`;
+      const projectFile = join(process.cwd(), projectDirName, 'project.json');
+
+      // Read project.json to get templateId, style, duration
+      let templateId = 'narrative';
+      let style = 'anime';
+      let duration = 60;
+      if (existsSync(projectFile)) {
+        try {
+          const projectData = JSON.parse(readFileSync(projectFile, 'utf-8'));
+          templateId = projectData.templateId || templateId;
+          style = projectData.style || style;
+          duration = projectData.duration || duration;
+        } catch {
+          // Use defaults if project.json is unreadable
+        }
+      }
+
+      // Reconfigure agent with correct tools and prompt for this project
+      this.conversationManager.configureSessionForProject(
+        sessionId,
+        templateId,
+        style,
+        duration,
+        projectDirName,
+      );
+
+      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+        status: 'ready',
+        message: `Project set to ${projectName}`,
+      }));
+      return;
+    }
+
+    if (isCreateProjectMessage(message)) {
+      await this.handleCreateProject(sessionId, socket, message.data);
+      return;
+    }
+
     this.sendError(socket, sessionId, 'unknown_message_type', `Unknown message type: ${message.type}`);
   }
 
@@ -245,6 +294,40 @@ export class WebSocketHandler {
   }
 
   /**
+   * Handle create_project message.
+   */
+  private async handleCreateProject(
+    sessionId: string,
+    socket: WebSocket,
+    data: CreateProjectData
+  ): Promise<void> {
+    try {
+      // Dynamically import createProject to avoid circular deps
+      const { createProject } = await import('../tasks/video/workflow/index.js');
+
+      // Create the project on disk
+      createProject(data.content, data.style, undefined, data.duration, data.templateId);
+
+      // Configure the session agent for this project
+      // The createProject call above sets activeProjectDir, so we don't need to pass it
+      this.conversationManager.configureSessionForProject(
+        sessionId,
+        data.templateId,
+        data.style,
+        data.duration,
+      );
+
+      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+        status: 'ready',
+        message: `Project "${data.title}" created`,
+      }));
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.sendError(socket, sessionId, 'create_project_error', errorMessage);
+    }
+  }
+
+  /**
    * Handle disconnection.
    */
   private handleDisconnection(sessionId: string): void {
@@ -324,11 +407,26 @@ export class WebSocketHandler {
         }));
       },
 
-      onQuestion: (sid, question, isConfirmation) => {
+      onQuestion: (sid, question, isConfirmation, options, autoApproveTimeoutMs) => {
         this.sendMessage(socket, createServerMessage<AgentQuestionData>('agent_question', sid, {
           question,
           toolCallId: isConfirmation ? 'confirmation' : '',
+          options,
+          isConfirmation,
+          autoApproveTimeoutMs,
         }));
+      },
+
+      onContextUsage: (sid, data) => {
+        this.sendMessage(socket, createServerMessage<ContextUsageData>('context_usage', sid, data));
+      },
+
+      onPhaseTransition: (sid, data) => {
+        this.sendMessage(socket, createServerMessage<PhaseTransitionData>('phase_transition', sid, data));
+      },
+
+      onNotification: (sid, data) => {
+        this.sendMessage(socket, createServerMessage<NotificationData>('notification', sid, data));
       },
     };
   }

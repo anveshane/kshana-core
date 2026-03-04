@@ -1,0 +1,1588 @@
+/**
+ * Web UI - Inline SPA served by Fastify.
+ * Dark theme matching analytics dashboard, no external dependencies.
+ */
+
+export function getWebUIHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kshana</title>
+<style>
+${getStyles()}
+</style>
+</head>
+<body>
+<div id="app">
+  <header id="header">
+    <div class="header-left">
+      <span class="logo">Kshana</span>
+      <select id="project-select">
+        <option value="">Select Project...</option>
+        <option value="__new__">+ New Project</option>
+      </select>
+    </div>
+    <div class="header-right">
+      <div id="context-bar-wrap">
+        <div id="context-bar"><div id="context-fill"></div></div>
+        <span id="context-label">CTX 0%</span>
+      </div>
+      <span id="conn-status" class="conn-dot disconnected" title="Disconnected"></span>
+    </div>
+  </header>
+  <div id="main">
+    <aside id="sidebar">
+      <div class="sidebar-section">
+        <h3>Phase</h3>
+        <div id="phase-display" class="phase-badge">-</div>
+      </div>
+      <div class="sidebar-section">
+        <h3>Todos</h3>
+        <div id="todo-list" class="todo-list"></div>
+      </div>
+      <div class="sidebar-section">
+        <h3>Assets</h3>
+        <div id="asset-browser" class="asset-grid"></div>
+      </div>
+    </aside>
+    <div id="chat-container">
+      <div id="chat-messages"></div>
+      <button id="scroll-btn" class="scroll-btn hidden" onclick="scrollToBottom()">&#x2193; New messages</button>
+      <div id="attached-files" class="hidden"></div>
+      <div id="input-area">
+        <textarea id="input-box" placeholder="Type a task..." rows="1"></textarea>
+        <button id="send-btn" onclick="sendMessage()">Send</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div id="lightbox" class="lightbox hidden" onclick="closeLightbox()">
+  <img id="lightbox-img" src="">
+</div>
+<div id="toast-container"></div>
+
+<script>
+${getScript()}
+</script>
+</body>
+</html>`;
+}
+
+function getStyles(): string {
+  return `
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0d1117; --bg-secondary: #161b22; --bg-tertiary: #21262d;
+  --border: #30363d; --text: #c9d1d9; --text-muted: #8b949e;
+  --accent: #58a6ff; --green: #238636; --green-bright: #3fb950;
+  --red: #da3633; --orange: #f0883e; --purple: #d2a8ff; --code-green: #7ee787;
+}
+html, body { height: 100%; overflow: hidden; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; }
+#app { display: flex; flex-direction: column; height: 100vh; }
+
+/* Header */
+header { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.header-left { display: flex; align-items: center; gap: 16px; }
+.header-right { display: flex; align-items: center; gap: 16px; }
+.logo { font-size: 18px; font-weight: 700; color: var(--accent); }
+#project-select { background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); padding: 4px 8px; border-radius: 6px; font-size: 13px; }
+#context-bar-wrap { display: flex; align-items: center; gap: 8px; }
+#context-bar { width: 80px; height: 8px; background: var(--bg-tertiary); border-radius: 4px; overflow: hidden; }
+#context-fill { height: 100%; width: 0%; background: var(--accent); border-radius: 4px; transition: width 0.3s, background 0.3s; }
+#context-label { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; min-width: 50px; }
+.conn-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.conn-dot.connected { background: var(--green-bright); }
+.conn-dot.disconnected { background: var(--red); }
+.conn-dot.connecting { background: var(--orange); }
+
+/* Main layout */
+#main { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+/* Sidebar */
+#sidebar { width: 260px; min-width: 260px; background: var(--bg-secondary); border-right: 1px solid var(--border); overflow-y: auto; padding: 12px; flex-shrink: 0; }
+.sidebar-section { margin-bottom: 16px; }
+.sidebar-section h3 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 8px; }
+.phase-badge { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--accent); }
+.todo-list { display: flex; flex-direction: column; gap: 2px; }
+.todo-item { display: flex; align-items: flex-start; gap: 6px; padding: 4px 6px; border-radius: 4px; font-size: 12px; line-height: 1.4; }
+.todo-item:hover { background: var(--bg-tertiary); }
+.todo-icon { flex-shrink: 0; width: 14px; text-align: center; }
+.todo-icon.pending { color: var(--text-muted); }
+.todo-icon.in_progress { color: var(--orange); }
+.todo-icon.completed { color: var(--green-bright); }
+.todo-text { flex: 1; }
+.asset-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.asset-thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; transition: border-color 0.2s; }
+.asset-thumb:hover { border-color: var(--accent); }
+
+/* Chat */
+#chat-container { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; min-height: 0; }
+#chat-messages { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+.scroll-btn { position: absolute; bottom: 80px; right: 24px; background: var(--accent); color: #fff; border: none; border-radius: 20px; padding: 6px 14px; font-size: 12px; cursor: pointer; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+
+/* Messages */
+.msg { padding: 10px 14px; border-radius: 8px; max-width: 100%; word-wrap: break-word; }
+.msg.agent { background: var(--bg-secondary); border: 1px solid var(--border); position: relative; }
+.msg .msg-copy-btn { position: absolute; top: 6px; right: 8px; font-size: 11px; color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid transparent; border-radius: 3px; cursor: pointer; padding: 1px 6px; opacity: 0; transition: opacity 0.15s; }
+.msg:hover .msg-copy-btn { opacity: 0.6; }
+.msg .msg-copy-btn:hover { opacity: 1 !important; color: var(--text); border-color: var(--border); }
+.msg .msg-copy-btn.copied { color: var(--green-bright); opacity: 1 !important; }
+.msg.user { background: #1c3a5c; border: 1px solid #264d73; align-self: flex-end; max-width: 70%; }
+.msg.system { background: transparent; color: var(--text-muted); font-size: 12px; text-align: center; padding: 4px; }
+.msg.error { background: #3d1518; border: 1px solid var(--red); color: #f8d7da; }
+.msg-content { font-size: 14px; line-height: 1.6; }
+.msg-content p { margin-bottom: 8px; }
+.msg-content p:last-child { margin-bottom: 0; }
+.msg-content code { background: var(--bg-tertiary); padding: 2px 5px; border-radius: 3px; font-family: 'SF Mono', Consolas, monospace; font-size: 13px; }
+.msg-content pre { background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: 12px; overflow-x: auto; margin: 8px 0; max-height: 400px; overflow-y: auto; }
+.msg-content pre code { background: none; padding: 0; font-size: 12px; line-height: 1.5; }
+.msg-content h1, .msg-content h2, .msg-content h3 { color: var(--accent); margin: 12px 0 6px; }
+.msg-content h1 { font-size: 18px; } .msg-content h2 { font-size: 16px; } .msg-content h3 { font-size: 14px; }
+.msg-content ul, .msg-content ol { padding-left: 20px; margin: 6px 0; }
+.msg-content li { margin: 2px 0; }
+.msg-content strong { color: #e6edf3; }
+.msg-content em { color: var(--text-muted); }
+.msg-content a { color: var(--accent); }
+.msg-content blockquote { border-left: 3px solid var(--border); padding-left: 12px; color: var(--text-muted); margin: 8px 0; }
+.msg-content img { max-width: 100%; max-height: 400px; border-radius: 6px; margin: 8px 0; cursor: pointer; }
+
+/* Streaming cursor */
+.streaming-cursor::after, .streaming-cursor-inline::after { content: '\\25CF'; animation: blink 1s infinite; color: var(--accent); margin-left: 2px; }
+.streaming-cursor-inline { display: inline; }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* Agent group block */
+.agent-label { font-size: 11px; font-weight: 600; color: var(--purple); padding: 6px 0 2px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+/* Tool call cards */
+.tool-card { border-bottom: 1px solid rgba(255,255,255,0.04); }
+.tool-card:last-child { border-bottom: none; }
+.tool-header { display: flex; align-items: center; gap: 6px; padding: 4px 12px; cursor: pointer; user-select: none; font-size: 12px; min-height: 28px; }
+.tool-header:hover { background: rgba(255,255,255,0.03); }
+.tool-chevron { font-size: 8px; color: var(--text-muted); transition: transform 0.2s; width: 10px; flex-shrink: 0; }
+.tool-chevron.open { transform: rotate(90deg); }
+.tool-name { font-family: 'SF Mono', Consolas, monospace; font-size: 11px; font-weight: 600; padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
+/* Tool color coding */
+.tool-name.cat-read { color: #79c0ff; background: rgba(121,192,255,0.1); }
+.tool-name.cat-write { color: var(--orange); background: rgba(240,136,62,0.1); }
+.tool-name.cat-generate { color: var(--purple); background: rgba(210,168,255,0.1); }
+.tool-name.cat-plan { color: var(--code-green); background: rgba(126,231,135,0.1); }
+.tool-name.cat-system { color: var(--text-muted); background: rgba(139,148,158,0.08); }
+.tool-name.cat-default { color: var(--code-green); background: rgba(126,231,135,0.08); }
+.tool-params-summary { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; opacity: 0.7; }
+.tool-status { font-size: 10px; padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
+.tool-status.started { color: var(--accent); }
+.tool-status.completed { color: var(--green-bright); opacity: 0.6; }
+.tool-status.error { color: var(--red); }
+.tool-duration { font-size: 10px; color: var(--text-muted); flex-shrink: 0; opacity: 0.6; }
+.tool-copy-btn { font-size: 11px; color: var(--text-muted); background: none; border: 1px solid transparent; border-radius: 3px; cursor: pointer; padding: 1px 5px; opacity: 0; transition: opacity 0.15s; flex-shrink: 0; margin-left: auto; }
+.tool-header:hover .tool-copy-btn { opacity: 0.6; }
+.tool-copy-btn:hover { opacity: 1 !important; color: var(--text); border-color: var(--border); }
+.tool-copy-btn.copied { color: var(--green-bright); opacity: 1 !important; }
+/* Faded style for routine tools */
+.tool-card.faded .tool-header { opacity: 0.55; }
+.tool-card.faded:hover .tool-header { opacity: 0.85; }
+.tool-body { display: none; padding: 8px 12px; border-top: 1px solid rgba(255,255,255,0.05); font-size: 12px; }
+.tool-body.open { display: block; }
+.tool-section-label { font-size: 10px; text-transform: uppercase; color: var(--text-muted); margin-top: 8px; margin-bottom: 4px; letter-spacing: 0.5px; }
+.tool-section-label:first-child { margin-top: 0; }
+.tool-body pre { background: #0d1117; border-radius: 4px; padding: 8px; overflow-x: auto; font-size: 11px; max-height: 200px; overflow-y: auto; margin: 4px 0; line-height: 1.5; font-family: 'SF Mono', Consolas, monospace; color: var(--text); border: 1px solid rgba(255,255,255,0.05); }
+.tool-result-content { position: relative; }
+.tool-result-truncated { max-height: 150px; overflow: hidden; }
+.tool-result-truncated::after { content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 40px; background: linear-gradient(transparent, var(--bg-secondary)); pointer-events: none; }
+.tool-expand-btn { display: inline-block; font-size: 11px; color: var(--accent); cursor: pointer; margin-top: 4px; padding: 2px 0; }
+.tool-expand-btn:hover { text-decoration: underline; }
+.tool-streaming-content { font-family: 'SF Mono', Consolas, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; color: var(--text); padding: 4px 0; }
+.think-card .tool-body { display: block; }
+.think-card .tool-header { cursor: default; }
+
+/* Generate tool rich cards */
+.gen-card { border: 1px solid var(--purple); border-radius: 8px; background: rgba(210,168,255,0.05); }
+.gen-card .tool-body { display: block; padding: 12px; }
+.gen-card .gen-section { margin-bottom: 10px; }
+.gen-card .gen-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 4px; }
+.gen-card .gen-prompt { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; }
+.gen-card .gen-images { display: flex; gap: 8px; flex-wrap: wrap; }
+.gen-card .gen-images .gen-img-wrap { position: relative; }
+.gen-card .gen-images img { width: 80px; height: 80px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; }
+.gen-card .gen-images img:hover { border-color: var(--accent); }
+.gen-card .gen-images .gen-img-label { font-size: 9px; color: var(--text-muted); text-align: center; margin-top: 2px; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gen-card .gen-meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 12px; flex-wrap: wrap; }
+.gen-card .gen-meta span { background: var(--bg-tertiary); padding: 2px 8px; border-radius: 4px; }
+.tool-md-result { font-size: 13px; line-height: 1.5; }
+.tool-md-result h1, .tool-md-result h2, .tool-md-result h3 { color: var(--accent); margin: 8px 0 4px; font-size: 14px; }
+.tool-md-result p { margin: 4px 0; }
+.tool-md-result ul, .tool-md-result ol { padding-left: 16px; }
+.tool-md-result code { background: var(--bg-tertiary); padding: 1px 3px; border-radius: 2px; font-size: 12px; }
+.tool-md-result pre { background: #0d1117; padding: 8px; border-radius: 4px; margin: 4px 0; font-size: 11px; }
+
+/* Phase transition */
+.phase-transition { display: flex; align-items: center; gap: 8px; padding: 8px 16px; margin: 4px 0; background: linear-gradient(90deg, rgba(88,166,255,0.1) 0%, transparent 100%); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; }
+.phase-transition .phase-icon { font-size: 14px; }
+.phase-transition .phase-text { font-size: 13px; color: var(--accent); font-weight: 600; }
+.phase-transition .phase-desc { font-size: 12px; color: var(--text-muted); }
+
+/* Question area */
+/* Question card — inline in chat */
+.question-card { background: var(--bg-secondary); border: 1px solid var(--accent); border-radius: 8px; padding: 16px; margin: 4px 0; }
+.question-card.answered { opacity: 0.6; border-color: var(--border); pointer-events: none; }
+.question-header { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.question-icon { width: 20px; height: 20px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; flex-shrink: 0; }
+.question-text { font-size: 14px; line-height: 1.5; color: var(--text); }
+.question-text p:first-child { margin-top: 0; }
+.question-text p:last-child { margin-bottom: 0; }
+.question-options { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.question-option { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; cursor: pointer; transition: all 0.15s; text-align: left; width: 100%; }
+.question-option:hover { border-color: var(--accent); background: #1c3a5c; }
+.question-option.selected { border-color: var(--accent); background: #1c3a5c; }
+.question-option-radio { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--text-muted); flex-shrink: 0; margin-top: 2px; transition: all 0.15s; }
+.question-option:hover .question-option-radio { border-color: var(--accent); }
+.question-option.selected .question-option-radio { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--bg); }
+.question-option-content { flex: 1; min-width: 0; }
+.question-option-label { font-size: 13px; font-weight: 500; color: var(--text); }
+.question-option-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; line-height: 1.4; }
+.question-timer-bar { height: 3px; background: var(--bg-tertiary); border-radius: 2px; margin-top: 12px; overflow: hidden; }
+.question-timer-fill { height: 100%; background: var(--accent); border-radius: 2px; transition: width 0.1s linear; }
+.question-timer-text { font-size: 11px; color: var(--text-muted); margin-top: 4px; text-align: right; }
+.question-actions { display: flex; gap: 8px; margin-top: 12px; align-items: center; }
+.question-submit-btn { background: #1c3a5c; border: 1px solid var(--accent); color: var(--accent); padding: 8px 20px; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 500; }
+.question-submit-btn:hover { background: #234b73; }
+.question-submit-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.question-custom-input { flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 10px; border-radius: 6px; font-size: 13px; }
+.question-custom-wrap { display: flex; gap: 6px; margin-top: 8px; }
+.question-answered-label { font-size: 12px; color: var(--text-muted); margin-top: 8px; font-style: italic; }
+
+/* Input area */
+#input-area { display: flex; gap: 8px; padding: 12px 16px; background: var(--bg-secondary); border-top: 1px solid var(--border); flex-shrink: 0; }
+#input-box { flex: 1; background: var(--bg); border: 1px solid var(--border); color: var(--text); padding: 8px 12px; border-radius: 8px; font-size: 14px; font-family: inherit; resize: none; outline: none; max-height: 120px; }
+#input-box:focus { border-color: var(--accent); }
+#send-btn { background: var(--accent); color: #fff; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; flex-shrink: 0; }
+#send-btn:hover { opacity: 0.9; }
+#send-btn:disabled { opacity: 0.4; cursor: default; }
+
+/* File attachments */
+#attached-files { display: flex; gap: 8px; padding: 8px 16px 0; flex-wrap: wrap; }
+.attached-file { display: flex; align-items: center; gap: 6px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+.attached-file img { width: 32px; height: 32px; object-fit: cover; border-radius: 4px; }
+.attached-file .file-name { color: var(--text); max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attached-file .file-remove { color: var(--text-muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.attached-file .file-remove:hover { color: var(--red); }
+.drop-overlay { position: absolute; inset: 0; background: rgba(88,166,255,0.1); border: 2px dashed var(--accent); border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; color: var(--accent); font-weight: 600; z-index: 20; pointer-events: none; }
+
+/* Lightbox */
+.lightbox { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 1000; cursor: pointer; }
+.lightbox img { max-width: 90%; max-height: 90%; border-radius: 8px; }
+
+/* Toasts */
+#toast-container { position: fixed; top: 16px; right: 16px; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
+.toast { padding: 10px 16px; border-radius: 8px; font-size: 13px; max-width: 360px; animation: slideIn 0.3s ease; }
+.toast.info { background: #1c3a5c; border: 1px solid var(--accent); color: var(--accent); }
+.toast.warning { background: #3d2e08; border: 1px solid var(--orange); color: var(--orange); }
+.toast.error { background: #3d1518; border: 1px solid var(--red); color: #f8d7da; }
+@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+.hidden { display: none !important; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--bg-tertiary); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--border); }
+`;
+}
+
+function getScript(): string {
+  return `
+// ===== State =====
+let ws = null;
+let sessionId = null;
+let selectedProject = null;
+let autoScroll = true;
+let reconnectDelay = 1000;
+let reconnectTimer = null;
+let streamingEl = null;
+let streamRenderTimer = null;
+let currentAgentGroup = null; // { name, el, bodyEl, count }
+let toolCounter = 0;
+let pendingTools = {}; // generatedId -> { card element, startTime, toolName }
+let attachedFiles = []; // { name, path, url }
+let artifactCache = {}; // artifact_id -> { path, url, type }
+
+const chatMessages = document.getElementById('chat-messages');
+const inputBox = document.getElementById('input-box');
+const sendBtn = document.getElementById('send-btn');
+const projectSelect = document.getElementById('project-select');
+const scrollBtn = document.getElementById('scroll-btn');
+let activeQuestionCard = null; // currently active question card element
+let questionTimerInterval = null; // auto-approve countdown interval
+
+// ===== Connection Manager =====
+function connect() {
+  setConnStatus('connecting');
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/api/v1/ws/chat');
+
+  ws.onopen = () => {
+    setConnStatus('connected');
+    reconnectDelay = 1000;
+    addSystemMessage('Connected to server');
+  };
+
+  ws.onmessage = (e) => {
+    try { handleServerMessage(JSON.parse(e.data)); }
+    catch (err) { console.error('Parse error:', err); }
+  };
+
+  ws.onclose = () => {
+    setConnStatus('disconnected');
+    sessionId = null;
+    scheduleReconnect();
+  };
+
+  ws.onerror = () => setConnStatus('disconnected');
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, reconnectDelay);
+  reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+}
+
+function setConnStatus(s) {
+  const dot = document.getElementById('conn-status');
+  dot.className = 'conn-dot ' + s;
+  dot.title = s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function wsSend(msg) {
+  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+// ===== Message Router =====
+function handleServerMessage(msg) {
+  if (msg.sessionId && !sessionId) sessionId = msg.sessionId;
+  switch (msg.type) {
+    case 'status': handleStatus(msg.data); break;
+    case 'stream_chunk': handleStreamChunk(msg.data); break;
+    case 'tool_call': handleToolCall(msg.data); break;
+    case 'agent_question': handleQuestion(msg.data); break;
+    case 'agent_response': handleAgentResponse(msg.data); break;
+    case 'todo_update': handleTodoUpdate(msg.data); break;
+    case 'context_usage': handleContextUsage(msg.data); break;
+    case 'phase_transition': handlePhaseTransition(msg.data); break;
+    case 'notification': handleNotification(msg.data); break;
+    case 'error': handleError(msg.data); break;
+  }
+}
+
+// ===== Status =====
+function handleStatus(data) {
+  if (data.status === 'connected') sendBtn.disabled = false;
+  else if (data.status === 'busy') sendBtn.disabled = true;
+  else if (data.status === 'completed') { sendBtn.disabled = false; finalizeStream(); closeAgentGroup(); }
+}
+
+// ===== Agent Grouping =====
+function getOrCreateAgentGroup(agentName) {
+  var name = agentName || 'Agent';
+  if (currentAgentGroup && currentAgentGroup.name === name) {
+    return currentAgentGroup;
+  }
+  // Close previous group
+  closeAgentGroup();
+  // Add a label for the new agent
+  var label = document.createElement('div');
+  label.className = 'agent-label';
+  label.textContent = name;
+  chatMessages.appendChild(label);
+  currentAgentGroup = { name, bodyEl: chatMessages };
+  return currentAgentGroup;
+}
+
+function closeAgentGroup() {
+  currentAgentGroup = null;
+}
+
+// ===== Streaming Text =====
+function handleStreamChunk(data) {
+  // Tool streaming goes into the tool card
+  if (data.toolCallId) {
+    const entry = findToolEntry(data.toolCallId);
+    if (entry) { handleToolStreaming(entry, data); return; }
+  }
+
+  // If there's an active agent group, put streaming text inside it
+  // If agent name changed, close and reopen
+  if (data.agentName && currentAgentGroup && currentAgentGroup.name !== data.agentName) {
+    finalizeStream();
+    closeAgentGroup();
+  }
+
+  if (data.reset) {
+    if (streamingEl) streamingEl.remove();
+    streamingEl = null;
+  }
+
+  if (!streamingEl) {
+    streamingEl = createStreamingMessage(data.agentName);
+  }
+
+  var contentEl = streamingEl.querySelector('.msg-content');
+  if (data.content) {
+    var raw = (streamingEl._rawText || '') + data.content;
+    streamingEl._rawText = raw;
+    // Throttled markdown rendering during streaming
+    if (!streamRenderTimer) {
+      streamRenderTimer = setTimeout(function() {
+        streamRenderTimer = null;
+        if (streamingEl) {
+          var el = streamingEl.querySelector('.msg-content');
+          if (el) el.innerHTML = renderMarkdown(streamingEl._rawText || '') + '<span class="streaming-cursor-inline"></span>';
+          maybeScroll();
+        }
+      }, 150);
+    }
+  }
+
+  if (data.done) {
+    if (streamRenderTimer) { clearTimeout(streamRenderTimer); streamRenderTimer = null; }
+    finalizeStream();
+  }
+  maybeScroll();
+}
+
+function finalizeStream() {
+  if (!streamingEl) return;
+  var raw = streamingEl._rawText || '';
+  if (!raw.trim()) {
+    streamingEl.remove();
+    streamingEl = null;
+    return;
+  }
+  // Convert streaming element into a tool-card style "think" card (no toolId — streaming origin)
+  var card = document.createElement('div');
+  card.className = 'tool-card think-card';
+  card.innerHTML =
+    '<div class="tool-header">' +
+      '<span class="tool-name cat-system">think</span>' +
+      '<button class="tool-copy-btn" onclick="copyCardText(this, event)">Copy</button>' +
+    '</div>' +
+    '<div class="tool-body" style="display:block">' +
+      '<div class="tool-md-result">' + renderMarkdown(raw.trim()) + '</div>' +
+    '</div>';
+  // Replace streaming el with the card
+  streamingEl.parentNode.replaceChild(card, streamingEl);
+  streamingEl = null;
+}
+
+function createStreamingMessage(agentName) {
+  var el = document.createElement('div');
+  el.className = 'msg agent agent-thinking';
+  el.innerHTML = '<div class="msg-content"></div>';
+  // If there's an active agent group, append inside it
+  if (currentAgentGroup) {
+    currentAgentGroup.bodyEl.appendChild(el);
+  } else if (agentName) {
+    var group = getOrCreateAgentGroup(agentName);
+    group.bodyEl.appendChild(el);
+  } else {
+    chatMessages.appendChild(el);
+  }
+  return el;
+}
+
+function createAgentMessage(agentName) {
+  const el = document.createElement('div');
+  el.className = 'msg agent';
+  el.innerHTML = '<button class="msg-copy-btn" onclick="copyCardText(this, event)">Copy</button><div class="msg-content"></div>';
+  chatMessages.appendChild(el);
+  return el;
+}
+
+// ===== Tool Calls =====
+function getToolCategory(toolName) {
+  const t = (toolName || '').toLowerCase();
+  if (t.includes('read') || t.includes('list') || t.includes('get') || t === 'search_files') return 'read';
+  if (t.includes('write') || t.includes('create') || t.includes('update') || t.includes('save') || t.includes('import') || t.includes('set')) return 'write';
+  if (t.includes('generat') || t.includes('image') || t.includes('render') || t.includes('video')) return 'generate';
+  if (t.includes('plan') || t.includes('review') || t.includes('approve') || t.includes('verify')) return 'plan';
+  if (t.includes('todo') || t.includes('phase') || t.includes('context') || t.includes('project')) return 'system';
+  return 'default';
+}
+
+function isRoutineTool(toolName) {
+  const t = (toolName || '').toLowerCase();
+  return t.includes('read') || t.includes('list') || t === 'search_files' || t.includes('get_project') || t.includes('todo');
+}
+
+function getToolParamsSummary(toolName, args) {
+  if (!args || typeof args !== 'object') return '';
+  // Show the most relevant param for common tools
+  if (args.path) return escHtml(String(args.path));
+  if (args.file_path) return escHtml(String(args.file_path));
+  if (args.query) return escHtml(truncStr(String(args.query), 80));
+  if (args.content) return escHtml(truncStr(String(args.content), 60));
+  if (args.task) return escHtml(truncStr(String(args.task), 80));
+  if (args.name) return escHtml(String(args.name));
+  // Fallback: show first few keys
+  const keys = Object.keys(args).slice(0, 3);
+  return keys.map(k => {
+    const v = args[k];
+    const vs = typeof v === 'string' ? truncStr(v, 40) : JSON.stringify(v);
+    return escHtml(k) + '=' + escHtml(truncStr(String(vs), 40));
+  }).join(', ');
+}
+
+function isGenerateTool(name) {
+  var t = (name || '').toLowerCase();
+  return t.includes('generate_image') || t.includes('generate_video') || t.includes('generate_content');
+}
+
+function buildArtifactImg(artifactId, label) {
+  var url = resolveArtifactUrl(artifactId);
+  var displayLabel = label || artifactId;
+  if (!url) return '<div class="gen-img-wrap"><div class="gen-img-label">' + escHtml(displayLabel) + '</div></div>';
+  return '<div class="gen-img-wrap"><img src="' + escHtml(url) + '" onclick="openLightbox(this.src)"><div class="gen-img-label">' + escHtml(displayLabel) + '</div></div>';
+}
+
+function getArtifactTypeLabel(artifactId) {
+  var entry = artifactCache[artifactId];
+  if (!entry) return artifactId;
+  var t = entry.type || '';
+  if (t === 'character_ref') return 'Character Ref';
+  if (t === 'setting_ref') return 'Setting Ref';
+  if (t === 'scene_image') return 'Scene Image';
+  if (t === 'scene_video') return 'Scene Video';
+  return t.replace(/_/g, ' ') || artifactId;
+}
+
+function buildGenerateCard(genId, toolName, args) {
+  var card = document.createElement('div');
+  card.className = 'tool-card gen-card';
+  card.dataset.toolId = genId;
+  card.dataset.toolName = toolName;
+
+  // Header
+  var headerHtml = '<div class="tool-header">' +
+    '<span class="tool-name cat-generate">' + escHtml(toolName) + '</span>' +
+    '<span class="tool-duration"></span>' +
+    '<button class="tool-copy-btn" onclick="copyCardText(this, event)">Copy</button>' +
+    '<span class="tool-status started">&#9679;</span>' +
+  '</div>';
+
+  // Body sections
+  var bodyHtml = '';
+
+  // Scene info
+  var metaParts = [];
+  if (args.scene_number) metaParts.push('<span>Scene ' + args.scene_number + '</span>');
+  if (args.image_type) metaParts.push('<span>' + escHtml(args.image_type) + '</span>');
+  if (args.generation_mode) metaParts.push('<span>' + escHtml(args.generation_mode) + '</span>');
+  if (args.character_name) metaParts.push('<span>Character: ' + escHtml(args.character_name) + '</span>');
+  if (args.setting_name) metaParts.push('<span>Setting: ' + escHtml(args.setting_name) + '</span>');
+  if (args.aspect_ratio) metaParts.push('<span>' + escHtml(args.aspect_ratio) + '</span>');
+  if (metaParts.length > 0) {
+    bodyHtml += '<div class="gen-section"><div class="gen-meta">' + metaParts.join('') + '</div></div>';
+  }
+
+  // Prompt
+  var prompt = args.prompt || args.motion_prompt || '';
+  var promptFile = args.prompt_file || args.motion_prompt_file || '';
+  if (prompt) {
+    bodyHtml += '<div class="gen-section"><div class="gen-label">Prompt</div><div class="gen-prompt">' + escHtml(prompt) + '</div></div>';
+  }
+  if (promptFile) {
+    bodyHtml += '<div class="gen-section"><div class="gen-label">Prompt File</div><div class="gen-prompt" style="font-size:12px;color:var(--accent);">' + escHtml(promptFile) + '</div></div>';
+  }
+  if (args.negative_prompt) {
+    bodyHtml += '<div class="gen-section"><div class="gen-label">Negative Prompt</div><div class="gen-prompt" style="color:var(--red);font-size:12px;">' + escHtml(args.negative_prompt) + '</div></div>';
+  }
+
+  // Images — separated by purpose with labels
+
+  // For generate_video_from_image: show the single shot image being animated
+  if (args.shot_image_artifact_id) {
+    var shotLabel = 'Shot' + (args.shot_number ? ' ' + args.shot_number : '') + ' Image';
+    bodyHtml += '<div class="gen-section"><div class="gen-label">' + shotLabel + '</div><div class="gen-images">' +
+      buildArtifactImg(args.shot_image_artifact_id, shotLabel) + '</div></div>';
+  }
+  // Legacy fallback for older scene_image_artifact_id
+  if (!args.shot_image_artifact_id && args.scene_image_artifact_id) {
+    bodyHtml += '<div class="gen-section"><div class="gen-label">Scene Image</div><div class="gen-images">' +
+      buildArtifactImg(args.scene_image_artifact_id, 'Scene') + '</div></div>';
+  }
+
+  // For generate_image: show reference images grouped by type
+  if (args.reference_images && Array.isArray(args.reference_images)) {
+    var charRefs = '';
+    var settingRefs = '';
+    args.reference_images.forEach(function(ref) {
+      if (!ref.image_id) return;
+      var aType = (artifactCache[ref.image_id] || {}).type || ref.type || '';
+      var refLabel = ref.name || getArtifactTypeLabel(ref.image_id);
+      if (aType === 'setting_ref') {
+        settingRefs += buildArtifactImg(ref.image_id, refLabel);
+      } else {
+        charRefs += buildArtifactImg(ref.image_id, refLabel);
+      }
+    });
+    if (charRefs) {
+      bodyHtml += '<div class="gen-section"><div class="gen-label">Character References</div><div class="gen-images">' + charRefs + '</div></div>';
+    }
+    if (settingRefs) {
+      bodyHtml += '<div class="gen-section"><div class="gen-label">Setting References</div><div class="gen-images">' + settingRefs + '</div></div>';
+    }
+  }
+
+  card.innerHTML = headerHtml + '<div class="tool-body">' + bodyHtml + '<div class="tool-streaming-content"></div><div class="tool-result-section" style="display:none"></div></div>';
+  return card;
+}
+
+function handleToolCall(data) {
+  // Finalize any streaming text before showing tool
+  finalizeStream();
+
+  const toolName = data.toolName || 'unknown';
+  const agentName = data.agentName;
+
+  if (data.status === 'started') {
+    toolCounter++;
+    const genId = 'tool_' + toolCounter;
+
+    // Get or create agent group
+    const group = getOrCreateAgentGroup(agentName);
+    const container = group.bodyEl;
+
+    // Special handling for think tool — render as think card, always expanded
+    if (toolName === 'think' || toolName === 'Think') {
+      var thought = (data.arguments && (data.arguments.thought || data.arguments.content)) || '';
+
+      // Remove preceding streaming-think card if it has the same content (avoids duplicate)
+      var lastChild = container.lastElementChild;
+      if (lastChild && lastChild.classList.contains('tool-card')) {
+        var prevName = lastChild.querySelector('.tool-name');
+        if (prevName && prevName.textContent === 'think' && !lastChild.dataset.toolId) {
+          lastChild.remove();
+        }
+      }
+
+      var thinkCard = document.createElement('div');
+      thinkCard.className = 'tool-card think-card';
+      thinkCard.dataset.toolId = genId;
+      thinkCard.dataset.toolName = toolName;
+      thinkCard.innerHTML =
+        '<div class="tool-header">' +
+          '<span class="tool-name cat-system">think</span>' +
+          '<button class="tool-copy-btn" onclick="copyCardText(this, event)">Copy</button>' +
+        '</div>' +
+        '<div class="tool-body" style="display:block">' +
+          '<div class="tool-md-result">' + renderMarkdown(thought) + '</div>' +
+        '</div>';
+      container.appendChild(thinkCard);
+      pendingTools[genId] = { card: thinkCard, startTime: Date.now(), toolName, isThink: true };
+      maybeScroll();
+      return;
+    }
+
+    // Special rich rendering for generate tools
+    if (isGenerateTool(toolName)) {
+      var genCard = buildGenerateCard(genId, toolName, data.arguments || {});
+      container.appendChild(genCard);
+      pendingTools[genId] = { card: genCard, startTime: Date.now(), toolName };
+      maybeScroll();
+      return;
+    }
+
+    const paramSummary = getToolParamsSummary(toolName, data.arguments);
+    const cat = getToolCategory(toolName);
+    const faded = isRoutineTool(toolName);
+    const card = document.createElement('div');
+    card.className = 'tool-card' + (faded ? ' faded' : '');
+    card.dataset.toolId = genId;
+    card.dataset.toolName = toolName;
+
+    card.innerHTML =
+      '<div class="tool-header" onclick="toggleToolBody(this)">' +
+        '<span class="tool-chevron">&#9654;</span>' +
+        '<span class="tool-name cat-' + cat + '">' + escHtml(toolName) + '</span>' +
+        (paramSummary ? '<span class="tool-params-summary">' + paramSummary + '</span>' : '') +
+        '<span class="tool-duration"></span>' +
+        '<button class="tool-copy-btn" onclick="copyCardText(this, event)">Copy</button>' +
+        '<span class="tool-status started">&#9679;</span>' +
+      '</div>' +
+      '<div class="tool-body">' +
+        '<div class="tool-section-label">Arguments</div>' +
+        '<pre>' + escHtml(JSON.stringify(data.arguments || {}, null, 2)) + '</pre>' +
+        '<div class="tool-streaming-content"></div>' +
+        '<div class="tool-result-section" style="display:none"></div>' +
+      '</div>';
+
+    container.appendChild(card);
+    pendingTools[genId] = { card, startTime: Date.now(), toolName };
+    maybeScroll();
+
+  } else if (data.status === 'completed' || data.status === 'error') {
+    // Find the matching pending tool card (most recent with same toolName)
+    let entry = null;
+    let entryId = null;
+    for (const [id, t] of Object.entries(pendingTools)) {
+      if (t.toolName === toolName) {
+        entry = t;
+        entryId = id;
+      }
+    }
+    if (!entry) return;
+    delete pendingTools[entryId];
+
+    // Skip result rendering for think tool — already shown in the card body
+    if (entry.isThink) return;
+
+    const card = entry.card;
+    const statusEl = card.querySelector('.tool-status');
+    statusEl.className = 'tool-status ' + data.status;
+    statusEl.innerHTML = data.status === 'completed' ? '&#10003;' : data.status === 'error' ? '&#10007;' : data.status;
+
+    const durEl = card.querySelector('.tool-duration');
+    durEl.textContent = formatDuration(Date.now() - entry.startTime);
+
+    if (data.result !== undefined) {
+      // Check if this is a confirmation-required result — show a clean message
+      var isConfirmationResult = typeof data.result === 'object' && data.result !== null && data.result.status === 'needs_confirmation';
+      if (isConfirmationResult) {
+        // For generate tools, just update status indicator to "pending" style
+        statusEl.className = 'tool-status started';
+        statusEl.innerHTML = '&#9679;';
+        var confLabel = document.createElement('div');
+        confLabel.style.cssText = 'font-size:12px;color:var(--text-muted);padding:8px 0 4px;';
+        confLabel.textContent = 'Awaiting user confirmation...';
+        var body = card.querySelector('.tool-body') || card;
+        body.appendChild(confLabel);
+      } else {
+        const resultSection = card.querySelector('.tool-result-section');
+        resultSection.style.display = 'block';
+        renderToolResult(resultSection, toolName, data.result);
+      }
+    }
+    // Refresh asset panel after image generation completes
+    if (selectedProject && (toolName === 'wait_for_job' || toolName === 'generate_image') && data.status === 'completed') {
+      loadProjectAssets(selectedProject);
+    }
+
+    maybeScroll();
+  }
+}
+
+function renderToolResult(container, toolName, result) {
+  container.innerHTML = '<div class="tool-section-label">Result</div>';
+
+  // For Task/subagent results, show a brief status — the summary was already
+  // streamed as agent_text/think blocks, so don't duplicate it
+  if (typeof result === 'object' && result !== null && (result.summary || result.output)) {
+    var status = result.status || 'completed';
+    var msg = result.message || '';
+    container.innerHTML = '<div class="tool-section-label">Result</div>' +
+      '<div class="tool-result-content" style="font-size:12px;color:var(--text-muted);padding:4px 0;">' +
+      escHtml(status + (msg ? ' — ' + msg : '')) + '</div>';
+    return;
+  }
+
+  var resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+
+  // Check if result is markdown-like (from read_file on .md files, or has markdown headers)
+  var looksLikeMd = /^#{1,3} |\\n#{1,3} |\\*\\*[^*]+\\*\\*|^- /.test(resultStr);
+  // Check if result is JSON
+  var looksLikeJson = resultStr.trimStart().startsWith('{') || resultStr.trimStart().startsWith('[');
+  // Check if result is very long
+  var isLong = resultStr.length > 500;
+
+  var wrapper = document.createElement('div');
+  wrapper.className = 'tool-result-content';
+
+  if (looksLikeMd && !looksLikeJson) {
+    // Render as markdown
+    var mdDiv = document.createElement('div');
+    mdDiv.className = 'tool-md-result';
+    mdDiv.innerHTML = renderMarkdown(resultStr);
+    wrapper.appendChild(mdDiv);
+  } else if (looksLikeJson) {
+    // Render as formatted JSON code block
+    var pre = document.createElement('pre');
+    try {
+      var parsed = JSON.parse(resultStr);
+      pre.textContent = JSON.stringify(parsed, null, 2);
+    } catch(e) {
+      pre.textContent = resultStr;
+    }
+    wrapper.appendChild(pre);
+  } else {
+    // Plain text in pre
+    var pre = document.createElement('pre');
+    pre.textContent = resultStr;
+    wrapper.appendChild(pre);
+  }
+
+  // Truncation with expand
+  if (isLong) {
+    wrapper.classList.add('tool-result-truncated');
+    var expandBtn = document.createElement('span');
+    expandBtn.className = 'tool-expand-btn';
+    expandBtn.textContent = 'Show more';
+    expandBtn.onclick = function() {
+      if (wrapper.classList.contains('tool-result-truncated')) {
+        wrapper.classList.remove('tool-result-truncated');
+        this.textContent = 'Show less';
+      } else {
+        wrapper.classList.add('tool-result-truncated');
+        this.textContent = 'Show more';
+      }
+    };
+    container.appendChild(wrapper);
+    container.appendChild(expandBtn);
+  } else {
+    container.appendChild(wrapper);
+  }
+
+  // Detect and render images in results
+  renderImagesInResult(container, resultStr);
+}
+
+function findToolEntry(toolCallId) {
+  // toolCallId from server is often empty; try matching by ID or return last pending
+  for (const [id, t] of Object.entries(pendingTools)) {
+    return t; // return most recent (usually only one pending at a time)
+  }
+  return null;
+}
+
+function handleToolStreaming(entry, data) {
+  const streamEl = entry.card.querySelector('.tool-streaming-content');
+  if (!streamEl) return;
+  if (data.reset) streamEl.textContent = '';
+  if (data.content) streamEl.textContent += data.content;
+
+  // Auto-open tool body
+  const body = entry.card.querySelector('.tool-body');
+  if (!body.classList.contains('open')) {
+    body.classList.add('open');
+    entry.card.querySelector('.tool-chevron').classList.add('open');
+  }
+  maybeScroll();
+}
+
+function toggleToolBody(header) {
+  const chevron = header.querySelector('.tool-chevron');
+  const body = header.nextElementSibling;
+  chevron.classList.toggle('open');
+  body.classList.toggle('open');
+}
+
+function copyCardText(btn, event) {
+  if (event) event.stopPropagation();
+  // Walk up to find the closest card-like container
+  var card = btn.closest('.tool-card') || btn.closest('.question-card') || btn.closest('.msg');
+  if (!card) return;
+  var parts = [];
+
+  // Tool card: name, arguments, streaming content, result
+  var nameEl = card.querySelector('.tool-name');
+  if (nameEl) parts.push('Tool: ' + nameEl.textContent);
+  var argsPre = card.querySelector('.tool-body > pre');
+  if (argsPre && argsPre.textContent) parts.push('Arguments:\\n' + argsPre.textContent);
+  var streamEl = card.querySelector('.tool-streaming-content');
+  if (streamEl && streamEl.textContent.trim()) parts.push('Output:\\n' + streamEl.textContent.trim());
+  var resultEl = card.querySelector('.tool-result-section');
+  if (resultEl && resultEl.style.display !== 'none') {
+    var resultText = resultEl.textContent || '';
+    resultText = resultText.replace(/^Result\\s*/, '').trim();
+    if (resultText) parts.push('Result:\\n' + resultText);
+  }
+  // Think card body (md content)
+  var mdResult = card.querySelector('.tool-md-result');
+  if (mdResult && !argsPre) parts.push(mdResult.textContent || '');
+  // Question card
+  var qText = card.querySelector('.question-text');
+  if (qText) parts.push(qText.textContent || '');
+  var answeredLabel = card.querySelector('.question-answered-label');
+  if (answeredLabel) parts.push(answeredLabel.textContent || '');
+  // Agent message
+  var msgContent = card.querySelector('.msg-content');
+  if (msgContent && !nameEl && !qText) parts.push(msgContent.textContent || '');
+  // Gen card sections
+  var genPrompt = card.querySelector('.gen-prompt');
+  if (genPrompt) parts.push('Prompt:\\n' + genPrompt.textContent);
+  var genRefs = card.querySelectorAll('.gen-ref-path');
+  if (genRefs.length > 0) {
+    var refs = [];
+    genRefs.forEach(function(r) { refs.push(r.textContent); });
+    parts.push('References:\\n' + refs.join('\\n'));
+  }
+
+  var text = parts.filter(function(p) { return p && p.trim(); }).join('\\n\\n');
+  navigator.clipboard.writeText(text).then(function() {
+    btn.textContent = '\\u2713 Copied';
+    btn.classList.add('copied');
+    setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+  }).catch(function() {});
+}
+
+// ===== Images in Results =====
+function renderImagesInResult(container, text) {
+  const imagePattern = /([\\w\\/\\-_.]+\\.(png|jpg|jpeg|webp|gif))/gi;
+  const matches = text.match(imagePattern);
+  if (!matches || !selectedProject) return;
+
+  const seen = new Set();
+  matches.forEach(path => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    let assetPath = path;
+    const assetsIdx = path.indexOf('assets/');
+    if (assetsIdx >= 0) assetPath = path.substring(assetsIdx);
+    const url = '/api/v1/assets/' + selectedProject + '/' + assetPath;
+    const img = document.createElement('img');
+    img.src = url;
+    img.style.maxWidth = '300px';
+    img.style.borderRadius = '6px';
+    img.style.marginTop = '8px';
+    img.style.cursor = 'pointer';
+    img.onclick = function() { openLightbox(url); };
+    img.onerror = function() { this.remove(); };
+    container.appendChild(img);
+  });
+}
+
+// ===== Questions =====
+function stopQuestionTimer(card) {
+  if (questionTimerInterval) {
+    clearInterval(questionTimerInterval);
+    questionTimerInterval = null;
+  }
+  // Update UI to show timer was cancelled
+  var tb = card.querySelector('.question-timer-bar');
+  if (tb) tb.remove();
+  var tt = card.querySelector('.question-timer-text');
+  if (tt) { tt.textContent = 'Auto-approve cancelled'; setTimeout(function() { tt.remove(); }, 2000); }
+}
+
+function handleQuestion(data) {
+  // Finalize any ongoing stream first
+  finalizeStream();
+
+  // Clear any previous timer
+  if (questionTimerInterval) { clearInterval(questionTimerInterval); questionTimerInterval = null; }
+
+  var question = data.question || '';
+  var options = data.options || [];
+  var isConfirmation = data.isConfirmation || data.toolCallId === 'confirmation';
+  var autoApproveMs = data.autoApproveTimeoutMs || 0;
+
+  // If confirmation and no options provided, default to Yes/No
+  if (isConfirmation && options.length === 0) {
+    options = [
+      { label: 'Yes', description: 'Confirm and proceed' },
+      { label: 'No', description: 'Decline' },
+    ];
+  }
+
+  var container = currentAgentGroup ? currentAgentGroup.bodyEl : chatMessages;
+
+  var card = document.createElement('div');
+  card.className = 'question-card';
+  activeQuestionCard = card;
+
+  // Header
+  var header = document.createElement('div');
+  header.className = 'question-header';
+  header.innerHTML = '<div class="question-icon">?</div><button class="tool-copy-btn" style="opacity:0.4;margin-left:auto" onclick="copyCardText(this, event)">Copy</button>';
+  card.appendChild(header);
+
+  // Question text
+  var textEl = document.createElement('div');
+  textEl.className = 'question-text';
+  textEl.innerHTML = renderMarkdown(question);
+  card.appendChild(textEl);
+
+  // Options
+  var selectedOption = null;
+  if (options.length > 0) {
+    var optionsEl = document.createElement('div');
+    optionsEl.className = 'question-options';
+
+    options.forEach(function(opt, idx) {
+      var optBtn = document.createElement('button');
+      optBtn.className = 'question-option';
+      optBtn.innerHTML =
+        '<div class="question-option-radio"></div>' +
+        '<div class="question-option-content">' +
+          '<div class="question-option-label">' + escHtml(opt.label || opt) + '</div>' +
+          (opt.description ? '<div class="question-option-desc">' + escHtml(opt.description) + '</div>' : '') +
+        '</div>';
+
+      optBtn.onclick = function() {
+        // Stop auto-approve timer on any user interaction
+        stopQuestionTimer(card);
+        // Deselect all
+        optionsEl.querySelectorAll('.question-option').forEach(function(o) { o.classList.remove('selected'); });
+        optBtn.classList.add('selected');
+        selectedOption = opt.label || opt;
+        // Enable submit
+        var submitBtn = card.querySelector('.question-submit-btn');
+        if (submitBtn) submitBtn.disabled = false;
+        // If the option is "Other" or "Provide feedback", show custom input
+        var customWrap = card.querySelector('.question-custom-wrap');
+        if (customWrap) {
+          var isCustom = (selectedOption || '').toLowerCase() === 'other' || (selectedOption || '').toLowerCase() === 'provide feedback';
+          customWrap.style.display = isCustom ? 'flex' : 'none';
+          if (isCustom) customWrap.querySelector('input').focus();
+        }
+      };
+
+      // Auto-select first option
+      if (idx === 0) {
+        optBtn.classList.add('selected');
+        selectedOption = opt.label || opt;
+      }
+
+      optionsEl.appendChild(optBtn);
+    });
+    card.appendChild(optionsEl);
+  }
+
+  // Custom input for "Other"
+  var customWrap = document.createElement('div');
+  customWrap.className = 'question-custom-wrap';
+  customWrap.style.display = 'none';
+  var customInput = document.createElement('input');
+  customInput.className = 'question-custom-input';
+  customInput.placeholder = 'Type your response...';
+  customInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') submitQuestion();
+  });
+  customInput.addEventListener('input', function() { stopQuestionTimer(card); });
+  customWrap.appendChild(customInput);
+  card.appendChild(customWrap);
+
+  // Actions row
+  var actionsEl = document.createElement('div');
+  actionsEl.className = 'question-actions';
+  var submitBtn = document.createElement('button');
+  submitBtn.className = 'question-submit-btn';
+  submitBtn.textContent = options.length > 0 ? 'Submit' : 'Reply';
+  submitBtn.disabled = options.length > 0 ? false : true; // enabled if options pre-selected
+  submitBtn.onclick = function() { submitQuestion(); };
+  actionsEl.appendChild(submitBtn);
+
+  // If no options, show a text input inline
+  if (options.length === 0) {
+    var freeInput = document.createElement('input');
+    freeInput.className = 'question-custom-input';
+    freeInput.placeholder = 'Type your response...';
+    freeInput.style.flex = '1';
+    freeInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') submitQuestion();
+    });
+    freeInput.addEventListener('input', function() {
+      stopQuestionTimer(card);
+      submitBtn.disabled = !freeInput.value.trim();
+    });
+    actionsEl.insertBefore(freeInput, submitBtn);
+    card._freeInput = freeInput;
+  }
+
+  card.appendChild(actionsEl);
+
+  // Timer bar
+  if (autoApproveMs > 0 && options.length > 0) {
+    var timerBar = document.createElement('div');
+    timerBar.className = 'question-timer-bar';
+    var timerFill = document.createElement('div');
+    timerFill.className = 'question-timer-fill';
+    timerFill.style.width = '100%';
+    timerBar.appendChild(timerFill);
+    card.appendChild(timerBar);
+
+    var timerText = document.createElement('div');
+    timerText.className = 'question-timer-text';
+    var secsLeft = Math.ceil(autoApproveMs / 1000);
+    timerText.textContent = 'Auto-approving in ' + secsLeft + 's...';
+    card.appendChild(timerText);
+
+    var startTime = Date.now();
+    questionTimerInterval = setInterval(function() {
+      var elapsed = Date.now() - startTime;
+      var remaining = Math.max(0, autoApproveMs - elapsed);
+      var pct = (remaining / autoApproveMs) * 100;
+      timerFill.style.width = pct + '%';
+      timerText.textContent = 'Auto-approving in ' + Math.ceil(remaining / 1000) + 's...';
+      if (remaining <= 0) {
+        clearInterval(questionTimerInterval);
+        questionTimerInterval = null;
+        submitQuestion();
+      }
+    }, 100);
+  }
+
+  container.appendChild(card);
+  maybeScroll();
+
+  function submitQuestion() {
+    if (questionTimerInterval) { clearInterval(questionTimerInterval); questionTimerInterval = null; }
+    var response = '';
+
+    // Check for custom/free input
+    var customVal = customInput.value.trim();
+    var freeVal = card._freeInput ? card._freeInput.value.trim() : '';
+
+    if (freeVal) {
+      response = freeVal;
+    } else if ((selectedOption || '').toLowerCase() === 'other' || (selectedOption || '').toLowerCase() === 'provide feedback') {
+      response = customVal || selectedOption;
+    } else if (selectedOption) {
+      response = selectedOption;
+    }
+
+    if (!response) return;
+
+    // Mark card as answered
+    card.classList.add('answered');
+    var answeredLabel = document.createElement('div');
+    answeredLabel.className = 'question-answered-label';
+    answeredLabel.textContent = 'Answered: ' + response;
+    card.appendChild(answeredLabel);
+    // Remove timer
+    var tb = card.querySelector('.question-timer-bar');
+    if (tb) tb.remove();
+    var tt = card.querySelector('.question-timer-text');
+    if (tt) tt.remove();
+
+    activeQuestionCard = null;
+    wsSend({ type: 'user_response', sessionId, data: { response: response } });
+    maybeScroll();
+  }
+}
+
+// ===== Agent Response =====
+function handleAgentResponse(data) {
+  finalizeStream();
+  // Suppress agent_response when it's just repeating the question (awaiting_input)
+  if (data.status === 'awaiting_input') {
+    // Question card is already rendered — don't duplicate
+    return;
+  }
+  if (data.output && data.output.trim()) {
+    const el = createAgentMessage();
+    el.querySelector('.msg-content').innerHTML = renderMarkdown(data.output);
+  }
+  sendBtn.disabled = false;
+  closeAgentGroup();
+}
+
+// ===== Todo Updates =====
+function handleTodoUpdate(data) {
+  const list = document.getElementById('todo-list');
+  if (!data.todos || data.todos.length === 0) {
+    list.innerHTML = '<div style="font-size:12px;color:var(--text-muted)">No todos</div>';
+    return;
+  }
+  list.innerHTML = data.todos.map(function(t) {
+    const icon = t.status === 'completed' ? '\\u2713' :
+                 t.status === 'in_progress' ? '\\u25B6' : '\\u25CB';
+    const indent = (t.depth || 0) * 12;
+    return '<div class="todo-item" style="padding-left:' + indent + 'px">' +
+      '<span class="todo-icon ' + t.status + '">' + icon + '</span>' +
+      '<span class="todo-text">' + escHtml(t.task) + '</span></div>';
+  }).join('');
+}
+
+// ===== Context Usage =====
+function handleContextUsage(data) {
+  const pct = Math.round(data.percentage || 0);
+  document.getElementById('context-fill').style.width = pct + '%';
+  document.getElementById('context-label').textContent = 'CTX ' + pct + '%';
+  const fill = document.getElementById('context-fill');
+  fill.style.background = pct > 80 ? 'var(--red)' : pct > 60 ? 'var(--orange)' : 'var(--accent)';
+}
+
+// ===== Phase Transitions =====
+function handlePhaseTransition(data) {
+  document.getElementById('phase-display').textContent = data.displayName || data.toPhase;
+  closeAgentGroup();
+  const el = document.createElement('div');
+  el.className = 'phase-transition';
+  el.innerHTML = '<span class="phase-icon">&#x2192;</span>' +
+    '<span class="phase-text">' + escHtml(data.displayName || data.toPhase) + '</span>' +
+    (data.description ? '<span class="phase-desc"> \\u2014 ' + escHtml(data.description) + '</span>' : '');
+  chatMessages.appendChild(el);
+  maybeScroll();
+}
+
+// ===== Notifications =====
+function handleNotification(data) { showToast(data.message, data.level || 'info'); }
+
+function showToast(message, level) {
+  const container = document.getElementById('toast-container');
+  const toast = document.createElement('div');
+  toast.className = 'toast ' + level;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(function() { toast.style.opacity = '0'; setTimeout(function() { toast.remove(); }, 300); }, 4000);
+}
+
+// ===== Error =====
+function handleError(data) {
+  const el = document.createElement('div');
+  el.className = 'msg error';
+  el.innerHTML = '<div class="msg-content"><strong>Error:</strong> ' + escHtml(data.message) + '</div>';
+  chatMessages.appendChild(el);
+  sendBtn.disabled = false;
+  maybeScroll();
+}
+
+// ===== Send Message =====
+function sendMessage() {
+  var text = inputBox.value.trim();
+  if (!text && attachedFiles.length === 0) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  // Build task with attached file paths
+  var task = text;
+  if (attachedFiles.length > 0) {
+    var filePaths = attachedFiles.map(function(f) { return f.path; }).join('\\n');
+    task = (text ? text + '\\n\\n' : '') + 'Attached files:\\n' + filePaths;
+  }
+
+  addUserMessage(text || 'Attached ' + attachedFiles.length + ' file(s)');
+  wsSend({ type: 'start_task', sessionId, data: { task: task } });
+  inputBox.value = '';
+  inputBox.style.height = 'auto';
+  sendBtn.disabled = true;
+  clearAttachedFiles();
+}
+
+function addUserMessage(text) {
+  closeAgentGroup();
+  const el = document.createElement('div');
+  el.className = 'msg user';
+  el.innerHTML = '<div class="msg-content">' + escHtml(text) + '</div>';
+  chatMessages.appendChild(el);
+  maybeScroll();
+}
+
+function addSystemMessage(text) {
+  const el = document.createElement('div');
+  el.className = 'msg system';
+  el.textContent = text;
+  chatMessages.appendChild(el);
+}
+
+// ===== File Attachments =====
+var attachedFilesEl = document.getElementById('attached-files');
+var chatContainer = document.getElementById('chat-container');
+var dropOverlay = null;
+
+function renderAttachedFiles() {
+  if (attachedFiles.length === 0) {
+    attachedFilesEl.classList.add('hidden');
+    attachedFilesEl.innerHTML = '';
+    return;
+  }
+  attachedFilesEl.classList.remove('hidden');
+  attachedFilesEl.innerHTML = '';
+  attachedFiles.forEach(function(f, i) {
+    var el = document.createElement('div');
+    el.className = 'attached-file';
+    var isImg = /\\.(png|jpg|jpeg|webp|gif)$/i.test(f.name);
+    el.innerHTML = (isImg ? '<img src="' + f.url + '">' : '') +
+      '<span class="file-name">' + escHtml(f.name) + '</span>' +
+      '<span class="file-remove" data-idx="' + i + '">&times;</span>';
+    el.querySelector('.file-remove').onclick = function() {
+      attachedFiles.splice(i, 1);
+      renderAttachedFiles();
+    };
+    attachedFilesEl.appendChild(el);
+  });
+}
+
+function clearAttachedFiles() {
+  attachedFiles = [];
+  renderAttachedFiles();
+}
+
+async function uploadFile(file) {
+  try {
+    var res = await fetch('/api/v1/upload?filename=' + encodeURIComponent(file.name), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: file,
+    });
+    var data = await res.json();
+    attachedFiles.push({ name: data.name, path: data.path, url: data.url });
+    renderAttachedFiles();
+  } catch(e) {
+    console.error('Upload failed:', e);
+    addSystemMessage('Upload failed: ' + file.name);
+  }
+}
+
+// Drag and drop on chat container
+chatContainer.addEventListener('dragover', function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (!dropOverlay) {
+    dropOverlay = document.createElement('div');
+    dropOverlay.className = 'drop-overlay';
+    dropOverlay.textContent = 'Drop files here';
+    chatContainer.appendChild(dropOverlay);
+  }
+});
+
+chatContainer.addEventListener('dragleave', function(e) {
+  e.preventDefault();
+  if (dropOverlay && !chatContainer.contains(e.relatedTarget)) {
+    dropOverlay.remove();
+    dropOverlay = null;
+  }
+});
+
+chatContainer.addEventListener('drop', function(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  if (dropOverlay) { dropOverlay.remove(); dropOverlay = null; }
+  var files = e.dataTransfer && e.dataTransfer.files;
+  if (files) {
+    for (var i = 0; i < files.length; i++) {
+      uploadFile(files[i]);
+    }
+  }
+});
+
+// Also handle paste of files (e.g. screenshot paste)
+inputBox.addEventListener('paste', function(e) {
+  var items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].kind === 'file') {
+      var file = items[i].getAsFile();
+      if (file) uploadFile(file);
+    }
+  }
+});
+
+// ===== Artifact Cache =====
+async function loadArtifactCache(projectName) {
+  artifactCache = {};
+  try {
+    var res = await fetch('/api/v1/projects/' + projectName + '/assets');
+    var data = await res.json();
+    (data.assets || []).forEach(function(a) {
+      artifactCache[a.id] = {
+        path: a.path,
+        url: '/api/v1/assets/' + projectName + '/' + a.path,
+        type: a.type || 'unknown',
+      };
+    });
+  } catch(e) { console.error('loadArtifactCache:', e); }
+}
+
+function resolveArtifactUrl(artifactId) {
+  var entry = artifactCache[artifactId];
+  return entry ? entry.url : null;
+}
+
+// ===== Project Browser =====
+async function loadProjects() {
+  try {
+    const res = await fetch('/api/v1/projects');
+    const data = await res.json();
+    const sel = projectSelect;
+    // Keep first option (Select Project...) and remove the rest
+    while (sel.options.length > 1) sel.remove(1);
+    // Add New Project option first
+    var newOpt = document.createElement('option');
+    newOpt.value = '__new__';
+    newOpt.textContent = '+ New Project';
+    sel.appendChild(newOpt);
+    (data.projects || []).forEach(function(p) {
+      const opt = document.createElement('option');
+      opt.value = p.dirName.replace('.kshana', '');
+      opt.textContent = p.dirName.replace('.kshana', '') + ' (' + p.currentPhase + ')';
+      sel.appendChild(opt);
+    });
+  } catch(e) { console.error('loadProjects:', e); }
+}
+
+projectSelect.addEventListener('change', async function() {
+  var val = projectSelect.value;
+  if (val === '__new__') {
+    selectedProject = null;
+    projectSelect.value = '';
+    inputBox.placeholder = 'Describe your new project idea...';
+    inputBox.focus();
+    addSystemMessage('Type a description to create a new project.');
+    return;
+  }
+  selectedProject = val || null;
+  if (selectedProject) {
+    inputBox.placeholder = 'Type a task...';
+    wsSend({ type: 'select_project', sessionId, data: { projectName: selectedProject } });
+    loadProjectDetails(selectedProject);
+    loadProjectAssets(selectedProject);
+    loadArtifactCache(selectedProject);
+    addSystemMessage('Project: ' + selectedProject);
+    sendBtn.disabled = true;
+    wsSend({
+      type: 'start_task', sessionId,
+      data: { task: 'Continue working on the existing project. The project state is already injected - proceed with the next step.' },
+    });
+  } else {
+    inputBox.placeholder = 'Type a task...';
+    document.getElementById('asset-browser').innerHTML = '';
+    document.getElementById('phase-display').textContent = '-';
+  }
+});
+
+async function loadProjectDetails(name) {
+  try {
+    const res = await fetch('/api/v1/projects/' + name);
+    if (!res.ok) return;
+    const data = await res.json();
+    document.getElementById('phase-display').textContent = (data.currentPhase || 'unknown').replace(/_/g, ' ');
+    if (data.todos && data.todos.length > 0) {
+      const list = document.getElementById('todo-list');
+      list.innerHTML = data.todos.map(function(t) {
+        const icon = t.status === 'completed' ? '\\u2713' : t.status === 'in_progress' ? '\\u25B6' : '\\u25CB';
+        return '<div class="todo-item"><span class="todo-icon ' + (t.status || 'pending') + '">' + icon + '</span>' +
+          '<span class="todo-text">' + escHtml(t.content || t.task || '') + '</span></div>';
+      }).join('');
+    }
+  } catch(e) { console.error('loadProjectDetails:', e); }
+}
+
+async function loadProjectAssets(name) {
+  try {
+    const res = await fetch('/api/v1/projects/' + name + '/images');
+    const data = await res.json();
+    const grid = document.getElementById('asset-browser');
+    if (!data.images || data.images.length === 0) {
+      grid.innerHTML = '<div style="font-size:12px;color:var(--text-muted);grid-column:1/-1">No images</div>';
+      return;
+    }
+    grid.innerHTML = data.images.map(function(img) {
+      return '<img class="asset-thumb" src="' + img.url + '" title="' + escHtml(img.name) +
+        '" onclick="openLightbox(this.src)" onerror="this.remove()">';
+    }).join('');
+  } catch(e) {
+    document.getElementById('asset-browser').innerHTML = '<div style="font-size:12px;color:var(--text-muted);grid-column:1/-1">Failed to load</div>';
+  }
+}
+
+// ===== Lightbox =====
+function openLightbox(src) {
+  document.getElementById('lightbox-img').src = src;
+  document.getElementById('lightbox').classList.remove('hidden');
+}
+function closeLightbox() { document.getElementById('lightbox').classList.add('hidden'); }
+
+// ===== Auto-scroll =====
+const chatEl = document.getElementById('chat-messages');
+chatEl.addEventListener('scroll', function() {
+  const atBottom = chatEl.scrollHeight - chatEl.scrollTop - chatEl.clientHeight < 60;
+  autoScroll = atBottom;
+  scrollBtn.classList.toggle('hidden', atBottom);
+});
+function scrollToBottom() { chatEl.scrollTop = chatEl.scrollHeight; autoScroll = true; scrollBtn.classList.add('hidden'); }
+function maybeScroll() { if (autoScroll) requestAnimationFrame(function() { chatEl.scrollTop = chatEl.scrollHeight; }); }
+
+// ===== Input handling =====
+inputBox.addEventListener('keydown', function(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+inputBox.addEventListener('input', function() {
+  inputBox.style.height = 'auto';
+  inputBox.style.height = Math.min(inputBox.scrollHeight, 120) + 'px';
+});
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeLightbox(); });
+
+// ===== Markdown Renderer =====
+function renderMarkdown(text) {
+  if (!text) return '';
+  let html = escHtml(text);
+
+  // Code blocks
+  html = html.replace(/\`\`\`(\\w*?)\\n([\\s\\S]*?)\`\`\`/g, function(m, lang, code) {
+    return '<pre><code>' + code + '</code></pre>';
+  });
+
+  // Inline code
+  html = html.replace(/\`([^\`]+?)\`/g, '<code>$1</code>');
+
+  // Headers
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+
+  // Bold + italic
+  html = html.replace(/\\*\\*\\*(.+?)\\*\\*\\*/g, '<strong><em>$1</em></strong>');
+  html = html.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
+  html = html.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
+
+  // Blockquotes
+  html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
+
+  // Unordered lists
+  html = html.replace(/^[\\-\\*] (.+)$/gm, '<li>$1</li>');
+  // Wrap consecutive li in ul
+  html = html.replace(/((?:<li>.*?<\\/li>\\s*)+)/g, '<ul>$1</ul>');
+
+  // Ordered lists
+  html = html.replace(/^\\d+\\. (.+)$/gm, '<li>$1</li>');
+
+  // Links
+  html = html.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
+
+  // Images
+  html = html.replace(/!\\[([^\\]]*?)\\]\\(([^)]+)\\)/g, '<img src="$2" alt="$1">');
+
+  // Paragraphs
+  html = html.replace(/\\n\\n/g, '</p><p>');
+  html = html.replace(/\\n/g, '<br>');
+  html = '<p>' + html + '</p>';
+
+  // Clean up
+  html = html.replace(/<p><\\/p>/g, '');
+  html = html.replace(/<p>(<h[123]>)/g, '$1');
+  html = html.replace(/(<\\/h[123]>)<\\/p>/g, '$1');
+  html = html.replace(/<p>(<ul>)/g, '$1');
+  html = html.replace(/(<\\/ul>)<\\/p>/g, '$1');
+  html = html.replace(/<p>(<pre>)/g, '$1');
+  html = html.replace(/(<\\/pre>)<\\/p>/g, '$1');
+  html = html.replace(/<p>(<blockquote>)/g, '$1');
+  html = html.replace(/(<\\/blockquote>)<\\/p>/g, '$1');
+
+  return html;
+}
+
+// ===== Utilities =====
+function escHtml(str) {
+  if (typeof str !== 'string') str = String(str);
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function truncStr(str, max) {
+  if (!str || str.length <= max) return str;
+  return str.substring(0, max) + '...';
+}
+
+function formatDuration(ms) {
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(1) + 's';
+}
+
+// ===== Init =====
+loadProjects();
+connect();
+`;
+}

@@ -38,6 +38,7 @@ import { getContentCreatorTools } from '../tools/builtin/contentCreatorTools.js'
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { FlowRecorder } from '../../utils/FlowRecorder.js';
+import { ToolAnalytics } from '../../utils/ToolAnalytics.js';
 import {
   getProjectDir,
   loadProject,
@@ -240,6 +241,9 @@ export class GenericAgent extends TypedEventEmitter {
   private thinkTagBuffer: string = '';
   private insideThinkTag: boolean = false;
 
+  // Analytics session ID (stable per agent instance)
+  private analyticsSessionId: string;
+
   constructor(tools: Map<string, ToolDefinition>, llm: LLMClient, config: AgentConfig = {}) {
     super();
     this.tools = tools;
@@ -249,6 +253,7 @@ export class GenericAgent extends TypedEventEmitter {
     this.name = config.name ?? `agent-${nanoid(6)}`;
     this.customPrompt = config.customPrompt;
     this.currentMode = config.initialMode ?? 'orchestrator';
+    this.analyticsSessionId = `${this.name}_${Date.now()}_${nanoid(6)}`;
   }
 
   /**
@@ -862,60 +867,6 @@ export class GenericAgent extends TypedEventEmitter {
           status: 'thinking',
           agentName: this.getEffectiveAgentName(),
         });
-      } else if (this.contentState?.active) {
-        // Capture toolCallId before handleContentResponse potentially clears contentState
-        const contentToolCallId = this.contentState.toolCallId;
-
-        // Handle the content creation response
-        const contentResult = await this.handleContentResponse(userResponse);
-        const contentResultObj = contentResult as Record<string, unknown>;
-
-        // Check if content needs more input or is complete
-        if (contentResultObj['status'] === 'awaiting_verification') {
-          // Still waiting for user - emit question and return
-          this.waitingForUser = true;
-          this.pendingQuestion = contentResultObj['question'] as string;
-
-          this.emit({
-            type: 'question',
-            question: contentResultObj['question'] as string,
-            isConfirmation: false,
-            options: contentResultObj['options'] as Array<{ label: string; description?: string }>,
-            autoApproveTimeoutMs: contentResultObj['autoApproveTimeoutMs'] as number | undefined,
-            context: contentResultObj['content'] as string,
-          });
-
-          // Content is shown via ToolCallDisplay
-          return {
-            status: 'waiting_for_user',
-            output: '',
-            todos: this.todoManager.getTodos(),
-            pendingQuestion: contentResultObj['question'] as string,
-            options: contentResultObj['options'] as Array<{ label: string; description?: string }>,
-            autoApproveTimeoutMs: contentResultObj['autoApproveTimeoutMs'] as number | undefined,
-            questionContext: contentResultObj['content'] as string | undefined,
-          };
-        }
-
-        // Content creation is complete (approved, cancelled, or max_iterations)
-        // Add the result to messages and continue
-        this.waitingForUser = false;
-        this.pendingQuestion = undefined;
-
-        // Add the generate_content result to messages
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(contentResult),
-          toolCallId: contentToolCallId,
-          name: 'generate_content',
-        });
-
-        // Emit status change back to thinking
-        this.emit({
-          type: 'agent_status',
-          status: 'thinking',
-          agentName: this.getEffectiveAgentName(),
-        });
       } else if (this.imageGenState?.active) {
         // Handle the image generation response
         const imageResult = await this.handleImageGenResponse(userResponse);
@@ -1184,6 +1135,9 @@ export class GenericAgent extends TypedEventEmitter {
         this.consecutiveTextOnlyResponses = 0;
       }
 
+      // Extract preceding message (LLM reasoning that led to these tool calls)
+      const precedingMessage = typeof response.content === 'string' ? response.content : undefined;
+
       // Execute tool calls
       for (const toolCall of response.toolCalls) {
         // Special handling for ask_user - pause execution
@@ -1200,9 +1154,30 @@ export class GenericAgent extends TypedEventEmitter {
           continue;
         }
 
+        // Record analytics start
+        const analyticsRowId = ToolAnalytics.instance()?.recordStart(
+          toolCall.id,
+          toolCall.name,
+          this.getEffectiveAgentName(),
+          toolCall.arguments,
+          this.analyticsSessionId,
+          precedingMessage
+        ) ?? null;
+
         // Execute the tool
         const result = await this.executeTool(toolCall);
         const resultObj = result as Record<string, unknown>;
+
+        // Record analytics completion
+        const isToolError = resultObj['status'] === 'loop_blocked' ||
+          resultObj['error'] !== undefined ||
+          resultObj['status'] === 'error';
+        const errorMsg = isToolError
+          ? (resultObj['error'] as string) ?? (resultObj['warning'] as string) ?? undefined
+          : undefined;
+        if (analyticsRowId !== null) {
+          ToolAnalytics.instance()?.recordComplete(toolCall.id, analyticsRowId, isToolError, errorMsg);
+        }
 
         // Reset iteration counter when project state is updated — this signals real progress
         // and prevents hitting max_iterations on long-running workflows.
@@ -1645,20 +1620,32 @@ export class GenericAgent extends TypedEventEmitter {
       if ((contentType === 'scene_video_prompt' || contentType === 'shot_image_prompt') && sceneNumber !== undefined) {
         const project = loadProject();
         if (project) {
+          const projectDir = getProjectDir();
           const scene = project.scenes?.find((s: { sceneNumber: number }) => s.sceneNumber === sceneNumber);
+
+          // Only include reference image paths that actually exist on disk
           const charRefs = (project.characters ?? [])
-            .filter((c: { referenceImagePath?: string }) => c.referenceImagePath)
+            .filter((c: { referenceImagePath?: string }) => {
+              if (!c.referenceImagePath) return false;
+              const fullPath = path.join(projectDir, c.referenceImagePath);
+              return fs.existsSync(fullPath);
+            })
             .map((c: { name: string; referenceImagePath?: string }) => `- ${c.name}: ${c.referenceImagePath}`)
             .join('\n');
           const settingRefs = (project.settings ?? [])
-            .filter((s: { referenceImagePath?: string }) => s.referenceImagePath)
+            .filter((s: { referenceImagePath?: string }) => {
+              if (!s.referenceImagePath) return false;
+              const fullPath = path.join(projectDir, s.referenceImagePath);
+              return fs.existsSync(fullPath);
+            })
             .map((s: { name: string; referenceImagePath?: string }) => `- ${s.name}: ${s.referenceImagePath}`)
             .join('\n');
 
-          subAgentTask += `\n\n## Available Reference Images\n`;
+          subAgentTask += `\n\n## Available Reference Images (verified on disk)\n`;
           subAgentTask += `**Scene Image:** artifact ${scene?.imageArtifactId ?? 'not yet generated'}\n`;
           subAgentTask += `**Characters:**\n${charRefs || 'None'}\n`;
           subAgentTask += `**Settings:**\n${settingRefs || 'None'}\n`;
+          subAgentTask += `\n**IMPORTANT:** ONLY use the paths listed above. Do NOT invent or guess image paths. Use list_project_files() to verify what files exist.\n`;
 
           if (contentType === 'shot_image_prompt' && shotNumber !== undefined) {
             subAgentTask += `\n**Shot Number:** ${shotNumber}\n`;
@@ -1688,45 +1675,6 @@ export class GenericAgent extends TypedEventEmitter {
       };
       this.currentMode = 'content';
       const result = await this.continueContentLoop();
-      const resultObj = result as Record<string, unknown>;
-
-      // Check if content needs user verification
-      if (resultObj['status'] === 'awaiting_verification') {
-        this.emit({
-          type: 'tool_result',
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          result,
-          isError: false,
-          agentName: this.getEffectiveAgentName(),
-        });
-
-        this.waitingForUser = true;
-        this.pendingQuestion = resultObj['question'] as string;
-
-        const questionOptions = resultObj['options'] as Array<{
-          label: string;
-          description?: string;
-        }>;
-        const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
-        this.emit({
-          type: 'question',
-          question: resultObj['question'] as string,
-          isConfirmation: false,
-          options: questionOptions,
-          autoApproveTimeoutMs: questionTimeout,
-          context: resultObj['content'] as string,
-        });
-
-        this.emit({
-          type: 'agent_status',
-          status: 'waiting',
-          agentName: this.getEffectiveAgentName(),
-        });
-
-        FlowRecorder.getSession()?.onToolComplete(toolCall.id, resultObj, false);
-        return { __awaiting_user_input: true, ...resultObj };
-      }
 
       // Include loop warning in result if present
       const finalResult = loopWarningMessage
@@ -1748,53 +1696,6 @@ export class GenericAgent extends TypedEventEmitter {
     // Handle dispatch_content_agent specially - spawn a sub-agent for creative content
     if (toolCall.name === 'dispatch_content_agent') {
       const result = await this.handleDispatchContentAgent(toolCall);
-      const resultObj = result as Record<string, unknown>;
-
-      // Check if content needs user verification
-      if (resultObj['status'] === 'awaiting_verification') {
-        // Emit tool result first
-        this.emit({
-          type: 'tool_result',
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          result,
-          isError: false,
-          agentName: this.getEffectiveAgentName(),
-        });
-
-        // Set up waiting state for user input
-        this.waitingForUser = true;
-        this.pendingQuestion = resultObj['question'] as string;
-
-        // Emit question event with options and auto-approve timeout
-        const questionOptions = resultObj['options'] as Array<{
-          label: string;
-          description?: string;
-        }>;
-        const questionTimeout = resultObj['autoApproveTimeoutMs'] as number | undefined;
-        debugLog(
-          `[GenericAgent] dispatch_content_agent emitting question event with options: ${JSON.stringify(questionOptions)}`
-        );
-        this.emit({
-          type: 'question',
-          question: resultObj['question'] as string,
-          isConfirmation: false,
-          options: questionOptions,
-          autoApproveTimeoutMs: questionTimeout,
-          context: resultObj['content'] as string,
-        });
-
-        // Emit status change
-        this.emit({
-          type: 'agent_status',
-          status: 'waiting',
-          agentName: this.getEffectiveAgentName(),
-        });
-
-        // Return special marker to indicate we're pausing for user input
-        FlowRecorder.getSession()?.onToolComplete(toolCall.id, resultObj, false);
-        return { __awaiting_user_input: true, ...resultObj };
-      }
 
       this.emit({
         type: 'tool_result',
@@ -2644,12 +2545,6 @@ Respond in JSON format:
     return this.planningState?.active ?? false;
   }
 
-  /**
-   * Check if there's an active content creation session awaiting user input.
-   */
-  isContentActive(): boolean {
-    return this.contentState?.active ?? false;
-  }
 
   /**
    * Try to resolve a context reference from project files.
@@ -2854,18 +2749,28 @@ Respond in JSON format:
           style: project.style,
           templateId: project.templateId ?? 'narrative',
           currentPhase: project.currentPhase,
-          characters: (project.characters || []).map((char: { name: string; referenceImagePath?: string }) => ({
-            name: char.name,
-            file: project.content?.characters?.itemFiles?.[char.name] ||
-              `characters/${char.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
-            referenceImagePath: char.referenceImagePath,
-          })),
-          settings: (project.settings || []).map((setting: { name: string; referenceImagePath?: string }) => ({
-            name: setting.name,
-            file: project.content?.settings?.itemFiles?.[setting.name] ||
-              `settings/${setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
-            referenceImagePath: setting.referenceImagePath,
-          })),
+          characters: (project.characters || []).map((char: { name: string; referenceImagePath?: string }) => {
+            const refPath = char.referenceImagePath;
+            const refExists = refPath ? fs.existsSync(path.join(projectDir, refPath)) : false;
+            return {
+              name: char.name,
+              file: project.content?.characters?.itemFiles?.[char.name] ||
+                `characters/${char.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
+              referenceImagePath: refExists ? refPath : null,
+              referenceImageStatus: refPath ? (refExists ? 'exists' : 'missing') : undefined,
+            };
+          }),
+          settings: (project.settings || []).map((setting: { name: string; referenceImagePath?: string }) => {
+            const refPath = setting.referenceImagePath;
+            const refExists = refPath ? fs.existsSync(path.join(projectDir, refPath)) : false;
+            return {
+              name: setting.name,
+              file: project.content?.settings?.itemFiles?.[setting.name] ||
+                `settings/${setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
+              referenceImagePath: refExists ? refPath : null,
+              referenceImageStatus: refPath ? (refExists ? 'exists' : 'missing') : undefined,
+            };
+          }),
           scenes: (project.scenes || []).map((scene: { sceneNumber: number; title?: string; imageArtifactId?: string }) => ({
             sceneNumber: scene.sceneNumber,
             title: scene.title,
@@ -2893,6 +2798,19 @@ Respond in JSON format:
         return content;
       } catch (err) {
         return `Error reading file: ${String(err)}`;
+      }
+    }
+
+    if (toolCall.name === 'list_project_files') {
+      try {
+        const { listProjectFilesTool } = await import('../../tasks/video/workflow/FileTools.js');
+        if (listProjectFilesTool.handler) {
+          const result = await listProjectFilesTool.handler(toolCall.arguments || {});
+          return JSON.stringify(result, null, 2);
+        }
+        return 'Error: list_project_files handler not available';
+      } catch (err) {
+        return `Error listing project files: ${String(err)}`;
       }
     }
 
@@ -3068,7 +2986,7 @@ Respond in JSON format:
         }
 
         // Clean content (remove <think> tags including orphaned ones)
-        const cleanedContent = content
+        let cleanedContent = content
           ? content
               .replace(/<think>.*?<\/think>/gs, '') // Complete think blocks
               .replace(/<think>.*$/gs, '') // Orphan opening tag
@@ -3113,6 +3031,24 @@ Respond in JSON format:
           }
         }
 
+        // Post-generation validation: strip hallucinated reference image paths
+        if (cleanedContent && this.contentState.contentType === 'scene_video_prompt') {
+          try {
+            const { validateAndSanitizeReferenceImages } = await import(
+              '../tools/builtin/referenceImageValidator.js'
+            );
+            const { sanitized, removedPaths } = validateAndSanitizeReferenceImages(cleanedContent);
+            if (removedPaths.length > 0) {
+              debugLog(
+                `[GenericAgent] Reference image validator removed ${removedPaths.length} hallucinated path(s): ${removedPaths.join(', ')}`
+              );
+              cleanedContent = sanitized;
+            }
+          } catch {
+            // Validation failed — continue with original content
+          }
+        }
+
         this.contentState.currentContent = cleanedContent || 'No content generated';
 
         // Add assistant response to history
@@ -3124,64 +3060,7 @@ Respond in JSON format:
         break; // Exit the loop - content generated
       }
 
-      // Return status indicating we need user verification
-      const verificationQuestion =
-        this.contentState.iterations === 1
-          ? `I've created the ${this.contentState.contentType} content. Would you like to accept it or provide feedback?`
-          : `I've updated the ${this.contentState.contentType} content based on your feedback. Would you like to accept it or provide more feedback?`;
-
-      const verificationResult = {
-        status: 'awaiting_verification',
-        content: this.contentState.currentContent,
-        content_type: this.contentState.contentType,
-        task: this.contentState.task,
-        output_file: this.contentState.outputFile,
-        iterations: this.contentState.iterations,
-        question: verificationQuestion,
-        options: [
-          { label: 'Accept content', description: 'Approve this content and proceed' },
-          { label: 'Provide feedback', description: 'Request changes to the content' },
-        ],
-        // No auto-approve for content - user must explicitly accept or provide feedback
-      };
-      debugLog(
-        `[GenericAgent] continueContentLoop returning: ${JSON.stringify(
-          {
-            status: verificationResult.status,
-            contentType: verificationResult.content_type,
-            question: verificationResult.question?.slice(0, 50),
-            optionsCount: verificationResult.options.length,
-          },
-          null,
-          2
-        )}`
-      );
-      return verificationResult;
-    } catch (error) {
-      const failedTask = this.contentState?.task;
-      this.contentState = null;
-      this.currentMode = 'orchestrator';
-      return {
-        error: `Content creation failed: ${String(error)}`,
-        task: failedTask,
-      };
-    }
-  }
-
-  /**
-   * Handle user response to content verification.
-   * Uses LLM to classify whether the response is approval or feedback.
-   */
-  async handleContentResponse(userResponse: string): Promise<unknown> {
-    if (!this.contentState) {
-      return { error: 'No active content session' };
-    }
-
-    // Use LLM to classify the user's intent (reuse same classification logic as planning)
-    const isApproval = this.classifyPlanResponse(userResponse);
-
-    if (isApproval) {
-      // Write content to output file if specified
+      // Auto-approve: save content immediately without user verification
       let fileSaved = false;
       if (this.contentState.outputFile) {
         try {
@@ -3204,7 +3083,7 @@ Respond in JSON format:
         }
       }
 
-      // Generate content name and summary using LLM (similar to planning)
+      // Generate content name and summary using LLM
       const { name, summary } = await this.generateContentMetadata(
         this.contentState.task,
         this.contentState.contentType,
@@ -3212,7 +3091,6 @@ Respond in JSON format:
       );
 
       // Store full content in external context store (NOT in messages)
-      // This prevents context bloat from large content being repeatedly passed
       const { variableName } = contextStore.store(this.contentState.currentContent, name, {
         source: 'tool',
         variableBaseName: this.contentState.contentType,
@@ -3241,26 +3119,38 @@ Respond in JSON format:
         message: fileSaved
           ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}`
           : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}`,
-        // Clear next_steps instruction including todo update
         next_steps: persistResult.persisted
           ? 'IMPORTANT: 1) Update the todo list using TodoWrite to mark this task as completed. 2) Then continue with the next pending task or transition to the next phase.'
           : 'IMPORTANT: 1) Update the todo list using TodoWrite to mark this task as completed. 2) Then continue with the next pending task.',
       };
+
+      debugLog(
+        `[GenericAgent] continueContentLoop auto-approved: ${JSON.stringify(
+          {
+            status: result.status,
+            contentType: result.content_type,
+            name: result.name,
+            fileSaved: result.file_saved,
+          },
+          null,
+          2
+        )}`
+      );
+
       this.contentState = null;
-      // Reset mode back to orchestrator
       this.currentMode = 'orchestrator';
       return result;
+    } catch (error) {
+      const failedTask = this.contentState?.task;
+      this.contentState = null;
+      this.currentMode = 'orchestrator';
+      return {
+        error: `Content creation failed: ${String(error)}`,
+        task: failedTask,
+      };
     }
-
-    // User wants to provide feedback - use their input directly with XML tags
-    this.contentState.messages.push({
-      role: 'user',
-      content: `<user_feedback>\n${userResponse}\n</user_feedback>\n\n<request>\nPlease revise the ${this.contentState.contentType} content based on the feedback above.\n</request>`,
-    });
-
-    // Continue the content loop
-    return this.continueContentLoop();
   }
+
 
   /**
    * Check if there's an active image generation session awaiting user input.
@@ -4388,11 +4278,12 @@ Respond in JSON format:
       return true;
     }
 
-    // Method 3: Trigger compression if we have many messages regardless
-    // This is a safety net for long conversations
-    // Lower threshold to be more aggressive with compression
-    const MESSAGE_COUNT_THRESHOLD = 20;
-    if (this.messages.length > MESSAGE_COUNT_THRESHOLD) {
+    // Method 3: Safety net based on message count, but only if we don't have
+    // reliable token-based data (Methods 1 & 2). With large context windows (128K+),
+    // a fixed low threshold causes premature compression.
+    // Scale threshold: ~20 messages per 16K of context, minimum 40.
+    const MESSAGE_COUNT_THRESHOLD = Math.max(40, Math.round((this.maxContextTokens / 16000) * 20));
+    if (this.tokenUsage.lastPromptTokens === 0 && this.messages.length > MESSAGE_COUNT_THRESHOLD) {
       debugLog(
         `[GenericAgent] Message count (${this.messages.length}) exceeds threshold (${MESSAGE_COUNT_THRESHOLD}) - compression needed`
       );

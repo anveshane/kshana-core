@@ -1,22 +1,20 @@
 /**
  * ConversationManager - Manages agent sessions and orchestrates conversations.
  * Each WebSocket connection can have one active conversation session.
+ * Agent is created lazily when a project is selected via configureSessionForProject().
  */
 import { v4 as uuidv4 } from 'uuid';
 import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
-import { createDefaultToolRegistry } from '../core/tools/index.js';
-import { createVideoToolRegistry, VIDEO_CREATION_SYSTEM_PROMPT } from '../tasks/video/index.js';
+import { createAgentForProject } from '../tasks/video/index.js';
+import { setActiveProjectDir } from '../tasks/video/workflow/activeProject.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
-
-type TaskType = 'generic' | 'video';
 
 export interface ConversationManagerConfig {
   llmConfig: LLMClientConfig;
   sessionTimeoutMs?: number;  // Default: 30 minutes
   maxIterations?: number;     // Default: 50
-  taskType?: TaskType;        // Default: 'generic'
 }
 
 export interface ConversationEvents {
@@ -25,17 +23,23 @@ export interface ConversationEvents {
   onToolResult?: (sessionId: string, toolName: string, result: unknown, agentName?: string) => void;
   onTodoUpdate?: (sessionId: string, todos: ExpandableTodoItem[]) => void;
   onAgentText?: (sessionId: string, text: string, isFinal: boolean) => void;
-  onQuestion?: (sessionId: string, question: string, isConfirmation: boolean) => void;
+  onQuestion?: (sessionId: string, question: string, isConfirmation: boolean, options?: Array<{ label: string; description?: string }>, autoApproveTimeoutMs?: number) => void;
   onAgentStatus?: (sessionId: string, status: string, agentName?: string) => void;
   /** Streaming text from agent's LLM output */
   onStreamingText?: (sessionId: string, chunk: string, done: boolean) => void;
   /** Tool streaming for sub-agent content generation */
   onToolStreaming?: (sessionId: string, toolCallId: string, chunk: string, done: boolean, agentName?: string, toolName?: string, reset?: boolean) => void;
+  /** Context window usage stats */
+  onContextUsage?: (sessionId: string, data: { promptTokens: number; maxTokens: number; percentage: number; wasCompressed: boolean; iteration: number }) => void;
+  /** Workflow phase transition */
+  onPhaseTransition?: (sessionId: string, data: { fromPhase: string; toPhase: string; displayName?: string; description?: string }) => void;
+  /** User-facing notification */
+  onNotification?: (sessionId: string, data: { level: 'info' | 'warning' | 'error'; message: string }) => void;
 }
 
 interface ActiveSession {
   state: SessionState;
-  agent: GenericAgent;
+  agent?: GenericAgent;
   abortController?: AbortController;
   initialized?: boolean;
 }
@@ -45,46 +49,23 @@ export class ConversationManager {
   private llmConfig: LLMClientConfig;
   private sessionTimeoutMs: number;
   private maxIterations: number;
-  private taskType: TaskType;
   private cleanupInterval?: ReturnType<typeof setInterval>;
 
   constructor(config: ConversationManagerConfig) {
     this.llmConfig = config.llmConfig;
     this.sessionTimeoutMs = config.sessionTimeoutMs ?? 30 * 60 * 1000; // 30 minutes
     this.maxIterations = config.maxIterations ?? 50;
-    this.taskType = config.taskType ?? 'generic';
 
     // Start cleanup interval
     this.cleanupInterval = setInterval(() => this.cleanupStaleSessions(), 60 * 1000);
   }
 
   /**
-   * Create a new conversation session.
+   * Create a new conversation session (bare — no agent until project is configured).
    */
   createSession(): SessionState {
     const sessionId = uuidv4();
     const now = Date.now();
-
-    // Create agent with tools based on task type
-    let registry;
-    let customPrompt: string | undefined;
-    let agentName: string;
-
-    if (this.taskType === 'video') {
-      registry = createVideoToolRegistry();
-      customPrompt = VIDEO_CREATION_SYSTEM_PROMPT;
-      agentName = 'kshana-video';
-    } else {
-      registry = createDefaultToolRegistry();
-      agentName = 'kshana-ink';
-    }
-
-    const llm = new LLMClient(this.llmConfig);
-    const agent = new GenericAgent(registry.getAll(), llm, {
-      maxIterations: this.maxIterations,
-      customPrompt,
-      name: agentName,
-    });
 
     const state: SessionState = {
       id: sessionId,
@@ -94,9 +75,48 @@ export class ConversationManager {
       taskHistory: [],
     };
 
-    this.sessions.set(sessionId, { state, agent });
+    this.sessions.set(sessionId, { state });
 
     return state;
+  }
+
+  /**
+   * Configure a session's agent for a specific project.
+   * Uses the shared createAgentForProject() — same tools, prompt, and params as CLI.
+   */
+  configureSessionForProject(
+    sessionId: string,
+    templateId: string,
+    style: string,
+    duration: number,
+    projectDirName?: string,
+  ): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    // Set active project directory so file tools resolve correctly
+    if (projectDirName) {
+      setActiveProjectDir(projectDirName);
+    }
+
+    // Create agent via the shared factory (identical to CLI path)
+    const { tools, customPrompt, agentName } = createAgentForProject({
+      templateId,
+      style,
+      duration,
+      llmConfig: this.llmConfig,
+      maxIterations: this.maxIterations,
+    });
+
+    const llm = new LLMClient(this.llmConfig);
+    session.agent = new GenericAgent(tools, llm, {
+      maxIterations: this.maxIterations,
+      customPrompt,
+      name: agentName,
+    });
+    session.initialized = false;
   }
 
   /**
@@ -115,6 +135,14 @@ export class ConversationManager {
   }
 
   /**
+   * Check if a session has a configured agent.
+   */
+  isSessionConfigured(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return session?.agent != null;
+  }
+
+  /**
    * Run a task in a session.
    */
   async runTask(
@@ -125,6 +153,10 @@ export class ConversationManager {
     const session = this.sessions.get(sessionId);
     if (!session) {
       throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    if (!session.agent) {
+      throw new Error('Session agent not configured. Select a project first.');
     }
 
     if (session.state.status === 'running') {
@@ -155,9 +187,6 @@ export class ConversationManager {
       session.state.lastActivity = Date.now();
       if (result.status === 'waiting_for_user') {
         session.state.status = 'awaiting_input';
-        if (events?.onQuestion && result.pendingQuestion) {
-          events.onQuestion(sessionId, result.pendingQuestion, result.isConfirmation ?? false);
-        }
       } else if (result.status === 'completed') {
         session.state.status = 'completed';
       } else if (result.status === 'error' || result.status === 'interrupted') {
@@ -189,6 +218,10 @@ export class ConversationManager {
       throw new Error(`Session not found: ${sessionId}`);
     }
 
+    if (!session.agent) {
+      throw new Error('Session agent not configured. Select a project first.');
+    }
+
     if (session.state.status !== 'awaiting_input') {
       throw new Error('Session is not awaiting input');
     }
@@ -210,9 +243,6 @@ export class ConversationManager {
       session.state.lastActivity = Date.now();
       if (result.status === 'waiting_for_user') {
         session.state.status = 'awaiting_input';
-        if (events?.onQuestion && result.pendingQuestion) {
-          events.onQuestion(sessionId, result.pendingQuestion, result.isConfirmation ?? false);
-        }
       } else if (result.status === 'completed') {
         session.state.status = 'completed';
       } else if (result.status === 'error' || result.status === 'interrupted') {
@@ -291,7 +321,25 @@ export class ConversationManager {
 
     if (events.onQuestion) {
       agent.on('question', (data) => {
-        events.onQuestion!(sessionId, data.question, data.isConfirmation);
+        events.onQuestion!(sessionId, data.question, data.isConfirmation, data.options, data.autoApproveTimeoutMs);
+      });
+    }
+
+    if (events.onContextUsage) {
+      agent.on('context_usage', (data) => {
+        events.onContextUsage!(sessionId, data);
+      });
+    }
+
+    if (events.onPhaseTransition) {
+      agent.on('phase_transition', (data) => {
+        events.onPhaseTransition!(sessionId, data);
+      });
+    }
+
+    if (events.onNotification) {
+      agent.on('notification', (data) => {
+        events.onNotification!(sessionId, data);
       });
     }
   }
