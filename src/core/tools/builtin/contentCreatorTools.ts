@@ -11,6 +11,28 @@ import fs from 'fs';
 import path from 'path';
 
 /**
+ * Session-level tracking of known project file paths.
+ * When list_project_files() is called, its results are registered here.
+ * Subsequent read_file() calls for relative paths are validated against this set.
+ */
+let knownProjectFiles: Set<string> | null = null;
+
+/**
+ * Register known project file paths from a list_project_files() result.
+ * Called by GenericAgent.executeContentCreatorTool when list_project_files runs.
+ */
+export function registerKnownProjectFiles(filePaths: string[]): void {
+  knownProjectFiles = new Set(filePaths);
+}
+
+/**
+ * Clear the known project files set. Call this when starting a new content session.
+ */
+export function clearKnownProjectFiles(): void {
+  knownProjectFiles = null;
+}
+
+/**
  * Read project structure tool - understand what content exists.
  */
 export const readProjectTool: ToolDefinition = {
@@ -196,6 +218,25 @@ If this returns "File not found", call read_project or list_project_files to see
           error: `FORBIDDEN: You used "${filePath}" - this is NOT a valid file path.`,
           instruction: 'You MUST call list_project_files to get actual file names. Files are named by content, not by index.',
         };
+      }
+
+      // Validate against known project files if list_project_files has been called
+      if (knownProjectFiles !== null) {
+        // Normalize path for comparison (remove leading ./ or /)
+        const normalizedPath = filePath.replace(/^\.\//, '');
+        const isKnown = knownProjectFiles.has(normalizedPath) ||
+          knownProjectFiles.has(`./${normalizedPath}`) ||
+          knownProjectFiles.has(`/${normalizedPath}`) ||
+          // Also check if any known path ends with this path (for partial matches)
+          Array.from(knownProjectFiles).some(kp => kp.endsWith(normalizedPath));
+
+        if (!isKnown) {
+          return {
+            status: 'error',
+            error: `Path "${filePath}" not found in project files. Call list_project_files() first to discover available files.`,
+            hint: 'Only paths returned by list_project_files() or read_project() are valid.',
+          };
+        }
       }
     }
 

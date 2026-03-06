@@ -29,13 +29,8 @@ const ASPECT_DIMENSIONS: Record<string, [number, number]> = {
   '3:4': [768, 1024],
 };
 
-const TYPE_COLORS: Record<string, string> = {
-  scene: '#2563eb',         // blue
-  character_ref: '#16a34a', // green
-  setting_ref: '#ea580c',   // orange
-  video: '#7c3aed',         // purple
-  edit: '#0d9488',          // teal
-};
+// Uniform dark background for all fake images
+const FAKE_BG_COLOR = '#1a1a2e';
 
 function escapeXml(str: string): string {
   return str
@@ -144,7 +139,8 @@ async function fakeGenerateImageHandler(
   args: Record<string, unknown>,
 ): Promise<unknown> {
   const sceneNumber = args['scene_number'] as number;
-  const prompt = (args['prompt'] as string) || (args['prompt_file'] as string) || '(none)';
+  const promptInline = (args['prompt'] as string) || '';
+  const promptFile = (args['prompt_file'] as string) || '';
   const negativePrompt = (args['negative_prompt'] as string) || '';
   const aspectRatio = (args['aspect_ratio'] as string) || '16:9';
   const seed = args['seed'] as number | undefined;
@@ -158,8 +154,24 @@ async function fakeGenerateImageHandler(
     name: string;
   }> | undefined;
 
+  // Resolve prompt text: read from file if prompt_file is provided, else use inline prompt
+  let promptText = promptInline;
+  if (!promptText && promptFile) {
+    try {
+      const projectDir = getProjectDir();
+      const fullPromptPath = path.isAbsolute(promptFile)
+        ? promptFile
+        : path.join(projectDir, promptFile);
+      if (fs.existsSync(fullPromptPath)) {
+        promptText = fs.readFileSync(fullPromptPath, 'utf-8').trim();
+      }
+    } catch {
+      // Fall back to showing the file path
+    }
+  }
+  if (!promptText) promptText = '(none)';
+
   const [width, height] = ASPECT_DIMENSIONS[aspectRatio] || [1280, 720];
-  const bgColor = TYPE_COLORS[imageType] ?? '#2563eb';
 
   const params: Array<[string, string]> = [
     ['scene_number', String(sceneNumber)],
@@ -169,13 +181,20 @@ async function fakeGenerateImageHandler(
     ['seed', seed !== undefined ? String(seed) : ''],
     ['character_name', characterName || ''],
     ['setting_name', settingName || ''],
+  ];
+
+  if (promptFile) {
+    params.push(['prompt_file', promptFile]);
+  }
+
+  params.push(
     ['', ''],
     ['PROMPT', ''],
-    ['', prompt],
+    ['', promptText],
     ['', ''],
     ['NEGATIVE PROMPT', ''],
     ['', negativePrompt || '(none)'],
-  ];
+  );
 
   if (referenceImages && referenceImages.length > 0) {
     params.push(['', '']);
@@ -192,7 +211,7 @@ async function fakeGenerateImageHandler(
   const assetsDir = getAssetsDir();
   const outputPath = path.join(assetsDir, filename);
 
-  await createPlaceholderImage(width, height, bgColor, 'generate_image', params, outputPath);
+  await createPlaceholderImage(width, height, FAKE_BG_COLOR, 'generate_image', params, outputPath);
 
   // Compute relative path for artifact
   const projectDir = getProjectDir();
@@ -242,7 +261,8 @@ async function fakeGenerateImageHandler(
     params: {
       scene_number: sceneNumber,
       image_type: imageType,
-      prompt,
+      prompt: promptText,
+      prompt_file: promptFile || undefined,
       generation_mode: generationMode,
       reference_count: referenceImages?.length ?? 0,
       references: referenceImages?.map(r => `${r.type}:${r.name}`) ?? [],
@@ -256,25 +276,50 @@ async function fakeGenerateVideoHandler(
   const shotImageArtifactId = args['shot_image_artifact_id'] as string;
   const sceneNumber = args['scene_number'] as number;
   const shotNumber = args['shot_number'] as number;
-  const motionPrompt = (args['motion_prompt'] as string) || (args['motion_prompt_file'] as string) || '(none)';
+  const motionPromptInline = (args['motion_prompt'] as string) || '';
+  const motionPromptFile = (args['motion_prompt_file'] as string) || '';
   const negativePrompt = (args['negative_prompt'] as string) || '';
   const seed = args['seed'] as number | undefined;
 
+  // Resolve motion prompt text: read from file if motion_prompt_file is provided
+  let motionPromptText = motionPromptInline;
+  if (!motionPromptText && motionPromptFile) {
+    try {
+      const projectDir = getProjectDir();
+      const fullPromptPath = path.isAbsolute(motionPromptFile)
+        ? motionPromptFile
+        : path.join(projectDir, motionPromptFile);
+      if (fs.existsSync(fullPromptPath)) {
+        motionPromptText = fs.readFileSync(fullPromptPath, 'utf-8').trim();
+      }
+    } catch {
+      // Fall back
+    }
+  }
+  if (!motionPromptText) motionPromptText = '(none)';
+
   const [width, height] = [1280, 720];
-  const bgColor = TYPE_COLORS['video'] ?? '#7c3aed';
+  const bgColor = FAKE_BG_COLOR;
 
   const params: Array<[string, string]> = [
     ['scene_number', String(sceneNumber)],
     ['shot_number', String(shotNumber)],
     ['shot_image_artifact_id', shotImageArtifactId || '(none)'],
     ['seed', seed !== undefined ? String(seed) : ''],
+  ];
+
+  if (motionPromptFile) {
+    params.push(['motion_prompt_file', motionPromptFile]);
+  }
+
+  params.push(
     ['', ''],
     ['MOTION PROMPT', ''],
-    ['', motionPrompt],
+    ['', motionPromptText],
     ['', ''],
     ['NEGATIVE PROMPT', ''],
     ['', negativePrompt || '(none)'],
-  ];
+  );
 
   const jobId = `fake-vid-${Date.now()}-${nanoid(6)}`;
   const artifactId = `vid_${nanoid(8)}`;
@@ -331,7 +376,8 @@ async function fakeGenerateVideoHandler(
       scene_number: sceneNumber,
       shot_number: shotNumber,
       image_artifact: shotImageArtifactId,
-      motion_prompt: motionPrompt,
+      motion_prompt: motionPromptText,
+      motion_prompt_file: motionPromptFile || undefined,
     },
   };
 }
@@ -348,7 +394,7 @@ async function fakeEditImageHandler(
   const seed = args['seed'] as number | undefined;
 
   const [width, height] = ASPECT_DIMENSIONS[aspectRatio] || [1280, 720];
-  const bgColor = TYPE_COLORS['edit'] ?? '#0d9488';
+  const bgColor = FAKE_BG_COLOR;
 
   const params: Array<[string, string]> = [
     ['scene_number', String(sceneNumber)],

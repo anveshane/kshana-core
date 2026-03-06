@@ -1,0 +1,334 @@
+/**
+ * Pre-fetches and formats context for content creator subagents.
+ *
+ * Each artifact level fully encapsulates the level above it — a scene description
+ * already contains everything from the story relevant to that scene. This module
+ * reads the MINIMAL set of files for each content type, eliminating redundant reads.
+ */
+import * as fs from 'fs';
+import * as path from 'path';
+import {
+  getProjectDir,
+  loadProject,
+} from '../../tasks/video/workflow/ProjectManager.js';
+import type { ProjectFile } from '../../tasks/video/workflow/types.js';
+
+/**
+ * Result of building pre-loaded context.
+ */
+export interface PreloadedContext {
+  /** Formatted context block to inject into the subagent task */
+  contextBlock: string;
+  /** List of files that were read (for debugging/analytics) */
+  filesRead: string[];
+}
+
+/**
+ * Safely read a file from the project directory.
+ * Returns the content or null if not found.
+ */
+function readProjectFile(projectDir: string, relativePath: string): string | null {
+  try {
+    const fullPath = path.isAbsolute(relativePath)
+      ? relativePath
+      : path.join(projectDir, relativePath);
+    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
+      return fs.readFileSync(fullPath, 'utf-8');
+    }
+  } catch {
+    // File not readable
+  }
+  return null;
+}
+
+/**
+ * Find the file path for a character profile.
+ */
+function getCharacterFilePath(project: ProjectFile, charName: string): string | undefined {
+  const itemFiles = project.content?.characters?.itemFiles;
+  if (itemFiles?.[charName]) return itemFiles[charName];
+  const safeName = charName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  return `characters/${safeName}.profile.md`;
+}
+
+/**
+ * Find the file path for a setting profile.
+ */
+function getSettingFilePath(project: ProjectFile, settingName: string): string | undefined {
+  const itemFiles = project.content?.settings?.itemFiles;
+  if (itemFiles?.[settingName]) return itemFiles[settingName];
+  const safeName = settingName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  return `settings/${safeName}.profile.md`;
+}
+
+/**
+ * Build a reference images section listing verified paths.
+ */
+function buildReferenceImagesSection(
+  project: ProjectFile,
+  projectDir: string,
+  opts?: { filterCharNames?: string[]; filterSettingNames?: string[] }
+): string {
+  const lines: string[] = [];
+
+  const chars = opts?.filterCharNames
+    ? project.characters.filter(c => opts.filterCharNames!.includes(c.name))
+    : project.characters;
+
+  const settings = opts?.filterSettingNames
+    ? project.settings.filter(s => opts.filterSettingNames!.includes(s.name))
+    : project.settings;
+
+  lines.push('### Character Reference Images');
+  for (const char of chars) {
+    if (char.referenceImagePath) {
+      const fullPath = path.join(projectDir, char.referenceImagePath);
+      if (fs.existsSync(fullPath)) {
+        lines.push(`- ${char.name}: ${char.referenceImagePath} (exists)`);
+      } else {
+        lines.push(`- ${char.name}: reference image missing`);
+      }
+    } else {
+      lines.push(`- ${char.name}: no reference image`);
+    }
+  }
+
+  lines.push('### Setting Reference Images');
+  for (const setting of settings) {
+    if (setting.referenceImagePath) {
+      const fullPath = path.join(projectDir, setting.referenceImagePath);
+      if (fs.existsSync(fullPath)) {
+        lines.push(`- ${setting.name}: ${setting.referenceImagePath} (exists)`);
+      } else {
+        lines.push(`- ${setting.name}: reference image missing`);
+      }
+    } else {
+      lines.push(`- ${setting.name}: no reference image`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Build pre-loaded context for a content creator subagent.
+ *
+ * Returns the minimal set of files needed for the given content type,
+ * eliminating the need for the subagent to call read_file().
+ */
+export function buildPreloadedContext(
+  contentType: string,
+  name?: string,
+  sceneNumber?: number,
+  shotNumber?: number,
+  chapterNumber?: number,
+): PreloadedContext | null {
+  const project = loadProject();
+  if (!project) return null;
+
+  const projectDir = getProjectDir();
+  const filesRead: string[] = [];
+  const sections: string[] = [];
+
+  // Helper to read and add a file section
+  const addFileSection = (label: string, relativePath: string): string | null => {
+    const content = readProjectFile(projectDir, relativePath);
+    if (content) {
+      filesRead.push(relativePath);
+      sections.push(`### ${label}\n**File:** ${relativePath}\n\n${content}`);
+      return content;
+    }
+    return null;
+  };
+
+  // Add project metadata
+  sections.push(`### Project Metadata
+**Template:** ${(project as unknown as Record<string, unknown>)['templateId'] ?? 'narrative'}
+**Style:** ${project.style}
+**Phase:** ${project.currentPhase}
+**Characters:** ${project.characters.map(c => c.name).join(', ') || 'None'}
+**Settings:** ${project.settings.map(s => s.name).join(', ') || 'None'}`);
+
+  switch (contentType) {
+    case 'plot': {
+      // Plot only needs original_input.md
+      addFileSection('Original Input', project.originalInputFile);
+      break;
+    }
+
+    case 'story': {
+      // Story needs the plot (which encapsulates original_input)
+      addFileSection('Plot', 'plans/plot.md');
+      break;
+    }
+
+    case 'character': {
+      // Character needs story chapters (which encapsulate plot + original_input)
+      const chapterDir = path.join(projectDir, 'plans/chapters');
+      if (fs.existsSync(chapterDir)) {
+        const chapterFiles = fs.readdirSync(chapterDir)
+          .filter(f => f.endsWith('.story.md'))
+          .sort();
+        for (const cf of chapterFiles) {
+          addFileSection(`Story Chapter: ${cf}`, `plans/chapters/${cf}`);
+        }
+      }
+      break;
+    }
+
+    case 'setting': {
+      // Setting needs story chapters
+      const chapterDir = path.join(projectDir, 'plans/chapters');
+      if (fs.existsSync(chapterDir)) {
+        const chapterFiles = fs.readdirSync(chapterDir)
+          .filter(f => f.endsWith('.story.md'))
+          .sort();
+        for (const cf of chapterFiles) {
+          addFileSection(`Story Chapter: ${cf}`, `plans/chapters/${cf}`);
+        }
+      }
+      break;
+    }
+
+    case 'scene': {
+      // Scene needs story + character/setting profiles mentioned in the scene
+      const chapterDir = path.join(projectDir, 'plans/chapters');
+      if (fs.existsSync(chapterDir)) {
+        const chapterFiles = fs.readdirSync(chapterDir)
+          .filter(f => f.endsWith('.story.md'))
+          .sort();
+        for (const cf of chapterFiles) {
+          addFileSection(`Story Chapter: ${cf}`, `plans/chapters/${cf}`);
+        }
+      }
+      // Add all character and setting profiles
+      for (const char of project.characters) {
+        const filePath = getCharacterFilePath(project, char.name);
+        if (filePath) addFileSection(`Character: ${char.name}`, filePath);
+      }
+      for (const setting of project.settings) {
+        const filePath = getSettingFilePath(project, setting.name);
+        if (filePath) addFileSection(`Setting: ${setting.name}`, filePath);
+      }
+      break;
+    }
+
+    case 'character_image_prompt': {
+      // Only needs the character profile + reference image info
+      if (name) {
+        const filePath = getCharacterFilePath(project, name);
+        if (filePath) addFileSection(`Character Profile: ${name}`, filePath);
+      }
+      sections.push(buildReferenceImagesSection(project, projectDir,
+        name ? { filterCharNames: [name] } : undefined));
+      break;
+    }
+
+    case 'setting_image_prompt': {
+      // Only needs the setting profile + reference image info
+      if (name) {
+        const filePath = getSettingFilePath(project, name);
+        if (filePath) addFileSection(`Setting Profile: ${name}`, filePath);
+      }
+      sections.push(buildReferenceImagesSection(project, projectDir,
+        name ? { filterSettingNames: [name] } : undefined));
+      break;
+    }
+
+    case 'scene_image_prompt': {
+      // Scene desc + char/setting profiles + reference image paths
+      if (sceneNumber !== undefined) {
+        const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+        if (scene?.file) {
+          addFileSection(`Scene ${sceneNumber} Description`, scene.file);
+        } else {
+          // Try standard path
+          addFileSection(`Scene ${sceneNumber} Description`, `scenes/scene-${sceneNumber}.md`);
+        }
+      }
+      // Add all character and setting profiles
+      for (const char of project.characters) {
+        const filePath = getCharacterFilePath(project, char.name);
+        if (filePath) addFileSection(`Character: ${char.name}`, filePath);
+      }
+      for (const setting of project.settings) {
+        const filePath = getSettingFilePath(project, setting.name);
+        if (filePath) addFileSection(`Setting: ${setting.name}`, filePath);
+      }
+      sections.push(buildReferenceImagesSection(project, projectDir));
+      break;
+    }
+
+    case 'scene_video_prompt': {
+      // Scene desc + profiles + reference image paths
+      if (sceneNumber !== undefined) {
+        const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+        if (scene?.file) {
+          addFileSection(`Scene ${sceneNumber} Description`, scene.file);
+        } else {
+          addFileSection(`Scene ${sceneNumber} Description`, `scenes/scene-${sceneNumber}.md`);
+        }
+      }
+      for (const char of project.characters) {
+        const filePath = getCharacterFilePath(project, char.name);
+        if (filePath) addFileSection(`Character: ${char.name}`, filePath);
+      }
+      for (const setting of project.settings) {
+        const filePath = getSettingFilePath(project, setting.name);
+        if (filePath) addFileSection(`Setting: ${setting.name}`, filePath);
+      }
+      sections.push(buildReferenceImagesSection(project, projectDir));
+      break;
+    }
+
+    case 'shot_image_prompt': {
+      // Scene video prompt JSON + profiles + reference image paths
+      if (sceneNumber !== undefined) {
+        // Read the scene's motion JSON (scene_video_prompt output)
+        addFileSection(
+          `Scene ${sceneNumber} Video Prompt`,
+          `prompts/videos/scenes/scene-${sceneNumber}.motion.json`
+        );
+        // Also read the scene description
+        const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+        if (scene?.file) {
+          addFileSection(`Scene ${sceneNumber} Description`, scene.file);
+        } else {
+          addFileSection(`Scene ${sceneNumber} Description`, `scenes/scene-${sceneNumber}.md`);
+        }
+      }
+      for (const char of project.characters) {
+        const filePath = getCharacterFilePath(project, char.name);
+        if (filePath) addFileSection(`Character: ${char.name}`, filePath);
+      }
+      for (const setting of project.settings) {
+        const filePath = getSettingFilePath(project, setting.name);
+        if (filePath) addFileSection(`Setting: ${setting.name}`, filePath);
+      }
+      sections.push(buildReferenceImagesSection(project, projectDir));
+      break;
+    }
+
+    default: {
+      // For unknown content types (thesis, outline, segment, etc.), fall back to
+      // reading original_input.md — the subagent can still call read_file() if needed
+      addFileSection('Original Input', project.originalInputFile);
+      return null; // Signal that we don't have a specialized context strategy
+    }
+  }
+
+  if (sections.length <= 1) {
+    // Only metadata, no actual content found
+    return null;
+  }
+
+  const contextBlock = `<pre_loaded_context>
+ALL context needed for this content type has been pre-loaded below.
+DO NOT call read_file(). You may call read_project() if you need additional project metadata.
+Generate the content using ONLY the provided context.
+
+${sections.join('\n\n---\n\n')}
+</pre_loaded_context>`;
+
+  return { contextBlock, filesRead };
+}

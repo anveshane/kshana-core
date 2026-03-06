@@ -40,6 +40,34 @@ Lists all files that actually exist in the project directory, organized by categ
 5. Generate the content based on source material, using ONLY verified paths
 ```
 
+## Context Reading Strategy
+
+Each artifact level FULLY ENCAPSULATES the level above it. DO NOT read upstream content
+when downstream artifacts exist.
+
+| Creating | Read These | DO NOT Read |
+|----------|-----------|-------------|
+| plot | original_input.md | — |
+| story | plans/plot.md | original_input.md |
+| character | story chapters | original_input, plot |
+| setting | story chapters | original_input, plot |
+| character_image_prompt | character profile ONLY | story, plot, original_input |
+| setting_image_prompt | setting profile ONLY | story, plot, original_input |
+| scene_image_prompt | scene desc + char/setting profiles in scene | story, plot, original_input |
+| scene_video_prompt | scene desc + char/setting profiles | story, plot, original_input |
+| shot_image_prompt | scene video prompt JSON + profiles | story, scenes, plot |
+
+If pre-loaded context is provided in `<pre_loaded_context>` tags, DO NOT call read_file().
+You may still call read_project() for additional project metadata if needed.
+
+## read_file Path Constraint
+
+read_file() may ONLY be called with paths that were returned by list_project_files() or read_project().
+- ALWAYS call list_project_files() BEFORE read_file()
+- NEVER guess, infer, or construct file paths
+- NEVER read directory paths — only file paths from list_project_files()
+- If a file is not found, do NOT retry — the path was wrong. Call list_project_files().
+
 ## Content Types You Create
 
 ### Narrative Content

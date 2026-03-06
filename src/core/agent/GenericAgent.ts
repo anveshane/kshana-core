@@ -34,11 +34,12 @@ import {
   LONG_CONTENT_THRESHOLD,
 } from '../context/index.js';
 import { CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
-import { getContentCreatorTools } from '../tools/builtin/contentCreatorTools.js';
+import { getContentCreatorTools, clearKnownProjectFiles } from '../tools/builtin/contentCreatorTools.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { FlowRecorder } from '../../utils/FlowRecorder.js';
 import { ToolAnalytics } from '../../utils/ToolAnalytics.js';
+import { buildPreloadedContext } from './contentContext.js';
 import {
   getProjectDir,
   loadProject,
@@ -201,6 +202,7 @@ export class GenericAgent extends TypedEventEmitter {
   private messages: Message[] = [];
   private iteration = 0;
   private waitingForUser = false;
+  private maxIterationsReached = false;
   private pendingQuestion?: string;
   private pendingConfirmations = new Map<string, Record<string, unknown>>();
 
@@ -972,6 +974,24 @@ export class GenericAgent extends TypedEventEmitter {
         this.handleUserResponse(userResponse);
         this.waitingForUser = false;
         this.pendingQuestion = undefined;
+
+        // If resuming from max iterations, check user response and reset counter
+        if (this.maxIterationsReached) {
+          this.maxIterationsReached = false;
+          const stopKeywords = ['stop', 'cancel', 'abort', 'use current'];
+          const shouldStop = stopKeywords.some(kw => userResponse.toLowerCase().includes(kw));
+          if (shouldStop) {
+            return {
+              status: 'interrupted',
+              output: 'Agent stopped at user request after reaching max iterations.',
+              todos: this.todoManager.getTodos(),
+              error: 'user_stopped_at_max_iterations',
+            };
+          }
+          // User chose to continue — reset iteration counter to resume the loop
+          this.iteration = 0;
+          this.recentToolCalls = [];
+        }
       }
     } else if (!this.waitingForUser) {
       // Start fresh - check if task is long and should be condensed
@@ -1214,13 +1234,35 @@ export class GenericAgent extends TypedEventEmitter {
       }
     }
 
-    // Check if max iterations reached
+    // Check if max iterations reached — ask user instead of silently stopping
     if (this.iteration >= this.maxIterations) {
-      // End flow recording session on error (only for main orchestrator)
-      if (!this.isSubAgent) {
-        FlowRecorder.endSession();
-      }
-      this.emit({ type: 'agent_status', status: 'error', agentName: this.getEffectiveAgentName() });
+      this.maxIterationsReached = true;
+
+      // Create a synthetic ask_user tool call to pause and ask the user
+      const syntheticToolCall: ToolCall = {
+        id: `max-iter-${nanoid(8)}`,
+        name: 'ask_user',
+        arguments: {
+          question: 'The agent has reached the maximum number of iterations. How would you like to proceed?',
+          options: [
+            { label: 'Continue', description: 'Resume from where we left off' },
+            { label: 'Stop', description: 'Stop and use the current results' },
+          ],
+          auto_approve_timeout_ms: 0,
+        },
+      };
+
+      // Add the assistant message that "called" ask_user
+      this.messages.push({
+        role: 'assistant',
+        content: 'I have reached the maximum number of iterations. Let me check with you on how to proceed.',
+        toolCalls: [syntheticToolCall],
+      });
+
+      const askResult = this.handleAskUser(syntheticToolCall);
+      if (askResult) return askResult;
+
+      // Fallback if handleAskUser returned null (shouldn't happen)
       return {
         status: 'interrupted',
         output: 'Agent reached maximum iterations without completing.',
@@ -1618,49 +1660,32 @@ export class GenericAgent extends TypedEventEmitter {
       // Build content system prompt and route through contentState loop
       // This activates streaming + approval + feedback support
       const contentSystemPrompt = buildContentPrompt(instruction, contentType as ContentType);
-      let subAgentTask = `First, use read_project() to understand the project structure, template type, and available files. Then use read_file() to fetch the relevant source material listed in the project files. Finally, generate the ${contentType} content based on this instruction:\n\n${instruction}`;
 
-      // For scene_video_prompt and shot_image_prompt, inject reference image context
-      if ((contentType === 'scene_video_prompt' || contentType === 'shot_image_prompt') && sceneNumber !== undefined) {
-        const project = loadProject();
-        if (project) {
-          const projectDir = getProjectDir();
-          const scene = project.scenes?.find((s: { sceneNumber: number }) => s.sceneNumber === sceneNumber);
+      // Try to pre-fetch context to eliminate subagent read_file() calls
+      const preloaded = buildPreloadedContext(contentType, name, sceneNumber, shotNumber, chapterNumber);
+      let subAgentTask: string;
 
-          // Only include reference image paths that actually exist on disk
-          const charRefs = (project.characters ?? [])
-            .filter((c: { referenceImagePath?: string }) => {
-              if (!c.referenceImagePath) return false;
-              const fullPath = path.join(projectDir, c.referenceImagePath);
-              return fs.existsSync(fullPath);
-            })
-            .map((c: { name: string; referenceImagePath?: string }) => `- ${c.name}: ${c.referenceImagePath}`)
-            .join('\n');
-          const settingRefs = (project.settings ?? [])
-            .filter((s: { referenceImagePath?: string }) => {
-              if (!s.referenceImagePath) return false;
-              const fullPath = path.join(projectDir, s.referenceImagePath);
-              return fs.existsSync(fullPath);
-            })
-            .map((s: { name: string; referenceImagePath?: string }) => `- ${s.name}: ${s.referenceImagePath}`)
-            .join('\n');
+      if (preloaded) {
+        // Context pre-loaded: instruct subagent to use it directly
+        debugLog(
+          `[GenericAgent] Pre-loaded context for ${contentType}: ${preloaded.filesRead.length} files read (${preloaded.filesRead.join(', ')})`
+        );
+        subAgentTask = `ALL context has been pre-loaded below. DO NOT call read_file(). You may call read_project() if you need additional project metadata (e.g. reference image paths). Generate the ${contentType} content using the provided context.\n\nInstruction: ${instruction}\n\n${preloaded.contextBlock}`;
 
-          subAgentTask += `\n\n## Available Reference Images (verified on disk)\n`;
-          subAgentTask += `**Scene Image:** artifact ${scene?.imageArtifactId ?? 'not yet generated'}\n`;
-          subAgentTask += `**Characters:**\n${charRefs || 'None'}\n`;
-          subAgentTask += `**Settings:**\n${settingRefs || 'None'}\n`;
-          subAgentTask += `\n**IMPORTANT:** ONLY use the paths listed above. Do NOT invent or guess image paths. Use list_project_files() to verify what files exist.\n`;
-
-          if (contentType === 'shot_image_prompt' && shotNumber !== undefined) {
-            subAgentTask += `\n**Shot Number:** ${shotNumber}\n`;
-            subAgentTask += `**Note:** Generate an image prompt specifically for this shot's framing and composition. Use only the reference images relevant to this shot.\n`;
-          }
+        if (contentType === 'shot_image_prompt' && shotNumber !== undefined) {
+          subAgentTask += `\n\n**Shot Number:** ${shotNumber}\n**Note:** Generate an image prompt specifically for this shot's framing and composition. Use only the reference images relevant to this shot.\n`;
         }
+      } else {
+        // No pre-loaded context available (unknown type or no project) — fall back to discovery
+        subAgentTask = `First, use read_project() to understand the project structure, template type, and available files. Then use read_file() to fetch the relevant source material listed in the project files. Finally, generate the ${contentType} content based on this instruction:\n\n${instruction}`;
       }
 
       debugLog(
         `[GenericAgent] generate_content initializing contentState for: "${instruction.substring(0, 100)}..."`
       );
+
+      // Clear known project files from previous content sessions
+      clearKnownProjectFiles();
 
       // Initialize contentState for streaming + approval
       this.contentState = {
@@ -1675,7 +1700,7 @@ export class GenericAgent extends TypedEventEmitter {
         currentContent: '',
         iterations: 0,
         toolCallId: toolCall.id,
-        gatheringContext: true,
+        gatheringContext: !preloaded, // Skip gathering phase when context is pre-loaded
       };
       this.currentMode = 'content';
       const result = await this.continueContentLoop();
@@ -2810,6 +2835,19 @@ Respond in JSON format:
         const { listProjectFilesTool } = await import('../../tasks/video/workflow/FileTools.js');
         if (listProjectFilesTool.handler) {
           const result = await listProjectFilesTool.handler(toolCall.arguments || {});
+
+          // Register known file paths for read_file validation
+          try {
+            const resultObj = result as Record<string, unknown>;
+            const files = resultObj['files'] as Array<{ path: string }> | undefined;
+            if (files && Array.isArray(files)) {
+              const { registerKnownProjectFiles } = await import('../tools/builtin/contentCreatorTools.js');
+              registerKnownProjectFiles(files.map(f => f.path));
+            }
+          } catch {
+            // Non-critical: validation won't be enforced if registration fails
+          }
+
           return JSON.stringify(result, null, 2);
         }
         return 'Error: list_project_files handler not available';
@@ -2834,13 +2872,16 @@ Respond in JSON format:
     const maxToolCallRounds = 5; // Limit tool call rounds to prevent infinite loops
 
     if (this.contentState.iterations >= maxIterations) {
+      debugLog(
+        `[GenericAgent] Content loop reached max iterations (${maxIterations}) for ${this.contentState.contentType}. Current draft length: ${this.contentState.currentContent?.length ?? 0}`
+      );
       const result = {
         status: 'max_iterations',
         content: this.contentState.currentContent,
         content_type: this.contentState.contentType,
         task: this.contentState.task,
         output_file: this.contentState.outputFile,
-        message: 'Reached maximum iterations for content refinement. Using the last version.',
+        message: `Content generation reached the iteration limit (${maxIterations}). The current draft may be incomplete. You can regenerate with overwrite: true.`,
       };
       this.contentState = null;
       this.currentMode = 'orchestrator';
