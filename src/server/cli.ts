@@ -7,18 +7,22 @@ import 'dotenv/config';
 import { createServer } from './index.js';
 import { getLLMConfig, getLLMProvider, validateLLMConfig } from '../core/llm/index.js';
 
+import type { ServerMode } from './WebSocketHandler.js';
+
 // Parse command line arguments
 function parseArgs(): {
   host: string;
   port: number;
   help: boolean;
   provider?: string;
+  mode: ServerMode;
 } {
   const args = process.argv.slice(2);
   let host = '127.0.0.1';
   let port = 3000;
   let help = false;
   let provider: string | undefined;
+  let mode: ServerMode = 'auto';
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -42,10 +46,21 @@ function parseArgs(): {
         provider = nextArg;
         i++;
         break;
+      case '--mode':
+        if (nextArg === 'local' || nextArg === 'remote' || nextArg === 'auto') {
+          mode = nextArg;
+        }
+        i++;
+        break;
     }
   }
 
-  return { host, port, help, provider };
+  // Auto-detect host based on mode
+  if (mode === 'remote' && host === '127.0.0.1') {
+    host = '0.0.0.0';
+  }
+
+  return { host, port, help, provider, mode };
 }
 
 function printHelp(): void {
@@ -59,9 +74,13 @@ Usage:
 
 Options:
   -h, --help            Show this help message
-  --host <host>         Host to bind to (default: 127.0.0.1)
+  --host <host>         Host to bind to (default: 127.0.0.1, 0.0.0.0 in remote mode)
   -p, --port <port>     Port to listen on (default: 3000)
   --provider <name>     LLM provider: gemini, lmstudio, openai, custom
+  --mode <mode>         Server mode: local, remote, auto (default: auto)
+                        local  - localhost only, LocalFileSystem, no auth
+                        remote - bind 0.0.0.0, require API key, RemoteClientFileSystem
+                        auto   - detect based on connection source
 
 Environment Variables:
   LLM_PROVIDER          Provider to use (current: ${currentProvider})
@@ -100,7 +119,7 @@ Examples:
 
 // Main
 async function main(): Promise<void> {
-  const { host, port, help, provider } = parseArgs();
+  const { host, port, help, provider, mode } = parseArgs();
 
   if (help) {
     printHelp();
@@ -133,11 +152,12 @@ async function main(): Promise<void> {
   console.log(`Model: ${llmConfig.model}`);
   console.log(`Base URL: ${llmConfig.baseUrl}`);
   console.log(`API Key: ${maskedApiKey}`);
+  console.log(`Mode: ${mode}`);
   console.log('');
 
   try {
     const server = await createServer(
-      { llmConfig },
+      { llmConfig, serverMode: mode },
       { host, port }
     );
 

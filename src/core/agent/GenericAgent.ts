@@ -1252,6 +1252,10 @@ export class GenericAgent extends TypedEventEmitter {
   /**
    * Get the current todo list.
    */
+  getToolNames(): string[] {
+    return Array.from(this.tools.keys());
+  }
+
   getTodos(): ExpandableTodoItem[] {
     return this.todoManager.getTodos();
   }

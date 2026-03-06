@@ -6,6 +6,40 @@ import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSy
 import { join, extname, basename } from 'path';
 import { scanProjects } from '../tasks/video/workflow/ProjectManager.js';
 import { getWebUIHtml } from './webui.js';
+import { builtInTemplates, initializeTemplates } from '../templates/index.js';
+
+const DURATION_PRESETS: Record<string, { label: string; seconds: number }[]> = {
+  short: [
+    { label: '15 seconds', seconds: 15 },
+    { label: '30 seconds', seconds: 30 },
+    { label: '45 seconds', seconds: 45 },
+    { label: '60 seconds', seconds: 60 },
+  ],
+  infomercial: [
+    { label: '1 minute', seconds: 60 },
+    { label: '1.5 minutes', seconds: 90 },
+    { label: '2 minutes', seconds: 120 },
+    { label: '3 minutes', seconds: 180 },
+  ],
+  narrative: [
+    { label: '1 minute', seconds: 60 },
+    { label: '2 minutes', seconds: 120 },
+    { label: '3 minutes', seconds: 180 },
+    { label: '5 minutes', seconds: 300 },
+  ],
+  documentary: [
+    { label: '2 minutes', seconds: 120 },
+    { label: '3 minutes', seconds: 180 },
+    { label: '5 minutes', seconds: 300 },
+    { label: '10 minutes', seconds: 600 },
+  ],
+  graphic_novel: [
+    { label: '8 panels', seconds: 8 },
+    { label: '16 panels', seconds: 16 },
+    { label: '24 panels', seconds: 24 },
+    { label: '32 panels', seconds: 32 },
+  ],
+};
 
 const MIME_TYPES: Record<string, string> = {
   '.png': 'image/png',
@@ -147,6 +181,23 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
       return reply.type(contentType).send(readFileSync(fullPath));
     }
   );
+
+  // Get all templates with styles and duration presets
+  app.get('/api/v1/templates', async (_request: FastifyRequest, reply: FastifyReply) => {
+    initializeTemplates();
+    const templates = builtInTemplates.map(t => ({
+      id: t.id,
+      displayName: t.displayName,
+      description: t.description,
+      defaultStyle: t.defaultStyle,
+      styles: (t.styles || []).map((s: any) => ({
+        id: s.id,
+        displayName: s.displayName,
+        description: s.description,
+      })),
+    }));
+    return reply.send({ templates, durationPresets: DURATION_PRESETS });
+  });
 
   // List image files in a project's assets directory (for browsing without manifest)
   app.get<{ Params: { name: string } }>(

@@ -7,29 +7,51 @@
  * Message types sent from server to client.
  */
 export type ServerMessageType =
-  | 'status'           // Connection/session status
-  | 'progress'         // Agent progress updates
-  | 'agent_response'   // Final agent response
-  | 'agent_question'   // Agent asking user a question
-  | 'tool_call'        // Tool execution notification
-  | 'todo_update'      // Todo list changes
-  | 'stream_chunk'     // Streaming text chunk
-  | 'stream_end'       // End of streaming
-  | 'context_usage'    // Context window usage stats
-  | 'phase_transition' // Workflow phase change
-  | 'notification'     // User-facing notification
-  | 'error';           // Error message
+  | 'status'              // Connection/session status
+  | 'progress'            // Agent progress updates
+  | 'agent_response'      // Final agent response
+  | 'agent_question'      // Agent asking user a question
+  | 'tool_call'           // Tool execution notification
+  | 'todo_update'         // Todo list changes
+  | 'stream_chunk'        // Streaming text chunk
+  | 'stream_end'          // End of streaming
+  | 'context_usage'       // Context window usage stats
+  | 'phase_transition'    // Workflow phase change
+  | 'notification'        // User-facing notification
+  | 'error'               // Error message
+  // Remote file system messages (server → client)
+  | 'file_read_request'       // Server asks client for file content
+  | 'file_write_command'       // Server tells client to write a file
+  | 'file_delete_command'      // Server tells client to delete a file
+  | 'file_list_request'        // Server asks for directory listing
+  | 'file_exists_request'      // Server asks if path exists
+  | 'file_stat_request'        // Server asks for file stats
+  | 'file_mkdir_command'       // Server tells client to create directory
+  | 'file_copy_command'        // Server tells client to copy a file
+  | 'file_read_buffer_request' // Server asks for binary file
+  | 'file_write_buffer_command' // Server tells client to write binary
+  | 'file_delete_dir_command'  // Server tells client to delete directory
+  | 'batch_write_command'      // Server tells client to write multiple files
+  | 'asset_transfer';          // Server sends generated asset to client
 
 /**
  * Message types sent from client to server.
  */
 export type ClientMessageType =
-  | 'start_task'       // Start a new task
-  | 'user_response'    // Response to agent question
-  | 'cancel'           // Cancel current task
-  | 'select_project'   // Select active project
-  | 'create_project'   // Create a new project
-  | 'ping';            // Keep-alive ping
+  | 'start_task'           // Start a new task
+  | 'user_response'       // Response to agent question
+  | 'cancel'              // Cancel current task
+  | 'select_project'      // Select active project
+  | 'create_project'      // Create a new project
+  | 'ping'                // Keep-alive ping
+  // Remote file system messages (client → server)
+  | 'file_read_response'      // Client sends file content back
+  | 'file_write_ack'          // Client confirms write applied
+  | 'file_list_response'      // Client sends directory listing
+  | 'file_exists_response'    // Client confirms if path exists
+  | 'file_stat_response'      // Client sends file stats
+  | 'file_buffer_response'    // Client sends binary file content
+  | 'project_state_sync';     // Client sends full project snapshot
 
 /**
  * Base message structure for server messages.
@@ -56,6 +78,8 @@ export interface ClientMessage<T = unknown> {
 export interface StatusData {
   status: 'connected' | 'ready' | 'busy' | 'completed' | 'error';
   message?: string;
+  /** Tool names available to the agent (included with 'ready' status after project selection) */
+  tools?: string[];
 }
 
 /**
@@ -168,6 +192,80 @@ export interface NotificationData {
  */
 export interface SelectProjectData {
   projectName: string;
+}
+
+// ==========================================================================
+// REMOTE FILE SYSTEM PROTOCOL TYPES
+// ==========================================================================
+
+/**
+ * File read response from client.
+ */
+export interface FileReadResponseData {
+  requestId: string;
+  content: string;
+  error?: string;
+}
+
+/**
+ * File write acknowledgment from client.
+ */
+export interface FileWriteAckData {
+  requestId: string;
+  success: boolean;
+  error?: string;
+}
+
+/**
+ * File list response from client.
+ */
+export interface FileListResponseData {
+  requestId: string;
+  entries: string[];
+  error?: string;
+}
+
+/**
+ * File exists response from client.
+ */
+export interface FileExistsResponseData {
+  requestId: string;
+  exists: boolean;
+  error?: string;
+}
+
+/**
+ * File stat response from client.
+ */
+export interface FileStatResponseData {
+  requestId: string;
+  isFile: boolean;
+  isDirectory: boolean;
+  size: number;
+  error?: string;
+}
+
+/**
+ * Project state sync from client (full snapshot on connect).
+ */
+export interface ProjectStateSyncData {
+  files: Record<string, string>;
+  directories: string[];
+  assetHashes?: Record<string, string>;
+  projectRoot: string;
+}
+
+/**
+ * Asset transfer data (server → client).
+ */
+export interface AssetTransferData {
+  path: string;
+  /** Base64-encoded data for inline transfer (<1MB) */
+  data?: string;
+  /** HTTP download URL for large assets */
+  downloadUrl?: string;
+  mimeType?: string;
+  size: number;
 }
 
 /**

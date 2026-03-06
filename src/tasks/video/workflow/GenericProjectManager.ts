@@ -28,6 +28,7 @@ import type { CreateArtifactOptions } from '../../../core/artifacts/ArtifactMana
 import { ArtifactManager } from '../../../core/artifacts/ArtifactManager.js';
 import { ArtifactResolver } from '../../../core/artifacts/ArtifactResolver.js';
 import { getActiveProjectDir } from './activeProject.js';
+import { getSessionFs } from '../../../core/fs/index.js';
 
 /**
  * Project file name
@@ -79,16 +80,16 @@ export class GenericProjectManager {
   /**
    * Check if a project exists at the current path
    */
-  projectExists(): boolean {
+  async projectExists(): Promise<boolean> {
     const projectFile = path.join(this.projectPath, PROJECT_FILE);
-    return fs.existsSync(projectFile);
+    return getSessionFs().exists(projectFile);
   }
 
   /**
    * Create a new project
    */
   async createProject(options: CreateProjectOptions): Promise<GenericProjectFile> {
-    if (this.projectExists()) {
+    if (await this.projectExists()) {
       throw new Error('Project already exists at this location');
     }
 
@@ -149,7 +150,7 @@ export class GenericProjectManager {
     if (options.inputContent) {
       const inputFile = 'original_input.md';
       const inputPath = path.join(this.projectPath, inputFile);
-      fs.writeFileSync(inputPath, options.inputContent, 'utf-8');
+      await getSessionFs().writeFile(inputPath, options.inputContent);
 
       // Store in context
       project.contextStore['$original_input'] = {
@@ -173,12 +174,12 @@ export class GenericProjectManager {
    * Load an existing project
    */
   async loadProject(): Promise<GenericProjectFile> {
-    if (!this.projectExists()) {
+    if (!(await this.projectExists())) {
       throw new Error('No project found at this location');
     }
 
     const projectFile = path.join(this.projectPath, PROJECT_FILE);
-    const content = fs.readFileSync(projectFile, 'utf-8');
+    const content = await getSessionFs().readFile(projectFile);
     const project = JSON.parse(content) as GenericProjectFile;
 
     // Validate version
@@ -216,7 +217,7 @@ export class GenericProjectManager {
     this.project.updatedAt = Date.now();
 
     const projectFile = path.join(this.projectPath, PROJECT_FILE);
-    fs.writeFileSync(projectFile, JSON.stringify(this.project, null, 2), 'utf-8');
+    await getSessionFs().writeFile(projectFile, JSON.stringify(this.project, null, 2));
   }
 
   /**
@@ -258,8 +259,10 @@ export class GenericProjectManager {
    * Create project directory structure
    */
   private async createProjectStructure(template: VideoTemplate): Promise<void> {
+    const sfs = getSessionFs();
+
     // Create main project directory
-    fs.mkdirSync(this.projectPath, { recursive: true });
+    await sfs.mkdir(this.projectPath, { recursive: true });
 
     // Create standard directories
     const dirs = ['plans', 'assets', 'assets/images', 'assets/videos'];
@@ -274,8 +277,8 @@ export class GenericProjectManager {
 
     for (const dir of dirs) {
       const fullPath = path.join(this.projectPath, dir);
-      if (!fs.existsSync(fullPath)) {
-        fs.mkdirSync(fullPath, { recursive: true });
+      if (!(await sfs.exists(fullPath))) {
+        await sfs.mkdir(fullPath, { recursive: true });
       }
     }
   }
@@ -316,12 +319,14 @@ export class GenericProjectManager {
   private async syncFromDisk(): Promise<void> {
     if (!this.project || !this.template) return;
 
+    const sfs = getSessionFs();
+
     // Sync context store files
     for (const [, entry] of Object.entries(this.project.contextStore) as [string, ContextStoreEntry][]) {
       if (entry.filePath) {
         const fullPath = path.join(this.projectPath, entry.filePath);
-        if (fs.existsSync(fullPath)) {
-          const content = fs.readFileSync(fullPath, 'utf-8');
+        if (await sfs.exists(fullPath)) {
+          const content = await sfs.readFile(fullPath);
           entry.content = content;
         }
       }
@@ -332,7 +337,7 @@ export class GenericProjectManager {
       for (const [, artifact] of Object.entries(artifacts) as [string, ArtifactInstance][]) {
         if (artifact.filePath) {
           const fullPath = path.join(this.projectPath, artifact.filePath);
-          if (!fs.existsSync(fullPath)) {
+          if (!(await sfs.exists(fullPath))) {
             // File missing - mark artifact as needing attention
             artifact.error = {
               code: 'FILE_MISSING',
@@ -589,7 +594,7 @@ export class GenericProjectManager {
 
     if (saveToFile) {
       const fullPath = path.join(this.projectPath, saveToFile);
-      fs.writeFileSync(fullPath, content, 'utf-8');
+      await getSessionFs().writeFile(fullPath, content);
       this.project.contextStore[varName] = {
         content,
         filePath: saveToFile,
@@ -614,34 +619,36 @@ export class GenericProjectManager {
   /**
    * Read a file from the project
    */
-  readFile(relativePath: string): string | null {
+  async readFile(relativePath: string): Promise<string | null> {
     const fullPath = path.join(this.projectPath, relativePath);
-    if (!fs.existsSync(fullPath)) {
+    const sfs = getSessionFs();
+    if (!(await sfs.exists(fullPath))) {
       return null;
     }
-    return fs.readFileSync(fullPath, 'utf-8');
+    return sfs.readFile(fullPath);
   }
 
   /**
    * Write a file to the project
    */
-  writeFile(relativePath: string, content: string): void {
+  async writeFile(relativePath: string, content: string): Promise<void> {
     const fullPath = path.join(this.projectPath, relativePath);
     const dir = path.dirname(fullPath);
+    const sfs = getSessionFs();
 
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    if (!(await sfs.exists(dir))) {
+      await sfs.mkdir(dir, { recursive: true });
     }
 
-    fs.writeFileSync(fullPath, content, 'utf-8');
+    await sfs.writeFile(fullPath, content);
   }
 
   /**
    * Check if a file exists
    */
-  fileExists(relativePath: string): boolean {
+  async fileExists(relativePath: string): Promise<boolean> {
     const fullPath = path.join(this.projectPath, relativePath);
-    return fs.existsSync(fullPath);
+    return getSessionFs().exists(fullPath);
   }
 
   /**
@@ -659,19 +666,44 @@ export class GenericProjectManager {
   }
 
   /**
-   * Synchronously load the project without auto-discovering content.
+   * Load the project without auto-discovering content.
    * Used by planner tools that need quick access to project state.
    */
-  loadProjectSync(): GenericProjectFile {
+  async loadProjectSync(): Promise<GenericProjectFile> {
+    const projectFile = path.join(this.projectPath, PROJECT_FILE);
+    const sfs = getSessionFs();
+    if (!(await sfs.exists(projectFile))) {
+      throw new Error('No project found at this location');
+    }
+
+    const content = await sfs.readFile(projectFile);
+    const project = JSON.parse(content) as GenericProjectFile;
+
+    return project;
+  }
+
+  /**
+   * Check if a project exists synchronously (local filesystem only).
+   * Used during tool registration in CLI mode where async isn't possible.
+   */
+  projectExistsSync(): boolean {
+    const projectFile = path.join(this.projectPath, PROJECT_FILE);
+    return fs.existsSync(projectFile);
+  }
+
+  /**
+   * Synchronously load project state from local disk.
+   * Used during tool registration in CLI mode where async isn't possible.
+   * Only works with LocalFileSystem (direct disk access).
+   */
+  loadProjectQuick(): GenericProjectFile {
     const projectFile = path.join(this.projectPath, PROJECT_FILE);
     if (!fs.existsSync(projectFile)) {
       throw new Error('No project found at this location');
     }
 
     const content = fs.readFileSync(projectFile, 'utf-8');
-    const project = JSON.parse(content) as GenericProjectFile;
-
-    return project;
+    return JSON.parse(content) as GenericProjectFile;
   }
 
   /**
@@ -930,6 +962,7 @@ export class GenericProjectManager {
    */
   private async createChapterStructure(chapterId: string): Promise<void> {
     const chapterDir = path.join(this.projectPath, 'chapters', chapterId);
+    const sfs = getSessionFs();
 
     const dirs = [
       chapterDir,
@@ -944,8 +977,8 @@ export class GenericProjectManager {
     ];
 
     for (const dir of dirs) {
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
+      if (!(await sfs.exists(dir))) {
+        await sfs.mkdir(dir, { recursive: true });
       }
     }
   }

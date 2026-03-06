@@ -10,6 +10,7 @@
   },
   "scripts": {
     "start": "tsx src/index.tsx",
+    "fake": "KSHANA_FAKE_MODE=1 tsx src/index.tsx",
     "dev": "tsx watch src/index.tsx",
     "server": "tsx src/server/cli.ts",
     "server:dev": "tsx watch src/server/cli.ts",

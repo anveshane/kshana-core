@@ -7,9 +7,16 @@ import { v4 as uuidv4 } from 'uuid';
 import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
 import { createAgentForProject } from '../tasks/video/index.js';
-import { setActiveProjectDir } from '../tasks/video/workflow/activeProject.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
+import {
+  type SessionContext,
+  type IFileSystem,
+  runInSession,
+  createLocalSession,
+  createRemoteSession,
+  LocalFileSystem,
+} from '../core/fs/index.js';
 
 export interface ConversationManagerConfig {
   llmConfig: LLMClientConfig;
@@ -42,6 +49,12 @@ interface ActiveSession {
   agent?: GenericAgent;
   abortController?: AbortController;
   initialized?: boolean;
+  /** Per-session context for file system and project isolation */
+  sessionContext?: SessionContext;
+  /** The mode this session operates in */
+  mode: 'local' | 'remote';
+  /** Remote client filesystem (set in remote mode) */
+  remoteFs?: IFileSystem;
 }
 
 export class ConversationManager {
@@ -63,7 +76,7 @@ export class ConversationManager {
   /**
    * Create a new conversation session (bare — no agent until project is configured).
    */
-  createSession(): SessionState {
+  createSession(mode: 'local' | 'remote' = 'local', remoteFs?: IFileSystem): SessionState {
     const sessionId = uuidv4();
     const now = Date.now();
 
@@ -75,7 +88,7 @@ export class ConversationManager {
       taskHistory: [],
     };
 
-    this.sessions.set(sessionId, { state });
+    this.sessions.set(sessionId, { state, mode, remoteFs });
 
     return state;
   }
@@ -83,6 +96,7 @@ export class ConversationManager {
   /**
    * Configure a session's agent for a specific project.
    * Uses the shared createAgentForProject() — same tools, prompt, and params as CLI.
+   * Creates a per-session SessionContext so each session has its own project dir and filesystem.
    */
   configureSessionForProject(
     sessionId: string,
@@ -96,27 +110,32 @@ export class ConversationManager {
       throw new Error(`Session not found: ${sessionId}`);
     }
 
-    // Set active project directory so file tools resolve correctly
-    if (projectDirName) {
-      setActiveProjectDir(projectDirName);
+    // Create per-session context with the appropriate filesystem
+    const projectDir = projectDirName ?? 'default.kshana';
+    if (session.mode === 'remote' && session.remoteFs) {
+      session.sessionContext = createRemoteSession(sessionId, projectDir, session.remoteFs);
+    } else {
+      session.sessionContext = createLocalSession(sessionId, projectDir);
     }
 
-    // Create agent via the shared factory (identical to CLI path)
-    const { tools, customPrompt, agentName } = createAgentForProject({
-      templateId,
-      style,
-      duration,
-      llmConfig: this.llmConfig,
-      maxIterations: this.maxIterations,
-    });
+    // Create agent inside the session context so tools see the right project dir
+    runInSession(session.sessionContext, () => {
+      const { tools, customPrompt, agentName } = createAgentForProject({
+        templateId,
+        style,
+        duration,
+        llmConfig: this.llmConfig,
+        maxIterations: this.maxIterations,
+      });
 
-    const llm = new LLMClient(this.llmConfig);
-    session.agent = new GenericAgent(tools, llm, {
-      maxIterations: this.maxIterations,
-      customPrompt,
-      name: agentName,
+      const llm = new LLMClient(this.llmConfig);
+      session.agent = new GenericAgent(tools, llm, {
+        maxIterations: this.maxIterations,
+        customPrompt,
+        name: agentName,
+      });
+      session.initialized = false;
     });
-    session.initialized = false;
   }
 
   /**
@@ -143,7 +162,17 @@ export class ConversationManager {
   }
 
   /**
+   * Get the tool names for a configured session's agent.
+   */
+  getSessionToolNames(sessionId: string): string[] {
+    const session = this.sessions.get(sessionId);
+    return session?.agent?.getToolNames() ?? [];
+  }
+
+  /**
    * Run a task in a session.
+   * Wraps execution in the session's context so all tool/file operations
+   * see the correct project directory and filesystem.
    */
   async runTask(
     sessionId: string,
@@ -163,50 +192,58 @@ export class ConversationManager {
       throw new Error('Session already has a running task');
     }
 
-    // Initialize agent if not already done (queries model context length)
-    if (!session.initialized) {
-      await session.agent.initialize();
-      session.initialized = true;
+    if (!session.sessionContext) {
+      throw new Error('Session context not initialized. Configure project first.');
     }
 
-    // Update session state
-    session.state.status = 'running';
-    session.state.lastActivity = Date.now();
-    session.state.taskHistory.push(task);
-
-    // Create abort controller for cancellation
-    session.abortController = new AbortController();
-
-    // Set up event listeners
-    this.setupEventListeners(sessionId, session.agent, events);
-
-    try {
-      const result = await session.agent.run(task);
-
-      // Update session state based on result
-      session.state.lastActivity = Date.now();
-      if (result.status === 'waiting_for_user') {
-        session.state.status = 'awaiting_input';
-      } else if (result.status === 'completed') {
-        session.state.status = 'completed';
-      } else if (result.status === 'error' || result.status === 'interrupted') {
-        session.state.status = 'error';
+    // Run the entire agent execution inside the session context
+    return runInSession(session.sessionContext, async () => {
+      // Initialize agent if not already done (queries model context length)
+      if (!session.initialized) {
+        await session.agent!.initialize();
+        session.initialized = true;
       }
 
-      return result;
-    } catch (error) {
-      session.state.status = 'error';
+      // Update session state
+      session.state.status = 'running';
       session.state.lastActivity = Date.now();
-      throw error;
-    } finally {
-      // Clean up event listeners
-      session.agent.removeAllListeners();
-      session.abortController = undefined;
-    }
+      session.state.taskHistory.push(task);
+
+      // Create abort controller for cancellation
+      session.abortController = new AbortController();
+
+      // Set up event listeners
+      this.setupEventListeners(sessionId, session.agent!, events);
+
+      try {
+        const result = await session.agent!.run(task);
+
+        // Update session state based on result
+        session.state.lastActivity = Date.now();
+        if (result.status === 'waiting_for_user') {
+          session.state.status = 'awaiting_input';
+        } else if (result.status === 'completed') {
+          session.state.status = 'completed';
+        } else if (result.status === 'error' || result.status === 'interrupted') {
+          session.state.status = 'error';
+        }
+
+        return result;
+      } catch (error) {
+        session.state.status = 'error';
+        session.state.lastActivity = Date.now();
+        throw error;
+      } finally {
+        // Clean up event listeners
+        session.agent!.removeAllListeners();
+        session.abortController = undefined;
+      }
+    });
   }
 
   /**
    * Send a user response to continue a paused session.
+   * Wraps execution in the session's context.
    */
   async sendResponse(
     sessionId: string,
@@ -226,39 +263,45 @@ export class ConversationManager {
       throw new Error('Session is not awaiting input');
     }
 
-    // Update session state
-    session.state.status = 'running';
-    session.state.lastActivity = Date.now();
-
-    // Create abort controller for cancellation
-    session.abortController = new AbortController();
-
-    // Set up event listeners
-    this.setupEventListeners(sessionId, session.agent, events);
-
-    try {
-      const result = await session.agent.run('', response);
-
-      // Update session state based on result
-      session.state.lastActivity = Date.now();
-      if (result.status === 'waiting_for_user') {
-        session.state.status = 'awaiting_input';
-      } else if (result.status === 'completed') {
-        session.state.status = 'completed';
-      } else if (result.status === 'error' || result.status === 'interrupted') {
-        session.state.status = 'error';
-      }
-
-      return result;
-    } catch (error) {
-      session.state.status = 'error';
-      session.state.lastActivity = Date.now();
-      throw error;
-    } finally {
-      // Clean up event listeners
-      session.agent.removeAllListeners();
-      session.abortController = undefined;
+    if (!session.sessionContext) {
+      throw new Error('Session context not initialized.');
     }
+
+    return runInSession(session.sessionContext, async () => {
+      // Update session state
+      session.state.status = 'running';
+      session.state.lastActivity = Date.now();
+
+      // Create abort controller for cancellation
+      session.abortController = new AbortController();
+
+      // Set up event listeners
+      this.setupEventListeners(sessionId, session.agent!, events);
+
+      try {
+        const result = await session.agent!.run('', response);
+
+        // Update session state based on result
+        session.state.lastActivity = Date.now();
+        if (result.status === 'waiting_for_user') {
+          session.state.status = 'awaiting_input';
+        } else if (result.status === 'completed') {
+          session.state.status = 'completed';
+        } else if (result.status === 'error' || result.status === 'interrupted') {
+          session.state.status = 'error';
+        }
+
+        return result;
+      } catch (error) {
+        session.state.status = 'error';
+        session.state.lastActivity = Date.now();
+        throw error;
+      } finally {
+        // Clean up event listeners
+        session.agent!.removeAllListeners();
+        session.abortController = undefined;
+      }
+    });
   }
 
   /**

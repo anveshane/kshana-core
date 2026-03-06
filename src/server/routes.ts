@@ -23,9 +23,13 @@ interface ChatResponse {
   todos?: unknown[];
 }
 
+import type { ServerMode } from './WebSocketHandler.js';
+import { ApiKeyAuth } from './auth.js';
+
 export interface RouteOptions {
   llmConfig: LLMClientConfig;
   apiPrefix?: string;
+  serverMode?: ServerMode;
 }
 
 /**
@@ -35,7 +39,7 @@ export async function registerRoutes(
   app: FastifyInstance,
   options: RouteOptions
 ): Promise<{ conversationManager: ConversationManager; wsHandler: WebSocketHandler }> {
-  const { llmConfig, apiPrefix = '/api/v1' } = options;
+  const { llmConfig, apiPrefix = '/api/v1', serverMode = 'auto' } = options;
 
   // Create conversation manager (agent configured lazily per-project)
   const conversationManager = new ConversationManager({
@@ -44,8 +48,11 @@ export async function registerRoutes(
     maxIterations: 50,
   });
 
-  // Create WebSocket handler
-  const wsHandler = new WebSocketHandler(conversationManager);
+  // Set up auth for remote mode
+  const auth = serverMode === 'local' ? null : new ApiKeyAuth();
+
+  // Create WebSocket handler with mode and auth
+  const wsHandler = new WebSocketHandler(conversationManager, { serverMode, auth: auth ?? undefined });
 
   // Health check endpoint
   app.get(`${apiPrefix}/health`, async (_request: FastifyRequest, reply: FastifyReply) => {
@@ -167,8 +174,12 @@ export async function registerRoutes(
   app.get(
     `${apiPrefix}/ws/chat`,
     { websocket: true },
-    (socket: WebSocket, _request: FastifyRequest) => {
-      wsHandler.handleConnection(socket);
+    (socket: WebSocket, request: FastifyRequest) => {
+      // Extract API key from query string for remote mode auth
+      const url = new URL(request.url, `http://${request.hostname}`);
+      const apiKey = url.searchParams.get('apiKey') ?? undefined;
+      const remoteAddress = request.ip;
+      wsHandler.handleConnection(socket, remoteAddress, apiKey);
     }
   );
 

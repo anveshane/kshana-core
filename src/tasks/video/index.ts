@@ -22,6 +22,7 @@ import {
 import { BackwardPlanner, AssetScanner } from '../../core/planner/index.js';
 import type { UserGoal, ExecutionPlan, AssetRegistry } from '../../core/planner/types.js';
 import { getVideoGenerationTools, getGraphicNovelTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
+import { getFakeVideoGenerationTools } from './fakeTools.js';
 import { getInfographicTools, INFOGRAPHIC_COMPLEX_TOOLS } from './infographic-tools.js';
 import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
@@ -99,8 +100,10 @@ export function createVideoToolRegistry(): ToolRegistry {
   // Start with default generic tools (think, ask_user, todos)
   const registry = createDefaultToolRegistry();
 
-  // Add video generation tools
-  for (const tool of getVideoGenerationTools()) {
+  // Add video generation tools (fake mode uses placeholder images instead of ComfyUI)
+  const isFake = process.env['KSHANA_FAKE_MODE'] === '1';
+  const genTools = isFake ? getFakeVideoGenerationTools() : getVideoGenerationTools();
+  for (const tool of genTools) {
     registry.register(tool);
   }
 
@@ -197,7 +200,10 @@ export function createWorkflowToolRegistry(): ToolRegistry {
   // Artifact tools removed — rarely used, saves significant tokens
 
   // Add image/video generation tools so image-generator/video-assembler subagents can submit jobs
-  for (const tool of getVideoGenerationTools()) {
+  // In fake mode, use placeholder image generators instead of ComfyUI
+  const isFakeWorkflow = process.env['KSHANA_FAKE_MODE'] === '1';
+  const workflowGenTools = isFakeWorkflow ? getFakeVideoGenerationTools() : getVideoGenerationTools();
+  for (const tool of workflowGenTools) {
     registry.register(tool);
   }
 
@@ -225,10 +231,10 @@ export function createGoalDrivenToolRegistry(
   const finalTemplateId = templateId || TEMPLATE_IDS.NARRATIVE;
   const template = getTemplateOrThrow(finalTemplateId);
 
-  // Create project manager to get project state
+  // Create project manager to get project state (sync for tool registration)
   const projectManager = createProjectManager(basePath);
-  const project = projectManager.projectExists()
-    ? projectManager.loadProjectSync()
+  const project = projectManager.projectExistsSync()
+    ? projectManager.loadProjectQuick()
     : projectManager.createEmptyProject(finalTemplateId);
 
   // Create planner tool context — use getter so project dir is resolved at execution time
@@ -556,7 +562,7 @@ export async function createTemplateVideoAgent(config: TemplateVideoAgentConfig)
 
   // Create or load project
   let project;
-  if (projectManager.projectExists()) {
+  if (await projectManager.projectExists()) {
     project = await projectManager.loadProject();
   } else {
     project = await projectManager.createProject({

@@ -2,9 +2,12 @@
  * WebSocket handler for real-time agent communication.
  */
 import type { WebSocket } from '@fastify/websocket';
-import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { ConversationManager, type ConversationEvents } from './ConversationManager.js';
+import { LocalFileSystem } from '../core/fs/LocalFileSystem.js';
+import { RemoteClientFileSystem } from '../core/fs/RemoteClientFileSystem.js';
+import { ProjectStateCache, type ProjectSnapshot } from '../core/fs/ProjectStateCache.js';
+import { ApiKeyAuth, shouldSkipAuth } from './auth.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { AgentStatus } from '../core/agent/index.js';
 import {
@@ -37,7 +40,13 @@ interface ConnectionState {
   socket: WebSocket;
   sessionId: string;
   isAlive: boolean;
+  mode: 'local' | 'remote';
+  clientId?: string;
+  remoteFs?: RemoteClientFileSystem;
+  projectCache?: ProjectStateCache;
 }
+
+export type ServerMode = 'local' | 'remote' | 'auto';
 
 /**
  * Map AgentStatus to the response status type.
@@ -60,9 +69,16 @@ export class WebSocketHandler {
   private conversationManager: ConversationManager;
   private connections = new Map<string, ConnectionState>();
   private heartbeatInterval?: ReturnType<typeof setInterval>;
+  private serverMode: ServerMode;
+  private auth: ApiKeyAuth | null;
 
-  constructor(conversationManager: ConversationManager) {
+  constructor(
+    conversationManager: ConversationManager,
+    options?: { serverMode?: ServerMode; auth?: ApiKeyAuth },
+  ) {
     this.conversationManager = conversationManager;
+    this.serverMode = options?.serverMode ?? 'auto';
+    this.auth = options?.auth ?? null;
 
     // Start heartbeat interval
     this.heartbeatInterval = setInterval(() => this.checkHeartbeats(), 30000);
@@ -70,24 +86,57 @@ export class WebSocketHandler {
 
   /**
    * Handle a new WebSocket connection.
+   * Optionally authenticates via API key and determines connection mode.
    */
-  handleConnection(socket: WebSocket): void {
-    // Create a new session for this connection
-    const session = this.conversationManager.createSession();
+  handleConnection(socket: WebSocket, remoteAddress?: string, apiKey?: string): void {
+    // Determine connection mode
+    const skipAuth = shouldSkipAuth(remoteAddress, this.serverMode);
+    let connectionMode: 'local' | 'remote' = 'local';
+    let clientId: string | undefined;
+
+    if (!skipAuth) {
+      // Remote mode: require authentication
+      if (this.auth && this.auth.isConfigured()) {
+        if (!apiKey) {
+          socket.close(4001, 'API key required');
+          return;
+        }
+        const entry = this.auth.validate(apiKey);
+        if (!entry) {
+          socket.close(4003, 'Invalid API key');
+          return;
+        }
+        clientId = entry.clientId;
+      }
+      connectionMode = 'remote';
+    }
+
+    // Create session with appropriate mode
+    const session = this.conversationManager.createSession(connectionMode);
     const sessionId = session.id;
 
     const connectionState: ConnectionState = {
       socket,
       sessionId,
       isAlive: true,
+      mode: connectionMode,
+      clientId,
     };
+
+    // For remote connections, set up the remote filesystem
+    if (connectionMode === 'remote') {
+      const cache = new ProjectStateCache();
+      const remoteFs = new RemoteClientFileSystem(socket, cache);
+      connectionState.remoteFs = remoteFs;
+      connectionState.projectCache = cache;
+    }
 
     this.connections.set(sessionId, connectionState);
 
     // Send connected status
     this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
       status: 'connected',
-      message: 'Session created successfully',
+      message: `Session created (${connectionMode} mode)`,
     }));
 
     // Set up message handler
@@ -156,43 +205,29 @@ export class WebSocketHandler {
     }
 
     if (isSelectProjectMessage(message)) {
-      const projectName = message.data.projectName;
-      const projectDirName = `${projectName}.kshana`;
-      const projectFile = join(process.cwd(), projectDirName, 'project.json');
-
-      // Read project.json to get templateId, style, duration
-      let templateId = 'narrative';
-      let style = 'anime';
-      let duration = 60;
-      if (existsSync(projectFile)) {
-        try {
-          const projectData = JSON.parse(readFileSync(projectFile, 'utf-8'));
-          templateId = projectData.templateId || templateId;
-          style = projectData.style || style;
-          duration = projectData.duration || duration;
-        } catch {
-          // Use defaults if project.json is unreadable
-        }
-      }
-
-      // Reconfigure agent with correct tools and prompt for this project
-      this.conversationManager.configureSessionForProject(
-        sessionId,
-        templateId,
-        style,
-        duration,
-        projectDirName,
-      );
-
-      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
-        status: 'ready',
-        message: `Project set to ${projectName}`,
-      }));
+      await this.handleSelectProject(sessionId, socket, message.data.projectName);
       return;
     }
 
     if (isCreateProjectMessage(message)) {
       await this.handleCreateProject(sessionId, socket, message.data);
+      return;
+    }
+
+    // Handle project_state_sync from remote clients
+    if (message.type === 'project_state_sync') {
+      this.handleProjectStateSync(sessionId, message.data as import('./types.js').ProjectStateSyncData);
+      return;
+    }
+
+    // File response messages from remote clients are handled by RemoteClientFileSystem
+    // (via its socket.on('message') listener), so we don't process them here.
+    const fileResponseTypes = [
+      'file_read_response', 'file_write_ack', 'file_list_response',
+      'file_exists_response', 'file_stat_response', 'file_buffer_response',
+    ];
+    if (fileResponseTypes.includes(message.type)) {
+      // Already handled by RemoteClientFileSystem's message listener
       return;
     }
 
@@ -294,6 +329,78 @@ export class WebSocketHandler {
   }
 
   /**
+   * Handle select_project message.
+   * Reads project.json using LocalFileSystem (async) and configures the session.
+   */
+  private async handleSelectProject(
+    sessionId: string,
+    socket: WebSocket,
+    projectName: string,
+  ): Promise<void> {
+    const projectDirName = `${projectName}.kshana`;
+    const projectFile = join(process.cwd(), projectDirName, 'project.json');
+
+    // Read project.json to get templateId, style, duration
+    let templateId = 'narrative';
+    let style = 'anime';
+    let duration = 60;
+
+    const localFs = new LocalFileSystem();
+    if (await localFs.exists(projectFile)) {
+      try {
+        const content = await localFs.readFile(projectFile);
+        const projectData = JSON.parse(content);
+        templateId = projectData.templateId || templateId;
+        style = projectData.style || style;
+        duration = projectData.duration || duration;
+      } catch {
+        // Use defaults if project.json is unreadable
+      }
+    }
+
+    // Reconfigure agent with correct tools and prompt for this project
+    this.conversationManager.configureSessionForProject(
+      sessionId,
+      templateId,
+      style,
+      duration,
+      projectDirName,
+    );
+
+    // Include the list of tools the agent was initialized with
+    const toolNames = this.conversationManager.getSessionToolNames(sessionId);
+
+    this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+      status: 'ready',
+      message: `Project set to ${projectName}`,
+      tools: toolNames,
+    }));
+  }
+
+  /**
+   * Handle project_state_sync from a remote client.
+   * Loads the project snapshot into the session's cache.
+   */
+  private handleProjectStateSync(
+    sessionId: string,
+    data: import('./types.js').ProjectStateSyncData,
+  ): void {
+    const connection = this.connections.get(sessionId);
+    if (!connection || connection.mode !== 'remote') {
+      return;
+    }
+
+    if (connection.projectCache) {
+      connection.projectCache.loadSnapshot({
+        files: data.files,
+        directories: data.directories,
+        assetHashes: data.assetHashes,
+        projectRoot: data.projectRoot,
+      });
+    }
+  }
+
+  /**
    * Handle create_project message.
    */
   private async handleCreateProject(
@@ -302,24 +409,29 @@ export class WebSocketHandler {
     data: CreateProjectData
   ): Promise<void> {
     try {
-      // Dynamically import createProject to avoid circular deps
-      const { createProject } = await import('../tasks/video/workflow/index.js');
+      // Dynamically import to avoid circular deps
+      const { createProject, inferProjectDirName } = await import('../tasks/video/workflow/index.js');
+
+      // Infer the dir name the same way createProject does
+      const projectDirName = inferProjectDirName(data.content);
 
       // Create the project on disk
       createProject(data.content, data.style, undefined, data.duration, data.templateId);
 
       // Configure the session agent for this project
-      // The createProject call above sets activeProjectDir, so we don't need to pass it
       this.conversationManager.configureSessionForProject(
         sessionId,
         data.templateId,
         data.style,
         data.duration,
+        projectDirName,
       );
 
+      const toolNames = this.conversationManager.getSessionToolNames(sessionId);
       this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
         status: 'ready',
         message: `Project "${data.title}" created`,
+        tools: toolNames,
       }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';

@@ -221,10 +221,10 @@ export interface ImageEditParams {
 }
 
 // Job storage (in-memory for now, could be Redis/DB in production)
-const jobs = new Map<string, GenerationJob>();
+export const jobs = new Map<string, GenerationJob>();
 
 // Get the project assets directory
-function getAssetsDir(): string {
+export function getAssetsDir(): string {
   const assetsDir = path.join(getProjectDir(), 'assets', 'images');
   if (!fs.existsSync(assetsDir)) {
     fs.mkdirSync(assetsDir, { recursive: true });

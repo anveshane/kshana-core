@@ -46,6 +46,10 @@ ${getStyles()}
         <h3>Assets</h3>
         <div id="asset-browser" class="asset-grid"></div>
       </div>
+      <div class="sidebar-section" id="tools-section" style="display:none">
+        <h3>Tools <span id="tools-count" class="tools-count"></span></h3>
+        <div id="tools-list" class="tools-list"></div>
+      </div>
     </aside>
     <div id="chat-container">
       <div id="chat-messages"></div>
@@ -115,6 +119,15 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .todo-icon.completed { color: var(--green-bright); }
 .todo-text { flex: 1; }
 .asset-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.tools-list { display: flex; flex-wrap: wrap; gap: 4px; max-height: 280px; overflow-y: auto; }
+.tools-list .tool-badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-family: var(--mono); line-height: 1.4; cursor: default; }
+.tools-count { font-size: 11px; color: var(--text-muted); font-weight: normal; }
+.tool-badge.cat-read { background: rgba(96,165,250,0.15); color: #93bbfc; }
+.tool-badge.cat-write { background: rgba(52,211,153,0.15); color: #6ee7b7; }
+.tool-badge.cat-generate { background: rgba(251,191,36,0.15); color: #fbbf24; }
+.tool-badge.cat-plan { background: rgba(167,139,250,0.15); color: #a78bfa; }
+.tool-badge.cat-system { background: rgba(148,163,184,0.15); color: #94a3b8; }
+.tool-badge.cat-default { background: rgba(148,163,184,0.10); color: #94a3b8; }
 .asset-thumb { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 6px; border: 1px solid var(--border); cursor: pointer; transition: border-color 0.2s; }
 .asset-thumb:hover { border-color: var(--accent); }
 
@@ -284,6 +297,22 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .toast.error { background: #3d1518; border: 1px solid var(--red); color: #f8d7da; }
 @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
 
+/* Wizard */
+.wizard-step { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin: 4px 0; }
+.wizard-step-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 4px; }
+.wizard-step-title { font-size: 15px; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+.wizard-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+.wizard-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px; cursor: pointer; transition: all 0.15s; }
+.wizard-card:hover { border-color: var(--accent); background: #1c3a5c; }
+.wizard-card-name { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 4px; }
+.wizard-card-desc { font-size: 12px; color: var(--text-muted); line-height: 1.4; }
+.wizard-card.selected { border-color: var(--accent); background: #1c3a5c; }
+.wizard-duration-cards { display: flex; flex-wrap: wrap; gap: 8px; }
+.wizard-duration-btn { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px; color: var(--text); transition: all 0.15s; }
+.wizard-duration-btn:hover { border-color: var(--accent); background: #1c3a5c; }
+.wizard-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.wizard-summary-tag { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 11px; color: var(--accent); }
+
 .hidden { display: none !important; }
 
 /* Scrollbar */
@@ -318,6 +347,8 @@ const projectSelect = document.getElementById('project-select');
 const scrollBtn = document.getElementById('scroll-btn');
 let activeQuestionCard = null; // currently active question card element
 let questionTimerInterval = null; // auto-approve countdown interval
+var newProjectState = null; // { step, templateId, templateName, style, styleName, duration, durationLabel, templates, durationPresets }
+var pendingAutoTask = null; // task string to send once select_project completes
 
 // ===== Connection Manager =====
 function connect() {
@@ -383,6 +414,49 @@ function handleStatus(data) {
   if (data.status === 'connected') sendBtn.disabled = false;
   else if (data.status === 'busy') sendBtn.disabled = true;
   else if (data.status === 'completed') { sendBtn.disabled = false; finalizeStream(); closeAgentGroup(); }
+  // When select_project or create_project completes, handle pending actions
+  if (data.status === 'ready') {
+    if (data.message && data.message.startsWith('Project "') && data.message.endsWith('" created')) {
+      addSystemMessage(data.message);
+      loadProjects();
+      sendBtn.disabled = false;
+    }
+    // Fire any pending auto-task queued by select_project
+    if (pendingAutoTask) {
+      var task = pendingAutoTask;
+      pendingAutoTask = null;
+      wsSend({ type: 'start_task', sessionId: sessionId, data: { task: task } });
+    }
+  }
+  // Show tool list when agent is ready
+  if (data.tools && data.tools.length > 0) {
+    renderToolsList(data.tools);
+  }
+}
+
+function getToolCategory(name) {
+  if (/read|list|get|search_files/.test(name)) return 'cat-read';
+  if (/write|create|update|save|import|set/.test(name)) return 'cat-write';
+  if (/generat|image|render|video/.test(name)) return 'cat-generate';
+  if (/plan|review|approve|verify/.test(name)) return 'cat-plan';
+  if (/todo|phase|context|project/.test(name)) return 'cat-system';
+  return 'cat-default';
+}
+
+function renderToolsList(tools) {
+  var section = document.getElementById('tools-section');
+  var list = document.getElementById('tools-list');
+  var count = document.getElementById('tools-count');
+  section.style.display = '';
+  count.textContent = '(' + tools.length + ')';
+  list.innerHTML = '';
+  tools.slice().sort().forEach(function(name) {
+    var badge = document.createElement('span');
+    badge.className = 'tool-badge ' + getToolCategory(name);
+    badge.textContent = name;
+    badge.title = name;
+    list.appendChild(badge);
+  });
 }
 
 // ===== Agent Grouping =====
@@ -1255,7 +1329,27 @@ function sendMessage() {
   }
 
   addUserMessage(text || 'Attached ' + attachedFiles.length + ' file(s)');
-  wsSend({ type: 'start_task', sessionId, data: { task: task } });
+
+  // If wizard is on content step, send create_project instead of start_task
+  if (newProjectState && newProjectState.step === 'content') {
+    wsSend({
+      type: 'create_project',
+      sessionId: sessionId,
+      data: {
+        title: text.slice(0, 60),
+        templateId: newProjectState.templateId,
+        style: newProjectState.style,
+        duration: newProjectState.duration,
+        content: text,
+      },
+    });
+    addSystemMessage('Creating project with ' + newProjectState.templateName + ' / ' + newProjectState.styleName + ' / ' + newProjectState.durationLabel + '...');
+    newProjectState = null;
+    inputBox.placeholder = 'Type a task...';
+  } else {
+    wsSend({ type: 'start_task', sessionId, data: { task: task } });
+  }
+
   inputBox.value = '';
   inputBox.style.height = 'auto';
   sendBtn.disabled = true;
@@ -1419,9 +1513,7 @@ projectSelect.addEventListener('change', async function() {
   if (val === '__new__') {
     selectedProject = null;
     projectSelect.value = '';
-    inputBox.placeholder = 'Describe your new project idea...';
-    inputBox.focus();
-    addSystemMessage('Type a description to create a new project.');
+    startNewProjectWizard();
     return;
   }
   selectedProject = val || null;
@@ -1433,10 +1525,8 @@ projectSelect.addEventListener('change', async function() {
     loadArtifactCache(selectedProject);
     addSystemMessage('Project: ' + selectedProject);
     sendBtn.disabled = true;
-    wsSend({
-      type: 'start_task', sessionId,
-      data: { task: 'Continue working on the existing project. The project state is already injected - proceed with the next step.' },
-    });
+    // Wait for 'ready' status from select_project before sending start_task
+    pendingAutoTask = 'Continue working on the existing project. The project state is already injected - proceed with the next step.';
   } else {
     inputBox.placeholder = 'Type a task...';
     document.getElementById('asset-browser').innerHTML = '';
@@ -1579,6 +1669,194 @@ function truncStr(str, max) {
 function formatDuration(ms) {
   if (ms < 1000) return ms + 'ms';
   return (ms / 1000).toFixed(1) + 's';
+}
+
+// ===== New Project Wizard =====
+async function startNewProjectWizard() {
+  try {
+    var res = await fetch('/api/v1/templates');
+    var data = await res.json();
+    newProjectState = {
+      step: 'template',
+      templateId: null,
+      templateName: null,
+      style: null,
+      styleName: null,
+      duration: null,
+      durationLabel: null,
+      templates: data.templates || [],
+      durationPresets: data.durationPresets || {},
+    };
+    showWizardStep('template');
+  } catch(e) {
+    console.error('Failed to fetch templates:', e);
+    addSystemMessage('Failed to load templates. Please try again.');
+  }
+}
+
+function removeWizardStepsFrom(stepOrder) {
+  // Remove all wizard-step cards at or after the given step order
+  var steps = chatMessages.querySelectorAll('.wizard-step');
+  steps.forEach(function(el) {
+    var order = Number(el.dataset.wizardOrder || 0);
+    if (order >= stepOrder) el.remove();
+  });
+  // Reset placeholder if we removed the content step
+  inputBox.placeholder = 'Type a task...';
+}
+
+var WIZARD_STEP_ORDER = { template: 1, style: 2, duration: 3, content: 4 };
+
+function showWizardStep(step) {
+  if (!newProjectState) return;
+  newProjectState.step = step;
+
+  // Remove any existing steps at or after this one
+  removeWizardStepsFrom(WIZARD_STEP_ORDER[step]);
+
+  var card = document.createElement('div');
+  card.className = 'wizard-step';
+  card.dataset.wizardOrder = String(WIZARD_STEP_ORDER[step]);
+
+  if (step === 'template') {
+    card.innerHTML =
+      '<div class="wizard-step-label">Step 1 of 4</div>' +
+      '<div class="wizard-step-title">Choose a Template</div>' +
+      '<div class="wizard-cards"></div>';
+    var grid = card.querySelector('.wizard-cards');
+    newProjectState.templates.forEach(function(t) {
+      var btn = document.createElement('div');
+      btn.className = 'wizard-card';
+      btn.innerHTML =
+        '<div class="wizard-card-name">' + escHtml(t.displayName) + '</div>' +
+        '<div class="wizard-card-desc">' + escHtml(t.description || '') + '</div>';
+      btn.onclick = function() {
+        newProjectState.templateId = t.id;
+        newProjectState.templateName = t.displayName;
+        grid.querySelectorAll('.wizard-card').forEach(function(c) { c.classList.remove('selected'); });
+        btn.classList.add('selected');
+        showWizardStep('style');
+      };
+      grid.appendChild(btn);
+    });
+    // Add "Other" option
+    var otherBtn = document.createElement('div');
+    otherBtn.className = 'wizard-card';
+    otherBtn.innerHTML =
+      '<div class="wizard-card-name">Other</div>' +
+      '<div class="wizard-card-desc">Custom project type</div>';
+    otherBtn.onclick = function() {
+      newProjectState.templateId = 'narrative';
+      newProjectState.templateName = 'Other (Narrative)';
+      grid.querySelectorAll('.wizard-card').forEach(function(c) { c.classList.remove('selected'); });
+      otherBtn.classList.add('selected');
+      showWizardStep('style');
+    };
+    grid.appendChild(otherBtn);
+
+  } else if (step === 'style') {
+    var template = newProjectState.templates.find(function(t) { return t.id === newProjectState.templateId; });
+    var styles = template ? (template.styles || []) : [];
+
+    card.innerHTML =
+      '<div class="wizard-step-label">Step 2 of 4</div>' +
+      '<div class="wizard-step-title">Choose a Style</div>' +
+      '<div class="wizard-summary"><span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span></div>' +
+      '<div class="wizard-cards"></div>';
+    var grid = card.querySelector('.wizard-cards');
+
+    if (styles.length === 0) {
+      // No styles defined, skip to duration
+      newProjectState.style = template ? (template.defaultStyle || 'default') : 'default';
+      newProjectState.styleName = 'Default';
+      showWizardStep('duration');
+      return;
+    }
+
+    styles.forEach(function(s) {
+      var btn = document.createElement('div');
+      btn.className = 'wizard-card';
+      btn.innerHTML =
+        '<div class="wizard-card-name">' + escHtml(s.displayName) + '</div>' +
+        '<div class="wizard-card-desc">' + escHtml(s.description || '') + '</div>';
+      btn.onclick = function() {
+        newProjectState.style = s.id;
+        newProjectState.styleName = s.displayName;
+        grid.querySelectorAll('.wizard-card').forEach(function(c) { c.classList.remove('selected'); });
+        btn.classList.add('selected');
+        showWizardStep('duration');
+      };
+      grid.appendChild(btn);
+    });
+
+  } else if (step === 'duration') {
+    var presets = newProjectState.durationPresets[newProjectState.templateId] || [];
+
+    card.innerHTML =
+      '<div class="wizard-step-label">Step 3 of 4</div>' +
+      '<div class="wizard-step-title">Choose Duration</div>' +
+      '<div class="wizard-summary">' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
+      '</div>' +
+      '<div class="wizard-duration-cards"></div>';
+    var btnRow = card.querySelector('.wizard-duration-cards');
+
+    presets.forEach(function(p) {
+      var btn = document.createElement('button');
+      btn.className = 'wizard-duration-btn';
+      btn.textContent = p.label;
+      btn.onclick = function() {
+        newProjectState.duration = p.seconds;
+        newProjectState.durationLabel = p.label;
+        showWizardStep('content');
+      };
+      btnRow.appendChild(btn);
+    });
+
+    // Custom option — inline input (no browser dialog)
+    var customWrap = document.createElement('div');
+    customWrap.style.cssText = 'display:inline-flex;gap:4px;align-items:center;';
+    var customInput = document.createElement('input');
+    customInput.type = 'number';
+    customInput.placeholder = 'seconds';
+    customInput.style.cssText = 'width:80px;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px;font-size:13px;';
+    var customOk = document.createElement('button');
+    customOk.className = 'wizard-duration-btn';
+    customOk.textContent = 'Set';
+    customOk.onclick = function() {
+      var val = Number(customInput.value);
+      if (val > 0) {
+        newProjectState.duration = val;
+        newProjectState.durationLabel = val + ' seconds';
+        showWizardStep('content');
+      }
+    };
+    customInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') customOk.click();
+    });
+    customWrap.appendChild(customInput);
+    customWrap.appendChild(customOk);
+    btnRow.appendChild(customWrap);
+
+  } else if (step === 'content') {
+    card.innerHTML =
+      '<div class="wizard-step-label">Step 4 of 4</div>' +
+      '<div class="wizard-step-title">Describe Your Project</div>' +
+      '<div class="wizard-summary">' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.durationLabel) + '</span>' +
+      '</div>';
+    chatMessages.appendChild(card);
+    inputBox.placeholder = 'Describe your project idea and press Send...';
+    inputBox.focus();
+    maybeScroll();
+    return;
+  }
+
+  chatMessages.appendChild(card);
+  maybeScroll();
 }
 
 // ===== Init =====

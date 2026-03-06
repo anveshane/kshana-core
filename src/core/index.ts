@@ -43,6 +43,22 @@ export {
   GENERIC_AGENT_ORCHESTRATOR_SECTION,
 } from './prompts/index.js';
 
+// File System
+export type { IFileSystem, FileStat, SessionContext, SessionMode } from './fs/index.js';
+export {
+  LocalFileSystem,
+  getCurrentSession,
+  requireSession,
+  getSessionFs,
+  getSessionProjectDir,
+  setSessionProjectDir,
+  runInSession,
+  createLocalSession,
+  createRemoteSession,
+  setDefaultProjectDir,
+  getDefaultProjectDir,
+} from './fs/index.js';
+
 // Planner
 export { BackwardPlanner, AssetScanner } from './planner/index.js';
 export type {
