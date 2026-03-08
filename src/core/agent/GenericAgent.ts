@@ -1223,6 +1223,10 @@ export class GenericAgent extends TypedEventEmitter {
           ToolAnalytics.instance()?.recordComplete(toolCall.id, analyticsRowId, isToolError, errorMsg);
         }
 
+        // Check if a generate tool (image/video) completed successfully
+        const isGenerateSuccess = COMFY_PROGRESS_TOOLS.has(toolCall.name) &&
+          (resultObj['status'] === 'completed' || resultObj['artifact_id']);
+
         // Reset iteration counter when project state is updated — this signals real progress
         // and prevents hitting max_iterations on long-running workflows.
         if (
@@ -1233,24 +1237,35 @@ export class GenericAgent extends TypedEventEmitter {
           this.iteration = 0;
         }
 
-        // Reset iteration counter on generate_content success — this signals real progress
-        // (content was generated and saved to disk).
+        // Reset iteration counter on generate_content or generate tool success
         if (
-          toolCall.name === 'generate_content' &&
-          resultObj['status'] === 'approved'
+          (toolCall.name === 'generate_content' && resultObj['status'] === 'approved') ||
+          isGenerateSuccess
         ) {
-          debugLog(`[GenericAgent] Progress detected (generate_content approved) — resetting iteration counter from ${this.iteration}`);
+          debugLog(`[GenericAgent] Progress detected (${toolCall.name} success) — resetting iteration counter from ${this.iteration}`);
           this.iteration = 0;
         }
 
         // Track productive tool calls and nudge agent to update todos when progress has been made.
-        // "Productive" = generate_content approved or update_project success.
         const isProductiveCall =
           (toolCall.name === 'generate_content' && resultObj['status'] === 'approved') ||
-          (toolCall.name === 'update_project' && resultObj['status'] === 'success');
+          (toolCall.name === 'update_project' && resultObj['status'] === 'success') ||
+          isGenerateSuccess;
 
         if (isProductiveCall) {
           this.productiveCallsSinceLastTodoUpdate++;
+        }
+
+        // After a successful generation, nudge the agent to read and update its todos
+        if (isGenerateSuccess && this.todoManager.getTodos().length > 0) {
+          const currentTodos = this.todoManager.getTodos()
+            .filter(t => t.visible)
+            .map(t => `  [${t.status}] ${t.content}`)
+            .join('\n');
+          resultObj['__todo_reminder'] =
+            `Generation completed successfully. Read your current todos and mark the relevant item as completed using TodoWrite(merge=true):\n${currentTodos}`;
+          this.productiveCallsSinceLastTodoUpdate = 0;
+          debugLog(`[GenericAgent] Injected post-generation todo update nudge`);
         }
 
         if (
