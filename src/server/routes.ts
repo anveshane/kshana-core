@@ -7,6 +7,7 @@ import { ConversationManager } from './ConversationManager.js';
 import { WebSocketHandler } from './WebSocketHandler.js';
 import { registerWebUIRoutes } from './webui-routes.js';
 import type { LLMClientConfig } from '../core/llm/index.js';
+import { getProviderRegistry } from '../services/providers/index.js';
 
 interface ChatRequestBody {
   task: string;
@@ -167,6 +168,43 @@ export async function registerRoutes(
     }
   );
 
+  // Provider listing endpoint
+  app.get(`${apiPrefix}/providers`, async (_request: FastifyRequest, reply: FastifyReply) => {
+    const registry = getProviderRegistry();
+    const providers = registry.listProviders();
+    const config = registry.getConfig();
+
+    // Group providers by capability
+    const byCapability = {
+      imageGeneration: providers
+        .filter(p => p.capabilities.includes('image_generation'))
+        .map(p => ({ id: p.id, name: p.displayName, available: p.available })),
+      imageEditing: providers
+        .filter(p => p.capabilities.includes('image_editing'))
+        .map(p => ({ id: p.id, name: p.displayName, available: p.available })),
+      videoGeneration: providers
+        .filter(p => p.capabilities.includes('video_generation'))
+        .map(p => ({ id: p.id, name: p.displayName, available: p.available })),
+    };
+
+    return reply.send({
+      providers: byCapability,
+      currentConfig: config,
+    });
+  });
+
+  // Update provider configuration
+  app.post(`${apiPrefix}/providers/config`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as {
+      imageGeneration?: string;
+      imageEditing?: string;
+      videoGeneration?: string;
+    };
+    const registry = getProviderRegistry();
+    registry.setConfig(body);
+    return reply.send({ status: 'ok', config: registry.getConfig() });
+  });
+
   // Register web UI routes (SPA + project/asset endpoints)
   await registerWebUIRoutes(app);
 
@@ -175,11 +213,12 @@ export async function registerRoutes(
     `${apiPrefix}/ws/chat`,
     { websocket: true },
     (socket: WebSocket, request: FastifyRequest) => {
-      // Extract API key from query string for remote mode auth
+      // Extract API key and optional sessionId from query string
       const url = new URL(request.url, `http://${request.hostname}`);
       const apiKey = url.searchParams.get('apiKey') ?? undefined;
+      const resumeSessionId = url.searchParams.get('sessionId') ?? undefined;
       const remoteAddress = request.ip;
-      wsHandler.handleConnection(socket, remoteAddress, apiKey);
+      wsHandler.handleConnection(socket, remoteAddress, apiKey, resumeSessionId);
     }
   );
 

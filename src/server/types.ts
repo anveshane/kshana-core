@@ -80,6 +80,8 @@ export interface StatusData {
   message?: string;
   /** Tool names available to the agent (included with 'ready' status after project selection) */
   tools?: string[];
+  /** Project name (included after create_project to auto-select in UI) */
+  projectName?: string;
 }
 
 /**
@@ -277,6 +279,12 @@ export interface CreateProjectData {
   style: string;
   duration: number;
   content: string;
+  /** Optional per-capability provider configuration */
+  providerConfig?: {
+    imageGeneration?: string;
+    imageEditing?: string;
+    videoGeneration?: string;
+  };
 }
 
 /**

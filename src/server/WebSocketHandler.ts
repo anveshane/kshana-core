@@ -88,7 +88,7 @@ export class WebSocketHandler {
    * Handle a new WebSocket connection.
    * Optionally authenticates via API key and determines connection mode.
    */
-  handleConnection(socket: WebSocket, remoteAddress?: string, apiKey?: string): void {
+  handleConnection(socket: WebSocket, remoteAddress?: string, apiKey?: string, resumeSessionId?: string): void {
     // Determine connection mode
     const skipAuth = shouldSkipAuth(remoteAddress, this.serverMode);
     let connectionMode: 'local' | 'remote' = 'local';
@@ -111,9 +111,21 @@ export class WebSocketHandler {
       connectionMode = 'remote';
     }
 
-    // Create session with appropriate mode
-    const session = this.conversationManager.createSession(connectionMode);
-    const sessionId = session.id;
+    // Try to resume an existing session (e.g. after browser reconnect)
+    let sessionId: string;
+    if (resumeSessionId && this.conversationManager.getSession(resumeSessionId)) {
+      sessionId = resumeSessionId;
+      // Close any stale connection for this session
+      const oldConn = this.connections.get(sessionId);
+      if (oldConn) {
+        try { oldConn.socket.close(); } catch { /* ignore */ }
+        this.connections.delete(sessionId);
+      }
+    } else {
+      // Create new session
+      const session = this.conversationManager.createSession(connectionMode);
+      sessionId = session.id;
+    }
 
     const connectionState: ConnectionState = {
       socket,
@@ -425,13 +437,16 @@ export class WebSocketHandler {
         data.style,
         data.duration,
         projectDirName,
+        (data as { providerConfig?: Record<string, string> }).providerConfig,
       );
 
       const toolNames = this.conversationManager.getSessionToolNames(sessionId);
+      const projectName = projectDirName.replace('.kshana', '');
       this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
         status: 'ready',
         message: `Project "${data.title}" created`,
         tools: toolNames,
+        projectName,
       }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -441,10 +456,11 @@ export class WebSocketHandler {
 
   /**
    * Handle disconnection.
+   * Only removes the WebSocket connection — the session is kept alive
+   * so the browser can reconnect and resume (e.g. after network blips).
+   * The session will be cleaned up by the ConversationManager's stale-session timer.
    */
   private handleDisconnection(sessionId: string): void {
-    // Cancel any running tasks and clean up
-    this.conversationManager.deleteSession(sessionId);
     this.connections.delete(sessionId);
   }
 

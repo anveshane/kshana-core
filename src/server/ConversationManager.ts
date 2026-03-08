@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
 import { createAgentForProject } from '../tasks/video/index.js';
+import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import {
@@ -104,6 +105,7 @@ export class ConversationManager {
     style: string,
     duration: number,
     projectDirName?: string,
+    providerConfig?: { imageGeneration?: string; imageEditing?: string; videoGeneration?: string },
   ): void {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -116,6 +118,11 @@ export class ConversationManager {
       session.sessionContext = createRemoteSession(sessionId, projectDir, session.remoteFs);
     } else {
       session.sessionContext = createLocalSession(sessionId, projectDir);
+    }
+
+    // Apply provider config if provided
+    if (providerConfig) {
+      getProviderRegistry().setConfig(providerConfig);
     }
 
     // Create agent inside the session context so tools see the right project dir
@@ -431,8 +438,14 @@ export class ConversationManager {
    */
   private cleanupStaleSessions(): void {
     const now = Date.now();
+    // Sessions awaiting user input get a longer timeout (2 hours)
+    // to survive long generation jobs + user think time
+    const awaitingInputTimeout = Math.max(this.sessionTimeoutMs, 2 * 60 * 60 * 1000);
     for (const [sessionId, session] of this.sessions) {
-      if (now - session.state.lastActivity > this.sessionTimeoutMs) {
+      const timeout = session.state.status === 'awaiting_input'
+        ? awaitingInputTimeout
+        : this.sessionTimeoutMs;
+      if (now - session.state.lastActivity > timeout) {
         this.deleteSession(sessionId);
       }
     }

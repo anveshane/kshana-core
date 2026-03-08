@@ -29,9 +29,38 @@ ${getStyles()}
         <div id="context-bar"><div id="context-fill"></div></div>
         <span id="context-label">CTX 0%</span>
       </div>
+      <button id="provider-settings-btn" title="Provider Settings" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:13px;">&#9881; Providers</button>
       <span id="conn-status" class="conn-dot disconnected" title="Disconnected"></span>
     </div>
   </header>
+  <!-- Provider Settings Modal -->
+  <div id="provider-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;display:none;align-items:center;justify-content:center;">
+    <div style="background:#1e1e2e;border:1px solid #444;border-radius:8px;padding:24px;min-width:380px;max-width:480px;">
+      <h3 style="margin:0 0 16px;color:#e0e0e0;">Provider Settings</h3>
+      <div style="margin-bottom:12px;">
+        <label style="display:block;color:#aaa;font-size:13px;margin-bottom:4px;">Image Generation</label>
+        <select id="prov-image-gen" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;">
+          <option value="comfyui">Loading...</option>
+        </select>
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="display:block;color:#aaa;font-size:13px;margin-bottom:4px;">Image Editing</label>
+        <select id="prov-image-edit" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;">
+          <option value="comfyui">Loading...</option>
+        </select>
+      </div>
+      <div style="margin-bottom:16px;">
+        <label style="display:block;color:#aaa;font-size:13px;margin-bottom:4px;">Video Generation</label>
+        <select id="prov-video-gen" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;">
+          <option value="comfyui">Loading...</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button id="prov-cancel" style="padding:6px 16px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;cursor:pointer;">Cancel</button>
+        <button id="prov-save" style="padding:6px 16px;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;">Save</button>
+      </div>
+    </div>
+  </div>
   <div id="main">
     <aside id="sidebar">
       <div class="sidebar-section">
@@ -64,6 +93,7 @@ ${getStyles()}
 </div>
 <div id="lightbox" class="lightbox hidden" onclick="closeLightbox()">
   <img id="lightbox-img" src="">
+  <video id="lightbox-video" src="" controls style="display:none"></video>
 </div>
 <div id="toast-container"></div>
 
@@ -225,6 +255,11 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .gen-card .gen-images .gen-img-label { font-size: 9px; color: var(--text-muted); text-align: center; margin-top: 2px; max-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gen-card .gen-meta { font-size: 12px; color: var(--text-muted); display: flex; gap: 12px; flex-wrap: wrap; }
 .gen-card .gen-meta span { background: var(--bg-tertiary); padding: 2px 8px; border-radius: 4px; }
+/* ComfyUI progress bar inside gen cards */
+.gen-progress { margin-top: 8px; }
+.gen-progress-bar { width: 100%; height: 6px; background: var(--bg-tertiary); border-radius: 3px; overflow: hidden; }
+.gen-progress-fill { height: 100%; width: 0%; background: var(--purple); border-radius: 3px; transition: width 0.3s ease; }
+.gen-progress-text { font-size: 11px; color: var(--text-muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
 .tool-md-result { font-size: 13px; line-height: 1.5; }
 .tool-md-result h1, .tool-md-result h2, .tool-md-result h3 { color: var(--accent); margin: 8px 0 4px; font-size: 14px; }
 .tool-md-result p { margin: 4px 0; }
@@ -287,7 +322,19 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 
 /* Lightbox */
 .lightbox { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); display: flex; align-items: center; justify-content: center; z-index: 1000; cursor: pointer; }
-.lightbox img { max-width: 90%; max-height: 90%; border-radius: 8px; }
+.lightbox img, .lightbox video { max-width: 90%; max-height: 90%; border-radius: 8px; }
+
+/* Result media preview (inside tool card) */
+.result-media-preview { margin-top: 8px; }
+.result-media-preview img { max-width: 100%; max-height: 400px; border-radius: 8px; cursor: pointer; }
+.result-media-preview video { max-width: 100%; max-height: 400px; border-radius: 8px; }
+.result-media-label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+/* Chat timeline media preview (after tool card) */
+.chat-media-preview { padding: 8px 0; }
+.chat-media-preview img { max-width: 512px; max-height: 400px; border-radius: 8px; cursor: pointer; box-shadow: 0 2px 12px rgba(0,0,0,0.3); }
+.chat-media-preview video { max-width: 512px; max-height: 400px; border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.3); }
+.chat-media-preview .result-media-label { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 
 /* Toasts */
 #toast-container { position: fixed; top: 16px; right: 16px; z-index: 999; display: flex; flex-direction: column; gap: 8px; }
@@ -354,7 +401,10 @@ var pendingAutoTask = null; // task string to send once select_project completes
 function connect() {
   setConnStatus('connecting');
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(proto + '//' + location.host + '/api/v1/ws/chat');
+  var wsUrl = proto + '//' + location.host + '/api/v1/ws/chat';
+  // On reconnect, pass the previous sessionId so the server can reattach
+  if (sessionId) wsUrl += '?sessionId=' + encodeURIComponent(sessionId);
+  ws = new WebSocket(wsUrl);
 
   ws.onopen = () => {
     setConnStatus('connected');
@@ -369,7 +419,7 @@ function connect() {
 
   ws.onclose = () => {
     setConnStatus('disconnected');
-    sessionId = null;
+    // Keep sessionId so we can reconnect to the same session
     scheduleReconnect();
   };
 
@@ -394,7 +444,7 @@ function wsSend(msg) {
 
 // ===== Message Router =====
 function handleServerMessage(msg) {
-  if (msg.sessionId && !sessionId) sessionId = msg.sessionId;
+  if (msg.sessionId) sessionId = msg.sessionId;
   switch (msg.type) {
     case 'status': handleStatus(msg.data); break;
     case 'stream_chunk': handleStreamChunk(msg.data); break;
@@ -418,7 +468,18 @@ function handleStatus(data) {
   if (data.status === 'ready') {
     if (data.message && data.message.startsWith('Project "') && data.message.endsWith('" created')) {
       addSystemMessage(data.message);
-      loadProjects();
+      // Auto-select the newly created project in the dropdown
+      if (data.projectName) {
+        selectedProject = data.projectName;
+        loadProjects().then(function() {
+          projectSelect.value = data.projectName;
+        });
+        loadProjectDetails(data.projectName);
+        loadProjectAssets(data.projectName);
+        loadArtifactCache(data.projectName);
+      } else {
+        loadProjects();
+      }
       sendBtn.disabled = false;
     }
     // Fire any pending auto-task queued by select_project
@@ -795,7 +856,19 @@ function handleToolCall(data) {
       '</div>';
 
     container.appendChild(card);
-    pendingTools[genId] = { card, startTime: Date.now(), toolName };
+    var toolEntry = { card, startTime: Date.now(), toolName, elapsedTimer: null };
+    pendingTools[genId] = toolEntry;
+
+    // For long-running generation tools, show a live elapsed timer
+    if (isGenerateTool(toolName) || toolName === 'generate_video_from_image') {
+      var durEl = card.querySelector('.tool-duration');
+      if (durEl) {
+        toolEntry.elapsedTimer = setInterval(function() {
+          durEl.textContent = formatDuration(Date.now() - toolEntry.startTime) + '...';
+        }, 1000);
+      }
+    }
+
     maybeScroll();
 
   } else if (data.status === 'completed' || data.status === 'error') {
@@ -809,6 +882,7 @@ function handleToolCall(data) {
       }
     }
     if (!entry) return;
+    if (entry.elapsedTimer) clearInterval(entry.elapsedTimer);
     delete pendingTools[entryId];
 
     // Skip result rendering for think tool — already shown in the card body
@@ -840,8 +914,18 @@ function handleToolCall(data) {
         renderToolResult(resultSection, toolName, data.result);
       }
     }
-    // Refresh asset panel after image generation completes
-    if (selectedProject && (toolName === 'wait_for_job' || toolName === 'generate_image') && data.status === 'completed') {
+
+    // For completed jobs with media output, show preview in the chat timeline (after the tool card)
+    if (data.status === 'completed' && typeof data.result === 'object' && data.result !== null &&
+        data.result.status === 'completed' && (data.result.artifact_id || data.result.file_path)) {
+      var previewEl = document.createElement('div');
+      previewEl.className = 'chat-media-preview';
+      renderMediaPreview(previewEl, data.result.artifact_id, data.result.file_path, data.result.type);
+      card.parentNode.insertBefore(previewEl, card.nextSibling);
+    }
+
+    // Refresh asset panel after image/video generation completes
+    if (selectedProject && (toolName === 'generate_image' || toolName === 'generate_video_from_image' || toolName === 'generate_video') && data.status === 'completed') {
       loadProjectAssets(selectedProject);
     }
 
@@ -849,8 +933,59 @@ function handleToolCall(data) {
   }
 }
 
+function renderMediaPreview(container, artifactId, filePath, jobType) {
+  if (!selectedProject) return;
+  // Try artifact cache first, fall back to file_path
+  var url = artifactId ? resolveArtifactUrl(artifactId) : null;
+  if (!url && filePath) {
+    var assetPath = filePath;
+    var idx = filePath.indexOf('assets/');
+    if (idx >= 0) assetPath = filePath.substring(idx);
+    url = '/api/v1/assets/' + selectedProject + '/' + assetPath;
+  }
+  if (!url) return;
+
+  var preview = document.createElement('div');
+  preview.className = 'result-media-preview';
+
+  var isVideo = jobType === 'video' || isVideoUrl(url);
+  if (isVideo) {
+    var video = document.createElement('video');
+    video.src = url;
+    video.controls = true;
+    video.autoplay = true;
+    video.loop = true;
+    video.muted = true;
+    video.onerror = function() { preview.remove(); };
+    preview.appendChild(video);
+  } else {
+    var img = document.createElement('img');
+    img.src = url;
+    img.onclick = function() { openLightbox(url); };
+    img.onerror = function() { preview.remove(); };
+    preview.appendChild(img);
+  }
+
+  var label = document.createElement('div');
+  label.className = 'result-media-label';
+  label.textContent = (isVideo ? 'Video' : 'Image') + ' generated' + (artifactId ? ' — ' + artifactId : '');
+  preview.appendChild(label);
+
+  container.appendChild(preview);
+}
+
 function renderToolResult(container, toolName, result) {
   container.innerHTML = '<div class="tool-section-label">Result</div>';
+
+  // For wait_for_job / generate_image completions with artifact, show brief status
+  // (the full media preview is shown in the chat timeline after the tool card)
+  if (typeof result === 'object' && result !== null && result.status === 'completed' && (result.artifact_id || result.file_path)) {
+    var mediaType = (result.type === 'video') ? 'Video' : 'Image';
+    container.innerHTML = '<div class="tool-section-label">Result</div>' +
+      '<div class="tool-result-content" style="font-size:12px;color:var(--text-muted);padding:4px 0;">' +
+      escHtml(mediaType + ' generated — ' + (result.artifact_id || result.file_path)) + '</div>';
+    return;
+  }
 
   // For Task/subagent results, show a brief status — the summary was already
   // streamed as agent_text/think blocks, so don't duplicate it
@@ -934,8 +1069,25 @@ function findToolEntry(toolCallId) {
 function handleToolStreaming(entry, data) {
   const streamEl = entry.card.querySelector('.tool-streaming-content');
   if (!streamEl) return;
-  if (data.reset) streamEl.textContent = '';
-  if (data.content) streamEl.textContent += data.content;
+
+  // Detect ComfyUI progress pattern: "Step N/M (P%)" or "P%"
+  var progressMatch = data.content && data.content.match(/^(?:Step\\s+(\\d+)\\/(\\d+)\\s+)?\\(?(\\d+)%\\)?$/);
+  if (data.reset && progressMatch) {
+    var pct = parseInt(progressMatch[3], 10);
+    var label = data.content;
+    var progressWrap = streamEl.querySelector('.gen-progress');
+    if (!progressWrap) {
+      streamEl.innerHTML = '<div class="gen-progress"><div class="gen-progress-bar"><div class="gen-progress-fill"></div></div><div class="gen-progress-text"></div></div>';
+      progressWrap = streamEl.querySelector('.gen-progress');
+    }
+    var fill = progressWrap.querySelector('.gen-progress-fill');
+    var text = progressWrap.querySelector('.gen-progress-text');
+    if (fill) fill.style.width = pct + '%';
+    if (text) text.textContent = label;
+  } else {
+    if (data.reset) streamEl.textContent = '';
+    if (data.content) streamEl.textContent += data.content;
+  }
 
   // Auto-open tool body
   const body = entry.card.querySelector('.tool-body');
@@ -1002,10 +1154,10 @@ function copyCardText(btn, event) {
   }).catch(function() {});
 }
 
-// ===== Images in Results =====
+// ===== Media in Results =====
 function renderImagesInResult(container, text) {
-  const imagePattern = /([\\w\\/\\-_.]+\\.(png|jpg|jpeg|webp|gif))/gi;
-  const matches = text.match(imagePattern);
+  const mediaPattern = /([\\w\\/\\-_.]+\\.(png|jpg|jpeg|webp|gif|mp4|webm|mov))/gi;
+  const matches = text.match(mediaPattern);
   if (!matches || !selectedProject) return;
 
   const seen = new Set();
@@ -1016,15 +1168,26 @@ function renderImagesInResult(container, text) {
     const assetsIdx = path.indexOf('assets/');
     if (assetsIdx >= 0) assetPath = path.substring(assetsIdx);
     const url = '/api/v1/assets/' + selectedProject + '/' + assetPath;
-    const img = document.createElement('img');
-    img.src = url;
-    img.style.maxWidth = '300px';
-    img.style.borderRadius = '6px';
-    img.style.marginTop = '8px';
-    img.style.cursor = 'pointer';
-    img.onclick = function() { openLightbox(url); };
-    img.onerror = function() { this.remove(); };
-    container.appendChild(img);
+    if (isVideoUrl(path)) {
+      const video = document.createElement('video');
+      video.src = url;
+      video.controls = true;
+      video.style.maxWidth = '300px';
+      video.style.borderRadius = '6px';
+      video.style.marginTop = '8px';
+      video.onerror = function() { this.remove(); };
+      container.appendChild(video);
+    } else {
+      const img = document.createElement('img');
+      img.src = url;
+      img.style.maxWidth = '300px';
+      img.style.borderRadius = '6px';
+      img.style.marginTop = '8px';
+      img.style.cursor = 'pointer';
+      img.onclick = function() { openLightbox(url); };
+      img.onerror = function() { this.remove(); };
+      container.appendChild(img);
+    }
   });
 }
 
@@ -1344,6 +1507,7 @@ function sendMessage() {
       },
     });
     addSystemMessage('Creating project with ' + newProjectState.templateName + ' / ' + newProjectState.styleName + ' / ' + newProjectState.durationLabel + '...');
+    pendingAutoTask = 'Start working on this project. The project has just been created with the user content.';
     newProjectState = null;
     inputBox.placeholder = 'Type a task...';
   } else {
@@ -1490,7 +1654,13 @@ function resolveArtifactUrl(artifactId) {
 async function loadProjects() {
   try {
     const res = await fetch('/api/v1/projects');
+    if (!res.ok) {
+      console.error('loadProjects: HTTP', res.status);
+      return;
+    }
     const data = await res.json();
+    const projects = data.projects || [];
+    console.log('loadProjects: found', projects.length, 'projects');
     const sel = projectSelect;
     // Keep first option (Select Project...) and remove the rest
     while (sel.options.length > 1) sel.remove(1);
@@ -1499,10 +1669,12 @@ async function loadProjects() {
     newOpt.value = '__new__';
     newOpt.textContent = '+ New Project';
     sel.appendChild(newOpt);
-    (data.projects || []).forEach(function(p) {
+    projects.forEach(function(p) {
       const opt = document.createElement('option');
-      opt.value = p.dirName.replace('.kshana', '');
-      opt.textContent = p.dirName.replace('.kshana', '') + ' (' + p.currentPhase + ')';
+      var name = (p.dirName || '').replace('.kshana', '');
+      var phase = p.currentPhase || 'unknown';
+      opt.value = name;
+      opt.textContent = name + ' (' + phase + ')';
       sel.appendChild(opt);
     });
   } catch(e) { console.error('loadProjects:', e); }
@@ -1570,11 +1742,31 @@ async function loadProjectAssets(name) {
 }
 
 // ===== Lightbox =====
+function isVideoUrl(src) {
+  return /\\.(mp4|webm|mov)(\\?|$)/i.test(src);
+}
 function openLightbox(src) {
-  document.getElementById('lightbox-img').src = src;
+  var imgEl = document.getElementById('lightbox-img');
+  var vidEl = document.getElementById('lightbox-video');
+  if (isVideoUrl(src)) {
+    imgEl.style.display = 'none';
+    vidEl.style.display = 'block';
+    vidEl.src = src;
+    vidEl.play();
+  } else {
+    vidEl.style.display = 'none';
+    vidEl.pause();
+    imgEl.style.display = 'block';
+    imgEl.src = src;
+  }
   document.getElementById('lightbox').classList.remove('hidden');
 }
-function closeLightbox() { document.getElementById('lightbox').classList.add('hidden'); }
+function closeLightbox() {
+  document.getElementById('lightbox').classList.add('hidden');
+  var vidEl = document.getElementById('lightbox-video');
+  vidEl.pause();
+  vidEl.src = '';
+}
 
 // ===== Auto-scroll =====
 const chatEl = document.getElementById('chat-messages');
@@ -1668,7 +1860,11 @@ function truncStr(str, max) {
 
 function formatDuration(ms) {
   if (ms < 1000) return ms + 'ms';
-  return (ms / 1000).toFixed(1) + 's';
+  var secs = Math.floor(ms / 1000);
+  if (secs < 60) return secs + 's';
+  var mins = Math.floor(secs / 60);
+  var remSecs = secs % 60;
+  return mins + 'm ' + remSecs + 's';
 }
 
 // ===== New Project Wizard =====
@@ -1858,6 +2054,59 @@ function showWizardStep(step) {
   chatMessages.appendChild(card);
   maybeScroll();
 }
+
+// ===== Provider Settings =====
+const provModal = document.getElementById('provider-modal');
+const provSettingsBtn = document.getElementById('provider-settings-btn');
+const provCancel = document.getElementById('prov-cancel');
+const provSave = document.getElementById('prov-save');
+const provImageGen = document.getElementById('prov-image-gen');
+const provImageEdit = document.getElementById('prov-image-edit');
+const provVideoGen = document.getElementById('prov-video-gen');
+
+provSettingsBtn.addEventListener('click', async () => {
+  try {
+    const res = await fetch('/api/v1/providers');
+    const data = await res.json();
+    const fillSelect = (sel, items, currentId) => {
+      sel.innerHTML = '';
+      for (const p of items) {
+        if (!p.available) continue;
+        const opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.name;
+        if (p.id === currentId) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    };
+    fillSelect(provImageGen, data.providers.imageGeneration, data.currentConfig.imageGeneration);
+    fillSelect(provImageEdit, data.providers.imageEditing, data.currentConfig.imageEditing);
+    fillSelect(provVideoGen, data.providers.videoGeneration, data.currentConfig.videoGeneration);
+    provModal.style.display = 'flex';
+  } catch (e) {
+    console.error('Failed to load providers:', e);
+  }
+});
+
+provCancel.addEventListener('click', () => { provModal.style.display = 'none'; });
+provModal.addEventListener('click', (e) => { if (e.target === provModal) provModal.style.display = 'none'; });
+
+provSave.addEventListener('click', async () => {
+  try {
+    await fetch('/api/v1/providers/config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        imageGeneration: provImageGen.value,
+        imageEditing: provImageEdit.value,
+        videoGeneration: provVideoGen.value,
+      }),
+    });
+    provModal.style.display = 'none';
+  } catch (e) {
+    console.error('Failed to save provider config:', e);
+  }
+});
 
 // ===== Init =====
 loadProjects();
