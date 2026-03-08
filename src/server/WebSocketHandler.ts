@@ -353,16 +353,18 @@ export class WebSocketHandler {
     const projectDirName = `${projectName}.kshana`;
     const projectFile = join(process.cwd(), projectDirName, 'project.json');
 
-    // Read project.json to get templateId, style, duration
+    // Read project.json to get templateId, style, duration, and timing
     let templateId = 'narrative';
     let style = 'anime';
     let duration = 60;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let projectData: any = null;
 
     const localFs = new LocalFileSystem();
     if (await localFs.exists(projectFile)) {
       try {
         const content = await localFs.readFile(projectFile);
-        const projectData = JSON.parse(content);
+        projectData = JSON.parse(content);
         templateId = projectData.templateId || templateId;
         style = projectData.style || style;
         duration = projectData.duration || duration;
@@ -389,17 +391,16 @@ export class WebSocketHandler {
       tools: toolNames,
     }));
 
-    // Send session timer if project has timing data (for reconnects)
-    try {
-      const content = await localFs.readFile(projectFile);
-      const projectData = JSON.parse(content);
-      if (projectData.productionStartedAt) {
+    // Send session timer — use productionStartedAt or fall back to createdAt
+    if (projectData) {
+      const startedAt = (projectData.productionStartedAt as number) || (projectData.createdAt as number);
+      if (startedAt) {
         this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sessionId, {
-          productionStartedAt: projectData.productionStartedAt,
-          productionCompletedAt: projectData.productionCompletedAt,
+          productionStartedAt: startedAt,
+          productionCompletedAt: projectData.productionCompletedAt as number | undefined,
         }));
       }
-    } catch { /* ignore */ }
+    }
   }
 
   /**
