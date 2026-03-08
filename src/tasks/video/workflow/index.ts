@@ -139,13 +139,6 @@ export {
   type WorkflowLoggerConfig,
 } from './WorkflowLogger.js';
 
-// Stitch Video Tool
-export {
-  stitchVideosTool,
-  getStitchingJobStatus,
-  getStitchingTools,
-  type VideoTransition,
-} from './StitchVideoTool.js';
 
 // Generic Project Manager (v3.0 template-aware)
 export {
@@ -176,12 +169,11 @@ export {
 
 // Combined tool getter
 import { getWorkflowFileTools } from './FileTools.js';
-import { getStitchingTools } from './StitchVideoTool.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
 
 /**
  * Get all workflow-related tools.
  */
 export function getAllWorkflowTools(): ToolDefinition[] {
-  return [...getWorkflowFileTools(), ...getStitchingTools()];
+  return [...getWorkflowFileTools()];
 }

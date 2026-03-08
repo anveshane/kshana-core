@@ -33,10 +33,14 @@ import {
   getAllFileTools,
   getOrCreateProject,
   loadProject,
+  saveProject,
   getCurrentPhase,
   WorkflowPhase,
   PHASE_CONFIGS,
   getProjectDir,
+  getProjectStyle,
+  addAsset,
+  updatePhaseStatus,
   // Style and input type configs
   STYLE_CONFIGS,
   INPUT_TYPE_CONFIGS,
@@ -250,6 +254,36 @@ export function createGoalDrivenToolRegistry(
   // Add timeline tools — use getter so project dir is resolved at execution time
   const timelineContext: TimelineToolContext = {
     getProjectDir: () => getProjectDir(basePath),
+    getProjectStyle: () => getProjectStyle(basePath),
+    markAssemblyComplete: (outputPath: string, duration: number, fileSize: number) => {
+      const proj = loadProject(basePath);
+      if (!proj) return;
+
+      // Register final video as asset
+      const finalVideoId = `final-video-${Date.now()}`;
+      addAsset({
+        id: finalVideoId,
+        type: 'final_video',
+        path: outputPath.startsWith(getProjectDir(basePath))
+          ? outputPath.slice(getProjectDir(basePath).length + 1)
+          : outputPath,
+        createdAt: Date.now(),
+        metadata: { duration, fileSize },
+      }, basePath);
+
+      // Set finalVideo on project
+      proj.finalVideo = {
+        artifactId: finalVideoId,
+        path: outputPath,
+        duration,
+        createdAt: Date.now(),
+      };
+      proj.productionCompletedAt = Date.now();
+      saveProject(proj, basePath);
+
+      // Mark VIDEO_COMBINE phase as completed
+      updatePhaseStatus(proj, WorkflowPhase.VIDEO_COMBINE, 'completed', basePath);
+    },
   };
   for (const tool of createTimelineTools(timelineContext)) {
     registry.register(tool);
@@ -430,8 +464,6 @@ export function getWorkflowToolNames(): string[] {
     'import_file',
     'read_project',
     'update_project',
-    // Stitching
-    'stitch_videos',
     // Timeline
     'manage_timeline',
     'assemble_from_timeline',

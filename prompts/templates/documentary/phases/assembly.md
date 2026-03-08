@@ -22,29 +22,24 @@ Segment videos are tracked in `project.json` with their artifact IDs. The docume
 
 ## Assembly Process
 
-### 1. Sequence Order
-Arrange segments according to the outline:
-- Opening hook
-- Main segments in logical order
-- Conclusion
+### Step 1: Validate timeline (ALWAYS do this first)
+Call `manage_timeline` with action `validate`. Review the `fileResolution` field:
+- `resolvedCount` — how many segments have actual files on disk
+- `videoCount` / `imageCount` — breakdown by media type
+- `errors` — segments that could not be resolved to any file
 
-### 2. Transitions
-Apply appropriate transitions:
-- Cross-fades for related content
-- Hard cuts for impact
-- Longer fades for section changes
-- Match cuts where possible
+### Step 2: Check readiness
+- If there are resolution errors (segments with no file at all): **STOP — report the missing segment IDs**. This phase does NOT have generation tools — the orchestrator must re-plan.
+- Image segments ARE allowed for documentary style — they will be converted to static video clips automatically during assembly.
 
-### 3. Pacing
-Ensure proper documentary rhythm:
-- Breathing room between dense content
-- Build toward key moments
-- Appropriate time for conclusion
+### Step 3: Assemble (only when all segments have files)
+Call `assemble_from_timeline` to produce the final video. This tool:
+- Resolves all segment file paths (with 3-tier fallback)
+- Converts image segments to static video clips (documentary style only)
+- Runs FFmpeg concat to produce the final assembled video
 
-### 4. Final Polish
-- Smooth all transitions
-- Check visual consistency
-- Verify complete narrative flow
+### Step 4: Review Result
+Check the returned `output_path`, `duration`, `file_size`, and any `warnings`.
 
 ## Documentary Assembly Guidelines
 
@@ -70,20 +65,13 @@ Note: If audio is included:
 - Musical transitions where appropriate
 - Balance levels across segments
 
-## Final Review
+## After Successful Assembly
 
-Before completing:
-1. Watch the entire documentary
-2. Verify narrative coherence
-3. Check all transitions
-4. Confirm total duration
-5. Present for final approval
+When `assemble_from_timeline` returns `success: true`, the final video asset is automatically registered and the phase is marked completed. Present the result to the user: output path, duration, file size.
 
 ## Quality Criteria
 
 Before completing this phase:
 - [ ] All segments included correctly
-- [ ] Transitions are smooth and appropriate
-- [ ] Pacing supports the content
 - [ ] Documentary feels complete
 - [ ] User has approved the final video

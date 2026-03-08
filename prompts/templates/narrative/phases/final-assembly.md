@@ -22,10 +22,23 @@ Scene videos are tracked in `project.json` under the scenes array with their `vi
 
 ## Assembly Process
 
-1. **Sequence Scenes**: Arrange all scene videos in story order
-2. **Add Transitions**: Apply appropriate transitions between scenes
-3. **Timing Adjustments**: Ensure pacing feels natural
-4. **Export**: Create the final combined video
+### Step 1: Validate timeline (ALWAYS do this first)
+Call `manage_timeline` with action `validate`. Review the `fileResolution` field in the response:
+- `resolvedCount` — how many segments have actual files on disk
+- `videoCount` / `imageCount` — breakdown by media type
+- `errors` — segments that could not be resolved to any file
+
+### Step 2: Check readiness
+If there are resolution errors OR image-only segments (invalid for anime/cinematic styles):
+- **STOP — do not attempt assembly**
+- Report the specific segment IDs that are missing videos
+- This phase does NOT have video generation tools — the orchestrator must re-plan and return to the video generation phase to create missing clips
+
+### Step 3: Assemble (only when all segments have videos)
+Call `assemble_from_timeline` to run FFmpeg concat. This resolves file paths, validates style requirements, and produces the final video synchronously.
+
+### Step 4: Review result
+Check the returned `output_path`, `duration`, `file_size`, and any `warnings`.
 
 ## Transition Guidelines
 
@@ -64,23 +77,24 @@ Before completing:
 4. Ensure pacing feels right
 5. Present to user for final approval
 
+## After Successful Assembly
+
+When `assemble_from_timeline` returns `success: true`:
+- The final video asset is automatically registered in the manifest
+- The VIDEO_COMBINE phase is automatically marked as completed
+- The project's `finalVideo` field is set with the artifact ID, path, and duration
+- Present the result to the user: output path, duration, file size
+
 ## User Approval
 
 The final video requires user approval:
-1. Play the complete assembled video
-2. Note total duration
-3. Allow user to request adjustments:
-   - Transition changes
-   - Pacing adjustments
-   - Scene reordering (if minor)
-4. Make requested changes and re-present
+1. Present the assembled video details (path, duration, size)
+2. Ask the user to review and approve
 
 ## Quality Criteria
 
 Before completing this phase:
 - [ ] All scene videos are included
 - [ ] Scenes are in correct story order
-- [ ] Transitions are smooth and appropriate
-- [ ] Pacing feels natural
 - [ ] Final video is exported successfully
 - [ ] User has approved the final video

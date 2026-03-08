@@ -46,3 +46,15 @@ export {
   createTimelineTools,
   type TimelineToolContext,
 } from './TimelineTools.js';
+
+// FFmpeg assembler
+export {
+  resolveSegmentFilePaths,
+  convertImageToVideo,
+  assembleVideos,
+  runFFmpeg,
+  type ResolvedSegment,
+  type ResolutionResult,
+  type AssemblyConfig,
+  type AssemblyResult,
+} from './FFmpegAssembler.js';

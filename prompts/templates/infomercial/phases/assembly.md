@@ -22,27 +22,20 @@ The script is at `plans/script.md`. Demo videos are tracked in `project.json` wi
 
 ## Assembly Process
 
-### 1. Sequence
-- Follow script structure
-- Opening hook first
-- Demos in order
-- CTA at end
+### Step 1: Validate timeline (ALWAYS do this first)
+Call `manage_timeline` with action `validate`. Review the `fileResolution` field for resolution errors or missing files.
 
-### 2. Transitions
-- Professional transitions
-- Match infomercial style
-- Keep energy up
+### Step 2: Check readiness
+If there are resolution errors or image-only segments:
+- **STOP — do not attempt assembly**
+- Report the specific missing segment IDs — this phase does NOT have video generation tools
+- The orchestrator must re-plan and return to clip generation
 
-### 3. Pacing
-- Quick opening
-- Time on demos
-- Strong close
-- Match typical infomercial rhythm
+### Step 3: Assemble (only when all segments have videos)
+Call `assemble_from_timeline` to run FFmpeg concat and produce the final video.
 
-### 4. Polish
-- Smooth all edits
-- Check flow
-- Verify total duration
+### Step 4: Review Result
+Check the returned `output_path`, `duration`, `file_size`, and any `warnings`. Verify total duration matches target.
 
 ## Infomercial Assembly Guidelines
 
@@ -94,20 +87,14 @@ Match target duration to:
 - Commercial-ready
 - Brand appropriate
 
-## User Approval
+## After Successful Assembly
 
-Present final infomercial:
-- Play complete video
-- Note duration
-- Allow adjustments
-- Final approval required
+When `assemble_from_timeline` returns `success: true`, the final video asset is automatically registered and the phase is marked completed. Present the result to the user.
 
 ## Quality Criteria
 
 Before completing this phase:
 - [ ] All content included
-- [ ] Transitions smooth
-- [ ] Pacing effective
-- [ ] CTA clear
 - [ ] Duration appropriate
+- [ ] Final video exported successfully
 - [ ] User has approved

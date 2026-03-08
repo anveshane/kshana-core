@@ -22,25 +22,21 @@ The script is at `plans/script.md`. Visual clips are tracked in `project.json` w
 
 ## Assembly Process
 
-### 1. Sequence
-- Order clips per script timing
-- Hook clip first
-- Logical visual flow
+### Step 1: Validate timeline (ALWAYS do this first)
+Call `manage_timeline` with action `validate`. Review the `fileResolution` field for resolution errors or image-only segments.
 
-### 2. Transitions
-- Quick cuts (standard for shorts)
-- Match cuts where possible
-- Minimal fade usage
+### Step 2: Check readiness
+If there are resolution errors or image-only segments:
+- **STOP — do not attempt assembly**
+- Report the specific missing segment IDs — this phase does NOT have video generation tools
+- The orchestrator must re-plan and return to clip generation
 
-### 3. Timing
-- Hit script beats precisely
-- Maintain momentum
-- No wasted frames
+### Step 3: Assemble (only when all segments have videos)
+Call `assemble_from_timeline` to run FFmpeg concat and produce the final video.
 
-### 4. Duration Check
-- Verify under 60 seconds
-- Trim if needed
-- Optimize for engagement
+### Step 4: Duration Check
+- Verify under 60 seconds from the returned duration
+- If over 60 seconds, trim segments and re-assemble
 
 ## Short-Form Assembly Best Practices
 
@@ -76,20 +72,14 @@ The script is at `plans/script.md`. Visual clips are tracked in `project.json` w
 - Mobile optimized
 - Thumbnail from strong frame
 
-## User Approval
+## After Successful Assembly
 
-Present final Short for approval:
-- Play full video
-- Note total duration
-- Allow timing adjustments
-- Final approval required
+When `assemble_from_timeline` returns `success: true`, the final video asset is automatically registered and the phase is marked completed. Present the result to the user.
 
 ## Quality Criteria
 
 Before completing this phase:
 - [ ] Under 60 seconds
 - [ ] Hook in first 3 seconds
-- [ ] Pacing is engaging
-- [ ] Ending is strong
-- [ ] Technical quality good
+- [ ] Final video exported successfully
 - [ ] User has approved

@@ -34,6 +34,11 @@ import {
   saveTimeline,
   splitSegmentIntoShots,
 } from './TimelineManager.js';
+import {
+  resolveSegmentFilePaths,
+  convertImageToVideo,
+  assembleVideos,
+} from './FFmpegAssembler.js';
 
 /**
  * Context required for timeline tools.
@@ -44,6 +49,10 @@ import {
 export interface TimelineToolContext {
   /** Returns the path to the active .kshana project directory */
   getProjectDir: () => string;
+  /** Returns the project style (e.g., 'anime', 'cinematic_realism', 'documentary') */
+  getProjectStyle?: () => string;
+  /** Marks the VIDEO_COMBINE phase as completed and saves project */
+  markAssemblyComplete?: (outputPath: string, duration: number, fileSize: number) => void;
 }
 
 /**
@@ -416,6 +425,11 @@ The timeline is saved to timeline.json in the project directory and persists acr
 
           const validation = validateTimeline(timeline);
 
+          // Also resolve file paths to check that "filled" segments have actual files
+          const resolution = resolveSegmentFilePaths(timeline, context.getProjectDir());
+          const videoCount = resolution.resolved.filter(r => r.mediaType === 'video').length;
+          const imageCount = resolution.resolved.filter(r => r.mediaType === 'image').length;
+
           return {
             success: true,
             validation,
@@ -428,6 +442,12 @@ The timeline is saved to timeline.json in the project directory and persists acr
               plannedSegments: timeline.segments.filter(s => s.fillStatus === 'planned').length,
               gapCount: validation.gaps.length,
               globalLayerCount: timeline.globalLayers.length,
+            },
+            fileResolution: {
+              resolvedCount: resolution.resolved.length,
+              videoCount,
+              imageCount,
+              errors: resolution.errors,
             },
           };
         }
@@ -540,10 +560,10 @@ The timeline must be fully validated (all segments filled) before assembly.`,
     },
     handler: async (params: Record<string, unknown>) => {
       const outputName = (params['output_name'] as string) ?? 'final_video';
-      const defaultTransition = (params['default_transition'] as string) ?? 'crossfade';
+      const projectDir = context.getProjectDir();
 
-      // Load and validate timeline
-      const timeline = loadTimeline(context.getProjectDir());
+      // 1. Load and validate timeline
+      const timeline = loadTimeline(projectDir);
       if (!timeline) {
         return { success: false, error: 'No timeline exists. Create and populate a timeline first.' };
       }
@@ -560,70 +580,87 @@ The timeline must be fully validated (all segments filled) before assembly.`,
         };
       }
 
-      // Build assembly plan from timeline
-      const assemblySegments = timeline.segments.map(segment => {
-        const visualLayer = segment.layers.find(
-          l => l.type === 'visual' || l.type === 'narration_video'
-        );
-        const audioLayers = segment.layers.filter(l => l.type === 'audio');
-        const overlayLayers = segment.layers.filter(l => l.type === 'overlay');
-
+      // 2. Resolve segment file paths
+      const resolution = resolveSegmentFilePaths(timeline, projectDir);
+      if (resolution.errors.length > 0 && resolution.resolved.length === 0) {
         return {
-          segmentId: segment.id,
-          label: segment.label,
-          startTime: segment.startTime,
-          endTime: segment.endTime,
-          duration: segment.duration,
-          compositingMode: segment.compositingMode,
-          transition: segment.transition ?? { type: defaultTransition, durationMs: 500 },
-          visual: visualLayer
-            ? { artifactId: visualLayer.artifactId, filePath: visualLayer.filePath }
-            : null,
-          audioLayers: audioLayers.map(a => ({
-            artifactId: a.artifactId,
-            filePath: a.filePath,
-          })),
-          overlayLayers: overlayLayers.map(o => ({
-            artifactId: o.artifactId,
-            filePath: o.filePath,
-            metadata: o.metadata,
+          success: false,
+          error: 'Could not resolve any segment file paths.',
+          resolution_errors: resolution.errors,
+        };
+      }
+
+      // 3. Style-aware validation
+      const projectStyle = context.getProjectStyle?.() ?? 'cinematic_realism';
+      const imageSegments = resolution.resolved.filter(s => s.mediaType === 'image');
+      const isVideoOnlyStyle = projectStyle === 'anime' ||
+        projectStyle.includes('cinematic') ||
+        projectStyle === 'cinematic_narrative';
+
+      if (isVideoOnlyStyle && imageSegments.length > 0) {
+        return {
+          success: false,
+          error: `Style "${projectStyle}" requires all segments to have video files. ` +
+            `${imageSegments.length} segment(s) have images instead of videos. ` +
+            `Generate videos for these segments before assembly.`,
+          image_segments: imageSegments.map(s => ({
+            segmentId: s.segmentId,
+            label: s.label,
+            filePath: s.filePath,
           })),
         };
-      });
+      }
 
-      const globalAudioLayers = timeline.globalLayers.map(gl => ({
-        type: gl.type,
-        artifactId: gl.artifactId,
-        filePath: gl.filePath,
-        label: gl.label,
-      }));
+      // 4. For documentary style: convert image segments to temp video clips
+      if (imageSegments.length > 0) {
+        const tempDir = join(projectDir, 'assets', 'videos', '.temp');
+        for (const seg of imageSegments) {
+          const tempPath = join(tempDir, `${seg.segmentId}_static.mp4`);
+          try {
+            await convertImageToVideo(seg.filePath, seg.duration, tempPath);
+            seg.filePath = tempPath;
+            seg.mediaType = 'video';
+          } catch (err) {
+            return {
+              success: false,
+              error: `Failed to convert image to video for segment "${seg.segmentId}": ${err}`,
+            };
+          }
+        }
+      }
 
-      // Extract ordered video artifact IDs for the stitch pipeline
-      const videoArtifactIds = assemblySegments
-        .map(s => s.visual?.artifactId)
-        .filter((id): id is string => !!id);
+      // Report resolution errors as warnings if some segments resolved
+      const warnings: string[] = [...resolution.errors];
 
-      // Create assembly job
-      const jobId = `assembly-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      // 5. Run real FFmpeg assembly
+      const outputPath = join(projectDir, 'assets', 'videos', `${outputName}.mp4`);
+      let result;
+      try {
+        result = await assembleVideos(resolution.resolved, outputPath);
+      } catch (err) {
+        return {
+          success: false,
+          error: `FFmpeg assembly failed: ${err}`,
+          resolved_segments: resolution.resolved.length,
+          warnings,
+        };
+      }
+
+      // 6. Register final video asset and mark phase completed
+      if (context.markAssemblyComplete) {
+        context.markAssemblyComplete(result.outputPath, result.duration, result.fileSize);
+      }
 
       return {
         success: true,
-        status: 'submitted',
-        job_id: jobId,
-        job_type: 'timeline_assembly',
-        assembly_plan: {
-          outputName,
-          totalDuration: timeline.totalDuration,
-          segmentCount: assemblySegments.length,
-          segments: assemblySegments,
-          globalAudioLayers,
-          videoArtifactIds,
-          defaultTransition,
-        },
-        message: `Assembly job created from timeline: ${assemblySegments.length} segments, ${timeline.totalDuration}s total. ` +
-          `${globalAudioLayers.length} global audio layer(s). ` +
-          `Compositing modes: ${[...new Set(assemblySegments.map(s => s.compositingMode))].join(', ')}. ` +
-          `Note: Complex compositing (pip, side_by_side) is planned but currently uses replace mode.`,
+        output_path: result.outputPath,
+        duration: result.duration,
+        file_size: result.fileSize,
+        segment_count: resolution.resolved.length,
+        warnings: warnings.length > 0 ? warnings : undefined,
+        message: `Final video assembled: ${resolution.resolved.length} segments, ` +
+          `${result.duration.toFixed(1)}s duration, ${(result.fileSize / 1024 / 1024).toFixed(1)}MB. ` +
+          `Output: ${result.outputPath}`,
       };
     },
   };

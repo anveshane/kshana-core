@@ -205,7 +205,7 @@ Each shot uses its own per-shot image. The `scene_image_artifact_id` serves as f
 
 After the multi-shot breakdown is approved:
 1. `manage_timeline(action: "split_segment", segment_id: "segment_N", shots: [...])`
-2. For each shot, after video generation: `manage_timeline(action: "update_segment", segment_id: "segment_N_shot_M", layers: [...])`
+2. For each shot, pass `segment_id: "segment_N_shot_M"` to `generate_video_from_image` — the timeline segment is auto-updated after successful generation (no separate `update_segment` call needed)
 3. Use `preview_from_timeline` to see the structure with placeholders before all clips are ready
 
 ---
@@ -234,6 +234,14 @@ After the multi-shot breakdown is approved:
 ### "Continue where we left off"
 - `scan_assets` discovers what's complete
 - Resume from earliest incomplete step
+
+### "Redo scene 3" / "That clip looks wrong" (after assembly)
+- The user wants to regenerate specific clips after seeing the final video
+- Use backward flow: re-plan from `final_video` target, but only the specific clips need regeneration
+- Steps: regenerate the specific scene video(s) with `segment_id` parameter → re-assemble
+- Do NOT try to regenerate from inside the assembly phase — go back to the video generation step for those specific clips
+- Pass `segment_id` when calling `generate_video_from_image` — this auto-updates the timeline segment with the new video, so no separate `manage_timeline(update_segment)` call is needed
+- After regeneration, call `assemble_from_timeline` to produce a new final video
 
 ---
 

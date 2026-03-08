@@ -16,14 +16,18 @@ Process:
 3. Generate video clip using `generate_video` tool
 4. Present to user for approval
 
-### 2. Final Stitched Video
+### 2. Final Assembled Video
 
 Purpose: Combine all scene clips into one continuous video.
 
 Process:
-1. Gather all approved scene video artifact IDs
-2. Use `stitch_videos` tool to combine them
-3. Present final video to user for approval
+1. **Validate timeline first**: Call `manage_timeline` with action `validate` to check all segments are filled and have resolvable files
+2. **Check file resolution**: Review the `fileResolution` field in the validation result:
+   - `errors` — segments that have no resolvable video file
+   - `imageCount` — segments with images instead of videos (invalid for anime/cinematic styles)
+3. **If gaps exist — STOP and report**: You do NOT have video generation tools in this phase. Report the specific missing segments back so the orchestrator can re-plan and return to the video generation phase to create them. List exactly which segment IDs need videos.
+4. **Only if all segments resolve**: Call `assemble_from_timeline` to run FFmpeg and produce the final video
+5. Present final video to user for approval
 
 ## Motion Types
 
@@ -55,14 +59,16 @@ You MUST use tools to generate videos - do NOT just output text recommendations.
 
 **Required workflow:**
 
-1. Call `generate_video` tool (or `generate_video_from_image` / `generate_video_from_frames`):
+1. Call `generate_video` tool (or `generate_video_from_image` / `generate_video_from_frames`).
+   **Always pass `segment_id`** to auto-link the video to the timeline segment — this eliminates the need for a separate `manage_timeline(update_segment)` call:
    ```
    generate_video_from_image({
      scene_number: 1,
      image_artifact_id: "artifact-id-from-scene-image",
      motion_type: "pan_left", // or static, pan_right, zoom_in, zoom_out, camera_follow
      motion_strength: 0.5,
-     duration: 5
+     duration: 5,
+     segment_id: "segment_0_shot_0" // auto-updates timeline segment
    })
    ```
 
@@ -78,6 +84,13 @@ You MUST use tools to generate videos - do NOT just output text recommendations.
 - Do NOT mark your task complete after just submitting - wait for the job
 - Do NOT skip the `wait_for_job` step - the video takes time to generate
 - Video generation typically takes 2-10 minutes depending on complexity
+
+## After Successful Assembly
+
+When `assemble_from_timeline` returns `success: true`:
+- The final video asset is automatically registered in the manifest
+- The VIDEO_COMBINE phase is automatically marked as completed
+- Report the result back: output path, duration, file size
 
 ## What You Do NOT Do
 

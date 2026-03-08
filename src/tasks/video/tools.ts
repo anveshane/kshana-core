@@ -23,6 +23,8 @@ function debugLog(message: string): void {
     // Ignore logging errors
   }
 }
+import { loadTimeline, updateSegmentLayers, saveTimeline } from '../../core/timeline/TimelineManager.js';
+import type { TimelineLayerEntry } from '../../core/timeline/types.js';
 import {
   getProjectDir,
   addAsset,
@@ -1316,6 +1318,10 @@ This tool blocks until video generation is complete and returns the result direc
         type: 'number',
         description: 'Random seed for reproducibility (optional)',
       },
+      segment_id: {
+        type: 'string',
+        description: 'Timeline segment ID to auto-update with this video (e.g. "segment_0_shot_1"). When provided, the timeline segment layers are automatically updated after successful generation — no separate update_segment call needed.',
+      },
     },
     required: ['shot_image_artifact_id', 'scene_number', 'shot_number'],
   },
@@ -1330,6 +1336,7 @@ This tool blocks until video generation is complete and returns the result direc
     const duration = args['duration'] as number | undefined;
     const videoWidth = args['width'] as number | undefined;
     const videoHeight = args['height'] as number | undefined;
+    const segmentId = args['segment_id'] as string | undefined;
 
     // If motion_prompt_file is provided, read and extract the prompt for this shot
     const motionPromptFile = args['motion_prompt_file'] as string | undefined;
@@ -1463,6 +1470,28 @@ This tool blocks until video generation is complete and returns the result direc
       // Link artifact to project
       linkArtifactToProject(context, artifactId, relativePath);
 
+      // Auto-update timeline segment if segment_id was provided
+      if (segmentId) {
+        try {
+          const timeline = loadTimeline(projectDir);
+          if (timeline) {
+            const layer: TimelineLayerEntry = {
+              type: 'visual',
+              artifactId,
+              filePath: relativePath,
+              label: `Scene ${sceneNumber} Shot ${shotNumber} video`,
+              source: 'generated',
+            };
+            const updated = updateSegmentLayers(timeline, segmentId, [layer]);
+            saveTimeline(projectDir, updated);
+            debugLog(`[generate_video_from_image] Auto-updated timeline segment ${segmentId} with artifact ${artifactId}`);
+          }
+        } catch (e) {
+          // Non-fatal — log but don't fail the video generation
+          debugLog(`[generate_video_from_image] Timeline auto-update failed for ${segmentId}: ${e}`);
+        }
+      }
+
       // Update job
       job.status = 'completed';
       job.progress = 100;
@@ -1475,6 +1504,8 @@ This tool blocks until video generation is complete and returns the result direc
         status: 'completed',
         artifact_id: artifactId,
         file_path: relativePath,
+        segment_id: segmentId,
+        timeline_updated: !!segmentId,
         params: {
           scene_number: sceneNumber,
           shot_number: shotNumber,
