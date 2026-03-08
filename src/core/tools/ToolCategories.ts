@@ -12,6 +12,7 @@ export const SIMPLE_TOOLS = new Set([
   'ask_user',
   'dispatch_agent',
   'TodoWrite',
+  'TodoRead',
   'todo_write',
 ]);
 

@@ -169,6 +169,7 @@ const SIMPLE_TOOLS = new Set([
   'dispatch_skill', // New skill-based architecture
   'generate_content', // Deterministic content generation
   'TodoWrite',
+  'TodoRead',
   'todo_write', // back-compat during migration
 ]);
 
@@ -187,7 +188,7 @@ function isComplexTool(name: string): boolean {
 }
 
 function isBuiltinTodoTool(name: string): boolean {
-  return name === 'TodoWrite' || name === 'todo_write';
+  return name === 'TodoWrite' || name === 'todo_write' || name === 'TodoRead';
 }
 
 function isTaskTool(name: string): boolean {
@@ -236,10 +237,6 @@ export class GenericAgent extends TypedEventEmitter {
   private consecutiveTextOnlyResponses = 0;
   private static readonly MAX_TEXT_ONLY_NUDGES = 3;
   private static readonly MAX_CONSECUTIVE_LOOP_WARNINGS = 3; // Force stop after this many warnings
-
-  // Track productive tool calls since last TodoWrite to nudge todo updates
-  private productiveCallsSinceLastTodoUpdate = 0;
-  private static readonly TODO_UPDATE_NUDGE_THRESHOLD = 3; // Nudge after this many productive calls
 
   // Context window tracking
   private tokenUsage = {
@@ -1246,44 +1243,6 @@ export class GenericAgent extends TypedEventEmitter {
           this.iteration = 0;
         }
 
-        // Track productive tool calls and nudge agent to update todos when progress has been made.
-        const isProductiveCall =
-          (toolCall.name === 'generate_content' && resultObj['status'] === 'approved') ||
-          (toolCall.name === 'update_project' && resultObj['status'] === 'success') ||
-          isGenerateSuccess;
-
-        if (isProductiveCall) {
-          this.productiveCallsSinceLastTodoUpdate++;
-        }
-
-        // After a successful generation, nudge the agent to read and update its todos
-        if (isGenerateSuccess && this.todoManager.getTodos().length > 0) {
-          const currentTodos = this.todoManager.getTodos()
-            .filter(t => t.visible)
-            .map(t => `  [${t.status}] ${t.content}`)
-            .join('\n');
-          resultObj['__todo_reminder'] =
-            `Generation completed successfully. Read your current todos and mark the relevant item as completed using TodoWrite(merge=true):\n${currentTodos}`;
-          this.productiveCallsSinceLastTodoUpdate = 0;
-          debugLog(`[GenericAgent] Injected post-generation todo update nudge`);
-        }
-
-        if (
-          isProductiveCall &&
-          this.productiveCallsSinceLastTodoUpdate >= GenericAgent.TODO_UPDATE_NUDGE_THRESHOLD &&
-          this.todoManager.getTodos().length > 0
-        ) {
-          // Inject current todo state into the result so the agent has fresh context
-          const currentTodos = this.todoManager.getTodos()
-            .filter(t => t.visible)
-            .map(t => `  [${t.status}] ${t.content}`)
-            .join('\n');
-          resultObj['__todo_reminder'] =
-            `You've made ${this.productiveCallsSinceLastTodoUpdate} productive progress steps since your last todo update. ` +
-            `Review your current todo list and use TodoWrite(merge=true) to mark completed items:\n${currentTodos}`;
-          debugLog(`[GenericAgent] Injected todo update nudge after ${this.productiveCallsSinceLastTodoUpdate} productive calls`);
-        }
-
         // Check if tool is waiting for user input (dispatch_agent planning)
         if (resultObj['__awaiting_user_input']) {
           // Return waiting status - the planning loop will handle user response
@@ -1547,10 +1506,24 @@ export class GenericAgent extends TypedEventEmitter {
       }
     }
 
+    // Handle TodoRead specially — return current todos with instructions
+    if (toolCall.name === 'TodoRead') {
+      const result = this.handleTodoReadTool();
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result,
+        isError: false,
+        agentName: this.getEffectiveAgentName(),
+      });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
+      return result;
+    }
+
     // Handle built-in todo tools specially (no handler required)
     if (isBuiltinTodoTool(toolCall.name)) {
       const result = this.handleTodoTool(toolCall);
-      this.productiveCallsSinceLastTodoUpdate = 0;
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -2177,6 +2150,22 @@ export class GenericAgent extends TypedEventEmitter {
   /**
    * Handle built-in todo management tool.
    */
+  private handleTodoReadTool(): unknown {
+    const todos = this.todoManager.getTodos().filter(t => t.visible);
+    if (todos.length === 0) {
+      return { todos: [], message: 'No todos found. Use TodoWrite to create todos.' };
+    }
+    const todoList = todos.map(t => ({
+      id: t.id,
+      status: t.status,
+      content: t.content,
+    }));
+    return {
+      todos: todoList,
+      instructions: 'Use TodoWrite(merge=true) with the todo id to update specific todos. Set status to "completed" for finished tasks, "in_progress" for the next task to work on.',
+    };
+  }
+
   private handleTodoTool(toolCall: ToolCall): unknown {
     const args = toolCall.arguments;
     const merge = (args['merge'] as boolean | undefined) ?? false;
@@ -2192,7 +2181,7 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Check for tool call patterns in todo content (forbidden)
     const toolCallPatterns = [
-      /\b(dispatch_\w+|update_project|read_project|import_file|read_file|todo_write|TodoWrite|ask_user|AskUserQuestion)\b/i,
+      /\b(dispatch_\w+|update_project|read_project|import_file|read_file|todo_write|TodoWrite|TodoRead|ask_user|AskUserQuestion)\b/i,
       /\baction:\s*["']?\w+["']?/i,
       /\buse\s+(the\s+)?[\w_]+\s+tool/i,
       /\bcall\s+[\w_]+/i,
@@ -3288,9 +3277,7 @@ Respond in JSON format:
         message: fileSaved
           ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}`
           : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}`,
-        next_steps: persistResult.persisted
-          ? 'IMPORTANT: 1) Update the todo list using TodoWrite to mark this task as completed. 2) Then continue with the next pending task or transition to the next phase.'
-          : 'IMPORTANT: 1) Update the todo list using TodoWrite to mark this task as completed. 2) Then continue with the next pending task.',
+        next_steps: 'IMPORTANT: 1) Update the timeline using manage_timeline with update_segment. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.',
       };
 
       debugLog(
@@ -3792,6 +3779,7 @@ Respond in JSON format:
         artifact_id: genResultObj['artifact_id'],
         file_path: genResultObj['file_path'],
         message: 'Image generated successfully.',
+        next_steps: 'IMPORTANT: 1) Update the timeline using manage_timeline with update_segment. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.',
       };
     } catch (error) {
       this.imageGenState = null;
@@ -4067,6 +4055,7 @@ Respond in JSON format:
         artifact_id: genResultObj['artifact_id'],
         file_path: genResultObj['file_path'],
         message: 'Video generated successfully.',
+        next_steps: 'IMPORTANT: 1) Update the timeline using manage_timeline with update_segment. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.',
       };
     } catch (error) {
       this.videoGenState = null;

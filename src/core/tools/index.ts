@@ -21,6 +21,7 @@ export {
   updateTodoTool,
   addSubtasksTool,
   todoWriteTool,
+  todoReadTool,
   legacyTodoWriteTool,
   expandTodoTool,
   storeContextTool,
@@ -38,6 +39,7 @@ import {
   askUserQuestionTool,
   taskTool,
   todoWriteTool,
+  todoReadTool,
   generateContentTool,
   readFileTool,
 } from './builtin/index.js';
@@ -55,6 +57,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   registry.register(taskTool);
   // enterPlanModeTool and exitPlanModeTool removed — unused, saves tokens
   registry.register(todoWriteTool);
+  registry.register(todoReadTool);
   registry.register(generateContentTool);
   registry.register(readFileTool);
 

@@ -99,6 +99,25 @@ When in doubt, use this tool. Being proactive with task management demonstrates 
   // No handler - handled by GenericAgent
 );
 
+// TodoRead - Read current todos with their ids and statuses (handled by GenericAgent)
+export const todoReadTool = createTool(
+  'TodoRead',
+  `Use this tool to read the current todo list. Returns all todos with their ids, statuses, and content.
+This is useful to check the current state of your task list before making updates.
+
+Use this tool when:
+- You need to see what tasks are pending, in progress, or completed
+- After completing a generation (image, video, content) to check which todo to mark as completed
+- Before using TodoWrite(merge=true) to update specific todos
+
+The result will include instructions on how to update todos using TodoWrite(merge=true).`,
+  {
+    type: 'object',
+    properties: {},
+  }
+  // No handler - handled by GenericAgent
+);
+
 // Legacy aliases for backwards compatibility
 export const setTodosTool = todoWriteTool;
 export const updateTodoTool = todoWriteTool;

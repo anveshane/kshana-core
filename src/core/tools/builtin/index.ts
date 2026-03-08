@@ -9,6 +9,7 @@ export {
   updateTodoTool,
   addSubtasksTool,
   todoWriteTool,
+  todoReadTool,
   legacyTodoWriteTool,
   expandTodoTool,
 } from './todoTools.js';
