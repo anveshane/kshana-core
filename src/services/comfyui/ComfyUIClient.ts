@@ -292,7 +292,26 @@ export class ComfyUIClient {
           const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
           const msgType: string = data.type;
 
-          if (msgType === 'progress' && data.data) {
+          if (msgType === 'status' && data.data) {
+            // Queue/server status updates
+            const statusData = data.data as { status?: { exec_info?: { queue_remaining?: number } } };
+            const queueRemaining = statusData.status?.exec_info?.queue_remaining;
+            if (queueRemaining !== undefined && queueRemaining > 0) {
+              debugLog(`[waitForCompletionWS] status: queue_remaining=${queueRemaining}`);
+              progressCallback?.({
+                percentage: 0,
+                message: `Queued (${queueRemaining} job${queueRemaining > 1 ? 's' : ''} ahead)`,
+              });
+            }
+          } else if (msgType === 'execution_start' && data.data) {
+            const execPromptId = (data.data as { prompt_id?: string }).prompt_id;
+            if (execPromptId && execPromptId !== promptId) return;
+            debugLog(`[waitForCompletionWS] execution_start for prompt=${promptId}`);
+            progressCallback?.({
+              percentage: 0,
+              message: 'Execution started',
+            });
+          } else if (msgType === 'progress' && data.data) {
             const { value, max } = data.data as { value: number; max: number };
             const pct = max > 0 ? Math.round((value / max) * 100) : 0;
             debugLog(`[waitForCompletionWS] progress: step ${value}/${max} (${pct}%)`);
@@ -313,6 +332,12 @@ export class ComfyUIClient {
             if (nodeId) {
               currentNode = nodeId;
               debugLog(`[waitForCompletionWS] executing node=${nodeId}`);
+              // Relay node execution to UI so user sees activity
+              progressCallback?.({
+                percentage: 0,
+                message: `Processing node ${nodeId}`,
+                currentNode: nodeId,
+              });
             } else {
               // node is null → execution finished for this prompt
               debugLog(`[waitForCompletionWS] Execution finished for prompt=${promptId}`);

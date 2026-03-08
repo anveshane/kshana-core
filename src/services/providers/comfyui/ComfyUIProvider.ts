@@ -100,6 +100,7 @@ export class ComfyUIProvider implements GenerationProvider {
     }
 
     // Load and parameterize workflow
+    onProgress?.({ percentage: 0, message: 'Loading workflow...', done: false });
     const template = loadWorkflowTemplate(workflowMetadata.filename);
     const workflow = parameterizeWorkflowByName(workflowName, template, {
       sceneNumber: 0,
@@ -113,10 +114,12 @@ export class ComfyUIProvider implements GenerationProvider {
     });
 
     // Queue and wait
+    onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
     const queueResult = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
     const promptId = queueResult.promptId;
 
     debugLog(`Queued image generation (prompt=${promptId})`);
+    onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
 
     // Wait for completion with progress
     await this.waitForCompletion(client, promptId, queueResult.clientId, onProgress);
@@ -153,6 +156,7 @@ export class ComfyUIProvider implements GenerationProvider {
     const client = new ComfyUIClient({ outputDir });
 
     // Upload base image
+    onProgress?.({ percentage: 0, message: 'Uploading base image...', done: false });
     const uploadResult = await client.uploadImage(baseImagePath, 'input', true);
 
     // Upload reference images (up to 2)
@@ -161,11 +165,13 @@ export class ComfyUIProvider implements GenerationProvider {
       if (!fs.existsSync(refPath)) {
         throw new Error(`Reference image not found: ${refPath}`);
       }
+      onProgress?.({ percentage: 0, message: 'Uploading reference image...', done: false });
       const refUpload = await client.uploadImage(refPath, 'input', true);
       referenceImageFilenames.push(refUpload.name);
     }
 
     // Load and parameterize workflow
+    onProgress?.({ percentage: 0, message: 'Loading workflow...', done: false });
     const template = loadWorkflowTemplate(workflowMetadata.filename);
     const workflow = parameterizeWorkflowByName('qwen_edit', template, {
       sceneNumber: 0,
@@ -179,9 +185,11 @@ export class ComfyUIProvider implements GenerationProvider {
     });
 
     // Queue and wait
+    onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
     const queueResult = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
 
     debugLog(`Queued image edit (prompt=${queueResult.promptId})`);
+    onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
 
     await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
 
@@ -222,9 +230,11 @@ export class ComfyUIProvider implements GenerationProvider {
     const client = new ComfyUIClient({ outputDir });
 
     // Upload source image
+    onProgress?.({ percentage: 0, message: 'Uploading source image...', done: false });
     const uploadResult = await client.uploadImage(sourceImagePath, 'input', true);
 
     // Load and parameterize workflow
+    onProgress?.({ percentage: 0, message: 'Loading workflow...', done: false });
     const template = loadWorkflowTemplate(workflowMetadata.filename);
     const workflow = parameterizeWorkflowByName(workflowName, template, {
       sceneNumber: 0,
@@ -238,9 +248,11 @@ export class ComfyUIProvider implements GenerationProvider {
     } as Parameters<typeof parameterizeWorkflowByName>[2]);
 
     // Queue and wait
+    onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
     const queueResult = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
 
     debugLog(`Queued video generation (prompt=${queueResult.promptId})`);
+    onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
 
     await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
 

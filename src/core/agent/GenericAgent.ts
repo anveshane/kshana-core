@@ -2008,9 +2008,10 @@ export class GenericAgent extends TypedEventEmitter {
     let progressHandler: ComfyProgressHandler | undefined;
     if (COMFY_PROGRESS_TOOLS.has(toolCall.name)) {
       progressHandler = (event) => {
+        // Show the message from ComfyUI (includes setup phases, node execution, and step progress)
         const chunk = event.step && event.maxSteps
           ? `Step ${event.step}/${event.maxSteps} (${event.percentage}%)`
-          : `${event.percentage}%`;
+          : event.message || `${event.percentage}%`;
         this.emit({
           type: 'tool_streaming',
           toolCallId: toolCall.id,
