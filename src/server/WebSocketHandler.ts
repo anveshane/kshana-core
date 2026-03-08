@@ -23,6 +23,7 @@ import {
   type ContextUsageData,
   type PhaseTransitionData,
   type NotificationData,
+  type SessionTimerData,
   type ErrorData,
   type StartTaskData,
   type UserResponseData,
@@ -387,6 +388,18 @@ export class WebSocketHandler {
       message: `Project set to ${projectName}`,
       tools: toolNames,
     }));
+
+    // Send session timer if project has timing data (for reconnects)
+    try {
+      const content = await localFs.readFile(projectFile);
+      const projectData = JSON.parse(content);
+      if (projectData.productionStartedAt) {
+        this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sessionId, {
+          productionStartedAt: projectData.productionStartedAt,
+          productionCompletedAt: projectData.productionCompletedAt,
+        }));
+      }
+    } catch { /* ignore */ }
   }
 
   /**
@@ -438,6 +451,7 @@ export class WebSocketHandler {
         data.duration,
         projectDirName,
         (data as { providerConfig?: Record<string, string> }).providerConfig,
+        data.autonomousMode,
       );
 
       const toolNames = this.conversationManager.getSessionToolNames(sessionId);
@@ -447,6 +461,11 @@ export class WebSocketHandler {
         message: `Project "${data.title}" created`,
         tools: toolNames,
         projectName,
+      }));
+
+      // Send session timer with production start time
+      this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sessionId, {
+        productionStartedAt: Date.now(),
       }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -551,6 +570,18 @@ export class WebSocketHandler {
 
       onPhaseTransition: (sid, data) => {
         this.sendMessage(socket, createServerMessage<PhaseTransitionData>('phase_transition', sid, data));
+        // Check if production completed (final video stitched) and send timer update
+        try {
+          import('../tasks/video/workflow/ProjectManager.js').then(({ loadProject }) => {
+            const project = loadProject();
+            if (project?.productionCompletedAt) {
+              this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sid, {
+                productionStartedAt: project.productionStartedAt ?? project.createdAt,
+                productionCompletedAt: project.productionCompletedAt,
+              }));
+            }
+          });
+        } catch { /* ignore */ }
       },
 
       onNotification: (sid, data) => {

@@ -354,6 +354,7 @@ export function createProject(
     ...(templateId ? { templateId } : {}),
     createdAt: now,
     updatedAt: now,
+    productionStartedAt: now,
     currentPhase: initialPhase as import('./types.js').WorkflowPhase,
     phases,
     // Empty content registry - entries added when content is created

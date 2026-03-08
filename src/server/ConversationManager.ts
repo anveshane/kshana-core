@@ -106,6 +106,7 @@ export class ConversationManager {
     duration: number,
     projectDirName?: string,
     providerConfig?: { imageGeneration?: string; imageEditing?: string; videoGeneration?: string },
+    autonomousMode?: boolean,
   ): void {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -120,10 +121,17 @@ export class ConversationManager {
       session.sessionContext = createLocalSession(sessionId, projectDir);
     }
 
+    // Store autonomous mode on session state
+    if (autonomousMode) {
+      session.state.autonomousMode = true;
+    }
+
     // Apply provider config if provided
     if (providerConfig) {
       getProviderRegistry().setConfig(providerConfig);
     }
+
+    const effectiveMaxIterations = autonomousMode ? Number.MAX_SAFE_INTEGER : this.maxIterations;
 
     // Create agent inside the session context so tools see the right project dir
     runInSession(session.sessionContext, () => {
@@ -132,14 +140,15 @@ export class ConversationManager {
         style,
         duration,
         llmConfig: this.llmConfig,
-        maxIterations: this.maxIterations,
+        maxIterations: effectiveMaxIterations,
       });
 
       const llm = new LLMClient(this.llmConfig);
       session.agent = new GenericAgent(tools, llm, {
-        maxIterations: this.maxIterations,
+        maxIterations: effectiveMaxIterations,
         customPrompt,
         name: agentName,
+        autonomousMode,
       });
       session.initialized = false;
     });

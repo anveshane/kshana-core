@@ -25,6 +25,7 @@ ${getStyles()}
       </select>
     </div>
     <div class="header-right">
+      <span id="session-timer" style="display:none;font-size:13px;font-variant-numeric:tabular-nums;color:var(--text-muted);font-family:monospace;">00:00:00</span>
       <div id="context-bar-wrap">
         <div id="context-bar"><div id="context-fill"></div></div>
         <span id="context-label">CTX 0%</span>
@@ -396,6 +397,9 @@ let activeQuestionCard = null; // currently active question card element
 let questionTimerInterval = null; // auto-approve countdown interval
 var newProjectState = null; // { step, templateId, templateName, style, styleName, duration, durationLabel, templates, durationPresets }
 var pendingAutoTask = null; // task string to send once select_project completes
+var autonomousModeActive = false; // autonomous mode flag
+var sessionTimerInterval = null; // session timer update interval
+var sessionTimerStartedAt = null; // production start timestamp
 
 // ===== Connection Manager =====
 function connect() {
@@ -455,6 +459,7 @@ function handleServerMessage(msg) {
     case 'context_usage': handleContextUsage(msg.data); break;
     case 'phase_transition': handlePhaseTransition(msg.data); break;
     case 'notification': handleNotification(msg.data); break;
+    case 'session_timer': handleSessionTimer(msg.data); break;
     case 'error': handleError(msg.data); break;
   }
 }
@@ -1216,6 +1221,14 @@ function handleQuestion(data) {
   var isConfirmation = data.isConfirmation || data.toolCallId === 'confirmation';
   var autoApproveMs = data.autoApproveTimeoutMs || 0;
 
+  // In autonomous mode, auto-respond with first option immediately
+  if (autonomousModeActive && options.length > 0) {
+    var autoResponse = options[0].label || options[0];
+    wsSend({ type: 'user_response', sessionId: sessionId, data: { response: autoResponse } });
+    addSystemMessage('[Auto] ' + question.slice(0, 80) + ' → ' + autoResponse);
+    return;
+  }
+
   // If confirmation and no options provided, default to Yes/No
   if (isConfirmation && options.length === 0) {
     options = [
@@ -1459,6 +1472,39 @@ function handlePhaseTransition(data) {
 // ===== Notifications =====
 function handleNotification(data) { showToast(data.message, data.level || 'info'); }
 
+function handleSessionTimer(data) {
+  var timerEl = document.getElementById('session-timer');
+  if (!timerEl) return;
+
+  sessionTimerStartedAt = data.productionStartedAt;
+  timerEl.style.display = '';
+
+  // Clear any existing interval
+  if (sessionTimerInterval) { clearInterval(sessionTimerInterval); sessionTimerInterval = null; }
+
+  if (data.productionCompletedAt) {
+    // Production complete — show final time in green
+    var totalSec = Math.floor((data.productionCompletedAt - data.productionStartedAt) / 1000);
+    timerEl.textContent = formatTimer(totalSec);
+    timerEl.style.color = '#4ade80';
+  } else {
+    // Production in progress — start live counter
+    function tick() {
+      var elapsed = Math.floor((Date.now() - data.productionStartedAt) / 1000);
+      timerEl.textContent = formatTimer(elapsed);
+    }
+    tick();
+    sessionTimerInterval = setInterval(tick, 1000);
+  }
+}
+
+function formatTimer(totalSeconds) {
+  var h = Math.floor(totalSeconds / 3600);
+  var m = Math.floor((totalSeconds % 3600) / 60);
+  var s = totalSeconds % 60;
+  return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
+}
+
 function showToast(message, level) {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
@@ -1504,6 +1550,7 @@ function sendMessage() {
         style: newProjectState.style,
         duration: newProjectState.duration,
         content: text,
+        autonomousMode: newProjectState.autonomousMode || false,
       },
     });
     addSystemMessage('Creating project with ' + newProjectState.templateName + ' / ' + newProjectState.styleName + ' / ' + newProjectState.durationLabel + '...');
@@ -1901,7 +1948,7 @@ function removeWizardStepsFrom(stepOrder) {
   inputBox.placeholder = 'Type a task...';
 }
 
-var WIZARD_STEP_ORDER = { template: 1, style: 2, duration: 3, content: 4 };
+var WIZARD_STEP_ORDER = { template: 1, style: 2, duration: 3, autonomous: 4, content: 5 };
 
 function showWizardStep(step) {
   if (!newProjectState) return;
@@ -1916,7 +1963,7 @@ function showWizardStep(step) {
 
   if (step === 'template') {
     card.innerHTML =
-      '<div class="wizard-step-label">Step 1 of 4</div>' +
+      '<div class="wizard-step-label">Step 1 of 5</div>' +
       '<div class="wizard-step-title">Choose a Template</div>' +
       '<div class="wizard-cards"></div>';
     var grid = card.querySelector('.wizard-cards');
@@ -1955,7 +2002,7 @@ function showWizardStep(step) {
     var styles = template ? (template.styles || []) : [];
 
     card.innerHTML =
-      '<div class="wizard-step-label">Step 2 of 4</div>' +
+      '<div class="wizard-step-label">Step 2 of 5</div>' +
       '<div class="wizard-step-title">Choose a Style</div>' +
       '<div class="wizard-summary"><span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span></div>' +
       '<div class="wizard-cards"></div>';
@@ -1989,7 +2036,7 @@ function showWizardStep(step) {
     var presets = newProjectState.durationPresets[newProjectState.templateId] || [];
 
     card.innerHTML =
-      '<div class="wizard-step-label">Step 3 of 4</div>' +
+      '<div class="wizard-step-label">Step 3 of 5</div>' +
       '<div class="wizard-step-title">Choose Duration</div>' +
       '<div class="wizard-summary">' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
@@ -2005,7 +2052,7 @@ function showWizardStep(step) {
       btn.onclick = function() {
         newProjectState.duration = p.seconds;
         newProjectState.durationLabel = p.label;
-        showWizardStep('content');
+        showWizardStep('autonomous');
       };
       btnRow.appendChild(btn);
     });
@@ -2025,7 +2072,7 @@ function showWizardStep(step) {
       if (val > 0) {
         newProjectState.duration = val;
         newProjectState.durationLabel = val + ' seconds';
-        showWizardStep('content');
+        showWizardStep('autonomous');
       }
     };
     customInput.addEventListener('keydown', function(e) {
@@ -2035,14 +2082,44 @@ function showWizardStep(step) {
     customWrap.appendChild(customOk);
     btnRow.appendChild(customWrap);
 
+  } else if (step === 'autonomous') {
+    newProjectState.autonomousMode = false;
+    card.innerHTML =
+      '<div class="wizard-step-label">Step 4 of 5</div>' +
+      '<div class="wizard-step-title">Autonomous Mode</div>' +
+      '<div class="wizard-summary">' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.durationLabel) + '</span>' +
+      '</div>' +
+      '<div style="margin:12px 0;display:flex;align-items:center;gap:12px;">' +
+        '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;color:var(--text);">' +
+          '<input type="checkbox" id="autonomous-toggle" style="width:18px;height:18px;cursor:pointer;">' +
+          '<span>Autonomous Mode</span>' +
+        '</label>' +
+        '<span style="font-size:12px;color:var(--text-muted);">Skip all approvals \u2014 run end-to-end</span>' +
+      '</div>' +
+      '<button class="wizard-duration-btn" id="autonomous-next-btn" style="margin-top:8px;">Continue</button>';
+    var autoToggle = card.querySelector('#autonomous-toggle');
+    var autoNextBtn = card.querySelector('#autonomous-next-btn');
+    autoNextBtn.onclick = function() {
+      newProjectState.autonomousMode = autoToggle.checked;
+      autonomousModeActive = autoToggle.checked;
+      showWizardStep('content');
+    };
+    chatMessages.appendChild(card);
+    maybeScroll();
+    return;
+
   } else if (step === 'content') {
     card.innerHTML =
-      '<div class="wizard-step-label">Step 4 of 4</div>' +
+      '<div class="wizard-step-label">Step 5 of 5</div>' +
       '<div class="wizard-step-title">Describe Your Project</div>' +
       '<div class="wizard-summary">' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.durationLabel) + '</span>' +
+        (newProjectState.autonomousMode ? '<span class="wizard-summary-tag" style="color:#4ade80;">Autonomous</span>' : '') +
       '</div>';
     chatMessages.appendChild(card);
     inputBox.placeholder = 'Describe your project idea and press Send...';

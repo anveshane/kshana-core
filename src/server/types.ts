@@ -32,6 +32,7 @@ export type ServerMessageType =
   | 'file_write_buffer_command' // Server tells client to write binary
   | 'file_delete_dir_command'  // Server tells client to delete directory
   | 'batch_write_command'      // Server tells client to write multiple files
+  | 'session_timer'            // Production timer updates
   | 'asset_transfer';          // Server sends generated asset to client
 
 /**
@@ -190,6 +191,14 @@ export interface NotificationData {
 }
 
 /**
+ * Session timer message data.
+ */
+export interface SessionTimerData {
+  productionStartedAt: number;
+  productionCompletedAt?: number;
+}
+
+/**
  * Select project client message data.
  */
 export interface SelectProjectData {
@@ -285,6 +294,8 @@ export interface CreateProjectData {
     imageEditing?: string;
     videoGeneration?: string;
   };
+  /** Run end-to-end without confirmations */
+  autonomousMode?: boolean;
 }
 
 /**
@@ -315,6 +326,8 @@ export interface SessionState {
   lastActivity: number;
   status: 'idle' | 'running' | 'awaiting_input' | 'completed' | 'error';
   taskHistory: string[];
+  /** When true, skip all confirmations and run without iteration limit */
+  autonomousMode?: boolean;
 }
 
 /**

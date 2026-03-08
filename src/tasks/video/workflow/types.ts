@@ -563,6 +563,13 @@ export interface ProjectFile {
   /** Final video information (populated after VIDEO_COMBINE phase) */
   finalVideo?: FinalVideoInfo;
 
+  /** Timestamp when production started */
+  productionStartedAt?: number;
+  /** Timestamp when production completed (final video stitched) */
+  productionCompletedAt?: number;
+  /** Timestamp of last checkpoint save */
+  lastCheckpointAt?: number;
+
   /** Target video duration in seconds (selected by user at startup) */
   targetDuration?: number;
 

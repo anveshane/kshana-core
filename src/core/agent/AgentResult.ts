@@ -43,4 +43,6 @@ export interface AgentConfig {
   name?: string;
   customPrompt?: string;
   initialMode?: 'orchestrator' | 'content' | 'image' | 'video' | 'planning';
+  /** Skip all confirmations and run without iteration limit */
+  autonomousMode?: boolean;
 }

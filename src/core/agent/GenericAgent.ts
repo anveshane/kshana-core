@@ -43,6 +43,7 @@ import { buildPreloadedContext } from './contentContext.js';
 import {
   getProjectDir,
   loadProject,
+  saveProject,
   saveCharacter,
   saveSetting,
   updateContentStatus,
@@ -197,6 +198,9 @@ function isPlanModeTool(name: string): boolean {
   return name === 'EnterPlanMode' || name === 'ExitPlanMode';
 }
 
+/** Checkpoint interval: save project state every 3 minutes */
+const CHECKPOINT_INTERVAL_MS = 180_000;
+
 export class GenericAgent extends TypedEventEmitter {
   private tools: Map<string, ToolDefinition>;
   private llm: LLMClient;
@@ -204,6 +208,8 @@ export class GenericAgent extends TypedEventEmitter {
   private maxIterations: number;
   private name: string;
   private customPrompt?: string;
+  private autonomousMode: boolean;
+  private lastCheckpointAt: number = 0;
 
   // State
   private todoManager = new ExpandableTodoManager();
@@ -266,6 +272,7 @@ export class GenericAgent extends TypedEventEmitter {
     this.maxIterations = config.maxIterations ?? 100;
     this.name = config.name ?? `agent-${nanoid(6)}`;
     this.customPrompt = config.customPrompt;
+    this.autonomousMode = config.autonomousMode ?? false;
     this.currentMode = config.initialMode ?? 'orchestrator';
     this.analyticsSessionId = `${this.name}_${Date.now()}_${nanoid(6)}`;
   }
@@ -1084,6 +1091,11 @@ export class GenericAgent extends TypedEventEmitter {
       }
 
       this.iteration++;
+
+      // Periodic checkpoint: save project state every few minutes
+      if (!this.isSubAgent && Date.now() - this.lastCheckpointAt > CHECKPOINT_INTERVAL_MS) {
+        this.performCheckpoint();
+      }
 
       // Emit thinking status
       this.emit({
@@ -1956,8 +1968,8 @@ export class GenericAgent extends TypedEventEmitter {
       return errorResult;
     }
 
-    // Framework-enforced confirmation for complex tools
-    if (isComplexTool(toolCall.name)) {
+    // Framework-enforced confirmation for complex tools (skip in autonomous mode)
+    if (isComplexTool(toolCall.name) && !this.autonomousMode) {
       if (!this.pendingConfirmations.has(toolCall.name)) {
         // First call - store args and return "needs confirmation"
         this.pendingConfirmations.set(toolCall.name, toolCall.arguments);
@@ -4094,9 +4106,10 @@ Respond in JSON format:
 
     // Use provided options or defaults (only for non-confirmation questions)
     const options = isConfirmation ? undefined : (normalizedOptions ?? DEFAULT_OPTIONS);
-    const autoApproveTimeoutMs = isConfirmation
-      ? undefined
-      : (providedTimeout ?? DEFAULT_AUTO_APPROVE_TIMEOUT_MS);
+    // In autonomous mode, auto-approve immediately for ALL questions
+    const autoApproveTimeoutMs = this.autonomousMode
+      ? 0
+      : (isConfirmation ? undefined : (providedTimeout ?? DEFAULT_AUTO_APPROVE_TIMEOUT_MS));
 
     this.waitingForUser = true;
     this.pendingQuestion = question;
@@ -4524,6 +4537,32 @@ Respond in JSON format:
         wasCompressed: true,
         iteration: this.iteration,
       });
+    }
+  }
+
+  /**
+   * Save a periodic checkpoint of project state during long-running sessions.
+   */
+  private performCheckpoint(): void {
+    try {
+      if (!projectExists()) return;
+      const project = loadProject();
+      if (!project) return;
+
+      project.lastCheckpointAt = Date.now();
+      project.updatedAt = Date.now();
+      saveProject(project);
+      saveTodos(this.todoManager.getTodos());
+
+      this.lastCheckpointAt = Date.now();
+      this.emit({
+        type: 'notification',
+        level: 'info',
+        message: 'Checkpoint saved',
+      });
+      debugLog('[GenericAgent] Checkpoint saved');
+    } catch (err) {
+      debugLog(`[GenericAgent] Checkpoint failed: ${err}`);
     }
   }
 }
