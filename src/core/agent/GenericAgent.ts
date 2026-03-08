@@ -60,6 +60,7 @@ import {
   createDefaultCharacterData,
   createDefaultSettingData,
 } from '../../tasks/video/workflow/types.js';
+import { comfyProgressBus, type ComfyProgressHandler } from '../../services/comfyui/index.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -166,12 +167,19 @@ const SIMPLE_TOOLS = new Set([
   'dispatch_explore', // New skill-based architecture
   'dispatch_skill', // New skill-based architecture
   'generate_content', // Deterministic content generation
-  'wait_for_job',
   'TodoWrite',
   'todo_write', // back-compat during migration
 ]);
 
 const COMPLEX_TOOLS = new Set(['generate_image', 'generate_video', 'edit_image']);
+
+/** Tools that trigger ComfyUI jobs and should relay real-time progress to the UI */
+const COMFY_PROGRESS_TOOLS = new Set([
+  'generate_video_from_image',
+  'generate_image',
+  'generate_video',
+  'edit_image',
+]);
 
 function isComplexTool(name: string): boolean {
   return COMPLEX_TOOLS.has(name);
@@ -222,6 +230,10 @@ export class GenericAgent extends TypedEventEmitter {
   private consecutiveTextOnlyResponses = 0;
   private static readonly MAX_TEXT_ONLY_NUDGES = 3;
   private static readonly MAX_CONSECUTIVE_LOOP_WARNINGS = 3; // Force stop after this many warnings
+
+  // Track productive tool calls since last TodoWrite to nudge todo updates
+  private productiveCallsSinceLastTodoUpdate = 0;
+  private static readonly TODO_UPDATE_NUDGE_THRESHOLD = 3; // Nudge after this many productive calls
 
   // Context window tracking
   private tokenUsage = {
@@ -1209,6 +1221,42 @@ export class GenericAgent extends TypedEventEmitter {
           this.iteration = 0;
         }
 
+        // Reset iteration counter on generate_content success — this signals real progress
+        // (content was generated and saved to disk).
+        if (
+          toolCall.name === 'generate_content' &&
+          resultObj['status'] === 'approved'
+        ) {
+          debugLog(`[GenericAgent] Progress detected (generate_content approved) — resetting iteration counter from ${this.iteration}`);
+          this.iteration = 0;
+        }
+
+        // Track productive tool calls and nudge agent to update todos when progress has been made.
+        // "Productive" = generate_content approved or update_project success.
+        const isProductiveCall =
+          (toolCall.name === 'generate_content' && resultObj['status'] === 'approved') ||
+          (toolCall.name === 'update_project' && resultObj['status'] === 'success');
+
+        if (isProductiveCall) {
+          this.productiveCallsSinceLastTodoUpdate++;
+        }
+
+        if (
+          isProductiveCall &&
+          this.productiveCallsSinceLastTodoUpdate >= GenericAgent.TODO_UPDATE_NUDGE_THRESHOLD &&
+          this.todoManager.getTodos().length > 0
+        ) {
+          // Inject current todo state into the result so the agent has fresh context
+          const currentTodos = this.todoManager.getTodos()
+            .filter(t => t.visible)
+            .map(t => `  [${t.status}] ${t.content}`)
+            .join('\n');
+          resultObj['__todo_reminder'] =
+            `You've made ${this.productiveCallsSinceLastTodoUpdate} productive progress steps since your last todo update. ` +
+            `Review your current todo list and use TodoWrite(merge=true) to mark completed items:\n${currentTodos}`;
+          debugLog(`[GenericAgent] Injected todo update nudge after ${this.productiveCallsSinceLastTodoUpdate} productive calls`);
+        }
+
         // Check if tool is waiting for user input (dispatch_agent planning)
         if (resultObj['__awaiting_user_input']) {
           // Return waiting status - the planning loop will handle user response
@@ -1325,7 +1373,7 @@ export class GenericAgent extends TypedEventEmitter {
     args: Record<string, unknown>
   ): { message: string; isHardError: boolean } | null {
     // Create a signature for this tool call (tool + key args)
-    const argSignature = JSON.stringify(args).slice(0, 100); // Limit to prevent huge signatures
+    const argSignature = JSON.stringify(args).slice(0, 200); // Limit to prevent huge signatures (200 chars to capture distinguishing instruction text)
     const signature = `${toolName}:${argSignature}`;
 
     // Add to recent calls
@@ -1367,27 +1415,42 @@ export class GenericAgent extends TypedEventEmitter {
     }
 
     // Also check for rapid tool repetition (same tool called consecutively)
-    const lastFew = this.recentToolCalls.slice(-4);
-    const sameToolCount = lastFew.filter(s => s.startsWith(toolName + ':')).length;
-    if (sameToolCount >= 4) {
-      this.consecutiveLoopWarnings++;
+    // Skip this check for generate_content — it's inherently a long-running productive
+    // operation with built-in idempotency (file existence check). Check 1 (exact same
+    // signature) still catches genuine repeats.
+    if (toolName !== 'generate_content') {
+      const lastFew = this.recentToolCalls.slice(-4);
+      const recentSameTool = lastFew.filter(s => s.startsWith(toolName + ':'));
+      const sameToolCount = recentSameTool.length;
+      if (sameToolCount >= 4) {
+        // Check if the args are actually different across these calls
+        const uniqueSigs = new Set(recentSameTool);
 
-      if (this.consecutiveLoopWarnings >= GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS) {
-        return {
-          message:
-            `LOOP BLOCKED: You've called ${toolName} 4+ times in a row and ignored warnings. ` +
-            `This tool call is being blocked. Provide a final response to the user.`,
-          isHardError: true,
-        };
+        // If all/most signatures are unique, this is productive work, not a loop
+        if (uniqueSigs.size >= recentSameTool.length - 1) {
+          // Different args each time — not a loop, skip warning
+        } else {
+          // Same args repeated — real loop
+          this.consecutiveLoopWarnings++;
+
+          if (this.consecutiveLoopWarnings >= GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS) {
+            return {
+              message:
+                `LOOP BLOCKED: You've called ${toolName} 4+ times in a row with similar arguments and ignored warnings. ` +
+                `This tool call is being blocked. Provide a final response to the user.`,
+              isHardError: true,
+            };
+          }
+
+          return {
+            message:
+              `WARNING (${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
+              `You've called ${toolName} 4 times in a row with similar arguments. ` +
+              `If you're done with the task, stop calling tools and provide a final response.`,
+            isHardError: false,
+          };
+        }
       }
-
-      return {
-        message:
-          `WARNING (${this.consecutiveLoopWarnings}/${GenericAgent.MAX_CONSECUTIVE_LOOP_WARNINGS}): ` +
-          `You've called ${toolName} 4 times in a row. ` +
-          `If you're done with the task, stop calling tools and provide a final response.`,
-        isHardError: false,
-      };
     }
 
     // Reset consecutive warnings if this call is not triggering a loop
@@ -1452,6 +1515,7 @@ export class GenericAgent extends TypedEventEmitter {
     // Handle built-in todo tools specially (no handler required)
     if (isBuiltinTodoTool(toolCall.name)) {
       const result = this.handleTodoTool(toolCall);
+      this.productiveCallsSinceLastTodoUpdate = 0;
       this.emit({
         type: 'tool_result',
         toolCallId: toolCall.id,
@@ -1920,6 +1984,26 @@ export class GenericAgent extends TypedEventEmitter {
     }
 
     // Execute the tool handler
+    // For ComfyUI generation tools, subscribe to real-time progress and relay as tool_streaming
+    let progressHandler: ComfyProgressHandler | undefined;
+    if (COMFY_PROGRESS_TOOLS.has(toolCall.name)) {
+      progressHandler = (event) => {
+        const chunk = event.step && event.maxSteps
+          ? `Step ${event.step}/${event.maxSteps} (${event.percentage}%)`
+          : `${event.percentage}%`;
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          chunk,
+          done: event.done,
+          reset: true,
+          agentName: this.getEffectiveAgentName(),
+        });
+      };
+      comfyProgressBus.onProgress(progressHandler);
+    }
+
     try {
       const result = await Promise.resolve(tool.handler(toolCall.arguments));
 
@@ -1963,6 +2047,10 @@ export class GenericAgent extends TypedEventEmitter {
       });
       FlowRecorder.getSession()?.onToolComplete(toolCall.id, errorResult, true);
       return errorResult;
+    } finally {
+      if (progressHandler) {
+        comfyProgressBus.offProgress(progressHandler);
+      }
     }
   }
 
@@ -3591,18 +3679,6 @@ Respond in JSON format:
       };
     }
 
-    // Get the wait_for_job tool
-    const waitForJobTool = this.tools.get('wait_for_job');
-    if (!waitForJobTool?.handler) {
-      this.imageGenState = null;
-      this.currentMode = 'orchestrator';
-      return {
-        error: 'wait_for_job tool not available',
-        prompt: currentPrompt,
-        task,
-      };
-    }
-
     // Build arguments for generate_image
     const generateArgs: Record<string, unknown> = {
       prompt: currentPrompt,
@@ -3639,75 +3715,33 @@ Respond in JSON format:
     });
 
     try {
-      // Step 1: Submit the image generation job
-      const submitResult = await Promise.resolve(generateImageTool.handler(generateArgs));
-      const submitResultObj = submitResult as Record<string, unknown>;
-
-      // Check if submission failed
-      if (submitResultObj['status'] === 'error') {
-        const finalState = { ...this.imageGenState };
-        this.imageGenState = null;
-        this.currentMode = 'orchestrator';
-
-        this.emit({
-          type: 'tool_result',
-          toolCallId,
-          toolName: 'generate_image',
-          result: submitResult,
-          isError: true,
-          agentName: this.getEffectiveAgentName(),
-        });
-
-        return {
-          status: 'error',
-          error: submitResultObj['error'] as string,
-          prompt: finalState.currentPrompt,
-          task: finalState.task,
-        };
-      }
-
-      const jobId = submitResultObj['job_id'] as string;
-      if (!jobId) {
-        throw new Error('No job_id returned from generate_image');
-      }
-
-      // Emit that we're waiting for the job
-      const waitToolCallId = `wait-job-${Date.now()}`;
-      this.emit({
-        type: 'tool_call',
-        toolCallId: waitToolCallId,
-        toolName: 'wait_for_job',
-        arguments: { job_id: jobId },
-        agentName: this.getEffectiveAgentName(),
-      });
-
-      // Step 2: Wait for the job to complete
-      const waitResult = await Promise.resolve(waitForJobTool.handler({ job_id: jobId }));
-      const waitResultObj = waitResult as Record<string, unknown>;
+      // generate_image now waits inline for ComfyUI completion
+      const genResult = await Promise.resolve(generateImageTool.handler(generateArgs));
+      const genResultObj = genResult as Record<string, unknown>;
 
       // Clear the state
       const finalState = { ...this.imageGenState };
       this.imageGenState = null;
       this.currentMode = 'orchestrator';
 
-      // Emit tool result for wait_for_job
+      const isError = genResultObj['status'] === 'error' || genResultObj['status'] === 'failed';
+
       this.emit({
         type: 'tool_result',
-        toolCallId: waitToolCallId,
-        toolName: 'wait_for_job',
-        result: waitResult,
-        isError: waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed',
+        toolCallId,
+        toolName: 'generate_image',
+        result: genResult,
+        isError,
         agentName: this.getEffectiveAgentName(),
       });
 
-      // Check if job failed
-      if (waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed') {
+      if (isError) {
         return {
           status: 'error',
-          error: (waitResultObj['error'] as string) || 'Job failed',
+          error: (genResultObj['error'] as string) || 'Image generation failed',
           prompt: finalState.currentPrompt,
           task: finalState.task,
-          job_id: jobId,
+          job_id: genResultObj['job_id'],
         };
       }
 
@@ -3718,9 +3752,9 @@ Respond in JSON format:
         aspect_ratio: finalState.aspectRatio,
         task: finalState.task,
         iterations: finalState.iterations,
-        job_id: jobId,
-        artifact_id: waitResultObj['artifact_id'],
-        file_path: waitResultObj['file_path'],
+        job_id: genResultObj['job_id'],
+        artifact_id: genResultObj['artifact_id'],
+        file_path: genResultObj['file_path'],
         message: 'Image generated successfully.',
       };
     } catch (error) {
@@ -3936,17 +3970,6 @@ Respond in JSON format:
       };
     }
 
-    // Get the wait_for_job tool
-    const waitForJobTool = this.tools.get('wait_for_job');
-    if (!waitForJobTool?.handler) {
-      this.videoGenState = null;
-      this.currentMode = 'orchestrator';
-      return {
-        error: 'wait_for_job tool not available',
-        task,
-      };
-    }
-
     // Build arguments for generate_video
     const generateArgs: Record<string, unknown> = {
       scene_number: sceneNumber,
@@ -3967,75 +3990,33 @@ Respond in JSON format:
     });
 
     try {
-      // Step 1: Submit the video generation job
-      const submitResult = await Promise.resolve(generateVideoTool.handler(generateArgs));
-      const submitResultObj = submitResult as Record<string, unknown>;
-
-      // Check if submission failed
-      if (submitResultObj['status'] === 'error') {
-        const finalState = { ...this.videoGenState };
-        this.videoGenState = null;
-        this.currentMode = 'orchestrator';
-
-        this.emit({
-          type: 'tool_result',
-          toolCallId,
-          toolName: 'generate_video',
-          result: submitResult,
-          isError: true,
-          agentName: this.getEffectiveAgentName(),
-        });
-
-        return {
-          status: 'error',
-          error: submitResultObj['error'] as string,
-          scene_number: finalState.sceneNumber,
-          task: finalState.task,
-        };
-      }
-
-      const jobId = submitResultObj['job_id'] as string;
-      if (!jobId) {
-        throw new Error('No job_id returned from generate_video');
-      }
-
-      // Emit that we're waiting for the job
-      const waitToolCallId = `wait-job-${Date.now()}`;
-      this.emit({
-        type: 'tool_call',
-        toolCallId: waitToolCallId,
-        toolName: 'wait_for_job',
-        arguments: { job_id: jobId },
-        agentName: this.getEffectiveAgentName(),
-      });
-
-      // Step 2: Wait for the job to complete
-      const waitResult = await Promise.resolve(waitForJobTool.handler({ job_id: jobId }));
-      const waitResultObj = waitResult as Record<string, unknown>;
+      // generate_video now waits inline for ComfyUI completion
+      const genResult = await Promise.resolve(generateVideoTool.handler(generateArgs));
+      const genResultObj = genResult as Record<string, unknown>;
 
       // Clear the state
       const finalState = { ...this.videoGenState };
       this.videoGenState = null;
       this.currentMode = 'orchestrator';
 
-      // Emit tool result for wait_for_job
+      const isError = genResultObj['status'] === 'error' || genResultObj['status'] === 'failed';
+
       this.emit({
         type: 'tool_result',
-        toolCallId: waitToolCallId,
-        toolName: 'wait_for_job',
-        result: waitResult,
-        isError: waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed',
+        toolCallId,
+        toolName: 'generate_video',
+        result: genResult,
+        isError,
         agentName: this.getEffectiveAgentName(),
       });
 
-      // Check if job failed
-      if (waitResultObj['status'] === 'error' || waitResultObj['status'] === 'failed') {
+      if (isError) {
         return {
           status: 'error',
-          error: (waitResultObj['error'] as string) || 'Job failed',
+          error: (genResultObj['error'] as string) || 'Video generation failed',
           scene_number: finalState.sceneNumber,
           task: finalState.task,
-          job_id: jobId,
+          job_id: genResultObj['job_id'],
         };
       }
 
@@ -4046,9 +4027,9 @@ Respond in JSON format:
         params: finalState.currentParams,
         task: finalState.task,
         iterations: finalState.iterations,
-        job_id: jobId,
-        artifact_id: waitResultObj['artifact_id'],
-        file_path: waitResultObj['file_path'],
+        job_id: genResultObj['job_id'],
+        artifact_id: genResultObj['artifact_id'],
+        file_path: genResultObj['file_path'],
         message: 'Video generated successfully.',
       };
     } catch (error) {

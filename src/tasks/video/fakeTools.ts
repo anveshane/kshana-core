@@ -14,7 +14,6 @@ import {
   generateImageTool,
   generateVideoFromImageTool,
   editImageTool,
-  waitForJobTool,
 } from './tools.js';
 import type { GenerationJob } from './tools.js';
 import { getProjectDir, addAsset } from './workflow/index.js';
@@ -278,8 +277,10 @@ async function fakeGenerateVideoHandler(
   const shotNumber = args['shot_number'] as number;
   const motionPromptInline = (args['motion_prompt'] as string) || '';
   const motionPromptFile = (args['motion_prompt_file'] as string) || '';
-  const negativePrompt = (args['negative_prompt'] as string) || '';
   const seed = args['seed'] as number | undefined;
+  const duration = (args['duration'] as number) || 10;
+  const videoWidth = (args['width'] as number) || 1280;
+  const videoHeight = (args['height'] as number) || 720;
 
   // Resolve motion prompt text: read from file if motion_prompt_file is provided
   let motionPromptText = motionPromptInline;
@@ -298,13 +299,15 @@ async function fakeGenerateVideoHandler(
   }
   if (!motionPromptText) motionPromptText = '(none)';
 
-  const [width, height] = [1280, 720];
+  const [width, height] = [videoWidth, videoHeight];
   const bgColor = FAKE_BG_COLOR;
 
   const params: Array<[string, string]> = [
     ['scene_number', String(sceneNumber)],
     ['shot_number', String(shotNumber)],
     ['shot_image_artifact_id', shotImageArtifactId || '(none)'],
+    ['duration', `${duration}s`],
+    ['size', `${videoWidth}x${videoHeight}`],
     ['seed', seed !== undefined ? String(seed) : ''],
   ];
 
@@ -316,9 +319,6 @@ async function fakeGenerateVideoHandler(
     ['', ''],
     ['MOTION PROMPT', ''],
     ['', motionPromptText],
-    ['', ''],
-    ['NEGATIVE PROMPT', ''],
-    ['', negativePrompt || '(none)'],
   );
 
   const jobId = `fake-vid-${Date.now()}-${nanoid(6)}`;
@@ -370,7 +370,7 @@ async function fakeGenerateVideoHandler(
   return {
     status: 'submitted',
     job_id: jobId,
-    workflow: 'fake_ltx_i2v',
+    workflow: 'fake_ltx23',
     message: `[FAKE] Video generation job completed instantly. Use wait_for_job("${jobId}") to get result.`,
     params: {
       scene_number: sceneNumber,
@@ -470,31 +470,6 @@ async function fakeEditImageHandler(
   };
 }
 
-function fakeWaitForJobHandler(
-  args: Record<string, unknown>,
-): unknown {
-  const jobId = args['job_id'] as string;
-
-  const job = jobs.get(jobId);
-  if (!job) {
-    return {
-      status: 'error',
-      error: `Job not found: ${jobId}`,
-    };
-  }
-
-  return {
-    job_id: job.id,
-    type: job.type,
-    status: job.status,
-    progress: 100,
-    artifact_id: job.result?.artifactId,
-    file_path: job.result?.path,
-    created_at: job.createdAt,
-    updated_at: job.updatedAt,
-  };
-}
-
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -523,12 +498,5 @@ export function getFakeVideoGenerationTools(): ToolDefinition[] {
     fakeEditImageHandler,
   );
 
-  const fakeWaitForJob = createTool(
-    waitForJobTool.name,
-    waitForJobTool.description,
-    waitForJobTool.parameters as ToolParameterSchema,
-    fakeWaitForJobHandler,
-  );
-
-  return [fakeGenerateImage, fakeGenerateVideo, fakeEditImage, fakeWaitForJob];
+  return [fakeGenerateImage, fakeGenerateVideo, fakeEditImage];
 }

@@ -11,7 +11,6 @@ export const SIMPLE_TOOLS = new Set([
   'AskUserQuestion',
   'ask_user',
   'dispatch_agent',
-  'wait_for_job',
   'TodoWrite',
   'todo_write',
 ]);

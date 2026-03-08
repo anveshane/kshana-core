@@ -136,6 +136,10 @@ export interface LtxWorkflowParams {
   height?: number;
   frameCount?: number;
   inputImageFilename?: string;
+  /** Duration in seconds for LTX-2.3 (1-20, default 10) */
+  durationSeconds?: number;
+  /** Text-to-video mode (true = T2V, false = I2V). Default false. */
+  t2vMode?: boolean;
 }
 
 /**
@@ -352,117 +356,121 @@ export function parameterizeQwenEditWorkflow(
 }
 
 /**
- * Parameterize LTX-2 Text-to-Video workflow.
- * Uses subgraph node (type b7c2d337-c38d-4c04-922b-2d638449d13e) for generation.
- * The subgraph is expanded before conversion to API format since ComfyUI's API
- * doesn't support subgraph nodes directly.
+ * Parameterize LTX-2.3 GGUF workflow.
+ * Flat workflow using GetNode/SetNode pattern — no subgraph expansion needed.
+ * Supports both I2V and T2V via a boolean toggle (node 290).
+ * Duration is in seconds (node 291), frame count is calculated automatically.
+ *
+ * Key nodes:
+ * - 291: INTConstant "LENGTH (in seconds)" — video duration
+ * - 292: INTConstant "WIDTH"
+ * - 293: INTConstant "HEIGHT"
+ * - 121: CLIPTextEncode — positive prompt
+ * - 110: CLIPTextEncode — negative prompt (left as-is, has good defaults)
+ * - 167: LoadImage — input image
+ * - 290: PrimitiveBoolean "Text To Video (no image ref)" — T2V toggle
+ * - 140: VHS_VideoCombine — output video
  */
-export function parameterizeLtxT2VWorkflow(
+export function parameterizeLtx23Workflow(
   template: WorkflowTemplate,
   params: LtxWorkflowParams
 ): Record<string, unknown> {
   // Deep copy
-  let workflow: WorkflowTemplate = JSON.parse(JSON.stringify(template));
-  const seed = params.seed ?? Math.floor(Math.random() * 2 ** 32);
+  const workflow: WorkflowTemplate = JSON.parse(JSON.stringify(template));
 
-  // Modify the LiteGraph format - set values on the subgraph node's widgets_values
+  const durationSeconds = Math.min(Math.max(params.durationSeconds ?? 10, 1), 20);
+  const t2vMode = params.t2vMode ?? false;
+  const width = params.width || 1280;
+  const height = params.height || 720;
+
   for (const node of workflow.nodes || []) {
     const nodeId = node.id;
-    const nodeType = node.type;
 
-    // Subgraph node (node 92) - LTX 2.0 generation
-    // widgets_values: [prompt, frame_count, width, height, seed]
-    if (nodeId === 92 && node.widgets_values) {
+    // Node 291: Duration in seconds
+    if (nodeId === 291 && node.widgets_values) {
+      node.widgets_values[0] = durationSeconds;
+      debugLog(`[Ltx23] Set duration (node 291) to ${durationSeconds}s`);
+    }
+    // Node 292: Width
+    else if (nodeId === 292 && node.widgets_values) {
+      node.widgets_values[0] = width;
+      debugLog(`[Ltx23] Set width (node 292) to ${width}`);
+    }
+    // Node 293: Height
+    else if (nodeId === 293 && node.widgets_values) {
+      node.widgets_values[0] = height;
+      debugLog(`[Ltx23] Set height (node 293) to ${height}`);
+    }
+    // Node 121: Positive prompt
+    else if (nodeId === 121 && node.widgets_values) {
       node.widgets_values[0] = params.prompt;
-      node.widgets_values[1] = params.frameCount || 121;
-      node.widgets_values[2] = params.width || 1280;
-      node.widgets_values[3] = params.height || 720;
-      node.widgets_values[4] = seed;
-      debugLog(`[LtxT2V] Set subgraph (node 92): prompt="${(params.prompt || '').substring(0, 50)}...", frames=${params.frameCount || 121}, ${params.width || 1280}x${params.height || 720}, seed=${seed}`);
+      debugLog(`[Ltx23] Set positive prompt (node 121): "${(params.prompt || '').substring(0, 50)}..."`);
     }
-    // SaveVideo node
-    else if (nodeType === 'SaveVideo' && node.widgets_values) {
-      node.widgets_values[0] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX_T2V';
-      debugLog(`[LtxT2V] Set SaveVideo filename_prefix to: ${node.widgets_values[0]}`);
-    }
-  }
+    // Node 110: Negative prompt — leave as-is (workflow has good built-in defaults)
 
-  // Expand subgraphs before converting to API format
-  // ComfyUI's API doesn't support subgraph nodes directly
-  workflow = expandSubgraphs(workflow);
-
-  // Convert to API format
-  const apiWorkflow = workflowToPrompt(workflow);
-
-  // Remove non-essential nodes
-  const nodesToRemove = ['Note', 'MarkdownNote'];
-  for (const [nodeId, node] of Object.entries(apiWorkflow)) {
-    const nodeData = node as { class_type?: string };
-    if (nodesToRemove.includes(nodeData.class_type || '')) {
-      delete apiWorkflow[nodeId];
-      debugLog(`[LtxT2V] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
-    }
-  }
-
-  // Bypass LoraLoaderModelOnly nodes with lora_name "None" (ComfyUI rejects "None")
-  bypassLoraLoaderNodesWithNone(apiWorkflow);
-
-  return apiWorkflow;
-}
-
-/**
- * Parameterize LTX-2 Image-to-Video workflow.
- * Takes an input image and animates it based on prompt.
- * The subgraph is expanded before conversion to API format since ComfyUI's API
- * doesn't support subgraph nodes directly.
- */
-export function parameterizeLtxI2VWorkflow(
-  template: WorkflowTemplate,
-  params: LtxWorkflowParams
-): Record<string, unknown> {
-  // Deep copy
-  let workflow: WorkflowTemplate = JSON.parse(JSON.stringify(template));
-  const seed = params.seed ?? Math.floor(Math.random() * 2 ** 32);
-
-  // Modify the LiteGraph format - set values on nodes
-  for (const node of workflow.nodes || []) {
-    const nodeId = node.id;
-    const nodeType = node.type;
-
-    // LoadImage node (node 98)
-    if (nodeId === 98 && nodeType === 'LoadImage' && node.widgets_values) {
+    // Node 167: Input image
+    else if (nodeId === 167 && node.widgets_values && params.inputImageFilename) {
       node.widgets_values[0] = params.inputImageFilename;
-      debugLog(`[LtxI2V] Set LoadImage (node 98) to: ${params.inputImageFilename}`);
+      debugLog(`[Ltx23] Set input image (node 167) to: ${params.inputImageFilename}`);
     }
-    // Subgraph node (node 92) - LTX 2.0 generation
-    // widgets_values for i2v: [prompt, frame_count, seed]
-    else if (nodeId === 92 && node.widgets_values) {
-      node.widgets_values[0] = params.prompt;
-      node.widgets_values[1] = params.frameCount || 241;
-      node.widgets_values[2] = seed;
-      debugLog(`[LtxI2V] Set subgraph (node 92): prompt="${(params.prompt || '').substring(0, 50)}...", frames=${params.frameCount || 241}, seed=${seed}`);
+    // Node 290: T2V mode toggle
+    else if (nodeId === 290 && node.widgets_values) {
+      node.widgets_values[0] = t2vMode;
+      debugLog(`[Ltx23] Set T2V mode (node 290) to: ${t2vMode}`);
     }
-    // SaveVideo node
-    else if (nodeType === 'SaveVideo' && node.widgets_values) {
-      node.widgets_values[0] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX_I2V';
-      debugLog(`[LtxI2V] Set SaveVideo filename_prefix to: ${node.widgets_values[0]}`);
+    // Node 140: VHS_VideoCombine — set filename_prefix
+    else if (nodeId === 140 && node.widgets_values) {
+      const prefix = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23';
+      if (typeof node.widgets_values === 'object' && !Array.isArray(node.widgets_values)) {
+        (node.widgets_values as Record<string, unknown>)['filename_prefix'] = prefix;
+      }
+      debugLog(`[Ltx23] Set VHS_VideoCombine (node 140) filename_prefix to: ${prefix}`);
     }
   }
 
-  // Expand subgraphs before converting to API format
-  // ComfyUI's API doesn't support subgraph nodes directly
-  workflow = expandSubgraphs(workflow);
+  // Resolve SetNode/GetNode virtual nodes before API conversion
+  const resolvedWorkflow = resolveSetGetNodes(workflow);
 
-  // Convert to API format
-  const apiWorkflow = workflowToPrompt(workflow);
+  // No subgraph expansion needed — this is a flat workflow
+  const apiWorkflow = workflowToPrompt(resolvedWorkflow);
 
-  // Ensure LoadImage node has correct image filename in API format
-  // Note: After expansion, the LoadImage node ID is still 98 (not part of subgraph)
-  const loadImageNode = apiWorkflow['98'] as { class_type?: string; inputs?: Record<string, unknown> } | undefined;
-  if (loadImageNode && loadImageNode.class_type === 'LoadImage' && params.inputImageFilename) {
-    loadImageNode.inputs = loadImageNode.inputs || {};
-    loadImageNode.inputs['image'] = params.inputImageFilename;
-    debugLog(`[LtxI2V] API format - Set LoadImage (node 98) inputs.image to: ${params.inputImageFilename}`);
+  // Also set values in API format to ensure they take effect
+  const node291 = apiWorkflow['291'] as { inputs?: Record<string, unknown> } | undefined;
+  if (node291) {
+    node291.inputs = node291.inputs || {};
+    node291.inputs['value'] = durationSeconds;
+  }
+  const node292 = apiWorkflow['292'] as { inputs?: Record<string, unknown> } | undefined;
+  if (node292) {
+    node292.inputs = node292.inputs || {};
+    node292.inputs['value'] = width;
+  }
+  const node293 = apiWorkflow['293'] as { inputs?: Record<string, unknown> } | undefined;
+  if (node293) {
+    node293.inputs = node293.inputs || {};
+    node293.inputs['value'] = height;
+  }
+  const node121 = apiWorkflow['121'] as { inputs?: Record<string, unknown> } | undefined;
+  if (node121) {
+    node121.inputs = node121.inputs || {};
+    node121.inputs['text'] = params.prompt;
+  }
+  if (params.inputImageFilename) {
+    const node167 = apiWorkflow['167'] as { inputs?: Record<string, unknown> } | undefined;
+    if (node167) {
+      node167.inputs = node167.inputs || {};
+      node167.inputs['image'] = params.inputImageFilename;
+    }
+  }
+  const node290 = apiWorkflow['290'] as { inputs?: Record<string, unknown> } | undefined;
+  if (node290) {
+    node290.inputs = node290.inputs || {};
+    node290.inputs['value'] = t2vMode;
+  }
+  const node140 = apiWorkflow['140'] as { inputs?: Record<string, unknown> } | undefined;
+  if (node140) {
+    node140.inputs = node140.inputs || {};
+    node140.inputs['filename_prefix'] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23';
   }
 
   // Remove non-essential nodes
@@ -471,7 +479,7 @@ export function parameterizeLtxI2VWorkflow(
     const nodeData = node as { class_type?: string };
     if (nodesToRemove.includes(nodeData.class_type || '')) {
       delete apiWorkflow[nodeId];
-      debugLog(`[LtxI2V] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
+      debugLog(`[Ltx23] Removed non-essential node ${nodeId} (${nodeData.class_type})`);
     }
   }
 
@@ -550,29 +558,23 @@ export function parameterizeWorkflowByName(
       inputImageFilename: params.inputImageFilename,
       referenceImageFilenames: params.referenceImageFilenames,
     });
-  } else if (workflowName === 'ltx_t2v') {
-    // LTX-2 Text-to-Video workflow
-    return parameterizeLtxT2VWorkflow(template, {
+  } else if (workflowName === 'ltx23') {
+    // LTX-2.3 GGUF workflow (supports both I2V and T2V)
+    const t2vMode = !params.inputImageFilename;
+    const extParams = params as {
+      durationSeconds?: number;
+      width?: number;
+      height?: number;
+    };
+    return parameterizeLtx23Workflow(template, {
       prompt: params.prompt,
-      negativePrompt: params.negativePrompt,
-      seed: params.seed,
-      filenamePrefix,
-      width: params.aspectRatio === '16:9' ? 1280 : params.aspectRatio === '9:16' ? 720 : 1280,
-      height: params.aspectRatio === '16:9' ? 720 : params.aspectRatio === '9:16' ? 1280 : 720,
-      frameCount: (params as { frameCount?: number }).frameCount,
-    });
-  } else if (workflowName === 'ltx_i2v') {
-    // LTX-2 Image-to-Video workflow
-    if (!params.inputImageFilename) {
-      throw new Error('ltx_i2v workflow requires inputImageFilename');
-    }
-    return parameterizeLtxI2VWorkflow(template, {
-      prompt: params.prompt,
-      negativePrompt: params.negativePrompt,
       seed: params.seed,
       filenamePrefix,
       inputImageFilename: params.inputImageFilename,
-      frameCount: (params as { frameCount?: number }).frameCount,
+      durationSeconds: extParams.durationSeconds ?? 10,
+      t2vMode,
+      width: extParams.width || (params.aspectRatio === '9:16' ? 720 : 1280),
+      height: extParams.height || (params.aspectRatio === '9:16' ? 1280 : 720),
     });
   }
 
@@ -1107,6 +1109,114 @@ function updateNodeWidgetValue(
 /**
  * Convert ComfyUI workflow (UI format) into the API prompt format.
  */
+/**
+ * Resolve SetNode/GetNode virtual nodes in a LiteGraph workflow.
+ * These are client-side-only nodes that act as named variable pass-throughs.
+ * SetNode stores a value under a name, GetNode retrieves it.
+ * We rewire links so that consumers of GetNodes point directly to the source
+ * that feeds the corresponding SetNode, then remove all Set/GetNodes.
+ */
+export function resolveSetGetNodes(workflow: WorkflowTemplate): WorkflowTemplate {
+  const nodes = workflow.nodes || [];
+  const links = workflow.links || [];
+
+  const setNodeIds = new Set<number>();
+  const getNodeIds = new Set<number>();
+  const setNodeNameMap = new Map<number, string>(); // setNodeId -> variable name
+  const getNodeNameMap = new Map<number, string>(); // getNodeId -> variable name
+
+  for (const node of nodes) {
+    if (node.type === 'SetNode') {
+      setNodeIds.add(node.id);
+      const name = Array.isArray(node.widgets_values) ? String(node.widgets_values[0]) : (node.title || '');
+      setNodeNameMap.set(node.id, name);
+    } else if (node.type === 'GetNode') {
+      getNodeIds.add(node.id);
+      const name = Array.isArray(node.widgets_values) ? String(node.widgets_values[0]) : (node.title || '');
+      getNodeNameMap.set(node.id, name);
+    }
+  }
+
+  if (setNodeIds.size === 0 && getNodeIds.size === 0) {
+    return workflow;
+  }
+
+  // Build: variable name -> [source_node_id, source_slot, link_type]
+  // by finding links that feed INTO SetNodes
+  const varSource = new Map<string, [number, number, string]>();
+  for (const link of links) {
+    if (!Array.isArray(link) || link.length < 6) continue;
+    const [, fromNode, fromSlot, toNode, , linkType] = link;
+    if (setNodeIds.has(toNode)) {
+      const name = setNodeNameMap.get(toNode);
+      if (name) {
+        varSource.set(name, [fromNode, fromSlot, linkType]);
+      }
+    }
+  }
+
+  // Rewire: for each link FROM a GetNode, replace the source with the SetNode's source
+  const newLinks: typeof links = [];
+  let nextLinkId = Math.max(...links.map(l => l[0]), 0) + 1;
+
+  for (const link of links) {
+    if (!Array.isArray(link) || link.length < 6) continue;
+    const [linkId, fromNode, fromSlot, toNode, toSlot, linkType] = link;
+
+    // Skip links TO SetNodes (they'll be removed)
+    if (setNodeIds.has(toNode)) continue;
+    // Skip links FROM SetNodes (pass-through output, not needed)
+    if (setNodeIds.has(fromNode)) continue;
+
+    if (getNodeIds.has(fromNode)) {
+      // This link comes from a GetNode — rewire to the actual source
+      const name = getNodeNameMap.get(fromNode);
+      if (name && varSource.has(name)) {
+        const [srcNode, srcSlot] = varSource.get(name)!;
+        newLinks.push([nextLinkId++, srcNode, srcSlot, toNode, toSlot, linkType]);
+        debugLog(`[resolveSetGetNodes] Rewired: GetNode ${fromNode} (${name}) -> [${srcNode}, ${srcSlot}] -> Node ${toNode} slot ${toSlot}`);
+      } else {
+        debugLog(`[resolveSetGetNodes] WARNING: GetNode ${fromNode} references unknown variable "${name}"`);
+      }
+    } else if (!getNodeIds.has(toNode)) {
+      // Regular link — keep as-is
+      newLinks.push([linkId, fromNode, fromSlot, toNode, toSlot, linkType]);
+    }
+  }
+
+  // Also update node input link references
+  const filteredNodes = nodes
+    .filter(n => !setNodeIds.has(n.id) && !getNodeIds.has(n.id))
+    .map(n => {
+      // Update input link IDs to match the new rewired links
+      if (n.inputs) {
+        const updatedInputs = n.inputs.map(input => {
+          if (input.link === null || input.link === undefined) return input;
+          // Find matching new link that targets this node and slot
+          const matchingLink = newLinks.find(l => l[3] === n.id && l[4] === (n.inputs!.indexOf(input)));
+          if (matchingLink) {
+            return { ...input, link: matchingLink[0] };
+          }
+          // Keep original if it exists in newLinks
+          const originalExists = newLinks.find(l => l[0] === input.link);
+          if (originalExists) return input;
+          // Link was removed (pointed to/from Set/GetNode)
+          return { ...input, link: null };
+        });
+        return { ...n, inputs: updatedInputs };
+      }
+      return n;
+    });
+
+  debugLog(`[resolveSetGetNodes] Resolved ${setNodeIds.size} SetNodes and ${getNodeIds.size} GetNodes, ${links.length} -> ${newLinks.length} links`);
+
+  return {
+    ...workflow,
+    nodes: filteredNodes,
+    links: newLinks,
+  };
+}
+
 export function workflowToPrompt(workflow: WorkflowTemplate): Record<string, unknown> {
   const prompt: Record<string, unknown> = {};
   const nodes = workflow.nodes || [];
@@ -1406,12 +1516,78 @@ export function workflowToPrompt(workflow: WorkflowTemplate): Record<string, unk
       convertedInputs['longer_edge'] = widgetValues[0];
     }
     // Special handling for ResizeImageMaskNode
+    // widgets_values can be either:
+    //   [resize_type, multiplier, scale_method] for "scale by multiplier" mode
+    //   [resize_type, width, height, crop, scale_method] for other modes
     else if (nodeType === 'ResizeImageMaskNode' && Array.isArray(widgetValues)) {
       convertedInputs['resize_type'] = widgetValues[0];
-      convertedInputs['resize_type.width'] = widgetValues[1];
-      convertedInputs['resize_type.height'] = widgetValues[2];
-      convertedInputs['resize_type.crop'] = widgetValues[3];
-      convertedInputs['scale_method'] = widgetValues[4];
+      if (widgetValues[0] === 'scale by multiplier') {
+        convertedInputs['resize_type.multiplier'] = widgetValues[1];
+        convertedInputs['scale_method'] = widgetValues[2];
+      } else {
+        convertedInputs['resize_type.width'] = widgetValues[1];
+        convertedInputs['resize_type.height'] = widgetValues[2];
+        convertedInputs['resize_type.crop'] = widgetValues[3];
+        convertedInputs['scale_method'] = widgetValues[4];
+      }
+    }
+    // Special handling for PrimitiveBoolean
+    else if (nodeType === 'PrimitiveBoolean' && Array.isArray(widgetValues)) {
+      convertedInputs['value'] = widgetValues[0];
+    }
+    // Special handling for DualCLIPLoader
+    else if (nodeType === 'DualCLIPLoader' && Array.isArray(widgetValues)) {
+      convertedInputs['clip_name1'] = widgetValues[0];
+      convertedInputs['clip_name2'] = widgetValues[1];
+      convertedInputs['type'] = widgetValues[2];
+      if (widgetValues[3] !== undefined) convertedInputs['device'] = widgetValues[3];
+    }
+    // Special handling for UnetLoaderGGUF
+    else if (nodeType === 'UnetLoaderGGUF' && Array.isArray(widgetValues)) {
+      convertedInputs['unet_name'] = widgetValues[0];
+    }
+    // Special handling for VAELoaderKJ
+    else if (nodeType === 'VAELoaderKJ' && Array.isArray(widgetValues)) {
+      convertedInputs['vae_name'] = widgetValues[0];
+      if (widgetValues[1] !== undefined) convertedInputs['device'] = widgetValues[1];
+      if (widgetValues[2] !== undefined) convertedInputs['weight_dtype'] = widgetValues[2];
+    }
+    // Special handling for SimpleCalculatorKJ
+    else if (nodeType === 'SimpleCalculatorKJ' && Array.isArray(widgetValues)) {
+      convertedInputs['expression'] = widgetValues[0];
+    }
+    // Special handling for ImageResizeKJv2
+    else if (nodeType === 'ImageResizeKJv2' && Array.isArray(widgetValues)) {
+      if (!convertedInputs['width']) convertedInputs['width'] = widgetValues[0];
+      if (!convertedInputs['height']) convertedInputs['height'] = widgetValues[1];
+      convertedInputs['upscale_method'] = widgetValues[2];
+      convertedInputs['keep_proportion'] = widgetValues[3];
+      if (widgetValues[4] !== undefined) convertedInputs['pad_color'] = widgetValues[4];
+      if (widgetValues[5] !== undefined) convertedInputs['crop_position'] = widgetValues[5];
+      if (widgetValues[6] !== undefined) convertedInputs['divisible_by'] = widgetValues[6];
+      if (widgetValues[7] !== undefined) convertedInputs['device'] = widgetValues[7];
+    }
+    // Special handling for VAEDecodeTiled
+    else if (nodeType === 'VAEDecodeTiled' && Array.isArray(widgetValues)) {
+      if (!convertedInputs['tile_size']) convertedInputs['tile_size'] = widgetValues[0];
+      if (!convertedInputs['overlap']) convertedInputs['overlap'] = widgetValues[1];
+      if (widgetValues[2] !== undefined && !convertedInputs['temporal_size']) convertedInputs['temporal_size'] = widgetValues[2];
+      if (widgetValues[3] !== undefined && !convertedInputs['temporal_overlap']) convertedInputs['temporal_overlap'] = widgetValues[3];
+    }
+    // Special handling for Power Lora Loader (rgthree) - complex widget structure
+    else if (nodeType === 'Power Lora Loader (rgthree)') {
+      // This node uses object-based widgets; the API handles it via linked inputs
+      // Lora configs are embedded in the widget values as objects
+      if (Array.isArray(widgetValues)) {
+        for (const wv of widgetValues) {
+          if (typeof wv === 'object' && wv !== null && 'on' in wv) {
+            const loraConfig = wv as { on: boolean; lora: string; strength: number; strengthTwo?: number | null };
+            if (loraConfig.on) {
+              convertedInputs['lora_01'] = loraConfig;
+            }
+          }
+        }
+      }
     }
     // Default handling for other nodes
     else if (Array.isArray(widgetValues)) {

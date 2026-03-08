@@ -133,44 +133,25 @@ class WorkflowRegistry {
       qualityLevel: 'ultra',
     });
 
-    // 4. LTX-2 Image-to-Video - Fast video from single image using LTX model
+    // 4. LTX-2.3 GGUF - Video generation (supports both I2V and T2V via toggle)
     this.register({
-      name: 'ltx_i2v',
-      filename: 'video_ltx2_i2v-final.json',
+      name: 'ltx23',
+      filename: 'video_ltx23_gguf.json',
       workflowType: WorkflowType.VIDEO_GENERATION,
-      description: 'Generate video from a single image using the LTX-2 model. Fast image-to-video generation with good motion quality.',
+      description: 'Generate video using LTX-2.3 GGUF model. Supports both image-to-video and text-to-video modes via a toggle. Duration in seconds (1-20). Uses GGUF quantized models for efficient generation.',
       capabilities: [
         'single-image-to-video',
+        'text-to-video',
         'motion-from-prompt',
         'fast-generation',
         'camera-movement',
         'character-animation',
+        'configurable-duration',
       ],
-      displayName: 'LTX-2 Image-to-Video',
-      requiresBaseImage: true,
-      supportsTextPrompts: true,
-      supportsImageToImage: true,
-      outputFormat: 'video',
-      estimatedTimeSeconds: 60,
-      qualityLevel: 'standard',
-    });
-
-    // 8. LTX-2 Text-to-Video - Video from text prompt only using LTX model
-    this.register({
-      name: 'ltx_t2v',
-      filename: 'video_ltx2_t2v-final.json',
-      workflowType: WorkflowType.VIDEO_GENERATION,
-      description: 'Generate video directly from a text prompt using the LTX-2 model. No input image required. Best for creating video content from scratch based on text descriptions.',
-      capabilities: [
-        'text-to-video',
-        'motion-from-prompt',
-        'fast-generation',
-        'no-input-image-needed',
-      ],
-      displayName: 'LTX-2 Text-to-Video',
+      displayName: 'LTX-2.3 Video (GGUF)',
       requiresBaseImage: false,
       supportsTextPrompts: true,
-      supportsImageToImage: false,
+      supportsImageToImage: true,
       outputFormat: 'video',
       estimatedTimeSeconds: 60,
       qualityLevel: 'standard',

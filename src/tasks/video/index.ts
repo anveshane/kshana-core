@@ -63,7 +63,6 @@ export {
   generateImageTool,
   generateVideoTool,
   editImageTool,
-  waitForJobTool,
   getVideoGenerationTools,
   getGraphicNovelTools,
   VIDEO_COMPLEX_TOOLS,
@@ -158,7 +157,6 @@ export function getVideoToolNames(): string[] {
     'generate_image',
     'generate_video',
     'edit_image',
-    'wait_for_job',
   ];
 }
 

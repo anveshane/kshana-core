@@ -1,8 +1,8 @@
 #!/usr/bin/env tsx
 /**
- * Test script for ComfyUI LTX-2 video generation workflows.
+ * Test script for ComfyUI LTX-2.3 GGUF video generation workflow.
  *
- * Supports two modes:
+ * Supports two modes via a single workflow:
  * 1. Text-to-Video (t2v) - Generate video from text prompt
  * 2. Image-to-Video (i2v) - Animate a static image based on motion prompt
  *
@@ -17,9 +17,9 @@
  *   --mode <t2v|i2v>     Generation mode (required)
  *   --prompt <text>      Video/motion prompt (required)
  *   --image <path>       Input image file path (required for i2v mode)
- *   --width <number>     Video width (t2v only, default: 640)
- *   --height <number>    Video height (t2v only, default: 640)
- *   --frames <number>    Frame count (default: 121 for t2v, 241 for i2v)
+ *   --width <number>     Video width (default: 1280)
+ *   --height <number>    Video height (default: 720)
+ *   --duration <number>  Duration in seconds (1-20, default: 10)
  *   --seed <number>      Random seed (optional, defaults to random)
  *   --url <url>          ComfyUI base URL (optional, defaults to COMFYUI_BASE_URL env or http://localhost:8188)
  *   --wait               Wait for completion and download the video (optional)
@@ -30,7 +30,7 @@
  *   tsx scripts/test-ltx-workflow.ts --mode t2v --prompt "A cheerful puppet singing in the rain"
  *
  *   # Text-to-video (wait and download)
- *   tsx scripts/test-ltx-workflow.ts --mode t2v --prompt "A puppet dancing" --width 640 --height 640 --wait
+ *   tsx scripts/test-ltx-workflow.ts --mode t2v --prompt "A puppet dancing" --width 1280 --height 720 --wait
  *
  *   # Image-to-video with download
  *   tsx scripts/test-ltx-workflow.ts --mode i2v --image ./scene.png --prompt "The character starts dancing" --wait
@@ -40,7 +40,7 @@ import 'dotenv/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ComfyUIClient } from '../src/services/comfyui/ComfyUIClient';
-import { loadWorkflowTemplate, parameterizeLtxT2VWorkflow, parameterizeLtxI2VWorkflow } from '../src/services/comfyui/WorkflowLoader';
+import { loadWorkflowTemplate, parameterizeLtx23Workflow } from '../src/services/comfyui/WorkflowLoader';
 
 interface Args {
   mode: 't2v' | 'i2v';
@@ -48,7 +48,7 @@ interface Args {
   image?: string;
   width?: number;
   height?: number;
-  frames?: number;
+  duration?: number;
   seed?: number;
   url?: string;
   wait?: boolean;
@@ -88,8 +88,8 @@ function parseArgs(): Args {
         result.height = parseInt(next, 10);
         i++;
         break;
-      case '--frames':
-        result.frames = parseInt(next, 10);
+      case '--duration':
+        result.duration = parseInt(next, 10);
         i++;
         break;
       case '--seed':
@@ -148,27 +148,24 @@ Options:
   --mode <t2v|i2v>     Generation mode (required)
   --prompt <text>      Video/motion prompt (required)
   --image <path>       Input image file path (required for i2v mode)
-  --width <number>     Video width in pixels (t2v only, default: 640)
-  --height <number>    Video height in pixels (t2v only, default: 640)
-  --frames <number>    Frame count (default: 121 for t2v, 241 for i2v)
-                       Must be divisible by 8 + 1 (e.g., 121, 241, 361)
+  --width <number>     Video width in pixels (default: 1280)
+  --height <number>    Video height in pixels (default: 720)
+  --duration <number>  Duration in seconds (1-20, default: 10)
   --seed <number>      Random seed for reproducibility (optional)
   --url <url>          ComfyUI base URL (optional, defaults to COMFYUI_BASE_URL env)
   --wait               Wait for completion and download the generated video
   --output <path>      Output directory for downloaded video (default: ./outputs)
   --help, -h           Show this help message
 
-Note: Width/height must be divisible by 32 + 1 (e.g., 640, 1280)
-
 Examples:
   # Text-to-video (queue only)
   tsx scripts/test-ltx-workflow.ts --mode t2v --prompt "A cheerful puppet singing in the rain"
 
   # Text-to-video with custom dimensions (wait and download)
-  tsx scripts/test-ltx-workflow.ts --mode t2v --prompt "A puppet dancing" --width 640 --height 640 --frames 121 --wait
+  tsx scripts/test-ltx-workflow.ts --mode t2v --prompt "A puppet dancing" --width 1280 --height 720 --duration 10 --wait
 
   # Image-to-video with download
-  tsx scripts/test-ltx-workflow.ts --mode i2v --image ./scene.png --prompt "The character starts dancing" --frames 241 --wait
+  tsx scripts/test-ltx-workflow.ts --mode i2v --image ./scene.png --prompt "The character starts dancing" --duration 8 --wait
 `);
 }
 
@@ -187,18 +184,19 @@ async function main(): Promise<void> {
   }
 
   // Set default values
-  const frames = args.frames || (isI2VMode ? 241 : 121);
-  const width = args.width || 640;
-  const height = args.height || 640;
+  const duration = Math.min(Math.max(args.duration || 10, 1), 20);
+  const width = args.width || 1280;
+  const height = args.height || 720;
+  const t2vMode = !isI2VMode;
 
   console.log('='.repeat(60));
-  console.log(`ComfyUI LTX-2 ${isI2VMode ? 'Image-to-Video' : 'Text-to-Video'} Test`);
+  console.log(`ComfyUI LTX-2.3 GGUF ${isI2VMode ? 'Image-to-Video' : 'Text-to-Video'} Test`);
   console.log('='.repeat(60));
   console.log(`Mode:     ${args.mode.toUpperCase()}`);
   if (imagePath) console.log(`Image:    ${imagePath}`);
   console.log(`Prompt:   ${args.prompt.substring(0, 80)}${args.prompt.length > 80 ? '...' : ''}`);
-  if (!isI2VMode) console.log(`Size:     ${width}x${height}`);
-  console.log(`Frames:   ${frames}`);
+  console.log(`Size:     ${width}x${height}`);
+  console.log(`Duration: ${duration}s`);
   if (args.seed) console.log(`Seed:     ${args.seed}`);
   console.log(`Wait:     ${args.wait ? 'Yes (will download video)' : 'No (queue only)'}`);
   console.log('='.repeat(60));
@@ -211,7 +209,7 @@ async function main(): Promise<void> {
   const client = new ComfyUIClient({
     baseUrl,
     outputDir,
-    timeout: 1800, // 30 min - LTX-2 video generation is compute-intensive
+    timeout: 1800, // 30 min - video generation is compute-intensive
   });
 
   try {
@@ -233,34 +231,20 @@ async function main(): Promise<void> {
     const loadStep = isI2VMode ? 2 : 1;
     const queueStep = isI2VMode ? 3 : 2;
 
-    let workflow: Record<string, unknown>;
+    console.log(`\n[${loadStep}/${stepCount}] Loading workflow template: video_ltx23_gguf.json`);
+    const template = loadWorkflowTemplate('video_ltx23_gguf.json');
 
-    if (isI2VMode) {
-      console.log(`\n[${loadStep}/${stepCount}] Loading workflow template: video_ltx2_i2v-final.json`);
-      const template = loadWorkflowTemplate('video_ltx2_i2v-final.json');
-
-      console.log('      Parameterizing workflow...');
-      workflow = parameterizeLtxI2VWorkflow(template, {
-        prompt: args.prompt,
-        seed: args.seed,
-        frameCount: frames,
-        inputImageFilename: uploadedImageName,
-        filenamePrefix: 'LTX_I2V_Test',
-      });
-    } else {
-      console.log(`\n[${loadStep}/${stepCount}] Loading workflow template: video_ltx2_t2v-final.json`);
-      const template = loadWorkflowTemplate('video_ltx2_t2v-final.json');
-
-      console.log('      Parameterizing workflow...');
-      workflow = parameterizeLtxT2VWorkflow(template, {
-        prompt: args.prompt,
-        seed: args.seed,
-        width,
-        height,
-        frameCount: frames,
-        filenamePrefix: 'LTX_T2V_Test',
-      });
-    }
+    console.log('      Parameterizing workflow...');
+    const workflow = parameterizeLtx23Workflow(template, {
+      prompt: args.prompt,
+      seed: args.seed,
+      durationSeconds: duration,
+      width,
+      height,
+      t2vMode,
+      inputImageFilename: uploadedImageName,
+      filenamePrefix: `LTX23_${args.mode.toUpperCase()}_Test`,
+    });
 
     // Queue workflow
     console.log(`\n[${queueStep}/${stepCount}] Queueing workflow to ComfyUI...`);
@@ -279,7 +263,7 @@ async function main(): Promise<void> {
       const downloadStep = queueStep + 2;
 
       console.log(`\n[${waitStep}/${stepCount}] Waiting for workflow completion...`);
-      console.log('      This may take several minutes (LTX-2 generation is compute-intensive)...\n');
+      console.log('      This may take several minutes (LTX-2.3 generation is compute-intensive)...\n');
 
       const result = await client.waitForCompletion(promptId, (pct, msg) => {
         process.stdout.write(`\r      Progress: ${pct}% - ${msg}                    `);

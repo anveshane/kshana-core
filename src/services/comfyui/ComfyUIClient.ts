@@ -11,6 +11,7 @@ import 'dotenv/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { nanoid } from 'nanoid';
+import WebSocket from 'ws';
 
 // Debug logging to file instead of console to avoid polluting Ink UI
 const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
@@ -38,6 +39,14 @@ export interface ImageInfo {
 
 export interface ProgressCallback {
   (percentage: number, message: string): void | Promise<void>;
+}
+
+export interface WSProgressInfo {
+  percentage: number;
+  message: string;
+  step?: number;
+  maxSteps?: number;
+  currentNode?: string;
 }
 
 export interface CompletionResult {
@@ -109,7 +118,9 @@ export class ComfyUIClient {
   /**
    * Queue a workflow for execution via HTTP POST to /prompt.
    */
-  async queueWorkflow(workflowJson: Record<string, unknown>, clientId?: string): Promise<string> {
+  async queueWorkflow(workflowJson: Record<string, unknown>, clientId?: string): Promise<string>;
+  async queueWorkflow(workflowJson: Record<string, unknown>, clientId: string | undefined, returnMeta: true): Promise<{ promptId: string; clientId: string }>;
+  async queueWorkflow(workflowJson: Record<string, unknown>, clientId?: string, returnMeta?: boolean): Promise<string | { promptId: string; clientId: string }> {
     clientId = clientId || nanoid();
 
     // Convert LiteGraph format to API format if needed
@@ -141,6 +152,9 @@ export class ComfyUIClient {
       throw new Error(`ComfyUI did not return prompt_id: ${JSON.stringify(result)}`);
     }
 
+    if (returnMeta) {
+      return { promptId, clientId };
+    }
     return promptId;
   }
 
@@ -176,17 +190,9 @@ export class ComfyUIClient {
         );
       }
 
-      if (elapsed > this.timeout) {
-        // Check for outputs before failing
-        try {
-          const history = await this.getHistory(promptId);
-          if (history && history.outputs && Object.keys(history.outputs).length > 0) {
-            return { status: 'completed_with_timeout', prompt_id: promptId };
-          }
-        } catch {
-          // Ignore
-        }
-        throw new Error(`Workflow ${promptId} did not complete within ${this.timeout}s`);
+      // Log progress periodically (every ~60s)
+      if (Math.floor(elapsed) % 60 === 0 && Math.floor(elapsed) > 0) {
+        debugLog(`[waitForCompletion] Still waiting for ${promptId}... (${Math.floor(elapsed)}s elapsed)`);
       }
 
       try {
@@ -196,13 +202,16 @@ export class ComfyUIClient {
           const outputs = history.outputs || {};
 
           if (Object.keys(outputs).length > 0) {
+            debugLog(`[waitForCompletion] Completed via outputs. Node IDs: ${Object.keys(outputs).join(', ')}`);
             if (progressCallback) {
               await this.callProgressCallback(progressCallback, 100, 'Complete!');
             }
             return { status: 'completed', prompt_id: promptId };
           }
 
-          if (history.status?.completed) {
+          // Check status.completed or status_str === 'success'
+          if (history.status?.completed || history.status?.status_str === 'success') {
+            debugLog(`[waitForCompletion] Completed via status flag (no outputs in history). completed=${history.status?.completed}, status_str=${history.status?.status_str}, messages=${JSON.stringify(history.status?.messages?.map(m => m[0]))}`);
             if (progressCallback) {
               await this.callProgressCallback(progressCallback, 100, 'Complete!');
             }
@@ -218,6 +227,117 @@ export class ComfyUIClient {
   }
 
   /**
+   * Wait for workflow completion using ComfyUI's WebSocket API.
+   * Provides real-time step-by-step progress. Falls back to HTTP polling on WS failure.
+   */
+  async waitForCompletionWS(
+    promptId: string,
+    clientId: string,
+    progressCallback?: (info: WSProgressInfo) => void,
+  ): Promise<CompletionResult> {
+    const wsUrl = this.baseUrl.replace(/^http/, 'ws') + `/ws?clientId=${clientId}`;
+    debugLog(`[waitForCompletionWS] Connecting to ${wsUrl} for prompt=${promptId}`);
+
+    return new Promise<CompletionResult>((resolve, reject) => {
+      let resolved = false;
+      let currentNode: string | undefined;
+      let ws: WebSocket;
+
+      const cleanup = () => {
+        try { ws?.close(); } catch { /* ignore */ }
+      };
+
+      const finish = (result: CompletionResult) => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        resolve(result);
+      };
+
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (err) {
+        debugLog(`[waitForCompletionWS] Failed to create WebSocket: ${err}. Falling back to HTTP polling.`);
+        return this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined);
+      }
+
+      ws.on('open', () => {
+        debugLog(`[waitForCompletionWS] WebSocket connected for prompt=${promptId}`);
+      });
+
+      ws.on('error', (err) => {
+        debugLog(`[waitForCompletionWS] WebSocket error: ${err}. Falling back to HTTP polling.`);
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+            .then(resolve)
+            .catch(reject);
+        }
+      });
+
+      ws.on('close', () => {
+        debugLog(`[waitForCompletionWS] WebSocket closed for prompt=${promptId}`);
+        // If not yet resolved, fall back to polling
+        if (!resolved) {
+          resolved = true;
+          this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+            .then(resolve)
+            .catch(reject);
+        }
+      });
+
+      ws.on('message', (raw: Buffer | string) => {
+        try {
+          const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
+          const msgType: string = data.type;
+
+          if (msgType === 'progress' && data.data) {
+            const { value, max } = data.data as { value: number; max: number };
+            const pct = max > 0 ? Math.round((value / max) * 100) : 0;
+            debugLog(`[waitForCompletionWS] progress: step ${value}/${max} (${pct}%)`);
+            progressCallback?.({
+              percentage: pct,
+              message: `Step ${value}/${max} (${pct}%)`,
+              step: value,
+              maxSteps: max,
+              currentNode,
+            });
+          } else if (msgType === 'executing' && data.data) {
+            const nodeId = data.data.node as string | null;
+            const execPromptId = data.data.prompt_id as string | undefined;
+
+            // Only track messages for our prompt
+            if (execPromptId && execPromptId !== promptId) return;
+
+            if (nodeId) {
+              currentNode = nodeId;
+              debugLog(`[waitForCompletionWS] executing node=${nodeId}`);
+            } else {
+              // node is null → execution finished for this prompt
+              debugLog(`[waitForCompletionWS] Execution finished for prompt=${promptId}`);
+              progressCallback?.({
+                percentage: 100,
+                message: 'Complete!',
+                currentNode: undefined,
+                done: true,
+              } as WSProgressInfo & { done: boolean });
+              finish({ status: 'completed', prompt_id: promptId });
+            }
+          } else if (msgType === 'execution_error' && data.data) {
+            const execPromptId = data.data.prompt_id as string | undefined;
+            if (execPromptId && execPromptId !== promptId) return;
+            debugLog(`[waitForCompletionWS] Execution error: ${JSON.stringify(data.data)}`);
+            finish({ status: 'error', prompt_id: promptId });
+          }
+        } catch (e) {
+          debugLog(`[waitForCompletionWS] Failed to parse WS message: ${e}`);
+        }
+      });
+    });
+  }
+
+  /**
    * Get output images from completed workflow.
    */
   async getOutputImages(promptId: string): Promise<ImageInfo[]> {
@@ -230,12 +350,16 @@ export class ComfyUIClient {
     const outputs = history.outputs || {};
     const images: ImageInfo[] = [];
 
+    debugLog(`[getOutputImages] prompt=${promptId} outputNodeIds=${JSON.stringify(Object.keys(outputs))}`);
+
     for (const [nodeId, nodeOutput] of Object.entries(outputs)) {
       const output = nodeOutput as {
         images?: Array<{ filename: string; subfolder?: string; type?: string }>;
         gifs?: Array<{ filename: string; subfolder?: string; type?: string }>;
         videos?: Array<{ filename: string; subfolder?: string; type?: string }>;
       };
+
+      debugLog(`[getOutputImages] Node ${nodeId} output keys: ${JSON.stringify(Object.keys(output))}`);
 
       // Check for images (standard image output)
       if (output.images) {
@@ -305,6 +429,7 @@ export class ComfyUIClient {
       }
     }
 
+    debugLog(`[getOutputImages] Total outputs found: ${images.length}${images.length > 0 ? ` files: ${images.map(i => i.filename).join(', ')}` : ''}`);
     return images;
   }
 
