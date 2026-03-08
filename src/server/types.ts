@@ -52,6 +52,7 @@ export type ClientMessageType =
   | 'file_exists_response'    // Client confirms if path exists
   | 'file_stat_response'      // Client sends file stats
   | 'file_buffer_response'    // Client sends binary file content
+  | 'set_autonomous'          // Toggle autonomous mode at runtime
   | 'project_state_sync';     // Client sends full project snapshot
 
 /**

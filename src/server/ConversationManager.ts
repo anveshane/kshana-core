@@ -186,6 +186,16 @@ export class ConversationManager {
   }
 
   /**
+   * Toggle autonomous mode on a running session.
+   */
+  setAutonomousMode(sessionId: string, enabled: boolean): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.state.autonomousMode = enabled;
+    session.agent?.setAutonomousMode(enabled);
+  }
+
+  /**
    * Run a task in a session.
    * Wraps execution in the session's context so all tool/file operations
    * see the correct project directory and filesystem.

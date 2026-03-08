@@ -227,6 +227,13 @@ export class WebSocketHandler {
       return;
     }
 
+    // Handle autonomous mode toggle
+    if (message.type === 'set_autonomous') {
+      const enabled = (message.data as { enabled: boolean }).enabled;
+      this.conversationManager.setAutonomousMode(sessionId, enabled);
+      return;
+    }
+
     // Handle project_state_sync from remote clients
     if (message.type === 'project_state_sync') {
       this.handleProjectStateSync(sessionId, message.data as import('./types.js').ProjectStateSyncData);

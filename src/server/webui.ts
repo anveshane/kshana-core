@@ -25,6 +25,7 @@ ${getStyles()}
       </select>
     </div>
     <div class="header-right">
+      <button id="autonomous-btn" title="Toggle Autonomous Mode" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:12px;font-weight:600;letter-spacing:0.5px;">AUTO</button>
       <span id="session-timer" style="display:none;font-size:13px;font-variant-numeric:tabular-nums;color:var(--text-muted);font-family:monospace;">00:00:00</span>
       <div id="context-bar-wrap">
         <div id="context-bar"><div id="context-fill"></div></div>
@@ -2131,6 +2132,26 @@ function showWizardStep(step) {
   chatMessages.appendChild(card);
   maybeScroll();
 }
+
+// ===== Autonomous Mode Toggle =====
+var autoBtn = document.getElementById('autonomous-btn');
+function updateAutoBtnStyle() {
+  if (autonomousModeActive) {
+    autoBtn.style.borderColor = '#4ade80';
+    autoBtn.style.color = '#4ade80';
+    autoBtn.style.background = 'rgba(74,222,128,0.1)';
+  } else {
+    autoBtn.style.borderColor = '#444';
+    autoBtn.style.color = '#aaa';
+    autoBtn.style.background = 'none';
+  }
+}
+autoBtn.addEventListener('click', function() {
+  autonomousModeActive = !autonomousModeActive;
+  updateAutoBtnStyle();
+  wsSend({ type: 'set_autonomous', sessionId: sessionId, data: { enabled: autonomousModeActive } });
+  showToast('Autonomous mode ' + (autonomousModeActive ? 'enabled' : 'disabled'), 'info');
+});
 
 // ===== Provider Settings =====
 const provModal = document.getElementById('provider-modal');

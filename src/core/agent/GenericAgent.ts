@@ -1354,6 +1354,14 @@ export class GenericAgent extends TypedEventEmitter {
   /**
    * Get the current todo list.
    */
+  setAutonomousMode(enabled: boolean): void {
+    this.autonomousMode = enabled;
+    if (enabled) {
+      this.maxIterations = Number.MAX_SAFE_INTEGER;
+    }
+    debugLog(`[GenericAgent] Autonomous mode ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
   getToolNames(): string[] {
     return Array.from(this.tools.keys());
   }
