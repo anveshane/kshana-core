@@ -238,12 +238,17 @@ export function buildPreloadedContext(
     case 'scene_image_prompt': {
       // Scene desc + char/setting profiles + reference image paths
       if (sceneNumber !== undefined) {
+        let sceneLoaded = false;
         const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
         if (scene?.file) {
-          addFileSection(`Scene ${sceneNumber} Description`, scene.file);
-        } else {
-          // Try standard path
-          addFileSection(`Scene ${sceneNumber} Description`, `scenes/scene-${sceneNumber}.md`);
+          sceneLoaded = !!addFileSection(`Scene ${sceneNumber} Description`, scene.file);
+        }
+        if (!sceneLoaded) {
+          sceneLoaded = !!addFileSection(`Scene ${sceneNumber} Description`, `plans/scenes/scene-${sceneNumber}.md`);
+        }
+        if (!sceneLoaded) {
+          // Legacy: try old single-file format
+          addFileSection(`Scenes Plan (find Scene ${sceneNumber})`, 'plans/scenes.md');
         }
       }
       // Add all character and setting profiles
@@ -262,11 +267,16 @@ export function buildPreloadedContext(
     case 'scene_video_prompt': {
       // Scene desc + profiles + reference image paths
       if (sceneNumber !== undefined) {
+        let sceneLoaded = false;
         const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
         if (scene?.file) {
-          addFileSection(`Scene ${sceneNumber} Description`, scene.file);
-        } else {
-          addFileSection(`Scene ${sceneNumber} Description`, `scenes/scene-${sceneNumber}.md`);
+          sceneLoaded = !!addFileSection(`Scene ${sceneNumber} Description`, scene.file);
+        }
+        if (!sceneLoaded) {
+          sceneLoaded = !!addFileSection(`Scene ${sceneNumber} Description`, `plans/scenes/scene-${sceneNumber}.md`);
+        }
+        if (!sceneLoaded) {
+          addFileSection(`Scenes Plan (find Scene ${sceneNumber})`, 'plans/scenes.md');
         }
       }
       for (const char of project.characters) {
@@ -282,19 +292,24 @@ export function buildPreloadedContext(
     }
 
     case 'shot_image_prompt': {
-      // Scene video prompt JSON + profiles + reference image paths
+      // Scene video prompt JSON + scene description + profiles + reference image paths
       if (sceneNumber !== undefined) {
         // Read the scene's motion JSON (scene_video_prompt output)
         addFileSection(
           `Scene ${sceneNumber} Video Prompt`,
           `prompts/videos/scenes/scene-${sceneNumber}.motion.json`
         );
-        // Also read the scene description
+        // Also read the scene description (with fallback chain)
+        let sceneLoaded = false;
         const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
         if (scene?.file) {
-          addFileSection(`Scene ${sceneNumber} Description`, scene.file);
-        } else {
-          addFileSection(`Scene ${sceneNumber} Description`, `scenes/scene-${sceneNumber}.md`);
+          sceneLoaded = !!addFileSection(`Scene ${sceneNumber} Description`, scene.file);
+        }
+        if (!sceneLoaded) {
+          sceneLoaded = !!addFileSection(`Scene ${sceneNumber} Description`, `plans/scenes/scene-${sceneNumber}.md`);
+        }
+        if (!sceneLoaded) {
+          addFileSection(`Scenes Plan (find Scene ${sceneNumber})`, 'plans/scenes.md');
         }
       }
       for (const char of project.characters) {

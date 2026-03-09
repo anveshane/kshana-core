@@ -1153,12 +1153,28 @@ export class GenericAgent extends TypedEventEmitter {
       // If no tool calls, check if we should really stop
       if (response.toolCalls.length === 0) {
         this.consecutiveTextOnlyResponses++;
+
+        // Skip nudging if the project is complete — the agent is allowed to
+        // stop naturally once the final video has been assembled. The user
+        // will drive the next interaction (e.g. editing specific artifacts).
+        const projectComplete = (() => {
+          try {
+            const proj = loadProject();
+            return !!(proj?.productionCompletedAt);
+          } catch {
+            return false;
+          }
+        })();
+
         // In video mode, the agent should never complete on its own —
         // it must always use tools to drive the workflow forward.
         // Inject a nudge message and continue the loop (up to MAX_TEXT_ONLY_NUDGES times).
+        // BUT: once the project is complete, let the agent stop — the user
+        // will come back with edit requests ("redo scene 3", etc.).
         if (
           this.name === 'kshana-video' &&
           !this.isSubAgent &&
+          !projectComplete &&
           this.iteration < this.maxIterations - 1 &&
           this.consecutiveTextOnlyResponses <= GenericAgent.MAX_TEXT_ONLY_NUDGES
         ) {
@@ -1169,6 +1185,11 @@ export class GenericAgent extends TypedEventEmitter {
           });
           continue;
         }
+
+        if (projectComplete) {
+          debugLog(`[GenericAgent] Project complete (productionCompletedAt set) — allowing agent to stop naturally`);
+        }
+
         finalOutput = response.content ?? '';
         break;
       } else {
@@ -1690,6 +1711,9 @@ export class GenericAgent extends TypedEventEmitter {
         // For character/setting image prompts, append {name}.prompt.md
         const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
         outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.prompt.md`;
+      } else if (contentType === 'scene' && sceneNumber !== undefined) {
+        // For scene descriptions, append scene-{n}.md
+        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.md`;
       } else if (contentType === 'scene_image_prompt' && sceneNumber !== undefined) {
         // For scene image prompts, append scene-{n}.prompt.md
         outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.prompt.md`;
@@ -2820,7 +2844,7 @@ Respond in JSON format:
       const generatedContent = result.output || '';
 
       // Always save content to disk — auto-generate outputFile if not specified
-      const effectiveOutputFile = outputFile || `plans/${contentType}.md`;
+      const effectiveOutputFile = outputFile || CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
       if (generatedContent) {
         try {
           const projectDir = getProjectDir();

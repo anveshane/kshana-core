@@ -25,7 +25,7 @@ export const CONTENT_TYPE_OUTPUT_FILES: Record<string, string> = {
   story: 'plans/chapters/',        // Will be appended with chapter number
   character: 'characters/',        // Will be appended with {name}.profile.md
   setting: 'settings/',            // Will be appended with {name}.profile.md
-  scene: 'plans/scenes.md',
+  scene: 'plans/scenes/',              // Will be appended with scene-{n}.md
   narration: 'plans/narration.md',
 
   // Image prompt generation - saved to prompts directory for review/refinement
@@ -65,7 +65,7 @@ The content creator will:
 | story | plans/chapters/chapter-{n}.story.md |
 | character | characters/{name}.profile.md |
 | setting | settings/{name}.profile.md |
-| scene | plans/scenes.md |
+| scene | plans/scenes/scene-{n}.md |
 | narration | plans/narration.md |
 | character_image_prompt | prompts/images/characters/{name}.prompt.md |
 | setting_image_prompt | prompts/images/settings/{name}.prompt.md |

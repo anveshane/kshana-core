@@ -55,7 +55,7 @@ when downstream artifacts exist.
 | setting_image_prompt | setting profile ONLY | story, plot, original_input |
 | scene_image_prompt | scene desc + char/setting profiles in scene | story, plot, original_input |
 | scene_video_prompt | scene desc + char/setting profiles | story, plot, original_input |
-| shot_image_prompt | scene video prompt JSON + profiles | story, scenes, plot |
+| shot_image_prompt | scene video prompt JSON + **scene description** + profiles | story, plot |
 
 If pre-loaded context is provided in `<pre_loaded_context>` tags, DO NOT call read_file().
 You may still call read_project() for additional project metadata if needed.
@@ -282,7 +282,7 @@ text_to_image
 
 **Multi-Shot Breakdown Rules:**
 
-1. **2-4 shots per scene**: Break the scene action into distinct cinematic shots
+1. **2-4 shots per scene**: Break the scene action into distinct cinematic shots. Each shot must map to a **specific narrative moment** from the scene description — not generic framing
 2. **4-8 seconds each**: Each shot's motion must be achievable in this window
 3. **Shot type vocabulary**:
    - **By distance**: extreme_wide, wide, medium_wide, medium, medium_close_up, close_up, extreme_close_up
@@ -367,6 +367,9 @@ Output ONLY a JSON object (no markdown fences).
 **This works like `scene_image_prompt` but tailored to a specific shot's framing.**
 
 **The instruction will include shot details**: shot number, shot type, camera work, and which characters/settings appear. Use this information to compose the image appropriately.
+
+**CRITICAL — Narrative Content from Scene Description:**
+The scene description is the **narrative source** — it contains the story beats, character actions, emotions, and dramatic context. Each shot must depict a **specific story moment** from the scene description. The motion JSON provides framing and composition guidance, but the scene description provides **what is actually happening**. Do NOT generate generic compositions like "wide interior shot" or "close-up on hands" — include the specific narrative details (who is doing what, why, and the emotional tone).
 
 **Shot-specific composition rules:**
 
