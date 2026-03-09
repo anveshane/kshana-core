@@ -186,6 +186,18 @@ export class ConversationManager {
   }
 
   /**
+   * Update the remote filesystem for a session after websocket connect/reconnect.
+   */
+  setRemoteFileSystem(sessionId: string, remoteFs: IFileSystem): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    session.remoteFs = remoteFs;
+  }
+
+  /**
    * Toggle autonomous mode on a running session.
    */
   setAutonomousMode(sessionId: string, enabled: boolean): void {

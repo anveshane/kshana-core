@@ -216,7 +216,10 @@ export async function registerRoutes(
       // Extract API key and optional sessionId from query string
       const url = new URL(request.url, `http://${request.hostname}`);
       const apiKey = url.searchParams.get('apiKey') ?? undefined;
-      const resumeSessionId = url.searchParams.get('sessionId') ?? undefined;
+      const resumeSessionId =
+        url.searchParams.get('sessionId') ??
+        url.searchParams.get('session_id') ??
+        undefined;
       const remoteAddress = request.ip;
       wsHandler.handleConnection(socket, remoteAddress, apiKey, resumeSessionId);
     }
