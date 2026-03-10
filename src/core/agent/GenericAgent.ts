@@ -358,7 +358,19 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Load persisted todos from project file (for resuming work)
     if (projectExists() && !this.isSubAgent) {
-      const persistedTodos = loadTodos();
+      let persistedTodos = loadTodos();
+
+      // Safety: if project is complete, auto-complete any stale todos
+      const project = loadProject();
+      const projRec = project as unknown as Record<string, unknown> | null;
+      if (projRec?.['productionCompletedAt'] && persistedTodos.some(t => t.status !== 'completed' && t.status !== 'cancelled')) {
+        debugLog(`[GenericAgent] Project complete but stale todos found — auto-completing`);
+        persistedTodos = persistedTodos.map(t =>
+          t.status === 'completed' || t.status === 'cancelled' ? t : { ...t, status: 'completed' as const }
+        );
+        saveTodos(persistedTodos);
+      }
+
       if (persistedTodos.length > 0) {
         // Convert persisted todos to the format expected by todoManager
         const todosForManager = persistedTodos.map(t => ({
