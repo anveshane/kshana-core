@@ -1208,6 +1208,16 @@ export class GenericAgent extends TypedEventEmitter {
 
         if (projectComplete) {
           debugLog(`[GenericAgent] Project complete (productionCompletedAt set) — allowing agent to stop naturally`);
+          // Clear any todos created during this session — project is done
+          const remainingTodos = this.todoManager.getTodos();
+          if (remainingTodos.length > 0) {
+            debugLog(`[GenericAgent] Project complete — clearing ${remainingTodos.length} session todos`);
+            this.todoManager.writeTodos([]);
+            this.emit({ type: 'todo_update', todos: [] });
+            if (projectExists()) {
+              saveTodos([]);
+            }
+          }
         }
 
         finalOutput = response.content ?? '';
