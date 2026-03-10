@@ -360,15 +360,23 @@ export class GenericAgent extends TypedEventEmitter {
     if (projectExists() && !this.isSubAgent) {
       let persistedTodos = loadTodos();
 
-      // Safety: if project is complete, auto-complete any stale todos
+      // Safety: if project is complete, clear all todos and fix goal status
       const project = loadProject();
       const projRec = project as unknown as Record<string, unknown> | null;
-      if (projRec?.['productionCompletedAt'] && persistedTodos.some(t => t.status !== 'completed' && t.status !== 'cancelled')) {
-        debugLog(`[GenericAgent] Project complete but stale todos found — auto-completing`);
-        persistedTodos = persistedTodos.map(t =>
-          t.status === 'completed' || t.status === 'cancelled' ? t : { ...t, status: 'completed' as const }
-        );
-        saveTodos(persistedTodos);
+      if (projRec?.['productionCompletedAt']) {
+        // Clear all todos — project is done, no stale todos should confuse next session
+        if (persistedTodos.length > 0) {
+          debugLog(`[GenericAgent] Project complete — clearing ${persistedTodos.length} stale todos`);
+          persistedTodos = [];
+          saveTodos([]);
+        }
+        // Ensure goal status reflects completion — prevents agent from re-executing an achieved goal
+        if (project?.goal?.status === 'active') {
+          debugLog(`[GenericAgent] Project complete but goal still active — marking as achieved`);
+          project.goal.status = 'achieved';
+          project.goal.achievedAt = projRec['productionCompletedAt'] as number;
+          saveProject(project);
+        }
       }
 
       if (persistedTodos.length > 0) {
@@ -1276,24 +1284,15 @@ export class GenericAgent extends TypedEventEmitter {
           this.iteration = 0;
         }
 
-        // Auto-complete all todos when final assembly succeeds
+        // Clear all todos when final assembly succeeds — assembly is terminal, no todos should survive
         if (toolCall.name === 'assemble_from_timeline' && resultObj['success'] === true) {
-          const allTodos = this.todoManager.getTodos();
-          const pendingIds = allTodos
-            .filter(t => t.status !== 'completed' && t.status !== 'cancelled')
-            .map(t => t.id);
-          if (pendingIds.length > 0) {
-            debugLog(`[GenericAgent] Assembly complete — auto-completing ${pendingIds.length} remaining todos`);
-            this.todoManager.mergeTodosById(
-              pendingIds.map(id => ({ id, status: 'completed' as const }))
-            );
-            const updatedTodos = this.todoManager.getTodos();
-            this.emit({ type: 'todo_update', todos: updatedTodos });
+          const todoCount = this.todoManager.getTodos().length;
+          if (todoCount > 0) {
+            debugLog(`[GenericAgent] Assembly complete — clearing all ${todoCount} todos`);
+            this.todoManager.writeTodos([]);
+            this.emit({ type: 'todo_update', todos: [] });
             if (projectExists()) {
-              saveTodos(updatedTodos.map(t => ({
-                id: t.id, content: t.content, activeForm: t.activeForm,
-                status: t.status, visible: t.visible, depth: t.depth,
-              })));
+              saveTodos([]);
             }
           }
         }
