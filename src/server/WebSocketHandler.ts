@@ -32,8 +32,10 @@ import {
   isUserResponseMessage,
   isCancelMessage,
   isPingMessage,
+  isConfigureProjectMessage,
   isSelectProjectMessage,
   isCreateProjectMessage,
+  type ConfigureProjectData,
   type CreateProjectData,
 } from './types.js';
 
@@ -112,6 +114,13 @@ export class WebSocketHandler {
       connectionMode = 'remote';
     }
 
+    let projectCache: ProjectStateCache | undefined;
+    let remoteFs: RemoteClientFileSystem | undefined;
+    if (connectionMode === 'remote') {
+      projectCache = new ProjectStateCache();
+      remoteFs = new RemoteClientFileSystem(socket, projectCache);
+    }
+
     // Try to resume an existing session (e.g. after browser reconnect)
     let sessionId: string;
     if (resumeSessionId && this.conversationManager.getSession(resumeSessionId)) {
@@ -124,7 +133,7 @@ export class WebSocketHandler {
       }
     } else {
       // Create new session
-      const session = this.conversationManager.createSession(connectionMode);
+      const session = this.conversationManager.createSession(connectionMode, remoteFs);
       sessionId = session.id;
     }
 
@@ -137,11 +146,10 @@ export class WebSocketHandler {
     };
 
     // For remote connections, set up the remote filesystem
-    if (connectionMode === 'remote') {
-      const cache = new ProjectStateCache();
-      const remoteFs = new RemoteClientFileSystem(socket, cache);
+    if (connectionMode === 'remote' && remoteFs && projectCache) {
       connectionState.remoteFs = remoteFs;
-      connectionState.projectCache = cache;
+      connectionState.projectCache = projectCache;
+      this.conversationManager.setRemoteFileSystem(sessionId, remoteFs);
     }
 
     this.connections.set(sessionId, connectionState);
@@ -217,6 +225,11 @@ export class WebSocketHandler {
       return;
     }
 
+    if (isConfigureProjectMessage(message)) {
+      this.handleConfigureProject(sessionId, socket, message.data);
+      return;
+    }
+
     if (isSelectProjectMessage(message)) {
       await this.handleSelectProject(sessionId, socket, message.data.projectName);
       return;
@@ -252,6 +265,31 @@ export class WebSocketHandler {
     }
 
     this.sendError(socket, sessionId, 'unknown_message_type', `Unknown message type: ${message.type}`);
+  }
+
+  /**
+   * Handle configure_project message.
+   */
+  private handleConfigureProject(
+    sessionId: string,
+    socket: WebSocket,
+    data: ConfigureProjectData,
+  ): void {
+    this.conversationManager.configureSessionForProject(
+      sessionId,
+      data.templateId,
+      data.style,
+      data.duration,
+      data.projectDir,
+    );
+
+    const toolNames = this.conversationManager.getSessionToolNames(sessionId);
+    this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+      status: 'ready',
+      message: `Project configured: ${data.projectName ?? data.projectDir}`,
+      tools: toolNames,
+      projectName: data.projectName,
+    }));
   }
 
   /**

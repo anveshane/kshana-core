@@ -7,6 +7,7 @@
  */
 
 import type { WebSocket } from '@fastify/websocket';
+import { isAbsolute, normalize, relative } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import type { IFileSystem, FileStat } from './IFileSystem.js';
 import type { ProjectStateCache } from './ProjectStateCache.js';
@@ -63,108 +64,176 @@ export class RemoteClientFileSystem implements IFileSystem {
   }
 
   async readFile(path: string): Promise<string> {
+    const wirePath = this.normalizePathForWire(path);
+
     // Try cache first
     if (this.cache) {
-      const cached = this.cache.getFile(path);
+      const cached = this.cache.getFile(wirePath);
       if (cached !== undefined) {
         return cached;
       }
     }
 
-    const result = await this.sendRequest('file_read_request', { path }, READ_TIMEOUT_MS);
+    const result = await this.sendRequest(
+      'file_read_request',
+      { path: wirePath },
+      READ_TIMEOUT_MS,
+    );
     const content = (result as { content: string }).content;
 
     // Update cache
     if (this.cache) {
-      this.cache.setFile(path, content);
+      this.cache.setFile(wirePath, content);
     }
 
     return content;
   }
 
   async writeFile(path: string, content: string): Promise<void> {
+    const wirePath = this.normalizePathForWire(path);
+
     // Update cache
     if (this.cache) {
-      this.cache.setFile(path, content);
+      this.cache.setFile(wirePath, content);
     }
 
     // Send write command to client
-    await this.sendRequest('file_write_command', { path, content }, WRITE_TIMEOUT_MS);
+    await this.sendRequest(
+      'file_write_command',
+      { path: wirePath, content },
+      WRITE_TIMEOUT_MS,
+    );
   }
 
   async exists(path: string): Promise<boolean> {
+    const wirePath = this.normalizePathForWire(path);
+
     // Check cache first
     if (this.cache) {
-      const exists = this.cache.hasFile(path);
+      const exists = this.cache.hasFile(wirePath);
       if (exists !== undefined) {
         return exists;
       }
     }
 
-    const result = await this.sendRequest('file_exists_request', { path }, READ_TIMEOUT_MS);
-    return (result as { exists: boolean }).exists;
+    const result = await this.sendRequest(
+      'file_exists_request',
+      { path: wirePath },
+      READ_TIMEOUT_MS,
+    );
+    const exists = (result as { exists: boolean }).exists;
+    if (this.cache && !exists) {
+      this.cache.markNonExistent(wirePath);
+    }
+    return exists;
   }
 
   async mkdir(path: string, options?: { recursive: boolean }): Promise<void> {
+    const wirePath = this.normalizePathForWire(path);
+
     // Track in cache
     if (this.cache) {
-      this.cache.markDirectory(path);
+      this.cache.markDirectory(wirePath);
     }
 
-    await this.sendRequest('file_mkdir_command', { path, options }, WRITE_TIMEOUT_MS);
+    await this.sendRequest(
+      'file_mkdir_command',
+      { path: wirePath, options },
+      WRITE_TIMEOUT_MS,
+    );
   }
 
   async readdir(path: string): Promise<string[]> {
-    const result = await this.sendRequest('file_list_request', { path }, READ_TIMEOUT_MS);
+    const wirePath = this.normalizePathForWire(path);
+    const result = await this.sendRequest(
+      'file_list_request',
+      { path: wirePath },
+      READ_TIMEOUT_MS,
+    );
     return (result as { entries: string[] }).entries;
   }
 
   async stat(path: string): Promise<FileStat> {
-    const result = await this.sendRequest('file_stat_request', { path }, READ_TIMEOUT_MS);
+    const wirePath = this.normalizePathForWire(path);
+    const result = await this.sendRequest(
+      'file_stat_request',
+      { path: wirePath },
+      READ_TIMEOUT_MS,
+    );
     return result as FileStat;
   }
 
   async copyFile(src: string, dest: string): Promise<void> {
-    await this.sendRequest('file_copy_command', { src, dest }, WRITE_TIMEOUT_MS);
+    const [wireSrc, wireDest] = this.normalizePathPairForWire(src, dest);
+    await this.sendRequest(
+      'file_copy_command',
+      { src: wireSrc, dest: wireDest },
+      WRITE_TIMEOUT_MS,
+    );
   }
 
   async deleteFile(path: string): Promise<void> {
+    const wirePath = this.normalizePathForWire(path);
     if (this.cache) {
-      this.cache.removeFile(path);
+      this.cache.removeFile(wirePath);
     }
-    await this.sendRequest('file_delete_command', { path }, WRITE_TIMEOUT_MS);
+    await this.sendRequest(
+      'file_delete_command',
+      { path: wirePath },
+      WRITE_TIMEOUT_MS,
+    );
   }
 
   async deleteDir(path: string): Promise<void> {
+    const wirePath = this.normalizePathForWire(path);
     if (this.cache) {
-      this.cache.removePath(path);
+      this.cache.removePath(wirePath);
     }
-    await this.sendRequest('file_delete_dir_command', { path }, WRITE_TIMEOUT_MS);
+    await this.sendRequest(
+      'file_delete_dir_command',
+      { path: wirePath },
+      WRITE_TIMEOUT_MS,
+    );
   }
 
   async readFileBuffer(path: string): Promise<Buffer> {
-    const result = await this.sendRequest('file_read_buffer_request', { path }, READ_TIMEOUT_MS);
+    const wirePath = this.normalizePathForWire(path);
+    const result = await this.sendRequest(
+      'file_read_buffer_request',
+      { path: wirePath },
+      READ_TIMEOUT_MS,
+    );
     // Client sends base64-encoded data for binary files
     return Buffer.from((result as { data: string }).data, 'base64');
   }
 
   async writeFileBuffer(path: string, data: Buffer): Promise<void> {
+    const wirePath = this.normalizePathForWire(path);
     await this.sendRequest(
       'file_write_buffer_command',
-      { path, data: data.toString('base64') },
+      { path: wirePath, data: data.toString('base64') },
       WRITE_TIMEOUT_MS,
     );
   }
 
   async writeBatch(operations: Array<{ path: string; content: string }>): Promise<void> {
+    const normalizedOperations = operations.map((operation) => ({
+      path: this.normalizePathForWire(operation.path),
+      content: operation.content,
+    }));
+
     // Update cache for all operations
     if (this.cache) {
-      for (const op of operations) {
+      for (const op of normalizedOperations) {
         this.cache.setFile(op.path, op.content);
       }
     }
 
-    await this.sendRequest('batch_write_command', { operations }, WRITE_TIMEOUT_MS);
+    await this.sendRequest(
+      'batch_write_command',
+      { operations: normalizedOperations },
+      WRITE_TIMEOUT_MS,
+    );
   }
 
   /**
@@ -210,5 +279,28 @@ export class RemoteClientFileSystem implements IFileSystem {
       pending.reject(new Error('RemoteClientFileSystem destroyed'));
       this.pending.delete(id);
     }
+  }
+
+  private normalizePathForWire(inputPath: string): string {
+    const normalizedInput = normalize(inputPath).replace(/\\/g, '/');
+    if (!isAbsolute(inputPath)) {
+      return normalizedInput.replace(/^\.\/+/, '');
+    }
+
+    const projectRoot = this.cache?.getProjectRoot();
+    if (!projectRoot) {
+      return normalizedInput;
+    }
+
+    const relativePath = relative(projectRoot, inputPath);
+    if (relativePath && !relativePath.startsWith('..') && !isAbsolute(relativePath)) {
+      return normalize(relativePath).replace(/\\/g, '/');
+    }
+
+    return normalizedInput;
+  }
+
+  private normalizePathPairForWire(src: string, dest: string): [string, string] {
+    return [this.normalizePathForWire(src), this.normalizePathForWire(dest)];
   }
 }

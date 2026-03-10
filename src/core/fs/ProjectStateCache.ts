@@ -10,7 +10,7 @@
  */
 
 export class ProjectStateCache {
-  /** Cached text file contents, keyed by absolute path */
+  /** Cached text file contents, keyed by project-relative POSIX path */
   private files = new Map<string, string>();
 
   /** Known directories (for exists checks) */
@@ -22,6 +22,9 @@ export class ProjectStateCache {
   /** Binary asset hashes, keyed by path */
   private assetHashes = new Map<string, string>();
 
+  /** Absolute project root on the remote client */
+  private projectRoot: string | null = null;
+
   /**
    * Initialize the cache from a project state snapshot.
    * Called when a remote client connects and selects a project.
@@ -31,6 +34,7 @@ export class ProjectStateCache {
     this.directories.clear();
     this.nonExistent.clear();
     this.assetHashes.clear();
+    this.projectRoot = snapshot.projectRoot;
 
     // Load text files
     for (const [filePath, content] of Object.entries(snapshot.files)) {
@@ -48,6 +52,13 @@ export class ProjectStateCache {
         this.assetHashes.set(filePath, hash);
       }
     }
+  }
+
+  /**
+   * Get the remote client's absolute project root.
+   */
+  getProjectRoot(): string | null {
+    return this.projectRoot;
   }
 
   /**
@@ -149,6 +160,7 @@ export class ProjectStateCache {
     this.directories.clear();
     this.nonExistent.clear();
     this.assetHashes.clear();
+    this.projectRoot = null;
   }
 }
 
@@ -156,7 +168,7 @@ export class ProjectStateCache {
  * Shape of the project state snapshot sent by the client on connect.
  */
 export interface ProjectSnapshot {
-  /** Text file contents, keyed by absolute path */
+  /** Text file contents, keyed by project-relative POSIX path */
   files: Record<string, string>;
 
   /** Known directory paths */

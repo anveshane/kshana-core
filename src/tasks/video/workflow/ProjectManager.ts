@@ -4,7 +4,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { isAbsolute, join } from 'path';
 import {
   type ProjectFile,
   type PhaseInfo,
@@ -49,7 +49,11 @@ import { getActiveProjectDir, setActiveProjectDir } from './activeProject.js';
  * Get the project directory path for the current working directory.
  */
 export function getProjectDir(basePath: string = process.cwd()): string {
-  return join(basePath, getActiveProjectDir());
+  const activeProjectDir = getActiveProjectDir();
+  if (isAbsolute(activeProjectDir)) {
+    return activeProjectDir;
+  }
+  return join(basePath, activeProjectDir);
 }
 
 /**

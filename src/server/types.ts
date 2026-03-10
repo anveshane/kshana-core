@@ -42,6 +42,7 @@ export type ClientMessageType =
   | 'start_task'           // Start a new task
   | 'user_response'       // Response to agent question
   | 'cancel'              // Cancel current task
+  | 'configure_project'   // Configure the active project/session
   | 'select_project'      // Select active project
   | 'create_project'      // Create a new project
   | 'ping'                // Keep-alive ping
@@ -206,6 +207,17 @@ export interface SelectProjectData {
   projectName: string;
 }
 
+/**
+ * Configure project client message data.
+ */
+export interface ConfigureProjectData {
+  projectDir: string;
+  projectName?: string;
+  templateId: string;
+  style: string;
+  duration: number;
+}
+
 // ==========================================================================
 // REMOTE FILE SYSTEM PROTOCOL TYPES
 // ==========================================================================
@@ -352,6 +364,12 @@ export function isPingMessage(msg: ClientMessage): msg is ClientMessage<void> {
 
 export function isSelectProjectMessage(msg: ClientMessage): msg is ClientMessage<SelectProjectData> {
   return msg.type === 'select_project';
+}
+
+export function isConfigureProjectMessage(
+  msg: ClientMessage,
+): msg is ClientMessage<ConfigureProjectData> {
+  return msg.type === 'configure_project';
 }
 
 export function isCreateProjectMessage(msg: ClientMessage): msg is ClientMessage<CreateProjectData> {
