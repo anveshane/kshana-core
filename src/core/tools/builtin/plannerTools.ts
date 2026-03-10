@@ -14,6 +14,7 @@ import type {
   GoalPreferences,
   AssetRegistry,
   ProvidedAsset,
+  PersistedGoal,
 } from '../../planner/types.js';
 import type { VideoTemplate, GenericProjectFile } from '../../templates/types.js';
 import { registerFile } from '../../../tasks/video/workflow/ProjectManager.js';
@@ -234,6 +235,14 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
       // Validate plan
       const validation = planner.validatePlan(plan);
 
+      // Auto-detect goal completion
+      const projectComplete = plan.steps.length === 0;
+      if (projectComplete && context.project.goal?.status === 'active') {
+        context.project.goal.status = 'achieved';
+        context.project.goal.achievedAt = Date.now();
+        persistProject(context);
+      }
+
       return {
         success: validation.valid,
         plan: {
@@ -245,6 +254,10 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
           requiresApproval: plan.requiresApproval,
           timelineHints: plan.timelineHints,
         },
+        projectComplete,
+        completionMessage: projectComplete
+          ? 'All target artifacts are satisfied. The project goal is achieved.'
+          : undefined,
         validation: {
           valid: validation.valid,
           errors: validation.errors,
@@ -396,6 +409,90 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
 }
 
 /**
+ * Persist the project state to disk.
+ * Works with GenericProjectFile (the planner context type).
+ */
+function persistProject(context: PlannerToolContext): void {
+  const projectDir = context.getProjectDir();
+  const filePath = join(projectDir, 'project.json');
+  context.project.updatedAt = Date.now();
+  writeFileSync(filePath, JSON.stringify(context.project, null, 2), 'utf-8');
+}
+
+/**
+ * Create set_goal tool
+ */
+export function createSetGoalTool(context: PlannerToolContext): ToolDefinition {
+  return {
+    name: 'set_goal',
+    description: `Persist the user's goal so it survives across sessions.
+
+Call this BEFORE create_backward_plan when:
+- Starting a new project (no goal exists yet)
+- The user changes their intent significantly
+- After goal achievement, user requests new work
+
+The goal is stored in project.json and read on session resume.`,
+    parameters: {
+      type: 'object' as const,
+      properties: {
+        target_artifacts: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Artifact type IDs the user wants (e.g., ["final_video"], ["story"])',
+        },
+        description: {
+          type: 'string',
+          description: 'What the user wants to achieve, in natural language',
+        },
+        preferences: {
+          type: 'object',
+          description: 'User preferences (style, duration, format, etc.)',
+          properties: {
+            style: { type: 'string' },
+            duration: { type: 'number' },
+            format: { type: 'string' },
+          },
+        },
+      },
+      required: ['target_artifacts', 'description'],
+    },
+    handler: async (params: Record<string, unknown>) => {
+      const targetArtifacts = params['target_artifacts'] as string[];
+      const description = params['description'] as string;
+      const preferences = (params['preferences'] as GoalPreferences) || {};
+
+      // If an active goal exists, mark it superseded
+      if (context.project.goal && context.project.goal.status === 'active') {
+        context.project.goal.status = 'superseded';
+      }
+
+      // Create new persisted goal
+      const newGoal: PersistedGoal = {
+        targetArtifacts,
+        description,
+        preferences,
+        setAt: Date.now(),
+        status: 'active',
+      };
+
+      context.project.goal = newGoal;
+
+      // Clear completion state so the nudge loop and workflow resume
+      delete (context.project as unknown as Record<string, unknown>)['productionCompletedAt'];
+
+      persistProject(context);
+
+      return {
+        success: true,
+        goal: newGoal,
+        message: `Goal persisted: "${description}" → targets: [${targetArtifacts.join(', ')}]`,
+      };
+    },
+  };
+}
+
+/**
  * Create all planner tools with the given context
  */
 export function createPlannerTools(context: PlannerToolContext): ToolDefinition[] {
@@ -403,5 +500,6 @@ export function createPlannerTools(context: PlannerToolContext): ToolDefinition[
     createScanAssetsTool(context),
     createBackwardPlanTool(context),
     createRegisterContentTool(context),
+    createSetGoalTool(context),
   ];
 }

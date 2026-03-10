@@ -3,6 +3,8 @@
  * 8-phase workflow: plot → story → characters_settings → scenes → character_setting_images → scene_images → video → video_combine
  */
 
+import type { PersistedGoal } from '../../../core/planner/types.js';
+
 /**
  * Project file version - used to detect incompatible old projects.
  */
@@ -600,6 +602,9 @@ export interface ProjectFile {
 
   /** Artifact-centric state for fine-grained control - individual artifact tracking with versioning */
   artifacts?: Record<string, ArtifactState>;
+
+  /** Persisted user goal for session resumption */
+  goal?: PersistedGoal;
 }
 
 /**

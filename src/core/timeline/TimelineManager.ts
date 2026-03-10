@@ -18,6 +18,8 @@ import type {
   SegmentFillStatus,
   DurationConstraints,
   SegmentDescriptor,
+  LayerSnapshot,
+  SegmentVersionInfo,
 } from './types.js';
 
 /** Default constraints based on current generation capabilities */
@@ -132,13 +134,19 @@ export function createTimelineSkeleton(
 /**
  * Update a segment's layers and fill status.
  *
+ * Automatically preserves version history: if the segment already has filled
+ * visual layers, the current layers are snapshotted into `layerHistory` before
+ * being replaced. First-time fills simply initialize `versionInfo`.
+ *
  * Returns a new timeline with the updated segment.
  */
 export function updateSegmentLayers(
   timeline: Timeline,
   segmentId: string,
   layers: TimelineLayerEntry[],
-  fillStatus?: SegmentFillStatus
+  fillStatus?: SegmentFillStatus,
+  prompt?: string,
+  note?: string
 ): Timeline {
   const segmentIndex = timeline.segments.findIndex(s => s.id === segmentId);
   if (segmentIndex === -1) {
@@ -152,14 +160,53 @@ export function updateSegmentLayers(
   const hasVisual = layers.some(l => l.type === 'visual' || l.type === 'narration_video');
   const newFillStatus = fillStatus ?? (hasVisual ? 'filled' : 'planned');
 
+  // --- Version history ---
+  const existingHasVisual = existing.layers.some(
+    l => l.type === 'visual' || l.type === 'narration_video'
+  );
+  const isReplacement = existingHasVisual && existing.fillStatus === 'filled' && hasVisual;
+
+  let layerHistory = existing.layerHistory ? [...existing.layerHistory] : [];
+  let versionInfo: SegmentVersionInfo;
+
+  if (isReplacement) {
+    // Snapshot current layers before replacing
+    const currentVersion = existing.versionInfo?.activeVersion ?? 1;
+    const snapshot: LayerSnapshot = {
+      version: currentVersion,
+      layers: [...existing.layers],
+      createdAt: new Date().toISOString(),
+      prompt: existing.layers[0]?.metadata?.['prompt'] as string | undefined,
+      note: note ?? undefined,
+    };
+    layerHistory.push(snapshot);
+    versionInfo = {
+      activeVersion: currentVersion + 1,
+      totalVersions: currentVersion + 1,
+    };
+  } else {
+    // First-time fill — initialize version info
+    versionInfo = existing.versionInfo ?? { activeVersion: 1, totalVersions: 1 };
+  }
+
+  // Store the generation prompt in the first layer's metadata if provided
+  const newLayers = prompt
+    ? layers.map((l, i) =>
+        i === 0 ? { ...l, metadata: { ...l.metadata, prompt } } : l
+      )
+    : layers;
+
   updatedSegments[segmentIndex] = {
     ...existing,
-    layers,
+    layers: newLayers,
     fillStatus: newFillStatus,
+    layerHistory: layerHistory.length > 0 ? layerHistory : undefined,
+    versionInfo,
   };
 
   const updated: Timeline = {
     ...timeline,
+    version: layerHistory.length > 0 ? '1.1' : timeline.version,
     segments: updatedSegments,
   };
   updated.validation = validateTimeline(updated);

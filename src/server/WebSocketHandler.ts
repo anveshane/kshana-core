@@ -561,6 +561,37 @@ export class WebSocketHandler {
           result,
           agentName,
         }));
+
+        // When set_goal completes, restart the session timer (goal change clears productionCompletedAt)
+        if (toolName === 'set_goal') {
+          try {
+            import('../tasks/video/workflow/ProjectManager.js').then(({ loadProject }) => {
+              const project = loadProject();
+              if (project) {
+                const proj = project as unknown as Record<string, unknown>;
+                this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sid, {
+                  productionStartedAt: (proj['productionStartedAt'] as number) || project.createdAt,
+                }));
+              }
+            });
+          } catch { /* ignore */ }
+        }
+
+        // Check if production completed (final video stitched) and send timer update
+        if (toolName === 'assemble_from_timeline') {
+          try {
+            import('../tasks/video/workflow/ProjectManager.js').then(({ loadProject }) => {
+              const project = loadProject();
+              const proj = project as unknown as Record<string, unknown> | null;
+              if (proj?.['productionCompletedAt']) {
+                this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sid, {
+                  productionStartedAt: (proj['productionStartedAt'] as number) ?? project!.createdAt,
+                  productionCompletedAt: proj['productionCompletedAt'] as number,
+                }));
+              }
+            });
+          } catch { /* ignore */ }
+        }
       },
 
       onStreamingText: (sid, chunk, done) => {

@@ -434,14 +434,18 @@ export class ConversationManager {
       return false;
     }
 
-    if (session.abortController) {
-      session.abortController.abort();
-      session.state.status = 'idle';
-      session.state.lastActivity = Date.now();
-      return true;
+    // Call agent.stop() to set the aborted flag — the loop checks this each iteration
+    if (session.agent) {
+      session.agent.stop();
     }
 
-    return false;
+    if (session.abortController) {
+      session.abortController.abort();
+    }
+
+    session.state.status = 'idle';
+    session.state.lastActivity = Date.now();
+    return !!(session.agent || session.abortController);
   }
 
   /**

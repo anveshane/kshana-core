@@ -1264,6 +1264,28 @@ export class GenericAgent extends TypedEventEmitter {
           this.iteration = 0;
         }
 
+        // Auto-complete all todos when final assembly succeeds
+        if (toolCall.name === 'assemble_from_timeline' && resultObj['success'] === true) {
+          const allTodos = this.todoManager.getTodos();
+          const pendingIds = allTodos
+            .filter(t => t.status !== 'completed' && t.status !== 'cancelled')
+            .map(t => t.id);
+          if (pendingIds.length > 0) {
+            debugLog(`[GenericAgent] Assembly complete — auto-completing ${pendingIds.length} remaining todos`);
+            this.todoManager.mergeTodosById(
+              pendingIds.map(id => ({ id, status: 'completed' as const }))
+            );
+            const updatedTodos = this.todoManager.getTodos();
+            this.emit({ type: 'todo_update', todos: updatedTodos });
+            if (projectExists()) {
+              saveTodos(updatedTodos.map(t => ({
+                id: t.id, content: t.content, activeForm: t.activeForm,
+                status: t.status, visible: t.visible, depth: t.depth,
+              })));
+            }
+          }
+        }
+
         // Check if tool is waiting for user input (dispatch_agent planning)
         if (resultObj['__awaiting_user_input']) {
           // Return waiting status - the planning loop will handle user response
@@ -1337,7 +1359,8 @@ export class GenericAgent extends TypedEventEmitter {
       status: 'completed',
       agentName: this.getEffectiveAgentName(),
     });
-    this.emit({ type: 'agent_text', text: finalOutput, isFinal: true });
+    // Signal completion without re-sending text (already streamed via streaming_text events)
+    this.emit({ type: 'agent_text', text: '', isFinal: true });
 
     return {
       status: 'completed',
@@ -2194,12 +2217,48 @@ export class GenericAgent extends TypedEventEmitter {
     const args = toolCall.arguments;
     const merge = (args['merge'] as boolean | undefined) ?? false;
     const todos = (args['todos'] as Array<Record<string, unknown>> | undefined) ?? [];
+    const removedIds = (args['removed_ids'] as string[] | undefined) ?? [];
+
+    // Remove specified todos first
+    if (removedIds.length > 0) {
+      this.todoManager.removeTodosById(removedIds);
+    }
 
     // Claude SDK guidance: never create single-item todo lists.
-    if (todos.length < 2) {
+    // Only applies to replace mode (merge=false) — merging a single status update is valid.
+    if (!merge && todos.length > 0 && todos.length < 2) {
       return {
         error:
           'Never create single-item todo lists. If you only have one task, just do it directly.',
+      };
+    }
+
+    // If only removed_ids was provided (no todos), still emit update and persist
+    if (todos.length === 0) {
+      const updatedTodos = this.todoManager.getTodos();
+
+      if (projectExists()) {
+        const persistedTodos = updatedTodos.map(t => ({
+          id: t.id,
+          content: t.content,
+          activeForm: t.activeForm,
+          status: t.status,
+          visible: t.visible,
+          depth: t.depth,
+        }));
+        saveTodos(persistedTodos);
+      }
+
+      this.emit({
+        type: 'todo_update',
+        todos: updatedTodos,
+        agentName: this.getEffectiveAgentName(),
+      });
+
+      return {
+        status: 'success',
+        message: removedIds.length > 0 ? `Removed ${removedIds.length} todo(s)` : 'No changes',
+        todos: updatedTodos,
       };
     }
 

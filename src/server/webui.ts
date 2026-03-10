@@ -1076,11 +1076,13 @@ function handleToolStreaming(entry, data) {
   const streamEl = entry.card.querySelector('.tool-streaming-content');
   if (!streamEl) return;
 
-  // Detect ComfyUI progress pattern: "Step N/M (P%)" or "P%"
+  // Detect ComfyUI progress pattern: "Step N/M (P%)" or just "P%"
   var progressMatch = data.content && data.content.match(/^(?:Step\\s+(\\d+)\\/(\\d+)\\s+)?\\(?(\\d+)%\\)?$/);
-  if (data.reset && progressMatch) {
-    var pct = parseInt(progressMatch[3], 10);
-    var label = data.content;
+  // Also detect status messages: "Processing node X (0%)", "Loading workflow...", etc.
+  var pctFromStatus = !progressMatch && data.content && data.content.match(/(\\d+)%/);
+
+  if (data.reset && (progressMatch || pctFromStatus || data.content)) {
+    // Ensure progress wrapper exists
     var progressWrap = streamEl.querySelector('.gen-progress');
     if (!progressWrap) {
       streamEl.innerHTML = '<div class="gen-progress"><div class="gen-progress-bar"><div class="gen-progress-fill"></div></div><div class="gen-progress-text"></div></div>';
@@ -1088,18 +1090,27 @@ function handleToolStreaming(entry, data) {
     }
     var fill = progressWrap.querySelector('.gen-progress-fill');
     var text = progressWrap.querySelector('.gen-progress-text');
-    if (fill) fill.style.width = pct + '%';
-    if (text) text.textContent = label;
+    if (progressMatch) {
+      var pct = parseInt(progressMatch[3], 10);
+      if (fill) fill.style.width = pct + '%';
+      if (text) text.textContent = data.content;
+    } else {
+      // Status message — show text, extract % if present for bar
+      var statusPct = pctFromStatus ? parseInt(pctFromStatus[1], 10) : 0;
+      if (fill && statusPct > 0) fill.style.width = statusPct + '%';
+      if (text) text.textContent = data.content;
+    }
   } else {
     if (data.reset) streamEl.textContent = '';
     if (data.content) streamEl.textContent += data.content;
   }
 
-  // Auto-open tool body
+  // Auto-open tool body (gen-cards are always open via CSS, but regular tool cards need the class)
   const body = entry.card.querySelector('.tool-body');
-  if (!body.classList.contains('open')) {
+  if (body && !body.classList.contains('open')) {
     body.classList.add('open');
-    entry.card.querySelector('.tool-chevron').classList.add('open');
+    var chevron = entry.card.querySelector('.tool-chevron');
+    if (chevron) chevron.classList.add('open');
   }
   maybeScroll();
 }
@@ -1417,13 +1428,15 @@ function handleQuestion(data) {
 
 // ===== Agent Response =====
 function handleAgentResponse(data) {
+  var hadStream = !!streamingEl;
   finalizeStream();
   // Suppress agent_response when it's just repeating the question (awaiting_input)
   if (data.status === 'awaiting_input') {
     // Question card is already rendered — don't duplicate
     return;
   }
-  if (data.output && data.output.trim()) {
+  // Only render output as a new message if it wasn't already shown via streaming
+  if (!hadStream && data.output && data.output.trim()) {
     const el = createAgentMessage();
     el.querySelector('.msg-content').innerHTML = renderMarkdown(data.output);
   }
@@ -1834,7 +1847,46 @@ inputBox.addEventListener('input', function() {
   inputBox.style.height = 'auto';
   inputBox.style.height = Math.min(inputBox.scrollHeight, 120) + 'px';
 });
-document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeLightbox(); });
+// ===== Double-Escape to pause agent =====
+var lastEscTime = 0;
+var escHintTimeout = null;
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') {
+    closeLightbox();
+    var now = Date.now();
+    if (now - lastEscTime < 500) {
+      // Double-press: send cancel
+      lastEscTime = 0;
+      if (escHintTimeout) { clearTimeout(escHintTimeout); escHintTimeout = null; hideEscHint(); }
+      if (sendBtn.disabled && ws && ws.readyState === WebSocket.OPEN) {
+        wsSend({ type: 'cancel', sessionId: sessionId });
+        addSystemMessage('Agent paused — you can now provide input to steer the conversation.');
+        showToast('Agent paused', 'info');
+      }
+    } else {
+      // First press: show hint
+      lastEscTime = now;
+      showEscHint();
+      escHintTimeout = setTimeout(function() { hideEscHint(); escHintTimeout = null; }, 1500);
+    }
+  }
+});
+
+function showEscHint() {
+  var hint = document.getElementById('esc-hint');
+  if (!hint) {
+    hint = document.createElement('div');
+    hint.id = 'esc-hint';
+    hint.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);color:#fff;padding:6px 16px;border-radius:6px;font-size:13px;z-index:9999;pointer-events:none;transition:opacity 0.2s;';
+    document.body.appendChild(hint);
+  }
+  hint.textContent = 'Press Esc again to pause agent';
+  hint.style.opacity = '1';
+}
+function hideEscHint() {
+  var hint = document.getElementById('esc-hint');
+  if (hint) hint.style.opacity = '0';
+}
 
 // ===== Markdown Renderer =====
 function renderMarkdown(text) {

@@ -1482,7 +1482,7 @@ This tool blocks until video generation is complete and returns the result direc
               label: `Scene ${sceneNumber} Shot ${shotNumber} video`,
               source: 'generated',
             };
-            const updated = updateSegmentLayers(timeline, segmentId, [layer]);
+            const updated = updateSegmentLayers(timeline, segmentId, [layer], undefined, motionPrompt);
             saveTimeline(projectDir, updated);
             debugLog(`[generate_video_from_image] Auto-updated timeline segment ${segmentId} with artifact ${artifactId}`);
           }

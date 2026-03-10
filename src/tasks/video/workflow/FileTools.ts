@@ -297,17 +297,21 @@ This is the primary way to find available project content.`,
  */
 export const importFileTool: ToolDefinition = createTool(
   'import_file',
-  `Import/copy content into the project directory.
+  `Import external files into the project. RESTRICTED to non-creative content only.
 
-Use this ONLY for importing external files or user-referenced content into the project:
+ALLOWED uses:
 - Copying a user-provided file (story, transcript, reference material) into the project
-- Saving plan/outline metadata that doesn't need user review
+- Saving plan/outline metadata (plans/plot.md, plans/outline.md)
 
-DO NOT use this for creative content (characters, settings, scenes, image prompts,
-video prompts). Use generate_content instead — it shows the content to the user for
-approval before saving.
+BLOCKED (will return error):
+- prompts/images/* — use generate_content with content_type "scene_image_prompt", "character_image_prompt", "setting_image_prompt", or "shot_image_prompt"
+- prompts/videos/* — use generate_content with content_type "scene_video_prompt"
+- characters/* — use generate_content with content_type "character"
+- settings/* — use generate_content with content_type "setting"
+- plans/scenes/* — use generate_content with content_type "scene"
+- plans/chapters/* — use generate_content with content_type "story"
 
-Files are automatically registered in project.json with a summary for easy discovery.`,
+generate_content provides user approval workflow and fetches proper context. import_file does not.`,
   {
     type: 'object',
     properties: {
@@ -337,6 +341,22 @@ Files are automatically registered in project.json with a summary for easy disco
       return {
         status: 'error',
         error: 'Invalid file path. Use relative paths within the project directory.',
+      };
+    }
+
+    // Block creative content paths — these MUST go through generate_content
+    const creativePathPatterns = [
+      /^prompts\/images\//,      // image prompts (character, setting, scene, shot)
+      /^prompts\/videos\//,      // video/motion prompts
+      /^characters\//,           // character profiles
+      /^settings\//,             // setting profiles
+      /^plans\/scenes\//,        // scene breakdowns
+      /^plans\/chapters\//,      // story chapters
+    ];
+    if (creativePathPatterns.some(p => p.test(filePath))) {
+      return {
+        status: 'error',
+        error: `Cannot use import_file for creative content path "${filePath}". Use generate_content instead — it provides user approval workflow and proper context. For image prompts use content_type "scene_image_prompt", "character_image_prompt", "setting_image_prompt", or "shot_image_prompt". For video prompts use content_type "scene_video_prompt".`,
       };
     }
 
