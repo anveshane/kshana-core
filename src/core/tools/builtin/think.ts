@@ -29,8 +29,8 @@ Focus on WHAT you're trying to achieve, not HOW you'll implement it.`,
     },
     required: ['thought'],
   },
-  args => ({
-    status: 'recorded',
-    thought: args['thought'],
-  })
+  args => {
+    void args;
+    return { status: 'recorded' };
+  }
 );

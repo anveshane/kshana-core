@@ -22,6 +22,19 @@ export interface UserGoal {
 }
 
 /**
+ * Persisted goal with lifecycle metadata.
+ * Stored in project.json to survive across sessions.
+ */
+export interface PersistedGoal extends UserGoal {
+  /** When the goal was set */
+  setAt: number;
+  /** When the goal was achieved (plan returned 0 steps) */
+  achievedAt?: number;
+  /** Goal lifecycle status */
+  status: 'active' | 'achieved' | 'superseded';
+}
+
+/**
  * Preferences extracted from user's goal description
  */
 export interface GoalPreferences {

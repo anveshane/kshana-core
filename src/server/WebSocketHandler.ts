@@ -309,8 +309,14 @@ export class WebSocketHandler {
     // Create event handlers
     const events = this.createEventHandlers(sessionId, socket);
 
+    // Notify UI that timer is running
+    this.sendTimerUpdate(socket, sessionId, true);
+
     try {
       const result = await this.conversationManager.runTask(sessionId, data.task, events);
+
+      // Notify UI that timer stopped
+      this.sendTimerUpdate(socket, sessionId, false);
 
       // Send final response
       this.sendMessage(socket, createServerMessage<AgentResponseData>('agent_response', sessionId, {
@@ -326,6 +332,8 @@ export class WebSocketHandler {
         }));
       }
     } catch (error) {
+      // Notify UI that timer stopped on error
+      this.sendTimerUpdate(socket, sessionId, false);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.sendError(socket, sessionId, 'task_error', errorMessage);
     }
@@ -348,8 +356,14 @@ export class WebSocketHandler {
     // Create event handlers
     const events = this.createEventHandlers(sessionId, socket);
 
+    // Notify UI that timer is running
+    this.sendTimerUpdate(socket, sessionId, true);
+
     try {
       const result = await this.conversationManager.sendResponse(sessionId, data.response, events);
+
+      // Notify UI that timer stopped
+      this.sendTimerUpdate(socket, sessionId, false);
 
       // Send final response
       this.sendMessage(socket, createServerMessage<AgentResponseData>('agent_response', sessionId, {
@@ -365,6 +379,8 @@ export class WebSocketHandler {
         }));
       }
     } catch (error) {
+      // Notify UI that timer stopped on error
+      this.sendTimerUpdate(socket, sessionId, false);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.sendError(socket, sessionId, 'response_error', errorMessage);
     }
@@ -436,15 +452,17 @@ export class WebSocketHandler {
       tools: toolNames,
     }));
 
-    // Send session timer — use productionStartedAt or fall back to createdAt
+    // Send session timer — recover elapsed time from project
     if (projectData) {
-      const startedAt = (projectData.productionStartedAt as number) || (projectData.createdAt as number);
-      if (startedAt) {
+      try {
+        const { recoverTimer } = await import('../tasks/video/workflow/ProjectManager.js');
+        const elapsedMs = recoverTimer();
         this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sessionId, {
-          productionStartedAt: startedAt,
-          productionCompletedAt: projectData.productionCompletedAt as number | undefined,
+          elapsedMs,
+          running: false,
+          completed: !!projectData.productionCompletedAt,
         }));
-      }
+      } catch { /* ignore */ }
     }
   }
 
@@ -509,9 +527,10 @@ export class WebSocketHandler {
         projectName,
       }));
 
-      // Send session timer with production start time
+      // Send session timer — new project starts at 0
       this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sessionId, {
-        productionStartedAt: Date.now(),
+        elapsedMs: 0,
+        running: false,
       }));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -561,6 +580,34 @@ export class WebSocketHandler {
           result,
           agentName,
         }));
+
+        // When set_goal completes, send timer update (accumulated time, agent still running)
+        if (toolName === 'set_goal') {
+          try {
+            import('../tasks/video/workflow/ProjectManager.js').then(({ getElapsedMs }) => {
+              this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sid, {
+                elapsedMs: getElapsedMs(),
+                running: true,
+              }));
+            });
+          } catch { /* ignore */ }
+        }
+
+        // Check if production completed (final video stitched) and send timer update
+        if (toolName === 'assemble_from_timeline') {
+          try {
+            import('../tasks/video/workflow/ProjectManager.js').then(({ getElapsedMs, loadProject }) => {
+              const project = loadProject();
+              if (project?.productionCompletedAt) {
+                this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sid, {
+                  elapsedMs: getElapsedMs(),
+                  running: false,
+                  completed: true,
+                }));
+              }
+            });
+          } catch { /* ignore */ }
+        }
       },
 
       onStreamingText: (sid, chunk, done) => {
@@ -618,12 +665,13 @@ export class WebSocketHandler {
         this.sendMessage(socket, createServerMessage<PhaseTransitionData>('phase_transition', sid, data));
         // Check if production completed (final video stitched) and send timer update
         try {
-          import('../tasks/video/workflow/ProjectManager.js').then(({ loadProject }) => {
+          import('../tasks/video/workflow/ProjectManager.js').then(({ getElapsedMs, loadProject }) => {
             const project = loadProject();
             if (project?.productionCompletedAt) {
               this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sid, {
-                productionStartedAt: project.productionStartedAt ?? project.createdAt,
-                productionCompletedAt: project.productionCompletedAt,
+                elapsedMs: getElapsedMs(),
+                running: false,
+                completed: true,
               }));
             }
           });
@@ -634,6 +682,25 @@ export class WebSocketHandler {
         this.sendMessage(socket, createServerMessage<NotificationData>('notification', sid, data));
       },
     };
+  }
+
+  /**
+   * Send a timer update to the client.
+   * Reads current elapsedMs from the project and sends the new-format timer message.
+   */
+  private sendTimerUpdate(socket: WebSocket, sessionId: string, running: boolean): void {
+    try {
+      // Dynamic import to avoid circular deps — synchronous require fallback for speed
+      import('../tasks/video/workflow/ProjectManager.js').then(({ getElapsedMs, loadProject }) => {
+        const project = loadProject();
+        const elapsedMs = getElapsedMs();
+        this.sendMessage(socket, createServerMessage<SessionTimerData>('session_timer', sessionId, {
+          elapsedMs,
+          running,
+          completed: !running && !!project?.productionCompletedAt,
+        }));
+      });
+    } catch { /* ignore */ }
   }
 
   /**

@@ -5,6 +5,8 @@
  * that can support any type of AI-generated video through configurable templates.
  */
 
+import type { PersistedGoal } from '../planner/types.js';
+
 // =============================================================================
 // ARTIFACT CATEGORIES
 // =============================================================================
@@ -598,6 +600,9 @@ export interface GenericProjectFile {
    * Maps variable names (e.g., '$story') to content or file paths.
    */
   contextStore: Record<string, ContextStoreEntry>;
+
+  /** Persisted user goal for session resumption */
+  goal?: PersistedGoal;
 }
 
 /**

@@ -966,6 +966,86 @@ export function saveProject(project: ProjectFile, basePath: string = process.cwd
   writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
 }
 
+// ============================================================================
+// ACTIVE TIMER TRACKING
+// ============================================================================
+
+/**
+ * Start the active timer. Called when agent begins running.
+ * Sets timerLastStartedAt so elapsed time can be computed on stop.
+ */
+export function startTimer(basePath: string = process.cwd()): void {
+  const project = loadProject(basePath);
+  if (!project) return;
+  project.timerLastStartedAt = Date.now();
+  saveProject(project, basePath);
+}
+
+/**
+ * Stop the active timer. Called when agent finishes running.
+ * Adds the delta since timerLastStartedAt to elapsedMs and clears timerLastStartedAt.
+ * Returns the total elapsedMs.
+ */
+export function stopTimer(basePath: string = process.cwd()): number {
+  const project = loadProject(basePath);
+  if (!project) return 0;
+  const lastStart = project.timerLastStartedAt;
+  if (lastStart) {
+    project.elapsedMs = (project.elapsedMs || 0) + (Date.now() - lastStart);
+    delete project.timerLastStartedAt;
+    saveProject(project, basePath);
+  }
+  return project.elapsedMs || 0;
+}
+
+/**
+ * Recover the timer on project load. If timerLastStartedAt is set,
+ * the server crashed mid-run — add the delta and clear the marker.
+ * Returns the total elapsedMs.
+ */
+export function recoverTimer(basePath: string = process.cwd()): number {
+  const project = loadProject(basePath);
+  if (!project) return 0;
+
+  // Migration: if elapsedMs is missing but productionCompletedAt exists, compute a rough estimate
+  if (project.elapsedMs == null && project.productionCompletedAt && project.productionStartedAt) {
+    project.elapsedMs = project.productionCompletedAt - project.productionStartedAt;
+  }
+
+  const lastStart = project.timerLastStartedAt;
+  if (lastStart) {
+    project.elapsedMs = (project.elapsedMs || 0) + (Date.now() - lastStart);
+    delete project.timerLastStartedAt;
+    saveProject(project, basePath);
+  }
+  return project.elapsedMs || 0;
+}
+
+/**
+ * Checkpoint the active timer. Flushes the current delta to elapsedMs
+ * and resets timerLastStartedAt to now. Called periodically (~60s) to
+ * limit data loss if the server crashes mid-run.
+ */
+export function checkpointTimer(basePath: string = process.cwd()): void {
+  const project = loadProject(basePath);
+  if (!project) return;
+  const lastStart = project.timerLastStartedAt;
+  if (lastStart) {
+    project.elapsedMs = (project.elapsedMs || 0) + (Date.now() - lastStart);
+    project.timerLastStartedAt = Date.now();
+    saveProject(project, basePath);
+  }
+}
+
+/**
+ * Get the current accumulated elapsed time without modifying state.
+ */
+export function getElapsedMs(basePath: string = process.cwd()): number {
+  const project = loadProject(basePath);
+  if (!project) return 0;
+  return project.elapsedMs || 0;
+}
+
 /**
  * Register a file in the project's files array with an optional summary.
  * If the file already exists in the array, updates it.

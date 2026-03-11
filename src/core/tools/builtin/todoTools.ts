@@ -43,13 +43,18 @@ NOTE that you should not use this tool if there is only one trivial task to do. 
    - activeForm: The present continuous form shown during execution (e.g., "Running tests", "Building the project")
 
 2. Task Management:
+   - ALWAYS call TodoRead first to get current todo IDs before updating with TodoWrite(merge=true)
    - Update task status in real-time as you work
-   - Mark tasks complete IMMEDIATELY after finishing (don't batch completions)
+   - Mark tasks complete IMMEDIATELY after finishing: TodoWrite(merge=true, todos=[{id: "the-id", status: "completed"}])
    - Exactly ONE task must be in_progress at any time (not less, not more)
    - Complete current tasks before starting new ones
-   - Remove tasks that are no longer relevant from the list entirely
 
-3. Task Completion Requirements:
+3. Todo Cleanup (use removed_ids to remove todos at these specific points ONLY):
+   - **Session resume**: Remove all completed/cancelled todos from previous sessions
+   - **Goal change**: After calling set_goal(), remove all old todos — the previous plan is stale
+   - **Assembly complete**: After assemble_from_timeline succeeds, remove completed generation todos
+
+4. Task Completion Requirements:
    - ONLY mark a task as completed when you have FULLY accomplished it
    - If you encounter errors, blockers, or cannot finish, keep the task as in_progress
    - When blocked, create a new task describing what needs to be resolved
@@ -59,7 +64,7 @@ NOTE that you should not use this tool if there is only one trivial task to do. 
      - You encountered unresolved errors
      - You couldn't find necessary files or dependencies
 
-4. Task Breakdown:
+5. Task Breakdown:
    - Create specific, actionable items
    - Break complex tasks into smaller, manageable steps
    - Use clear, descriptive task names
@@ -93,8 +98,13 @@ When in doubt, use this tool. Being proactive with task management demonstrates 
           required: ['id', 'content', 'status'],
         },
       },
+      removed_ids: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'IDs of todos to remove from the list entirely. Use this to clean up completed or irrelevant tasks.',
+      },
     },
-    required: ['merge', 'todos'],
+    required: ['merge'],
   }
   // No handler - handled by GenericAgent
 );

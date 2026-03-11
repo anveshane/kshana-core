@@ -151,6 +151,10 @@ The timeline is saved to timeline.json in the project directory and persists acr
           enum: ['empty', 'planned', 'filled'],
           description: '(update_segment) Override fill status (auto-detected if omitted)',
         },
+        version_note: {
+          type: 'string',
+          description: '(update_segment) Optional note for this version (e.g., "regenerated with different prompt")',
+        },
         // add_global_layer params
         global_layer: {
           type: 'object',
@@ -255,6 +259,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             metadata?: Record<string, unknown>;
           }> | undefined;
           const fillStatus = params['fill_status'] as SegmentFillStatus | undefined;
+          const versionNote = params['version_note'] as string | undefined;
 
           if (!segmentId) {
             return { success: false, error: 'segment_id is required' };
@@ -278,7 +283,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
           }));
 
           try {
-            timeline = updateSegmentLayers(timeline, segmentId, layers, fillStatus);
+            timeline = updateSegmentLayers(timeline, segmentId, layers, fillStatus, undefined, versionNote);
           } catch (e) {
             return { success: false, error: String(e) };
           }
@@ -293,9 +298,14 @@ The timeline is saved to timeline.json in the project directory and persists acr
               label: segment.label,
               fillStatus: segment.fillStatus,
               layerCount: segment.layers.length,
+              versionInfo: segment.versionInfo,
+              hasAlternatives: (segment.versionInfo?.totalVersions ?? 1) > 1,
             },
             validation: timeline.validation,
-            message: `Segment "${segment.label}" updated with ${layers.length} layer(s), status: ${segment.fillStatus}`,
+            message: `Segment "${segment.label}" updated with ${layers.length} layer(s), status: ${segment.fillStatus}` +
+              (segment.versionInfo && segment.versionInfo.totalVersions > 1
+                ? ` (version ${segment.versionInfo.activeVersion} of ${segment.versionInfo.totalVersions})`
+                : ''),
           };
         }
 

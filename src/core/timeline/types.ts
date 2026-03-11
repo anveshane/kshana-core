@@ -121,6 +121,29 @@ export interface TimelineSegment {
   layers: TimelineLayerEntry[];
   /** Transition from the previous segment */
   transition?: SegmentTransition;
+  /** History of previous layer versions (auto-populated on regeneration) */
+  layerHistory?: LayerSnapshot[];
+  /** Current version info for this segment */
+  versionInfo?: SegmentVersionInfo;
+}
+
+/**
+ * Snapshot of a segment's layers at a point in time.
+ * Created automatically when update_segment replaces existing filled layers.
+ */
+export interface LayerSnapshot {
+  version: number;
+  layers: TimelineLayerEntry[];
+  createdAt: string;
+  /** The prompt/instruction that produced these layers */
+  prompt?: string;
+  /** Human-readable note */
+  note?: string;
+}
+
+export interface SegmentVersionInfo {
+  activeVersion: number;
+  totalVersions: number;
 }
 
 /**
@@ -171,7 +194,7 @@ export interface TimelineGlobalLayer {
  */
 export interface Timeline {
   /** Schema version */
-  version: '1.0';
+  version: '1.0' | '1.1';
   /** Total target duration in seconds */
   totalDuration: number;
   /** Default compositing mode for new segments */

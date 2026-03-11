@@ -114,10 +114,19 @@ function buildProjectStateSection(projectState: Record<string, unknown> | null):
     }
   }
 
+  // Extract goal for prominent display
+  const goal = projectState['goal'] as { description?: string; targetArtifacts?: string[]; status?: string; achievedAt?: number } | undefined;
+  let goalSection = '';
+  if (goal) {
+    goalSection = `\n## Current Goal\n- **Description**: ${goal.description}\n- **Targets**: ${(goal.targetArtifacts || []).join(', ')}\n- **Status**: ${goal.status}${goal.achievedAt ? ' (completed)' : ''}\n`;
+  } else {
+    goalSection = `\n## Current Goal\nNo goal set. Understand user intent and call \`set_goal\` to persist it.\n`;
+  }
+
   return `
 <project_state>
 The following is the current project state. This is automatically injected - you do NOT need to call read_project at the start.
-
+${goalSection}
 ## Available Files (use EXACT paths with read_file)
 ${filesList || 'No files created yet.'}
 

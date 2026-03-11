@@ -358,7 +358,27 @@ export class GenericAgent extends TypedEventEmitter {
 
     // Load persisted todos from project file (for resuming work)
     if (projectExists() && !this.isSubAgent) {
-      const persistedTodos = loadTodos();
+      let persistedTodos = loadTodos();
+
+      // Safety: if project is complete, clear all todos and fix goal status
+      const project = loadProject();
+      const projRec = project as unknown as Record<string, unknown> | null;
+      if (projRec?.['productionCompletedAt']) {
+        // Clear all todos — project is done, no stale todos should confuse next session
+        if (persistedTodos.length > 0) {
+          debugLog(`[GenericAgent] Project complete — clearing ${persistedTodos.length} stale todos`);
+          persistedTodos = [];
+          saveTodos([]);
+        }
+        // Ensure goal status reflects completion — prevents agent from re-executing an achieved goal
+        if (project?.goal?.status === 'active') {
+          debugLog(`[GenericAgent] Project complete but goal still active — marking as achieved`);
+          project.goal.status = 'achieved';
+          project.goal.achievedAt = projRec['productionCompletedAt'] as number;
+          saveProject(project);
+        }
+      }
+
       if (persistedTodos.length > 0) {
         // Convert persisted todos to the format expected by todoManager
         const todosForManager = persistedTodos.map(t => ({
@@ -1188,6 +1208,16 @@ export class GenericAgent extends TypedEventEmitter {
 
         if (projectComplete) {
           debugLog(`[GenericAgent] Project complete (productionCompletedAt set) — allowing agent to stop naturally`);
+          // Clear any todos created during this session — project is done
+          const remainingTodos = this.todoManager.getTodos();
+          if (remainingTodos.length > 0) {
+            debugLog(`[GenericAgent] Project complete — clearing ${remainingTodos.length} session todos`);
+            this.todoManager.writeTodos([]);
+            this.emit({ type: 'todo_update', todos: [] });
+            if (projectExists()) {
+              saveTodos([]);
+            }
+          }
         }
 
         finalOutput = response.content ?? '';
@@ -1264,6 +1294,19 @@ export class GenericAgent extends TypedEventEmitter {
           this.iteration = 0;
         }
 
+        // Clear all todos when final assembly succeeds — assembly is terminal, no todos should survive
+        if (toolCall.name === 'assemble_from_timeline' && resultObj['success'] === true) {
+          const todoCount = this.todoManager.getTodos().length;
+          if (todoCount > 0) {
+            debugLog(`[GenericAgent] Assembly complete — clearing all ${todoCount} todos`);
+            this.todoManager.writeTodos([]);
+            this.emit({ type: 'todo_update', todos: [] });
+            if (projectExists()) {
+              saveTodos([]);
+            }
+          }
+        }
+
         // Check if tool is waiting for user input (dispatch_agent planning)
         if (resultObj['__awaiting_user_input']) {
           // Return waiting status - the planning loop will handle user response
@@ -1337,7 +1380,8 @@ export class GenericAgent extends TypedEventEmitter {
       status: 'completed',
       agentName: this.getEffectiveAgentName(),
     });
-    this.emit({ type: 'agent_text', text: finalOutput, isFinal: true });
+    // Signal completion without re-sending text (already streamed via streaming_text events)
+    this.emit({ type: 'agent_text', text: '', isFinal: true });
 
     return {
       status: 'completed',
@@ -2194,12 +2238,48 @@ export class GenericAgent extends TypedEventEmitter {
     const args = toolCall.arguments;
     const merge = (args['merge'] as boolean | undefined) ?? false;
     const todos = (args['todos'] as Array<Record<string, unknown>> | undefined) ?? [];
+    const removedIds = (args['removed_ids'] as string[] | undefined) ?? [];
+
+    // Remove specified todos first
+    if (removedIds.length > 0) {
+      this.todoManager.removeTodosById(removedIds);
+    }
 
     // Claude SDK guidance: never create single-item todo lists.
-    if (todos.length < 2) {
+    // Only applies to replace mode (merge=false) — merging a single status update is valid.
+    if (!merge && todos.length > 0 && todos.length < 2) {
       return {
         error:
           'Never create single-item todo lists. If you only have one task, just do it directly.',
+      };
+    }
+
+    // If only removed_ids was provided (no todos), still emit update and persist
+    if (todos.length === 0) {
+      const updatedTodos = this.todoManager.getTodos();
+
+      if (projectExists()) {
+        const persistedTodos = updatedTodos.map(t => ({
+          id: t.id,
+          content: t.content,
+          activeForm: t.activeForm,
+          status: t.status,
+          visible: t.visible,
+          depth: t.depth,
+        }));
+        saveTodos(persistedTodos);
+      }
+
+      this.emit({
+        type: 'todo_update',
+        todos: updatedTodos,
+        agentName: this.getEffectiveAgentName(),
+      });
+
+      return {
+        status: 'success',
+        message: removedIds.length > 0 ? `Removed ${removedIds.length} todo(s)` : 'No changes',
+        todos: updatedTodos,
       };
     }
 
@@ -3135,8 +3215,9 @@ Respond in JSON format:
           temperature: 0.8,
         };
         if (this.contentState.contentType === 'scene_video_prompt') {
-          const { MOTION_PROMPT_SCHEMA } = await import('../../tasks/video/tools.js');
-          streamOptions.responseFormat = MOTION_PROMPT_SCHEMA;
+          // Use json_object (broadly supported) instead of json_schema (OpenAI-only).
+          // The prompt instructions already describe the required JSON structure.
+          streamOptions.responseFormat = { type: 'json_object' as const };
         }
 
         for await (const chunk of this.llm.generateStream(streamOptions)) {

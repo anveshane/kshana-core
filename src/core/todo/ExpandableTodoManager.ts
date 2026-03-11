@@ -213,6 +213,23 @@ export class ExpandableTodoManager {
   }
 
   /**
+   * Remove todos by their IDs.
+   * Returns the removed count.
+   */
+  removeTodosById(ids: string[]): TodoManagerResult {
+    const idSet = new Set(ids);
+    const before = this.todos.length;
+    this.todos = this.todos.filter(t => !idSet.has(t.id));
+    const removed = before - this.todos.length;
+
+    return {
+      status: 'success',
+      message: `Removed ${removed} todo(s)`,
+      todos: this.todos,
+    };
+  }
+
+  /**
    * Direct todo list write - for backwards compatibility and testing.
    * Preserves completed todos that are not in the new list.
    */

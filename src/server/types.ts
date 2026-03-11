@@ -196,8 +196,9 @@ export interface NotificationData {
  * Session timer message data.
  */
 export interface SessionTimerData {
-  productionStartedAt: number;
-  productionCompletedAt?: number;
+  elapsedMs: number;
+  running: boolean;
+  completed?: boolean;
 }
 
 /**
