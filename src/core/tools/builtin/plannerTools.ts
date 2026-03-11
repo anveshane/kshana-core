@@ -426,10 +426,18 @@ function persistProject(context: PlannerToolContext, project: GenericProjectFile
   const latestProject = getCurrentProject(context);
   const mergedProject = {
     ...(latestProject as Record<string, unknown>),
-    ...(project as Record<string, unknown>),
     goal: project.goal ?? latestProject.goal,
     updatedAt: Date.now(),
-  } as GenericProjectFile;
+  } as GenericProjectFile & Record<string, unknown>;
+
+  if (!project.goal && 'goal' in mergedProject) {
+    delete mergedProject['goal'];
+  }
+
+  if (project.goal?.status === 'active' && 'productionCompletedAt' in mergedProject) {
+    delete mergedProject['productionCompletedAt'];
+  }
+
   writeFileSync(filePath, JSON.stringify(mergedProject, null, 2), 'utf-8');
 }
 
