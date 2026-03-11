@@ -291,16 +291,12 @@ text_to_image
 4. **Shot sequencing**: Start with establishing/wide shots, move to medium/close-ups for key moments, use reaction shots for emotional beats
 5. **Per-shot referenceImages**: Only include references relevant to that specific shot (e.g., close-up of Alice → only Alice's reference)
 
-**LTX-2 Prompt Rules (apply to EACH shot's prompt):**
+**Model-Specific Prompt Rules:** If a `<model_skills>` section is present in the system prompt, apply those rules to EACH shot's prompt. Otherwise, use these defaults for each shot:
 
 1. **Single flowing paragraph**: Each shot prompt is ONE continuous paragraph
 2. **Present tense, descriptive language**: "a woman walks" not "a woman walking"
-3. **Chronological flow**: Describe how the shot starts, what unfolds, and how it resolves
-4. **Show, don't label emotions**: "tears stream down her face" not "she is sad"
-5. **Explicit camera work in cameraWork field**: Define the camera motion separately
-6. **Match detail to shot scale**: More facial detail for close-ups, environmental detail for wide shots
-7. **Environmental motion**: Wind, water, smoke, light — these add life
-8. **No clutter**: No text, logos, or chaotic motion
+3. **Show, don't label emotions**: "tears stream down her face" not "she is sad"
+4. **Explicit camera work in cameraWork field**: Define the camera motion separately
 
 **Dialogue Support:**
 - If the scene description includes character dialogue, distribute the lines across the appropriate shots

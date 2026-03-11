@@ -273,6 +273,52 @@ export function loadRemotionSkills(options?: LoadRemotionSkillsOptions): string 
   return parts.join('');
 }
 
+// =============================================================================
+// Content-Type Skill Loading
+// =============================================================================
+
+export interface SkillResolutionContext {
+  providerId?: string;
+  workflowName?: string;
+}
+
+/**
+ * Load content-type-specific skill files using a 3-level resolution convention.
+ *
+ * Looks for files under `prompts/skills/content-type/` in this order (additive):
+ *   1. `{contentType}.md`                              — base skill
+ *   2. `{contentType}.{providerId}.md`                 — provider-level
+ *   3. `{contentType}.{providerId}.{workflowName}.md`  — most specific
+ *
+ * Missing files are silently skipped. Returns concatenated content or empty string.
+ */
+export function loadContentTypeSkills(
+  contentType: string,
+  context?: SkillResolutionContext,
+): string {
+  const dir = join(PROMPTS_DIR, 'skills', 'content-type');
+  if (!existsSync(dir)) return '';
+
+  const candidates: string[] = [
+    `${contentType}.md`,
+  ];
+  if (context?.providerId) {
+    candidates.push(`${contentType}.${context.providerId}.md`);
+    if (context.workflowName) {
+      candidates.push(`${contentType}.${context.providerId}.${context.workflowName}.md`);
+    }
+  }
+
+  const parts: string[] = [];
+  for (const filename of candidates) {
+    const filePath = join(dir, filename);
+    if (existsSync(filePath)) {
+      parts.push(readFileSync(filePath, 'utf-8'));
+    }
+  }
+  return parts.join('\n\n');
+}
+
 export type InfographicType = 'bar_chart' | 'line_chart' | 'diagram' | 'statistic' | 'list';
 
 export interface InfographicSkillSelection {

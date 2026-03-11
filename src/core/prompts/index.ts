@@ -3,7 +3,8 @@
  * Reads prompts from markdown files in /prompts/ directory.
  */
 import type { ToolDefinition } from '../llm/index.js';
-import { loadAndRenderMarkdown, loadMarkdown, type PromptContext } from './loader.js';
+import { loadAndRenderMarkdown, loadMarkdown, loadContentTypeSkills, type PromptContext, type SkillResolutionContext } from './loader.js';
+import { getProviderRegistry, type ProviderConfig } from '../../services/providers/index.js';
 import os from 'os';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -207,6 +208,48 @@ export type ContentType = 'plot' | 'story' | 'character' | 'setting' | 'scene' |
   | 'character_image_prompt' | 'setting_image_prompt' | 'scene_image_prompt' | 'scene_video_prompt'
   | 'shot_image_prompt';
 
+/** Map content types to the generation capability they require. */
+const CONTENT_TYPE_CAPABILITY: Partial<Record<ContentType, string>> = {
+  scene_video_prompt: 'videoGeneration',
+  scene_image_prompt: 'imageEditing',
+  character_image_prompt: 'imageGeneration',
+  setting_image_prompt: 'imageGeneration',
+  shot_image_prompt: 'imageEditing',
+};
+
+/** Default ComfyUI workflow names per capability. */
+const COMFYUI_DEFAULT_WORKFLOWS: Record<string, string> = {
+  videoGeneration: 'ltx23',
+  imageGeneration: 'zimage',
+  imageEditing: 'qwen_edit',
+};
+
+/**
+ * Resolve the skill context (provider + workflow) for a given content type
+ * by reading the active provider configuration from ProviderRegistry.
+ */
+function resolveSkillContext(contentType: ContentType): SkillResolutionContext | undefined {
+  const capability = CONTENT_TYPE_CAPABILITY[contentType];
+  if (!capability) return undefined;
+
+  try {
+    const config: ProviderConfig = getProviderRegistry().getConfig();
+
+    // capability key matches config key names (videoGeneration, imageGeneration, imageEditing)
+    const providerId = config[capability as keyof ProviderConfig];
+    if (!providerId) return undefined;
+
+    const workflowName = providerId === 'comfyui'
+      ? COMFYUI_DEFAULT_WORKFLOWS[capability]
+      : undefined;
+
+    return { providerId, workflowName };
+  } catch {
+    // ProviderRegistry not initialised yet — no skill injection
+    return undefined;
+  }
+}
+
 /**
  * Build the content creation sub-agent system prompt.
  * Used for creative writing tasks like stories, characters, and scene descriptions.
@@ -226,7 +269,15 @@ export function buildContentPrompt(
   const base = loadAndRenderMarkdown('system/base.md', {});
   const sub = loadAndRenderMarkdown('system/subagent.md', {});
   const content = loadAndRenderMarkdown('subagents/content-creator.md', { content_type: contentType });
-  return [base, sub, content, taskSection, contextSection].filter(Boolean).join('\n\n');
+
+  // Dynamically inject model-specific skills based on content type + active provider
+  const skillContext = resolveSkillContext(contentType);
+  const skillsContent = loadContentTypeSkills(contentType, skillContext);
+  const skillsSection = skillsContent
+    ? `\n<model_skills>\n${skillsContent}\n</model_skills>`
+    : '';
+
+  return [base, sub, content, skillsSection, taskSection, contextSection].filter(Boolean).join('\n\n');
 }
 
 /**
