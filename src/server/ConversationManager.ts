@@ -16,8 +16,10 @@ import {
   runInSession,
   createLocalSession,
   createRemoteSession,
-  LocalFileSystem,
 } from '../core/fs/index.js';
+import { startTimer, stopTimer, checkpointTimer } from '../tasks/video/workflow/ProjectManager.js';
+
+const TIMER_CHECKPOINT_INTERVAL_MS = 60_000; // Flush elapsed time to disk every 60s
 
 export interface ConversationManagerConfig {
   llmConfig: LLMClientConfig;
@@ -56,6 +58,8 @@ interface ActiveSession {
   mode: 'local' | 'remote';
   /** Remote client filesystem (set in remote mode) */
   remoteFs?: IFileSystem;
+  /** Periodic timer checkpoint interval (flushes elapsedMs to disk) */
+  timerCheckpointInterval?: ReturnType<typeof setInterval>;
 }
 
 export class ConversationManager {
@@ -253,8 +257,18 @@ export class ConversationManager {
       // Set up event listeners
       this.setupEventListeners(sessionId, session.agent!, events);
 
+      // Start active timer + periodic checkpoint
+      try { startTimer(); } catch { /* ignore if no project yet */ }
+      session.timerCheckpointInterval = setInterval(() => {
+        try { checkpointTimer(); } catch { /* ignore */ }
+      }, TIMER_CHECKPOINT_INTERVAL_MS);
+
       try {
         const result = await session.agent!.run(task);
+
+        // Stop active timer + checkpoint interval
+        if (session.timerCheckpointInterval) { clearInterval(session.timerCheckpointInterval); session.timerCheckpointInterval = undefined; }
+        try { stopTimer(); } catch { /* ignore */ }
 
         // Update session state based on result
         session.state.lastActivity = Date.now();
@@ -268,6 +282,9 @@ export class ConversationManager {
 
         return result;
       } catch (error) {
+        // Stop active timer + checkpoint interval on error
+        if (session.timerCheckpointInterval) { clearInterval(session.timerCheckpointInterval); session.timerCheckpointInterval = undefined; }
+        try { stopTimer(); } catch { /* ignore */ }
         session.state.status = 'error';
         session.state.lastActivity = Date.now();
         throw error;
@@ -316,8 +333,18 @@ export class ConversationManager {
       // Set up event listeners
       this.setupEventListeners(sessionId, session.agent!, events);
 
+      // Start active timer + periodic checkpoint
+      try { startTimer(); } catch { /* ignore */ }
+      session.timerCheckpointInterval = setInterval(() => {
+        try { checkpointTimer(); } catch { /* ignore */ }
+      }, TIMER_CHECKPOINT_INTERVAL_MS);
+
       try {
         const result = await session.agent!.run('', response);
+
+        // Stop active timer + checkpoint interval
+        if (session.timerCheckpointInterval) { clearInterval(session.timerCheckpointInterval); session.timerCheckpointInterval = undefined; }
+        try { stopTimer(); } catch { /* ignore */ }
 
         // Update session state based on result
         session.state.lastActivity = Date.now();
@@ -331,6 +358,9 @@ export class ConversationManager {
 
         return result;
       } catch (error) {
+        // Stop active timer + checkpoint interval on error
+        if (session.timerCheckpointInterval) { clearInterval(session.timerCheckpointInterval); session.timerCheckpointInterval = undefined; }
+        try { stopTimer(); } catch { /* ignore */ }
         session.state.status = 'error';
         session.state.lastActivity = Date.now();
         throw error;
@@ -457,6 +487,11 @@ export class ConversationManager {
       // Cancel any running task
       if (session.abortController) {
         session.abortController.abort();
+      }
+      // Clear timer checkpoint interval
+      if (session.timerCheckpointInterval) {
+        clearInterval(session.timerCheckpointInterval);
+        session.timerCheckpointInterval = undefined;
       }
       // Clean up Remotion session resources (temp dirs, jobs) — fire and forget
       import('../services/remotion/index.js')

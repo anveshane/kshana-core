@@ -400,7 +400,8 @@ var newProjectState = null; // { step, templateId, templateName, style, styleNam
 var pendingAutoTask = null; // task string to send once select_project completes
 var autonomousModeActive = false; // autonomous mode flag
 var sessionTimerInterval = null; // session timer update interval
-var sessionTimerStartedAt = null; // production start timestamp
+var sessionElapsedMs = 0; // accumulated elapsed ms from server
+var sessionTimerLocalStart = null; // Date.now() when local ticking started
 
 // ===== Connection Manager =====
 function connect() {
@@ -1490,25 +1491,32 @@ function handleSessionTimer(data) {
   var timerEl = document.getElementById('session-timer');
   if (!timerEl) return;
 
-  sessionTimerStartedAt = data.productionStartedAt;
+  sessionElapsedMs = data.elapsedMs || 0;
   timerEl.style.display = '';
 
   // Clear any existing interval
   if (sessionTimerInterval) { clearInterval(sessionTimerInterval); sessionTimerInterval = null; }
 
-  if (data.productionCompletedAt) {
+  if (data.completed) {
     // Production complete — show final time in green
-    var totalSec = Math.floor((data.productionCompletedAt - data.productionStartedAt) / 1000);
-    timerEl.textContent = formatTimer(totalSec);
+    timerEl.textContent = formatTimer(Math.floor(sessionElapsedMs / 1000));
     timerEl.style.color = '#4ade80';
-  } else {
-    // Production in progress — start live counter
+    sessionTimerLocalStart = null;
+  } else if (data.running) {
+    // Agent actively running — start live counter from accumulated base
+    sessionTimerLocalStart = Date.now();
+    timerEl.style.color = 'var(--text-muted)';
     function tick() {
-      var elapsed = Math.floor((Date.now() - data.productionStartedAt) / 1000);
-      timerEl.textContent = formatTimer(elapsed);
+      var total = sessionElapsedMs + (Date.now() - sessionTimerLocalStart);
+      timerEl.textContent = formatTimer(Math.floor(total / 1000));
     }
     tick();
     sessionTimerInterval = setInterval(tick, 1000);
+  } else {
+    // Paused (agent not running, between runs)
+    timerEl.textContent = formatTimer(Math.floor(sessionElapsedMs / 1000));
+    timerEl.style.color = 'var(--text-muted)';
+    sessionTimerLocalStart = null;
   }
 }
 

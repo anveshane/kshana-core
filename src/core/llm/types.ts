@@ -90,10 +90,12 @@ export interface GenerateOptions {
   temperature?: number;
   maxTokens?: number;
   stream?: boolean;
-  responseFormat?: {
-    type: 'json_schema';
-    json_schema: { name: string; strict?: boolean; schema: Record<string, unknown> };
-  };
+  responseFormat?:
+    | { type: 'json_object' }
+    | {
+        type: 'json_schema';
+        json_schema: { name: string; strict?: boolean; schema: Record<string, unknown> };
+      };
 }
 
 /**

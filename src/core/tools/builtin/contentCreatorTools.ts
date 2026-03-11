@@ -251,6 +251,25 @@ If this returns "File not found", call read_project or list_project_files to see
         };
       }
 
+      // Guard: only allow reading text files to prevent binary blobs from blowing up context
+      const ALLOWED_TEXT_EXTENSIONS = new Set([
+        '.txt', '.md', '.json', '.jsonl',
+        '.yaml', '.yml', '.toml', '.csv', '.tsv',
+        '.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs',
+        '.py', '.sh', '.bash', '.zsh',
+        '.html', '.htm', '.css', '.scss', '.less',
+        '.xml', '.svg', '.env', '.ini', '.cfg', '.conf',
+        '.log', '.prompt',
+      ]);
+      const ext = path.extname(resolvedPath).toLowerCase();
+      if (ext && !ALLOWED_TEXT_EXTENSIONS.has(ext)) {
+        return {
+          status: 'error',
+          error: `Cannot read binary file: ${filePath} (extension: ${ext}). Only text files are readable.`,
+          hint: 'This file is a binary asset (image, video, etc). Use its artifact ID or path to reference it in tools — do not read its contents.',
+        };
+      }
+
       const content = fs.readFileSync(resolvedPath, 'utf-8');
       return {
         status: 'success',

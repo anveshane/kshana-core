@@ -3215,8 +3215,9 @@ Respond in JSON format:
           temperature: 0.8,
         };
         if (this.contentState.contentType === 'scene_video_prompt') {
-          const { MOTION_PROMPT_SCHEMA } = await import('../../tasks/video/tools.js');
-          streamOptions.responseFormat = MOTION_PROMPT_SCHEMA;
+          // Use json_object (broadly supported) instead of json_schema (OpenAI-only).
+          // The prompt instructions already describe the required JSON structure.
+          streamOptions.responseFormat = { type: 'json_object' as const };
         }
 
         for await (const chunk of this.llm.generateStream(streamOptions)) {
