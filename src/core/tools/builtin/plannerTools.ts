@@ -25,7 +25,8 @@ import { registerFile } from '../../../tasks/video/workflow/ProjectManager.js';
  */
 export interface PlannerToolContext {
   template: VideoTemplate;
-  project: GenericProjectFile;
+  /** Load the latest project state at tool execution time. */
+  getProject: () => GenericProjectFile;
   /** Returns the path to the active .kshana project directory (resolved at call time) */
   getProjectDir: () => string;
   /** Shared registry state across planner tool calls within a session */
@@ -55,6 +56,10 @@ interface RegistryData {
   lastScanAt: number;
 }
 
+function getCurrentProject(context: PlannerToolContext): GenericProjectFile {
+  return context.getProject();
+}
+
 /**
  * Create scan_assets tool
  */
@@ -82,9 +87,10 @@ The result shows which artifact types are fully or partially satisfied.`,
     },
     handler: async (params: Record<string, unknown>) => {
       const additionalPaths = params['additional_paths'] as string[] | undefined;
+      const project = getCurrentProject(context);
 
       const scanner = new AssetScanner(context.template);
-      const result = scanner.scan(context.getProjectDir(), context.project);
+      const result = scanner.scan(context.getProjectDir(), project);
 
       // Register any additional user paths
       if (additionalPaths && additionalPaths.length > 0) {
@@ -209,8 +215,9 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
         registry = context.registry;
       } else {
         // Perform fresh scan
+        const project = getCurrentProject(context);
         const scanner = new AssetScanner(context.template);
-        const scanResult = scanner.scan(context.getProjectDir(), context.project);
+        const scanResult = scanner.scan(context.getProjectDir(), project);
         registry = scanResult.registry;
       }
 
@@ -237,10 +244,11 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
 
       // Auto-detect goal completion
       const projectComplete = plan.steps.length === 0;
-      if (projectComplete && context.project.goal?.status === 'active') {
-        context.project.goal.status = 'achieved';
-        context.project.goal.achievedAt = Date.now();
-        persistProject(context);
+      const project = getCurrentProject(context);
+      if (projectComplete && project.goal?.status === 'active') {
+        project.goal.status = 'achieved';
+        project.goal.achievedAt = Date.now();
+        persistProject(context, project);
       }
 
       return {
@@ -412,11 +420,17 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
  * Persist the project state to disk.
  * Works with GenericProjectFile (the planner context type).
  */
-function persistProject(context: PlannerToolContext): void {
+function persistProject(context: PlannerToolContext, project: GenericProjectFile): void {
   const projectDir = context.getProjectDir();
   const filePath = join(projectDir, 'project.json');
-  context.project.updatedAt = Date.now();
-  writeFileSync(filePath, JSON.stringify(context.project, null, 2), 'utf-8');
+  const latestProject = getCurrentProject(context);
+  const mergedProject = {
+    ...(latestProject as Record<string, unknown>),
+    ...(project as Record<string, unknown>),
+    goal: project.goal ?? latestProject.goal,
+    updatedAt: Date.now(),
+  } as GenericProjectFile;
+  writeFileSync(filePath, JSON.stringify(mergedProject, null, 2), 'utf-8');
 }
 
 /**
@@ -461,10 +475,11 @@ The goal is stored in project.json and read on session resume.`,
       const targetArtifacts = params['target_artifacts'] as string[];
       const description = params['description'] as string;
       const preferences = (params['preferences'] as GoalPreferences) || {};
+      const project = getCurrentProject(context);
 
       // If an active goal exists, mark it superseded
-      if (context.project.goal && context.project.goal.status === 'active') {
-        context.project.goal.status = 'superseded';
+      if (project.goal && project.goal.status === 'active') {
+        project.goal.status = 'superseded';
       }
 
       // Create new persisted goal
@@ -476,12 +491,12 @@ The goal is stored in project.json and read on session resume.`,
         status: 'active',
       };
 
-      context.project.goal = newGoal;
+      project.goal = newGoal;
 
       // Clear completion state so the nudge loop and workflow resume
-      delete (context.project as unknown as Record<string, unknown>)['productionCompletedAt'];
+      delete (project as unknown as Record<string, unknown>)['productionCompletedAt'];
 
-      persistProject(context);
+      persistProject(context, project);
 
       return {
         success: true,

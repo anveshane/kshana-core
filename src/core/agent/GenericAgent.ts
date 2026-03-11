@@ -40,6 +40,7 @@ import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { FlowRecorder } from '../../utils/FlowRecorder.js';
 import { ToolAnalytics } from '../../utils/ToolAnalytics.js';
 import { buildPreloadedContext } from './contentContext.js';
+import { resolveGenerateContentOutputFile } from './generateContentPath.js';
 import {
   getProjectDir,
   loadProject,
@@ -1715,6 +1716,7 @@ export class GenericAgent extends TypedEventEmitter {
       const sceneNumber = args['scene_number'] as number | undefined;
       const shotNumber = args['shot_number'] as number | undefined;
       const chapterNumber = args['chapter_number'] as number | undefined;
+      const explicitOutputFile = args['output_file'] as string | undefined;
 
       if (!contentType) {
         const errorResult = { error: 'content_type is required for generate_content' };
@@ -1736,38 +1738,15 @@ export class GenericAgent extends TypedEventEmitter {
         `[GenericAgent] generate_content: content_type=${contentType}, instruction=${instruction.substring(0, 100)}...`
       );
 
-      // Build the output file path
-      let outputFile = CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
-
-      // Handle different content types that need name/number appended
-      if ((contentType === 'character' || contentType === 'setting') && name) {
-        // For character/setting, append {name}.profile.md
-        const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-        outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.profile.md`;
-      } else if (contentType === 'story') {
-        // For story, append chapter-{n}.story.md
-        const chapter = chapterNumber ?? 1;
-        outputFile = `${outputFile.replace(/\/$/, '')}/chapter-${chapter}.story.md`;
-      } else if (
-        (contentType === 'character_image_prompt' || contentType === 'setting_image_prompt') &&
-        name
-      ) {
-        // For character/setting image prompts, append {name}.prompt.md
-        const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-        outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.prompt.md`;
-      } else if (contentType === 'scene' && sceneNumber !== undefined) {
-        // For scene descriptions, append scene-{n}.md
-        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.md`;
-      } else if (contentType === 'scene_image_prompt' && sceneNumber !== undefined) {
-        // For scene image prompts, append scene-{n}.prompt.md
-        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.prompt.md`;
-      } else if (contentType === 'scene_video_prompt' && sceneNumber !== undefined) {
-        // For scene video prompts, append scene-{n}.motion.json
-        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.motion.json`;
-      } else if (contentType === 'shot_image_prompt' && sceneNumber !== undefined && shotNumber !== undefined) {
-        // For shot image prompts, append scene-{n}-shot-{m}.prompt.md
-        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}-shot-${shotNumber}.prompt.md`;
-      }
+      const outputFile = resolveGenerateContentOutputFile({
+        contentType,
+        instruction,
+        name,
+        sceneNumber,
+        shotNumber,
+        chapterNumber,
+        outputFile: explicitOutputFile,
+      });
 
       // Check if the output file already exists (skip regeneration unless overwrite is true)
       const overwrite = args['overwrite'] as boolean | undefined;

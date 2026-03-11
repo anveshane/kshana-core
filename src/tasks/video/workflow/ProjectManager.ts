@@ -290,8 +290,12 @@ export function createProject(
     ? String(styleOrBasePath)
     : basePathMaybe;
 
-  // Infer project directory name from input and set it as active
-  const inferredDir = inferProjectDirName(originalInput, basePath);
+  // In desktop/remote mode the active project dir may already be an absolute
+  // workspace path. Preserve it instead of inferring and switching roots.
+  const activeProjectDir = getActiveProjectDir();
+  const inferredDir = isAbsolute(activeProjectDir)
+    ? activeProjectDir
+    : inferProjectDirName(originalInput, basePath);
   setActiveProjectDir(inferredDir);
 
   // Ensure directory structure exists
@@ -894,10 +898,10 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
     const content = readFileSync(filePath, 'utf-8');
     const project = JSON.parse(content);
 
-    // Check version - must be 2.0 for 8-phase workflow
-    if (!project.version || project.version !== '2.0') {
+    // Check version - must match the current workflow format
+    if (!project.version || project.version !== PROJECT_VERSION) {
       console.warn(
-        `[ProjectManager] Incompatible project version: ${project.version ?? 'unknown'}. Expected: 2.0`
+        `[ProjectManager] Incompatible project version: ${project.version ?? 'unknown'}. Expected: ${PROJECT_VERSION}`
       );
       console.warn('[ProjectManager] Please delete the .kshana directory and start a new project.');
       return null;
@@ -939,15 +943,15 @@ export function isProjectCompatible(basePath: string = process.cwd()): {
       return {
         compatible: false,
         version: 'unknown',
-        reason: 'Old project without version (pre-2.0). Delete .kshana directory to start fresh.',
+        reason: `Old project without version metadata (before ${PROJECT_VERSION}). Delete .kshana directory to start fresh.`,
       };
     }
 
-    if (project.version !== '2.0') {
+    if (project.version !== PROJECT_VERSION) {
       return {
         compatible: false,
         version: project.version,
-        reason: `Incompatible version ${project.version}. Expected 2.0. Delete .kshana directory to start fresh.`,
+        reason: `Incompatible version ${project.version}. Expected ${PROJECT_VERSION}. Delete .kshana directory to start fresh.`,
       };
     }
 

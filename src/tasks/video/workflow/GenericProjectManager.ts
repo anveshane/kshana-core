@@ -38,7 +38,7 @@ export const PROJECT_FILE = 'project.json';
 /**
  * Project version for v3.0 format
  */
-export const PROJECT_VERSION = '3.0';
+export const PROJECT_VERSION = '2.0';
 
 /**
  * Options for creating a new project
@@ -74,7 +74,10 @@ export class GenericProjectManager {
   private resolver: ArtifactResolver | null = null;
 
   constructor(basePath: string) {
-    this.projectPath = path.join(basePath, getActiveProjectDir());
+    const activeProjectDir = getActiveProjectDir();
+    this.projectPath = path.isAbsolute(activeProjectDir)
+      ? activeProjectDir
+      : path.join(basePath, activeProjectDir);
   }
 
   /**
@@ -126,7 +129,7 @@ export class GenericProjectManager {
     const now = Date.now();
 
     const project: GenericProjectFile = {
-      version: '3.0',
+      version: '2.0',
       id: projectId,
       title: options.title,
       templateId: options.templateId,
@@ -183,8 +186,10 @@ export class GenericProjectManager {
     const project = JSON.parse(content) as GenericProjectFile;
 
     // Validate version
-    if (project.version !== '3.0') {
-      throw new Error(`Incompatible project version: ${project.version}. Expected: 3.0`);
+    if (project.version !== PROJECT_VERSION) {
+      throw new Error(
+        `Incompatible project version: ${project.version}. Expected: ${PROJECT_VERSION}`
+      );
     }
 
     // Load template
@@ -722,7 +727,7 @@ export class GenericProjectManager {
     const now = Date.now();
 
     const project: GenericProjectFile = {
-      version: '3.0',
+      version: '2.0',
       id: projectId,
       title: 'Planning Project',
       templateId,

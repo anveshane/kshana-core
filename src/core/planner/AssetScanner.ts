@@ -114,8 +114,18 @@ export class AssetScanner {
     registry: AssetRegistry,
     issues: ScanIssue[]
   ): void {
-    for (const [typeId, instances] of Object.entries(project.artifacts)) {
+    const artifactState = (project as { artifacts?: unknown }).artifacts;
+    if (!artifactState || typeof artifactState !== 'object') {
+      return;
+    }
+
+    for (const [typeId, instances] of Object.entries(artifactState as Record<string, unknown>)) {
       if (!instances || typeof instances !== 'object') {
+        continue;
+      }
+
+      if (this.isLegacyArtifactInstance(instances)) {
+        this.scanLegacyArtifact(typeId, instances, registry, issues);
         continue;
       }
 
@@ -157,6 +167,69 @@ export class AssetScanner {
         registry.satisfiedArtifacts.set(typeId, satisfaction);
       }
     }
+  }
+
+  private isLegacyArtifactInstance(value: object): boolean {
+    return (
+      'status' in value &&
+      (('type' in value && typeof (value as { type?: unknown }).type === 'string') ||
+        ('typeId' in value && typeof (value as { typeId?: unknown }).typeId === 'string'))
+    );
+  }
+
+  private scanLegacyArtifact(
+    artifactId: string,
+    rawArtifact: object,
+    registry: AssetRegistry,
+    issues: ScanIssue[]
+  ): void {
+    const artifact = rawArtifact as Record<string, unknown>;
+    const typeId =
+      typeof artifact['typeId'] === 'string'
+        ? artifact['typeId']
+        : typeof artifact['type'] === 'string'
+          ? artifact['type']
+          : undefined;
+
+    if (!typeId) {
+      return;
+    }
+
+    const typeDef = this.template.artifactTypes[typeId];
+    if (!typeDef) {
+      issues.push({
+        type: 'warning',
+        message: `Unknown artifact type in project: ${typeId}`,
+      });
+      return;
+    }
+
+    const status = artifact['status'];
+    if (status !== 'approved' && status !== 'complete') {
+      return;
+    }
+
+    const asset: ProvidedAsset = {
+      id: typeof artifact['id'] === 'string' ? artifact['id'] : artifactId,
+      artifactTypeId: typeId,
+      itemId: typeof artifact['itemId'] === 'string' ? artifact['itemId'] : undefined,
+      path:
+        typeof artifact['assetPath'] === 'string'
+          ? artifact['assetPath']
+          : typeof artifact['filePath'] === 'string'
+            ? artifact['filePath']
+            : undefined,
+      source: 'previously_generated',
+      registeredAt:
+        typeof artifact['updatedAt'] === 'number' ? artifact['updatedAt'] : Date.now(),
+      metadata:
+        artifact['metadata'] && typeof artifact['metadata'] === 'object'
+          ? (artifact['metadata'] as Record<string, unknown>)
+          : undefined,
+    };
+
+    registry.assets.set(asset.id, asset);
+    this.updateSatisfaction(typeId, registry);
   }
 
   /**
