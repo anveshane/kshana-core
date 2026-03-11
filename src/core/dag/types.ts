@@ -282,7 +282,7 @@ export interface ExpansionEvent {
  */
 export type DAGEvent =
   | { type: 'node_ready'; nodeId: string; nodeType: NodeType }
-  | { type: 'node_started'; nodeId: string; nodeType: NodeType }
+  | { type: 'node_started'; nodeId: string; nodeType: NodeType; description?: string }
   | { type: 'node_completed'; nodeId: string; nodeType: NodeType; durationMs: number }
   | { type: 'node_failed'; nodeId: string; nodeType: NodeType; error: string; attempt: number }
   | { type: 'node_skipped'; nodeId: string; reason: string }

@@ -150,6 +150,9 @@ export class ConversationManager {
       if (result.agent) {
         // DAG mode — use pre-built adapter directly
         session.agent = result.agent as unknown as GenericAgent;
+        if (autonomousMode) {
+          session.agent.setAutonomousMode(true);
+        }
       } else {
         // Legacy mode — construct GenericAgent from tools/prompt
         const llm = new LLMClient(this.llmConfig);

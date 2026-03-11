@@ -10,7 +10,8 @@ import { TypedEventEmitter } from '../../events/EventEmitter.js';
 import type { GenericAgentResult } from '../agent/AgentResult.js';
 import type { ExpandableTodoItem } from '../todo/index.js';
 import { LLMClient, type LLMClientConfig } from '../llm/index.js';
-import type { DAGEvent } from './types.js';
+import type { DAGEvent, NodeType } from './types.js';
+import { DAG } from './DAG.js';
 import { DAGExecutor, type DAGExecutorConfig, type DAGExecutorResult, type UserInteractionHandler } from './DAGExecutor.js';
 import { buildNarrativeDAG, rebuildDAGFromState } from './DAGBuilder.js';
 import { dagStateExists, loadDAGState, prepareStateForResume } from './persistence.js';
@@ -31,8 +32,11 @@ export interface DAGAgentAdapterConfig {
 export class DAGAgentAdapter extends TypedEventEmitter {
   private config: DAGAgentAdapterConfig;
   private executor: DAGExecutor | null = null;
+  private dag: DAG | null = null;
   private running = false;
   private waiting = false;
+  private autonomousMode = false;
+  private userTask = '';
 
   /** Pending user interaction — set when a U node fires, resolved when respond() is called. */
   private pendingResolve: ((response: string) => void) | null = null;
@@ -67,7 +71,7 @@ export class DAGAgentAdapter extends TypedEventEmitter {
    * On subsequent calls (userResponse provided), resolves the pending
    * Promise so the executor's U node continues.
    */
-  async run(_task: string, userResponse?: string): Promise<GenericAgentResult> {
+  async run(task: string, userResponse?: string): Promise<GenericAgentResult> {
     // --- Resume path: user is responding to a question ---
     if (userResponse !== undefined && this.pendingResolve) {
       this.waiting = false;
@@ -88,12 +92,18 @@ export class DAGAgentAdapter extends TypedEventEmitter {
 
     // --- Start path: kick off the DAG ---
     this.running = true;
+    this.userTask = task;
     this.emit({ type: 'agent_status', status: 'thinking', agentName: 'kshana-dag' });
 
     // Build the user interaction handler — the Promise bridge
     const userInteraction: UserInteractionHandler = (
       _nodeId, question, isConfirmation, options, context, autoApproveTimeoutMs,
     ) => {
+      // In autonomous mode, auto-approve confirmation gates
+      if (this.autonomousMode && isConfirmation) {
+        return Promise.resolve('Yes');
+      }
+
       return new Promise<string>((resolve) => {
         // Store the resolve so respond() can unblock us
         this.pendingResolve = resolve;
@@ -144,14 +154,25 @@ export class DAGAgentAdapter extends TypedEventEmitter {
       dagId = `dag_${Date.now().toString(36)}`;
     }
 
-    // Create executor
+    // Store DAG ref for event mapping lookups
+    this.dag = dag;
+
+    // Pass user task into set_goal node metadata
+    if (this.userTask) {
+      const goalNode = dag.tryGetNode('set_goal');
+      if (goalNode) {
+        goalNode.metadata = { ...goalNode.metadata, userTask: this.userTask };
+      }
+    }
+
+    // Create executor — force sequential execution (maxConcurrency: 1)
     const llm = new LLMClient(this.config.llmConfig);
     const executorConfig: DAGExecutorConfig = {
       llm,
       projectDir,
       templateId,
       dagId,
-      maxConcurrency: this.config.maxConcurrency,
+      maxConcurrency: 1,
       userInteraction,
     };
 
@@ -231,35 +252,167 @@ export class DAGAgentAdapter extends TypedEventEmitter {
     // Not supported for DAG mode
   }
 
-  setAutonomousMode(_enabled: boolean): void {
-    // DAG doesn't use autonomous mode — it has its own flow control
+  setAutonomousMode(enabled: boolean): void {
+    this.autonomousMode = enabled;
   }
 
   // ==========================================================================
   // Event Mapping
   // ==========================================================================
 
+  /**
+   * Map a DAG node ID to a legacy tool name + structured args for rich UI rendering.
+   * Returns null to suppress the event (e.g., auto-approved U nodes).
+   */
+  private mapNodeToLegacyTool(
+    nodeId: string,
+    nodeType: NodeType,
+    description?: string,
+  ): { toolName: string; args: Record<string, unknown> } | null {
+    const node = this.dag?.tryGetNode(nodeId);
+    const meta = node?.metadata ?? {};
+
+    // Suppress ALL U nodes — they're handled via the question event flow
+    if (nodeType === 'U') {
+      return null;
+    }
+
+    // --- D nodes ---
+
+    // Internal setup operations → think
+    if (nodeId === 'set_goal' || nodeId === 'scan_assets' || nodeId === 'register_content') {
+      return { toolName: 'think', args: { thought: description ?? nodeId } };
+    }
+
+    // create_plan → dispatch_agent (shows as plan box in CLI)
+    if (nodeId === 'create_plan') {
+      return { toolName: 'dispatch_agent', args: { task: 'Create execution plan', context: description ?? '' } };
+    }
+
+    // Other D nodes → think (internal operations)
+    if (nodeType === 'D') {
+      return { toolName: 'think', args: { thought: description ?? nodeId } };
+    }
+
+    // --- S nodes: match specific patterns for rich gen-card rendering ---
+
+    // Plot / Story
+    if (nodeId === 'generate_plot') {
+      return { toolName: 'generate_content', args: { content_type: 'Plot Outline' } };
+    }
+    if (nodeId === 'generate_story') {
+      return { toolName: 'generate_content', args: { content_type: 'Full Story' } };
+    }
+
+    // Entity extraction
+    if (nodeId === 'extract_entities') {
+      return { toolName: 'generate_content', args: { content_type: 'Entity Extraction' } };
+    }
+
+    // Character pipeline
+    const charGenMatch = nodeId.match(/^char_(.+)_generate$/);
+    if (charGenMatch) {
+      return { toolName: 'generate_content', args: { character_name: meta['characterName'] ?? charGenMatch[1], content_type: 'Character' } };
+    }
+    const charImgPromptMatch = nodeId.match(/^char_(.+)_img_prompt$/);
+    if (charImgPromptMatch) {
+      return { toolName: 'generate_content', args: { character_name: meta['characterName'] ?? charImgPromptMatch[1], content_type: 'Image Prompt' } };
+    }
+    const charImgMatch = nodeId.match(/^char_(.+)_img$/);
+    if (charImgMatch) {
+      return { toolName: 'generate_image', args: { character_name: meta['characterName'] ?? charImgMatch[1], image_type: 'character_ref' } };
+    }
+
+    // Setting pipeline
+    const settingGenMatch = nodeId.match(/^setting_(.+)_generate$/);
+    if (settingGenMatch) {
+      return { toolName: 'generate_content', args: { setting_name: meta['settingName'] ?? settingGenMatch[1], content_type: 'Setting' } };
+    }
+    const settingImgPromptMatch = nodeId.match(/^setting_(.+)_img_prompt$/);
+    if (settingImgPromptMatch) {
+      return { toolName: 'generate_content', args: { setting_name: meta['settingName'] ?? settingImgPromptMatch[1], content_type: 'Image Prompt' } };
+    }
+    const settingImgMatch = nodeId.match(/^setting_(.+)_img$/);
+    if (settingImgMatch) {
+      return { toolName: 'generate_image', args: { setting_name: meta['settingName'] ?? settingImgMatch[1], image_type: 'setting_ref' } };
+    }
+
+    // Scene generation
+    if (nodeId === 'generate_scenes') {
+      return { toolName: 'generate_content', args: { content_type: 'Scenes' } };
+    }
+
+    // Shot breakdown
+    const shotBreakdownMatch = nodeId.match(/^scene_(\d+)_shot_breakdown$/);
+    if (shotBreakdownMatch) {
+      return { toolName: 'generate_content', args: { scene_number: shotBreakdownMatch[1], content_type: 'Shot Breakdown' } };
+    }
+
+    // Shot image prompt
+    const shotImgPromptMatch = nodeId.match(/^scene_(\d+)_shot_(\d+)_img_prompt$/);
+    if (shotImgPromptMatch) {
+      return { toolName: 'generate_content', args: { scene_number: shotImgPromptMatch[1], shot_number: shotImgPromptMatch[2], content_type: 'Shot Image Prompt' } };
+    }
+
+    // Shot image
+    const shotImgMatch = nodeId.match(/^scene_(\d+)_shot_(\d+)_img$/);
+    if (shotImgMatch) {
+      return { toolName: 'generate_image', args: { scene_number: shotImgMatch[1], shot_number: shotImgMatch[2], image_type: 'scene_image' } };
+    }
+
+    // Shot video
+    const shotVideoMatch = nodeId.match(/^scene_(\d+)_shot_(\d+)_video$/);
+    if (shotVideoMatch) {
+      return { toolName: 'generate_video', args: { scene_number: shotVideoMatch[1], shot_number: shotVideoMatch[2] } };
+    }
+
+    // Fallback for any other S nodes
+    return { toolName: 'generate_content', args: { content_type: description ?? nodeId } };
+  }
+
   private mapDAGEvent(event: DAGEvent): void {
     switch (event.type) {
-      case 'node_started':
+      case 'node_started': {
+        const mapped = this.mapNodeToLegacyTool(event.nodeId, event.nodeType, event.description);
+        if (!mapped) break; // Suppressed (e.g., U nodes)
+
         this.emit({
           type: 'tool_call',
           toolCallId: event.nodeId,
-          toolName: event.nodeType === 'S' ? `llm:${event.nodeId}` : event.nodeId,
-          arguments: { nodeType: event.nodeType },
+          toolName: mapped.toolName,
+          arguments: mapped.args,
           agentName: 'kshana-dag',
         });
         break;
+      }
 
-      case 'node_completed':
+      case 'node_completed': {
+        const mapped = this.mapNodeToLegacyTool(event.nodeId, event.nodeType);
+        if (!mapped) break; // Suppressed
+
+        // Look up result content from the DAG node
+        const completedNode = this.dag?.tryGetNode(event.nodeId);
+        const content = completedNode?.result?.content;
+
+        // Build result payload — include content for renderToolResult to display as markdown
+        let resultPayload: string;
+        if (mapped.toolName === 'dispatch_agent' && content) {
+          resultPayload = JSON.stringify({ plan: content, duration: `${event.durationMs}ms` });
+        } else if (content) {
+          resultPayload = content;
+        } else {
+          resultPayload = `Completed in ${event.durationMs}ms`;
+        }
+
         this.emit({
           type: 'tool_result',
           toolCallId: event.nodeId,
-          toolName: event.nodeId,
-          result: `Completed in ${event.durationMs}ms`,
+          toolName: mapped.toolName,
+          result: resultPayload,
           agentName: 'kshana-dag',
         });
         break;
+      }
 
       case 'node_failed':
         this.emit({

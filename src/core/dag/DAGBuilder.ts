@@ -260,7 +260,8 @@ function buildStaticPrefix(skipPlanning?: boolean): DAGNodeDefinition[] {
 function registerHandlers(dag: DAG): void {
   // Planning handlers — these will be overridden by the video task wiring
   dag.registerHandler('set_goal', async (ctx) => {
-    return { content: 'Goal set', metadata: { projectDir: ctx.projectDir } };
+    const task = ctx.metadata['userTask'] as string ?? '';
+    return { content: task || 'Goal set', metadata: { projectDir: ctx.projectDir, userTask: task } };
   });
 
   dag.registerHandler('scan_assets', async (_ctx) => {
@@ -271,8 +272,19 @@ function registerHandlers(dag: DAG): void {
     return { content: 'Content registered' };
   });
 
-  dag.registerHandler('create_plan', async (_ctx) => {
-    return { content: 'Plan created' };
+  dag.registerHandler('create_plan', async (ctx) => {
+    const goalResult = ctx.getResult('set_goal');
+    const goal = goalResult.content ?? 'Create a narrative video';
+    const planSteps = [
+      '1. Generate plot outline from goal',
+      '2. Expand plot into full story',
+      '3. Extract characters, settings, and scenes',
+      '4. Generate character/setting descriptions and reference images',
+      '5. Break scenes into shots and generate shot visuals',
+      '6. Assemble timeline and produce final video',
+    ];
+    const planContent = `## Execution Plan\n\n**Goal:** ${goal}\n\n**Pipeline:**\n${planSteps.join('\n')}`;
+    return { content: planContent, metadata: { goal } };
   });
 
   // Timeline handlers
@@ -321,7 +333,14 @@ function registerPromptBuilders(dag: DAG): void {
   dag.registerPromptBuilder('extract_entities', buildEntityExtractionPrompt);
 
   dag.registerPromptBuilder('plot_generate', (ctx) => {
-    const goal = ctx.metadata['userGoal'] as string ?? 'Create a narrative video';
+    let goal = 'Create a narrative video';
+    try {
+      const goalResult = ctx.getResult('set_goal');
+      if (goalResult.content) goal = goalResult.content;
+    } catch {
+      // set_goal may not exist (skipPlanning mode) — fall back to metadata
+      if (ctx.metadata['userGoal']) goal = ctx.metadata['userGoal'] as string;
+    }
     return `You are a creative writer. Generate a compelling plot outline for the following project goal:\n\n${goal}\n\nReturn a structured plot outline with beginning, middle, and end.`;
   });
 

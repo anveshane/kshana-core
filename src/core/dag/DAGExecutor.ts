@@ -14,6 +14,8 @@
  * - Persistence: save state after every completion/expansion/pause
  */
 
+import { writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
 import type { LLMClient } from '../llm/index.js';
 import type {
   DAGNode,
@@ -189,7 +191,7 @@ export class DAGExecutor {
   private async executeNode(node: DAGNode): Promise<void> {
     node.status = 'running';
     node.startedAt = new Date().toISOString();
-    this.emit({ type: 'node_started', nodeId: node.id, nodeType: node.type });
+    this.emit({ type: 'node_started', nodeId: node.id, nodeType: node.type, description: node.description });
 
     const startTime = Date.now();
     let result: NodeResult | null = null;
@@ -228,6 +230,20 @@ export class DAGExecutor {
       node.status = 'completed';
       node.completedAt = new Date().toISOString();
 
+      // Save S-node outputs to disk for persistence/visibility
+      if (node.type === 'S' && result.content) {
+        try {
+          const subdir = getOutputSubdir(node.id);
+          const outDir = subdir
+            ? join(this.config.projectDir, subdir)
+            : this.config.projectDir;
+          mkdirSync(outDir, { recursive: true });
+          writeFileSync(join(outDir, `${node.id}.md`), result.content, 'utf-8');
+        } catch {
+          // Best-effort — don't fail the node over a write error
+        }
+      }
+
       const durationMs = Date.now() - startTime;
       this.emit({ type: 'node_completed', nodeId: node.id, nodeType: node.type, durationMs });
 
@@ -262,21 +278,29 @@ export class DAGExecutor {
     }
 
     const prompt = node.promptBuilder(context);
+    const useJson = prompt.includes('Return ONLY valid JSON') || prompt.includes('Return JSON');
 
-    // Call LLM with focused prompt (fresh context — no conversation history)
-    const response = await this.config.llm.generate({
+    // Stream LLM response for real-time UI updates
+    let content = '';
+    for await (const chunk of this.config.llm.generateStream({
       messages: [
         { role: 'system', content: 'You are a creative AI assistant working on a video production pipeline. Follow the instructions precisely and return the requested output.' },
         { role: 'user', content: prompt },
       ],
       temperature: 0.7,
-      responseFormat: prompt.includes('Return ONLY valid JSON') || prompt.includes('Return JSON')
-        ? { type: 'json_object' }
-        : undefined,
-    });
+      responseFormat: useJson ? { type: 'json_object' } : undefined,
+    })) {
+      if (chunk.content) {
+        content += chunk.content;
+        this.emit({ type: 'llm_streaming', nodeId: node.id, chunk: chunk.content, done: false });
+      }
+      if (chunk.done) {
+        this.emit({ type: 'llm_streaming', nodeId: node.id, chunk: '', done: true });
+      }
+    }
 
     return {
-      content: response.content ?? undefined,
+      content: content || undefined,
     };
   }
 
@@ -579,4 +603,15 @@ export interface DAGExecutorResult {
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Determine the output subdirectory for an S-node based on its ID pattern.
+ * Returns undefined for root-level files.
+ */
+function getOutputSubdir(nodeId: string): string | undefined {
+  if (nodeId.startsWith('char_')) return 'characters';
+  if (nodeId.startsWith('setting_')) return 'settings';
+  if (nodeId.startsWith('scene_')) return 'scenes';
+  return undefined;
 }

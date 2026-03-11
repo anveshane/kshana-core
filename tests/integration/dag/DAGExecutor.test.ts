@@ -8,9 +8,12 @@ import { DAGExecutor, type UserInteractionHandler } from '../../../src/core/dag/
 import type { DAGEvent, DAGNode, NodeResult } from '../../../src/core/dag/types.js';
 import { saveDAGState, loadDAGState, prepareStateForResume } from '../../../src/core/dag/persistence.js';
 import { getDefaultPolicy } from '../../../src/core/dag/errorPolicies.js';
-import { makeNode, withTempDir } from '../../helpers/dag/DAGTestHelpers.js';
+import { makeNode, makeContext, withTempDir } from '../../helpers/dag/DAGTestHelpers.js';
 import { MockLLMClient } from '../../integration/MockLLMClient.js';
+import { buildNarrativeDAG } from '../../../src/core/dag/DAGBuilder.js';
 import type { Message } from '../../../src/core/llm/types.js';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 
 function makeExecutor(
   dag: DAG,
@@ -822,6 +825,123 @@ describe('DAGExecutor', () => {
       // 'slow' started but 'after' should never have started
       expect(startedNodes).toContain('slow');
       expect(startedNodes).not.toContain('after');
+    });
+  });
+});
+
+// =============================================================================
+// DAGAgentAdapter Fixes
+// =============================================================================
+
+describe('DAGAgentAdapter fixes', () => {
+  // ===========================================================================
+  // Test 1: node_started event includes description
+  // ===========================================================================
+
+  it('node_started event includes description field', async () => {
+    await withTempDir(async (dir) => {
+      const dag = new DAG();
+      dag.addNode(makeNode({ id: 'a', description: 'Scan project assets', handler: async () => ({ content: 'done' }) }));
+      dag.updateReadyNodes();
+      const executor = makeExecutor(dag, { projectDir: dir });
+      const events = collectEvents(executor);
+      await executor.run();
+      const started = events.find(e => e.type === 'node_started' && (e as any).nodeId === 'a');
+      expect((started as any).description).toBe('Scan project assets');
+    });
+  });
+
+  // ===========================================================================
+  // Test 2: set_goal handler uses userTask from metadata
+  // ===========================================================================
+
+  it('set_goal handler returns userTask from metadata', async () => {
+    await withTempDir(async (dir) => {
+      const dag = buildNarrativeDAG({ templateId: 'narrative', projectDir: dir });
+      const goalNode = dag.getNode('set_goal');
+      goalNode.metadata = { ...goalNode.metadata, userTask: 'A zombie apocalypse story' };
+
+      const ctx = makeContext({}, { userTask: 'A zombie apocalypse story' });
+      Object.assign(ctx, { projectDir: dir, templateId: 'narrative' });
+
+      const result = await goalNode.handler!(ctx);
+      expect(result.content).toBe('A zombie apocalypse story');
+      expect(result.metadata?.['userTask']).toBe('A zombie apocalypse story');
+    });
+  });
+
+  // ===========================================================================
+  // Test 3: maxConcurrency=1 forces sequential execution
+  // ===========================================================================
+
+  it('maxConcurrency=1 forces sequential execution', async () => {
+    await withTempDir(async (dir) => {
+      const dag = new DAG();
+      const order: string[] = [];
+      for (const id of ['x', 'y', 'z']) {
+        dag.addNode(makeNode({
+          id,
+          handler: async () => {
+            order.push(id);
+            await new Promise(r => setTimeout(r, 30));
+            return { content: `${id} done` };
+          },
+        }));
+      }
+      dag.updateReadyNodes();
+      const executor = makeExecutor(dag, { maxConcurrency: 1, projectDir: dir });
+      await executor.run();
+      // With concurrency=1, all three should execute sequentially
+      expect(order).toEqual(['x', 'y', 'z']);
+    });
+  });
+
+  // ===========================================================================
+  // Test 4: S-node output saved to disk
+  // ===========================================================================
+
+  it('S node output written to disk as .md file', async () => {
+    await withTempDir(async (dir) => {
+      const dag = new DAG();
+      const llm = new MockLLMClient();
+      llm.setDefaultResponse({ content: 'Once upon a time...' });
+
+      dag.addNode({
+        id: 'generate_plot',
+        type: 'S',
+        dependsOn: [],
+        status: 'pending',
+        promptBuilder: () => 'Write a plot',
+        errorPolicy: getDefaultPolicy('S'),
+      });
+      dag.updateReadyNodes();
+
+      const executor = makeExecutor(dag, { llm, projectDir: dir });
+      await executor.run();
+
+      const filePath = join(dir, 'generate_plot.md');
+      expect(existsSync(filePath)).toBe(true);
+      expect(readFileSync(filePath, 'utf-8')).toBe('Once upon a time...');
+    });
+  });
+
+  // ===========================================================================
+  // Test 5: plot_generate promptBuilder reads goal from set_goal result
+  // ===========================================================================
+
+  it('plot_generate promptBuilder reads goal from set_goal result', async () => {
+    await withTempDir(async (dir) => {
+      const dag = buildNarrativeDAG({ templateId: 'narrative', projectDir: dir });
+      const plotNode = dag.getNode('generate_plot');
+
+      const ctx = makeContext(
+        { set_goal: { content: 'A zombie apocalypse story' } },
+        { projectDir: dir },
+      );
+      Object.assign(ctx, { projectDir: dir, templateId: 'narrative' });
+
+      const prompt = plotNode.promptBuilder!(ctx);
+      expect(prompt).toContain('zombie apocalypse');
     });
   });
 });
