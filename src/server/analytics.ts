@@ -12,6 +12,17 @@ import { ToolAnalytics } from '../utils/ToolAnalytics.js';
  * Start the analytics dashboard HTTP server.
  * Returns silently if the database is unavailable.
  */
+/** Reference to the analytics server so it can be shut down. */
+let analyticsServer: http.Server | null = null;
+
+/** Shut down the analytics dashboard server. */
+export function stopAnalyticsDashboard(): void {
+  if (analyticsServer) {
+    analyticsServer.close();
+    analyticsServer = null;
+  }
+}
+
 export async function startAnalyticsDashboard(port: number = 3001): Promise<void> {
   const analytics = ToolAnalytics.instance();
   if (!analytics) return;
@@ -56,6 +67,7 @@ export async function startAnalyticsDashboard(port: number = 3001): Promise<void
     });
 
     server.listen(port, '127.0.0.1', () => {
+      analyticsServer = server;
       console.log(`Analytics dashboard: http://localhost:${port}`);
       resolve();
     });

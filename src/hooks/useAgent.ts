@@ -46,6 +46,9 @@ interface UseAgentOptions {
   llmConfig?: LLMClientConfig;
   agentConfig?: AgentConfig;
   onEvent?: (event: AgentEvent) => void;
+  /** Pre-built agent (e.g., DAGAgentAdapter). When set, used instead of new GenericAgent. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  agent?: any;
 }
 
 export interface ToolCallHistoryItem {
@@ -643,7 +646,7 @@ interface UseAgentReturn {
 }
 
 export function useAgent(options: UseAgentOptions): UseAgentReturn {
-  const { tools, llmConfig, agentConfig, onEvent } = options;
+  const { tools, llmConfig, agentConfig, onEvent, agent: providedAgent } = options;
 
   const [state, dispatch] = React.useReducer(agentReducer, initialState);
   const agentRef = React.useRef<GenericAgent | null>(null);
@@ -659,8 +662,8 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
 
   // Create agent
   const createAgent = React.useCallback(() => {
-    const llm = getLLM();
-    const agent = new GenericAgent(tools, llm, agentConfig);
+    // Use pre-built agent (DAGAgentAdapter) if provided
+    const agent: GenericAgent = providedAgent ?? new GenericAgent(tools, getLLM(), agentConfig);
 
     // Subscribe to events
     agent.on('agent_status', event => {
@@ -818,7 +821,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
 
     agentRef.current = agent;
     return agent;
-  }, [tools, agentConfig, getLLM, onEvent]);
+  }, [tools, agentConfig, getLLM, onEvent, providedAgent]);
 
   // Run agent on a task
   const run = React.useCallback(

@@ -9,7 +9,7 @@ import { App } from './App.js';
 import { getLLMConfig, getLLMProvider, validateLLMConfig, resetLLMLogger, type LLMClientConfig } from './core/llm/index.js';
 import { resetPhaseLogger } from './utils/phaseLogger.js';
 import { resetDebugLog } from './hooks/useAgent.js';
-import { startAnalyticsDashboard } from './server/analytics.js';
+import { startAnalyticsDashboard, stopAnalyticsDashboard } from './server/analytics.js';
 
 // Task type for agent specialization
 type TaskType = 'generic' | 'video';
@@ -202,6 +202,15 @@ console.log('');
 
 // Start analytics dashboard (non-blocking, fire-and-forget)
 startAnalyticsDashboard(3001).catch(() => {});
+
+// Ensure clean exit on Ctrl+C — kills analytics server and any stuck event loop handles
+function handleExit() {
+  stopAnalyticsDashboard();
+  // Give 2s for graceful cleanup, then force exit
+  setTimeout(() => process.exit(0), 2000).unref();
+}
+process.on('SIGINT', handleExit);
+process.on('SIGTERM', handleExit);
 
 // Start in CLI mode or server mode (default)
 if (cli) {

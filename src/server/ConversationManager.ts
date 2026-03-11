@@ -139,7 +139,7 @@ export class ConversationManager {
 
     // Create agent inside the session context so tools see the right project dir
     runInSession(session.sessionContext, () => {
-      const { tools, customPrompt, agentName } = createAgentForProject({
+      const result = createAgentForProject({
         templateId,
         style,
         duration,
@@ -147,13 +147,19 @@ export class ConversationManager {
         maxIterations: effectiveMaxIterations,
       });
 
-      const llm = new LLMClient(this.llmConfig);
-      session.agent = new GenericAgent(tools, llm, {
-        maxIterations: effectiveMaxIterations,
-        customPrompt,
-        name: agentName,
-        autonomousMode,
-      });
+      if (result.agent) {
+        // DAG mode — use pre-built adapter directly
+        session.agent = result.agent as unknown as GenericAgent;
+      } else {
+        // Legacy mode — construct GenericAgent from tools/prompt
+        const llm = new LLMClient(this.llmConfig);
+        session.agent = new GenericAgent(result.tools, llm, {
+          maxIterations: effectiveMaxIterations,
+          customPrompt: result.customPrompt,
+          name: result.agentName,
+          autonomousMode,
+        });
+      }
       session.initialized = false;
     });
   }

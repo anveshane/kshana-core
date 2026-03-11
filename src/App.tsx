@@ -155,7 +155,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   }, [taskType, existingProject]);
 
   // Create tools and prompt via shared factory (same as web UI)
-  const { tools, customPrompt } = React.useMemo(() => {
+  const { tools, customPrompt, agent: dagAgent } = React.useMemo(() => {
     if (taskType === 'video') {
       const result = createAgentForProject({
         templateId: selectedTemplateId,
@@ -164,11 +164,12 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         llmConfig: llmConfig!,
         customProjectDescription,
       });
-      return { tools: result.tools, customPrompt: result.customPrompt };
+      return { tools: result.tools, customPrompt: result.customPrompt, agent: result.agent };
     }
     return {
       tools: createDefaultToolRegistry().getAll(),
       customPrompt: agentConfig?.customPrompt,
+      agent: undefined,
     };
   }, [taskType, agentConfig?.customPrompt, selectedTemplateId, selectedStyle, selectedDuration, customProjectDescription, llmConfig]);
 
@@ -241,6 +242,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       customPrompt,
     },
     onEvent: handleAgentEvent,
+    agent: dagAgent,
   });
 
   // Handle global keyboard shortcuts
