@@ -2768,6 +2768,10 @@ Respond in JSON format:
 Respond in JSON format:
 {"name": "...", "summary": "..."}`;
 
+    const fallback = {
+      name: `${contentType}: ${task.slice(0, 30)}`,
+      summary: `${contentType} content for: ${task.slice(0, 100)}`,
+    };
     try {
       const response = await this.llm.generate({
         messages: [{ role: 'user', content: prompt }],
@@ -2775,12 +2779,13 @@ Respond in JSON format:
         maxTokens: 200,
       });
 
-      return JSON.parse(response.content ?? '{}');
-    } catch {
+      const parsed = JSON.parse(response.content ?? '{}');
       return {
-        name: `${contentType}: ${task.slice(0, 30)}`,
-        summary: `${contentType} content for: ${task.slice(0, 100)}`,
+        name: parsed.name || fallback.name,
+        summary: parsed.summary || fallback.summary,
       };
+    } catch {
+      return fallback;
     }
   }
 
