@@ -366,6 +366,7 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .wizard-duration-cards { display: flex; flex-wrap: wrap; gap: 8px; }
 .wizard-duration-btn { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px; color: var(--text); transition: all 0.15s; }
 .wizard-duration-btn:hover { border-color: var(--accent); background: #1c3a5c; }
+.wizard-duration-btn.selected { border-color: #4ade80; color: #4ade80; background: rgba(74,222,128,0.1); }
 .wizard-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .wizard-summary-tag { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 11px; color: var(--accent); }
 
@@ -2210,6 +2211,9 @@ function showWizardStep(step) {
       { id: '720p', label: '720p (HD)' },
       { id: '1080p', label: '1080p (Full HD)' },
     ];
+    // Auto-select 480p default
+    newProjectState.resolution = '480p';
+    newProjectState.resolutionLabel = '480p (Default)';
     card.innerHTML =
       '<div class="wizard-step-label">Step 4 of 6</div>' +
       '<div class="wizard-step-title">Video Resolution</div>' +
@@ -2223,15 +2227,23 @@ function showWizardStep(step) {
     resOptions.forEach(function(r) {
       var btn = document.createElement('button');
       btn.className = 'wizard-duration-btn';
-      if (r.id === '480p') btn.style.cssText = 'border-color:#4ade80;color:#4ade80;';
+      if (r.id === '480p') btn.classList.add('selected');
       btn.textContent = r.label;
       btn.onclick = function() {
         newProjectState.resolution = r.id;
         newProjectState.resolutionLabel = r.label;
+        resBtnRow.querySelectorAll('.wizard-duration-btn').forEach(function(b) { b.classList.remove('selected'); });
+        btn.classList.add('selected');
+        // Re-render downstream steps with updated resolution
         showWizardStep('autonomous');
       };
       resBtnRow.appendChild(btn);
     });
+    // Append card then auto-advance with default
+    chatMessages.appendChild(card);
+    maybeScroll();
+    showWizardStep('autonomous');
+    return;
 
   } else if (step === 'autonomous') {
     newProjectState.autonomousMode = false;
