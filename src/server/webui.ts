@@ -1551,6 +1551,11 @@ function handleProgress(data) {
   fill.style.width = pct + '%';
   pctLabel.textContent = Math.round(pct) + '%';
 
+  // Update phase display from progress data (keeps sidebar in sync)
+  if (data.currentPhaseDisplayName) {
+    document.getElementById('phase-display').textContent = data.currentPhaseDisplayName;
+  }
+
   if (pct >= 100) {
     etaLabel.textContent = 'Done!';
     etaLabel.style.color = '#4ade80';

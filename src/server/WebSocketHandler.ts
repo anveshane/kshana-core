@@ -596,6 +596,12 @@ export class WebSocketHandler {
           agentName,
         }));
 
+        // Send progress update on project-mutating tools
+        const progressTools = ['update_project', 'generate_content', 'dispatch_content_agent', 'dispatch_image_agent', 'dispatch_video_agent'];
+        if (progressTools.includes(toolName)) {
+          this.sendProgressUpdate(socket, sid);
+        }
+
         // Record timing and send progress for generation tools
         const trackedTools = ['generate_image', 'edit_image', 'generate_video', 'generate_video_from_image', 'assemble_from_timeline'];
         if (trackedTools.includes(toolName)) {
