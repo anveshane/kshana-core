@@ -17,6 +17,19 @@ export const PROJECT_VERSION = '2.0';
 export type ProjectStyle = 'cinematic_realism' | 'anime' | (string & {});
 
 /**
+ * Video resolution presets for generation.
+ * Lower resolutions are faster for testing; higher for production quality.
+ */
+export type VideoResolution = '360p' | '480p' | '720p' | '1080p';
+
+export const VIDEO_RESOLUTION_PRESETS: Record<VideoResolution, { width: number; height: number; label: string }> = {
+  '360p': { width: 640, height: 360, label: '360p (Fast)' },
+  '480p': { width: 854, height: 480, label: '480p (Default)' },
+  '720p': { width: 1280, height: 720, label: '720p (HD)' },
+  '1080p': { width: 1920, height: 1080, label: '1080p (Full HD)' },
+};
+
+/**
  * Style configuration with display names and prompt modifiers.
  */
 export interface StyleConfig {
@@ -38,8 +51,9 @@ export const STYLE_CONFIGS: Record<ProjectStyle, StyleConfig> = {
     displayName: 'Cinematic Realism',
     description: 'Photorealistic, cinematic look with dramatic lighting and film-quality visuals',
     promptModifier:
-      'cinematic, photorealistic, dramatic lighting, high detail, film quality, 8k, professional photography',
-    negativePromptModifier: 'anime, cartoon, illustration, drawing, sketch, 2d, cel shaded',
+      'rendered in photorealistic cinematic style, natural lighting with visible light rays and atmospheric haze, shot on 35mm film with shallow depth of field, 8K resolution, high detail skin textures and fabric weave, professional photography, no CGI, no 3D rendering, no illustration',
+    negativePromptModifier:
+      'anime, cartoon, illustration, drawing, sketch, 2d, cel shaded, 3d render, CGI, computer graphics, video game, plastic skin, smooth textures, artificial lighting, flat colors',
   },
   anime: {
     displayName: 'Anime',
@@ -452,7 +466,7 @@ export interface SceneRef {
  */
 export interface AssetInfo {
   id: string;
-  type: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'scene_infographic' | 'final_video';
+  type: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'scene_infographic' | 'final_video' | 'establishing_image';
   path: string;
   createdAt: number;
   metadata?: Record<string, unknown>;
@@ -580,6 +594,9 @@ export interface ProjectFile {
   /** Target video duration in seconds (selected by user at startup) */
   targetDuration?: number;
 
+  /** Video resolution preset (selected by user at startup, default '480p') */
+  videoResolution?: VideoResolution;
+
   /** Persisted todo list for resuming work */
   todos?: PersistedTodo[];
 
@@ -607,6 +624,9 @@ export interface ProjectFile {
 
   /** Artifact-centric state for fine-grained control - individual artifact tracking with versioning */
   artifacts?: Record<string, ArtifactState>;
+
+  /** Timing heuristics for progress estimation and ETA */
+  timingHeuristics?: TimingHeuristics;
 
   /** Persisted user goal for session resumption */
   goal?: PersistedGoal;
@@ -1276,4 +1296,35 @@ export interface PromptComparison {
   versionA: PromptVersion;
   versionB: PromptVersion;
   diff: string;
+}
+
+// ============================================================================
+// PROGRESS TRACKING (Heuristic Progress & ETA)
+// ============================================================================
+
+/**
+ * Operation types for timing heuristics.
+ */
+export type OperationType =
+  | 'content_generation'
+  | 'image_generation'
+  | 'image_editing'
+  | 'video_generation'
+  | 'assembly';
+
+/**
+ * Running average for a single operation type.
+ */
+export interface TimingAverage {
+  totalMs: number;
+  count: number;
+  avgMs: number;
+}
+
+/**
+ * Timing heuristics stored on the project for progress estimation.
+ */
+export interface TimingHeuristics {
+  averages: Partial<Record<OperationType, TimingAverage>>;
+  defaults: Record<OperationType, number>;
 }

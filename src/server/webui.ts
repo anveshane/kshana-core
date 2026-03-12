@@ -27,6 +27,13 @@ ${getStyles()}
     <div class="header-right">
       <button id="autonomous-btn" title="Toggle Autonomous Mode" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:12px;font-weight:600;letter-spacing:0.5px;">AUTO</button>
       <span id="session-timer" style="display:none;font-size:13px;font-variant-numeric:tabular-nums;color:var(--text-muted);font-family:monospace;">00:00:00</span>
+      <div id="progress-wrap" style="display:none;align-items:center;gap:6px;">
+        <div id="progress-bar" style="width:120px;height:8px;background:var(--bg-tertiary);border-radius:4px;overflow:hidden;">
+          <div id="progress-fill" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--green-bright));border-radius:4px;transition:width 0.4s ease;"></div>
+        </div>
+        <span id="progress-pct" style="font-size:11px;color:var(--text-muted);font-variant-numeric:tabular-nums;min-width:32px;">0%</span>
+        <span id="progress-eta" style="font-size:11px;color:var(--text-muted);min-width:40px;"></span>
+      </div>
       <div id="context-bar-wrap">
         <div id="context-bar"><div id="context-fill"></div></div>
         <span id="context-label">CTX 0%</span>
@@ -462,6 +469,7 @@ function handleServerMessage(msg) {
     case 'phase_transition': handlePhaseTransition(msg.data); break;
     case 'notification': handleNotification(msg.data); break;
     case 'session_timer': handleSessionTimer(msg.data); break;
+    case 'progress': handleProgress(msg.data); break;
     case 'error': handleError(msg.data); break;
   }
 }
@@ -1527,6 +1535,45 @@ function formatTimer(totalSeconds) {
   return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m + ':' + (s < 10 ? '0' : '') + s;
 }
 
+// ===== Heuristic Progress =====
+function handleProgress(data) {
+  // Detect heuristic progress (has overallPercent field) vs legacy iteration progress
+  if (typeof data.overallPercent !== 'number') return;
+  var wrap = document.getElementById('progress-wrap');
+  var fill = document.getElementById('progress-fill');
+  var pctLabel = document.getElementById('progress-pct');
+  var etaLabel = document.getElementById('progress-eta');
+  if (!wrap || !fill || !pctLabel || !etaLabel) return;
+
+  wrap.style.display = 'flex';
+  var pct = Math.min(100, Math.max(0, data.overallPercent));
+  fill.style.width = pct + '%';
+  pctLabel.textContent = Math.round(pct) + '%';
+
+  if (pct >= 100) {
+    etaLabel.textContent = 'Done!';
+    etaLabel.style.color = '#4ade80';
+    fill.style.background = 'linear-gradient(90deg, var(--green), var(--green-bright))';
+  } else if (data.estimatedRemainingMs != null && data.estimatedRemainingMs > 0) {
+    etaLabel.textContent = '~' + formatEta(data.estimatedRemainingMs);
+    etaLabel.style.color = 'var(--text-muted)';
+    fill.style.background = 'linear-gradient(90deg, var(--accent), var(--green-bright))';
+  } else {
+    etaLabel.textContent = '';
+  }
+}
+
+function formatEta(ms) {
+  var totalSec = Math.round(ms / 1000);
+  if (totalSec < 60) return totalSec + 's left';
+  var m = Math.floor(totalSec / 60);
+  var s = totalSec % 60;
+  if (m < 60) return m + 'm ' + (s > 0 ? s + 's' : '') + ' left';
+  var h = Math.floor(m / 60);
+  m = m % 60;
+  return h + 'h ' + m + 'm left';
+}
+
 function showToast(message, level) {
   const container = document.getElementById('toast-container');
   const toast = document.createElement('div');
@@ -1571,11 +1618,12 @@ function sendMessage() {
         templateId: newProjectState.templateId,
         style: newProjectState.style,
         duration: newProjectState.duration,
+        resolution: newProjectState.resolution,
         content: text,
         autonomousMode: newProjectState.autonomousMode || false,
       },
     });
-    addSystemMessage('Creating project with ' + newProjectState.templateName + ' / ' + newProjectState.styleName + ' / ' + newProjectState.durationLabel + '...');
+    addSystemMessage('Creating project with ' + newProjectState.templateName + ' / ' + newProjectState.styleName + ' / ' + newProjectState.durationLabel + ' / ' + (newProjectState.resolutionLabel || '480p') + '...');
     pendingAutoTask = 'Start working on this project. The project has just been created with the user content.';
     newProjectState = null;
     inputBox.placeholder = 'Type a task...';
@@ -1988,6 +2036,8 @@ async function startNewProjectWizard() {
       styleName: null,
       duration: null,
       durationLabel: null,
+      resolution: null,
+      resolutionLabel: null,
       templates: data.templates || [],
       durationPresets: data.durationPresets || {},
     };
@@ -2009,7 +2059,7 @@ function removeWizardStepsFrom(stepOrder) {
   inputBox.placeholder = 'Type a task...';
 }
 
-var WIZARD_STEP_ORDER = { template: 1, style: 2, duration: 3, autonomous: 4, content: 5 };
+var WIZARD_STEP_ORDER = { template: 1, style: 2, duration: 3, resolution: 4, autonomous: 5, content: 6 };
 
 function showWizardStep(step) {
   if (!newProjectState) return;
@@ -2024,7 +2074,7 @@ function showWizardStep(step) {
 
   if (step === 'template') {
     card.innerHTML =
-      '<div class="wizard-step-label">Step 1 of 5</div>' +
+      '<div class="wizard-step-label">Step 1 of 6</div>' +
       '<div class="wizard-step-title">Choose a Template</div>' +
       '<div class="wizard-cards"></div>';
     var grid = card.querySelector('.wizard-cards');
@@ -2063,7 +2113,7 @@ function showWizardStep(step) {
     var styles = template ? (template.styles || []) : [];
 
     card.innerHTML =
-      '<div class="wizard-step-label">Step 2 of 5</div>' +
+      '<div class="wizard-step-label">Step 2 of 6</div>' +
       '<div class="wizard-step-title">Choose a Style</div>' +
       '<div class="wizard-summary"><span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span></div>' +
       '<div class="wizard-cards"></div>';
@@ -2097,7 +2147,7 @@ function showWizardStep(step) {
     var presets = newProjectState.durationPresets[newProjectState.templateId] || [];
 
     card.innerHTML =
-      '<div class="wizard-step-label">Step 3 of 5</div>' +
+      '<div class="wizard-step-label">Step 3 of 6</div>' +
       '<div class="wizard-step-title">Choose Duration</div>' +
       '<div class="wizard-summary">' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
@@ -2113,7 +2163,7 @@ function showWizardStep(step) {
       btn.onclick = function() {
         newProjectState.duration = p.seconds;
         newProjectState.durationLabel = p.label;
-        showWizardStep('autonomous');
+        showWizardStep('resolution');
       };
       btnRow.appendChild(btn);
     });
@@ -2133,7 +2183,7 @@ function showWizardStep(step) {
       if (val > 0) {
         newProjectState.duration = val;
         newProjectState.durationLabel = val + ' seconds';
-        showWizardStep('autonomous');
+        showWizardStep('resolution');
       }
     };
     customInput.addEventListener('keydown', function(e) {
@@ -2143,15 +2193,46 @@ function showWizardStep(step) {
     customWrap.appendChild(customOk);
     btnRow.appendChild(customWrap);
 
+  } else if (step === 'resolution') {
+    var resOptions = [
+      { id: '360p', label: '360p (Fast)' },
+      { id: '480p', label: '480p (Default)' },
+      { id: '720p', label: '720p (HD)' },
+      { id: '1080p', label: '1080p (Full HD)' },
+    ];
+    card.innerHTML =
+      '<div class="wizard-step-label">Step 4 of 6</div>' +
+      '<div class="wizard-step-title">Video Resolution</div>' +
+      '<div class="wizard-summary">' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.durationLabel) + '</span>' +
+      '</div>' +
+      '<div class="wizard-duration-cards"></div>';
+    var resBtnRow = card.querySelector('.wizard-duration-cards');
+    resOptions.forEach(function(r) {
+      var btn = document.createElement('button');
+      btn.className = 'wizard-duration-btn';
+      if (r.id === '480p') btn.style.cssText = 'border-color:#4ade80;color:#4ade80;';
+      btn.textContent = r.label;
+      btn.onclick = function() {
+        newProjectState.resolution = r.id;
+        newProjectState.resolutionLabel = r.label;
+        showWizardStep('autonomous');
+      };
+      resBtnRow.appendChild(btn);
+    });
+
   } else if (step === 'autonomous') {
     newProjectState.autonomousMode = false;
     card.innerHTML =
-      '<div class="wizard-step-label">Step 4 of 5</div>' +
+      '<div class="wizard-step-label">Step 5 of 6</div>' +
       '<div class="wizard-step-title">Autonomous Mode</div>' +
       '<div class="wizard-summary">' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.durationLabel) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.resolutionLabel || '') + '</span>' +
       '</div>' +
       '<div style="margin:12px 0;display:flex;align-items:center;gap:12px;">' +
         '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;color:var(--text);">' +
@@ -2174,12 +2255,13 @@ function showWizardStep(step) {
 
   } else if (step === 'content') {
     card.innerHTML =
-      '<div class="wizard-step-label">Step 5 of 5</div>' +
+      '<div class="wizard-step-label">Step 6 of 6</div>' +
       '<div class="wizard-step-title">Describe Your Project</div>' +
       '<div class="wizard-summary">' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.durationLabel) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.resolutionLabel || '') + '</span>' +
         (newProjectState.autonomousMode ? '<span class="wizard-summary-tag" style="color:#4ade80;">Autonomous</span>' : '') +
       '</div>';
     chatMessages.appendChild(card);

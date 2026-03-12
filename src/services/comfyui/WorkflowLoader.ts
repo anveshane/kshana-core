@@ -102,14 +102,15 @@ export function loadWorkflowTemplate(templateName: string): WorkflowTemplate {
  * Convert aspect ratio string to width and height dimensions.
  */
 export function aspectRatioToDimensions(aspectRatio: string): [number, number] {
-  const ratioMap: Record<string, [number, number]> = {
-    '16:9': [1536, 864],
-    '9:16': [864, 1536],
+  // Normalize all image generation to 1024x1024 — the resolution where image models perform best
+  const _ratioMap: Record<string, [number, number]> = {
+    '16:9': [1024, 1024],
+    '9:16': [1024, 1024],
     '1:1': [1024, 1024],
-    '4:3': [1366, 1024],
-    '3:4': [1024, 1366],
+    '4:3': [1024, 1024],
+    '3:4': [1024, 1024],
   };
-  return ratioMap[aspectRatio] || [1024, 1024];
+  return _ratioMap[aspectRatio] || [1024, 1024];
 }
 
 export interface WorkflowParams {
@@ -380,8 +381,8 @@ export function parameterizeLtx23Workflow(
 
   const durationSeconds = Math.min(Math.max(params.durationSeconds ?? 10, 1), 20);
   const t2vMode = params.t2vMode ?? false;
-  const width = params.width || 1280;
-  const height = params.height || 720;
+  const width = params.width || 854;
+  const height = params.height || 480;
 
   for (const node of workflow.nodes || []) {
     const nodeId = node.id;
@@ -573,8 +574,8 @@ export function parameterizeWorkflowByName(
       inputImageFilename: params.inputImageFilename,
       durationSeconds: extParams.durationSeconds ?? 10,
       t2vMode,
-      width: extParams.width || (params.aspectRatio === '9:16' ? 720 : 1280),
-      height: extParams.height || (params.aspectRatio === '9:16' ? 1280 : 720),
+      width: extParams.width || (params.aspectRatio === '9:16' ? 480 : 854),
+      height: extParams.height || (params.aspectRatio === '9:16' ? 854 : 480),
     });
   }
 

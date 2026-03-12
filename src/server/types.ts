@@ -193,6 +193,17 @@ export interface NotificationData {
 }
 
 /**
+ * Heuristic progress data for overall project completion tracking.
+ */
+export interface HeuristicProgressData {
+  overallPercent: number;          // 0-100
+  currentPhase: string;
+  currentPhaseDisplayName: string;
+  estimatedRemainingMs: number | null;
+  currentOperation: string;        // e.g. "Generating image 3/8"
+}
+
+/**
  * Session timer message data.
  */
 export interface SessionTimerData {
@@ -308,6 +319,8 @@ export interface CreateProjectData {
     imageEditing?: string;
     videoGeneration?: string;
   };
+  /** Video resolution preset (e.g. '480p', '720p') */
+  resolution?: string;
   /** Run end-to-end without confirmations */
   autonomousMode?: boolean;
 }

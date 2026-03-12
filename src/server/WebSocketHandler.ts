@@ -24,6 +24,7 @@ import {
   type PhaseTransitionData,
   type NotificationData,
   type SessionTimerData,
+  type HeuristicProgressData,
   type ErrorData,
   type StartTaskData,
   type UserResponseData,
@@ -74,6 +75,8 @@ export class WebSocketHandler {
   private heartbeatInterval?: ReturnType<typeof setInterval>;
   private serverMode: ServerMode;
   private auth: ApiKeyAuth | null;
+  /** Track tool call start times for timing heuristics (key = toolName:timestamp) */
+  private toolStartTimes = new Map<string, number>();
 
   constructor(
     conversationManager: ConversationManager,
@@ -309,6 +312,9 @@ export class WebSocketHandler {
     // Create event handlers
     const events = this.createEventHandlers(sessionId, socket);
 
+    // Send initial progress update
+    this.sendProgressUpdate(socket, sessionId);
+
     // Notify UI that timer is running
     this.sendTimerUpdate(socket, sessionId, true);
 
@@ -464,6 +470,9 @@ export class WebSocketHandler {
         }));
       } catch { /* ignore */ }
     }
+
+    // Send initial progress for the selected project
+    this.sendProgressUpdate(socket, sessionId);
   }
 
   /**
@@ -505,7 +514,7 @@ export class WebSocketHandler {
       const projectDirName = inferProjectDirName(data.content);
 
       // Create the project on disk
-      createProject(data.content, data.style, undefined, data.duration, data.templateId);
+      createProject(data.content, data.style, undefined, data.duration, data.templateId, data.resolution);
 
       // Configure the session agent for this project
       this.conversationManager.configureSessionForProject(
@@ -516,6 +525,7 @@ export class WebSocketHandler {
         projectDirName,
         (data as { providerConfig?: Record<string, string> }).providerConfig,
         data.autonomousMode,
+        data.resolution,
       );
 
       const toolNames = this.conversationManager.getSessionToolNames(sessionId);
@@ -532,6 +542,9 @@ export class WebSocketHandler {
         elapsedMs: 0,
         running: false,
       }));
+
+      // Send initial progress for new project (0%)
+      this.sendProgressUpdate(socket, sessionId);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.sendError(socket, sessionId, 'create_project_error', errorMessage);
@@ -569,6 +582,8 @@ export class WebSocketHandler {
           status: 'started',
           agentName,
         }));
+        // Track start time for timing heuristics
+        this.toolStartTimes.set(toolName, Date.now());
       },
 
       onToolResult: (sid, toolName, result, agentName) => {
@@ -580,6 +595,19 @@ export class WebSocketHandler {
           result,
           agentName,
         }));
+
+        // Record timing and send progress for generation tools
+        const trackedTools = ['generate_image', 'edit_image', 'generate_video', 'generate_video_from_image', 'assemble_from_timeline'];
+        if (trackedTools.includes(toolName)) {
+          const startTime = this.toolStartTimes.get(toolName);
+          if (startTime) {
+            const durationMs = Date.now() - startTime;
+            this.toolStartTimes.delete(toolName);
+            this.recordToolTiming(socket, sid, toolName, durationMs);
+          }
+          // Send progress update after generation tools complete
+          this.sendProgressUpdate(socket, sid);
+        }
 
         // When set_goal completes, send timer update (accumulated time, agent still running)
         if (toolName === 'set_goal') {
@@ -663,6 +691,8 @@ export class WebSocketHandler {
 
       onPhaseTransition: (sid, data) => {
         this.sendMessage(socket, createServerMessage<PhaseTransitionData>('phase_transition', sid, data));
+        // Send progress update on phase transition
+        this.sendProgressUpdate(socket, sid);
         // Check if production completed (final video stitched) and send timer update
         try {
           import('../tasks/video/workflow/ProjectManager.js').then(({ getElapsedMs, loadProject }) => {
@@ -682,6 +712,36 @@ export class WebSocketHandler {
         this.sendMessage(socket, createServerMessage<NotificationData>('notification', sid, data));
       },
     };
+  }
+
+  /**
+   * Send a heuristic progress update to the client.
+   */
+  private sendProgressUpdate(socket: WebSocket, sessionId: string): void {
+    import('../tasks/video/workflow/ProjectManager.js').then(({ loadProject }) => {
+      const project = loadProject();
+      if (!project) return;
+      import('../tasks/video/workflow/ProgressTracker.js').then(({ computeProgress }) => {
+        const progress = computeProgress(project);
+        this.sendMessage(socket, createServerMessage<HeuristicProgressData>('progress', sessionId, progress));
+      });
+    }).catch(() => { /* ignore */ });
+  }
+
+  /**
+   * Record tool timing and update project heuristics.
+   */
+  private recordToolTiming(_socket: WebSocket, _sessionId: string, toolName: string, durationMs: number): void {
+    import('../tasks/video/workflow/ProgressTracker.js').then(({ toolToOperationType, recordOperationTiming }) => {
+      const opType = toolToOperationType(toolName);
+      if (!opType) return;
+      import('../tasks/video/workflow/ProjectManager.js').then(({ loadProject, saveProject: save }) => {
+        const project = loadProject();
+        if (!project) return;
+        recordOperationTiming(project, opType, durationMs);
+        save(project);
+      });
+    }).catch(() => { /* ignore */ });
   }
 
   /**

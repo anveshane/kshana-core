@@ -21,11 +21,11 @@ import { getProjectDir, addAsset } from './workflow/index.js';
 // ─── Placeholder image generation ────────────────────────────────────────────
 
 const ASPECT_DIMENSIONS: Record<string, [number, number]> = {
-  '16:9': [1280, 720],
-  '9:16': [720, 1280],
+  '16:9': [1024, 1024],
+  '9:16': [1024, 1024],
   '1:1': [1024, 1024],
-  '4:3': [1024, 768],
-  '3:4': [768, 1024],
+  '4:3': [1024, 1024],
+  '3:4': [1024, 1024],
 };
 
 // Uniform dark background for all fake images
@@ -217,7 +217,7 @@ async function fakeGenerateImageHandler(
   const relativePath = path.relative(projectDir, outputPath);
 
   // Register job as immediately completed
-  const entityType = imageType === 'character_ref' ? 'character' as const : imageType === 'setting_ref' ? 'setting' as const : 'scene' as const;
+  const entityType = imageType === 'character_ref' ? 'character' as const : imageType === 'setting_ref' ? 'setting' as const : imageType === 'establishing' ? 'scene' as const : 'scene' as const;
   const job: GenerationJob = {
     id: jobId,
     type: 'image',
@@ -239,7 +239,7 @@ async function fakeGenerateImageHandler(
   jobs.set(jobId, job);
 
   // Register in manifest
-  const assetType = imageType === 'character_ref' ? 'character_ref' as const : imageType === 'setting_ref' ? 'setting_ref' as const : 'scene_image' as const;
+  const assetType = imageType === 'character_ref' ? 'character_ref' as const : imageType === 'setting_ref' ? 'setting_ref' as const : imageType === 'establishing' ? 'establishing_image' as const : 'scene_image' as const;
   try {
     addAsset({
       id: artifactId,

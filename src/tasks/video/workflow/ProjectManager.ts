@@ -23,6 +23,7 @@ import {
   type ProjectStyle,
   type StyleConfig,
   type InputType,
+  type VideoResolution,
   WorkflowPhase,
   PlannerStage,
   PHASE_CONFIGS,
@@ -40,6 +41,7 @@ import {
   createDefaultSceneRef,
 } from './types.js';
 import { generateProjectTitle, contextStore } from '../../../core/context/index.js';
+import { getDefaultTimingEstimates } from './ProgressTracker.js';
 import { initializeArtifactsFromFiles, createArtifactFromFile } from './ArtifactManager.js';
 import { TemplateRegistry } from '../../../core/templates/TemplateRegistry.js';
 import type { PhaseDefinition } from '../../../core/templates/types.js';
@@ -274,7 +276,8 @@ export function createProject(
   styleOrBasePath: ProjectStyle | string = 'cinematic_realism',
   basePathMaybe: string = process.cwd(),
   targetDuration?: number,
-  templateId?: string
+  templateId?: string,
+  videoResolution?: string
 ): ProjectFile {
   // Determine style and basePath.
   // If styleOrBasePath looks like a filesystem path, treat it as basePath (old signature).
@@ -356,6 +359,7 @@ export function createProject(
     inputType: 'idea',
     ...(targetDuration != null ? { targetDuration } : {}),
     ...(templateId ? { templateId } : {}),
+    videoResolution: (videoResolution as VideoResolution) || '480p',
     createdAt: now,
     updatedAt: now,
     productionStartedAt: now,
@@ -370,6 +374,11 @@ export function createProject(
     assets: [],
     // Track only files that actually exist
     files: [{ type: 'original_input', path: inputFilePath }],
+    // Timing heuristics for progress estimation
+    timingHeuristics: {
+      averages: {},
+      defaults: getDefaultTimingEstimates(),
+    },
   };
 
   // Save project file

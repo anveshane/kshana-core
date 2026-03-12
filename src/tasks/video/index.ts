@@ -733,6 +733,7 @@ export interface CreateAgentForProjectOptions {
   llmConfig: LLMClientConfig;
   maxIterations?: number;
   customProjectDescription?: string;
+  resolution?: string;
 }
 
 /**
@@ -750,7 +751,7 @@ export interface AgentForProjectResult {
  * identical tools, orchestrator prompt, and meta prompt.
  */
 export function createAgentForProject(options: CreateAgentForProjectOptions): AgentForProjectResult {
-  const { templateId, style, duration, customProjectDescription } = options;
+  const { templateId, style, duration, customProjectDescription, resolution } = options;
 
   // 1. Full tool registry (file, planner, timeline, video, infographic)
   const registry = createGoalDrivenToolRegistry(templateId);
@@ -775,7 +776,22 @@ export function createAgentForProject(options: CreateAgentForProjectOptions): Ag
     ? `\n\n**Custom project description from user:** ${customProjectDescription}\nInterpret this description and adapt your workflow accordingly.`
     : '';
 
-  const metaPrompt = `You are working on a **${templateName}** project with **${styleName}** visual style.\nTarget duration: **${durationStr} (${duration} seconds)**.\nThe user already selected these — do not ask about project type, style, or duration. Proceed directly with the planning workflow.${customDesc}`;
+  // Resolution info for the agent
+  let resolutionInfo = '';
+  if (resolution) {
+    const presetMap: Record<string, { width: number; height: number }> = {
+      '360p': { width: 640, height: 360 },
+      '480p': { width: 854, height: 480 },
+      '720p': { width: 1280, height: 720 },
+      '1080p': { width: 1920, height: 1080 },
+    };
+    const preset = presetMap[resolution];
+    if (preset) {
+      resolutionInfo = `\nVideo resolution: **${resolution} (${preset.width}x${preset.height})**. Use width=${preset.width} height=${preset.height} for all video generation.`;
+    }
+  }
+
+  const metaPrompt = `You are working on a **${templateName}** project with **${styleName}** visual style.\nTarget duration: **${durationStr} (${duration} seconds)**.${resolutionInfo}\nThe user already selected these — do not ask about project type, style, or duration. Proceed directly with the planning workflow.${customDesc}`;
 
   const customPrompt = templatePrompt ? `${metaPrompt}\n\n${templatePrompt}` : metaPrompt;
 

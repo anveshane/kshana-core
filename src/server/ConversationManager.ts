@@ -111,6 +111,7 @@ export class ConversationManager {
     projectDirName?: string,
     providerConfig?: { imageGeneration?: string; imageEditing?: string; videoGeneration?: string },
     autonomousMode?: boolean,
+    resolution?: string,
   ): void {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -145,6 +146,7 @@ export class ConversationManager {
         duration,
         llmConfig: this.llmConfig,
         maxIterations: effectiveMaxIterations,
+        resolution,
       });
 
       const llm = new LLMClient(this.llmConfig);

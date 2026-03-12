@@ -255,7 +255,7 @@ export async function convertImageToVideo(
     '-c:v', 'libx264',
     '-t', String(duration),
     '-pix_fmt', 'yuv420p',
-    '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2',
+    '-vf', 'scale=854:480:force_original_aspect_ratio=decrease,pad=854:480:(ow-iw)/2:(oh-ih)/2',
     '-c:a', 'aac',
     '-shortest',
     '-preset', 'fast',
@@ -278,8 +278,8 @@ export async function assembleVideos(
   config: AssemblyConfig = {}
 ): Promise<AssemblyResult> {
   const {
-    width = 1280,
-    height = 720,
+    width = 854,
+    height = 480,
     preset = 'fast',
     timeoutMs = DEFAULT_TIMEOUT_MS,
   } = config;
