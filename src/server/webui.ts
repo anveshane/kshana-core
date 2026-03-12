@@ -1608,8 +1608,9 @@ function sendMessage() {
 
   addUserMessage(text || 'Attached ' + attachedFiles.length + ' file(s)');
 
-  // If wizard is on content step, send create_project instead of start_task
-  if (newProjectState && newProjectState.step === 'content') {
+  // If wizard is active and minimum fields are set, send create_project with defaults for unset fields
+  if (newProjectState && newProjectState.templateId && newProjectState.style && newProjectState.duration) {
+    if (!newProjectState.resolution) { newProjectState.resolution = '480p'; newProjectState.resolutionLabel = '480p (Default)'; }
     wsSend({
       type: 'create_project',
       sessionId: sessionId,
