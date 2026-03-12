@@ -18,6 +18,13 @@ import {
   createRemoteSession,
 } from '../core/fs/index.js';
 import { startTimer, stopTimer, checkpointTimer } from '../tasks/video/workflow/ProjectManager.js';
+import {
+  captureSessionEnded,
+  captureSessionStarted,
+  captureWorkflowCompleted,
+  captureWorkflowFailed,
+  captureWorkflowStarted,
+} from './posthog.js';
 
 const TIMER_CHECKPOINT_INTERVAL_MS = 60_000; // Flush elapsed time to disk every 60s
 
@@ -69,6 +76,13 @@ export class ConversationManager {
   private maxIterations: number;
   private cleanupInterval?: ReturnType<typeof setInterval>;
 
+  private getWorkflowName(session: ActiveSession): string {
+    const maybeName = (session.agent as unknown as { name?: unknown } | undefined)?.name;
+    return typeof maybeName === 'string' && maybeName.trim().length > 0
+      ? maybeName
+      : 'unknown';
+  }
+
   constructor(config: ConversationManagerConfig) {
     this.llmConfig = config.llmConfig;
     this.sessionTimeoutMs = config.sessionTimeoutMs ?? 30 * 60 * 1000; // 30 minutes
@@ -94,6 +108,7 @@ export class ConversationManager {
     };
 
     this.sessions.set(sessionId, { state, mode, remoteFs });
+    captureSessionStarted(sessionId, new Date(now).toISOString());
 
     return state;
   }
@@ -263,6 +278,13 @@ export class ConversationManager {
         try { checkpointTimer(); } catch { /* ignore */ }
       }, TIMER_CHECKPOINT_INTERVAL_MS);
 
+      const workflowName = this.getWorkflowName(session);
+      const workflowStartedAt = Date.now();
+      captureWorkflowStarted({
+        sessionId,
+        workflowName,
+      });
+
       try {
         const result = await session.agent!.run(task);
 
@@ -280,6 +302,12 @@ export class ConversationManager {
           session.state.status = 'error';
         }
 
+        captureWorkflowCompleted({
+          sessionId,
+          workflowName,
+          durationMs: Math.max(0, Date.now() - workflowStartedAt),
+        });
+
         return result;
       } catch (error) {
         // Stop active timer + checkpoint interval on error
@@ -287,6 +315,12 @@ export class ConversationManager {
         try { stopTimer(); } catch { /* ignore */ }
         session.state.status = 'error';
         session.state.lastActivity = Date.now();
+        captureWorkflowFailed({
+          sessionId,
+          workflowName,
+          errorType: error instanceof Error ? error.name : 'unknown_error',
+          durationMs: Math.max(0, Date.now() - workflowStartedAt),
+        });
         throw error;
       } finally {
         // Clean up event listeners
@@ -484,6 +518,14 @@ export class ConversationManager {
   deleteSession(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     if (session) {
+      const sessionDurationMs = Math.max(0, Date.now() - session.state.createdAt);
+      captureSessionEnded(
+        sessionId,
+        sessionDurationMs,
+        new Date(session.state.createdAt).toISOString(),
+        session.state.taskHistory.length
+      );
+
       // Cancel any running task
       if (session.abortController) {
         session.abortController.abort();

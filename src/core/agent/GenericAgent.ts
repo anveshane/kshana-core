@@ -39,6 +39,12 @@ import { buildContextVariablesSection, type ContextVariable } from '../prompts/i
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { FlowRecorder } from '../../utils/FlowRecorder.js';
 import { ToolAnalytics } from '../../utils/ToolAnalytics.js';
+import {
+  captureErrorOccurred,
+  captureToolCallCompleted,
+  captureToolCallStarted,
+  hashAnalyticsMessage,
+} from '../../server/posthog.js';
 import { buildPreloadedContext } from './contentContext.js';
 import { resolveGenerateContentOutputFile } from './generateContentPath.js';
 import {
@@ -1247,6 +1253,15 @@ export class GenericAgent extends TypedEventEmitter {
           continue;
         }
 
+        let activeProjectDir: string | undefined;
+        try {
+          activeProjectDir = getProjectDir();
+        } catch {
+          activeProjectDir = undefined;
+        }
+
+        const toolStartedAtIso = new Date().toISOString();
+
         // Record analytics start
         const analyticsRowId = ToolAnalytics.instance()?.recordStart(
           toolCall.id,
@@ -1254,8 +1269,21 @@ export class GenericAgent extends TypedEventEmitter {
           this.getEffectiveAgentName(),
           toolCall.arguments,
           this.analyticsSessionId,
-          precedingMessage
+          precedingMessage,
+          activeProjectDir,
         ) ?? null;
+        captureToolCallStarted({
+          sessionId: this.analyticsSessionId,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          agentName: this.getEffectiveAgentName(),
+          args: toolCall.arguments,
+          startedAt: toolStartedAtIso,
+          projectDir: activeProjectDir,
+          workflowName: this.name,
+        });
+
+        const toolStartPerf = performance.now();
 
         // Execute the tool
         const result = await this.executeTool(toolCall);
@@ -1268,8 +1296,34 @@ export class GenericAgent extends TypedEventEmitter {
         const errorMsg = isToolError
           ? (resultObj['error'] as string) ?? (resultObj['warning'] as string) ?? undefined
           : undefined;
+        const toolDurationMs = Math.round(performance.now() - toolStartPerf);
         if (analyticsRowId !== null) {
           ToolAnalytics.instance()?.recordComplete(toolCall.id, analyticsRowId, isToolError, errorMsg);
+        }
+        captureToolCallCompleted({
+          sessionId: this.analyticsSessionId,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          agentName: this.getEffectiveAgentName(),
+          isError: isToolError,
+          durationMs: toolDurationMs,
+          errorMessage: errorMsg,
+          startedAt: toolStartedAtIso,
+          completedAt: new Date().toISOString(),
+          projectDir: activeProjectDir,
+          sqliteRowId: analyticsRowId ?? undefined,
+          source: 'live',
+          workflowName: this.name,
+        });
+
+        if (isToolError) {
+          captureErrorOccurred({
+            sessionId: this.analyticsSessionId,
+            errorType: 'tool_error',
+            toolName: toolCall.name,
+            workflowName: this.name,
+            messageHash: hashAnalyticsMessage(errorMsg),
+          });
         }
 
         // Check if a generate tool (image/video) completed successfully
