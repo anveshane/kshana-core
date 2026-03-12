@@ -2042,6 +2042,9 @@ async function startNewProjectWizard() {
       templates: data.templates || [],
       durationPresets: data.durationPresets || {},
     };
+    inputBox.disabled = true;
+    sendBtn.disabled = true;
+    inputBox.placeholder = 'Complete the wizard steps above...';
     showWizardStep('template');
   } catch(e) {
     console.error('Failed to fetch templates:', e);
@@ -2056,8 +2059,14 @@ function removeWizardStepsFrom(stepOrder) {
     var order = Number(el.dataset.wizardOrder || 0);
     if (order >= stepOrder) el.remove();
   });
-  // Reset placeholder if we removed the content step
-  inputBox.placeholder = 'Type a task...';
+  // Keep input disabled while wizard is active (unless on content step)
+  if (newProjectState) {
+    inputBox.disabled = true;
+    sendBtn.disabled = true;
+    inputBox.placeholder = 'Complete the wizard steps above...';
+  } else {
+    inputBox.placeholder = 'Type a task...';
+  }
 }
 
 var WIZARD_STEP_ORDER = { template: 1, style: 2, duration: 3, resolution: 4, autonomous: 5, content: 6 };
@@ -2266,6 +2275,8 @@ function showWizardStep(step) {
         (newProjectState.autonomousMode ? '<span class="wizard-summary-tag" style="color:#4ade80;">Autonomous</span>' : '') +
       '</div>';
     chatMessages.appendChild(card);
+    inputBox.disabled = false;
+    sendBtn.disabled = false;
     inputBox.placeholder = 'Describe your project idea and press Send...';
     inputBox.focus();
     maybeScroll();
