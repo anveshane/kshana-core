@@ -3225,24 +3225,57 @@ Respond in JSON format:
           streamOptions.responseFormat = { type: 'json_object' as const };
         }
 
+        // Reset think tag filter for content creator streaming
+        this.resetThinkTagFilter();
+        const hasImplicitThinking = this.llm.hasImplicitThinking;
+
         for await (const chunk of this.llm.generateStream(streamOptions)) {
-          // Handle content chunks
+          // Handle content chunks — separate <think> tags from output
           if (chunk.content) {
             content += chunk.content;
-            this.emit({
-              type: 'tool_streaming',
-              toolCallId: this.contentState.toolCallId,
-              chunk: chunk.content,
-              done: false,
-              agentName: this.getEffectiveAgentName(),
-              toolName: 'generate_content',
-              reset: isFirstChunk && shouldReset,
-            });
-            isFirstChunk = false;
+            const { output, thinking } = this.processStreamChunk(chunk.content);
+
+            // Emit thinking content so UI can display it
+            if (hasImplicitThinking && thinking) {
+              this.emit({ type: 'streaming_think', chunk: thinking, done: false });
+            }
+
+            // Emit regular content as tool streaming
+            if (output) {
+              this.emit({
+                type: 'tool_streaming',
+                toolCallId: this.contentState.toolCallId,
+                chunk: output,
+                done: false,
+                agentName: this.getEffectiveAgentName(),
+                toolName: 'generate_content',
+                reset: isFirstChunk && shouldReset,
+              });
+              isFirstChunk = false;
+            }
           }
 
           // Handle stream completion
           if (chunk.done) {
+            // Flush any remaining buffered content
+            const { output: remainingOutput, thinking: remainingThinking } =
+              this.flushThinkTagBuffer();
+            if (hasImplicitThinking && remainingThinking) {
+              this.emit({ type: 'streaming_think', chunk: remainingThinking, done: false });
+            }
+            if (hasImplicitThinking) {
+              this.emit({ type: 'streaming_think', chunk: '', done: true });
+            }
+            if (remainingOutput) {
+              this.emit({
+                type: 'tool_streaming',
+                toolCallId: this.contentState.toolCallId,
+                chunk: remainingOutput,
+                done: false,
+                agentName: this.getEffectiveAgentName(),
+                toolName: 'generate_content',
+              });
+            }
             this.emit({
               type: 'tool_streaming',
               toolCallId: this.contentState.toolCallId,
