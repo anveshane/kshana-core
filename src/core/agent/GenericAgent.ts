@@ -1810,7 +1810,7 @@ export class GenericAgent extends TypedEventEmitter {
         debugLog(
           `[GenericAgent] Pre-loaded context for ${contentType}: ${preloaded.filesRead.length} files read (${preloaded.filesRead.join(', ')})`
         );
-        subAgentTask = `ALL context has been pre-loaded below. DO NOT call read_file(). You may call read_project() if you need additional project metadata (e.g. reference image paths). Generate the ${contentType} content using the provided context.\n\nInstruction: ${instruction}\n\n${preloaded.contextBlock}`;
+        subAgentTask = `ALL context has been pre-loaded below. DO NOT call any tools — no read_file(), no read_project(). Everything you need is provided. Generate the ${contentType} content directly.\n\nInstruction: ${instruction}\n\n${preloaded.contextBlock}`;
 
         if (contentType === 'shot_image_prompt' && shotNumber !== undefined) {
           subAgentTask += `\n\n**Shot Number:** ${shotNumber}\n**Note:** Generate an image prompt specifically for this shot's framing and composition. Use only the reference images relevant to this shot.\n`;
@@ -3253,12 +3253,14 @@ Respond in JSON format:
           }
         }
 
-        // Clean content (remove <think> tags including orphaned ones)
+        // Clean content (remove <think> tags and leaked tool-call XML)
         let cleanedContent = content
           ? content
               .replace(/<think>.*?<\/think>/gs, '') // Complete think blocks
               .replace(/<think>.*$/gs, '') // Orphan opening tag
               .replace(/<\/think>/g, '') // Orphan closing tag
+              .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '') // Leaked tool call blocks
+              .replace(/<function=[^>]*>[\s\S]*?<\/function>/g, '') // Leaked function calls
               .trim()
           : '';
 
