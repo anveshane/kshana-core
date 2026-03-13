@@ -14,6 +14,8 @@ import {
 import { getProviderRegistry } from '../../services/providers/index.js';
 import type { ProviderProgressCallback } from '../../services/providers/types.js';
 
+import { getPhaseLogger } from '../../utils/phaseLogger.js';
+
 const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
 function debugLog(message: string): void {
   try {
@@ -46,6 +48,7 @@ export interface ShotPrompt {
   dialogue: string | null; // character dialogue for LTX-2 audio, null if none
   cameraWork: string; // e.g. "slow push-in", "static close-up with subtle drift"
   referenceImages: string[]; // character/setting ref paths relevant to this shot
+  useEstablishingAsFirstFrame?: boolean; // for continuous mode: use establishing image directly as LTX-2 input
 }
 
 /**
@@ -58,6 +61,9 @@ export interface MultiShotMotionPrompt {
   shots: ShotPrompt[];
   totalSceneDuration: number;
   referenceImages: string[]; // all ref images for the scene
+  sceneMode: 'multi_shot' | 'continuous'; // multi_shot (2-4 shots) or continuous (single long shot)
+  spatialLayout: string; // description of how elements are arranged in the establishing shot
+  establishingImagePath?: string; // path to the establishing image for this scene
 }
 
 /**
@@ -87,6 +93,7 @@ export const MOTION_PROMPT_SCHEMA = {
               dialogue: { anyOf: [{ type: 'string' }, { type: 'null' }] },
               cameraWork: { type: 'string' },
               referenceImages: { type: 'array', items: { type: 'string' } },
+              useEstablishingAsFirstFrame: { type: 'boolean' },
             },
             required: [
               'shotNumber',
@@ -102,8 +109,11 @@ export const MOTION_PROMPT_SCHEMA = {
         },
         totalSceneDuration: { type: 'number' },
         referenceImages: { type: 'array', items: { type: 'string' } },
+        sceneMode: { type: 'string', enum: ['multi_shot', 'continuous'] },
+        spatialLayout: { type: 'string' },
+        establishingImagePath: { anyOf: [{ type: 'string' }, { type: 'null' }] },
       },
-      required: ['sceneNumber', 'sceneTitle', 'shots', 'totalSceneDuration', 'referenceImages'],
+      required: ['sceneNumber', 'sceneTitle', 'shots', 'totalSceneDuration', 'referenceImages', 'sceneMode', 'spatialLayout'],
       additionalProperties: false,
     },
   },
@@ -116,8 +126,47 @@ export const MOTION_PROMPT_SCHEMA = {
  */
 export function parseMotionPrompt(raw: string): MultiShotMotionPrompt {
   const parsed = JSON.parse(raw);
+  const phaseLogger = getPhaseLogger();
+
   if (parsed.shots && Array.isArray(parsed.shots)) {
-    return parsed as MultiShotMotionPrompt;
+    // Validate sceneMode enum
+    const validSceneModes = ['multi_shot', 'continuous'];
+    const sceneMode = parsed.sceneMode ?? 'multi_shot';
+    if (!validSceneModes.includes(sceneMode)) {
+      throw new Error(
+        `Invalid sceneMode "${sceneMode}" — must be one of: ${validSceneModes.join(', ')}`
+      );
+    }
+
+    const spatialLayout = parsed.spatialLayout ?? '';
+
+    // Warn if multi_shot mode is missing establishing image or spatial layout
+    if (sceneMode === 'multi_shot') {
+      if (!parsed.establishingImagePath) {
+        phaseLogger.warn('MotionPrompt', 'missing_establishing', `Scene ${parsed.sceneNumber} uses multi_shot mode but has no establishingImagePath — shots will lack spatial anchor`);
+      }
+      if (!spatialLayout) {
+        phaseLogger.warn('MotionPrompt', 'missing_spatial_layout', `Scene ${parsed.sceneNumber} uses multi_shot mode but has empty spatialLayout`);
+      }
+    }
+
+    if (sceneMode === 'continuous') {
+      phaseLogger.info('MotionPrompt', 'continuous_mode', `Scene ${parsed.sceneNumber} using continuous mode — shot images will be skipped`, {
+        sceneNumber: parsed.sceneNumber,
+        sceneTitle: parsed.sceneTitle,
+      });
+    }
+
+    return {
+      sceneNumber: parsed.sceneNumber,
+      sceneTitle: parsed.sceneTitle,
+      shots: parsed.shots,
+      totalSceneDuration: parsed.totalSceneDuration,
+      referenceImages: parsed.referenceImages ?? [],
+      sceneMode,
+      spatialLayout,
+      establishingImagePath: parsed.establishingImagePath,
+    };
   }
   // Legacy single-prompt format
   return {
@@ -136,6 +185,8 @@ export function parseMotionPrompt(raw: string): MultiShotMotionPrompt {
     ],
     totalSceneDuration: 6,
     referenceImages: parsed.referenceImages ?? [],
+    sceneMode: 'multi_shot',
+    spatialLayout: '',
   };
 }
 
@@ -185,8 +236,8 @@ export interface GenerationJob {
 export interface ReferenceImage {
   /** Artifact ID or path to the reference image */
   image_id: string;
-  /** Type of reference: character or setting */
-  type: 'character' | 'setting';
+  /** Type of reference: character, setting, or establishing */
+  type: 'character' | 'setting' | 'establishing';
   /** Name of the character or setting this references */
   name: string;
 }
@@ -200,13 +251,17 @@ export interface ImageGenerationParams {
   negative_prompt?: string;
   aspect_ratio?: string;
   seed?: number;
-  image_type?: 'scene' | 'character_ref' | 'setting_ref';
+  image_type?: 'scene' | 'character_ref' | 'setting_ref' | 'establishing';
   character_name?: string;
   setting_name?: string;
   /** Reference images for consistency (used for scene generation) */
   reference_images?: ReferenceImage[];
   /** Generation mode: text-to-image or image+text-to-image */
   generation_mode?: 'text_to_image' | 'image_text_to_image';
+  /** Current pass number (for multi-pass establishing image generation with 3+ characters) */
+  pass?: number;
+  /** Total number of passes planned */
+  totalPasses?: number;
 }
 
 /**
@@ -277,6 +332,8 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
     reference_images = [],
   } = params;
 
+  const phaseLogger = getPhaseLogger();
+
   // Determine filename prefix based on image type
   let filenamePrefix: string;
 
@@ -286,6 +343,13 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
   } else if (image_type === 'setting_ref' && setting_name) {
     const cleanName = setting_name.replace(/[^a-zA-Z0-9]/g, '');
     filenamePrefix = `SettingRef_${cleanName}`;
+  } else if (image_type === 'establishing') {
+    // Multi-pass: intermediate passes get a pass suffix; final pass uses clean name
+    if (params.pass && params.totalPasses && params.pass < params.totalPasses) {
+      filenamePrefix = `Establishing_Scene${scene_number}_pass${params.pass}`;
+    } else {
+      filenamePrefix = `Establishing_Scene${scene_number}`;
+    }
   } else {
     filenamePrefix = `Scene${scene_number}`;
   }
@@ -296,8 +360,27 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
     context = { entityType: 'character', characterName: character_name, artifactType: 'image' };
   } else if (image_type === 'setting_ref' && setting_name) {
     context = { entityType: 'setting', settingName: setting_name, artifactType: 'image' };
+  } else if (image_type === 'establishing') {
+    context = { entityType: 'scene', sceneNumber: scene_number, artifactType: 'image' };
   } else {
     context = { entityType: 'scene', sceneNumber: scene_number, artifactType: 'image' };
+  }
+
+  // Structured logging for establishing image generation
+  if (image_type === 'establishing') {
+    phaseLogger.info('ImageGen', 'establishing_start', `Generating establishing image for scene ${scene_number}`, {
+      sceneNumber: scene_number,
+      characterCount: reference_images.filter(r => r.type === 'character').length,
+      generationMode: generation_mode,
+      ...(params.pass ? { pass: params.pass, totalPasses: params.totalPasses } : {}),
+    });
+    if (params.pass) {
+      phaseLogger.info('ImageGen', 'multi_pass', `Multi-pass establishing: pass ${params.pass}/${params.totalPasses}`, {
+        pass: params.pass,
+        totalPasses: params.totalPasses,
+        intermediate: params.pass < (params.totalPasses ?? params.pass),
+      });
+    }
   }
 
   // Create job for tracking
@@ -363,7 +446,7 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
           );
           return null;
         }
-        return { filePath: refPath, type: ref.type as 'character' | 'setting', name: ref.name };
+        return { filePath: refPath, type: ref.type as 'character' | 'setting' | 'establishing', name: ref.name };
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);
 
@@ -425,17 +508,24 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
     }
 
     // Store in manifest
-    let assetType: 'character_ref' | 'setting_ref' | 'scene_image' = 'scene_image';
+    let assetType: 'character_ref' | 'setting_ref' | 'scene_image' | 'establishing_image' = 'scene_image';
     if (context.entityType === 'character') assetType = 'character_ref';
     else if (context.entityType === 'setting') assetType = 'setting_ref';
+    else if (image_type === 'establishing') assetType = 'establishing_image';
 
     try {
+      const assetMetadata: Record<string, unknown> = { jobId, provider: provider.id };
+      if (image_type === 'establishing' && params.pass) {
+        assetMetadata['pass'] = params.pass;
+        assetMetadata['totalPasses'] = params.totalPasses;
+        assetMetadata['intermediate'] = params.pass < (params.totalPasses ?? params.pass);
+      }
       addAsset({
         id: artifactId,
         type: assetType,
         path: relativePath,
         createdAt: Date.now(),
-        metadata: { jobId, provider: provider.id },
+        metadata: assetMetadata,
       });
     } catch {
       // Project may not exist yet
@@ -600,7 +690,7 @@ async function waitForComfyUIJob(
     }
 
     // Determine asset type based on context
-    let assetType: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' = 'scene_image';
+    let assetType: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'establishing_image' = 'scene_image';
     if (job.context) {
       if (job.context.entityType === 'character') {
         assetType = 'character_ref';
@@ -739,7 +829,7 @@ This tool blocks until generation is complete and returns the result directly (a
       image_type: {
         type: 'string',
         description: 'Type of image being generated',
-        enum: ['scene', 'character_ref', 'setting_ref'],
+        enum: ['scene', 'character_ref', 'setting_ref', 'establishing'],
       },
       character_name: {
         type: 'string',
@@ -768,7 +858,7 @@ This tool blocks until generation is complete and returns the result directly (a
             },
             type: {
               type: 'string',
-              enum: ['character', 'setting'],
+              enum: ['character', 'setting', 'establishing'],
               description: 'Type of reference',
             },
             name: {
@@ -778,6 +868,14 @@ This tool blocks until generation is complete and returns the result directly (a
           },
           required: ['image_id', 'type', 'name'],
         },
+      },
+      pass: {
+        type: 'number',
+        description: 'Current pass number for multi-pass establishing image generation (3+ characters). Pass 1 result is used as image1 in Pass 2.',
+      },
+      totalPasses: {
+        type: 'number',
+        description: 'Total number of passes planned for multi-pass establishing image generation.',
       },
     },
     required: ['scene_number'],
@@ -851,7 +949,7 @@ This tool blocks until generation is complete and returns the result directly (a
     // Determine generation mode based on image_type and reference_images
     const generationMode =
       params.generation_mode ??
-      (params.image_type === 'scene' && params.reference_images?.length
+      ((['scene', 'establishing'].includes(params.image_type ?? '') && params.reference_images?.length)
         ? 'image_text_to_image'
         : 'text_to_image');
 
@@ -913,7 +1011,7 @@ interface PromptFileMetadata {
   generationMode?: 'text_to_image' | 'image_text_to_image';
   /** Reference images specified in the prompt */
   references: Array<{
-    type: 'character' | 'setting';
+    type: 'character' | 'setting' | 'establishing';
     name: string;
     refId?: string;
     /** Direct relative path to the reference image file (preferred over name-based lookup) */
@@ -1068,13 +1166,26 @@ function parsePromptFile(content: string): PromptFileMetadata {
         continue;
       }
 
+      // Match establishing references
+      const establishingMatch = line.match(
+        /^-\s*(?:image\d+:\s*)?(?:Establishing:\s*)([^(\[-]+?)(?:\s*[\[(-].*)?$/i
+      );
+      if (establishingMatch && establishingMatch[1] && /establishing/i.test(line)) {
+        result.references.push({
+          type: 'establishing',
+          name: establishingMatch[1].trim(),
+          path: inlinePath,
+        });
+        continue;
+      }
+
       // Fallback: match "- imageN: Name (type)" format
       const imageNMatch = line.match(/^-\s*image\d+:\s*([^(]+?)\s*\((\w+)\)/i);
       if (imageNMatch && imageNMatch[1] && imageNMatch[2]) {
         const type = imageNMatch[2].toLowerCase();
-        if (type === 'character' || type === 'setting') {
+        if (type === 'character' || type === 'setting' || type === 'establishing') {
           result.references.push({
-            type: type as 'character' | 'setting',
+            type: type as 'character' | 'setting' | 'establishing',
             name: imageNMatch[1].trim(),
             path: inlinePath,
           });
@@ -1105,14 +1216,14 @@ function parsePromptFile(content: string): PromptFileMetadata {
  */
 function resolveReferencesToPaths(
   references: PromptFileMetadata['references']
-): Array<{ image_id: string; type: 'character' | 'setting'; name: string }> | null {
+): Array<{ image_id: string; type: 'character' | 'setting' | 'establishing'; name: string }> | null {
   const project = loadProject();
   if (!project) {
     return null;
   }
 
   const projectDir = getProjectDir();
-  const resolved: Array<{ image_id: string; type: 'character' | 'setting'; name: string }> = [];
+  const resolved: Array<{ image_id: string; type: 'character' | 'setting' | 'establishing'; name: string }> = [];
 
   for (const ref of references) {
     // Priority 1: Direct path specified in prompt file — most reliable
@@ -1157,6 +1268,9 @@ function resolveReferencesToPaths(
           continue;
         }
       }
+    } else if (ref.type === 'establishing') {
+      // Establishing images are resolved via direct path (Priority 1 above) or filename scan (Priority 3 below)
+      // No project entity lookup for establishing images — they don't have a dedicated project array
     } else if (ref.type === 'setting') {
       const setting = project.settings.find(
         s =>
@@ -1187,7 +1301,7 @@ function resolveReferencesToPaths(
     // This handles cases where project.characters/settings arrays are empty but images exist
     const itemFiles = project.content?.images?.itemFiles;
     if (itemFiles) {
-      const refPrefix = ref.type === 'character' ? 'CharRef' : 'SettingRef';
+      const refPrefix = ref.type === 'character' ? 'CharRef' : ref.type === 'establishing' ? 'Establishing' : 'SettingRef';
       const searchName = ref.name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
       for (const [_imgId, imgPath] of Object.entries(itemFiles)) {
         const filename = path

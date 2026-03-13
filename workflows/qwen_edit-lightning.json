@@ -15,7 +15,7 @@
         {"name": "MODEL", "type": "MODEL", "links": [21]}
       ],
       "properties": {},
-      "widgets_values": ["Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors", "fp8_e4m3fn"]
+      "widgets_values": ["FireRed-Image-Edit-1.1_fp8mixed_comfy.safetensors", "default"]
     },
     {
       "id": 16,
@@ -32,7 +32,7 @@
         {"name": "MODEL", "type": "MODEL", "links": [1]}
       ],
       "properties": {},
-      "widgets_values": ["Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors", 1],
+      "widgets_values": ["FireRed-Image-Edit-v1.1-Lightning-8steps-v1.0.safetensors", 1],
       "title": "Lightning LoRA"
     },
     {
@@ -246,7 +246,7 @@
         {"name": "LATENT", "type": "LATENT", "links": [19]}
       ],
       "properties": {},
-      "widgets_values": [0, "randomize", 4, 1.0, "euler", "normal", 1]
+      "widgets_values": [0, "randomize", 8, 1.0, "euler", "bong_tangent", 1]
     },
     {
       "id": 14,

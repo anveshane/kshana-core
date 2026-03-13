@@ -18,7 +18,8 @@ import {
   getArtifactFilePath,
 } from '../templates/types.js';
 import { ArtifactGraph } from './ArtifactGraph.js';
-import type { RippleEffect, MissingDependency } from './ArtifactGraph.js';
+import type { RippleEffect, ArtifactImpact, MissingDependency } from './ArtifactGraph.js';
+import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
 /**
  * Options for creating an artifact
@@ -341,10 +342,53 @@ export class ArtifactManager {
   }
 
   /**
-   * Mark artifact for regeneration
+   * Mark artifact for regeneration, then cascade-invalidate all downstream artifacts.
    */
   markForRegeneration(instanceId: string): ArtifactOperationResult {
-    return this.update(instanceId, { status: 'regenerating', incrementVersion: true });
+    const result = this.update(instanceId, { status: 'regenerating', incrementVersion: true });
+    if (result.success) {
+      this.cascadeInvalidation(instanceId);
+    }
+    return result;
+  }
+
+  /**
+   * Cascade invalidation: mark all downstream artifacts as 'stale' when an
+   * upstream artifact is regenerated. Uses the dependency graph's ripple
+   * effect calculation to find all affected artifacts.
+   */
+  cascadeInvalidation(instanceId: string): ArtifactImpact[] {
+    const artifact = this.findById(instanceId);
+    if (!artifact) return [];
+
+    const phaseLogger = getPhaseLogger();
+    const ripple = this.graph.calculateRippleEffect(artifact.typeId, this.project, instanceId);
+    const staled: ArtifactImpact[] = [];
+
+    for (const impact of ripple.invalidated) {
+      const downstream = this.findById(impact.instanceId);
+      if (downstream && (downstream.status === 'approved' || downstream.status === 'in_review')) {
+        downstream.status = 'stale';
+        downstream.metadata['staleReason'] = `Upstream artifact ${instanceId} (${artifact.typeId}) was regenerated`;
+        downstream.updatedAt = Date.now();
+        staled.push(impact);
+        phaseLogger.info('ArtifactManager', 'cascade_invalidation', `Marked ${impact.typeId}/${impact.name} as stale`, {
+          staledInstanceId: impact.instanceId,
+          staledTypeId: impact.typeId,
+          sourceInstanceId: instanceId,
+          sourceTypeId: artifact.typeId,
+        });
+      }
+    }
+
+    if (staled.length > 0) {
+      phaseLogger.info('ArtifactManager', 'cascade_invalidation', `Invalidated ${staled.length} downstream artifacts`, {
+        sourceInstanceId: instanceId,
+        staledCount: staled.length,
+      });
+    }
+
+    return staled;
   }
 
   /**
@@ -489,6 +533,13 @@ export class ArtifactManager {
   }
 
   /**
+   * Get stale artifacts (invalidated by upstream regeneration)
+   */
+  getStale(): ArtifactInstance[] {
+    return this.query({ status: 'stale' });
+  }
+
+  /**
    * Check if all artifacts of a type are approved
    */
   isTypeComplete(typeId: string): boolean {
@@ -624,6 +675,7 @@ export class ArtifactManager {
       approved: 0,
       rejected: 0,
       regenerating: 0,
+      stale: 0,
     };
 
     const byType: Record<string, number> = {};

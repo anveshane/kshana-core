@@ -361,6 +361,17 @@ export class LLMClient {
           : undefined;
 
         yield { done: true, usage };
+      } else if (chunk.usage && (!chunk.choices || chunk.choices.length === 0)) {
+        // llama.cpp sends usage in a separate final chunk with empty choices array.
+        // Yield it as a usage-only update so context tracking picks it up.
+        yield {
+          done: true,
+          usage: {
+            promptTokens: chunk.usage.prompt_tokens,
+            completionTokens: chunk.usage.completion_tokens,
+            totalTokens: chunk.usage.total_tokens,
+          },
+        };
       }
     }
   }

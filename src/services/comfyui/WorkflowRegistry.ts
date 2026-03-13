@@ -85,12 +85,12 @@ class WorkflowRegistry {
       qualityLevel: 'high',
     });
 
-    // 3. Qwen Edit Lightning - Fast image editing with up to 3 reference images (default)
+    // 3. FireRed Edit Lightning - Fast image editing with up to 3 reference images (default)
     this.register({
       name: 'qwen_edit',
       filename: 'qwen_edit-lightning.json',
       workflowType: WorkflowType.IMAGE_EDITING,
-      description: 'Fast intelligent image editing using Qwen model with Lightning acceleration. Supports 1-3 input images for editing, combining, or transforming visuals based on text instructions. Use for scene generation with character/setting references.',
+      description: 'Fast intelligent image editing using FireRed Image Edit 1.1 with Lightning acceleration. Supports 1-3 input images for editing, combining, or transforming visuals based on text instructions. Use for scene generation with character/setting references.',
       capabilities: [
         'image-to-image',
         'multi-image-input',
@@ -100,7 +100,7 @@ class WorkflowRegistry {
         'consistency-preservation',
         'reference-based-generation',
       ],
-      displayName: 'Qwen Image Editor (Lightning)',
+      displayName: 'FireRed Image Editor (Lightning)',
       requiresBaseImage: true,
       supportsTextPrompts: true,
       supportsImageToImage: true,

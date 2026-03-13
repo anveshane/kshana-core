@@ -34,7 +34,7 @@ import {
   LONG_CONTENT_THRESHOLD,
 } from '../context/index.js';
 import { CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
-import { getContentCreatorTools, clearKnownProjectFiles } from '../tools/builtin/contentCreatorTools.js';
+import { getContentCreatorTools, clearKnownProjectFiles, ReadCache, ListFilesCache } from '../tools/builtin/contentCreatorTools.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { FlowRecorder } from '../../utils/FlowRecorder.js';
@@ -260,6 +260,10 @@ export class GenericAgent extends TypedEventEmitter {
 
   // Analytics session ID (stable per agent instance)
   private analyticsSessionId: string;
+
+  // Per-session caches to avoid redundant file reads and directory listings
+  private readCache = new ReadCache();
+  private listFilesCache = new ListFilesCache();
 
   constructor(tools: Map<string, ToolDefinition>, llm: LLMClient, config: AgentConfig = {}) {
     super();
@@ -1824,8 +1828,10 @@ export class GenericAgent extends TypedEventEmitter {
         `[GenericAgent] generate_content initializing contentState for: "${instruction.substring(0, 100)}..."`
       );
 
-      // Clear known project files from previous content sessions
+      // Clear known project files and read caches from previous content sessions
       clearKnownProjectFiles();
+      this.readCache.clear();
+      this.listFilesCache.clear();
 
       // Initialize contentState for streaming + approval
       this.contentState = {
@@ -3042,10 +3048,37 @@ Respond in JSON format:
       }
       try {
         const fullPath = path.join(projectDir, filePath);
-        if (!fs.existsSync(fullPath)) {
-          return `File not found: ${filePath}`;
+
+        // Single stat call — handles both existence check and mtime
+        let stats: fs.Stats;
+        try {
+          stats = fs.statSync(fullPath);
+        } catch (statErr: unknown) {
+          if ((statErr as NodeJS.ErrnoException).code === 'ENOENT') {
+            this.readCache.evict(fullPath);
+            return `File not found: ${filePath}`;
+          }
+          throw statErr;
         }
-        const content = fs.readFileSync(fullPath, 'utf-8');
+
+        // Check read cache — avoid re-reading unchanged files
+        const cachedLen = this.readCache.check(fullPath, stats.mtimeMs);
+        if (cachedLen !== null) {
+          return `[File "${filePath}" already read — ${cachedLen} chars, unchanged. Use the content from your previous read.]`;
+        }
+
+        // Read file — handle race where file is deleted between stat and read
+        let content: string;
+        try {
+          content = fs.readFileSync(fullPath, 'utf-8');
+        } catch (readErr: unknown) {
+          if ((readErr as NodeJS.ErrnoException).code === 'ENOENT') {
+            this.readCache.evict(fullPath);
+            return `File not found: ${filePath}`;
+          }
+          throw readErr;
+        }
+        this.readCache.set(fullPath, stats.mtimeMs, content.length);
         return content;
       } catch (err) {
         return `Error reading file: ${String(err)}`;
@@ -3053,6 +3086,12 @@ Respond in JSON format:
     }
 
     if (toolCall.name === 'list_project_files') {
+      // Return cached result if available and still fresh
+      const cachedList = this.listFilesCache.get();
+      if (cachedList) {
+        return '[File listing unchanged since last call. Use the file paths from your previous list_project_files result.]\n\n' + cachedList;
+      }
+
       try {
         const { listProjectFilesTool } = await import('../../tasks/video/workflow/FileTools.js');
         if (listProjectFilesTool.handler) {
@@ -3070,7 +3109,9 @@ Respond in JSON format:
             // Non-critical: validation won't be enforced if registration fails
           }
 
-          return JSON.stringify(result, null, 2);
+          const resultStr = JSON.stringify(result, null, 2);
+          this.listFilesCache.set(resultStr);
+          return resultStr;
         }
         return 'Error: list_project_files handler not available';
       } catch (err) {

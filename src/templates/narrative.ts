@@ -212,6 +212,33 @@ const settingImageArtifact: ArtifactTypeDefinition = {
   },
 };
 
+const establishingImageArtifact: ArtifactTypeDefinition = {
+  id: 'establishing_image',
+  displayName: 'Scene Establishing Images',
+  category: 'visual_ref',
+  description: 'Wide establishing shot per scene — spatial anchor for all per-shot images',
+  scope: 'chapter',
+  isCollection: true,
+  itemName: 'establishing image',
+  outputFormat: 'image',
+  filePattern: 'chapters/{{chapter}}/assets/images/establishing/scene_{{index}}.png',
+  agentType: 'image',
+  promptFile: 'narrative/establishing-image.md',
+  isExpensive: true,
+  requiresPerItemApproval: true,
+  dependencies: [
+    { artifactTypeId: 'scene', required: true, usage: 'context', scope: 'matching' },
+    { artifactTypeId: 'character_image', required: true, usage: 'reference', scope: 'matching' },
+    { artifactTypeId: 'setting_image', required: true, usage: 'reference', scope: 'matching' },
+  ],
+  metadataSchema: {
+    sceneId: { type: 'string', required: true, description: 'ID of the source scene' },
+    characterRefs: { type: 'array', required: false, description: 'Character image IDs used' },
+    settingRef: { type: 'string', required: false, description: 'Setting image ID used' },
+    seed: { type: 'number', required: false, description: 'Generation seed' },
+  },
+};
+
 const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
   id: 'scene_video_prompt',
   displayName: 'Multi-Shot Motion Prompts',
@@ -228,6 +255,7 @@ const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
   requiresPerItemApproval: true,
   dependencies: [
     { artifactTypeId: 'scene', required: true, usage: 'context', scope: 'matching' },
+    { artifactTypeId: 'establishing_image', required: true, usage: 'reference', scope: 'matching' },
     { artifactTypeId: 'character_image', required: false, usage: 'reference', scope: 'matching' },
     { artifactTypeId: 'setting_image', required: false, usage: 'reference', scope: 'matching' },
   ],
@@ -249,6 +277,7 @@ const shotImagePromptArtifact: ArtifactTypeDefinition = {
   requiresPerItemApproval: false,
   dependencies: [
     { artifactTypeId: 'scene_video_prompt', required: true, usage: 'context', scope: 'matching' },
+    { artifactTypeId: 'establishing_image', required: true, usage: 'reference', scope: 'matching' },
     { artifactTypeId: 'character_image', required: false, usage: 'reference', scope: 'matching' },
     { artifactTypeId: 'setting_image', required: false, usage: 'reference', scope: 'matching' },
   ],
@@ -279,6 +308,12 @@ const sceneImageArtifact: ArtifactTypeDefinition = {
       artifactTypeId: 'shot_image_prompt',
       required: true,
       usage: 'context',
+      scope: 'matching',
+    },
+    {
+      artifactTypeId: 'establishing_image',
+      required: true,
+      usage: 'reference',
       scope: 'matching',
     },
     {
@@ -489,10 +524,19 @@ const phases: PhaseDefinition[] = [
     promptFile: 'narrative/phases/reference-images.md',
   },
   {
+    id: 'establishing_images',
+    displayName: 'Establishing Image Generation',
+    description: 'Generate wide establishing shots per scene as spatial anchors for shot-to-shot coherence',
+    order: 5,
+    artifactTypes: ['establishing_image'],
+    requiresConfirmation: true,
+    promptFile: 'narrative/phases/establishing-images.md',
+  },
+  {
     id: 'shot_breakdown',
     displayName: 'Shot Breakdown',
     description: 'Break scenes into cinematic shots and generate per-shot image prompts',
-    order: 5,
+    order: 6,
     artifactTypes: ['scene_video_prompt', 'shot_image_prompt'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/shot-breakdown.md',
@@ -501,7 +545,7 @@ const phases: PhaseDefinition[] = [
     id: 'scene_images',
     displayName: 'Scene Image Generation',
     description: 'Generate images for each scene using reference images',
-    order: 6,
+    order: 7,
     artifactTypes: ['scene_image'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/scene-images.md',
@@ -510,7 +554,7 @@ const phases: PhaseDefinition[] = [
     id: 'video_generation',
     displayName: 'Video Generation',
     description: 'Generate video clips for each scene',
-    order: 7,
+    order: 8,
     artifactTypes: ['scene_video'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/video-generation.md',
@@ -519,7 +563,7 @@ const phases: PhaseDefinition[] = [
     id: 'final_assembly',
     displayName: 'Final Assembly',
     description: 'Assemble all scene videos into the final video',
-    order: 8,
+    order: 9,
     artifactTypes: ['final_video'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/final-assembly.md',
@@ -666,6 +710,7 @@ export const narrativeTemplate: VideoTemplate = {
     scene: sceneArtifact,
     character_image: characterImageArtifact,
     setting_image: settingImageArtifact,
+    establishing_image: establishingImageArtifact,
     scene_video_prompt: sceneVideoPromptArtifact,
     shot_image_prompt: shotImagePromptArtifact,
     scene_image: sceneImageArtifact,

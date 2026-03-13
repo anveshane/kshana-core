@@ -314,7 +314,7 @@ export interface PhaseInfo {
 /**
  * Approval status for an individual item (character, setting, scene, etc.).
  */
-export type ItemApprovalStatus = 'pending' | 'in_review' | 'approved' | 'rejected' | 'regenerating';
+export type ItemApprovalStatus = 'pending' | 'in_review' | 'approved' | 'rejected' | 'regenerating' | 'stale';
 
 /**
  * Individual item tracking for per-item approval phases.

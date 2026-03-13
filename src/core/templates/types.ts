@@ -50,7 +50,8 @@ export type ArtifactApprovalStatus =
   | 'in_review'     // Currently being reviewed
   | 'approved'      // User approved
   | 'rejected'      // User rejected, needs regeneration
-  | 'regenerating'; // Being regenerated after rejection
+  | 'regenerating'  // Being regenerated after rejection
+  | 'stale';        // Invalidated by upstream regeneration
 
 /**
  * How a dependency is used by an artifact

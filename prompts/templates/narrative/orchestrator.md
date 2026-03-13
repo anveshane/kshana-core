@@ -12,9 +12,11 @@ This template creates narrative/story-based videos through the following artifac
 4. **Settings** (environments) - Location descriptions for visual generation
 5. **Scenes** (segments) - Individual scene breakdowns
 6. **Reference Images** (visual_refs) - Character and setting reference images
-7. **Scene Images** (visual_refs) - Generated scene visuals
-8. **Scene Videos** (clips) - Animated scene clips
-9. **Final Video** (final) - Assembled final video
+7. **Establishing Images** (visual_refs) - Wide establishing shots per scene (spatial anchors)
+8. **Shot Breakdown** (structure) - Multi-shot motion prompts and per-shot image prompts
+9. **Scene Images** (visual_refs) - Per-shot generated scene visuals
+10. **Scene Videos** (clips) - Animated scene clips
+11. **Final Video** (final) - Assembled final video
 
 ## Current Project State
 
@@ -34,9 +36,22 @@ Based on the current state, you can:
 - Include camera directions and emotional beats in scene descriptions
 
 ### For Image Generation
-- Generate reference images before scene images
+- Generate reference images before establishing images, and establishing images before scene images
 - Use reference images to maintain character and setting consistency
 - Allow for iterative refinement based on user feedback
+
+### For Establishing Images
+- Generate one wide establishing shot per scene after character/setting reference images are approved
+- The establishing image shows the full physical space with all characters positioned
+- Uses setting_ref as image1, character refs as image2/image3 in Qwen Edit
+- For scenes with 3+ characters, use multi-pass compositing (see image-generator subagent)
+- Prefer scenes with 1-2 characters to minimize compositing passes
+
+### For Scene Mode (Continuous vs Multi-Shot)
+- When a scene's `sceneMode` is `"continuous"`, it uses a single long shot (8-10s)
+- In continuous mode, skip per-shot image prompt generation and scene image generation for that scene
+- Use the establishing image directly as the LTX-2 input frame (the shot has `useEstablishingAsFirstFrame: true`)
+- When `sceneMode` is `"multi_shot"` (default), proceed with normal shot breakdown and per-shot image generation
 
 ### For Video Generation
 - Scenes should flow naturally from one to the next

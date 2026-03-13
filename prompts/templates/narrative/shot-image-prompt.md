@@ -33,24 +33,56 @@ The image must match the shot's framing. Different shot types require different 
 
 ## Reference Image Rules
 
-- Use ONLY the character/setting references relevant to THIS shot
-- For close-ups: only the featured character's reference
-- For establishing/wide shots: all character + setting references
-- Reference images as "from image1", "from image2", "from image3" based on the order listed in Reference Images section
+The establishing image is the spatial anchor for this scene. All per-shot images must appear to exist within the same physical space shown in the establishing image.
+
+### Qwen Edit Slot Assignment (Per-Shot Images)
+
+- **image1** (primary) = **establishing image** — the spatial anchor. This ensures the shot's environment matches the scene.
+- **image2** = **character reference** — the featured character's face/appearance for accuracy.
+- **image3** = secondary character reference OR setting reference (if only one character in shot).
+
+### Framing Relative to Establishing Shot
+
+The prompt must describe framing RELATIVE to the establishing shot:
+- "Zooming into the character at the left of the space shown in image1..."
+- "A close-up of the figure seated at the center desk in image1, with the face and features from image2..."
+- "The right side of the room from image1, focusing on the bookshelf area..."
+
+This ensures the generated image looks like a different camera angle within the SAME physical space, not a new environment.
+
+### Shot Type Rules
+- **Close-ups**: image1=establishing, image2=featured character ref
+- **Medium shots**: image1=establishing, image2=character ref, image3=secondary character or setting ref
+- **Wide/establishing shots**: image1=establishing, image2=character ref 1, image3=character ref 2
+
+## Rendering Style (Cinematic Realism)
+
+When the project uses `cinematic_realism` style, every shot image prompt MUST follow these rendering requirements:
+
+1. **Rendering declaration sentence**: End the prompt with an explicit rendering statement, e.g.: "The image is rendered in a photorealistic cinematic style with natural film grain, shallow depth of field, and 8K resolution."
+
+2. **Natural lighting behavior**: Describe how light physically behaves in the shot — reflections, shadows, light falloff. Instead of "dramatic lighting", write "a single warm practial light from the desk lamp illuminates the character's face from the left while the background falls into soft shadow, rim light from the window outlining the shoulder."
+
+3. **Material textures and physical properties**: Include specific tactile details visible at the shot's framing distance: for close-ups, describe "visible pores, fine hair, the weave of cotton fabric"; for medium shots, describe "the drape and fold of clothing fabric, wood grain on furniture, scuff marks on leather shoes."
+
+4. **Negative prompt additions**: Always append to the negative prompt: "3d render, CGI, computer graphics, video game, plastic skin, smooth textures, artificial lighting, flat colors"
+
+These requirements ensure each shot maintains photorealistic quality consistent with the establishing image.
 
 ## Output Format
 
 When reference images EXIST:
 ```
 **Image Prompt:**
-[Single detailed paragraph matching the shot's framing. Use "from image1/image2/image3" to reference characters and settings.]
+[Single detailed paragraph matching the shot's framing. Describe composition RELATIVE to the establishing shot in image1. Use "from image1" for the spatial environment, "from image2" for character appearance, "from image3" for secondary reference.]
 
 **Reference Images:**
+- Establishing: Scene [N] [path/to/establishing/scene_N.png]
 - Character: [name] [path/to/character_ref.png]
-- Setting: [name] [path/to/setting_ref.png]
+- Character: [name] [path/to/character_ref.png]
 
 **Negative Prompt:**
-[Style-appropriate negatives + inconsistent appearance, wrong features]
+[Style-appropriate negatives + inconsistent appearance, wrong features, different room, different lighting]
 
 **Aspect Ratio:**
 1:1
@@ -59,7 +91,7 @@ When reference images EXIST:
 image_text_to_image
 ```
 
-**IMPORTANT**: Always include the actual file path in square brackets after each reference name. Use `list_project_files` to find the exact paths of character and setting reference images. The path should be relative to the project directory (e.g., `assets/images/0jZCrE-k_CharRef_Parvati_00001_.png`). This ensures reliable image resolution during generation.
+**IMPORTANT**: The establishing image MUST be listed first (it becomes image1). Always include the actual file path in square brackets after each reference name. Use `list_project_files` to find the exact paths. The path should be relative to the project directory (e.g., `assets/images/0jZCrE-k_Establishing_Scene1_00001_.png`). This ensures reliable image resolution during generation.
 
 When NO reference images exist:
 ```

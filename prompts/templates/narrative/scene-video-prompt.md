@@ -6,9 +6,30 @@ Break this scene into 2-4 cinematic shots, each optimized for the LTX-2 video ge
 
 {{SCENE_CONTENT}}
 
-## Source Image
+## Establishing Image
 
-The source image is managed by the orchestrator.
+An establishing image has been generated for this scene — a wide shot showing the full physical space with all characters positioned. All shots in this scene share this spatial anchor. Every per-shot image will be derived from the establishing image using it as image1 in Qwen Edit.
+
+The establishing image path is available from the project state. Include it in the output JSON as `establishingImagePath`.
+
+## Scene Mode Decision
+
+Choose one of two modes for this scene:
+
+- **multi_shot** (default): Break into 2-4 separate shots of 4-8 seconds each. Use for scenes with multiple beats, dialogue exchanges, or visual variety needs.
+- **continuous**: A single long shot of 8-10 seconds. Use for simple scenes with a single continuous action, minimal dialogue, or when the establishing shot already captures the key moment. In continuous mode, set the single shot's `useEstablishingAsFirstFrame: true` to use the establishing image directly as the LTX-2 input frame (no separate per-shot image generation needed).
+
+Set `sceneMode` in the output JSON accordingly.
+
+## Spatial Layout
+
+Describe how characters and key elements are arranged in the establishing image. This helps the shot image generator know where to "zoom into" for each shot. Set `spatialLayout` in the output JSON.
+
+Example: "Protagonist stands at left near the window, antagonist seated at center desk, bookshelf fills the right wall, warm candlelight from overhead chandelier"
+
+## Character Count Guidance
+
+Prefer 1-2 characters per scene where possible. Scenes with 3+ characters required multi-pass compositing for the establishing image (slower, potential quality loss). Only use 3+ character scenes when narratively essential (ensemble moments, confrontations). Consider splitting large ensemble scenes into sequential 2-character interactions.
 
 ## Multi-Shot Breakdown
 
@@ -92,6 +113,9 @@ Output ONLY a JSON object (no markdown fences, no extra text):
 {
   "sceneNumber": 1,
   "sceneTitle": "Scene Title Here",
+  "sceneMode": "multi_shot",
+  "spatialLayout": "Description of how characters and elements are arranged in the establishing shot",
+  "establishingImagePath": "path/to/establishing/scene_1.png",
   "shots": [
     {
       "shotNumber": 1,
@@ -113,6 +137,31 @@ Output ONLY a JSON object (no markdown fences, no extra text):
     }
   ],
   "totalSceneDuration": 11,
+  "referenceImages": ["path/to/all-refs.png"]
+}
+```
+
+For **continuous mode**, use a single shot with `useEstablishingAsFirstFrame: true`:
+```
+{
+  "sceneNumber": 3,
+  "sceneTitle": "Simple Scene Title",
+  "sceneMode": "continuous",
+  "spatialLayout": "Character centered in frame, walking through doorway",
+  "establishingImagePath": "path/to/establishing/scene_3.png",
+  "shots": [
+    {
+      "shotNumber": 1,
+      "shotType": "wide",
+      "duration": 9,
+      "prompt": "[single flowing paragraph for the continuous shot]",
+      "dialogue": null,
+      "cameraWork": "slow tracking shot",
+      "referenceImages": ["path/to/establishing/scene_3.png"],
+      "useEstablishingAsFirstFrame": true
+    }
+  ],
+  "totalSceneDuration": 9,
   "referenceImages": ["path/to/all-refs.png"]
 }
 ```

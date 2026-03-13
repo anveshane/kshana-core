@@ -166,7 +166,10 @@ function getProgressCount(project: ProjectFile, phase: string): number {
     for (const item of items) {
       if (item.status === 'approved') {
         count += 1;
-      } else if (item.status !== 'pending') {
+      } else if (item.status === 'pending' || item.status === 'stale') {
+        // pending and stale get no credit
+        count += 0;
+      } else {
         // in_review, regenerating, or any active status = partial credit
         count += 0.5;
       }

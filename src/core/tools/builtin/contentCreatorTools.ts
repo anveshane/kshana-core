@@ -32,6 +32,77 @@ export function clearKnownProjectFiles(): void {
   knownProjectFiles = null;
 }
 
+// ============================================================================
+// ReadCache class: session-scoped caching for file reads.
+// Each GenericAgent instance owns its own ReadCache to avoid cross-session leaks.
+// ============================================================================
+
+export interface ReadCacheEntry {
+  mtimeMs: number;
+  length: number;
+}
+
+export class ReadCache {
+  private cache = new Map<string, ReadCacheEntry>();
+
+  /** Check if file is unchanged since last read. Returns cached length or null. */
+  check(resolvedPath: string, mtimeMs: number): number | null {
+    const cached = this.cache.get(resolvedPath);
+    if (cached && cached.mtimeMs === mtimeMs) {
+      return cached.length;
+    }
+    return null;
+  }
+
+  /** Record that a file was read. */
+  set(resolvedPath: string, mtimeMs: number, length: number): void {
+    this.cache.set(resolvedPath, { mtimeMs, length });
+  }
+
+  /** Remove a specific cache entry (e.g., when a file is deleted between stat and read). */
+  evict(resolvedPath: string): void {
+    this.cache.delete(resolvedPath);
+  }
+
+  /** Clear all entries. */
+  clear(): void {
+    this.cache.clear();
+  }
+}
+
+// ============================================================================
+// ListFilesCache class: session-scoped caching for list_project_files.
+// ============================================================================
+
+export class ListFilesCache {
+  private cached: { result: string; timestamp: number } | null = null;
+  private readonly ttlMs: number;
+
+  constructor(ttlMs: number = 30_000) {
+    this.ttlMs = ttlMs;
+  }
+
+  /** Get cached result if still fresh. Returns null if expired or empty. */
+  get(): string | null {
+    if (!this.cached) return null;
+    if (Date.now() - this.cached.timestamp > this.ttlMs) {
+      this.cached = null;
+      return null;
+    }
+    return this.cached.result;
+  }
+
+  /** Store a result. */
+  set(result: string): void {
+    this.cached = { result, timestamp: Date.now() };
+  }
+
+  /** Invalidate the cache. */
+  clear(): void {
+    this.cached = null;
+  }
+}
+
 /**
  * Read project structure tool - understand what content exists.
  */

@@ -38,7 +38,7 @@ export interface ProviderReferenceImage {
   /** Absolute path to the reference image file */
   filePath: string;
   /** Type of reference */
-  type: 'character' | 'setting';
+  type: 'character' | 'setting' | 'establishing';
   /** Name of the character or setting */
   name: string;
 }
