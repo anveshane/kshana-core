@@ -6,6 +6,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, readdirSync } from 'fs';
 import { isAbsolute, join } from 'path';
 import {
+  extractHeadingName,
+  extractSceneTitle as extractSceneTitleFromContent,
+  isLikelyToolChatter,
+  isValidSceneContent,
+  normalizeProfileName,
+} from '../../../core/contentValidation.js';
+import {
   type ProjectFile,
   type PhaseInfo,
   type PhaseStatus,
@@ -26,6 +33,7 @@ import {
   WorkflowPhase,
   PlannerStage,
   PHASE_CONFIGS,
+  PHASE_ORDER,
   STYLE_CONFIGS,
   INPUT_TYPE_CONFIGS,
   PROJECT_FILE,
@@ -438,18 +446,299 @@ export function setProjectInputType(
   return project;
 }
 
+function extractSummary(text: string): string | undefined {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  const summary = trimmed
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .find(line => !line.startsWith('#') && !line.startsWith('```'));
+
+  return summary?.slice(0, 200);
+}
+
+function setContentEntryFile(
+  project: ProjectFile,
+  contentType: 'story' | 'plot',
+  filePath: string
+): boolean {
+  const entry = project.content[contentType];
+  if (entry.file !== filePath) {
+    entry.file = filePath;
+    return true;
+  }
+  return false;
+}
+
+function migrateContentItemName(
+  entry: ContentEntry,
+  fromName: string,
+  toName: string
+): boolean {
+  let changed = false;
+
+  if (entry.items) {
+    const index = entry.items.indexOf(fromName);
+    if (index >= 0) {
+      entry.items[index] = toName;
+      changed = true;
+    }
+  }
+
+  if (entry.itemFiles?.[fromName]) {
+    const existingFile = entry.itemFiles[fromName];
+    delete entry.itemFiles[fromName];
+    entry.itemFiles[toName] = existingFile;
+    changed = true;
+  }
+
+  return changed;
+}
+
+function discoverProfileFiles(
+  projectDir: string,
+  directoryName: 'characters' | 'settings'
+): Map<string, string> {
+  const directory = join(projectDir, directoryName);
+  const discovered = new Map<string, string>();
+  if (!existsSync(directory)) {
+    return discovered;
+  }
+
+  const files = readdirSync(directory)
+    .filter(f => f.endsWith('.profile.md') || (f.endsWith('.md') && !f.endsWith('.prompt.md')))
+    .sort();
+
+  for (const file of files) {
+    const relativePath = `${directoryName}/${file}`;
+    const fullPath = join(directory, file);
+    let discoveredName: string | undefined;
+    try {
+      discoveredName = extractHeadingName(readFileSync(fullPath, 'utf-8'));
+    } catch {
+      // Ignore read errors and fall back to the filename.
+    }
+
+    const fallbackName = normalizeProfileName(
+      file
+        .replace(/\.profile\.md$/, '')
+        .replace(/\.md$/, '')
+        .replace(/[-_]/g, ' ')
+    );
+    discovered.set((discoveredName || fallbackName).toLowerCase(), relativePath);
+  }
+
+  return discovered;
+}
+
+function discoverSceneFiles(
+  projectDir: string
+): Map<number, { path: string; title?: string; description?: string; valid: boolean }> {
+  const discovered = new Map<number, { path: string; title?: string; description?: string; valid: boolean }>();
+  const sceneDirectories = [
+    {
+      dirPath: join(projectDir, 'plans', 'scenes'),
+      relativePrefix: 'plans/scenes',
+      filePattern: /^scene-(\d+)\.md$/i,
+    },
+    {
+      dirPath: join(projectDir, 'scenes'),
+      relativePrefix: 'scenes',
+      filePattern: /^scene_(\d+)\.md$/i,
+    },
+  ];
+
+  for (const directory of sceneDirectories) {
+    if (!existsSync(directory.dirPath)) {
+      continue;
+    }
+
+    const sceneFiles = readdirSync(directory.dirPath)
+      .filter(f => directory.filePattern.test(f))
+      .sort();
+
+    for (const sceneFile of sceneFiles) {
+      const match = sceneFile.match(directory.filePattern);
+      const sceneNumber = match?.[1] ? parseInt(match[1], 10) : NaN;
+      if (!Number.isFinite(sceneNumber)) {
+        continue;
+      }
+
+      const relativePath = `${directory.relativePrefix}/${sceneFile}`;
+      const fullPath = join(directory.dirPath, sceneFile);
+      try {
+        const content = readFileSync(fullPath, 'utf-8');
+        const valid = isValidSceneContent(content, sceneNumber);
+        const title = valid ? extractSceneTitleFromContent(content, sceneNumber) : undefined;
+        const description = valid ? extractSummary(content) : undefined;
+        discovered.set(sceneNumber, { path: relativePath, title, description, valid });
+      } catch {
+        discovered.set(sceneNumber, { path: relativePath, valid: false });
+      }
+    }
+  }
+
+  return discovered;
+}
+
+function syncGoalPreferencesIntoProject(project: ProjectFile): boolean {
+  let changed = false;
+  const goalPreferences = project.goal?.preferences;
+
+  if (
+    project.goal?.status === 'active' &&
+    goalPreferences?.duration != null &&
+    project.targetDuration !== goalPreferences.duration
+  ) {
+    project.targetDuration = goalPreferences.duration;
+    changed = true;
+  }
+
+  if (
+    project.goal?.status === 'active' &&
+    typeof goalPreferences?.style === 'string' &&
+    goalPreferences.style &&
+    project.style !== goalPreferences.style
+  ) {
+    project.style = goalPreferences.style as ProjectStyle;
+    changed = true;
+  }
+
+  return changed;
+}
+
+function recomputeNarrativePhaseState(project: ProjectFile): boolean {
+  let changed = false;
+  const now = Date.now();
+  const phaseIndex = new Map(PHASE_ORDER.map((phase, index) => [phase, index]));
+  const currentPhaseIndex = phaseIndex.get(project.currentPhase as WorkflowPhase) ?? -1;
+
+  const hasProgressedBeyond = (phase: WorkflowPhase): boolean => {
+    const index = phaseIndex.get(phase) ?? -1;
+    if (currentPhaseIndex > index) {
+      return true;
+    }
+
+    return PHASE_ORDER.slice(index + 1).some(nextPhase => {
+      const status = project.phases[nextPhase]?.status;
+      return status === 'in_progress' || status === 'completed';
+    });
+  };
+
+  const setPhaseStatus = (phase: WorkflowPhase, status: PhaseStatus) => {
+    const phaseInfo = project.phases[phase];
+    if (!phaseInfo) {
+      return;
+    }
+
+    if (phaseInfo.status !== status) {
+      phaseInfo.status = status;
+      changed = true;
+    }
+
+    if (status === 'completed') {
+      if (!phaseInfo.completedAt) {
+        phaseInfo.completedAt = now;
+        changed = true;
+      }
+      if (phaseInfo.plannerStage !== PlannerStage.COMPLETE) {
+        phaseInfo.plannerStage = PlannerStage.COMPLETE;
+        changed = true;
+      }
+    } else if (phaseInfo.completedAt != null) {
+      phaseInfo.completedAt = null;
+      changed = true;
+    }
+  };
+
+  setPhaseStatus(
+    WorkflowPhase.PLOT,
+    project.content.plot.status === 'available' || project.content.story.status === 'available' || hasProgressedBeyond(WorkflowPhase.PLOT)
+      ? 'completed'
+      : project.phases[WorkflowPhase.PLOT]?.status === 'completed'
+        ? 'completed'
+        : 'pending'
+  );
+  setPhaseStatus(
+    WorkflowPhase.STORY,
+    project.content.story.status === 'available' || hasProgressedBeyond(WorkflowPhase.STORY)
+      ? 'completed'
+      : project.phases[WorkflowPhase.STORY]?.status === 'completed'
+        ? 'completed'
+        : 'pending'
+  );
+
+  const characterSettingCounts = countApprovedItems(project, WorkflowPhase.CHARACTERS_SETTINGS);
+  setPhaseStatus(
+    WorkflowPhase.CHARACTERS_SETTINGS,
+    characterSettingCounts.total === 0
+      ? hasProgressedBeyond(WorkflowPhase.CHARACTERS_SETTINGS)
+        ? 'completed'
+        : project.phases[WorkflowPhase.CHARACTERS_SETTINGS]?.status === 'in_progress'
+          ? 'in_progress'
+          : 'pending'
+      : characterSettingCounts.approved === characterSettingCounts.total
+        ? 'completed'
+        : 'in_progress'
+  );
+
+  const sceneCounts = countApprovedItems(project, WorkflowPhase.SCENES);
+  setPhaseStatus(
+    WorkflowPhase.SCENES,
+    sceneCounts.total === 0
+      ? hasProgressedBeyond(WorkflowPhase.SCENES)
+        ? 'completed'
+        : project.phases[WorkflowPhase.SCENES]?.status === 'in_progress'
+          ? 'in_progress'
+          : 'pending'
+      : sceneCounts.approved === sceneCounts.total
+        ? 'completed'
+        : 'in_progress'
+  );
+
+  const derivedPhase =
+    PHASE_ORDER.find(phase => {
+      const status = project.phases[phase]?.status;
+      return status !== 'completed' && status !== 'skipped';
+    }) || WorkflowPhase.COMPLETED;
+
+  const shouldPreserveCurrentPhase =
+    currentPhaseIndex >= 0 &&
+    currentPhaseIndex >= (phaseIndex.get(derivedPhase as WorkflowPhase) ?? -1) &&
+    ['in_progress', 'completed'].includes(project.phases[project.currentPhase]?.status || '');
+
+  const currentPhase = shouldPreserveCurrentPhase
+    ? project.currentPhase
+    : derivedPhase;
+
+  if (project.currentPhase !== currentPhase) {
+    project.currentPhase = currentPhase;
+    changed = true;
+  }
+
+  return changed;
+}
+
 /**
  * Sync the content registry to match actual project content.
  * This ensures existing projects that were created before content tracking
  * have their content registry properly populated.
  */
 function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
-  // Non-narrative templates don't use the narrative content registry
-  if (project.templateId && project.templateId !== 'narrative') {
-    return false;
+  let needsSave = false;
+
+  if (syncGoalPreferencesIntoProject(project)) {
+    needsSave = true;
   }
 
-  let needsSave = false;
+  // Non-narrative templates don't use the narrative content registry
+  if (project.templateId && project.templateId !== 'narrative') {
+    return needsSave;
+  }
 
   // Ensure content registry exists
   if (!project.content) {
@@ -466,14 +755,27 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
   // Helper to add file if not already tracked
   const trackFile = (type: string, path: string, name?: string) => {
     if (!project.files) project.files = [];
-    const exists = project.files.some(f => f.path === path);
-    if (!exists) {
+    const existingFile = project.files.find(f => f.path === path);
+    if (!existingFile) {
       project.files.push({ type, path, name });
+      needsSave = true;
+      return;
+    }
+
+    if (existingFile.type !== type) {
+      existingFile.type = type;
+      needsSave = true;
+    }
+    if (name && existingFile.name !== name) {
+      existingFile.name = name;
       needsSave = true;
     }
   };
 
   const projectDir = getProjectDir(basePath);
+  const discoveredCharacterFiles = discoverProfileFiles(projectDir, 'characters');
+  const discoveredSettingFiles = discoverProfileFiles(projectDir, 'settings');
+  const discoveredSceneFiles = discoverSceneFiles(projectDir);
 
   // Always track original_input if it exists
   if (existsSync(join(projectDir, project.originalInputFile))) {
@@ -500,6 +802,9 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       needsSave = true;
     }
     trackFile('story', 'plans/story.md');
+    if (setContentEntryFile(project, 'story', 'plans/story.md')) {
+      needsSave = true;
+    }
   }
 
   // Also check for chapter-based story files
@@ -509,9 +814,20 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       .sort();
 
     for (const chapterFile of chapterFiles) {
-      trackFile('story_chapter', `plans/chapters/${chapterFile}`);
+      const chapterPath = `plans/chapters/${chapterFile}`;
+      trackFile('story_chapter', chapterPath);
       if (project.content.story.status === 'missing') {
         project.content.story.status = 'available';
+        needsSave = true;
+      }
+      if (!existsSync(storyFile) && !project.content.story.file && setContentEntryFile(project, 'story', chapterPath)) {
+        needsSave = true;
+      }
+    }
+
+    if (!existsSync(storyFile) && chapterFiles.length > 0) {
+      const firstChapterPath = `plans/chapters/${chapterFiles[0]}`;
+      if (setContentEntryFile(project, 'story', firstChapterPath)) {
         needsSave = true;
       }
     }
@@ -519,6 +835,23 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
   // Sync characters from project.characters
   for (const char of project.characters) {
+    const originalName = char.name;
+    const normalizedName = normalizeProfileName(char.name);
+    if (normalizedName && normalizedName !== char.name) {
+      char.name = normalizedName;
+      if (migrateContentItemName(project.content.characters, originalName, normalizedName)) {
+        needsSave = true;
+      }
+      const trackedFile = project.files?.find(
+        file => file.type === 'character' && file.name === originalName
+      );
+      if (trackedFile) {
+        trackedFile.name = normalizedName;
+        needsSave = true;
+      }
+      needsSave = true;
+    }
+
     if (!project.content.characters.items?.includes(char.name)) {
       if (!project.content.characters.items) {
         project.content.characters.items = [];
@@ -526,13 +859,16 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       project.content.characters.items.push(char.name);
       needsSave = true;
     }
-    // Also track file path (new convention: .profile.md)
     const safeName = char.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-    const charFile = `characters/${safeName}.profile.md`;
+    const existingItemFile = project.content.characters.itemFiles?.[char.name];
+    const charFile =
+      (existingItemFile && existsSync(join(projectDir, existingItemFile)) ? existingItemFile : undefined) ||
+      discoveredCharacterFiles.get(char.name.toLowerCase()) ||
+      `characters/${safeName}.profile.md`;
     if (!project.content.characters.itemFiles) {
       project.content.characters.itemFiles = {};
     }
-    if (!project.content.characters.itemFiles[char.name]) {
+    if (project.content.characters.itemFiles[char.name] !== charFile) {
       project.content.characters.itemFiles[char.name] = charFile;
       needsSave = true;
     }
@@ -552,14 +888,15 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       try {
         const charContent = readFileSync(join(charactersDir, charFile), 'utf-8');
         // Extract name from first heading or filename
-        const nameMatch = charContent.match(/^#\s*(?:Character[:\-–—\s]*)?(.+)/m);
         const charName =
-          nameMatch && nameMatch[1]
-            ? nameMatch[1].trim()
-            : charFile
-                .replace(/\.profile\.md$/, '')
-                .replace(/\.md$/, '')
-                .replace(/[-_]/g, ' ');
+          extractHeadingName(charContent) ||
+          normalizeProfileName(
+            charFile
+              .replace(/\.profile\.md$/, '')
+              .replace(/\.md$/, '')
+              .replace(/[-_]/g, ' ')
+          );
+        const relativePath = `characters/${charFile}`;
 
         // Check if character is already registered
         const existingChar = project.characters.find(
@@ -578,8 +915,19 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
           }
 
           project.characters.push(character);
+          if (!project.content.characters.itemFiles) {
+            project.content.characters.itemFiles = {};
+          }
+          project.content.characters.itemFiles[charName] = relativePath;
+          needsSave = true;
+        } else if (!project.content.characters.itemFiles?.[existingChar.name] || project.content.characters.itemFiles[existingChar.name] !== relativePath) {
+          if (!project.content.characters.itemFiles) {
+            project.content.characters.itemFiles = {};
+          }
+          project.content.characters.itemFiles[existingChar.name] = relativePath;
           needsSave = true;
         }
+        trackFile('character', relativePath, charName);
       } catch {
         /* ignore read errors */
       }
@@ -596,6 +944,23 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
   // Sync settings from project.settings
   for (const setting of project.settings) {
+    const originalName = setting.name;
+    const normalizedName = normalizeProfileName(setting.name);
+    if (normalizedName && normalizedName !== setting.name) {
+      setting.name = normalizedName;
+      if (migrateContentItemName(project.content.settings, originalName, normalizedName)) {
+        needsSave = true;
+      }
+      const trackedFile = project.files?.find(
+        file => file.type === 'setting' && file.name === originalName
+      );
+      if (trackedFile) {
+        trackedFile.name = normalizedName;
+        needsSave = true;
+      }
+      needsSave = true;
+    }
+
     if (!project.content.settings.items?.includes(setting.name)) {
       if (!project.content.settings.items) {
         project.content.settings.items = [];
@@ -605,11 +970,15 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     }
     // Also track file path (new convention: .profile.md)
     const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-    const settingFile = `settings/${safeName}.profile.md`;
+    const existingItemFile = project.content.settings.itemFiles?.[setting.name];
+    const settingFile =
+      (existingItemFile && existsSync(join(projectDir, existingItemFile)) ? existingItemFile : undefined) ||
+      discoveredSettingFiles.get(setting.name.toLowerCase()) ||
+      `settings/${safeName}.profile.md`;
     if (!project.content.settings.itemFiles) {
       project.content.settings.itemFiles = {};
     }
-    if (!project.content.settings.itemFiles[setting.name]) {
+    if (project.content.settings.itemFiles[setting.name] !== settingFile) {
       project.content.settings.itemFiles[setting.name] = settingFile;
       needsSave = true;
     }
@@ -629,14 +998,15 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       try {
         const settingContent = readFileSync(join(settingsDir, settingFile), 'utf-8');
         // Extract name from first heading or filename
-        const nameMatch = settingContent.match(/^#\s*(?:Setting[:\-–—\s]*)?(.+)/m);
         const settingName =
-          nameMatch && nameMatch[1]
-            ? nameMatch[1].trim()
-            : settingFile
-                .replace(/\.profile\.md$/, '')
-                .replace(/\.md$/, '')
-                .replace(/[-_]/g, ' ');
+          extractHeadingName(settingContent) ||
+          normalizeProfileName(
+            settingFile
+              .replace(/\.profile\.md$/, '')
+              .replace(/\.md$/, '')
+              .replace(/[-_]/g, ' ')
+          );
+        const relativePath = `settings/${settingFile}`;
 
         // Check if setting is already registered
         const existingSetting = project.settings.find(
@@ -655,8 +1025,19 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
           }
 
           project.settings.push(setting);
+          if (!project.content.settings.itemFiles) {
+            project.content.settings.itemFiles = {};
+          }
+          project.content.settings.itemFiles[settingName] = relativePath;
+          needsSave = true;
+        } else if (!project.content.settings.itemFiles?.[existingSetting.name] || project.content.settings.itemFiles[existingSetting.name] !== relativePath) {
+          if (!project.content.settings.itemFiles) {
+            project.content.settings.itemFiles = {};
+          }
+          project.content.settings.itemFiles[existingSetting.name] = relativePath;
           needsSave = true;
         }
+        trackFile('setting', relativePath, settingName);
       } catch {
         /* ignore read errors */
       }
@@ -673,7 +1054,31 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
 
   // Sync scenes from project.scenes
   for (const scene of project.scenes) {
-    const sceneName = scene.title || `Scene ${scene.sceneNumber}`;
+    const discoveredScene = discoveredSceneFiles.get(scene.sceneNumber);
+    const sceneName =
+      (discoveredScene?.valid ? discoveredScene.title : undefined) ||
+      scene.title ||
+      `Scene ${scene.sceneNumber}`;
+    if (scene.title !== sceneName) {
+      scene.title = sceneName;
+      needsSave = true;
+    }
+    if (discoveredScene?.path && scene.file !== discoveredScene.path) {
+      scene.file = discoveredScene.path;
+      needsSave = true;
+    }
+    if (discoveredScene?.valid && discoveredScene.description && scene.description !== discoveredScene.description) {
+      scene.description = discoveredScene.description;
+      needsSave = true;
+    } else if (
+      scene.description &&
+      isLikelyToolChatter(scene.description) &&
+      !discoveredScene?.valid
+    ) {
+      delete scene.description;
+      needsSave = true;
+    }
+
     if (!project.content.scenes.items?.includes(sceneName)) {
       if (!project.content.scenes.items) {
         project.content.scenes.items = [];
@@ -682,8 +1087,15 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
       needsSave = true;
     }
     // Track in files array
-    const sceneFile = `scenes/scene_${String(scene.sceneNumber).padStart(2, '0')}.md`;
+    const sceneFile =
+      scene.file ??
+      discoveredScene?.path ??
+      `plans/scenes/scene-${scene.sceneNumber}.md`;
     trackFile('scene', sceneFile, `Scene ${scene.sceneNumber}`);
+    if (!scene.file || scene.file !== sceneFile) {
+      scene.file = sceneFile;
+      needsSave = true;
+    }
   }
   if (
     (project.content.scenes.items?.length ?? 0) > 0 &&
@@ -693,77 +1105,81 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
     needsSave = true;
   }
 
-  // Sync scenes from disk - scan scenes/ directory for scene_XX.md files
-  // This catches scenes that were created but never registered in project.scenes
-  const scenesDir = join(projectDir, 'scenes');
-  if (existsSync(scenesDir)) {
-    const sceneFiles = readdirSync(scenesDir)
-      .filter(f => /^scene_\d+\.md$/.test(f))
-      .sort();
+  // Sync scenes from disk - catches scenes that were created but never registered.
+  for (const [sceneNumber, discoveredScene] of discoveredSceneFiles.entries()) {
+    trackFile('scene', discoveredScene.path, `Scene ${sceneNumber}`);
 
-    for (const sceneFile of sceneFiles) {
-      const match = sceneFile.match(/^scene_(\d+)\.md$/);
-      if (match && match[1]) {
-        const sceneNumber = parseInt(match[1], 10);
-
-        // Track scene file in files array
-        trackFile('scene', `scenes/${sceneFile}`, `Scene ${sceneNumber}`);
-
-        // Check if scene is already registered
-        const existingScene = project.scenes.find(s => s.sceneNumber === sceneNumber);
-        if (!existingScene) {
-          // Create new scene ref
-          const sceneRef = createDefaultSceneRef(sceneNumber);
-
-          // Extract title from file content
-          try {
-            const sceneContent = readFileSync(join(scenesDir, sceneFile), 'utf-8');
-            const titleMatch = sceneContent.match(/^#\s*(?:Scene\s*\d+[:\-–—\s]*)?(.+)/m);
-            if (titleMatch && titleMatch[1]) {
-              sceneRef.title = titleMatch[1].trim();
-            }
-          } catch {
-            /* ignore read errors */
-          }
-
-          // If scenes phase is complete, mark scene as approved
-          if (
-            project.phases['scenes']?.status === 'completed' ||
-            project.phases['scenes']?.plannerStage === 'complete'
-          ) {
-            sceneRef.contentApprovalStatus = 'approved';
-            sceneRef.contentApprovedAt = Date.now();
-          }
-
-          project.scenes.push(sceneRef);
-          needsSave = true;
-        }
+    const existingScene = project.scenes.find(s => s.sceneNumber === sceneNumber);
+    if (!existingScene) {
+      const sceneRef = createDefaultSceneRef(
+        sceneNumber,
+        discoveredScene.title || `Scene ${sceneNumber}`
+      );
+      sceneRef.file = discoveredScene.path;
+      if (discoveredScene.description) {
+        sceneRef.description = discoveredScene.description;
       }
-    }
 
-    // Sort scenes by number
-    if (project.scenes.length > 0) {
-      project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
-    }
-
-    // Update content registry with newly discovered scenes
-    for (const scene of project.scenes) {
-      const sceneName = scene.title || `Scene ${scene.sceneNumber}`;
-      if (!project.content.scenes.items?.includes(sceneName)) {
-        if (!project.content.scenes.items) {
-          project.content.scenes.items = [];
-        }
-        project.content.scenes.items.push(sceneName);
-        needsSave = true;
+      if (
+        discoveredScene.valid &&
+        (project.phases['scenes']?.status === 'completed' ||
+          project.phases['scenes']?.plannerStage === 'complete')
+      ) {
+        sceneRef.contentApprovalStatus = 'approved';
+        sceneRef.contentApprovedAt = Date.now();
       }
-    }
-    if (
-      (project.content.scenes.items?.length ?? 0) > 0 &&
-      project.content.scenes.status === 'missing'
-    ) {
-      project.content.scenes.status = 'partial';
+
+      project.scenes.push(sceneRef);
       needsSave = true;
     }
+  }
+
+  // Sort scenes by number
+  if (project.scenes.length > 0) {
+    project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
+  }
+
+  const normalizedCharacterItems = [...new Set(project.characters.map(char => char.name))];
+  if (
+    JSON.stringify(project.content.characters.items || []) !== JSON.stringify(normalizedCharacterItems)
+  ) {
+    project.content.characters.items = normalizedCharacterItems;
+    needsSave = true;
+  }
+
+  const normalizedSettingItems = [...new Set(project.settings.map(setting => setting.name))];
+  if (
+    JSON.stringify(project.content.settings.items || []) !== JSON.stringify(normalizedSettingItems)
+  ) {
+    project.content.settings.items = normalizedSettingItems;
+    needsSave = true;
+  }
+
+  const normalizedSceneItems = [...new Set(project.scenes.map(
+    scene => scene.title || `Scene ${scene.sceneNumber}`
+  ))];
+  if (JSON.stringify(project.content.scenes.items || []) !== JSON.stringify(normalizedSceneItems)) {
+    project.content.scenes.items = normalizedSceneItems;
+    needsSave = true;
+  }
+
+  // Update content registry with newly discovered scenes
+  for (const scene of project.scenes) {
+    const sceneName = scene.title || `Scene ${scene.sceneNumber}`;
+    if (!project.content.scenes.items?.includes(sceneName)) {
+      if (!project.content.scenes.items) {
+        project.content.scenes.items = [];
+      }
+      project.content.scenes.items.push(sceneName);
+      needsSave = true;
+    }
+  }
+  if (
+    (project.content.scenes.items?.length ?? 0) > 0 &&
+    project.content.scenes.status === 'missing'
+  ) {
+    project.content.scenes.status = 'partial';
+    needsSave = true;
   }
 
   // Sync image prompts for characters
@@ -857,9 +1273,11 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
   // Sync video/motion prompts for scenes
   const sceneVideoPromptsDir = join(projectDir, 'prompts', 'videos', 'scenes');
   if (existsSync(sceneVideoPromptsDir)) {
-    const promptFiles = readdirSync(sceneVideoPromptsDir).filter(f => f.endsWith('.motion.md'));
+    const promptFiles = readdirSync(sceneVideoPromptsDir).filter(
+      f => f.endsWith('.motion.json') || f.endsWith('.motion.md')
+    );
     for (const promptFile of promptFiles) {
-      const sceneMatch = promptFile.match(/scene[_-]?(\d+)\.motion\.md/i);
+      const sceneMatch = promptFile.match(/scene[_-]?(\d+)\.motion\.(json|md)$/i);
       if (sceneMatch && sceneMatch[1]) {
         const sceneNumber = parseInt(sceneMatch[1], 10);
         const promptPath = `prompts/videos/scenes/${promptFile}`;
@@ -875,9 +1293,17 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
           }
           trackFile('scene_video_prompt', promptPath, `Scene ${sceneNumber}`);
           needsSave = true;
+        } else if (matchingScene && matchingScene.videoPromptPath !== promptPath) {
+          matchingScene.videoPromptPath = promptPath;
+          trackFile('scene_video_prompt', promptPath, `Scene ${sceneNumber}`);
+          needsSave = true;
         }
       }
     }
+  }
+
+  if (recomputeNarrativePhaseState(project)) {
+    needsSave = true;
   }
 
   return needsSave;
@@ -2794,7 +3220,7 @@ export function saveVideoPrompt(
   content: string,
   basePath: string = process.cwd()
 ): string {
-  const relativePath = `prompts/videos/scenes/scene-${sceneNumber}.motion.md`;
+  const relativePath = `prompts/videos/scenes/scene-${sceneNumber}.motion.json`;
   writeProjectFile(relativePath, content, basePath);
 
   // Update the project with the prompt path
@@ -2820,8 +3246,14 @@ export function loadVideoPrompt(
   sceneNumber: number,
   basePath: string = process.cwd()
 ): string | null {
-  const relativePath = `prompts/videos/scenes/scene-${sceneNumber}.motion.md`;
-  return readProjectFile(relativePath, basePath);
+  const canonicalPath = `prompts/videos/scenes/scene-${sceneNumber}.motion.json`;
+  const canonical = readProjectFile(canonicalPath, basePath);
+  if (canonical !== null) {
+    return canonical;
+  }
+
+  const legacyPath = `prompts/videos/scenes/scene-${sceneNumber}.motion.md`;
+  return readProjectFile(legacyPath, basePath);
 }
 
 /**

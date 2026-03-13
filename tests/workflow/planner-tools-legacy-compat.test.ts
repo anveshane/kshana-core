@@ -243,7 +243,7 @@ describe('Planner tools legacy compatibility', () => {
     const result = await tool?.handler?.({
       target_artifacts: ['final_video'],
       description: 'Finish the video',
-      preferences: { duration: 60 },
+      preferences: { duration: 60, style: 'anime' },
     });
 
     expect(tool).toBeDefined();
@@ -251,6 +251,8 @@ describe('Planner tools legacy compatibility', () => {
 
     const afterProject = loadProject(tempRoot)! as Record<string, unknown>;
     expect(afterProject['currentPhase']).toBe('scene_images');
+    expect(afterProject['targetDuration']).toBe(60);
+    expect(afterProject['style']).toBe('anime');
     expect(((afterProject['phases'] as Record<string, { status: string }>).story).status).toBe('completed');
     expect(afterProject['productionCompletedAt']).toBeUndefined();
     expect((afterProject['goal'] as Record<string, unknown>)['description']).toBe('Finish the video');

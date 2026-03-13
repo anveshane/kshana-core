@@ -424,8 +424,9 @@ function persistProject(context: PlannerToolContext, project: GenericProjectFile
   const projectDir = context.getProjectDir();
   const filePath = join(projectDir, 'project.json');
   const latestProject = getCurrentProject(context);
+  const latestProjectRecord = latestProject as unknown as Record<string, unknown>;
   const mergedProject = {
-    ...(latestProject as Record<string, unknown>),
+    ...latestProjectRecord,
     goal: project.goal ?? latestProject.goal,
     updatedAt: Date.now(),
   } as GenericProjectFile & Record<string, unknown>;
@@ -500,6 +501,14 @@ The goal is stored in project.json and read on session resume.`,
       };
 
       project.goal = newGoal;
+      const mutableProject = project as GenericProjectFile & Record<string, unknown>;
+
+      if (typeof preferences.duration === 'number' && Number.isFinite(preferences.duration)) {
+        mutableProject['targetDuration'] = preferences.duration;
+      }
+      if (typeof preferences.style === 'string' && preferences.style) {
+        project.style = preferences.style as GenericProjectFile['style'];
+      }
 
       // Clear completion state so the nudge loop and workflow resume
       delete (project as unknown as Record<string, unknown>)['productionCompletedAt'];

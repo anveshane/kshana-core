@@ -1396,7 +1396,7 @@ A scene is composed of multiple shots — call this tool separately for each sho
 
 This tool blocks until video generation is complete and returns the result directly (artifact_id and file_path). No need to call wait_for_job separately. Generate videos one at a time.
 
-**Motion prompt source**: Provide EITHER \`motion_prompt\` (inline text) OR \`motion_prompt_file\` (path to prompt file). Using \`motion_prompt_file\` is preferred as it reads from approved prompt files. If the file is a multi-shot JSON, you MUST specify \`shot_number\` to select the prompt for this shot.`,
+**Motion prompt source**: Provide EITHER \`motion_prompt\` (inline text) OR \`motion_prompt_file\` (path to prompt file). Using \`motion_prompt_file\` is preferred as it reads from approved prompt files. If the file is a multi-shot JSON, you MUST specify \`shot_number\` to select the prompt for this shot. If \`duration\` is omitted and the motion JSON includes a shot duration, that approved shot duration is used automatically.`,
   {
     type: 'object',
     properties: {
@@ -1453,7 +1453,7 @@ This tool blocks until video generation is complete and returns the result direc
     const shotNumber = args['shot_number'] as number;
     let motionPrompt = args['motion_prompt'] as string | undefined;
     const seed = args['seed'] as number | undefined;
-    const duration = args['duration'] as number | undefined;
+    let duration = args['duration'] as number | undefined;
     const videoWidth = args['width'] as number | undefined;
     const videoHeight = args['height'] as number | undefined;
     const segmentId = args['segment_id'] as string | undefined;
@@ -1483,6 +1483,9 @@ This tool blocks until video generation is complete and returns the result direc
         }
 
         motionPrompt = targetShot.prompt;
+        if (duration == null && Number.isFinite(targetShot.duration) && targetShot.duration > 0) {
+          duration = targetShot.duration;
+        }
         if (targetShot.dialogue) {
           motionPrompt += ` The character speaks: "${targetShot.dialogue}"`;
         }
@@ -1631,6 +1634,7 @@ This tool blocks until video generation is complete and returns the result direc
           shot_number: shotNumber,
           image_artifact: shotImageArtifactId,
           motion_prompt: motionPrompt,
+          duration,
         },
       };
     } catch (error) {
