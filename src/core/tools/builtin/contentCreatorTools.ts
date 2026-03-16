@@ -6,9 +6,17 @@
  * Do NOT define read_file or read_project anywhere else.
  */
 import type { ToolDefinition } from '../../llm/index.js';
-import { getProjectDir, loadProject } from '../../../tasks/video/workflow/ProjectManager.js';
+import { getCurrentSession } from '../../fs/index.js';
+import { loadProject } from '../../../tasks/video/workflow/ProjectManager.js';
 import fs from 'fs';
 import path from 'path';
+import type { ProjectFile } from '../../../tasks/video/workflow/types.js';
+import {
+  getKnownProjectPaths,
+  isWithinProjectRoot,
+  projectRelativePath,
+  readProjectText,
+} from '../../../tasks/video/workflow/projectFileIO.js';
 
 /**
  * Session-level tracking of known project file paths.
@@ -32,6 +40,64 @@ export function clearKnownProjectFiles(): void {
   knownProjectFiles = null;
 }
 
+function inferFileType(filePath: string): string {
+  if (filePath === 'original_input.md') return 'original_input';
+  if (filePath === 'plans/plot.md') return 'plot';
+  if (filePath === 'plans/story.md') return 'story';
+  if (/^plans\/chapters\/chapter-\d+\.story\.md$/i.test(filePath)) return 'story_chapter';
+  if (filePath.startsWith('characters/')) return 'character';
+  if (filePath.startsWith('settings/')) return 'setting';
+  if (filePath.startsWith('plans/scenes/') || filePath.startsWith('scenes/')) return 'scene';
+  if (filePath.startsWith('assets/')) return 'asset';
+  return 'other';
+}
+
+function buildLiveProjectFiles(project: ProjectFile): Array<NonNullable<ProjectFile['files']>[number]> {
+  const filesByPath = new Map<string, NonNullable<ProjectFile['files']>[number]>();
+
+  for (const file of project.files || []) {
+    filesByPath.set(file.path, file);
+  }
+
+  for (const filePath of getKnownProjectPaths()) {
+    if (filePath === 'project.json') {
+      continue;
+    }
+    if (!filesByPath.has(filePath)) {
+      filesByPath.set(filePath, {
+        type: inferFileType(filePath),
+        path: filePath,
+      });
+    }
+  }
+
+  return Array.from(filesByPath.values()).sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export function buildProjectReadSummary(project: ProjectFile): Record<string, unknown> {
+  return {
+    style: project.style,
+    templateId: (project as unknown as Record<string, unknown>)['templateId'] ?? 'narrative',
+    currentPhase: project.currentPhase,
+    characters: (project.characters || []).map((char: { name: string }) => ({
+      name: char.name,
+      file: project.content?.characters?.itemFiles?.[char.name] ||
+        `characters/${char.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
+    })),
+    settings: (project.settings || []).map((setting: { name: string }) => ({
+      name: setting.name,
+      file: project.content?.settings?.itemFiles?.[setting.name] ||
+        `settings/${setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
+    })),
+    scenes: (project.scenes || []).map((scene: { sceneNumber: number; title?: string; imageArtifactId?: string }) => ({
+      sceneNumber: scene.sceneNumber,
+      title: scene.title,
+      imageArtifactId: scene.imageArtifactId,
+    })),
+    files: buildLiveProjectFiles(project),
+  };
+}
+
 /**
  * Read project structure tool - understand what content exists.
  */
@@ -49,23 +115,7 @@ export const readProjectTool: ToolDefinition = {
       if (!project) {
         return 'No project found. The project has not been initialized yet.';
       }
-      const summary: Record<string, unknown> = {
-        style: project.style,
-        templateId: (project as unknown as Record<string, unknown>)['templateId'] ?? 'narrative',
-        currentPhase: project.currentPhase,
-        characters: (project.characters || []).map((char: { name: string }) => ({
-          name: char.name,
-          file: project.content?.characters?.itemFiles?.[char.name] ||
-            `characters/${char.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
-        })),
-        settings: (project.settings || []).map((setting: { name: string }) => ({
-          name: setting.name,
-          file: project.content?.settings?.itemFiles?.[setting.name] ||
-            `settings/${setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
-        })),
-        files: project.files || [],
-      };
-      return JSON.stringify(summary, null, 2);
+      return JSON.stringify(buildProjectReadSummary(project), null, 2);
     } catch (err) {
       return `Error reading project: ${String(err)}`;
     }
@@ -79,45 +129,56 @@ function normalizeQuotes(s: string): string {
   return s.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036\u00AB\u00BB"]/g, '"');
 }
 
+function resolveProjectRelativePath(filePath: string): string | null {
+  try {
+    return projectRelativePath(filePath);
+  } catch {
+    return null;
+  }
+}
+
+function resolveExactKnownPath(candidate: string): string | null {
+  const normalizedCandidate = resolveProjectRelativePath(candidate);
+  if (!normalizedCandidate) {
+    return null;
+  }
+
+  const knownPaths = getKnownProjectPaths();
+  return knownPaths.includes(normalizedCandidate) ? normalizedCandidate : null;
+}
+
 /**
  * Try multiple path variants to find a file that exists.
  * Handles shell escapes, smart quote ↔ ASCII quote differences,
  * and fuzzy directory segment matching.
  */
 export function tryPathVariants(filePath: string): string | null {
-  const toFull = (p: string) =>
-    path.isAbsolute(p) ? p : path.join(getProjectDir(), p);
-
-  // 1. Try as-is
-  const fullPath = toFull(filePath);
-  if (fs.existsSync(fullPath)) return fullPath;
+  // 1. Try exact project path matches first
+  const exactProjectPath = resolveExactKnownPath(filePath);
+  if (exactProjectPath) return exactProjectPath;
 
   // 2. Try cleaning terminal shell escapes (e.g., \, → , and \ → space)
   const cleaned = filePath.replace(/\\(.)/g, '$1');
-  const cleanedFull = toFull(cleaned);
-  if (cleanedFull !== fullPath && fs.existsSync(cleanedFull)) return cleanedFull;
+  const cleanedProjectPath = resolveExactKnownPath(cleaned);
+  if (cleanedProjectPath) return cleanedProjectPath;
 
   // 3. Try replacing ASCII quotes with Unicode smart quotes (paired left/right).
-  //    macOS filenames from web downloads often use smart quotes (" ") but
-  //    terminals and JSON produce ASCII quotes (").
   let isLeft = true;
   const smartQuoteVariant = cleaned.replace(/"/g, () => {
     const q = isLeft ? '\u201C' : '\u201D';
     isLeft = !isLeft;
     return q;
   });
-  const smartFull = toFull(smartQuoteVariant);
-  if (smartFull !== cleanedFull && fs.existsSync(smartFull)) return smartFull;
+  const smartProjectPath = resolveExactKnownPath(smartQuoteVariant);
+  if (smartProjectPath) return smartProjectPath;
 
   // 4. Try the reverse: smart quotes → ASCII
   const asciiQuoteVariant = cleaned.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"');
-  const asciiFull = toFull(asciiQuoteVariant);
-  if (asciiFull !== cleanedFull && fs.existsSync(asciiFull)) return asciiFull;
+  const asciiProjectPath = resolveExactKnownPath(asciiQuoteVariant);
+  if (asciiProjectPath) return asciiProjectPath;
 
-  // 5. Fuzzy segment-by-segment resolution: walk path segments, matching each
-  //    against actual directory entries with normalized quotes.
-  //    This handles cases where both directory AND file names have smart quotes.
-  const resolved = resolvePathFuzzy(cleanedFull);
+  // 5. Fuzzy match against known project paths.
+  const resolved = resolvePathFuzzy(cleaned);
   if (resolved) return resolved;
 
   return null;
@@ -127,36 +188,30 @@ export function tryPathVariants(filePath: string): string | null {
  * Resolve a path segment-by-segment, fuzzy-matching each component
  * against actual directory entries (normalizing quotes for comparison).
  */
-function resolvePathFuzzy(fullPath: string): string | null {
-  const segments = fullPath.split(path.sep);
-  let current: string = path.sep; // start from root
+function resolvePathFuzzy(filePath: string): string | null {
+  const normalizedCandidate = resolveProjectRelativePath(filePath);
+  if (!normalizedCandidate) {
+    return null;
+  }
 
-  for (const segment of segments) {
-    if (!segment) continue; // skip empty segments from leading /
+  const candidateSegments = normalizedCandidate.split('/').filter(Boolean);
+  const knownPaths = getKnownProjectPaths();
 
-    const exact = path.join(current, segment);
-    if (fs.existsSync(exact)) {
-      current = exact;
+  for (const knownPath of knownPaths) {
+    const knownSegments = knownPath.split('/').filter(Boolean);
+    if (knownSegments.length !== candidateSegments.length) {
       continue;
     }
 
-    // Fuzzy match: list parent and find a segment with matching normalized quotes
-    try {
-      if (!fs.existsSync(current)) return null;
-      const entries = fs.readdirSync(current);
-      const normalizedSegment = normalizeQuotes(segment);
-      const match = entries.find(e => normalizeQuotes(e) === normalizedSegment);
-      if (match) {
-        current = path.join(current, match);
-      } else {
-        return null; // No match found for this segment
-      }
-    } catch {
-      return null;
+    const matches = knownSegments.every(
+      (segment, index) => normalizeQuotes(segment) === normalizeQuotes(candidateSegments[index] || ''),
+    );
+    if (matches) {
+      return knownPath;
     }
   }
 
-  return fs.existsSync(current) ? current : null;
+  return null;
 }
 
 /**
@@ -192,8 +247,12 @@ If this returns "File not found", call read_project or list_project_files to see
       return { status: 'error', error: 'path is required' };
     }
 
+    const isAbsolutePath = path.isAbsolute(filePath);
+    const isProjectPath = !isAbsolutePath || isWithinProjectRoot(filePath);
+    const currentSession = getCurrentSession();
+
     // For relative paths: reject numeric index guessing (common LLM mistake)
-    if (!path.isAbsolute(filePath)) {
+    if (!isAbsolutePath) {
       // Security: prevent path traversal
       if (filePath.includes('..')) {
         return {
@@ -240,8 +299,16 @@ If this returns "File not found", call read_project or list_project_files to see
       }
     }
 
+    if (isAbsolutePath && !isProjectPath && currentSession?.mode === 'remote') {
+      return {
+        status: 'error',
+        error: `Absolute path is outside the active project root: ${filePath}`,
+        hint: 'In remote mode, read_file only supports project files under the active .kshana directory.',
+      };
+    }
+
     try {
-      const resolvedPath = tryPathVariants(filePath);
+      const resolvedPath = isProjectPath ? tryPathVariants(filePath) : filePath;
 
       if (!resolvedPath) {
         return {
@@ -270,7 +337,16 @@ If this returns "File not found", call read_project or list_project_files to see
         };
       }
 
-      const content = fs.readFileSync(resolvedPath, 'utf-8');
+      const content = isProjectPath
+        ? readProjectText(resolvedPath)
+        : fs.readFileSync(resolvedPath, 'utf-8');
+      if (content == null) {
+        return {
+          status: 'error',
+          error: `File not found: ${filePath}`,
+          hint: 'Use list_project_files to see available files and their exact paths.',
+        };
+      }
       return {
         status: 'success',
         file_path: filePath,

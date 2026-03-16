@@ -9,6 +9,10 @@ interface RemoteProjectCacheLike {
   setFile(path: string, content: string): void;
   hasFile(path: string): boolean | undefined;
   markDirectory(path: string): void;
+  listFiles?(prefix?: string): string[];
+  listDirectories?(prefix?: string): string[];
+  listEntries?(prefix?: string): Array<{ path: string; type: 'file' | 'directory' }>;
+  getProjectRoot?(): string | null;
 }
 
 interface RemoteSocketLike {
@@ -19,6 +23,12 @@ interface RemoteSocketLike {
 interface RemoteProjectFsLike {
   getCache?: () => RemoteProjectCacheLike | null;
   socket?: RemoteSocketLike;
+}
+
+export interface ProjectTreeEntry {
+  path: string;
+  type: 'file' | 'directory';
+  size?: number;
 }
 
 function looksAbsolute(targetPath: string): boolean {
@@ -36,6 +46,17 @@ function getRemoteProjectFs(): RemoteProjectFsLike | null {
 
 function getRemoteProjectCache(): RemoteProjectCacheLike | null {
   return getRemoteProjectFs()?.getCache?.() ?? null;
+}
+
+function tryNormalizeProjectRelativePath(
+  targetPath: string,
+  basePath: string = process.cwd(),
+): string | null {
+  try {
+    return normalizeProjectRelativePath(targetPath, basePath);
+  } catch {
+    return null;
+  }
 }
 
 function normalizeProjectRelativePath(
@@ -160,6 +181,165 @@ export function ensureProjectDir(
     path: normalizedRelative,
     options: { recursive: true },
   });
+}
+
+export function projectDirExists(
+  relativeDir: string = '',
+  basePath: string = process.cwd(),
+): boolean {
+  const normalizedRelative = tryNormalizeProjectRelativePath(relativeDir, basePath);
+  if (normalizedRelative === null) {
+    return false;
+  }
+
+  const remoteFs = getRemoteProjectFs();
+  if (!remoteFs) {
+    const resolvedPath = normalizedRelative
+      ? projectPath(normalizedRelative, basePath)
+      : getProjectRoot(basePath);
+    try {
+      return fs.existsSync(resolvedPath) && fs.statSync(resolvedPath).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
+  if (!normalizedRelative) {
+    return Boolean(getRemoteProjectCache()?.getProjectRoot?.());
+  }
+
+  const cache = getRemoteProjectCache();
+  if (!cache) {
+    return false;
+  }
+
+  if (cache.hasFile(normalizedRelative) === true) {
+    return true;
+  }
+
+  return (cache.listEntries?.(normalizedRelative).length ?? 0) > 0;
+}
+
+export function listProjectEntries(
+  relativeDir: string = '',
+  basePath: string = process.cwd(),
+): ProjectTreeEntry[] {
+  const normalizedRelative = tryNormalizeProjectRelativePath(relativeDir, basePath);
+  if (normalizedRelative === null) {
+    return [];
+  }
+
+  const remoteFs = getRemoteProjectFs();
+  if (!remoteFs) {
+    const resolvedDir = normalizedRelative
+      ? projectPath(normalizedRelative, basePath)
+      : getProjectRoot(basePath);
+    if (!fs.existsSync(resolvedDir)) {
+      return [];
+    }
+
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(resolvedDir);
+    } catch {
+      return [];
+    }
+    if (!stats.isDirectory()) {
+      return [];
+    }
+
+    try {
+      return fs.readdirSync(resolvedDir, { withFileTypes: true })
+        .map((entry): ProjectTreeEntry | null => {
+          const entryPath = normalizedRelative
+            ? `${normalizedRelative}/${entry.name}`
+            : entry.name;
+          if (entry.isDirectory()) {
+            return { path: entryPath, type: 'directory' };
+          }
+          if (entry.isFile()) {
+            try {
+              const entryStats = fs.statSync(projectPath(entryPath, basePath));
+              return { path: entryPath, type: 'file', size: entryStats.size };
+            } catch {
+              return { path: entryPath, type: 'file' };
+            }
+          }
+          return null;
+        })
+        .filter((entry): entry is ProjectTreeEntry => entry !== null)
+        .sort((a, b) => a.path.localeCompare(b.path));
+    } catch {
+      return [];
+    }
+  }
+
+  const cache = getRemoteProjectCache();
+  if (!cache) {
+    return [];
+  }
+
+  const directEntries = cache.listEntries?.(normalizedRelative) ?? [];
+  return directEntries
+    .map((entry): ProjectTreeEntry => ({ path: entry.path, type: entry.type }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export function listProjectTree(
+  options: {
+    relativeDir?: string;
+    maxDepth?: number;
+    excludeDirectories?: string[];
+  } = {},
+  basePath: string = process.cwd(),
+): ProjectTreeEntry[] {
+  const relativeDir = options.relativeDir ?? '';
+  const maxDepth = options.maxDepth ?? Number.POSITIVE_INFINITY;
+  const excluded = new Set(options.excludeDirectories ?? []);
+  const rootRelative = tryNormalizeProjectRelativePath(relativeDir, basePath);
+  if (rootRelative === null) {
+    return [];
+  }
+
+  const results: ProjectTreeEntry[] = [];
+  const walk = (currentRelative: string, depth: number) => {
+    if (depth > maxDepth) {
+      return;
+    }
+
+    for (const entry of listProjectEntries(currentRelative, basePath)) {
+      const basename = path.posix.basename(entry.path);
+      if (entry.type === 'directory' && excluded.has(basename)) {
+        continue;
+      }
+
+      results.push(entry);
+      if (entry.type === 'directory') {
+        walk(entry.path, depth + 1);
+      }
+    }
+  };
+
+  walk(rootRelative, 0);
+  return results.sort((a, b) => a.path.localeCompare(b.path));
+}
+
+export function getKnownProjectPaths(basePath: string = process.cwd()): string[] {
+  const remoteFs = getRemoteProjectFs();
+  if (!remoteFs) {
+    return listProjectTree({ maxDepth: Number.POSITIVE_INFINITY }, basePath)
+      .filter(entry => entry.type === 'file')
+      .map(entry => entry.path);
+  }
+
+  const cache = getRemoteProjectCache();
+  if (!cache) {
+    return [];
+  }
+
+  return (cache.listFiles?.('') ?? [])
+    .slice()
+    .sort((a, b) => a.localeCompare(b));
 }
 
 export function writeProjectText(

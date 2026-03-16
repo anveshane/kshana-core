@@ -377,7 +377,12 @@ function persistApprovedContent(
       case 'plot':
       case 'story':
         // Update content registry status
-        updateContentStatus(project, contentType as ContentTypeName, 'available');
+        updateContentStatus(
+          project,
+          contentType as ContentTypeName,
+          'available',
+          outputFile,
+        );
         debugLog(
           `[GenericAgent] Auto-updated ${contentType} status to available in project registry`
         );
@@ -3356,40 +3361,8 @@ Respond in JSON format:
         if (!project) {
           return 'No project found. The project has not been initialized yet.';
         }
-        // Return a template-agnostic view of the project
-        const summary: Record<string, unknown> = {
-          style: project.style,
-          templateId: project.templateId ?? 'narrative',
-          currentPhase: project.currentPhase,
-          characters: (project.characters || []).map((char: { name: string; referenceImagePath?: string }) => {
-            const refPath = char.referenceImagePath;
-            const refExists = refPath ? projectFileExists(refPath) : false;
-            return {
-              name: char.name,
-              file: project.content?.characters?.itemFiles?.[char.name] ||
-                `characters/${char.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
-              referenceImagePath: refExists ? refPath : null,
-              referenceImageStatus: refPath ? (refExists ? 'exists' : 'missing') : undefined,
-            };
-          }),
-          settings: (project.settings || []).map((setting: { name: string; referenceImagePath?: string }) => {
-            const refPath = setting.referenceImagePath;
-            const refExists = refPath ? projectFileExists(refPath) : false;
-            return {
-              name: setting.name,
-              file: project.content?.settings?.itemFiles?.[setting.name] ||
-                `settings/${setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.profile.md`,
-              referenceImagePath: refExists ? refPath : null,
-              referenceImageStatus: refPath ? (refExists ? 'exists' : 'missing') : undefined,
-            };
-          }),
-          scenes: (project.scenes || []).map((scene: { sceneNumber: number; title?: string; imageArtifactId?: string }) => ({
-            sceneNumber: scene.sceneNumber,
-            title: scene.title,
-            imageArtifactId: scene.imageArtifactId,
-          })),
-          files: project.files || [],
-        };
+        const { buildProjectReadSummary } = await import('../tools/builtin/contentCreatorTools.js');
+        const summary = buildProjectReadSummary(project);
         return JSON.stringify(summary, null, 2);
       } catch (err) {
         return `Error reading project: ${String(err)}`;

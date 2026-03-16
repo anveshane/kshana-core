@@ -3,8 +3,6 @@
  * These tools allow agents to read/write project files and manage project state.
  */
 
-import { existsSync, readdirSync, statSync } from 'fs';
-import { join } from 'path';
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
 import {
@@ -74,6 +72,7 @@ import {
 } from './types.js';
 // read_file is imported from the canonical source — single definition for the entire system
 import { readFileTool } from '../../../core/tools/builtin/contentCreatorTools.js';
+import { listProjectTree, projectDirExists } from './projectFileIO.js';
 export { readFileTool };
 
 /**
@@ -81,59 +80,6 @@ export { readFileTool };
  * These are internal/debug directories that agents shouldn't see or access.
  */
 const EXCLUDED_DIRECTORIES = ['flows', 'logs', '.git'];
-
-/**
- * Helper function to recursively list files in a directory
- */
-function listDirectoryContents(
-  dirPath: string,
-  basePath: string,
-  depth: number = 0,
-  maxDepth: number = 3
-): Array<{ path: string; type: 'file' | 'directory'; size?: number }> {
-  const results: Array<{ path: string; type: 'file' | 'directory'; size?: number }> = [];
-
-  if (depth > maxDepth || !existsSync(dirPath)) {
-    return results;
-  }
-
-  try {
-    const entries = readdirSync(dirPath);
-
-    for (const entry of entries) {
-      // Skip excluded directories
-      if (EXCLUDED_DIRECTORIES.includes(entry)) {
-        continue;
-      }
-
-      const fullPath = join(dirPath, entry);
-      const relativePath = fullPath.replace(basePath + '/', '');
-
-      try {
-        const stats = statSync(fullPath);
-
-        if (stats.isDirectory()) {
-          results.push({ path: relativePath + '/', type: 'directory' });
-          // Recurse into subdirectories
-          const subResults = listDirectoryContents(fullPath, basePath, depth + 1, maxDepth);
-          results.push(...subResults);
-        } else if (stats.isFile()) {
-          results.push({
-            path: relativePath,
-            type: 'file',
-            size: stats.size,
-          });
-        }
-      } catch {
-        // Skip files we can't stat
-      }
-    }
-  } catch {
-    // Skip directories we can't read
-  }
-
-  return results;
-}
 
 /**
  * List project files tool - returns the directory structure of the .kshana project.
@@ -167,7 +113,7 @@ This is the primary way to find available project content.`,
     const includeSizes = args['include_sizes'] === true;
     const projectDir = getProjectDir();
 
-    if (!existsSync(projectDir)) {
+    if (!projectDirExists()) {
       return {
         status: 'no_project',
         content:
@@ -179,7 +125,10 @@ This is the primary way to find available project content.`,
     }
 
     // Get all files recursively
-    const allFiles = listDirectoryContents(projectDir, projectDir);
+    const allFiles = listProjectTree({
+      maxDepth: 3,
+      excludeDirectories: EXCLUDED_DIRECTORIES,
+    });
 
     // Categorize files by type
     const categorized: Record<string, string[]> = {

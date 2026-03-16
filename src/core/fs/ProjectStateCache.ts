@@ -70,6 +70,65 @@ export class ProjectStateCache {
   }
 
   /**
+   * List cached text files under a prefix.
+   */
+  listFiles(prefix: string = ''): string[] {
+    const normalizedPrefix = normalizePrefix(prefix);
+    return Array.from(this.files.keys())
+      .filter(path => matchesPrefix(path, normalizedPrefix))
+      .sort();
+  }
+
+  /**
+   * List cached directories under a prefix.
+   */
+  listDirectories(prefix: string = ''): string[] {
+    const normalizedPrefix = normalizePrefix(prefix);
+    return Array.from(this.directories)
+      .filter(path => matchesPrefix(path, normalizedPrefix))
+      .sort();
+  }
+
+  /**
+   * List immediate child entries for a directory prefix.
+   */
+  listEntries(prefix: string = ''): Array<{ path: string; type: 'file' | 'directory' }> {
+    const normalizedPrefix = normalizePrefix(prefix);
+    const entryMap = new Map<string, 'file' | 'directory'>();
+
+    const registerChild = (fullPath: string, type: 'file' | 'directory') => {
+      const childPath = immediateChildPath(fullPath, normalizedPrefix);
+      if (!childPath) {
+        return;
+      }
+
+      const existing = entryMap.get(childPath);
+      if (existing === 'directory') {
+        return;
+      }
+      if (existing === 'file' && type === 'directory') {
+        entryMap.set(childPath, 'directory');
+        return;
+      }
+      entryMap.set(childPath, type);
+    };
+
+    for (const dir of this.directories) {
+      registerChild(dir, 'directory');
+    }
+    for (const file of this.files.keys()) {
+      registerChild(file, 'file');
+    }
+    for (const asset of this.assetHashes.keys()) {
+      registerChild(asset, 'file');
+    }
+
+    return Array.from(entryMap.entries())
+      .map(([path, type]) => ({ path, type }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /**
    * Set file content in cache.
    */
   setFile(path: string, content: string): void {
@@ -162,6 +221,41 @@ export class ProjectStateCache {
     this.assetHashes.clear();
     this.projectRoot = null;
   }
+}
+
+function normalizePrefix(prefix: string): string {
+  if (!prefix) {
+    return '';
+  }
+  return prefix.replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/\/+$/, '');
+}
+
+function matchesPrefix(path: string, prefix: string): boolean {
+  if (!prefix) {
+    return true;
+  }
+  return path === prefix || path.startsWith(`${prefix}/`);
+}
+
+function immediateChildPath(fullPath: string, prefix: string): string | null {
+  if (!matchesPrefix(fullPath, prefix)) {
+    return null;
+  }
+
+  const relativePath = prefix
+    ? fullPath.slice(prefix.length).replace(/^\/+/, '')
+    : fullPath;
+
+  if (!relativePath) {
+    return null;
+  }
+
+  const [firstSegment] = relativePath.split('/');
+  if (!firstSegment) {
+    return null;
+  }
+
+  return prefix ? `${prefix}/${firstSegment}` : firstSegment;
 }
 
 /**
