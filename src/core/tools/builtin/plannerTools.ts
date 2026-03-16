@@ -4,8 +4,7 @@
  * Tools for the goal-driven orchestrator to scan assets and create backward plans.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync } from 'fs';
 import type { ToolDefinition } from '../../llm/index.js';
 import { tryPathVariants } from './contentCreatorTools.js';
 import { BackwardPlanner, AssetScanner } from '../../planner/index.js';
@@ -18,6 +17,7 @@ import type {
 } from '../../planner/types.js';
 import type { VideoTemplate, GenericProjectFile } from '../../templates/types.js';
 import { registerFile } from '../../../tasks/video/workflow/ProjectManager.js';
+import { writeProjectText } from '../../../tasks/video/workflow/projectFileIO.js';
 
 /**
  * Context required for planner tools.
@@ -380,12 +380,7 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
           const fileName = itemId
             ? `plans/${artifactType}_${itemId.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.md`
             : `plans/${artifactType}.md`;
-          const fullPath = join(context.getProjectDir(), fileName);
-          const parentDir = dirname(fullPath);
-          if (!existsSync(parentDir)) {
-            mkdirSync(parentDir, { recursive: true });
-          }
-          writeFileSync(fullPath, content, 'utf-8');
+          writeProjectText(fileName, content);
           persistedPath = fileName;
           // Register in project.json files array so other tools can discover it
           registerFile(fileName, artifactType, {
@@ -421,8 +416,6 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
  * Works with GenericProjectFile (the planner context type).
  */
 function persistProject(context: PlannerToolContext, project: GenericProjectFile): void {
-  const projectDir = context.getProjectDir();
-  const filePath = join(projectDir, 'project.json');
   const latestProject = getCurrentProject(context);
   const latestProjectRecord = latestProject as unknown as Record<string, unknown>;
   const mergedProject = {
@@ -439,7 +432,7 @@ function persistProject(context: PlannerToolContext, project: GenericProjectFile
     delete mergedProject['productionCompletedAt'];
   }
 
-  writeFileSync(filePath, JSON.stringify(mergedProject, null, 2), 'utf-8');
+  writeProjectText('project.json', JSON.stringify(mergedProject, null, 2));
 }
 
 /**

@@ -52,6 +52,12 @@ import { initializeArtifactsFromFiles, createArtifactFromFile } from './Artifact
 import { TemplateRegistry } from '../../../core/templates/TemplateRegistry.js';
 import type { PhaseDefinition } from '../../../core/templates/types.js';
 import { getActiveProjectDir, setActiveProjectDir } from './activeProject.js';
+import {
+  ensureProjectDir,
+  projectExists as projectFileExists,
+  readProjectText,
+  writeProjectText,
+} from './projectFileIO.js';
 
 /**
  * Get the project directory path for the current working directory.
@@ -148,7 +154,7 @@ export function getProjectFilePath(basePath: string = process.cwd()): string {
  * Check if a project exists in the current directory.
  */
 export function projectExists(basePath: string = process.cwd()): boolean {
-  return existsSync(getProjectFilePath(basePath));
+  return projectFileExists(PROJECT_FILE, basePath);
 }
 
 /**
@@ -200,15 +206,12 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
   ];
 
   for (const dir of dirs) {
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
+    ensureProjectDir(dir, basePath);
   }
 
   // Create empty assets manifest (needed for asset tracking)
-  const manifestPath = join(projectDir, 'assets', 'manifest.json');
-  if (!existsSync(manifestPath)) {
-    writeFileSync(manifestPath, JSON.stringify({ assets: [] }, null, 2), 'utf-8');
+  if (!projectFileExists('assets/manifest.json', basePath)) {
+    writeProjectText('assets/manifest.json', JSON.stringify({ assets: [] }, null, 2), basePath);
   }
 
   // NOTE: Plan files (plot.md, story.md, etc.) are created on first write
@@ -329,8 +332,7 @@ export function createProject(
 
   // Save original input to a separate file
   const inputFilePath = 'original_input.md';
-  const fullInputPath = join(getProjectDir(basePath), inputFilePath);
-  writeFileSync(fullInputPath, cleanInput, 'utf-8');
+  writeProjectText(inputFilePath, cleanInput, basePath);
 
   // Build phases based on template
   const isNonNarrativeTemplate = templateId && templateId !== 'narrative';
@@ -430,12 +432,7 @@ export function setProjectInputType(
     // Read the original input and save it as the story
     const originalInput = getOriginalInput(project, basePath);
     if (originalInput) {
-      const storyDir = join(getProjectDir(basePath), 'plans');
-      if (!existsSync(storyDir)) {
-        mkdirSync(storyDir, { recursive: true });
-      }
-      const storyPath = join(storyDir, 'story.md');
-      writeFileSync(storyPath, `# Story\n\n${originalInput}`, 'utf-8');
+      writeProjectText('plans/story.md', `# Story\n\n${originalInput}`, basePath);
 
       // Update content registry
       project.content.story.status = 'available';
@@ -1314,14 +1311,15 @@ function syncContentRegistry(project: ProjectFile, basePath: string): boolean {
  * Returns null if project doesn't exist or is incompatible (old version).
  */
 export function loadProject(basePath: string = process.cwd()): ProjectFile | null {
-  const filePath = getProjectFilePath(basePath);
-
-  if (!existsSync(filePath)) {
+  if (!projectFileExists(PROJECT_FILE, basePath)) {
     return null;
   }
 
   try {
-    const content = readFileSync(filePath, 'utf-8');
+    const content = readProjectText(PROJECT_FILE, basePath);
+    if (!content) {
+      return null;
+    }
     const project = JSON.parse(content);
 
     // Check version - must match the current workflow format
@@ -1355,14 +1353,15 @@ export function isProjectCompatible(basePath: string = process.cwd()): {
   version?: string;
   reason?: string;
 } {
-  const filePath = getProjectFilePath(basePath);
-
-  if (!existsSync(filePath)) {
+  if (!projectFileExists(PROJECT_FILE, basePath)) {
     return { compatible: true, reason: 'No existing project' };
   }
 
   try {
-    const content = readFileSync(filePath, 'utf-8');
+    const content = readProjectText(PROJECT_FILE, basePath);
+    if (!content) {
+      return { compatible: false, reason: 'Failed to read project file' };
+    }
     const project = JSON.parse(content);
 
     if (!project.version) {
@@ -1391,9 +1390,8 @@ export function isProjectCompatible(basePath: string = process.cwd()): {
  * Save the project file.
  */
 export function saveProject(project: ProjectFile, basePath: string = process.cwd()): void {
-  const filePath = getProjectFilePath(basePath);
   project.updatedAt = Date.now();
-  writeFileSync(filePath, JSON.stringify(project, null, 2), 'utf-8');
+  writeProjectText(PROJECT_FILE, JSON.stringify(project, null, 2), basePath);
 }
 
 // ============================================================================
@@ -1568,11 +1566,7 @@ export function generateFileSummary(content: string, fileType: string): string {
  * Read the original user input from its file.
  */
 export function getOriginalInput(project: ProjectFile, basePath: string = process.cwd()): string {
-  const inputPath = join(getProjectDir(basePath), project.originalInputFile);
-  if (existsSync(inputPath)) {
-    return readFileSync(inputPath, 'utf-8');
-  }
-  return '';
+  return readProjectText(project.originalInputFile, basePath) ?? '';
 }
 
 /**
@@ -1728,14 +1722,11 @@ export function transitionToNextPhase(
  * Check if a plan file has content.
  */
 export function planFileHasContent(planFile: string, basePath: string = process.cwd()): boolean {
-  const filePath = join(getProjectDir(basePath), planFile);
-
-  if (!existsSync(filePath)) {
+  const content = readProjectText(planFile, basePath);
+  if (content === null) {
     return false;
   }
-
-  const content = readFileSync(filePath, 'utf-8').trim();
-  return content.length > 0;
+  return content.trim().length > 0;
 }
 
 /**
@@ -1745,13 +1736,7 @@ export function readProjectFile(
   relativePath: string,
   basePath: string = process.cwd()
 ): string | null {
-  const filePath = join(getProjectDir(basePath), relativePath);
-
-  if (!existsSync(filePath)) {
-    return null;
-  }
-
-  return readFileSync(filePath, 'utf-8');
+  return readProjectText(relativePath, basePath);
 }
 
 /**
@@ -1762,16 +1747,7 @@ export function writeProjectFile(
   content: string,
   basePath: string = process.cwd()
 ): void {
-  const projectDir = getProjectDir(basePath);
-  const filePath = join(projectDir, relativePath);
-
-  // Ensure parent directory exists
-  const parentDir = join(filePath, '..');
-  if (!existsSync(parentDir)) {
-    mkdirSync(parentDir, { recursive: true });
-  }
-
-  writeFileSync(filePath, content, 'utf-8');
+  writeProjectText(relativePath, content, basePath);
 }
 
 /**
@@ -2207,12 +2183,11 @@ export function updateSceneApproval(
  * Add an asset to the manifest.
  */
 export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): void {
-  const manifestPath = join(getProjectDir(basePath), 'assets', 'manifest.json');
-
   let manifest: { assets: AssetInfo[] } = { assets: [] };
-  if (existsSync(manifestPath)) {
+  const manifestContent = readProjectText('assets/manifest.json', basePath);
+  if (manifestContent) {
     try {
-      manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      manifest = JSON.parse(manifestContent);
     } catch {
       // Use empty manifest on parse error
     }
@@ -2226,7 +2201,7 @@ export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): vo
     manifest.assets.push(asset);
   }
 
-  writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+  writeProjectText('assets/manifest.json', JSON.stringify(manifest, null, 2), basePath);
 
   // Update project file's asset list
   const project = loadProject(basePath);
@@ -2254,14 +2229,13 @@ export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): vo
  * Get all assets from the manifest.
  */
 export function getAssets(basePath: string = process.cwd()): AssetInfo[] {
-  const manifestPath = join(getProjectDir(basePath), 'assets', 'manifest.json');
-
-  if (!existsSync(manifestPath)) {
+  const manifestContent = readProjectText('assets/manifest.json', basePath);
+  if (!manifestContent) {
     return [];
   }
 
   try {
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    const manifest = JSON.parse(manifestContent);
     return manifest.assets || [];
   } catch {
     return [];

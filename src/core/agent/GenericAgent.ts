@@ -65,6 +65,11 @@ import {
   loadTodos,
   registerFile,
 } from '../../tasks/video/workflow/ProjectManager.js';
+import {
+  projectExists as projectFileExists,
+  readProjectText,
+  writeProjectText,
+} from '../../tasks/video/workflow/projectFileIO.js';
 import type {
   CharacterData,
   SettingData,
@@ -2129,28 +2134,20 @@ export class GenericAgent extends TypedEventEmitter {
       // Check if the output file already exists (skip regeneration unless overwrite is true)
       const overwrite = args['overwrite'] as boolean | undefined;
       if (!overwrite) {
-        const projectDir = getProjectDir();
-        const fullOutputPath = path.join(projectDir, outputFile);
-        if (fs.existsSync(fullOutputPath)) {
-          try {
-            const existingContent = fs.readFileSync(fullOutputPath, 'utf-8');
-            if (existingContent.trim().length > 0) {
-              debugLog(
-                `[GenericAgent] generate_content: file already exists at ${outputFile}, returning existing content`
-              );
-              const result = {
-                already_exists: true,
-                content_type: contentType,
-                output_file: outputFile,
-                content: existingContent,
-                message: `Content already exists at ${outputFile}. Use overwrite: true to regenerate.`,
-              };
-              FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
-              return result;
-            }
-          } catch {
-            // File exists but can't be read — fall through to regeneration
-          }
+        const existingContent = readProjectText(outputFile);
+        if (existingContent && existingContent.trim().length > 0) {
+          debugLog(
+            `[GenericAgent] generate_content: file already exists at ${outputFile}, returning existing content`
+          );
+          const result = {
+            already_exists: true,
+            content_type: contentType,
+            output_file: outputFile,
+            content: existingContent,
+            message: `Content already exists at ${outputFile}. Use overwrite: true to regenerate.`,
+          };
+          FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
+          return result;
         }
       }
 
@@ -3168,24 +3165,18 @@ Respond in JSON format:
       $original_input: { file: 'original_input.md', label: 'Original Input' },
     };
 
-    const projectDir = getProjectDir();
-
     // Check if ref is a direct file path (e.g., "plans/story.md")
     if (ref.includes('/') || ref.endsWith('.md')) {
-      const filePath = path.join(projectDir, ref);
       try {
-        if (fs.existsSync(filePath)) {
-          const content = fs.readFileSync(filePath, 'utf-8');
-          if (content.trim().length > 0) {
-            // Generate label from filename
-            const filename = path.basename(ref, '.md');
-            const label = filename.charAt(0).toUpperCase() + filename.slice(1);
-            return {
-              label: label,
-              content: content,
-              file: ref,
-            };
-          }
+        const content = readProjectText(ref);
+        if (content && content.trim().length > 0) {
+          const filename = path.basename(ref, '.md');
+          const label = filename.charAt(0).toUpperCase() + filename.slice(1);
+          return {
+            label,
+            content,
+            file: ref,
+          };
         }
       } catch {
         // File read failed, continue to variable name lookup
@@ -3201,18 +3192,14 @@ Respond in JSON format:
     }
 
     // Try to read from project directory
-    const filePath = path.join(projectDir, mapping.file);
-
     try {
-      if (fs.existsSync(filePath)) {
-        const content = fs.readFileSync(filePath, 'utf-8');
-        if (content.trim().length > 0) {
-          return {
-            label: mapping.label,
-            content: content,
-            file: mapping.file,
-          };
-        }
+      const content = readProjectText(mapping.file);
+      if (content && content.trim().length > 0) {
+        return {
+          label: mapping.label,
+          content,
+          file: mapping.file,
+        };
       }
     } catch {
       // File read failed, return null
@@ -3306,17 +3293,11 @@ Respond in JSON format:
 
       if (generatedContent) {
         try {
-          const projectDir = getProjectDir();
-          const filePath = path.join(projectDir, effectiveOutputFile);
-
-          // Ensure parent directory exists
-          const parentDir = path.dirname(filePath);
-          if (!fs.existsSync(parentDir)) {
-            fs.mkdirSync(parentDir, { recursive: true });
-          }
-
-          fs.writeFileSync(filePath, validatedContent?.content ?? generatedContent, 'utf-8');
-          debugLog(`[GenericAgent] Saved content to ${filePath}`);
+          writeProjectText(
+            effectiveOutputFile,
+            validatedContent?.content ?? generatedContent,
+          );
+          debugLog(`[GenericAgent] Saved content to ${effectiveOutputFile}`);
 
           // Auto-persist to project registry
           const persistResult = persistApprovedContent(
@@ -3369,8 +3350,6 @@ Respond in JSON format:
    * Execute a tool call from the content creator.
    */
   private async executeContentCreatorTool(toolCall: ToolCall): Promise<string> {
-    const projectDir = getProjectDir();
-
     if (toolCall.name === 'read_project') {
       try {
         const project = loadProject();
@@ -3384,7 +3363,7 @@ Respond in JSON format:
           currentPhase: project.currentPhase,
           characters: (project.characters || []).map((char: { name: string; referenceImagePath?: string }) => {
             const refPath = char.referenceImagePath;
-            const refExists = refPath ? fs.existsSync(path.join(projectDir, refPath)) : false;
+            const refExists = refPath ? projectFileExists(refPath) : false;
             return {
               name: char.name,
               file: project.content?.characters?.itemFiles?.[char.name] ||
@@ -3395,7 +3374,7 @@ Respond in JSON format:
           }),
           settings: (project.settings || []).map((setting: { name: string; referenceImagePath?: string }) => {
             const refPath = setting.referenceImagePath;
-            const refExists = refPath ? fs.existsSync(path.join(projectDir, refPath)) : false;
+            const refExists = refPath ? projectFileExists(refPath) : false;
             return {
               name: setting.name,
               file: project.content?.settings?.itemFiles?.[setting.name] ||
@@ -3423,12 +3402,7 @@ Respond in JSON format:
         return 'Error: file_path is required';
       }
       try {
-        const fullPath = path.join(projectDir, filePath);
-        if (!fs.existsSync(fullPath)) {
-          return `File not found: ${filePath}`;
-        }
-        const content = fs.readFileSync(fullPath, 'utf-8');
-        return content;
+        return readProjectText(filePath) ?? `File not found: ${filePath}`;
       } catch (err) {
         return `Error reading file: ${String(err)}`;
       }
@@ -3744,16 +3718,7 @@ Respond in JSON format:
             );
           }
 
-          const projectDir = getProjectDir();
-          const filePath = path.join(projectDir, this.contentState.outputFile);
-
-          // Ensure parent directory exists
-          const parentDir = path.dirname(filePath);
-          if (!fs.existsSync(parentDir)) {
-            fs.mkdirSync(parentDir, { recursive: true });
-          }
-
-          fs.writeFileSync(filePath, this.contentState.currentContent, 'utf-8');
+          writeProjectText(this.contentState.outputFile, this.contentState.currentContent);
           fileSaved = true;
           debugLog(`[GenericAgent] Saved content to ${this.contentState.outputFile}`);
         } catch (err) {

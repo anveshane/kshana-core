@@ -17,6 +17,10 @@ import type {
   VideoGenerationInput,
   ProviderProgressCallback,
 } from '../types.js';
+import {
+  ensureProjectPathDir,
+  writeProjectBufferAtPath,
+} from '../../../tasks/video/workflow/projectFileIO.js';
 
 export class XAIProvider implements GenerationProvider {
   readonly id = 'xai';
@@ -91,12 +95,15 @@ export class XAIProvider implements GenerationProvider {
     const filename = `${input.filenamePrefix || 'aurora'}_${nanoid(8)}.png`;
     const outputPath = path.join(input.outputDir, filename);
 
-    if (!fs.existsSync(input.outputDir)) {
+    if (!ensureProjectPathDir(input.outputDir) && !fs.existsSync(input.outputDir)) {
       fs.mkdirSync(input.outputDir, { recursive: true });
     }
 
     if (imageData.b64_json) {
-      fs.writeFileSync(outputPath, Buffer.from(imageData.b64_json, 'base64'));
+      const imageBuffer = Buffer.from(imageData.b64_json, 'base64');
+      if (!writeProjectBufferAtPath(outputPath, imageBuffer)) {
+        fs.writeFileSync(outputPath, imageBuffer);
+      }
     } else if (imageData.url) {
       // Download from URL
       const imgResponse = await fetch(imageData.url);
@@ -104,7 +111,9 @@ export class XAIProvider implements GenerationProvider {
         throw new Error(`Failed to download image from xAI`);
       }
       const imgBuffer = Buffer.from(await imgResponse.arrayBuffer());
-      fs.writeFileSync(outputPath, imgBuffer);
+      if (!writeProjectBufferAtPath(outputPath, imgBuffer)) {
+        fs.writeFileSync(outputPath, imgBuffer);
+      }
     } else {
       throw new Error('No image content in xAI response');
     }
@@ -210,19 +219,24 @@ export class XAIProvider implements GenerationProvider {
     const filename = `${input.filenamePrefix || 'aurora_edit'}_${nanoid(8)}.png`;
     const outputPath = path.join(input.outputDir, filename);
 
-    if (!fs.existsSync(input.outputDir)) {
+    if (!ensureProjectPathDir(input.outputDir) && !fs.existsSync(input.outputDir)) {
       fs.mkdirSync(input.outputDir, { recursive: true });
     }
 
     if (editedImage.b64_json) {
-      fs.writeFileSync(outputPath, Buffer.from(editedImage.b64_json, 'base64'));
+      const imageBuffer = Buffer.from(editedImage.b64_json, 'base64');
+      if (!writeProjectBufferAtPath(outputPath, imageBuffer)) {
+        fs.writeFileSync(outputPath, imageBuffer);
+      }
     } else if (editedImage.url) {
       const imgResponse = await fetch(editedImage.url);
       if (!imgResponse.ok) {
         throw new Error('Failed to download edited image from xAI');
       }
       const imgBuffer = Buffer.from(await imgResponse.arrayBuffer());
-      fs.writeFileSync(outputPath, imgBuffer);
+      if (!writeProjectBufferAtPath(outputPath, imgBuffer)) {
+        fs.writeFileSync(outputPath, imgBuffer);
+      }
     } else {
       throw new Error('No image content in xAI edit response');
     }
@@ -338,19 +352,24 @@ export class XAIProvider implements GenerationProvider {
     const filename = `${input.filenamePrefix || 'grok'}_${nanoid(8)}.mp4`;
     const outputPath = path.join(input.outputDir, filename);
 
-    if (!fs.existsSync(input.outputDir)) {
+    if (!ensureProjectPathDir(input.outputDir) && !fs.existsSync(input.outputDir)) {
       fs.mkdirSync(input.outputDir, { recursive: true });
     }
 
     if (videoData.b64_json) {
-      fs.writeFileSync(outputPath, Buffer.from(videoData.b64_json, 'base64'));
+      const videoBuffer = Buffer.from(videoData.b64_json, 'base64');
+      if (!writeProjectBufferAtPath(outputPath, videoBuffer)) {
+        fs.writeFileSync(outputPath, videoBuffer);
+      }
     } else if (videoData.url) {
       const videoResponse = await fetch(videoData.url);
       if (!videoResponse.ok) {
         throw new Error('Failed to download video from xAI');
       }
       const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
-      fs.writeFileSync(outputPath, videoBuffer);
+      if (!writeProjectBufferAtPath(outputPath, videoBuffer)) {
+        fs.writeFileSync(outputPath, videoBuffer);
+      }
     } else {
       throw new Error('No video content in xAI response');
     }
