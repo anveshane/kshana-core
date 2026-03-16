@@ -18,6 +18,7 @@ on:
   push:
     branches:
       - master
+      - dev
 
 jobs:
   deploy:
@@ -46,6 +47,20 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
 
+      - name: Resolve deployment target
+        run: |
+          EFFECTIVE_CLOUD_RUN_SERVICE="${CLOUD_RUN_SERVICE}"
+          DEPLOY_ENVIRONMENT="production"
+
+          if [ "${GITHUB_REF_NAME}" = "dev" ]; then
+            EFFECTIVE_CLOUD_RUN_SERVICE="${CLOUD_RUN_SERVICE}-dev"
+            DEPLOY_ENVIRONMENT="staging"
+          fi
+
+          echo "EFFECTIVE_CLOUD_RUN_SERVICE=${EFFECTIVE_CLOUD_RUN_SERVICE}" >> "${GITHUB_ENV}"
+          echo "DEPLOY_ENVIRONMENT=${DEPLOY_ENVIRONMENT}" >> "${GITHUB_ENV}"
+          echo "Deploying '${GITHUB_REF_NAME}' branch to ${DEPLOY_ENVIRONMENT} service: ${EFFECTIVE_CLOUD_RUN_SERVICE}"
+
       - name: Build and push image
         env:
           PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -57,16 +72,17 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
-          gcloud run deploy "${CLOUD_RUN_SERVICE}" \
+          gcloud run deploy "${EFFECTIVE_CLOUD_RUN_SERVICE}" \
             --image "${IMAGE_URI}" \
             --region "${REGION}" \
             --platform managed \
             --allow-unauthenticated \
             --port 8080 \
-            --set-secrets "LLM_PROVIDER=LLM_PROVIDER:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,OPENAI_BASE_URL=OPENAI_BASE_URL:latest,OPENAI_MODEL=OPENAI_MODEL:latest,COMFYUI_BASE_URL=COMFYUI_BASE_URL:latest"
+            --set-secrets "LLM_PROVIDER=LLM_PROVIDER:latest,LLM_CONTEXT_TOKENS=LLM_CONTEXT_TOKENS:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,OPENAI_BASE_URL=OPENAI_BASE_URL:latest,OPENAI_MODEL=OPENAI_MODEL:latest,COMFYUI_BASE_URL=COMFYUI_BASE_URL:latest,COMFYUI_TIMEOUT=COMFYUI_TIMEOUT:latest,POSTHOG_API_KEY=POSTHOG_API_KEY:latest,POSTHOG_HOST=POSTHOG_HOST:latest,ANALYTICS_SALT=ANALYTICS_SALT:latest"
 
       - name: Show service URL
         run: |
-          gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+          echo "Environment: ${DEPLOY_ENVIRONMENT}"
+          gcloud run services describe "${EFFECTIVE_CLOUD_RUN_SERVICE}" \
             --region "${REGION}" \
             --format="value(status.url)"
