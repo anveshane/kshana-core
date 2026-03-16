@@ -10,6 +10,11 @@ import { getLLMConfig, getLLMProvider, validateLLMConfig, resetLLMLogger, type L
 import { resetPhaseLogger } from './utils/phaseLogger.js';
 import { resetDebugLog } from './hooks/useAgent.js';
 import { startAnalyticsDashboard } from './server/analytics.js';
+import {
+  captureAppStarted,
+  registerPostHogShutdownHandlers,
+  setCommonProperties,
+} from './server/posthog.js';
 
 // Task type for agent specialization
 type TaskType = 'generic' | 'video';
@@ -202,6 +207,10 @@ console.log('');
 
 // Start analytics dashboard (non-blocking, fire-and-forget)
 startAnalyticsDashboard(3001).catch(() => {});
+const appVersion = process.env['npm_package_version'] ?? '0.1.0';
+setCommonProperties('desktop', appVersion);
+captureAppStarted('desktop');
+registerPostHogShutdownHandlers();
 
 // Start in CLI mode or server mode (default)
 if (cli) {

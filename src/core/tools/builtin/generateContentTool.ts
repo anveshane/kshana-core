@@ -56,6 +56,7 @@ The content creator will:
 - **content_type** (required): Type of content - determines output file path
 - **instruction** (required): Clear description of what to create
 - **name**: For character/setting - the name (required for these types)
+- **output_file**: Optional explicit relative path to save the generated content
 
 ## Content Types
 
@@ -102,6 +103,13 @@ generate_content(
   name: "Scene 3: The Revelation",
   instruction: "Create scene 3 where Alice discovers the hidden clue in the library. Include characters present, actions, and camera suggestions."
 )
+
+// Create a scene outline in a custom file
+generate_content(
+  content_type: "scene",
+  instruction: "Create a scene outline based on the story and save it to plans/scenes-outline.md.",
+  output_file: "plans/scenes-outline.md"
+)
 \`\`\``,
   {
     type: 'object',
@@ -135,6 +143,11 @@ generate_content(
       chapter_number: {
         type: 'number',
         description: 'For story content: the chapter number (default: 1)',
+      },
+      output_file: {
+        type: 'string',
+        description:
+          'Optional relative output path inside the project. Use this when the content should be saved to a specific file such as plans/scenes-outline.md.',
       },
       overwrite: {
         type: 'boolean',

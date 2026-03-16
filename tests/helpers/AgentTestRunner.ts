@@ -180,7 +180,7 @@ export class AgentTestRunner {
     const projectFile = require('path').join(projectPath, 'project.json');
 
     const defaultProject: GenericProjectFile = {
-      version: '3.0',
+      version: '2.0',
       id: 'test-project',
       title: 'Test Project',
       templateId: 'narrative',

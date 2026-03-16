@@ -142,6 +142,122 @@ export interface LtxWorkflowParams {
   t2vMode?: boolean;
 }
 
+export interface Ltx23WorkflowBindings {
+  durationNodeId: number;
+  widthNodeId: number;
+  heightNodeId: number;
+  positivePromptNodeId: number;
+  negativePromptNodeId: number | null;
+  inputImageNodeId: number;
+  t2vModeNodeId: number;
+  outputNodeId: number;
+}
+
+function getNodeWidgetText(node: {
+  widgets_values?: unknown[] | Record<string, unknown>;
+}): string {
+  const widgetValues = node.widgets_values;
+  if (!Array.isArray(widgetValues) || widgetValues.length === 0) {
+    return '';
+  }
+  const firstValue = widgetValues[0];
+  return typeof firstValue === 'string' ? firstValue : String(firstValue ?? '');
+}
+
+function looksLikeNegativePrompt(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes('blurry') ||
+    normalized.includes('oversaturated') ||
+    normalized.includes('watermark') ||
+    normalized.includes('artifacts')
+  );
+}
+
+function findUniqueNode(
+  nodes: NonNullable<WorkflowTemplate['nodes']>,
+  description: string,
+  predicate: (node: NonNullable<WorkflowTemplate['nodes']>[number]) => boolean
+): NonNullable<WorkflowTemplate['nodes']>[number] {
+  const matches = nodes.filter(predicate);
+  if (matches.length !== 1) {
+    throw new Error(
+      `Invalid ltx23 workflow: expected exactly one ${description} node, found ${matches.length}`
+    );
+  }
+  return matches[0]!;
+}
+
+export function validateLtx23WorkflowTemplate(
+  template: WorkflowTemplate
+): Ltx23WorkflowBindings {
+  const nodes = template.nodes || [];
+  if (nodes.length === 0) {
+    throw new Error('Invalid ltx23 workflow: template has no nodes');
+  }
+
+  const durationNode = findUniqueNode(
+    nodes,
+    'duration',
+    node => node.type === 'INTConstant' && node.title === 'LENGTH (in seconds)'
+  );
+  const widthNode = findUniqueNode(
+    nodes,
+    'width',
+    node => node.type === 'INTConstant' && node.title === 'WIDTH'
+  );
+  const heightNode = findUniqueNode(
+    nodes,
+    'height',
+    node => node.type === 'INTConstant' && node.title === 'HEIGHT'
+  );
+  const inputImageNode = findUniqueNode(
+    nodes,
+    'input image',
+    node => node.type === 'LoadImage'
+  );
+  const t2vModeNode = findUniqueNode(
+    nodes,
+    'text-to-video toggle',
+    node => node.type === 'PrimitiveBoolean' && (node.title || '').includes('Text To Video')
+  );
+  const outputNode = findUniqueNode(
+    nodes,
+    'video output',
+    node => node.type === 'VHS_VideoCombine'
+  );
+
+  const promptNodes = nodes.filter(node => node.type === 'CLIPTextEncode');
+  if (promptNodes.length < 2) {
+    throw new Error(
+      `Invalid ltx23 workflow: expected at least two CLIPTextEncode nodes, found ${promptNodes.length}`
+    );
+  }
+
+  const negativePromptNode =
+    promptNodes.find(node => looksLikeNegativePrompt(getNodeWidgetText(node))) || null;
+  const positivePromptCandidates = promptNodes.filter(
+    node => negativePromptNode == null || node.id !== negativePromptNode.id
+  );
+
+  if (positivePromptCandidates.length !== 1) {
+    throw new Error(
+      `Invalid ltx23 workflow: expected exactly one positive prompt node, found ${positivePromptCandidates.length}`
+    );
+  }
+
+  return {
+    durationNodeId: durationNode.id,
+    widthNodeId: widthNode.id,
+    heightNodeId: heightNode.id,
+    positivePromptNodeId: positivePromptCandidates[0]!.id,
+    negativePromptNodeId: negativePromptNode?.id ?? null,
+    inputImageNodeId: inputImageNode.id,
+    t2vModeNodeId: t2vModeNode.id,
+    outputNodeId: outputNode.id,
+  };
+}
+
 /**
  * Parameterize Z-Image workflow.
  */
@@ -377,6 +493,7 @@ export function parameterizeLtx23Workflow(
 ): Record<string, unknown> {
   // Deep copy
   const workflow: WorkflowTemplate = JSON.parse(JSON.stringify(template));
+  const bindings = validateLtx23WorkflowTemplate(workflow);
 
   const durationSeconds = Math.min(Math.max(params.durationSeconds ?? 10, 1), 20);
   const t2vMode = params.t2vMode ?? false;
@@ -386,45 +503,55 @@ export function parameterizeLtx23Workflow(
   for (const node of workflow.nodes || []) {
     const nodeId = node.id;
 
-    // Node 291: Duration in seconds
-    if (nodeId === 291 && node.widgets_values) {
+    if (nodeId === bindings.durationNodeId && node.widgets_values) {
       node.widgets_values[0] = durationSeconds;
-      debugLog(`[Ltx23] Set duration (node 291) to ${durationSeconds}s`);
+      debugLog(`[Ltx23] Set duration (node ${bindings.durationNodeId}) to ${durationSeconds}s`);
     }
-    // Node 292: Width
-    else if (nodeId === 292 && node.widgets_values) {
+    else if (nodeId === bindings.widthNodeId && node.widgets_values) {
       node.widgets_values[0] = width;
-      debugLog(`[Ltx23] Set width (node 292) to ${width}`);
+      debugLog(`[Ltx23] Set width (node ${bindings.widthNodeId}) to ${width}`);
     }
-    // Node 293: Height
-    else if (nodeId === 293 && node.widgets_values) {
+    else if (nodeId === bindings.heightNodeId && node.widgets_values) {
       node.widgets_values[0] = height;
-      debugLog(`[Ltx23] Set height (node 293) to ${height}`);
+      debugLog(`[Ltx23] Set height (node ${bindings.heightNodeId}) to ${height}`);
     }
-    // Node 121: Positive prompt
-    else if (nodeId === 121 && node.widgets_values) {
+    else if (nodeId === bindings.positivePromptNodeId && node.widgets_values) {
       node.widgets_values[0] = params.prompt;
-      debugLog(`[Ltx23] Set positive prompt (node 121): "${(params.prompt || '').substring(0, 50)}..."`);
+      debugLog(
+        `[Ltx23] Set positive prompt (node ${bindings.positivePromptNodeId}): "${(params.prompt || '').substring(0, 50)}..."`
+      );
     }
-    // Node 110: Negative prompt — leave as-is (workflow has good built-in defaults)
-
-    // Node 167: Input image
-    else if (nodeId === 167 && node.widgets_values && params.inputImageFilename) {
+    else if (
+      bindings.negativePromptNodeId != null &&
+      nodeId === bindings.negativePromptNodeId &&
+      node.widgets_values &&
+      params.negativePrompt
+    ) {
+      node.widgets_values[0] = params.negativePrompt;
+      debugLog(`[Ltx23] Set negative prompt (node ${bindings.negativePromptNodeId})`);
+    }
+    else if (
+      nodeId === bindings.inputImageNodeId &&
+      node.widgets_values &&
+      params.inputImageFilename
+    ) {
       node.widgets_values[0] = params.inputImageFilename;
-      debugLog(`[Ltx23] Set input image (node 167) to: ${params.inputImageFilename}`);
+      debugLog(
+        `[Ltx23] Set input image (node ${bindings.inputImageNodeId}) to: ${params.inputImageFilename}`
+      );
     }
-    // Node 290: T2V mode toggle
-    else if (nodeId === 290 && node.widgets_values) {
+    else if (nodeId === bindings.t2vModeNodeId && node.widgets_values) {
       node.widgets_values[0] = t2vMode;
-      debugLog(`[Ltx23] Set T2V mode (node 290) to: ${t2vMode}`);
+      debugLog(`[Ltx23] Set T2V mode (node ${bindings.t2vModeNodeId}) to: ${t2vMode}`);
     }
-    // Node 140: VHS_VideoCombine — set filename_prefix
-    else if (nodeId === 140 && node.widgets_values) {
+    else if (nodeId === bindings.outputNodeId && node.widgets_values) {
       const prefix = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23';
       if (typeof node.widgets_values === 'object' && !Array.isArray(node.widgets_values)) {
         (node.widgets_values as Record<string, unknown>)['filename_prefix'] = prefix;
       }
-      debugLog(`[Ltx23] Set VHS_VideoCombine (node 140) filename_prefix to: ${prefix}`);
+      debugLog(
+        `[Ltx23] Set VHS_VideoCombine (node ${bindings.outputNodeId}) filename_prefix to: ${prefix}`
+      );
     }
   }
 
@@ -434,44 +561,33 @@ export function parameterizeLtx23Workflow(
   // No subgraph expansion needed — this is a flat workflow
   const apiWorkflow = workflowToPrompt(resolvedWorkflow);
 
-  // Also set values in API format to ensure they take effect
-  const node291 = apiWorkflow['291'] as { inputs?: Record<string, unknown> } | undefined;
-  if (node291) {
-    node291.inputs = node291.inputs || {};
-    node291.inputs['value'] = durationSeconds;
-  }
-  const node292 = apiWorkflow['292'] as { inputs?: Record<string, unknown> } | undefined;
-  if (node292) {
-    node292.inputs = node292.inputs || {};
-    node292.inputs['value'] = width;
-  }
-  const node293 = apiWorkflow['293'] as { inputs?: Record<string, unknown> } | undefined;
-  if (node293) {
-    node293.inputs = node293.inputs || {};
-    node293.inputs['value'] = height;
-  }
-  const node121 = apiWorkflow['121'] as { inputs?: Record<string, unknown> } | undefined;
-  if (node121) {
-    node121.inputs = node121.inputs || {};
-    node121.inputs['text'] = params.prompt;
+  const setApiInput = (nodeId: number, inputName: string, value: unknown): void => {
+    const node = apiWorkflow[String(nodeId)] as { inputs?: Record<string, unknown> } | undefined;
+    if (!node) {
+      throw new Error(
+        `Invalid ltx23 workflow: API prompt missing node ${nodeId} for input "${inputName}"`
+      );
+    }
+    node.inputs = node.inputs || {};
+    node.inputs[inputName] = value;
+  };
+
+  setApiInput(bindings.durationNodeId, 'value', durationSeconds);
+  setApiInput(bindings.widthNodeId, 'value', width);
+  setApiInput(bindings.heightNodeId, 'value', height);
+  setApiInput(bindings.positivePromptNodeId, 'text', params.prompt);
+  if (bindings.negativePromptNodeId != null && params.negativePrompt) {
+    setApiInput(bindings.negativePromptNodeId, 'text', params.negativePrompt);
   }
   if (params.inputImageFilename) {
-    const node167 = apiWorkflow['167'] as { inputs?: Record<string, unknown> } | undefined;
-    if (node167) {
-      node167.inputs = node167.inputs || {};
-      node167.inputs['image'] = params.inputImageFilename;
-    }
+    setApiInput(bindings.inputImageNodeId, 'image', params.inputImageFilename);
   }
-  const node290 = apiWorkflow['290'] as { inputs?: Record<string, unknown> } | undefined;
-  if (node290) {
-    node290.inputs = node290.inputs || {};
-    node290.inputs['value'] = t2vMode;
-  }
-  const node140 = apiWorkflow['140'] as { inputs?: Record<string, unknown> } | undefined;
-  if (node140) {
-    node140.inputs = node140.inputs || {};
-    node140.inputs['filename_prefix'] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23';
-  }
+  setApiInput(bindings.t2vModeNodeId, 'value', t2vMode);
+  setApiInput(
+    bindings.outputNodeId,
+    'filename_prefix',
+    params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23'
+  );
 
   // Remove non-essential nodes
   const nodesToRemove = ['Note', 'MarkdownNote'];

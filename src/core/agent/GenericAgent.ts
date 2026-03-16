@@ -33,13 +33,25 @@ import {
   shouldCondense,
   LONG_CONTENT_THRESHOLD,
 } from '../context/index.js';
-import { CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
 import { getContentCreatorTools, clearKnownProjectFiles } from '../tools/builtin/contentCreatorTools.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { FlowRecorder } from '../../utils/FlowRecorder.js';
 import { ToolAnalytics } from '../../utils/ToolAnalytics.js';
+import {
+  extractSceneTitle,
+  type ParsedSceneMotionPrompt,
+  validateGeneratedSceneContent,
+  validateGeneratedSceneMotionPromptContent,
+} from '../contentValidation.js';
+import {
+  captureErrorOccurred,
+  captureToolCallCompleted,
+  captureToolCallStarted,
+  hashAnalyticsMessage,
+} from '../../server/posthog.js';
 import { buildPreloadedContext } from './contentContext.js';
+import { resolveGenerateContentOutputFile } from './generateContentPath.js';
 import {
   getProjectDir,
   loadProject,
@@ -47,6 +59,7 @@ import {
   saveCharacter,
   saveSetting,
   updateContentStatus,
+  addContentItem,
   projectExists,
   saveTodos,
   loadTodos,
@@ -56,12 +69,21 @@ import type {
   CharacterData,
   SettingData,
   ContentTypeName,
+  SceneRef,
 } from '../../tasks/video/workflow/types.js';
 import {
   createDefaultCharacterData,
   createDefaultSettingData,
+  createDefaultSceneRef,
 } from '../../tasks/video/workflow/types.js';
 import { comfyProgressBus, type ComfyProgressHandler } from '../../services/comfyui/index.js';
+import {
+  createTimelineSkeleton,
+  loadTimeline,
+  saveTimeline,
+  splitSegmentIntoShots,
+} from '../timeline/TimelineManager.js';
+import type { SegmentDescriptor } from '../timeline/types.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -79,6 +101,219 @@ function debugLog(message: string) {
   }
 }
 
+
+type PersistResult = {
+  persisted: boolean;
+  action?: string;
+  error?: string;
+  timelineAction?: string;
+};
+
+function parseSceneNumberFromPath(outputFile?: string): number | undefined {
+  if (!outputFile) return undefined;
+  const match = outputFile.match(/scene[-_](\d+)/i);
+  if (!match?.[1]) return undefined;
+  const parsed = Number.parseInt(match[1], 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function extractSceneDescription(text: string): string | undefined {
+  const lines = text
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .filter(line => !line.startsWith('#'));
+  return lines[0]?.slice(0, 200);
+}
+
+function upsertSceneRef(projectScenes: SceneRef[], sceneRef: SceneRef): SceneRef[] {
+  const existingIndex = projectScenes.findIndex(scene => scene.sceneNumber === sceneRef.sceneNumber);
+  if (existingIndex >= 0) {
+    projectScenes[existingIndex] = { ...projectScenes[existingIndex], ...sceneRef };
+  } else {
+    projectScenes.push(sceneRef);
+  }
+  projectScenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
+  return projectScenes;
+}
+
+function readSuggestedSceneDuration(projectDir: string, scene: SceneRef): number | undefined {
+  const promptPath = scene.videoPromptPath;
+  if (!promptPath) return undefined;
+
+  const fullPath = path.join(projectDir, promptPath);
+  if (!fs.existsSync(fullPath)) return undefined;
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(fullPath, 'utf-8')) as ParsedSceneMotionPrompt;
+    const duration = parsed.totalSceneDuration;
+    return Number.isFinite(duration) && duration && duration > 0 ? duration : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function buildSceneDescriptors(projectDir: string, scenes: SceneRef[]): SegmentDescriptor[] {
+  return [...scenes]
+    .sort((a, b) => a.sceneNumber - b.sceneNumber)
+    .map(scene => ({
+      label: scene.title ? `Scene ${scene.sceneNumber}: ${scene.title}` : `Scene ${scene.sceneNumber}`,
+      ...(readSuggestedSceneDuration(projectDir, scene)
+        ? { suggestedDuration: readSuggestedSceneDuration(projectDir, scene) }
+        : {}),
+    }));
+}
+
+function getTimelineTargetDuration(projectDir: string, project: ReturnType<typeof loadProject>): number {
+  const scenes = project?.scenes ?? [];
+  const suggestedTotal = scenes.reduce(
+    (sum, scene) => sum + (readSuggestedSceneDuration(projectDir, scene) ?? 0),
+    0
+  );
+  const goalDuration = project?.goal?.status === 'active' ? project.goal.preferences?.duration : undefined;
+  return (
+    goalDuration ??
+    project?.targetDuration ??
+    (suggestedTotal > 0 ? suggestedTotal : Math.max(scenes.length * 10, 1))
+  );
+}
+
+function syncTimelineSkeleton(projectDir: string, project: NonNullable<ReturnType<typeof loadProject>>): PersistResult {
+  const scenes = [...project.scenes].sort((a, b) => a.sceneNumber - b.sceneNumber);
+  if (scenes.length === 0) {
+    return { persisted: false };
+  }
+
+  const descriptors = buildSceneDescriptors(projectDir, scenes);
+  const desiredLabels = descriptors.map(descriptor => descriptor.label);
+  const existing = loadTimeline(projectDir);
+  const hasShotSplits = existing?.segments.some(segment => segment.id.includes('_shot_')) ?? false;
+
+  if (existing && hasShotSplits) {
+    return { persisted: true, timelineAction: 'timeline_preserved' };
+  }
+
+  if (existing) {
+    const existingLabels = existing.segments.map(segment => segment.label);
+    if (existingLabels.length === desiredLabels.length && existingLabels.every((label, index) => label === desiredLabels[index])) {
+      return { persisted: true, timelineAction: 'timeline_already_current' };
+    }
+  }
+
+  const totalDuration = getTimelineTargetDuration(projectDir, project);
+  const timeline = createTimelineSkeleton(totalDuration, descriptors);
+  saveTimeline(projectDir, timeline);
+  return { persisted: true, timelineAction: existing ? 'timeline_refreshed' : 'timeline_created' };
+}
+
+function syncTimelineForMotionPrompt(
+  projectDir: string,
+  project: NonNullable<ReturnType<typeof loadProject>>,
+  motionPrompt: ParsedSceneMotionPrompt
+): PersistResult {
+  const sceneNumber = motionPrompt.sceneNumber;
+  if (sceneNumber === undefined) {
+    return { persisted: false, error: 'scene_video_prompt is missing sceneNumber' };
+  }
+
+  const skeletonResult = syncTimelineSkeleton(projectDir, project);
+  if (skeletonResult.error) {
+    return skeletonResult;
+  }
+
+  const timeline = loadTimeline(projectDir);
+  if (!timeline) {
+    return { persisted: false, error: 'Failed to create timeline before splitting scene shots' };
+  }
+
+  const scenes = [...project.scenes].sort((a, b) => a.sceneNumber - b.sceneNumber);
+  const sceneIndex = scenes.findIndex(scene => scene.sceneNumber === sceneNumber);
+  if (sceneIndex < 0) {
+    return { persisted: false, error: `Scene ${sceneNumber} is not registered in project.scenes` };
+  }
+
+  const validShots =
+    motionPrompt.shots
+      ?.map((shot, index) => {
+        const duration = shot.duration;
+        if (!Number.isFinite(duration) || !duration || duration <= 0) {
+          return null;
+        }
+
+        return {
+          label:
+            shot.label ??
+            (shot.shotType
+              ? `Shot ${shot.shotNumber ?? index + 1}: ${shot.shotType}`
+              : `Shot ${shot.shotNumber ?? index + 1}`),
+          duration,
+          metadata: {
+            sceneNumber,
+            shotNumber: shot.shotNumber ?? index + 1,
+            ...(shot.shotType ? { shotType: shot.shotType } : {}),
+            ...(shot.prompt ? { prompt: shot.prompt } : {}),
+            ...(shot.cameraWork ? { cameraWork: shot.cameraWork } : {}),
+            ...(shot.dialogue ? { dialogue: shot.dialogue } : {}),
+          },
+        };
+      })
+      .filter((shot): shot is NonNullable<typeof shot> => shot !== null) ?? [];
+
+  if (validShots.length === 0) {
+    return { persisted: false, error: `scene_video_prompt for Scene ${sceneNumber} does not contain valid shots` };
+  }
+
+  const updatedTimeline = splitSegmentIntoShots(timeline, `segment_${sceneIndex}`, validShots);
+  saveTimeline(projectDir, updatedTimeline);
+  return { persisted: true, timelineAction: `timeline_split_scene_${sceneNumber}` };
+}
+
+function contentApprovalNextSteps(contentType: string, persistResult: PersistResult): string {
+  if (contentType === 'scene') {
+    return 'IMPORTANT: 1) Scene was persisted and the timeline skeleton was created or refreshed automatically. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.';
+  }
+
+  if (contentType === 'scene_video_prompt') {
+    return 'IMPORTANT: 1) Motion prompt was persisted and the matching timeline scene was split into shots automatically. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.';
+  }
+
+  if (persistResult.timelineAction === 'timeline_created') {
+    return 'IMPORTANT: 1) Timeline was created automatically. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.';
+  }
+
+  return 'IMPORTANT: 1) Use TodoRead to check current todos. 2) Use TodoWrite(merge=true) to mark the completed task. 3) Continue with the next pending task.';
+}
+
+function contentTypeRequiresConcreteFile(contentType: string): boolean {
+  return new Set([
+    'story',
+    'character',
+    'setting',
+    'scene',
+    'character_image_prompt',
+    'setting_image_prompt',
+    'scene_image_prompt',
+    'scene_video_prompt',
+    'shot_image_prompt',
+  ]).has(contentType);
+}
+
+function validateApprovedContent(
+  contentType: string,
+  content: string,
+  outputFile?: string
+): { valid: true; content: string } | { valid: false; error: string } {
+  if (contentType === 'scene') {
+    return validateGeneratedSceneContent(content, parseSceneNumberFromPath(outputFile));
+  }
+
+  if (contentType === 'scene_video_prompt') {
+    return validateGeneratedSceneMotionPromptContent(content);
+  }
+
+  return { valid: true, content: content.trim() };
+}
+
 /**
  * Framework-managed persistence: Auto-update project registry when content is approved.
  * This removes the need for agents to manually call update_project for every content type.
@@ -88,7 +323,7 @@ function persistApprovedContent(
   name: string | undefined,
   content: string,
   outputFile: string | undefined
-): { persisted: boolean; action?: string; error?: string } {
+): PersistResult {
   if (!projectExists()) {
     return { persisted: false, error: 'No project exists' };
   }
@@ -99,6 +334,8 @@ function persistApprovedContent(
   }
 
   try {
+    const projectDir = getProjectDir();
+
     // Extract first 200 chars as description for registry
     const extractDescription = (text: string): string => {
       const firstParagraph = text.split('\n\n')[0] || text;
@@ -140,6 +377,100 @@ function persistApprovedContent(
           `[GenericAgent] Auto-updated ${contentType} status to available in project registry`
         );
         return { persisted: true, action: `update_content_status: ${contentType}` };
+
+      case 'scene': {
+        const sceneNumber = parseSceneNumberFromPath(outputFile);
+        if (sceneNumber === undefined || !outputFile) {
+          return { persisted: false, error: 'Approved scene content requires a concrete scene output file' };
+        }
+
+        const sceneTitle = extractSceneTitle(content, sceneNumber) ?? name ?? `Scene ${sceneNumber}`;
+        const sceneRef: SceneRef = {
+          ...(project.scenes.find(scene => scene.sceneNumber === sceneNumber) ??
+            createDefaultSceneRef(sceneNumber, sceneTitle)),
+          sceneNumber,
+          file: outputFile,
+          title: sceneTitle,
+          description: extractSceneDescription(content) ?? extractDescription(content),
+          contentApprovalStatus: 'approved',
+          contentApprovedAt: Date.now(),
+        };
+
+        upsertSceneRef(project.scenes, sceneRef);
+        saveProject(project);
+        registerFile(outputFile, 'scene', {
+          name: sceneTitle,
+          summary: extractDescription(content),
+        });
+        const reloadedProject = loadProject();
+        if (!reloadedProject) {
+          return { persisted: false, error: 'Failed to reload project after scene persistence' };
+        }
+        const sceneName = sceneRef.title || `Scene ${sceneNumber}`;
+        addContentItem(reloadedProject, 'scenes', sceneName, outputFile);
+        const timelineResult = syncTimelineSkeleton(projectDir, reloadedProject);
+        debugLog(`[GenericAgent] Auto-persisted scene ${sceneNumber} to project registry`);
+        return {
+          persisted: true,
+          action: `add_scene: ${sceneNumber}`,
+          ...(timelineResult.timelineAction ? { timelineAction: timelineResult.timelineAction } : {}),
+        };
+      }
+
+      case 'scene_video_prompt': {
+        if (!outputFile) {
+          return { persisted: false, error: 'Approved scene_video_prompt requires an output file' };
+        }
+
+        let motionPrompt: ParsedSceneMotionPrompt;
+        try {
+          motionPrompt = JSON.parse(content) as ParsedSceneMotionPrompt;
+        } catch (error) {
+          return {
+            persisted: false,
+            error: `Approved scene_video_prompt is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+
+        const sceneNumber = motionPrompt.sceneNumber ?? parseSceneNumberFromPath(outputFile);
+        if (sceneNumber === undefined) {
+          return { persisted: false, error: 'scene_video_prompt is missing sceneNumber' };
+        }
+
+        const sceneTitle = motionPrompt.sceneTitle ?? `Scene ${sceneNumber}`;
+        const sceneRef: SceneRef = {
+          ...(project.scenes.find(scene => scene.sceneNumber === sceneNumber) ??
+            createDefaultSceneRef(sceneNumber, sceneTitle)),
+          sceneNumber,
+          ...(motionPrompt.sceneTitle ? { title: motionPrompt.sceneTitle } : {}),
+          videoPromptPath: outputFile,
+          videoPromptApprovalStatus: 'approved',
+        };
+
+        upsertSceneRef(project.scenes, sceneRef);
+        saveProject(project);
+        registerFile(outputFile, 'scene_video_prompt', {
+          name: `Scene ${sceneNumber}`,
+          summary: extractDescription(content),
+        });
+        const reloadedProject = loadProject();
+        if (!reloadedProject) {
+          return { persisted: false, error: 'Failed to reload project after scene_video_prompt persistence' };
+        }
+        const timelineResult = syncTimelineForMotionPrompt(projectDir, reloadedProject, {
+          ...motionPrompt,
+          sceneNumber,
+        });
+        if (timelineResult.error) {
+          return timelineResult;
+        }
+        debugLog(`[GenericAgent] Auto-persisted scene_video_prompt for scene ${sceneNumber}`);
+        return {
+          persisted: true,
+          action: `add_scene_video_prompt: ${sceneNumber}`,
+          ...(timelineResult.timelineAction ? { timelineAction: timelineResult.timelineAction } : {}),
+        };
+      }
 
       default:
         // For other content types, just log that we're not auto-persisting
@@ -1246,6 +1577,15 @@ export class GenericAgent extends TypedEventEmitter {
           continue;
         }
 
+        let activeProjectDir: string | undefined;
+        try {
+          activeProjectDir = getProjectDir();
+        } catch {
+          activeProjectDir = undefined;
+        }
+
+        const toolStartedAtIso = new Date().toISOString();
+
         // Record analytics start
         const analyticsRowId = ToolAnalytics.instance()?.recordStart(
           toolCall.id,
@@ -1253,8 +1593,21 @@ export class GenericAgent extends TypedEventEmitter {
           this.getEffectiveAgentName(),
           toolCall.arguments,
           this.analyticsSessionId,
-          precedingMessage
+          precedingMessage,
+          activeProjectDir,
         ) ?? null;
+        captureToolCallStarted({
+          sessionId: this.analyticsSessionId,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          agentName: this.getEffectiveAgentName(),
+          args: toolCall.arguments,
+          startedAt: toolStartedAtIso,
+          projectDir: activeProjectDir,
+          workflowName: this.name,
+        });
+
+        const toolStartPerf = performance.now();
 
         // Execute the tool
         const result = await this.executeTool(toolCall);
@@ -1267,8 +1620,34 @@ export class GenericAgent extends TypedEventEmitter {
         const errorMsg = isToolError
           ? (resultObj['error'] as string) ?? (resultObj['warning'] as string) ?? undefined
           : undefined;
+        const toolDurationMs = Math.round(performance.now() - toolStartPerf);
         if (analyticsRowId !== null) {
           ToolAnalytics.instance()?.recordComplete(toolCall.id, analyticsRowId, isToolError, errorMsg);
+        }
+        captureToolCallCompleted({
+          sessionId: this.analyticsSessionId,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          agentName: this.getEffectiveAgentName(),
+          isError: isToolError,
+          durationMs: toolDurationMs,
+          errorMessage: errorMsg,
+          startedAt: toolStartedAtIso,
+          completedAt: new Date().toISOString(),
+          projectDir: activeProjectDir,
+          sqliteRowId: analyticsRowId ?? undefined,
+          source: 'live',
+          workflowName: this.name,
+        });
+
+        if (isToolError) {
+          captureErrorOccurred({
+            sessionId: this.analyticsSessionId,
+            errorType: 'tool_error',
+            toolName: toolCall.name,
+            workflowName: this.name,
+            messageHash: hashAnalyticsMessage(errorMsg),
+          });
         }
 
         // Check if a generate tool (image/video) completed successfully
@@ -1715,6 +2094,7 @@ export class GenericAgent extends TypedEventEmitter {
       const sceneNumber = args['scene_number'] as number | undefined;
       const shotNumber = args['shot_number'] as number | undefined;
       const chapterNumber = args['chapter_number'] as number | undefined;
+      const explicitOutputFile = args['output_file'] as string | undefined;
 
       if (!contentType) {
         const errorResult = { error: 'content_type is required for generate_content' };
@@ -1736,38 +2116,15 @@ export class GenericAgent extends TypedEventEmitter {
         `[GenericAgent] generate_content: content_type=${contentType}, instruction=${instruction.substring(0, 100)}...`
       );
 
-      // Build the output file path
-      let outputFile = CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
-
-      // Handle different content types that need name/number appended
-      if ((contentType === 'character' || contentType === 'setting') && name) {
-        // For character/setting, append {name}.profile.md
-        const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-        outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.profile.md`;
-      } else if (contentType === 'story') {
-        // For story, append chapter-{n}.story.md
-        const chapter = chapterNumber ?? 1;
-        outputFile = `${outputFile.replace(/\/$/, '')}/chapter-${chapter}.story.md`;
-      } else if (
-        (contentType === 'character_image_prompt' || contentType === 'setting_image_prompt') &&
-        name
-      ) {
-        // For character/setting image prompts, append {name}.prompt.md
-        const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-        outputFile = `${outputFile.replace(/\/$/, '')}/${safeName}.prompt.md`;
-      } else if (contentType === 'scene' && sceneNumber !== undefined) {
-        // For scene descriptions, append scene-{n}.md
-        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.md`;
-      } else if (contentType === 'scene_image_prompt' && sceneNumber !== undefined) {
-        // For scene image prompts, append scene-{n}.prompt.md
-        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.prompt.md`;
-      } else if (contentType === 'scene_video_prompt' && sceneNumber !== undefined) {
-        // For scene video prompts, append scene-{n}.motion.json
-        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}.motion.json`;
-      } else if (contentType === 'shot_image_prompt' && sceneNumber !== undefined && shotNumber !== undefined) {
-        // For shot image prompts, append scene-{n}-shot-{m}.prompt.md
-        outputFile = `${outputFile.replace(/\/$/, '')}/scene-${sceneNumber}-shot-${shotNumber}.prompt.md`;
-      }
+      const outputFile = resolveGenerateContentOutputFile({
+        contentType,
+        instruction,
+        name,
+        sceneNumber,
+        shotNumber,
+        chapterNumber,
+        outputFile: explicitOutputFile,
+      });
 
       // Check if the output file already exists (skip regeneration unless overwrite is true)
       const overwrite = args['overwrite'] as boolean | undefined;
@@ -2920,11 +3277,33 @@ Respond in JSON format:
         parentToolCallId: toolCall.id,
       });
 
+      // Always save content to disk — auto-generate outputFile if not specified
+      const effectiveOutputFile = resolveGenerateContentOutputFile({
+        contentType,
+        instruction: task,
+        outputFile,
+      });
       // Extract the generated content from the sub-agent's output
       const generatedContent = result.output || '';
+      const validatedContent = generatedContent
+        ? validateApprovedContent(contentType, generatedContent, effectiveOutputFile)
+        : null;
+      if (contentTypeRequiresConcreteFile(contentType) && /\/$/.test(effectiveOutputFile)) {
+        return {
+          error: `Resolved output path for ${contentType} is a directory, not a file: ${effectiveOutputFile}`,
+          task,
+          content_type: contentType,
+        };
+      }
+      if (validatedContent && !validatedContent.valid) {
+        return {
+          error: validatedContent.error,
+          task,
+          content_type: contentType,
+          output_file: effectiveOutputFile,
+        };
+      }
 
-      // Always save content to disk — auto-generate outputFile if not specified
-      const effectiveOutputFile = outputFile || CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
       if (generatedContent) {
         try {
           const projectDir = getProjectDir();
@@ -2936,16 +3315,24 @@ Respond in JSON format:
             fs.mkdirSync(parentDir, { recursive: true });
           }
 
-          fs.writeFileSync(filePath, generatedContent, 'utf-8');
+          fs.writeFileSync(filePath, validatedContent?.content ?? generatedContent, 'utf-8');
           debugLog(`[GenericAgent] Saved content to ${filePath}`);
 
           // Auto-persist to project registry
-          persistApprovedContent(contentType, undefined, generatedContent, effectiveOutputFile);
+          const persistResult = persistApprovedContent(
+            contentType,
+            undefined,
+            validatedContent?.content ?? generatedContent,
+            effectiveOutputFile
+          );
+          if (persistResult.error) {
+            throw new Error(persistResult.error);
+          }
 
           // Register file in project so other tools can discover it
           if (projectExists()) {
             registerFile(effectiveOutputFile, contentType, {
-              summary: generatedContent.slice(0, 200).trim(),
+              summary: (validatedContent?.content ?? generatedContent).slice(0, 200).trim(),
             });
           }
         } catch (saveError) {
@@ -2955,7 +3342,7 @@ Respond in JSON format:
 
       return {
         status: result.status,
-        content: generatedContent,
+        content: validatedContent?.content ?? generatedContent,
         content_type: contentType,
         output_file: effectiveOutputFile,
         message: `Content generated successfully — saved to ${effectiveOutputFile}`,
@@ -3314,6 +3701,27 @@ Respond in JSON format:
 
         this.contentState.currentContent = cleanedContent || 'No content generated';
 
+        const validation = validateApprovedContent(
+          this.contentState.contentType,
+          this.contentState.currentContent,
+          this.contentState.outputFile
+        );
+        if (!validation.valid) {
+          const result = {
+            status: 'validation_failed',
+            content_type: this.contentState.contentType,
+            task: this.contentState.task,
+            output_file: this.contentState.outputFile,
+            error: validation.error,
+            message: `Generated ${this.contentState.contentType} content failed validation and was not saved.`,
+          };
+          this.contentState = null;
+          this.currentMode = 'orchestrator';
+          return result;
+        }
+
+        this.contentState.currentContent = validation.content;
+
         // Add assistant response to history
         this.contentState.messages.push({
           role: 'assistant',
@@ -3327,6 +3735,15 @@ Respond in JSON format:
       let fileSaved = false;
       if (this.contentState.outputFile) {
         try {
+          if (
+            contentTypeRequiresConcreteFile(this.contentState.contentType) &&
+            /\/$/.test(this.contentState.outputFile)
+          ) {
+            throw new Error(
+              `Resolved output path for ${this.contentState.contentType} is a directory, not a file: ${this.contentState.outputFile}`
+            );
+          }
+
           const projectDir = getProjectDir();
           const filePath = path.join(projectDir, this.contentState.outputFile);
 
@@ -3366,6 +3783,9 @@ Respond in JSON format:
         this.contentState.currentContent,
         this.contentState.outputFile
       );
+      if (persistResult.error) {
+        throw new Error(persistResult.error);
+      }
 
       const result = {
         status: 'approved',
@@ -3382,7 +3802,7 @@ Respond in JSON format:
         message: fileSaved
           ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}`
           : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}`,
-        next_steps: 'IMPORTANT: 1) Update the timeline using manage_timeline with update_segment. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.',
+        next_steps: contentApprovalNextSteps(this.contentState.contentType, persistResult),
       };
 
       debugLog(
@@ -4337,6 +4757,7 @@ Respond in JSON format:
       }
     }
   }
+
 
   /**
    * Build the system message for this agent.

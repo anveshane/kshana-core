@@ -283,7 +283,7 @@ This is the primary way to find available project content.`,
     return {
       status: 'success',
       content, // This field is displayed in the UI
-      project_directory: 'project/',
+      project_directory: projectDir,
       total_files: fileList.length,
       files: fileList,
       usage_hint:
@@ -578,6 +578,17 @@ export const updateProjectTool: ToolDefinition = createTool(
           let originalInput = data['original_input'] as string;
           if (!originalInput) {
             return { status: 'error', error: 'original_input is required for create action' };
+          }
+
+          const existingProject = loadProject();
+          if (existingProject) {
+            return {
+              status: 'success',
+              message: 'Project already exists',
+              project_id: existingProject.id,
+              current_phase: existingProject.currentPhase,
+              already_exists: true,
+            };
           }
 
           const project = createProject(originalInput);

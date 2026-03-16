@@ -541,7 +541,7 @@ export interface FinalOutputInfo {
  */
 export interface GenericProjectFile {
   /** Schema version */
-  version: '3.0';
+  version: '2.0';
 
   /** Unique project identifier */
   id: string;
