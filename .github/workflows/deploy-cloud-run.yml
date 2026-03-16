@@ -26,6 +26,7 @@ jobs:
     permissions:
       contents: read
     env:
+      PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
       REGION: ${{ github.event.inputs.region || 'asia-south1' }}
       ARTIFACT_REGISTRY_REPO: ${{ github.event.inputs.artifact_registry_repo || 'kshana' }}
       CLOUD_RUN_SERVICE: ${{ github.event.inputs.cloud_run_service || 'kshana-ink' }}
@@ -42,7 +43,7 @@ jobs:
       - name: Setup gcloud
         uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
+          project_id: ${{ env.PROJECT_ID }}
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
@@ -62,8 +63,6 @@ jobs:
           echo "Deploying '${GITHUB_REF_NAME}' branch to ${DEPLOY_ENVIRONMENT} service: ${EFFECTIVE_CLOUD_RUN_SERVICE}"
 
       - name: Build and push image
-        env:
-          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/kshana-ink:${GITHUB_SHA}"
           docker build -t "${IMAGE_URI}" .
@@ -76,6 +75,7 @@ jobs:
             --image "${IMAGE_URI}" \
             --region "${REGION}" \
             --platform managed \
+            --service-account "kshana-ink@${PROJECT_ID}.iam.gserviceaccount.com" \
             --allow-unauthenticated \
             --port 8080 \
             --set-secrets "LLM_PROVIDER=LLM_PROVIDER:latest,LLM_CONTEXT_TOKENS=LLM_CONTEXT_TOKENS:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,OPENAI_BASE_URL=OPENAI_BASE_URL:latest,OPENAI_MODEL=OPENAI_MODEL:latest,COMFYUI_BASE_URL=COMFYUI_BASE_URL:latest,COMFYUI_TIMEOUT=COMFYUI_TIMEOUT:latest,POSTHOG_API_KEY=POSTHOG_API_KEY:latest,POSTHOG_HOST=POSTHOG_HOST:latest,ANALYTICS_SALT=ANALYTICS_SALT:latest"
