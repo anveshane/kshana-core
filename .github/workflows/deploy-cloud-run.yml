@@ -1,0 +1,71 @@
+name: Deploy to Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: GCP region for Artifact Registry and Cloud Run
+        required: false
+        default: asia-south1
+      artifact_registry_repo:
+        description: Artifact Registry repository name
+        required: false
+        default: kshana
+      cloud_run_service:
+        description: Cloud Run service name
+        required: false
+        default: kshana-ink
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      REGION: ${{ github.event.inputs.region || 'asia-south1' }}
+      ARTIFACT_REGISTRY_REPO: ${{ github.event.inputs.artifact_registry_repo || 'kshana' }}
+      CLOUD_RUN_SERVICE: ${{ github.event.inputs.cloud_run_service || 'kshana-ink' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push image
+        env:
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+        run: |
+          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/kshana-ink:${GITHUB_SHA}"
+          gcloud builds submit --tag "${IMAGE_URI}" .
+          echo "IMAGE_URI=${IMAGE_URI}" >> "${GITHUB_ENV}"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${CLOUD_RUN_SERVICE}" \
+            --image "${IMAGE_URI}" \
+            --region "${REGION}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --port 8080 \
+            --set-secrets "LLM_PROVIDER=LLM_PROVIDER:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,OPENAI_BASE_URL=OPENAI_BASE_URL:latest,OPENAI_MODEL=OPENAI_MODEL:latest,COMFYUI_BASE_URL=COMFYUI_BASE_URL:latest"
+
+      - name: Show service URL
+        run: |
+          gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+            --region "${REGION}" \
+            --format="value(status.url)"
