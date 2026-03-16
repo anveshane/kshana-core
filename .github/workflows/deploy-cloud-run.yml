@@ -51,7 +51,7 @@ jobs:
           PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
         run: |
           IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/kshana-ink:${GITHUB_SHA}"
-          gcloud builds submit --tag "${IMAGE_URI}" .
+          gcloud builds submit --tag "${IMAGE_URI}" --region="${REGION}" .
           echo "IMAGE_URI=${IMAGE_URI}" >> "${GITHUB_ENV}"
 
       - name: Deploy to Cloud Run
