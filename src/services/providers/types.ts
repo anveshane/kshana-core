@@ -57,6 +57,8 @@ export interface ImageGenerationInput {
   filenamePrefix?: string;
   /** Reference images for consistency (image+text-to-image mode) */
   referenceImages?: ProviderReferenceImage[];
+  /** Optional workflow name override (for custom workflows) */
+  workflowName?: string;
 }
 
 /**
@@ -94,6 +96,8 @@ export interface VideoGenerationInput {
   outputDir: string;
   /** Optional filename prefix */
   filenamePrefix?: string;
+  /** Optional workflow name override (for custom workflows) */
+  workflowName?: string;
 }
 
 /**

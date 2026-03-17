@@ -412,7 +412,7 @@ describe('Content Agent Prompt Building', { sequential: true }, () => {
       : undefined;
 
     // Build the prompt
-    const prompt = buildContentPrompt(
+    const { prompt } = buildContentPrompt(
       'Create a detailed character profile for Jan',
       'character',
       context

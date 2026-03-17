@@ -1,8 +1,8 @@
 /**
  * ComfyUI provider — wraps the existing ComfyUI service to implement GenerationProvider.
  *
- * Delegates to ComfyUIClient, WorkflowRegistry, and WorkflowLoader.
- * Does NOT modify any existing ComfyUI service code.
+ * All workflows (built-in and custom) go through the same manifest-based
+ * parameterization path. No workflow-specific hardcoding.
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -10,9 +10,11 @@ import { nanoid } from 'nanoid';
 import {
   ComfyUIClient,
   loadWorkflowTemplate,
-  parameterizeWorkflowByName,
+  parameterizeCustomWorkflow,
   getRegistry,
 } from '../../comfyui/index.js';
+import { ensureApiFormat } from '../../comfyui/WorkflowAnalyzer.js';
+import type { WorkflowManifest } from '../../comfyui/WorkflowAnalyzer.js';
 import type {
   GenerationProvider,
   GenerationCapability,
@@ -43,7 +45,6 @@ export class ComfyUIProvider implements GenerationProvider {
   ];
 
   isAvailable(): boolean {
-    // ComfyUI is available if the server URL is set (defaults to localhost:8188)
     const url = process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
     return !!url;
   }
@@ -60,14 +61,15 @@ export class ComfyUIProvider implements GenerationProvider {
       outputDir,
       filenamePrefix = 'image',
       referenceImages = [],
+      workflowName: requestedWorkflow,
     } = input;
 
     const registry = getRegistry();
     const client = new ComfyUIClient({ outputDir });
 
-    // Determine workflow based on reference images
-    const useQwenEdit = referenceImages.length > 0;
-    const workflowName = useQwenEdit ? 'qwen_edit' : 'zimage';
+    // Determine workflow: explicit override > reference-image heuristic > default
+    const useQwenEdit = !requestedWorkflow && referenceImages.length > 0;
+    const workflowName = requestedWorkflow || (useQwenEdit ? 'qwen_edit' : 'zimage');
     const workflowMetadata = registry.get(workflowName);
 
     if (!workflowMetadata) {
@@ -77,8 +79,8 @@ export class ComfyUIProvider implements GenerationProvider {
     let inputImageFilename: string | undefined;
     const referenceImageFilenames: string[] = [];
 
-    // Upload reference images if using qwen_edit
-    if (useQwenEdit) {
+    // Upload reference images if needed
+    if (referenceImages.length > 0) {
       const imagesToUpload = referenceImages.slice(0, 3);
       for (let i = 0; i < imagesToUpload.length; i++) {
         const refImage = imagesToUpload[i]!;
@@ -94,37 +96,37 @@ export class ComfyUIProvider implements GenerationProvider {
         }
       }
 
-      if (!inputImageFilename) {
+      if (!inputImageFilename && workflowMetadata.requiresBaseImage) {
         throw new Error('No reference images could be uploaded for image+text generation mode.');
       }
     }
 
-    // Load and parameterize workflow
+    // Resolve dimensions from aspect ratio
+    const [width, height] = aspectRatioToDimensions(aspectRatio);
+
+    // Load, convert to API format, and parameterize via manifest
     onProgress?.({ percentage: 0, message: 'Loading workflow...', done: false });
-    const template = loadWorkflowTemplate(workflowMetadata.filename);
-    const workflow = parameterizeWorkflowByName(workflowName, template, {
-      sceneNumber: 0,
+    const workflow = this.loadAndParameterize(workflowName, {
       prompt,
       negativePrompt,
-      aspectRatio,
       seed,
+      width,
+      height,
       filenamePrefix,
-      inputImageFilename,
-      referenceImageFilenames: referenceImageFilenames.length > 0 ? referenceImageFilenames : undefined,
+      inputImageFilenames: inputImageFilename
+        ? [inputImageFilename, ...referenceImageFilenames]
+        : undefined,
     });
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const queueResult = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
+    const queueResult = await client.queueWorkflow(workflow, undefined, true);
     const promptId = queueResult.promptId;
 
-    debugLog(`Queued image generation (prompt=${promptId})`);
+    debugLog(`Queued image generation (prompt=${promptId}, workflow=${workflowName})`);
     onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
 
-    // Wait for completion with progress
     await this.waitForCompletion(client, promptId, queueResult.clientId, onProgress);
-
-    // Download result
     return this.downloadFirstOutput(client, promptId, outputDir, 'image/png');
   }
 
@@ -170,29 +172,29 @@ export class ComfyUIProvider implements GenerationProvider {
       referenceImageFilenames.push(refUpload.name);
     }
 
-    // Load and parameterize workflow
+    // Resolve dimensions
+    const [width, height] = aspectRatio ? aspectRatioToDimensions(aspectRatio) : [undefined, undefined];
+
+    // Load and parameterize via manifest
     onProgress?.({ percentage: 0, message: 'Loading workflow...', done: false });
-    const template = loadWorkflowTemplate(workflowMetadata.filename);
-    const workflow = parameterizeWorkflowByName('qwen_edit', template, {
-      sceneNumber: 0,
+    const workflow = this.loadAndParameterize('qwen_edit', {
       prompt: editPrompt,
       negativePrompt,
-      aspectRatio,
       seed,
-      inputImageFilename: uploadResult.name,
-      referenceImageFilenames: referenceImageFilenames.length > 0 ? referenceImageFilenames : undefined,
+      width,
+      height,
       filenamePrefix,
+      inputImageFilenames: [uploadResult.name, ...referenceImageFilenames],
     });
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const queueResult = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
+    const queueResult = await client.queueWorkflow(workflow, undefined, true);
 
     debugLog(`Queued image edit (prompt=${queueResult.promptId})`);
     onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
 
     await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
-
     return this.downloadFirstOutput(client, queueResult.promptId, outputDir, 'image/png');
   }
 
@@ -209,6 +211,7 @@ export class ComfyUIProvider implements GenerationProvider {
       seed,
       outputDir,
       filenamePrefix = 'video',
+      workflowName: requestedWorkflow,
     } = input;
 
     if (!fs.existsSync(sourceImagePath)) {
@@ -216,13 +219,12 @@ export class ComfyUIProvider implements GenerationProvider {
     }
 
     const registry = getRegistry();
-    const workflowName = 'ltx23';
+    const workflowName = requestedWorkflow || 'ltx23';
     const workflowMetadata = registry.get(workflowName);
     if (!workflowMetadata) {
       throw new Error(`Workflow '${workflowName}' not found`);
     }
 
-    // Ensure output dir exists
     if (!fs.existsSync(outputDir)) {
       fs.mkdirSync(outputDir, { recursive: true });
     }
@@ -233,30 +235,82 @@ export class ComfyUIProvider implements GenerationProvider {
     onProgress?.({ percentage: 0, message: 'Uploading source image...', done: false });
     const uploadResult = await client.uploadImage(sourceImagePath, 'input', true);
 
-    // Load and parameterize workflow
+    // Build extra params for video-specific mappings (t2v toggle, duration)
+    const t2vMode = !uploadResult.name; // false for I2V since we have an image
+    const duration = Math.min(Math.max(durationSeconds ?? 10, 1), 20);
+    const extra: Record<string, unknown> = {
+      t2vMode,
+      durationSeconds: duration,
+    };
+
+    // Load and parameterize via manifest
     onProgress?.({ percentage: 0, message: 'Loading workflow...', done: false });
-    const template = loadWorkflowTemplate(workflowMetadata.filename);
-    const workflow = parameterizeWorkflowByName(workflowName, template, {
-      sceneNumber: 0,
+    const workflow = this.loadAndParameterize(workflowName, {
       prompt,
       seed,
-      inputImageFilename: uploadResult.name,
-      filenamePrefix,
-      durationSeconds,
       width,
       height,
-    } as Parameters<typeof parameterizeWorkflowByName>[2]);
+      filenamePrefix: filenamePrefix ? `video/${filenamePrefix}` : 'video/LTX23',
+      inputImageFilenames: [uploadResult.name],
+      extra,
+    });
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const queueResult = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
+    const queueResult = await client.queueWorkflow(workflow, undefined, true);
 
-    debugLog(`Queued video generation (prompt=${queueResult.promptId})`);
+    debugLog(`Queued video generation (prompt=${queueResult.promptId}, workflow=${workflowName})`);
     onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
 
     await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
-
     return this.downloadFirstOutput(client, queueResult.promptId, outputDir, 'video/mp4');
+  }
+
+  // ── Core: unified workflow loading + parameterization ────────────────────────
+
+  /**
+   * Load any workflow (built-in or custom), convert to API format if needed,
+   * resolve its manifest, and parameterize via the generic engine.
+   */
+  private loadAndParameterize(
+    workflowName: string,
+    params: {
+      prompt?: string;
+      negativePrompt?: string;
+      seed?: number;
+      width?: number;
+      height?: number;
+      filenamePrefix?: string;
+      inputImageFilenames?: string[];
+      extra?: Record<string, unknown>;
+    },
+  ): Record<string, unknown> {
+    const registry = getRegistry();
+    const metadata = registry.get(workflowName);
+    if (!metadata) {
+      throw new Error(`Workflow '${workflowName}' not found in registry`);
+    }
+
+    // Get or auto-generate the manifest
+    const manifest = registry.getManifest(workflowName);
+    if (!manifest) {
+      throw new Error(`No manifest available for workflow '${workflowName}'`);
+    }
+
+    // Load the workflow JSON
+    let apiWorkflow: Record<string, unknown>;
+    if (metadata.custom && metadata.apiWorkflowPath) {
+      // Custom workflow: load from project directory
+      const content = fs.readFileSync(metadata.apiWorkflowPath, 'utf-8');
+      apiWorkflow = JSON.parse(content);
+    } else {
+      // Built-in workflow: load from workflows directory, convert if LiteGraph
+      const template = loadWorkflowTemplate(metadata.filename);
+      apiWorkflow = ensureApiFormat(template);
+    }
+
+    // Parameterize using the manifest — same path for all workflows
+    return parameterizeCustomWorkflow(apiWorkflow, manifest, params);
   }
 
   // ── Shared helpers ──────────────────────────────────────────────────────────
@@ -326,5 +380,17 @@ export class ComfyUIProvider implements GenerationProvider {
       mimeType,
       metadata: { promptId, comfyuiFilename: first.filename },
     };
+  }
+}
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+
+function aspectRatioToDimensions(aspectRatio: string): [number, number] {
+  switch (aspectRatio) {
+    case '16:9': return [1536, 864];
+    case '9:16': return [864, 1536];
+    case '4:3': return [1366, 1024];
+    case '3:4': return [1024, 1366];
+    default: return [1024, 1024];
   }
 }

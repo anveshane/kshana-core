@@ -46,6 +46,7 @@ import { initializeArtifactsFromFiles, createArtifactFromFile } from './Artifact
 import { TemplateRegistry } from '../../../core/templates/TemplateRegistry.js';
 import type { PhaseDefinition } from '../../../core/templates/types.js';
 import { getActiveProjectDir, setActiveProjectDir } from './activeProject.js';
+import { getRegistry } from '../../../services/comfyui/index.js';
 
 /**
  * Get the project directory path for the current working directory.
@@ -191,6 +192,7 @@ export function createProjectStructure(basePath: string = process.cwd()): void {
     join(projectDir, 'prompts', 'images', 'scenes'),
     join(projectDir, 'prompts', 'videos'),
     join(projectDir, 'prompts', 'videos', 'scenes'),
+    join(projectDir, 'workflows'),
   ];
 
   for (const dir of dirs) {
@@ -919,6 +921,14 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
 
     // Initialize artifacts from existing files
     initializeArtifactsFromFiles(project, basePath);
+
+    // Load custom workflows from project's workflows/ directory
+    try {
+      const projectDir = getProjectDir(basePath);
+      getRegistry().loadCustomWorkflows(projectDir);
+    } catch {
+      // Non-fatal — custom workflow loading failure shouldn't break project load
+    }
 
     return project as ProjectFile;
   } catch {

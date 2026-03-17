@@ -10,6 +10,11 @@ import type { ToolDefinition } from '../../core/llm/index.js';
 import {
   ComfyUIClient,
   comfyProgressBus,
+  analyzeWorkflow,
+  ensureApiFormat,
+  isLiteGraphFormat,
+  saveCustomWorkflow,
+  getRegistry,
 } from '../../services/comfyui/index.js';
 import { getProviderRegistry } from '../../services/providers/index.js';
 import type { ProviderProgressCallback } from '../../services/providers/types.js';
@@ -2511,10 +2516,136 @@ Run this after all panels have been composed with compose_panel.`,
 );
 
 /**
+ * Import a custom ComfyUI workflow into the project.
+ * Analyzes the workflow JSON, auto-detects parameter mappings, and registers it.
+ */
+export const importWorkflowTool: ToolDefinition = createTool(
+  'import_workflow',
+  `Import a custom ComfyUI workflow into this project. The workflow will be analyzed to auto-detect
+prompt, seed, dimension, and image input nodes. Both ComfyUI API format and LiteGraph UI format are supported.
+
+The imported workflow will appear alongside built-in workflows for image/video generation.
+After import, the auto-detected parameter mapping (manifest) can be manually edited at the reported path.
+
+Returns the detected manifest with confidence levels for review.`,
+  {
+    type: 'object' as const,
+    properties: {
+      file_path: {
+        type: 'string',
+        description: 'Absolute path to the ComfyUI workflow JSON file',
+      },
+      name: {
+        type: 'string',
+        description: 'Slug name for the workflow (e.g., "my-anime-workflow"). Must be unique. If not provided, derived from filename.',
+      },
+      display_name: {
+        type: 'string',
+        description: 'Human-readable display name for the workflow',
+      },
+      description: {
+        type: 'string',
+        description: 'Description of what this workflow does',
+      },
+    },
+    required: ['file_path'],
+  },
+  async args => {
+    const params = args as {
+      file_path: string;
+      name?: string;
+      display_name?: string;
+      description?: string;
+    };
+
+    const filePath = params.file_path;
+
+    // Validate file exists
+    if (!fs.existsSync(filePath)) {
+      return { error: `Workflow file not found: ${filePath}` };
+    }
+
+    // Read and parse the workflow JSON
+    let rawWorkflow: unknown;
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      rawWorkflow = JSON.parse(content);
+    } catch (e) {
+      return { error: `Failed to parse workflow JSON: ${e instanceof Error ? e.message : String(e)}` };
+    }
+
+    // Detect format and convert if needed
+    const wasLiteGraph = isLiteGraphFormat(rawWorkflow);
+    const apiWorkflow = ensureApiFormat(rawWorkflow);
+
+    // Derive name from filename if not provided
+    const baseName = path.basename(filePath, '.json')
+      .replace(/[^a-zA-Z0-9_-]/g, '-')
+      .replace(/-+/g, '-')
+      .toLowerCase();
+    const workflowName = params.name || baseName;
+
+    // Check for name collision with existing workflows
+    const registry = getRegistry();
+    const existing = registry.get(workflowName);
+    if (existing && !existing.custom) {
+      return { error: `Workflow name '${workflowName}' conflicts with a built-in workflow. Choose a different name.` };
+    }
+
+    // Analyze the workflow
+    const manifest = analyzeWorkflow(
+      apiWorkflow,
+      workflowName,
+      params.display_name,
+      params.description,
+    );
+
+    // Save to project's .kshana/workflows/ directory
+    let projectDir: string;
+    try {
+      projectDir = getProjectDir();
+    } catch {
+      return { error: 'No active project. Create a project first before importing workflows.' };
+    }
+
+    const { apiWorkflowPath, manifestPath } = saveCustomWorkflow(
+      projectDir,
+      workflowName,
+      apiWorkflow,
+      manifest,
+    );
+
+    // Register in the workflow registry
+    registry.loadCustomWorkflows(projectDir);
+
+    debugLog(`Imported custom workflow '${workflowName}' from ${filePath}`);
+
+    return {
+      success: true,
+      name: workflowName,
+      displayName: manifest.displayName,
+      workflowType: manifest.workflowType,
+      outputFormat: manifest.outputFormat,
+      convertedFromLiteGraph: wasLiteGraph,
+      apiWorkflowPath,
+      manifestPath,
+      parameterMap: manifest.parameterMap,
+      confidence: manifest.confidence,
+      message: `Workflow '${workflowName}' imported successfully. ` +
+        `Type: ${manifest.workflowType}, Output: ${manifest.outputFormat}. ` +
+        (manifest.confidence.notes.length > 0
+          ? `Notes: ${manifest.confidence.notes.join('; ')}. `
+          : '') +
+        `Manifest saved to ${manifestPath} — edit this file to adjust parameter mappings.`,
+    };
+  },
+);
+
+/**
  * Get all video generation tools.
  */
 export function getVideoGenerationTools(): ToolDefinition[] {
-  return [generateImageTool, generateVideoFromImageTool, editImageTool];
+  return [generateImageTool, generateVideoFromImageTool, editImageTool, importWorkflowTool];
 }
 
 /**

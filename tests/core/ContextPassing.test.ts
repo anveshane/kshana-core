@@ -145,7 +145,7 @@ describe('Context Passing', { sequential: true }, () => {
         : undefined;
 
       // Build content prompt
-      const prompt = buildContentPrompt(
+      const { prompt } = buildContentPrompt(
         'Create a character profile for Jan',
         'character',
         context
@@ -281,7 +281,7 @@ Setting: Remote village`,
     const context = `## ${plotVar} (${plot?.label})\n\n${plot?.content}`;
 
     // Build the content prompt
-    const prompt = buildContentPrompt(
+    const { prompt } = buildContentPrompt(
       'Create a detailed character profile for Jan, the protagonist',
       'character',
       context

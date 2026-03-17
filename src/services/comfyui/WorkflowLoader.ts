@@ -8,6 +8,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import type { WorkflowManifest } from './WorkflowAnalyzer.js';
 
 // Debug logging to file instead of console to avoid polluting Ink UI
 const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
@@ -177,10 +178,11 @@ export function parameterizeZImageWorkflow(
     const inputs = nodeData.inputs || {};
 
     if (classType === 'CLIPTextEncode') {
-      const currentText = (inputs['text'] as string) || '';
-      if (currentText.toLowerCase().includes('blurry') ||
-          currentText.toLowerCase().includes('ugly') ||
-          currentText.toLowerCase().includes('bad')) {
+      const rawText = inputs['text'];
+      const currentText = typeof rawText === 'string' ? rawText.toLowerCase() : '';
+      if (currentText.includes('blurry') ||
+          currentText.includes('ugly') ||
+          currentText.includes('bad')) {
         inputs['text'] = negPrompt;
       } else {
         inputs['text'] = params.prompt;
@@ -579,8 +581,178 @@ export function parameterizeWorkflowByName(
     });
   }
 
-  // Default: return template as-is
+  // Default: try manifest-based parameterization for custom workflows
   return template;
+}
+
+/**
+ * Universal workflow parameterizer — driven entirely by the manifest.
+ * Sets parameters via simple property writes, then applies post-processing.
+ */
+export function parameterizeCustomWorkflow(
+  apiWorkflow: Record<string, unknown>,
+  manifest: WorkflowManifest,
+  params: {
+    prompt?: string;
+    negativePrompt?: string;
+    seed?: number;
+    width?: number;
+    height?: number;
+    inputImageFilenames?: string[];
+    filenamePrefix?: string;
+    /** Extra params keyed by the manifest's extra[].name */
+    extra?: Record<string, unknown>;
+  },
+): Record<string, unknown> {
+  const workflow = JSON.parse(JSON.stringify(apiWorkflow));
+  const map = manifest.parameterMap;
+
+  function setNodeInput(mapping: { nodeId: string; inputKey: string } | undefined, value: unknown): void {
+    if (!mapping || value === undefined || value === null) return;
+    const node = workflow[mapping.nodeId] as Record<string, unknown> | undefined;
+    if (!node) return;
+    const inputs = node['inputs'] as Record<string, unknown> | undefined;
+    if (!inputs) {
+      node['inputs'] = { [mapping.inputKey]: value };
+    } else {
+      inputs[mapping.inputKey] = value;
+    }
+  }
+
+  // ── Core parameter writes ──────────────────────────────────────────────────
+
+  // Randomize seed if not provided but mapped
+  const seed = params.seed ?? (map.seed ? Math.floor(Math.random() * 2 ** 32) : undefined);
+
+  setNodeInput(map.positivePrompt, params.prompt);
+  setNodeInput(map.negativePrompt, params.negativePrompt);
+  setNodeInput(map.seed, seed);
+  setNodeInput(map.width, params.width);
+  setNodeInput(map.height, params.height);
+  setNodeInput(map.filenamePrefix, params.filenamePrefix);
+
+  // Apply input images to LoadImage nodes
+  if (params.inputImageFilenames && map.inputImages) {
+    for (let i = 0; i < Math.min(params.inputImageFilenames.length, map.inputImages.length); i++) {
+      setNodeInput(map.inputImages[i], params.inputImageFilenames[i]);
+    }
+  }
+
+  // Apply extra parameter mappings (t2v toggle, duration, etc.)
+  if (params.extra && map.extra) {
+    for (const extraMapping of map.extra) {
+      const value = params.extra[extraMapping.name];
+      if (value !== undefined) {
+        setNodeInput({ nodeId: extraMapping.nodeId, inputKey: extraMapping.inputKey }, value);
+      }
+    }
+  }
+
+  // ── Post-processing ────────────────────────────────────────────────────────
+
+  const pp = manifest.postProcess;
+
+  // Remove LoadImage nodes that weren't assigned an image
+  if (pp?.removeUnusedInputImages && map.inputImages) {
+    const assignedNodeIds = new Set(
+      (params.inputImageFilenames || [])
+        .slice(0, map.inputImages.length)
+        .map((_, i) => map.inputImages![i]!.nodeId)
+    );
+    for (const imgMapping of map.inputImages) {
+      if (!assignedNodeIds.has(imgMapping.nodeId)) {
+        removeNodeAndReferences(workflow, imgMapping.nodeId);
+      }
+    }
+  }
+
+  // Remove Note/MarkdownNote nodes
+  if (pp?.removeNoteNodes) {
+    const noteTypes = new Set(['Note', 'MarkdownNote']);
+    for (const [nodeId, node] of Object.entries(workflow)) {
+      const classType = (node as { class_type?: string })?.class_type;
+      if (classType && noteTypes.has(classType)) {
+        delete workflow[nodeId];
+      }
+    }
+  }
+
+  // Bypass LoraLoaderModelOnly nodes with lora_name "None"
+  if (pp?.bypassEmptyLoraLoaders) {
+    bypassLoraLoaderNodesWithNone(workflow);
+  }
+
+  // Prune unused reference image chain groups and rewire the target node
+  if (pp?.referenceImageChain) {
+    pruneReferenceImageChain(workflow, pp.referenceImageChain, params.inputImageFilenames?.length ?? 1);
+  }
+
+  return workflow;
+}
+
+/**
+ * Remove a node from the API workflow and reroute any references to it.
+ * Other nodes that reference the removed node's outputs will have those
+ * input links deleted (set to undefined), which ComfyUI interprets as
+ * "use the node's default or ignore this input."
+ */
+function removeNodeAndReferences(workflow: Record<string, unknown>, nodeIdToRemove: string): void {
+  delete workflow[nodeIdToRemove];
+
+  // Remove references to this node from other nodes' inputs
+  for (const [, node] of Object.entries(workflow)) {
+    const nodeData = node as { inputs?: Record<string, unknown> };
+    if (!nodeData.inputs) continue;
+    for (const [inputKey, inputVal] of Object.entries(nodeData.inputs)) {
+      if (Array.isArray(inputVal) && String(inputVal[0]) === nodeIdToRemove) {
+        delete nodeData.inputs[inputKey];
+      }
+    }
+  }
+}
+
+/**
+ * Prune unused reference image groups from a ReferenceLatent conditioning chain.
+ *
+ * Given N active images, removes all node groups for images N+1..end and
+ * rewires the target node (e.g., CFGGuider) to point to the last active
+ * group's positive/negative ReferenceLatent endpoints.
+ */
+function pruneReferenceImageChain(
+  workflow: Record<string, unknown>,
+  chain: NonNullable<WorkflowManifest['postProcess']>['referenceImageChain'] & object,
+  activeImageCount: number,
+): void {
+  const { groups, targetNodeId, positiveInputKey, negativeInputKey } = chain;
+  // Clamp to valid range: at least 1, at most the number of groups
+  const active = Math.max(1, Math.min(activeImageCount, groups.length));
+
+  // Remove all nodes from unused groups (from the end of the chain)
+  for (let i = active; i < groups.length; i++) {
+    const group = groups[i]!;
+    for (const nodeId of group.nodeIds) {
+      delete workflow[nodeId];
+    }
+  }
+
+  // Rewire the target node to point to the last active group's endpoints
+  const lastActiveGroup = groups[active - 1]!;
+  const targetNode = workflow[targetNodeId] as { inputs?: Record<string, unknown> } | undefined;
+  if (targetNode?.inputs) {
+    targetNode.inputs[positiveInputKey] = [lastActiveGroup.positiveEndNodeId, 0];
+    targetNode.inputs[negativeInputKey] = [lastActiveGroup.negativeEndNodeId, 0];
+  }
+}
+
+/**
+ * Load a custom workflow's API JSON from its absolute path.
+ */
+export function loadCustomWorkflowJson(apiWorkflowPath: string): Record<string, unknown> {
+  if (!fs.existsSync(apiWorkflowPath)) {
+    throw new Error(`Custom workflow file not found: ${apiWorkflowPath}`);
+  }
+  const content = fs.readFileSync(apiWorkflowPath, 'utf-8');
+  return JSON.parse(content);
 }
 
 /**

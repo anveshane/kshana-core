@@ -283,22 +283,9 @@ export interface SkillResolutionContext {
 }
 
 /**
- * Load content-type-specific skill files using a 3-level resolution convention.
- *
- * Looks for files under `prompts/skills/content-type/` in this order (additive):
- *   1. `{contentType}.md`                              — base skill
- *   2. `{contentType}.{providerId}.md`                 — provider-level
- *   3. `{contentType}.{providerId}.{workflowName}.md`  — most specific
- *
- * Missing files are silently skipped. Returns concatenated content or empty string.
+ * Build the list of candidate filenames for a content-type skill resolution.
  */
-export function loadContentTypeSkills(
-  contentType: string,
-  context?: SkillResolutionContext,
-): string {
-  const dir = join(PROMPTS_DIR, 'skills', 'content-type');
-  if (!existsSync(dir)) return '';
-
+function buildSkillCandidates(contentType: string, context?: SkillResolutionContext): string[] {
   const candidates: string[] = [
     `${contentType}.md`,
   ];
@@ -308,15 +295,75 @@ export function loadContentTypeSkills(
       candidates.push(`${contentType}.${context.providerId}.${context.workflowName}.md`);
     }
   }
+  return candidates;
+}
 
-  const parts: string[] = [];
+interface LoadedSkillFile {
+  filename: string;
+  content: string;
+}
+
+/**
+ * Load skill files from a single directory using the candidate filenames.
+ * Returns array of loaded files with their filenames.
+ */
+function loadSkillsFromDir(dir: string, candidates: string[]): LoadedSkillFile[] {
+  if (!existsSync(dir)) return [];
+  const loaded: LoadedSkillFile[] = [];
   for (const filename of candidates) {
     const filePath = join(dir, filename);
     if (existsSync(filePath)) {
-      parts.push(readFileSync(filePath, 'utf-8'));
+      loaded.push({ filename, content: readFileSync(filePath, 'utf-8') });
     }
   }
-  return parts.join('\n\n');
+  return loaded;
+}
+
+export interface ContentTypeSkillsResult {
+  /** Concatenated skill content (empty string if none found). */
+  content: string;
+  /** Filenames of loaded skill files (for UI notifications). */
+  loadedFiles: string[];
+}
+
+/**
+ * Load content-type-specific skill files using a 3-level resolution convention.
+ *
+ * Looks for files under `prompts/skills/content-type/` in this order (additive):
+ *   1. `{contentType}.md`                              — base skill
+ *   2. `{contentType}.{providerId}.md`                 — provider-level
+ *   3. `{contentType}.{providerId}.{workflowName}.md`  — most specific
+ *
+ * If `projectDir` is provided, also scans `{projectDir}/skills/content-type/`
+ * using the same candidate filenames. Project-level skills are appended after
+ * built-in skills (additive), allowing users to layer their own prompt guides.
+ *
+ * Missing files are silently skipped. Returns content and list of loaded filenames.
+ */
+export function loadContentTypeSkills(
+  contentType: string,
+  context?: SkillResolutionContext,
+  projectDir?: string,
+): ContentTypeSkillsResult {
+  const candidates = buildSkillCandidates(contentType, context);
+
+  // Load built-in skills from prompts/skills/content-type/
+  const builtinDir = join(PROMPTS_DIR, 'skills', 'content-type');
+  const loaded = loadSkillsFromDir(builtinDir, candidates);
+
+  // Load project-level skills from {projectDir}/skills/content-type/
+  if (projectDir) {
+    const projectSkillDir = join(projectDir, 'skills', 'content-type');
+    const projectLoaded = loadSkillsFromDir(projectSkillDir, candidates);
+    for (const f of projectLoaded) {
+      loaded.push({ filename: `project:${f.filename}`, content: f.content });
+    }
+  }
+
+  return {
+    content: loaded.map(f => f.content).join('\n\n'),
+    loadedFiles: loaded.map(f => f.filename),
+  };
 }
 
 export type InfographicType = 'bar_chart' | 'line_chart' | 'diagram' | 'statistic' | 'list';

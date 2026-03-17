@@ -5,6 +5,11 @@
  * to enable agents to choose the right workflow for each task.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
+import type { WorkflowManifest } from './WorkflowAnalyzer.js';
+import { BUILTIN_MANIFESTS } from './builtinManifests.js';
+
 export enum WorkflowType {
   IMAGE_GENERATION = 'image_generation',
   IMAGE_EDITING = 'image_editing',
@@ -30,6 +35,11 @@ export interface WorkflowMetadata {
   // Performance characteristics
   estimatedTimeSeconds: number;
   qualityLevel: 'draft' | 'standard' | 'high' | 'ultra';
+
+  // Custom workflow fields (only set for user-imported workflows)
+  custom?: boolean;
+  manifestPath?: string;
+  apiWorkflowPath?: string;
 }
 
 /**
@@ -37,6 +47,7 @@ export interface WorkflowMetadata {
  */
 class WorkflowRegistry {
   private workflows: Map<string, WorkflowMetadata> = new Map();
+  private manifests: Map<string, WorkflowManifest> = new Map();
 
   constructor() {
     this.registerBuiltinWorkflows();
@@ -46,7 +57,7 @@ class WorkflowRegistry {
     // 1. Z-Image Turbo - Fast high-quality image generation (default)
     this.register({
       name: 'zimage',
-      filename: 'zimage_standard.json',
+      filename: 'zimage_standard_api.json',
       workflowType: WorkflowType.IMAGE_GENERATION,
       description: 'Fast high-quality image generation using Z-Image Turbo model with Qwen text encoder. Best for creating scene images quickly with excellent quality.',
       capabilities: [
@@ -156,6 +167,11 @@ class WorkflowRegistry {
       estimatedTimeSeconds: 60,
       qualityLevel: 'standard',
     });
+
+    // Register built-in manifests
+    for (const [name, manifest] of Object.entries(BUILTIN_MANIFESTS)) {
+      this.manifests.set(name, manifest);
+    }
   }
 
   /**
@@ -170,6 +186,63 @@ class WorkflowRegistry {
    */
   get(name: string): WorkflowMetadata | undefined {
     return this.workflows.get(name);
+  }
+
+  /**
+   * Get the manifest for a workflow (built-in or custom).
+   * For custom workflows, loads from the manifest file on disk.
+   * For built-in workflows still in LiteGraph format, auto-analyzes
+   * the workflow file on first access and caches the result.
+   */
+  getManifest(name: string): WorkflowManifest | undefined {
+    // Check in-memory cache first
+    const cached = this.manifests.get(name);
+    if (cached) return cached;
+
+    // For custom workflows, load from disk
+    const metadata = this.workflows.get(name);
+    if (!metadata) return undefined;
+
+    if (metadata.custom && metadata.manifestPath) {
+      try {
+        const content = fs.readFileSync(metadata.manifestPath, 'utf-8');
+        const manifest: WorkflowManifest = JSON.parse(content);
+        this.manifests.set(name, manifest);
+        return manifest;
+      } catch {
+        return undefined;
+      }
+    }
+
+    // For built-in workflows without a pre-defined manifest,
+    // auto-analyze the workflow file and cache the result
+    try {
+      const { analyzeWorkflow } = require('./WorkflowAnalyzer.js') as typeof import('./WorkflowAnalyzer.js');
+      const { loadWorkflowTemplate } = require('./WorkflowLoader.js') as typeof import('./WorkflowLoader.js');
+      const template = loadWorkflowTemplate(metadata.filename);
+      const analyzed = analyzeWorkflow(template, name, metadata.displayName, metadata.description);
+
+      // Merge with any built-in manifest overrides (postProcess, extra mappings)
+      const builtinOverride = BUILTIN_MANIFESTS[name];
+      if (builtinOverride) {
+        analyzed.postProcess = builtinOverride.postProcess;
+        if (builtinOverride.parameterMap.extra) {
+          analyzed.parameterMap.extra = builtinOverride.parameterMap.extra;
+        }
+      }
+
+      this.manifests.set(name, analyzed);
+      return analyzed;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Set/override a manifest for a workflow.
+   */
+  setManifest(name: string, manifest: WorkflowManifest): void {
+    this.manifests.set(name, manifest);
   }
 
   /**
@@ -269,9 +342,98 @@ class WorkflowRegistry {
         output_format: wf.outputFormat,
         estimated_time: `${wf.estimatedTimeSeconds}s`,
         quality: wf.qualityLevel,
+        custom: wf.custom || false,
       })),
     };
   }
+
+  /**
+   * Load custom workflows from a project's .kshana/workflows/ directory.
+   * Scans for *.manifest.json files, reads the manifest, and registers each.
+   */
+  loadCustomWorkflows(projectDir: string): void {
+    const workflowsDir = path.join(projectDir, 'workflows');
+    if (!fs.existsSync(workflowsDir)) return;
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(workflowsDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith('.manifest.json')) continue;
+
+      const manifestPath = path.join(workflowsDir, entry.name);
+      const baseName = entry.name.replace('.manifest.json', '');
+      const apiWorkflowPath = path.join(workflowsDir, `${baseName}.api.json`);
+
+      try {
+        const manifestContent = fs.readFileSync(manifestPath, 'utf-8');
+        const manifest: WorkflowManifest = JSON.parse(manifestContent);
+
+        if (!fs.existsSync(apiWorkflowPath)) {
+          continue; // Skip if the API workflow file is missing
+        }
+
+        // Convert manifest workflowType to registry WorkflowType
+        const workflowType = manifest.workflowType === 'video_generation'
+          ? WorkflowType.VIDEO_GENERATION
+          : manifest.workflowType === 'image_editing'
+            ? WorkflowType.IMAGE_EDITING
+            : WorkflowType.IMAGE_GENERATION;
+
+        const hasInputImages = (manifest.parameterMap.inputImages?.length ?? 0) > 0;
+
+        this.register({
+          name: manifest.name,
+          filename: `${baseName}.api.json`,
+          workflowType,
+          description: manifest.description,
+          capabilities: [`custom-${manifest.workflowType}`],
+          displayName: manifest.displayName,
+          requiresBaseImage: hasInputImages,
+          supportsTextPrompts: !!manifest.parameterMap.positivePrompt,
+          supportsImageToImage: hasInputImages,
+          outputFormat: manifest.outputFormat,
+          estimatedTimeSeconds: manifest.estimatedTimeSeconds ?? 30,
+          qualityLevel: manifest.qualityLevel ?? 'standard',
+          custom: true,
+          manifestPath,
+          apiWorkflowPath,
+        });
+
+        // Cache the manifest
+        this.manifests.set(manifest.name, manifest);
+      } catch {
+        // Skip invalid manifest files
+      }
+    }
+  }
+}
+
+/**
+ * Save a custom workflow and its manifest to the project's workflows directory.
+ */
+export function saveCustomWorkflow(
+  projectDir: string,
+  name: string,
+  apiJson: Record<string, unknown>,
+  manifest: WorkflowManifest,
+): { apiWorkflowPath: string; manifestPath: string } {
+  const workflowsDir = path.join(projectDir, 'workflows');
+  if (!fs.existsSync(workflowsDir)) {
+    fs.mkdirSync(workflowsDir, { recursive: true });
+  }
+
+  const apiWorkflowPath = path.join(workflowsDir, `${name}.api.json`);
+  const manifestPath = path.join(workflowsDir, `${name}.manifest.json`);
+
+  fs.writeFileSync(apiWorkflowPath, JSON.stringify(apiJson, null, 2), 'utf-8');
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf-8');
+
+  return { apiWorkflowPath, manifestPath };
 }
 
 // Global singleton registry

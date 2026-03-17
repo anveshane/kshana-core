@@ -1,0 +1,157 @@
+{
+  "3": {
+    "inputs": {
+      "seed": 336263199666847,
+      "steps": 9,
+      "cfg": 1,
+      "sampler_name": "euler",
+      "scheduler": "bong_tangent",
+      "denoise": 1,
+      "model": [
+        "16",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "13",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "6": {
+    "inputs": {
+      "text": [
+        "35",
+        0
+      ],
+      "clip": [
+        "18",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "7": {
+    "inputs": {
+      "text": "blurry ugly bad",
+      "clip": [
+        "18",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Negative Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "17",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "17_26/zimage",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "13": {
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {
+      "title": "EmptySD3LatentImage"
+    }
+  },
+  "16": {
+    "inputs": {
+      "unet_name": "z_image_turbo_bf16.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "17": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "18": {
+    "inputs": {
+      "clip_name": "qwen_3_4b.safetensors",
+      "type": "lumina2",
+      "device": "default"
+    },
+    "class_type": "CLIPLoader",
+    "_meta": {
+      "title": "Load CLIP"
+    }
+  },
+  "32": {
+    "inputs": {
+      "input_prompt": "A young Indian girl of around 16 years of age is lying on top of an old man in a deserted island. She is wearing a worn out old skimpy clothes showing a lot of skin that have seen better days.",
+      "system_prompt": "Given a simple user prompt like:\n\nA young Indian woman whose both breasts are being sucked by an old man and a young man.\n\nHere is how an expanded prompt for the user intent above should look like:\n\nThis is an intimate, sensual photograph capturing a moment of three people in a dimly lit, warm-toned indoor setting.\n\nCentral Figure (The Woman):\n\nShe is a young Indian woman of around 18 years of age with very dark, long, straight hair that falls over her shoulders. Her hair is styled to look glossy.\nShe has a slender, athletic build and is completely nude.\nHer facial expression is serene and contemplative; her eyes are closed, and she has a slight, almost imperceptible smile on her lips.\nShe wears a simple, delicate silver necklace with a small pendant that looks like a stylized flower.\nOne of her hands rests gently on the shoulder of the man to her left. Her other hand is placed flat against the lower part of her abdomen, near her navel.\nLeft Figure (The Older Man):\n\nHe is an older man with dark skin and a full beard that is gray at the temples and sides but darker in the center.\nHe has a prominent mustache. His eyes are closed as he leans in to lick the woman's left breast.\nHis right hand is placed on her lower abdomen, just above her navel, with his fingers spread.\nRight Figure (The Younger Man):\n\nHe is a younger man with dark skin and short, black hair. He has a well-groomed mustache that matches the style of the older man.\nHis eyes are also closed as he leans in to lick the woman's right breast.\nHis left hand is placed on her lower abdomen, mirroring the position of the other man.\nSetting and Lighting:\n\nThe scene takes place indoors in a lounge area. In the background, there are out-of-focus beige curtains.\nA warm, soft glow comes from a lamp with a cream-colored shade, which illuminates the subjects from behind and slightly above.\nThe lighting is cinematic and moody, casting gentle shadows on their bodies and highlighting their skin tones. The background is softly blurred (bokeh), drawing focus to the three figures.\n\nComposition:\n\nThe woman is positioned centrally in the frame, with her body angled slightly toward the viewer.\nThe two men are positioned symmetrically on either side of her, creating a balanced composition that emphasizes the central figure and the intimate action taking place around her.\nThe camera angle is at eye level, making the scene feel personal and immersive.\n\nInterpret the user seed as production intent, then build a definitive 200-250 word structured image prompt in the way shown above that preserves every explicit constraint while intelligently expanding missing details. First infer the core subject, action, setting, and emotional tone; treat these as non-negotiable anchors. Then enhance with precise visual staging (explicit foreground, midground, background), clear visual hierarchy and eye path, physically plausible lighting (source, direction, softness, color temperature), and optical strategy (if lens/aperture are provided, preserve exactly; if absent, choose fitting lens and aperture and imply their depth-of-field effect). Integrate organic, manufactured, and environmental textures with realistic material behavior, add motion/atmospheric cues only when they support the scene, and apply a coherent color grade consistent with mood and environment. Keep the prose vivid but controlled: no contradictions, no overstuffing, no generic filler. Do not mention camera body brands.",
+      "api_url": "http://localhost:1234/v1",
+      "model": "local-model",
+      "seed": 708782502378436,
+      "temperature": 0.7
+    },
+    "class_type": "ZEngineer",
+    "_meta": {
+      "title": "Z-Engineer"
+    }
+  },
+  "35": {
+    "inputs": {
+      "text": [
+        "32",
+        0
+      ]
+    },
+    "class_type": "ShowText|pysssss",
+    "_meta": {
+      "title": "Show Text 🐍"
+    }
+  }
+}

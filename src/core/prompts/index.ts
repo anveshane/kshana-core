@@ -221,7 +221,7 @@ const CONTENT_TYPE_CAPABILITY: Partial<Record<ContentType, string>> = {
 const COMFYUI_DEFAULT_WORKFLOWS: Record<string, string> = {
   videoGeneration: 'ltx23',
   imageGeneration: 'zimage',
-  imageEditing: 'qwen_edit',
+  imageEditing: 'flux2_klein_edit',
 };
 
 /**
@@ -259,11 +259,19 @@ function resolveSkillContext(contentType: ContentType): SkillResolutionContext |
  * @param context - Optional background context (existing story elements, etc.)
  * @returns The complete content agent system prompt
  */
+export interface ContentPromptResult {
+  /** The complete system prompt string. */
+  prompt: string;
+  /** Filenames of injected model skill files (empty if none). */
+  injectedSkills: string[];
+}
+
 export function buildContentPrompt(
   task: string,
   contentType: ContentType,
-  context?: string
-): string {
+  context?: string,
+  projectDir?: string,
+): ContentPromptResult {
   const taskSection = `<task>\n${task}\n</task>`;
   const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
   const base = loadAndRenderMarkdown('system/base.md', {});
@@ -272,12 +280,13 @@ export function buildContentPrompt(
 
   // Dynamically inject model-specific skills based on content type + active provider
   const skillContext = resolveSkillContext(contentType);
-  const skillsContent = loadContentTypeSkills(contentType, skillContext);
-  const skillsSection = skillsContent
-    ? `\n<model_skills>\n${skillsContent}\n</model_skills>`
+  const skills = loadContentTypeSkills(contentType, skillContext, projectDir);
+  const skillsSection = skills.content
+    ? `\n<model_skills>\n${skills.content}\n</model_skills>`
     : '';
 
-  return [base, sub, content, skillsSection, taskSection, contextSection].filter(Boolean).join('\n\n');
+  const prompt = [base, sub, content, skillsSection, taskSection, contextSection].filter(Boolean).join('\n\n');
+  return { prompt, injectedSkills: skills.loadedFiles };
 }
 
 /**

@@ -9,9 +9,12 @@ export { ComfyUIClient, type ComfyUIClientConfig, type ProgressCallback, type Im
 export {
   loadWorkflowTemplate,
   parameterizeWorkflowByName,
+  parameterizeCustomWorkflow,
+  loadCustomWorkflowJson,
   parameterizeZImageWorkflow,
   parameterizeChromaRadianceWorkflow,
   workflowToPrompt,
+  resolveSetGetNodes,
   aspectRatioToDimensions,
   type WorkflowTemplate,
   type WorkflowParams,
@@ -23,5 +26,15 @@ export {
   getRegistry,
   type WorkflowMetadata,
 } from './WorkflowRegistry.js';
+
+export { saveCustomWorkflow } from './WorkflowRegistry.js';
+
+export {
+  analyzeWorkflow,
+  ensureApiFormat,
+  isLiteGraphFormat,
+  type WorkflowManifest,
+  type ParameterMapping,
+} from './WorkflowAnalyzer.js';
 
 export { comfyProgressBus, type ComfyProgressEvent, type ComfyProgressHandler } from './ComfyUIProgressBus.js';

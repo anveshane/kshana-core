@@ -1803,7 +1803,16 @@ export class GenericAgent extends TypedEventEmitter {
 
       // Build content system prompt and route through contentState loop
       // This activates streaming + approval + feedback support
-      const contentSystemPrompt = buildContentPrompt(instruction, contentType as ContentType);
+      const contentPromptResult = buildContentPrompt(instruction, contentType as ContentType, undefined, getProjectDir());
+      const contentSystemPrompt = contentPromptResult.prompt;
+
+      if (contentPromptResult.injectedSkills.length > 0) {
+        this.emit({
+          type: 'notification',
+          level: 'info',
+          message: `Prompt skills injected for ${contentType}: ${contentPromptResult.injectedSkills.join(', ')}`,
+        });
+      }
 
       // Try to pre-fetch context to eliminate subagent read_file() calls
       const preloaded = buildPreloadedContext(contentType, name, sceneNumber, shotNumber, chapterNumber);
@@ -2914,7 +2923,16 @@ Respond in JSON format:
     );
 
     // Build the content prompt
-    const contentSystemPrompt = buildContentPrompt(task, contentType);
+    const contentPromptResult = buildContentPrompt(task, contentType, undefined, getProjectDir());
+    const contentSystemPrompt = contentPromptResult.prompt;
+
+    if (contentPromptResult.injectedSkills.length > 0) {
+      this.emit({
+        type: 'notification',
+        level: 'info',
+        message: `Prompt skills injected for ${contentType}: ${contentPromptResult.injectedSkills.join(', ')}`,
+      });
+    }
 
     // Build the user task for the sub-agent
     const subAgentTask = `First, use read_project() to understand the project structure, template type, and available files. Then use read_file() to fetch the relevant source material listed in the project files. Finally, generate the ${contentType} content based on this instruction:\n\n${task}`;

@@ -184,7 +184,7 @@ Setting: Mountain village threatened by shadow demon`,
       const context = `## ${variableName} (${stored!.label})\n\n${stored!.content}`;
 
       // Build content prompt for character creation
-      const contentPrompt = buildContentPrompt(
+      const { prompt: contentPrompt } = buildContentPrompt(
         'Create a detailed character profile for Jan',
         'character',
         context
@@ -223,7 +223,7 @@ Setting: Mountain village threatened by shadow demon`,
         .map(p => `## ${p.variableName} (${p.label})\n\n${p.content}`)
         .join('\n\n---\n\n');
 
-      const contentPrompt = buildContentPrompt(
+      const { prompt: contentPrompt } = buildContentPrompt(
         'Create character profile for Jan',
         'character',
         combinedContext
