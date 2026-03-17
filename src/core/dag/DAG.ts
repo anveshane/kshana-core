@@ -62,6 +62,7 @@ export class DAG {
         onExhausted: 'ask_user',
         ...def.errorPolicy,
       },
+      outputFormat: def.outputFormat,
     };
 
     // Attach handler based on type and key

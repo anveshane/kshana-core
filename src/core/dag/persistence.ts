@@ -40,14 +40,14 @@ function getDagDir(projectDir: string): string {
 /**
  * Save the full DAG state to disk.
  */
-export function saveDAGState(dag: DAG, dagId: string, templateId: string, projectDir: string): string {
+export function saveDAGState(dag: DAG, dagId: string, templateId: string, projectDir: string, existingCreatedAt?: string): string {
   const dagDir = getDagDir(projectDir);
   ensureDir(dagDir);
 
   const state: PersistedDAGState = {
     dagId,
     templateId,
-    createdAt: new Date().toISOString(),
+    createdAt: existingCreatedAt ?? new Date().toISOString(),
     lastUpdatedAt: new Date().toISOString(),
     nodes: {},
     expansionLog: dag.getExpansionLog(),
@@ -65,6 +65,7 @@ export function saveDAGState(dag: DAG, dagId: string, templateId: string, projec
       completedAt: node.completedAt,
       attempts: node.attempts,
       recoveryDecisions: node.recoveryDecisions,
+      outputFormat: node.outputFormat,
     };
 
     // Only persist results for completed nodes

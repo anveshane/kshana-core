@@ -48,6 +48,7 @@ export function buildSceneNodes(_result: NodeResult, context: NodeContext): DAGN
         description: `Break scene ${sceneNum} into shots`,
         metadata: { sceneNumber: sceneNum },
         handlerKey: 'shot_breakdown',
+        outputFormat: 'json',
       },
       {
         id: `scene_${sceneNum}_approve_shots`,

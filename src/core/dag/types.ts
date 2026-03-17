@@ -162,6 +162,9 @@ export interface DAGNode {
   /** Expander function — spawns new nodes from this node's result */
   expander?: (result: NodeResult, context: NodeContext) => DAGNodeDefinition[];
 
+  /** Output format hint — 'json' triggers structured JSON response from LLM */
+  outputFormat?: 'json' | 'text';
+
   // --- Error handling ---
 
   /** Error policy for this node */
@@ -204,6 +207,8 @@ export interface DAGNodeDefinition {
   handlerKey?: string;
   /** Whether this node has an expander */
   expanderKey?: string;
+  /** Output format hint — 'json' triggers structured JSON response from LLM */
+  outputFormat?: 'json' | 'text';
 }
 
 // =============================================================================
@@ -259,6 +264,8 @@ export interface PersistedNodeState {
   /** Handler/expander keys for re-attaching on resume */
   handlerKey?: string;
   expanderKey?: string;
+  /** Output format hint */
+  outputFormat?: 'json' | 'text';
 }
 
 /**

@@ -777,26 +777,6 @@ export function createAgentForProject(options: CreateAgentForProjectOptions): Ag
     agentName: 'kshana-dag',
     agent: adapter,
   };
-
-  // --- LEGACY (kept for reference) ---
-  // const registry = createGoalDrivenToolRegistry(templateId);
-  // const templatePrompt = loadTemplateOrchestratorPrompt(templateId);
-  // initializeTemplates();
-  // const template = getTemplateOrThrow(templateId);
-  // const templateName = template.displayName;
-  // const styleConfig = template.styles?.find((s: { id: string }) => s.id === style);
-  // const styleName = styleConfig?.displayName ?? style;
-  // const minutes = Math.floor(duration / 60);
-  // const seconds = duration % 60;
-  // const durationStr = minutes > 0
-  //   ? seconds > 0 ? `${minutes} minute${minutes > 1 ? 's' : ''} ${seconds} seconds` : `${minutes} minute${minutes > 1 ? 's' : ''}`
-  //   : `${seconds} seconds`;
-  // const customDesc = customProjectDescription
-  //   ? `\n\n**Custom project description from user:** ${customProjectDescription}\nInterpret this description and adapt your workflow accordingly.`
-  //   : '';
-  // const metaPrompt = `You are working on a **${templateName}** project with **${styleName}** visual style.\nTarget duration: **${durationStr} (${duration} seconds)**.\nThe user already selected these — do not ask about project type, style, or duration. Proceed directly with the planning workflow.${customDesc}`;
-  // const customPrompt = templatePrompt ? `${metaPrompt}\n\n${templatePrompt}` : metaPrompt;
-  // return { tools: registry.getAll(), customPrompt, agentName: 'kshana-video' };
 }
 
 /**
@@ -836,116 +816,8 @@ export function loadTemplateOrchestratorPrompt(
   }
 }
 
-// =============================================================================
-// DAG EXECUTOR INTEGRATION
-// =============================================================================
-
-import {
-  DAGExecutor,
-  DAGAgentAdapter,
-  buildNarrativeDAG,
-  rebuildDAGFromState,
-  loadDAGState,
-  dagStateExists,
-  prepareStateForResume,
-  type DAGExecutorConfig,
-  type UserInteractionHandler,
-} from '../../core/dag/index.js';
-
-/**
- * Configuration for creating a DAG-driven video pipeline.
- */
-export interface DAGVideoAgentConfig {
-  llmConfig: LLMClientConfig;
-  templateId?: string;
-  basePath?: string;
-  /** Callback for user interaction (required for U nodes) */
-  userInteraction: UserInteractionHandler;
-  /** Maximum concurrent node executions */
-  maxConcurrency?: number;
-  /** Skip initial planning nodes if already done */
-  skipPlanning?: boolean;
-}
-
-/**
- * Create a DAG executor for video production.
- *
- * This is the new DAG-based approach that replaces LLM-as-router.
- * The executor handles routing deterministically, using LLMs only
- * for content generation (S nodes) and error recovery.
- *
- * Usage:
- * ```typescript
- * const { executor, dagId } = createDAGVideoExecutor({
- *   llmConfig: { baseUrl: '...', apiKey: '...' },
- *   userInteraction: async (nodeId, question, isConfirmation, options, context) => {
- *     // Show question to user and return their response
- *     return userResponse;
- *   },
- * });
- *
- * executor.on((event) => {
- *   // Handle DAG events (node_started, node_completed, expansion, etc.)
- *   console.log(event.type, event);
- * });
- *
- * const result = await executor.run();
- * ```
- */
-export function createDAGVideoExecutor(config: DAGVideoAgentConfig): {
-  executor: DAGExecutor;
-  dagId: string;
-} {
-  const {
-    llmConfig,
-    templateId,
-    basePath = process.cwd(),
-    userInteraction,
-    maxConcurrency,
-    skipPlanning,
-  } = config;
-
-  // Initialize templates
-  initializeTemplates();
-  const finalTemplateId = templateId || TEMPLATE_IDS.NARRATIVE;
-  const projectDir = getProjectDir(basePath);
-
-  // Create LLM client
-  const llm = new LLMClient(llmConfig);
-
-  // Check for existing DAG state (resume)
-  let dag;
-  let dagId: string;
-
-  if (dagStateExists(projectDir)) {
-    const state = loadDAGState(projectDir);
-    if (state) {
-      const resumeState = prepareStateForResume(state);
-      dag = rebuildDAGFromState(resumeState);
-      dagId = state.dagId;
-    } else {
-      dag = buildNarrativeDAG({ templateId: finalTemplateId, projectDir, skipPlanning });
-      dagId = `dag_${Date.now().toString(36)}`;
-    }
-  } else {
-    dag = buildNarrativeDAG({ templateId: finalTemplateId, projectDir, skipPlanning });
-    dagId = `dag_${Date.now().toString(36)}`;
-  }
-
-  // Create executor config
-  const executorConfig: DAGExecutorConfig = {
-    llm,
-    projectDir,
-    templateId: finalTemplateId,
-    dagId,
-    maxConcurrency,
-    userInteraction,
-  };
-
-  const executor = new DAGExecutor(dag, executorConfig);
-
-  return { executor, dagId };
-}
+// DAG imports
+import { DAGAgentAdapter } from '../../core/dag/index.js';
 
 // Re-export DAG types for consumers
 export type { DAGExecutorConfig, DAGExecutorResult, UserInteractionHandler } from '../../core/dag/index.js';

@@ -9,6 +9,14 @@
  */
 
 import type { NodeResult, NodeContext, DAGNodeDefinition, ValidationResult } from '../types.js';
+import { IMAGE_GENERATION_POLICY } from '../errorPolicies.js';
+
+// =============================================================================
+// LIMITS
+// =============================================================================
+
+export const MAX_CHARACTERS = 10;
+export const MAX_SCENES = 12;
 
 // =============================================================================
 // ENTITY TYPES
@@ -122,11 +130,11 @@ export function validateEntityExtraction(result: NodeResult): ValidationResult {
   }
 
   // Template limits
-  if (characters.length > 10) {
-    return { valid: false, error: `Too many characters (${characters.length}, max 10)` };
+  if (characters.length > MAX_CHARACTERS) {
+    return { valid: false, error: `Too many characters (${characters.length}, max ${MAX_CHARACTERS})` };
   }
-  if (scenes.length > 12) {
-    return { valid: false, error: `Too many scenes (${scenes.length}, max 12)` };
+  if (scenes.length > MAX_SCENES) {
+    return { valid: false, error: `Too many scenes (${scenes.length}, max ${MAX_SCENES})` };
   }
 
   return { valid: true, data: { characters, settings, scenes } };
@@ -240,7 +248,7 @@ export function buildEntityNodes(result: NodeResult, _context: NodeContext): DAG
         description: `Generate reference image for ${char.name}`,
         handlerKey: 'character_img_generate',
         metadata: { characterName: char.name },
-        errorPolicy: { maxRetries: 3, retryStrategy: 'same', retryDelayMs: 10000, onExhausted: 'ask_user' },
+        errorPolicy: { ...IMAGE_GENERATION_POLICY },
       },
     );
   }
@@ -280,7 +288,7 @@ export function buildEntityNodes(result: NodeResult, _context: NodeContext): DAG
         description: `Generate reference image for ${setting.name}`,
         handlerKey: 'setting_img_generate',
         metadata: { settingName: setting.name },
-        errorPolicy: { maxRetries: 3, retryStrategy: 'same', retryDelayMs: 10000, onExhausted: 'ask_user' },
+        errorPolicy: { ...IMAGE_GENERATION_POLICY },
       },
     );
   }

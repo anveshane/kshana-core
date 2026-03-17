@@ -76,10 +76,16 @@ export class DAGExecutor {
   private paused = false;
   private pauseReason?: string;
   private assemblyNodesAdded = false;
+  private createdAt: string = new Date().toISOString();
 
   constructor(dag: DAG, config: DAGExecutorConfig) {
     this.dag = dag;
     this.config = config;
+  }
+
+  /** Set the original createdAt timestamp (for resumed DAGs). */
+  setCreatedAt(timestamp: string): void {
+    this.createdAt = timestamp;
   }
 
   // ==========================================================================
@@ -281,7 +287,7 @@ export class DAGExecutor {
     }
 
     const prompt = node.promptBuilder(context);
-    const useJson = prompt.includes('Return ONLY valid JSON') || prompt.includes('Return JSON');
+    const useJson = node.outputFormat === 'json';
 
     // Stream LLM response for real-time UI updates
     let content = '';
@@ -406,9 +412,7 @@ export class DAGExecutor {
           { role: 'user', content: `Your previous response was invalid.\nError: ${error}\n\nPlease fix the issue and return the corrected output.` },
         ],
         temperature: 0.5,
-        responseFormat: originalPrompt.includes('Return ONLY valid JSON') || originalPrompt.includes('Return JSON')
-          ? { type: 'json_object' }
-          : undefined,
+        responseFormat: node.outputFormat === 'json' ? { type: 'json_object' } : undefined,
       });
 
       const result: NodeResult = { content: response.content ?? undefined };
@@ -449,6 +453,7 @@ export class DAGExecutor {
     } else {
       // Non-rephrase retry — just reset to ready
       node.status = 'ready';
+      this.dag.updateReadyNodes();
     }
   }
 
@@ -573,6 +578,7 @@ export class DAGExecutor {
         this.config.dagId,
         this.config.templateId,
         this.config.projectDir,
+        this.createdAt,
       );
       this.emit({ type: 'dag_state_saved', path });
     } catch {

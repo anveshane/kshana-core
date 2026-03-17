@@ -86,6 +86,7 @@ export function rebuildDAGFromState(state: PersistedDAGState): DAG {
       attempts: nodeState.attempts,
       recoveryDecisions: nodeState.recoveryDecisions,
       errorPolicy: getDefaultPolicy(nodeState.type),
+      outputFormat: nodeState.outputFormat,
     };
 
     // Re-attach handlers from registries using handlerKey
@@ -168,6 +169,7 @@ function buildStaticPrefix(skipPlanning?: boolean): DAGNodeDefinition[] {
         handlerKey: 'extract_entities',
         expanderKey: 'entity_expander',
         errorPolicy: { ...ENTITY_EXTRACTION_POLICY },
+        outputFormat: 'json',
       },
     ];
   }
@@ -244,6 +246,7 @@ function buildStaticPrefix(skipPlanning?: boolean): DAGNodeDefinition[] {
       handlerKey: 'extract_entities',
       expanderKey: 'entity_expander',
       errorPolicy: { ...ENTITY_EXTRACTION_POLICY },
+      outputFormat: 'json',
     },
   ];
 }

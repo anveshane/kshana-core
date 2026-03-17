@@ -8,6 +8,7 @@
  */
 
 import type { NodeResult, NodeContext, DAGNodeDefinition } from '../types.js';
+import { IMAGE_GENERATION_POLICY, VIDEO_GENERATION_POLICY } from '../errorPolicies.js';
 
 // =============================================================================
 // SHOT DATA
@@ -107,7 +108,7 @@ export function buildShotNodes(result: NodeResult, context: NodeContext): DAGNod
         description: `Generate image for scene ${sceneNum} shot ${shotNum}`,
         handlerKey: 'shot_img_generate',
         metadata: { sceneNumber: sceneNum, shotNumber: shotNum },
-        errorPolicy: { maxRetries: 3, retryStrategy: 'same', retryDelayMs: 10000, onExhausted: 'ask_user' },
+        errorPolicy: { ...IMAGE_GENERATION_POLICY },
       },
       {
         id: `${prefix}_video`,
@@ -116,7 +117,7 @@ export function buildShotNodes(result: NodeResult, context: NodeContext): DAGNod
         description: `Generate video for scene ${sceneNum} shot ${shotNum}`,
         handlerKey: 'shot_video_generate',
         metadata: { sceneNumber: sceneNum, shotNumber: shotNum },
-        errorPolicy: { maxRetries: 3, retryStrategy: 'same', retryDelayMs: 15000, onExhausted: 'micro_llm' },
+        errorPolicy: { ...VIDEO_GENERATION_POLICY, onExhausted: 'micro_llm' as const },
       },
       {
         id: `${prefix}_timeline`,

@@ -113,7 +113,7 @@ describe('DAGExecutor', () => {
   // S node with json_object response format
   // ===========================================================================
 
-  it('S node triggers json_object response format when prompt contains JSON instruction', async () => {
+  it('S node triggers json_object response format when outputFormat is json', async () => {
     await withTempDir(async (dir) => {
       const dag = new DAG();
       const capturedOpts: any[] = [];
@@ -131,6 +131,7 @@ describe('DAGExecutor', () => {
         dependsOn: [],
         status: 'pending',
         promptBuilder: () => 'Return ONLY valid JSON with the answer',
+        outputFormat: 'json',
         errorPolicy: getDefaultPolicy('S'),
       });
       dag.updateReadyNodes();
@@ -942,6 +943,166 @@ describe('DAGAgentAdapter fixes', () => {
 
       const prompt = plotNode.promptBuilder!(ctx);
       expect(prompt).toContain('zombie apocalypse');
+    });
+  });
+});
+
+// =============================================================================
+// Round-Trip Resume Integration (Issue #12)
+// =============================================================================
+
+describe('Round-trip resume', () => {
+  it('saves state, reloads, and continues execution from where it left off', async () => {
+    await withTempDir(async (dir) => {
+      const dag1 = new DAG();
+      const llm = new MockLLMClient();
+      llm.setDefaultResponse({ content: 'LLM output' });
+
+      // Build a small pipeline: D → S → D
+      dag1.addNode(makeNode({ id: 'step_1', handler: async () => ({ content: 'step 1 done' }) }));
+      dag1.addNode({
+        id: 'step_2',
+        type: 'S',
+        dependsOn: ['step_1'],
+        status: 'pending',
+        promptBuilder: () => 'Generate something',
+        errorPolicy: getDefaultPolicy('S'),
+      });
+      dag1.addNode(makeNode({ id: 'step_3', dependsOn: ['step_2'], handler: async () => ({ content: 'step 3 done' }) }));
+      dag1.updateReadyNodes();
+
+      // Run step_1, then save state mid-execution by aborting after step_1
+      const executor1 = makeExecutor(dag1, { llm, projectDir: dir, maxConcurrency: 1 });
+      let nodeCount = 0;
+      executor1.on((e) => {
+        if (e.type === 'node_completed') {
+          nodeCount++;
+          if (nodeCount === 1) executor1.abort(); // Abort after first node
+        }
+      });
+      await executor1.run();
+
+      // Verify step_1 completed, step_2 and step_3 did not
+      expect(dag1.getNode('step_1').status).toBe('completed');
+
+      // Save state
+      saveDAGState(dag1, 'resume-test', 'test', dir);
+
+      // Load and resume
+      const state = loadDAGState(dir)!;
+      expect(state).not.toBeNull();
+      expect(state.nodes['step_1']!.status).toBe('completed');
+
+      const prepared = prepareStateForResume(state);
+
+      // Rebuild DAG from state
+      const dag2 = new DAG();
+      for (const [_id, nodeState] of Object.entries(prepared.nodes)) {
+        const node: DAGNode = {
+          id: nodeState.id,
+          type: nodeState.type,
+          dependsOn: [...nodeState.dependsOn],
+          status: nodeState.status as any,
+          result: nodeState.result,
+          errorPolicy: getDefaultPolicy(nodeState.type),
+        };
+        if (nodeState.type === 'D') {
+          node.handler = async () => ({ content: `${nodeState.id} done` });
+        } else if (nodeState.type === 'S') {
+          node.promptBuilder = () => 'Generate something';
+        }
+        dag2.addNode(node);
+      }
+
+      // Run to completion
+      const executor2 = makeExecutor(dag2, { llm, projectDir: dir });
+      const result2 = await executor2.run();
+
+      expect(result2.completed).toBe(true);
+      expect(dag2.getNode('step_1').status).toBe('completed');
+      expect(dag2.getNode('step_2').status).toBe('completed');
+      expect(dag2.getNode('step_3').status).toBe('completed');
+    });
+  });
+
+  it('preserves createdAt timestamp across saves', async () => {
+    await withTempDir(async (dir) => {
+      const dag = new DAG();
+      dag.addNode(makeNode({ id: 'a', status: 'completed', result: { content: 'done' } }));
+
+      const originalTime = '2025-01-01T00:00:00.000Z';
+      saveDAGState(dag, 'ts-test', 'test', dir, originalTime);
+
+      const state = loadDAGState(dir)!;
+      expect(state.createdAt).toBe(originalTime);
+
+      // Save again — createdAt should be preserved
+      saveDAGState(dag, 'ts-test', 'test', dir, state.createdAt);
+      const state2 = loadDAGState(dir)!;
+      expect(state2.createdAt).toBe(originalTime);
+    });
+  });
+});
+
+// =============================================================================
+// S-node rephrase retry with validation (Issue #11)
+// =============================================================================
+
+describe('S-node rephrase retry', () => {
+  it('rephrase retry sends error feedback and validates again', async () => {
+    await withTempDir(async (dir) => {
+      const dag = new DAG();
+      let callCount = 0;
+      const llm = new MockLLMClient();
+
+      // First call returns invalid JSON, second returns valid
+      const origGenerate = llm.generate.bind(llm);
+      llm.generate = async (opts: any) => {
+        callCount++;
+        if (callCount <= 1) {
+          llm.setDefaultResponse({ content: '{"bad": true}' });
+        } else {
+          llm.setDefaultResponse({ content: '{"valid": true, "items": ["a"]}' });
+        }
+        return origGenerate(opts);
+      };
+
+      dag.addNode({
+        id: 'validated_s',
+        type: 'S',
+        dependsOn: [],
+        status: 'pending',
+        promptBuilder: () => 'Return JSON with items array',
+        outputFormat: 'json',
+        errorPolicy: {
+          maxRetries: 3,
+          retryStrategy: 'rephrase',
+          onExhausted: 'ask_user',
+          validation: (result) => {
+            if (!result.content) return { valid: false, error: 'No content' };
+            try {
+              const data = JSON.parse(result.content);
+              if (!Array.isArray(data.items)) return { valid: false, error: 'Missing items array' };
+              return { valid: true, data };
+            } catch {
+              return { valid: false, error: 'Invalid JSON' };
+            }
+          },
+        },
+      });
+      dag.updateReadyNodes();
+
+      const executor = makeExecutor(dag, { llm: llm as any, projectDir: dir });
+      const events = collectEvents(executor);
+      const result = await executor.run();
+
+      expect(result.completed).toBe(true);
+      expect(dag.getNode('validated_s').status).toBe('completed');
+      // Validated data should be stored
+      expect(dag.getNode('validated_s').result?.data).toEqual({ valid: true, items: ['a'] });
+      // Should have retry events
+      const retryEvents = events.filter(e => e.type === 'retry');
+      expect(retryEvents.length).toBeGreaterThanOrEqual(1);
     });
   });
 });
