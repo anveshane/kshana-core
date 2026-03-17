@@ -10,6 +10,7 @@ import { getLLMConfig, getLLMProvider, validateLLMConfig, resetLLMLogger, type L
 import { resetPhaseLogger } from './utils/phaseLogger.js';
 import { resetDebugLog } from './hooks/useAgent.js';
 import { startAnalyticsDashboard } from './server/analytics.js';
+import { killAllChildProcesses } from './utils/processRegistry.js';
 
 // Task type for agent specialization
 type TaskType = 'generic' | 'video';
@@ -214,7 +215,21 @@ if (cli) {
   resetDebugLog();
 
   // Render with fullscreen mode enabled
-  render(<App llmConfig={llmConfig} initialTask={task} taskType={taskType} />);
+  const inkInstance = render(<App llmConfig={llmConfig} initialTask={task} taskType={taskType} />);
+
+  // Graceful shutdown for CLI mode — kill child processes and exit cleanly
+  const cliShutdown = () => {
+    killAllChildProcesses();
+    inkInstance.unmount();
+    process.exit(0);
+  };
+  process.on('SIGINT', cliShutdown);
+  process.on('SIGTERM', cliShutdown);
+
+  // Also clean up child processes on normal Ink exit
+  inkInstance.waitUntilExit().then(() => {
+    killAllChildProcesses();
+  });
 } else {
   // Server mode (default) - import and start the server with web UI
   import('./server/index.js').then(async ({ createServer }) => {

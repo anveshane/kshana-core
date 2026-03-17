@@ -16,6 +16,7 @@ import * as https from 'https';
 import { getProjectDir } from '../../tasks/video/workflow/ProjectManager.js';
 import * as http from 'http';
 import { spawn } from 'child_process';
+import { registerChildProcess } from '../../utils/processRegistry.js';
 import type { InputMediaType, ProjectInput } from '../../tasks/video/workflow/types.js';
 import { inputDetector } from './InputDetector.js';
 
@@ -739,6 +740,7 @@ export class InputProcessor {
       const proc = spawn(command, ['--version'], {
         stdio: ['ignore', 'ignore', 'ignore'],
       });
+      registerChildProcess(proc);
       proc.on('error', () => resolve(false));
       proc.on('close', (code) => resolve(code === 0));
     });
@@ -752,6 +754,7 @@ export class InputProcessor {
       const proc = spawn(command, args, {
         stdio: ['ignore', 'pipe', 'pipe'],
       });
+      registerChildProcess(proc);
 
       let stdout = '';
       let stderr = '';

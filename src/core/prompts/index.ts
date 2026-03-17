@@ -279,6 +279,8 @@ const GUIDE_INJECTED_TYPES: Record<string, ContentType> = {
   character_image_guide: 'character_image_prompt',
   setting_image_guide: 'setting_image_prompt',
   scene_image_guide: 'scene_image_prompt',
+  scene_video_guide: 'scene_video_prompt',
+  shot_image_guide: 'shot_image_prompt',
 };
 
 export function buildContentPrompt(

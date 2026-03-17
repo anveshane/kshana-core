@@ -10,6 +10,7 @@ import { existsSync, readFileSync, statSync, mkdirSync } from 'fs';
 import { join, extname, basename } from 'path';
 import { spawn, execSync } from 'child_process';
 import type { Timeline } from './types.js';
+import { registerChildProcess } from '../../utils/processRegistry.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -401,6 +402,7 @@ export function runFFmpeg(
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    registerChildProcess(proc);
 
     let stderr = '';
     let stdout = '';

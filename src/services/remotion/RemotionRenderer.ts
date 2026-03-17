@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { nanoid } from 'nanoid';
+import { registerChildProcess } from '../../utils/processRegistry.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { getProjectDir } from '../../tasks/video/workflow/ProjectManager.js';
 import type {
@@ -211,6 +212,7 @@ export class RemotionRenderer {
         stdio: ['ignore', 'pipe', 'pipe'],
         timeout,
       });
+      registerChildProcess(buildProcess);
 
       let stderr = '';
       buildProcess.stderr?.on('data', (data: Buffer) => {
@@ -274,6 +276,7 @@ export class RemotionRenderer {
           },
         },
       );
+      registerChildProcess(renderProcess);
 
       let stderr = '';
 
