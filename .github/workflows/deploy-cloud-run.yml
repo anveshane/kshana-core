@@ -15,6 +15,14 @@ on:
         description: Cloud Run service name
         required: false
         default: kshana-ink
+      request_timeout_seconds:
+        description: Cloud Run request timeout in seconds (WebSocket max 3600)
+        required: false
+        default: "3600"
+      max_instances:
+        description: Cloud Run max instances (set 1 to keep in-memory WS sessions sticky)
+        required: false
+        default: "1"
   push:
     branches:
       - master
@@ -30,6 +38,8 @@ jobs:
       REGION: ${{ github.event.inputs.region || 'asia-south1' }}
       ARTIFACT_REGISTRY_REPO: ${{ github.event.inputs.artifact_registry_repo || 'kshana' }}
       CLOUD_RUN_SERVICE: ${{ github.event.inputs.cloud_run_service || 'kshana-ink' }}
+      REQUEST_TIMEOUT_SECONDS: ${{ github.event.inputs.request_timeout_seconds || '3600' }}
+      MAX_INSTANCES: ${{ github.event.inputs.max_instances || '1' }}
 
     steps:
       - name: Checkout
@@ -78,6 +88,10 @@ jobs:
             --service-account "kshana-ink@${PROJECT_ID}.iam.gserviceaccount.com" \
             --allow-unauthenticated \
             --port 8080 \
+            --timeout "${REQUEST_TIMEOUT_SECONDS}" \
+            --session-affinity \
+            --max-instances "${MAX_INSTANCES}" \
+            --no-use-http2 \
             --set-secrets "LLM_PROVIDER=LLM_PROVIDER:latest,LLM_CONTEXT_TOKENS=LLM_CONTEXT_TOKENS:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,OPENAI_BASE_URL=OPENAI_BASE_URL:latest,OPENAI_MODEL=OPENAI_MODEL:latest,COMFYUI_BASE_URL=COMFYUI_BASE_URL:latest,COMFYUI_TIMEOUT=COMFYUI_TIMEOUT:latest,POSTHOG_API_KEY=POSTHOG_API_KEY:latest,POSTHOG_HOST=POSTHOG_HOST:latest,ANALYTICS_SALT=ANALYTICS_SALT:latest"
 
       - name: Show service URL
