@@ -2274,6 +2274,10 @@ function showWizardStep(step) {
     autoNextBtn.onclick = function() {
       newProjectState.autonomousMode = autoToggle.checked;
       autonomousModeActive = autoToggle.checked;
+      updateAutoBtnStyle();
+      if (autoToggle.checked) {
+        wsSend({ type: 'set_autonomous', sessionId: sessionId, data: { enabled: true } });
+      }
       showWizardStep('content');
     };
     chatMessages.appendChild(card);
