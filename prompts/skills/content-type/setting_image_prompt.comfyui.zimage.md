@@ -31,7 +31,7 @@ Build setting image prompts using this scaffold, in order:
 ### Key Environmental Details
 - 3–5 specific visual elements that define the space
 - Textures and materials: `weathered stone`, `polished concrete`, `lush green foliage`
-- Objects that tell a story: `scattered papers on the desk`, `steam rising from manhole covers`
+- Objects that ground the space: `scattered papers on the desk`, `steam rising from manhole covers`
 
 ### Lighting & Atmosphere
 Z-Image responds very well to lighting keywords. For settings, these are critical for mood:
@@ -47,41 +47,17 @@ Z-Image responds very well to lighting keywords. For settings, these are critica
 - `overcast sky`, `light rain on the pavement`, `snow-covered`
 - `clear starry night sky`
 
-### Mood / Tone
-- Be specific: `eerie and abandoned`, `warm and inviting`, `bustling and energetic`
-- Avoid vague terms: say `tense atmospheric silence` not `moody`
-
 ### Style / Medium
 - `realistic photography, 24mm wide-angle lens, deep depth of field`
-- `matte painting, cinematic concept art`
-- `watercolor landscape, soft washes, atmospheric perspective`
-
-### Technical Specs
 - Wide lenses for environments: `24mm`, `35mm`, `16mm ultra-wide`
 - Depth of field: `deep focus throughout`, `foreground blur leading to sharp midground`
-- Quality: `4K quality`, `highly detailed textures`, `clean sharp image`
 
 ### Cleanup Constraints
-- `no people, no figures, empty scene` (if you want unpopulated settings)
+Even without negative prompts, Z-Image learns "avoid X" semantics in the positive prompt:
+- `no people, no figures, empty uninhabited scene`
 - `no text, no watermark, no logos, no UI elements`
-- `no lens distortion, no fisheye effect`
+- `no lens distortion, correct perspective, straight vertical lines`
 - `clean composition, no visual clutter outside the intended elements`
-
-## Setting-Specific Tips
-
-### Interior Spaces
-- Specify room size and ceiling height
-- Name the light sources: `pendant lamp overhead`, `natural light from floor-to-ceiling windows`
-- Include texture details on walls, floors, furniture
-
-### Exterior / Landscape
-- Include foreground, midground, and background elements for depth
-- Specify atmospheric perspective: `hazy mountains in the far distance`
-- Weather and sky are critical mood-setters
-
-### Fantasy / Sci-Fi Settings
-- Ground fantastical elements in real-world physics: `bioluminescent mushrooms casting soft blue light on the cave walls`
-- Mix familiar and unfamiliar: `a futuristic train station with Art Deco architecture`
 
 ## Prompt Length
 
@@ -99,17 +75,3 @@ Z-Image responds very well to lighting keywords. For settings, these are critica
 | Logos / watermarks | `no text, no watermark, no branding, no signage` |
 | Distortion | `no lens distortion, correct perspective, straight vertical lines` |
 | Repetitive patterns | `varied architectural details, no repetitive tiling` |
-
-## Quality Checklist
-
-Before finalizing a setting image prompt, verify:
-- [ ] Shot type and composition angle specified
-- [ ] Location described with specific architectural/environmental details
-- [ ] 3–5 key visual elements that define the space
-- [ ] Lighting explicitly described with direction and quality
-- [ ] Time of day and weather stated
-- [ ] Mood word is specific, not vague
-- [ ] Style/medium and lens specified (wide lenses for environments)
-- [ ] Cleanup constraints at the end
-- [ ] No reliance on negative prompts — all constraints are positive
-- [ ] 80–250 words, structured and precise

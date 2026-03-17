@@ -26,13 +26,22 @@ interface ToolCallDisplayProps {
   streamingContent?: string;
   /** Whether streaming content was already displayed live */
   wasStreamed?: boolean;
+  /** Child tool calls made by this tool (for sub-agent patterns) */
+  childTools?: Array<{
+    id: string;
+    name: string;
+    args?: Record<string, unknown>;
+    status: 'executing' | 'completed' | 'error';
+    duration?: number;
+    agentName?: string;
+  }>;
 }
 
 // Tools that should be hidden (rendered elsewhere in UI)
 export const HIDDEN_TOOLS = new Set(['TodoWrite', 'todo_write']);
 
 // Tools with special rendering (not standard tool call format)
-const SPECIAL_RENDER_TOOLS = new Set(['think', 'dispatch_agent']);
+const SPECIAL_RENDER_TOOLS = new Set(['think', 'dispatch_agent', 'generate_content']);
 
 // User-friendly display names with gerund (ongoing) and past tense (completed)
 const TOOL_DISPLAY_NAMES: Record<string, { gerund: string; past: string }> = {
@@ -234,6 +243,63 @@ function renderDispatchAgentTool(
   );
 }
 
+// Render generate_content as a sub-agent container with nested tool calls
+function renderGenerateContentTool(
+  args: Record<string, unknown> | undefined,
+  status: ToolCallDisplayProps['status'],
+  duration?: number,
+  streamingContent?: string,
+  wasStreamed?: boolean,
+  childTools?: ToolCallDisplayProps['childTools'],
+): React.ReactNode {
+  const contentType = args?.['content_type'] as string | undefined;
+  const isExecuting = status === 'executing';
+
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="magenta" paddingX={1} marginY={1}>
+      <Box>
+        {isExecuting ? (
+          <>
+            <Text color="magenta">{'✦ '}</Text>
+            <Spinner color="magenta" />
+            <Text color="magenta"> Content Creator</Text>
+            {contentType && <Text dimColor> ({contentType.replace(/_/g, ' ')})</Text>}
+          </>
+        ) : (
+          <>
+            <Text color="green">{'✓ '}</Text>
+            <Text bold>Content Creator</Text>
+            {contentType && <Text dimColor> ({contentType.replace(/_/g, ' ')})</Text>}
+            {duration !== undefined && <Text dimColor> ({formatDuration(duration)})</Text>}
+          </>
+        )}
+      </Box>
+
+      {/* Child tool calls (context gathering phase) */}
+      {childTools && childTools.length > 0 && (
+        <Box flexDirection="column" marginLeft={2} marginTop={1}>
+          {childTools.map(child => (
+            <Box key={child.id}>
+              <Text color={child.status === 'completed' ? 'green' : child.status === 'error' ? 'red' : 'yellow'}>
+                {child.status === 'completed' ? '✓ ' : child.status === 'error' ? '✗ ' : '◉ '}
+              </Text>
+              <Text dimColor>{formatToolCall(child.name, child.args)}</Text>
+              {child.duration !== undefined && <Text dimColor> ({formatDuration(child.duration)})</Text>}
+            </Box>
+          ))}
+        </Box>
+      )}
+
+      {/* Streaming content */}
+      {streamingContent && (
+        <Box marginLeft={2} marginTop={1} flexDirection="column">
+          <MarkdownText text={streamingContent} />
+        </Box>
+      )}
+    </Box>
+  );
+}
+
 // Render read_file tool specially with truncated content
 function renderReadFileTool(
   args: Record<string, unknown> | undefined,
@@ -343,6 +409,7 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
   agentName,
   streamingContent,
   wasStreamed = false,
+  childTools,
 }: ToolCallDisplayProps) {
   // Special rendering for think tool
   if (toolName === 'think') {
@@ -352,6 +419,11 @@ export const ToolCallDisplay = React.memo(function ToolCallDisplay({
   // Special rendering for dispatch_agent (planning) tool
   if (toolName === 'dispatch_agent') {
     return renderDispatchAgentTool(args, status, result, expanded);
+  }
+
+  // Special rendering for generate_content (content creator sub-agent)
+  if (toolName === 'generate_content') {
+    return renderGenerateContentTool(args, status, duration, streamingContent, wasStreamed, childTools);
   }
 
   // Special rendering for read_file tool

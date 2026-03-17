@@ -109,6 +109,11 @@ AskUserQuestion(
 
 Work through plan steps in dependency order:
 - Use `generate_content` for all text/prompt artifacts
+- **Duration-aware content**: The `create_backward_plan` response includes `timelineHints` with suggested scene counts and durations. Reference these when writing `generate_content` instructions:
+  - For **plot**: "Create a plot outline with approximately N scenes/segments to fit a Xs video"
+  - For **story**: "Write a concise story that fits N scenes of ~Ds each"
+  - For **scene breakdown**: "Break the story into exactly N scenes"
+  - The system auto-injects duration constraints, but your instruction should also reflect the scope
 - Use `generate_image` / `generate_video_from_image` for media
 - Get user approval before expensive operations (images, videos)
 - Track progress with `TodoWrite` — call `TodoRead` first to get current IDs before updating

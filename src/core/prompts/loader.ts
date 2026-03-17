@@ -366,6 +366,71 @@ export function loadContentTypeSkills(
   };
 }
 
+/**
+ * Resolve a prompt guide for a given guide name.
+ *
+ * The default guide (`prompts/skills/defaults/{guideName}.md`) is ALWAYS included
+ * as the base layer — it contains universal rules (no narrative contamination,
+ * photographic anchoring, etc.). If a more specific skill file exists, it is
+ * appended after the default to layer model-specific guidance on top.
+ *
+ * Skill resolution order (most specific wins):
+ *   1. Project-level: `{projectDir}/skills/content-type/{contentType}.{provider}.{workflow}.md`
+ *   2. Built-in:      `prompts/skills/content-type/{contentType}.{provider}.{workflow}.md`
+ *   3. Built-in:      `prompts/skills/content-type/{contentType}.{provider}.md`
+ *   4. Built-in:      `prompts/skills/content-type/{contentType}.md`
+ *
+ * Returns: default guide + most specific skill (concatenated), or just default, or empty.
+ */
+export function resolveGuide(
+  guideName: string,
+  contentType: string,
+  context?: SkillResolutionContext,
+  projectDir?: string,
+): { content: string; source: string } {
+  // Always load the default guide as the base layer
+  const defaultPath = join(PROMPTS_DIR, 'skills', 'defaults', `${guideName}.md`);
+  const defaultContent = existsSync(defaultPath) ? readFileSync(defaultPath, 'utf-8') : '';
+
+  // Try skill files (most specific first — reverse the candidates)
+  const candidates = buildSkillCandidates(contentType, context).reverse();
+
+  // Check project-level skills first
+  if (projectDir) {
+    const projectSkillDir = join(projectDir, 'skills', 'content-type');
+    for (const filename of candidates) {
+      const filePath = join(projectSkillDir, filename);
+      if (existsSync(filePath)) {
+        const skillContent = readFileSync(filePath, 'utf-8');
+        const combined = defaultContent
+          ? `${defaultContent}\n\n---\n\n${skillContent}`
+          : skillContent;
+        return { content: combined, source: `project:${filename}` };
+      }
+    }
+  }
+
+  // Check built-in skills
+  const builtinDir = join(PROMPTS_DIR, 'skills', 'content-type');
+  for (const filename of candidates) {
+    const filePath = join(builtinDir, filename);
+    if (existsSync(filePath)) {
+      const skillContent = readFileSync(filePath, 'utf-8');
+      const combined = defaultContent
+        ? `${defaultContent}\n\n---\n\n${skillContent}`
+        : skillContent;
+      return { content: combined, source: filename };
+    }
+  }
+
+  // No skill found — return default only
+  if (defaultContent) {
+    return { content: defaultContent, source: `default:${guideName}.md` };
+  }
+
+  return { content: '', source: 'none' };
+}
+
 export type InfographicType = 'bar_chart' | 'line_chart' | 'diagram' | 'statistic' | 'list';
 
 export interface InfographicSkillSelection {

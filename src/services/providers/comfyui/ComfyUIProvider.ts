@@ -67,9 +67,9 @@ export class ComfyUIProvider implements GenerationProvider {
     const registry = getRegistry();
     const client = new ComfyUIClient({ outputDir });
 
-    // Determine workflow: explicit override > reference-image heuristic > default
-    const useQwenEdit = !requestedWorkflow && referenceImages.length > 0;
-    const workflowName = requestedWorkflow || (useQwenEdit ? 'qwen_edit' : 'zimage');
+    // Determine workflow: explicit override > caller-specified > default
+    // The caller (tools.ts) resolves the correct workflow via getDefaultWorkflowForCapability()
+    const workflowName = requestedWorkflow || 'zimage';
     const workflowMetadata = registry.get(workflowName);
 
     if (!workflowMetadata) {

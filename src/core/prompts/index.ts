@@ -3,7 +3,7 @@
  * Reads prompts from markdown files in /prompts/ directory.
  */
 import type { ToolDefinition } from '../llm/index.js';
-import { loadAndRenderMarkdown, loadMarkdown, loadContentTypeSkills, type PromptContext, type SkillResolutionContext } from './loader.js';
+import { loadAndRenderMarkdown, loadMarkdown, loadContentTypeSkills, resolveGuide, type PromptContext, type SkillResolutionContext } from './loader.js';
 import { getProviderRegistry, type ProviderConfig } from '../../services/providers/index.js';
 import os from 'os';
 import { existsSync } from 'fs';
@@ -225,6 +225,14 @@ const COMFYUI_DEFAULT_WORKFLOWS: Record<string, string> = {
 };
 
 /**
+ * Resolve the default ComfyUI workflow name for a given capability.
+ * Returns undefined if the capability is unknown.
+ */
+export function getDefaultWorkflowForCapability(capability: string): string | undefined {
+  return COMFYUI_DEFAULT_WORKFLOWS[capability];
+}
+
+/**
  * Resolve the skill context (provider + workflow) for a given content type
  * by reading the active provider configuration from ProviderRegistry.
  */
@@ -266,6 +274,13 @@ export interface ContentPromptResult {
   injectedSkills: string[];
 }
 
+/** Content types whose guides are injected via template variables (not <model_skills>). */
+const GUIDE_INJECTED_TYPES: Record<string, ContentType> = {
+  character_image_guide: 'character_image_prompt',
+  setting_image_guide: 'setting_image_prompt',
+  scene_image_guide: 'scene_image_prompt',
+};
+
 export function buildContentPrompt(
   task: string,
   contentType: ContentType,
@@ -276,17 +291,36 @@ export function buildContentPrompt(
   const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
   const base = loadAndRenderMarkdown('system/base.md', {});
   const sub = loadAndRenderMarkdown('system/subagent.md', {});
-  const content = loadAndRenderMarkdown('subagents/content-creator.md', { content_type: contentType });
 
-  // Dynamically inject model-specific skills based on content type + active provider
-  const skillContext = resolveSkillContext(contentType);
-  const skills = loadContentTypeSkills(contentType, skillContext, projectDir);
-  const skillsSection = skills.content
-    ? `\n<model_skills>\n${skills.content}\n</model_skills>`
-    : '';
+  // Resolve image guides and inject as template variables
+  const templateVars: Record<string, unknown> = { content_type: contentType };
+  const allInjectedSkills: string[] = [];
+
+  for (const [guideName, guideContentType] of Object.entries(GUIDE_INJECTED_TYPES)) {
+    const guideSkillCtx = resolveSkillContext(guideContentType);
+    const resolved = resolveGuide(guideName, guideContentType, guideSkillCtx, projectDir);
+    templateVars[guideName] = resolved.content;
+    if (resolved.source !== 'none' && !resolved.source.startsWith('default:')) {
+      allInjectedSkills.push(resolved.source);
+    }
+  }
+
+  const content = loadAndRenderMarkdown('subagents/content-creator.md', templateVars as PromptContext);
+
+  // For content types NOT handled by template injection, still inject <model_skills>
+  const guideInjectedSet = new Set(Object.values(GUIDE_INJECTED_TYPES));
+  let skillsSection = '';
+  if (!guideInjectedSet.has(contentType)) {
+    const skillContext = resolveSkillContext(contentType);
+    const skills = loadContentTypeSkills(contentType, skillContext, projectDir);
+    if (skills.content) {
+      skillsSection = `\n<model_skills>\n${skills.content}\n</model_skills>`;
+      allInjectedSkills.push(...skills.loadedFiles);
+    }
+  }
 
   const prompt = [base, sub, content, skillsSection, taskSection, contextSection].filter(Boolean).join('\n\n');
-  return { prompt, injectedSkills: skills.loadedFiles };
+  return { prompt, injectedSkills: allInjectedSkills };
 }
 
 /**

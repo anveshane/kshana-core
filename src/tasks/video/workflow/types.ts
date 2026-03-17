@@ -51,9 +51,9 @@ export const STYLE_CONFIGS: Record<ProjectStyle, StyleConfig> = {
     displayName: 'Cinematic Realism',
     description: 'Photorealistic, cinematic look with dramatic lighting and film-quality visuals',
     promptModifier:
-      'rendered in photorealistic cinematic style, natural lighting with visible light rays and atmospheric haze, shot on 35mm film with shallow depth of field, 8K resolution, high detail skin textures and fabric weave, professional photography, no CGI, no 3D rendering, no illustration',
+      'realistic photography, cinematic lighting, natural skin textures, professional photography, no CGI, no illustration, no anime, no cartoon',
     negativePromptModifier:
-      'anime, cartoon, illustration, drawing, sketch, 2d, cel shaded, 3d render, CGI, computer graphics, video game, plastic skin, smooth textures, artificial lighting, flat colors',
+      'anime, cartoon, illustration, drawing, sketch, 2d, cel shaded, 3d render, CGI, computer graphics, video game',
   },
   anime: {
     displayName: 'Anime',

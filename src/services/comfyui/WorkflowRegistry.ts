@@ -318,8 +318,10 @@ class WorkflowRegistry {
     }
 
     // Subsequent scenes can use editing for consistency
+    // Look up the configured image editing workflow, falling back to the first registered editing workflow
     if (preferConsistency && hasPreviousScene) {
-      return this.get('qwen_edit')!;
+      const editingWorkflow = this.listAll().find(wf => wf.workflowType === WorkflowType.IMAGE_EDITING);
+      return editingWorkflow ?? this.get('zimage')!;
     }
 
     // Otherwise use base generation

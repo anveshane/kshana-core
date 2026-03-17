@@ -84,7 +84,8 @@ function buildReferenceImagesSection(
     if (char.referenceImagePath) {
       const fullPath = path.join(projectDir, char.referenceImagePath);
       if (fs.existsSync(fullPath)) {
-        lines.push(`- ${char.name}: ${char.referenceImagePath} (exists)`);
+        const idPart = char.referenceImageId ? ` [id: ${char.referenceImageId}]` : '';
+        lines.push(`- ${char.name}: ${char.referenceImagePath} (exists)${idPart}`);
       } else {
         lines.push(`- ${char.name}: reference image missing`);
       }
@@ -98,7 +99,8 @@ function buildReferenceImagesSection(
     if (setting.referenceImagePath) {
       const fullPath = path.join(projectDir, setting.referenceImagePath);
       if (fs.existsSync(fullPath)) {
-        lines.push(`- ${setting.name}: ${setting.referenceImagePath} (exists)`);
+        const idPart = setting.referenceImageId ? ` [id: ${setting.referenceImageId}]` : '';
+        lines.push(`- ${setting.name}: ${setting.referenceImagePath} (exists)${idPart}`);
       } else {
         lines.push(`- ${setting.name}: reference image missing`);
       }
@@ -146,6 +148,7 @@ export function buildPreloadedContext(
 **Template:** ${(project as unknown as Record<string, unknown>)['templateId'] ?? 'narrative'}
 **Style:** ${project.style}
 **Phase:** ${project.currentPhase}
+${project.targetDuration ? `**Target Duration:** ${project.targetDuration} seconds\n` : ''}\
 **Characters:** ${project.characters.map(c => c.name).join(', ') || 'None'}
 **Settings:** ${project.settings.map(s => s.name).join(', ') || 'None'}`);
 

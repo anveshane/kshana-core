@@ -49,6 +49,7 @@ function HistoryItem({ entry, expanded }: { entry: HistoryEntry; expanded: boole
         // The content will be shown from result.content instead for Task tools
         streamingContent={entry.wasStreamed ? undefined : entry.streamingContent}
         wasStreamed={entry.wasStreamed}
+        childTools={entry.childTools}
       />
     );
   }

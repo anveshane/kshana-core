@@ -62,6 +62,8 @@ import {
   createDefaultSettingData,
 } from '../../tasks/video/workflow/types.js';
 import { comfyProgressBus, type ComfyProgressHandler } from '../../services/comfyui/index.js';
+import { createTimelineSkeleton, loadTimeline, saveTimeline } from '../timeline/TimelineManager.js';
+import { parseSceneBreakdown } from './sceneBreakdownParser.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -140,6 +142,15 @@ function persistApprovedContent(
           `[GenericAgent] Auto-updated ${contentType} status to available in project registry`
         );
         return { persisted: true, action: `update_content_status: ${contentType}` };
+
+      case 'scene':
+      case 'scene_breakdown':
+        // Update scenes content registry status
+        updateContentStatus(project, 'scenes' as ContentTypeName, 'available');
+        debugLog(
+          `[GenericAgent] Auto-updated scenes status to available in project registry`
+        );
+        return { persisted: true, action: 'update_content_status: scenes' };
 
       default:
         // For other content types, just log that we're not auto-persisting
@@ -1814,6 +1825,24 @@ export class GenericAgent extends TypedEventEmitter {
         });
       }
 
+      // Auto-inject duration context from project
+      let durationSection = '';
+      const durationProject = loadProject();
+      if (durationProject?.targetDuration) {
+        const totalDuration = durationProject.targetDuration;
+        const maxClip = 10;
+        const segCount = Math.ceil(totalDuration / maxClip);
+        const segDuration = Math.round((totalDuration / segCount) * 100) / 100;
+
+        let scopeGuidance: string;
+        if (totalDuration <= 30) scopeGuidance = 'This is a very short video — focus on ONE key moment, 2-3 scenes max.';
+        else if (totalDuration <= 60) scopeGuidance = 'This is a short video — cover only the core dramatic arc.';
+        else if (totalDuration <= 120) scopeGuidance = 'This is a medium-length video — cover the main narrative with moderate detail.';
+        else scopeGuidance = 'This is a longer video — a fuller narrative is appropriate.';
+
+        durationSection = `\n<duration_constraints>\nTarget video duration: ${totalDuration} seconds\nSuggested scene/segment count: ${segCount}\nSuggested duration per segment: ~${segDuration} seconds\n${scopeGuidance}\n</duration_constraints>\n`;
+      }
+
       // Try to pre-fetch context to eliminate subagent read_file() calls
       const preloaded = buildPreloadedContext(contentType, name, sceneNumber, shotNumber, chapterNumber);
       let subAgentTask: string;
@@ -1823,14 +1852,14 @@ export class GenericAgent extends TypedEventEmitter {
         debugLog(
           `[GenericAgent] Pre-loaded context for ${contentType}: ${preloaded.filesRead.length} files read (${preloaded.filesRead.join(', ')})`
         );
-        subAgentTask = `ALL context has been pre-loaded below. DO NOT call any tools — no read_file(), no read_project(). Everything you need is provided. Generate the ${contentType} content directly.\n\nInstruction: ${instruction}\n\n${preloaded.contextBlock}`;
+        subAgentTask = `${durationSection}ALL context has been pre-loaded below. DO NOT call any tools — no read_file(), no read_project(). Everything you need is provided. Generate the ${contentType} content directly.\n\nInstruction: ${instruction}\n\n${preloaded.contextBlock}`;
 
         if (contentType === 'shot_image_prompt' && shotNumber !== undefined) {
           subAgentTask += `\n\n**Shot Number:** ${shotNumber}\n**Note:** Generate an image prompt specifically for this shot's framing and composition. Use only the reference images relevant to this shot.\n`;
         }
       } else {
         // No pre-loaded context available (unknown type or no project) — fall back to discovery
-        subAgentTask = `First, use read_project() to understand the project structure, template type, and available files. Then use read_file() to fetch the relevant source material listed in the project files. Finally, generate the ${contentType} content based on this instruction:\n\n${instruction}`;
+        subAgentTask = `${durationSection}First, use read_project() to understand the project structure, template type, and available files. Then use read_file() to fetch the relevant source material listed in the project files. Finally, generate the ${contentType} content based on this instruction:\n\n${instruction}`;
       }
 
       debugLog(
@@ -1859,6 +1888,44 @@ export class GenericAgent extends TypedEventEmitter {
       };
       this.currentMode = 'content';
       const result = await this.continueContentLoop();
+
+      // Auto-create timeline skeleton after scene_breakdown is generated
+      if (contentType === 'scene_breakdown' || contentType === 'scene') {
+        try {
+          const resultObj = result as Record<string, unknown>;
+          const generatedContent = (resultObj['content'] as string) ?? '';
+          const projectDir = getProjectDir();
+          const timelineProject = loadProject();
+
+          if (generatedContent && projectDir && timelineProject?.targetDuration) {
+            // Only auto-create if no timeline exists yet
+            const existingTimeline = loadTimeline(projectDir);
+            if (!existingTimeline) {
+              const parsedScenes = parseSceneBreakdown(generatedContent);
+              if (parsedScenes.length > 0) {
+                const descriptors = parsedScenes.map(s => ({
+                  label: s.label,
+                  suggestedDuration: s.suggestedDuration,
+                }));
+                const timeline = createTimelineSkeleton(timelineProject.targetDuration, descriptors);
+                saveTimeline(projectDir, timeline);
+                debugLog(
+                  `[GenericAgent] Auto-created timeline skeleton with ${parsedScenes.length} segments from ${contentType}`
+                );
+                this.emit({
+                  type: 'notification',
+                  level: 'info',
+                  message: `Timeline skeleton auto-created with ${parsedScenes.length} segments (${timelineProject.targetDuration}s total)`,
+                });
+              }
+            } else {
+              debugLog('[GenericAgent] Timeline already exists, skipping auto-creation');
+            }
+          }
+        } catch (err) {
+          debugLog(`[GenericAgent] Auto-timeline creation failed (non-fatal): ${err}`);
+        }
+      }
 
       // Include loop warning in result if present
       const finalResult = loopWarningMessage
@@ -2783,8 +2850,28 @@ Respond in JSON format:
 Respond in JSON format:
 {"name": "...", "summary": "..."}`;
 
+    // Try to extract a meaningful name from the content itself
+    const extractNameFromContent = (text: string, type: string): string => {
+      // Try markdown heading: "# Character Name" or "## Setting Name"
+      const headingMatch = text.match(/^#{1,3}\s+(.+)/m);
+      if (headingMatch) {
+        const heading = headingMatch[1]!.trim();
+        // Strip type prefix if present (e.g., "Character: Rowan" → "Rowan")
+        const stripped = heading.replace(/^(character|setting|scene|plot|story)[:\s-]+/i, '').trim();
+        if (stripped.length > 0 && stripped.length <= 50) return stripped;
+      }
+      // Try bold title: "**Name**" at start of content
+      const boldMatch = text.match(/^\*\*([^*]+)\*\*/m);
+      if (boldMatch) {
+        const bold = boldMatch[1]!.trim();
+        const stripped = bold.replace(/^(character|setting|scene|plot|story)[:\s-]+/i, '').trim();
+        if (stripped.length > 0 && stripped.length <= 50) return stripped;
+      }
+      return `${type} content`;
+    };
+
     const fallback = {
-      name: `${contentType}: ${task.slice(0, 30)}`,
+      name: extractNameFromContent(content, contentType),
       summary: `${contentType} content for: ${task.slice(0, 100)}`,
     };
     try {
@@ -3231,7 +3318,8 @@ Respond in JSON format:
                 toolCallId: tc.id,
                 toolName: tc.name,
                 arguments: tc.arguments,
-                agentName: this.getEffectiveAgentName(),
+                agentName: 'Content Creator',
+                parentToolCallId: this.contentState!.toolCallId,
               });
 
               const result = await this.executeContentCreatorTool(tc);
@@ -3242,7 +3330,8 @@ Respond in JSON format:
                 toolCallId: tc.id,
                 toolName: tc.name,
                 result: result.length > 500 ? result.slice(0, 500) + '...' : result,
-                agentName: this.getEffectiveAgentName(),
+                agentName: 'Content Creator',
+                parentToolCallId: this.contentState!.toolCallId,
               });
 
               this.contentState.messages.push({
@@ -3306,7 +3395,7 @@ Respond in JSON format:
                 toolCallId: this.contentState.toolCallId,
                 chunk: output,
                 done: false,
-                agentName: this.getEffectiveAgentName(),
+                agentName: 'Content Creator',
                 toolName: 'generate_content',
                 reset: isFirstChunk && shouldReset,
               });
@@ -3331,7 +3420,7 @@ Respond in JSON format:
                 toolCallId: this.contentState.toolCallId,
                 chunk: remainingOutput,
                 done: false,
-                agentName: this.getEffectiveAgentName(),
+                agentName: 'Content Creator',
                 toolName: 'generate_content',
               });
             }
@@ -3340,7 +3429,7 @@ Respond in JSON format:
               toolCallId: this.contentState.toolCallId,
               chunk: '',
               done: true,
-              agentName: this.getEffectiveAgentName(),
+              agentName: 'Content Creator',
             });
           }
         }
@@ -3384,7 +3473,7 @@ Respond in JSON format:
               toolCallId: this.contentState.toolCallId,
               chunk: display,
               done: true,
-              agentName: this.getEffectiveAgentName(),
+              agentName: 'Content Creator',
               toolName: 'generate_content',
               reset: true,
             });

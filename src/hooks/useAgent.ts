@@ -61,6 +61,8 @@ export interface ToolCallHistoryItem {
   agentName?: string;
   /** Streaming content being accumulated for this tool (for sub-agent loops) */
   streamingContent?: string;
+  /** Child tool calls made by this tool (for sub-agent patterns like generate_content) */
+  childTools?: ToolCallHistoryItem[];
 }
 
 /**
@@ -91,6 +93,8 @@ export interface HistoryEntry {
   questionOptions?: QuestionOption[];
   /** For question entries: whether it was a yes/no confirmation */
   isConfirmation?: boolean;
+  /** Child tool calls from sub-agent patterns (e.g., generate_content context gathering) */
+  childTools?: ToolCallHistoryItem[];
 }
 
 /**
@@ -170,8 +174,8 @@ type AgentAction =
   | { type: 'SET_QUESTION'; question: string; isConfirmation: boolean; options?: QuestionOption[]; autoApproveTimeoutMs?: number; context?: string }
   | { type: 'CLEAR_QUESTION' }
   | { type: 'SET_ERROR'; error: string }
-  | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown>; agentName?: string }
-  | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean; agentName?: string }
+  | { type: 'TOOL_START'; toolCallId: string; toolName: string; args?: Record<string, unknown>; agentName?: string; parentToolCallId?: string }
+  | { type: 'TOOL_COMPLETE'; toolCallId: string; result: unknown; isError: boolean; agentName?: string; parentToolCallId?: string }
   | { type: 'TOOL_STREAM'; toolCallId: string; chunk: string; done: boolean; reset?: boolean; toolName?: string; toolArgs?: Record<string, unknown>; agentName?: string }
   | { type: 'ADD_AGENT_TEXT'; text: string; agentName?: string }
   | { type: 'ADD_USER_INPUT'; text: string; isTask?: boolean }
@@ -251,6 +255,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       let newHistory = state.history;
       const ca = state.currentAction;
       if (ca?.type === 'tool_completed' && ca.toolName && ca.toolCallId) {
+        const matchingTool = state.recentTools.find(t => t.id === ca.toolCallId);
         const historyEntry: HistoryEntry = {
           id: `tool-${ca.toolCallId}`,
           type: 'tool_completed',
@@ -263,6 +268,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
           agentName: ca.agentName,
           streamingContent: ca.streamingContent,
           wasStreamed: !!ca.streamingContent,
+          childTools: matchingTool?.childTools,
         };
         newHistory = [...state.history.slice(-MAX_HISTORY + 1), historyEntry];
       }
@@ -278,6 +284,27 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
     case 'TOOL_START': {
       const startTime = Date.now();
       const agentName = action.agentName ?? state.currentAgentName;
+
+      // If this is a child tool call, nest it under its parent — don't change currentAction
+      if (action.parentToolCallId) {
+        const childTool: ToolCallHistoryItem = {
+          id: action.toolCallId,
+          name: action.toolName,
+          args: action.args,
+          status: 'executing',
+          startTime,
+          agentName,
+        };
+        return {
+          ...state,
+          recentTools: state.recentTools.map(t =>
+            t.id === action.parentToolCallId
+              ? { ...t, childTools: [...(t.childTools ?? []), childTool] }
+              : t
+          ),
+        };
+      }
+
       const newTool: ToolCallHistoryItem = {
         id: action.toolCallId,
         name: action.toolName,
@@ -291,6 +318,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       let newHistory = state.history;
       const ca = state.currentAction;
       if (ca?.type === 'tool_completed' && ca.toolName && ca.toolCallId) {
+        const matchingTool = state.recentTools.find(t => t.id === ca.toolCallId);
         const historyEntry: HistoryEntry = {
           id: `tool-${ca.toolCallId}`,
           type: 'tool_completed',
@@ -303,6 +331,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
           agentName: ca.agentName,
           streamingContent: ca.streamingContent,
           wasStreamed: !!ca.streamingContent,
+          childTools: matchingTool?.childTools,
         };
         newHistory = [...state.history.slice(-MAX_HISTORY + 1), historyEntry];
       }
@@ -325,6 +354,32 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
 
     case 'TOOL_COMPLETE': {
       const endTime = Date.now();
+
+      // If this is a child tool completion, update it in the parent's childTools
+      if (action.parentToolCallId) {
+        return {
+          ...state,
+          recentTools: state.recentTools.map(t =>
+            t.id === action.parentToolCallId
+              ? {
+                  ...t,
+                  childTools: (t.childTools ?? []).map(child =>
+                    child.id === action.toolCallId
+                      ? {
+                          ...child,
+                          status: (action.isError ? 'error' : 'completed') as 'error' | 'completed',
+                          result: action.result,
+                          endTime,
+                          duration: endTime - child.startTime,
+                        }
+                      : child
+                  ),
+                }
+              : t
+          ),
+        };
+      }
+
       const tool = state.recentTools.find(t => t.id === action.toolCallId);
       const duration = tool ? endTime - tool.startTime : 0;
       const agentName = action.agentName ?? tool?.agentName ?? state.currentAgentName;
@@ -533,6 +588,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
       let newHistory = state.history;
       const ca = state.currentAction;
       if (ca?.type === 'tool_completed' && ca.toolName && ca.toolCallId) {
+        const matchingTool = state.recentTools.find(t => t.id === ca.toolCallId);
         const historyEntry: HistoryEntry = {
           id: `tool-${ca.toolCallId}`,
           type: 'tool_completed',
@@ -545,6 +601,7 @@ function agentReducer(state: AgentState, action: AgentAction): AgentState {
           agentName: ca.agentName,
           streamingContent: ca.streamingContent,
           wasStreamed: !!ca.streamingContent,
+          childTools: matchingTool?.childTools,
         };
         newHistory = [...state.history.slice(-MAX_HISTORY + 1), historyEntry];
       }
@@ -749,6 +806,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         toolName: event.toolName,
         args: event.arguments,
         agentName: event.agentName,
+        parentToolCallId: event.parentToolCallId,
       });
       onEvent?.(event);
     });
@@ -760,6 +818,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
         result: event.result,
         isError: event.isError ?? false,
         agentName: event.agentName,
+        parentToolCallId: event.parentToolCallId,
       });
       onEvent?.(event);
     });

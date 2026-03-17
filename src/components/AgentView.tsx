@@ -31,6 +31,8 @@ interface ToolHistoryItem {
   duration?: number;
   /** Streaming content being accumulated for this tool */
   streamingContent?: string;
+  /** Child tool calls from sub-agent patterns */
+  childTools?: ToolHistoryItem[];
 }
 
 export interface ConversationMessage {
@@ -143,6 +145,7 @@ export function AgentView({
               expanded={expanded}
               agentName={currentAction.agentName}
               streamingContent={recentTools.find(t => t.id === currentAction.toolCallId)?.streamingContent}
+              childTools={recentTools.find(t => t.id === currentAction.toolCallId)?.childTools}
             />
           )}
           {currentAction.type === 'tool_completed' && currentAction.toolName && (
@@ -157,6 +160,7 @@ export function AgentView({
               agentName={currentAction.agentName}
               streamingContent={currentAction.streamingContent}
               wasStreamed={!!currentAction.streamingContent}
+              childTools={recentTools.find(t => t.id === currentAction.toolCallId)?.childTools}
             />
           )}
         </Box>

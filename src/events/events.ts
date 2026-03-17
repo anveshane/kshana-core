@@ -21,6 +21,8 @@ export interface ToolCallEvent {
   toolName: string;
   arguments: Record<string, unknown>;
   agentName?: string;
+  /** If set, this tool call is a child of the specified parent tool call (sub-agent pattern). */
+  parentToolCallId?: string;
 }
 
 /**
@@ -33,6 +35,8 @@ export interface ToolResultEvent {
   result: unknown;
   isError?: boolean;
   agentName?: string;
+  /** If set, this tool result is a child of the specified parent tool call (sub-agent pattern). */
+  parentToolCallId?: string;
 }
 
 /**

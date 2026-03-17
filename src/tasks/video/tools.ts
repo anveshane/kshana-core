@@ -18,6 +18,7 @@ import {
 } from '../../services/comfyui/index.js';
 import { getProviderRegistry } from '../../services/providers/index.js';
 import type { ProviderProgressCallback } from '../../services/providers/types.js';
+import { getDefaultWorkflowForCapability } from '../../core/prompts/index.js';
 
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
@@ -425,13 +426,13 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
     // Get the project style configuration and enhance the prompt
     const styleConfig = getProjectStyleConfig();
 
-    const useQwenEdit = generation_mode === 'image_text_to_image' && reference_images.length > 0;
+    const useImageEditing = generation_mode === 'image_text_to_image' && reference_images.length > 0;
 
-    // If qwen_edit mode with references, prepend image mapping context
+    // If image editing mode with references, prepend image mapping context
     let basePrompt = prompt;
-    if (useQwenEdit && reference_images.length > 0) {
+    if (useImageEditing && reference_images.length > 0) {
       const imageContext = reference_images
-        .map((ref, i) => `image${i + 1} is a ${ref.type} reference for "${ref.name}"`)
+        .map((ref, i) => `image ${i + 1} is a ${ref.type} reference for "${ref.name}"`)
         .join('. ');
       basePrompt = `${imageContext}. ${prompt}`;
     }
@@ -455,8 +456,8 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);
 
-    // Fail if qwen_edit mode but no references resolved
-    if (useQwenEdit && resolvedRefImages.length === 0) {
+    // Fail if image editing mode but no references resolved
+    if (useImageEditing && resolvedRefImages.length === 0) {
       job.status = 'failed';
       job.error = 'No reference images could be resolved or uploaded for image_text_to_image mode.';
       job.updatedAt = Date.now();
@@ -489,6 +490,11 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
       });
     };
 
+    // Resolve workflow: if editing with references, use the configured imageEditing workflow
+    const workflowName = useImageEditing
+      ? getDefaultWorkflowForCapability('imageEditing')
+      : undefined;
+
     const result = await provider.generateImage!(
       {
         prompt: enhancedPrompt,
@@ -498,6 +504,7 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
         outputDir: getAssetsDir(),
         filenamePrefix,
         referenceImages: resolvedRefImages.length > 0 ? resolvedRefImages : undefined,
+        workflowName,
       },
       progressCallback,
     );

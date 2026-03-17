@@ -1437,7 +1437,8 @@ export function updateCharacter(
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.characters.findIndex(c => c.name === name);
+  const nameLower = name.toLowerCase();
+  const index = project.characters.findIndex(c => c.name.toLowerCase() === nameLower);
   if (index < 0) return null;
 
   const existing = project.characters[index];
@@ -1469,7 +1470,8 @@ export function updateCharacterApproval(
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.characters.findIndex(c => c.name === name);
+  const nameLower = name.toLowerCase();
+  const index = project.characters.findIndex(c => c.name.toLowerCase() === nameLower);
   if (index < 0) return null;
 
   const character = project.characters[index];
@@ -1583,7 +1585,8 @@ export function updateSetting(
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.settings.findIndex(s => s.name === name);
+  const nameLower = name.toLowerCase();
+  const index = project.settings.findIndex(s => s.name.toLowerCase() === nameLower);
   if (index < 0) return null;
 
   const existing = project.settings[index];
@@ -1615,7 +1618,8 @@ export function updateSettingApproval(
   const project = loadProject(basePath);
   if (!project) return null;
 
-  const index = project.settings.findIndex(s => s.name === name);
+  const nameLower = name.toLowerCase();
+  const index = project.settings.findIndex(s => s.name.toLowerCase() === nameLower);
   if (index < 0) return null;
 
   const setting = project.settings[index];
