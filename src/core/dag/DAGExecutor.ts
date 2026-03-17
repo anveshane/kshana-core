@@ -15,7 +15,7 @@
  */
 
 import { writeFileSync, mkdirSync } from 'fs';
-import { join } from 'path';
+import { join, basename } from 'path';
 import type { LLMClient } from '../llm/index.js';
 import type {
   DAGNode,
@@ -189,6 +189,8 @@ export class DAGExecutor {
   // ==========================================================================
 
   private async executeNode(node: DAGNode): Promise<void> {
+    // Guard against race: node may have been claimed by a concurrent batch
+    if (node.status !== 'ready') return;
     node.status = 'running';
     node.startedAt = new Date().toISOString();
     this.emit({ type: 'node_started', nodeId: node.id, nodeType: node.type, description: node.description });
@@ -238,7 +240,8 @@ export class DAGExecutor {
             ? join(this.config.projectDir, subdir)
             : this.config.projectDir;
           mkdirSync(outDir, { recursive: true });
-          writeFileSync(join(outDir, `${node.id}.md`), result.content, 'utf-8');
+          const safeId = basename(node.id).replace(/[^a-z0-9_-]/gi, '_');
+          writeFileSync(join(outDir, `${safeId}.md`), result.content, 'utf-8');
         } catch {
           // Best-effort — don't fail the node over a write error
         }

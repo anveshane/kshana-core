@@ -192,7 +192,17 @@ Rules:
  * Spawns per-character, per-setting, and scene-level pipelines.
  */
 export function buildEntityNodes(result: NodeResult, _context: NodeContext): DAGNodeDefinition[] {
-  const data = (result.data ?? JSON.parse(result.content!)) as ExtractedEntities;
+  let data: ExtractedEntities;
+  if (result.data) {
+    data = result.data as ExtractedEntities;
+  } else {
+    // Fallback: validate raw content before trusting it
+    const validation = validateEntityExtraction(result);
+    if (!validation.valid) {
+      throw new Error(`buildEntityNodes: entity extraction failed validation — ${validation.error}`);
+    }
+    data = validation.data as ExtractedEntities;
+  }
   const nodes: DAGNodeDefinition[] = [];
 
   // Per-character pipeline

@@ -71,13 +71,16 @@ export function buildShotNodes(result: NodeResult, context: NodeContext): DAGNod
   const sceneNum = context.metadata['sceneNumber'] as number;
   const nodes: DAGNodeDefinition[] = [];
 
-  // Parse shot breakdown
+  // Parse shot breakdown — prefer validated data, validate raw content as fallback
   let shots: ShotBreakdown['shots'];
   if (result.data) {
     shots = (result.data as ShotBreakdown).shots;
   } else if (result.content) {
-    const parsed = JSON.parse(result.content) as ShotBreakdown;
-    shots = parsed.shots;
+    const validation = validateShotBreakdown(result);
+    if (!validation.valid) {
+      throw new Error(`buildShotNodes: shot breakdown failed validation for scene ${sceneNum} — ${validation.error}`);
+    }
+    shots = (validation.data as ShotBreakdown).shots;
   } else {
     // Fallback: create a single shot
     shots = [{ shotNumber: 1, type: 'wide', description: 'Full scene shot' }];
