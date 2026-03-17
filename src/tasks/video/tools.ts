@@ -36,6 +36,7 @@ import {
 } from './workflow/index.js';
 import {
   ensureProjectPathDir,
+  readProjectText,
   writeProjectBufferAtPath,
 } from './workflow/projectFileIO.js';
 
@@ -62,6 +63,40 @@ export interface MultiShotMotionPrompt {
   shots: ShotPrompt[];
   totalSceneDuration: number;
   referenceImages: string[]; // all ref images for the scene
+}
+
+function readPromptSourceFile(
+  filePath: string,
+): { content?: string; error?: string; suggestion?: string } {
+  if (path.isAbsolute(filePath)) {
+    if (!fs.existsSync(filePath)) {
+      return {
+        error: `Prompt file not found: ${filePath}`,
+        suggestion: 'Check that the prompt file path is correct and the file exists.',
+      };
+    }
+
+    return { content: fs.readFileSync(filePath, 'utf-8') };
+  }
+
+  const content = readProjectText(filePath);
+  if (content == null) {
+    return {
+      error: `Prompt file not found: ${filePath}`,
+      suggestion:
+        'Check that the prompt file path is correct and that it exists under the active project.',
+    };
+  }
+
+  return { content };
+}
+
+function projectPromptFileExists(filePath: string): boolean {
+  if (path.isAbsolute(filePath)) {
+    return fs.existsSync(filePath);
+  }
+
+  return readProjectText(filePath) != null;
 }
 
 /**
@@ -836,15 +871,17 @@ This tool blocks until generation is complete and returns the result directly (a
       promptFile = resolvedPromptFile.promptFile;
     }
     if (promptFile) {
-      const fullPath = path.join(getProjectDir(), promptFile);
-      if (!fs.existsSync(fullPath)) {
+      const promptFileResult = readPromptSourceFile(promptFile);
+      if (promptFileResult.error || promptFileResult.content == null) {
         return {
           status: 'error',
-          error: `Prompt file not found: ${promptFile}`,
-          suggestion: 'Check that the prompt file path is correct and the file exists.',
+          error: promptFileResult.error ?? `Prompt file not found: ${promptFile}`,
+          suggestion:
+            promptFileResult.suggestion ??
+            'Check that the prompt file path is correct and the file exists.',
         };
       }
-      const promptContent = fs.readFileSync(fullPath, 'utf-8');
+      const promptContent = promptFileResult.content;
 
       // Parse the prompt file for both prompt text and metadata
       const parsed = parsePromptFile(promptContent);
@@ -1330,7 +1367,7 @@ function resolveScenePromptFile(
   }
 
   const shotPromptFile = `prompts/images/shots/scene-${sceneNumber}-shot-${shotNumber}.prompt.md`;
-  if (!fs.existsSync(path.join(getProjectDir(), shotPromptFile))) {
+  if (!projectPromptFileExists(shotPromptFile)) {
     return {
       error:
         `Scene image generation requires the shot prompt file "${shotPromptFile}". Motion prompt "${promptFile}" cannot be used as prompt_file.`,
@@ -1487,15 +1524,19 @@ This tool blocks until video generation is complete and returns the result direc
     // If motion_prompt_file is provided, read and extract the prompt for this shot
     const motionPromptFile = args['motion_prompt_file'] as string | undefined;
     if (motionPromptFile) {
-      const fullPath = path.join(getProjectDir(), motionPromptFile);
-      if (!fs.existsSync(fullPath)) {
+      const motionPromptFileResult = readPromptSourceFile(motionPromptFile);
+      if (motionPromptFileResult.error || motionPromptFileResult.content == null) {
         return {
           status: 'error',
-          error: `Motion prompt file not found: ${motionPromptFile}`,
-          suggestion: 'Check that the motion prompt file path is correct and the file exists.',
+          error:
+            motionPromptFileResult.error ??
+            `Motion prompt file not found: ${motionPromptFile}`,
+          suggestion:
+            motionPromptFileResult.suggestion ??
+            'Check that the motion prompt file path is correct and the file exists.',
         };
       }
-      const promptContent = fs.readFileSync(fullPath, 'utf-8');
+      const promptContent = motionPromptFileResult.content;
 
       if (motionPromptFile.endsWith('.json')) {
         const motionData = parseMotionPrompt(promptContent);
