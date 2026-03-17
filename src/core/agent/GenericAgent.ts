@@ -64,6 +64,7 @@ import {
 import { comfyProgressBus, type ComfyProgressHandler } from '../../services/comfyui/index.js';
 import { createTimelineSkeleton, loadTimeline, saveTimeline } from '../timeline/TimelineManager.js';
 import { parseSceneBreakdown } from './sceneBreakdownParser.js';
+import { computeSegmentBreakdown } from '../../utils/durationUtils.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -1827,24 +1828,24 @@ export class GenericAgent extends TypedEventEmitter {
 
       // Auto-inject duration context from project
       let durationSection = '';
-      const durationProject = loadProject();
-      if (durationProject?.targetDuration) {
-        const totalDuration = durationProject.targetDuration;
-        const maxClip = 10;
-        const segCount = Math.ceil(totalDuration / maxClip);
-        const segDuration = Math.round((totalDuration / segCount) * 100) / 100;
+      const cachedProject = loadProject();
+      if (cachedProject?.targetDuration) {
+        const totalDuration = cachedProject.targetDuration;
+        const breakdown = computeSegmentBreakdown(totalDuration);
 
-        let scopeGuidance: string;
-        if (totalDuration <= 30) scopeGuidance = 'This is a very short video — focus on ONE key moment, 2-3 scenes max.';
-        else if (totalDuration <= 60) scopeGuidance = 'This is a short video — cover only the core dramatic arc.';
-        else if (totalDuration <= 120) scopeGuidance = 'This is a medium-length video — cover the main narrative with moderate detail.';
-        else scopeGuidance = 'This is a longer video — a fuller narrative is appropriate.';
+        if (breakdown) {
+          let scopeGuidance: string;
+          if (totalDuration <= 30) scopeGuidance = 'This is a very short video — focus on ONE key moment, 2-3 scenes max.';
+          else if (totalDuration <= 60) scopeGuidance = 'This is a short video — cover only the core dramatic arc.';
+          else if (totalDuration <= 120) scopeGuidance = 'This is a medium-length video — cover the main narrative with moderate detail.';
+          else scopeGuidance = 'This is a longer video — a fuller narrative is appropriate.';
 
-        durationSection = `\n<duration_constraints>\nTarget video duration: ${totalDuration} seconds\nSuggested scene/segment count: ${segCount}\nSuggested duration per segment: ~${segDuration} seconds\n${scopeGuidance}\n</duration_constraints>\n`;
+          durationSection = `\n<duration_constraints>\nTarget video duration: ${totalDuration} seconds\nSuggested scene/segment count: ${breakdown.segmentCount}\nSuggested duration per segment: ~${breakdown.segmentDuration} seconds\n${scopeGuidance}\n</duration_constraints>\n`;
+        }
       }
 
       // Try to pre-fetch context to eliminate subagent read_file() calls
-      const preloaded = buildPreloadedContext(contentType, name, sceneNumber, shotNumber, chapterNumber);
+      const preloaded = buildPreloadedContext(contentType, name, sceneNumber, shotNumber, chapterNumber, cachedProject);
       let subAgentTask: string;
 
       if (preloaded) {

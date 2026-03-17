@@ -7,6 +7,7 @@
  */
 
 import type { VideoTemplate, ArtifactTypeDefinition } from '../templates/types.js';
+import { computeSegmentBreakdown } from '../../utils/durationUtils.js';
 import { ArtifactGraph } from '../artifacts/ArtifactGraph.js';
 import type {
   UserGoal,
@@ -354,8 +355,9 @@ export class BackwardPlanner {
    */
   computeTimelineHints(goal: UserGoal, maxClipDuration: number = 10): TimelineHints {
     const totalDuration = goal.preferences.duration as number;
+    const breakdown = computeSegmentBreakdown(totalDuration, maxClipDuration);
 
-    if (!totalDuration || totalDuration <= 0) {
+    if (!breakdown) {
       return {
         suggestedSegmentCount: 1,
         suggestedSegmentDuration: 0,
@@ -365,17 +367,14 @@ export class BackwardPlanner {
       };
     }
 
-    const suggestedSegmentCount = Math.ceil(totalDuration / maxClipDuration);
-    const suggestedSegmentDuration = Math.round((totalDuration / suggestedSegmentCount) * 100) / 100;
-
     const reasoning =
       `For a ${totalDuration}s video with ${maxClipDuration}s max clip duration, ` +
-      `you need at least ${suggestedSegmentCount} segment(s) of ~${suggestedSegmentDuration}s each. ` +
+      `you need at least ${breakdown.segmentCount} segment(s) of ~${breakdown.segmentDuration}s each. ` +
       `After planning segments, call manage_timeline create_skeleton to create the timeline structure.`;
 
     return {
-      suggestedSegmentCount,
-      suggestedSegmentDuration,
+      suggestedSegmentCount: breakdown.segmentCount,
+      suggestedSegmentDuration: breakdown.segmentDuration,
       totalDuration,
       maxClipDuration,
       reasoning,

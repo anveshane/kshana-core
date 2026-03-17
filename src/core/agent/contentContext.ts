@@ -124,8 +124,9 @@ export function buildPreloadedContext(
   sceneNumber?: number,
   shotNumber?: number,
   chapterNumber?: number,
+  cachedProject?: ProjectFile | null,
 ): PreloadedContext | null {
-  const project = loadProject();
+  const project = cachedProject ?? loadProject();
   if (!project) return null;
 
   const projectDir = getProjectDir();
