@@ -5,8 +5,11 @@
  * No tool concerns — this module is the core logic layer.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
+import {
+  readProjectText,
+  writeProjectText,
+} from '../../tasks/video/workflow/projectFileIO.js';
 import type {
   Timeline,
   TimelineSegment,
@@ -489,13 +492,11 @@ export function splitSegmentIntoShots(
  * Returns null if the file doesn't exist.
  */
 export function loadTimeline(projectDir: string): Timeline | null {
-  const filePath = join(projectDir, TIMELINE_FILENAME);
-  if (!existsSync(filePath)) {
-    return null;
-  }
-
   try {
-    const raw = readFileSync(filePath, 'utf-8');
+    const raw = readProjectText(join(projectDir, TIMELINE_FILENAME));
+    if (!raw) {
+      return null;
+    }
     return JSON.parse(raw) as Timeline;
   } catch {
     return null;
@@ -507,14 +508,11 @@ export function loadTimeline(projectDir: string): Timeline | null {
  * Creates the project directory if it doesn't exist.
  */
 export function saveTimeline(projectDir: string, timeline: Timeline): void {
-  const filePath = join(projectDir, TIMELINE_FILENAME);
-  const dir = dirname(filePath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-
   // Revalidate before saving
   timeline.validation = validateTimeline(timeline);
 
-  writeFileSync(filePath, JSON.stringify(timeline, null, 2), 'utf-8');
+  writeProjectText(
+    join(projectDir, TIMELINE_FILENAME),
+    JSON.stringify(timeline, null, 2),
+  );
 }

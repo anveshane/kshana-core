@@ -17,6 +17,11 @@ import {
   writeProjectBuffer,
   writeProjectText,
 } from '../../src/tasks/video/workflow/projectFileIO.js';
+import {
+  loadTimeline,
+  saveTimeline,
+} from '../../src/core/timeline/TimelineManager.js';
+import type { Timeline } from '../../src/core/timeline/types.js';
 
 class FakeRemoteFs implements IFileSystem {
   readonly cache = new ProjectStateCache();
@@ -100,6 +105,33 @@ function withRemoteProjectSession<T>(
   );
 }
 
+function createTimeline(): Timeline {
+  return {
+    version: '1.0',
+    totalDuration: 6,
+    defaultCompositingMode: 'replace',
+    segments: [
+      {
+        id: 'segment_0',
+        label: 'Scene 1',
+        startTime: 0,
+        endTime: 6,
+        duration: 6,
+        compositingMode: 'replace',
+        fillStatus: 'empty',
+        layers: [],
+      },
+    ],
+    globalLayers: [],
+    validation: {
+      isComplete: false,
+      filledDuration: 0,
+      gaps: [],
+      warnings: [],
+    },
+  };
+}
+
 describe('projectFileIO remote persistence', () => {
   it('writes project text through remote mkdir/write commands and cache', () => {
     const projectRoot = '/Users/indhicdev/Documents/test-kshana-dev/test-kshana-dev.kshana';
@@ -176,6 +208,37 @@ describe('projectFileIO remote persistence', () => {
           data: Buffer.from('binary-data').toString('base64'),
         },
       });
+    });
+  });
+
+  it('persists timeline.json through remote project file commands and reloads from cache', () => {
+    const projectRoot = '/Users/indhicdev/Documents/test-kshana-dev/test-kshana-dev.kshana';
+
+    withRemoteProjectSession(projectRoot, (remoteFs) => {
+      const timeline = createTimeline();
+
+      saveTimeline(projectRoot, timeline);
+      const reloaded = loadTimeline(projectRoot);
+
+      expect(remoteFs.messages).toHaveLength(1);
+      expect(remoteFs.messages[0]).toMatchObject({
+        type: 'file_write_command',
+        data: {
+          path: 'timeline.json',
+        },
+      });
+      expect(readProjectText('timeline.json')).toContain('"totalDuration": 6');
+      expect(reloaded).toEqual(
+        expect.objectContaining({
+          totalDuration: 6,
+          segments: [
+            expect.objectContaining({
+              id: 'segment_0',
+              label: 'Scene 1',
+            }),
+          ],
+        }),
+      );
     });
   });
 });
