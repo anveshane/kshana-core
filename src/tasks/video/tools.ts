@@ -34,6 +34,10 @@ import {
   updateScene,
   getProjectStyleConfig,
 } from './workflow/index.js';
+import {
+  ensureProjectPathDir,
+  writeProjectBufferAtPath,
+} from './workflow/projectFileIO.js';
 
 /**
  * A single shot within a multi-shot scene breakdown.
@@ -248,10 +252,28 @@ function withVideoLock<T>(fn: () => Promise<T>): Promise<T> {
 // Get the project assets directory
 export function getAssetsDir(): string {
   const assetsDir = path.join(getProjectDir(), 'assets', 'images');
-  if (!fs.existsSync(assetsDir)) {
+  if (!ensureProjectPathDir(assetsDir) && !fs.existsSync(assetsDir)) {
     fs.mkdirSync(assetsDir, { recursive: true });
   }
   return assetsDir;
+}
+
+function persistProjectBinaryOutput(
+  outputDir: string,
+  outputFilename: string,
+  buffer: Buffer,
+): string {
+  const outputPath = path.join(outputDir, outputFilename);
+
+  if (!ensureProjectPathDir(outputDir) && !fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  if (!writeProjectBufferAtPath(outputPath, buffer)) {
+    fs.writeFileSync(outputPath, buffer);
+  }
+
+  return outputPath;
 }
 
 /**
@@ -581,11 +603,15 @@ async function waitForComfyUIJob(
     const firstImage = images[0]!;
     const outputFilename = `${nanoid(8)}_${firstImage.filename}`;
     debugLog(`[waitForComfyUIJob] Downloading ${firstImage.filename} (subfolder=${firstImage.subfolder}, type=${firstImage.type}) to ${assetsDir}/${outputFilename}`);
-    const savedPath = await client.downloadImage(
+    const downloaded = await client.downloadOutput(
       firstImage.filename,
       firstImage.subfolder,
       firstImage.type,
-      outputFilename
+    );
+    const savedPath = persistProjectBinaryOutput(
+      assetsDir,
+      outputFilename,
+      downloaded.buffer,
     );
 
     // Create artifact ID

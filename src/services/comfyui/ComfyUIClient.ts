@@ -37,6 +37,13 @@ export interface ImageInfo {
   node_id?: string;
 }
 
+export interface DownloadedOutput {
+  buffer: Buffer;
+  filename: string;
+  subfolder: string;
+  type: string;
+}
+
 export interface ProgressCallback {
   (percentage: number, message: string): void | Promise<void>;
 }
@@ -75,11 +82,6 @@ export class ComfyUIClient {
     this.baseUrl = merged.baseUrl.replace(/\/$/, '');
     this.outputDir = merged.outputDir;
     this.timeout = merged.timeout;
-
-    // Ensure output directory exists
-    if (!fs.existsSync(this.outputDir)) {
-      fs.mkdirSync(this.outputDir, { recursive: true });
-    }
   }
 
   /**
@@ -461,12 +463,11 @@ export class ComfyUIClient {
   /**
    * Download an image from ComfyUI to local storage.
    */
-  async downloadImage(
+  async downloadOutput(
     filename: string,
     subfolder: string = '',
-    outputType: string = 'output',
-    outputFilename?: string
-  ): Promise<string> {
+    outputType: string = 'output'
+  ): Promise<DownloadedOutput> {
     const params = new URLSearchParams({
       filename,
       type: outputType,
@@ -482,11 +483,35 @@ export class ComfyUIClient {
       throw new Error(`Failed to download image: ${response.statusText}`);
     }
 
-    const buffer = await response.arrayBuffer();
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    return {
+      buffer,
+      filename,
+      subfolder,
+      type: outputType,
+    };
+  }
+
+  /**
+   * Download an image from ComfyUI to local storage.
+   */
+  async downloadImage(
+    filename: string,
+    subfolder: string = '',
+    outputType: string = 'output',
+    outputFilename?: string
+  ): Promise<string> {
+    const downloaded = await this.downloadOutput(filename, subfolder, outputType);
     const finalFilename = outputFilename || filename;
     const outputPath = path.join(this.outputDir, finalFilename);
+    const outputDir = path.dirname(outputPath);
 
-    fs.writeFileSync(outputPath, Buffer.from(buffer));
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    fs.writeFileSync(outputPath, downloaded.buffer);
 
     return outputPath;
   }

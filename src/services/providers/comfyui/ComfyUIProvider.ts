@@ -13,6 +13,10 @@ import {
   parameterizeWorkflowByName,
   getRegistry,
 } from '../../comfyui/index.js';
+import {
+  ensureProjectPathDir,
+  writeProjectBufferAtPath,
+} from '../../../tasks/video/workflow/projectFileIO.js';
 import type {
   GenerationProvider,
   GenerationCapability,
@@ -302,7 +306,7 @@ export class ComfyUIProvider implements GenerationProvider {
   private async downloadFirstOutput(
     client: ComfyUIClient,
     promptId: string,
-    _outputDir: string,
+    outputDir: string,
     mimeType: string,
   ): Promise<GenerationResult> {
     const images = await client.getOutputImages(promptId);
@@ -312,19 +316,37 @@ export class ComfyUIProvider implements GenerationProvider {
 
     const first = images[0]!;
     const outputFilename = `${nanoid(8)}_${first.filename}`;
-    debugLog(`Downloading ${first.filename} → ${_outputDir}/${outputFilename}`);
+    debugLog(`Downloading ${first.filename} → ${outputDir}/${outputFilename}`);
 
-    const savedPath = await client.downloadImage(
+    const downloaded = await client.downloadOutput(
       first.filename,
       first.subfolder,
       first.type,
-      outputFilename,
     );
+    const savedPath = this.persistOutput(downloaded.buffer, outputDir, outputFilename);
 
     return {
       filePath: savedPath,
       mimeType,
       metadata: { promptId, comfyuiFilename: first.filename },
     };
+  }
+
+  private persistOutput(
+    buffer: Buffer,
+    outputDir: string,
+    outputFilename: string,
+  ): string {
+    const outputPath = path.join(outputDir, outputFilename);
+
+    if (!ensureProjectPathDir(outputDir) && !fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    if (!writeProjectBufferAtPath(outputPath, buffer)) {
+      fs.writeFileSync(outputPath, buffer);
+    }
+
+    return outputPath;
   }
 }

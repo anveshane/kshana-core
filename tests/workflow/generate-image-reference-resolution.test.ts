@@ -5,6 +5,7 @@ import { join } from 'path';
 
 const providerState = vi.hoisted(() => ({
   calls: [] as Array<Record<string, unknown>>,
+  failure: null as Error | null,
 }));
 
 vi.mock('../../src/services/providers/index.js', async () => {
@@ -20,6 +21,9 @@ vi.mock('../../src/services/providers/index.js', async () => {
         isAvailable: () => true,
         generateImage: async (input: Record<string, unknown>) => {
           providerState.calls.push(input);
+          if (providerState.failure) {
+            throw providerState.failure;
+          }
           const outputDir = input['outputDir'] as string;
           fsModule.mkdirSync(outputDir, { recursive: true });
           const outputPath = pathModule.join(outputDir, 'generated-test.png');
@@ -48,6 +52,7 @@ describe('generate_image prompt and reference resolution', () => {
 
   beforeEach(() => {
     providerState.calls.length = 0;
+    providerState.failure = null;
     tempRoot = fs.mkdtempSync(join(os.tmpdir(), 'kshana-generate-image-'));
     projectRoot = join(tempRoot, 'legacy-shot-test.kshana');
     setActiveProjectDir(projectRoot);
@@ -162,5 +167,31 @@ describe('generate_image prompt and reference resolution', () => {
         name: "Kai's Pitch",
       },
     ]);
+  });
+
+  it('does not register assets when provider generation fails', async () => {
+    providerState.failure = new Error('binary save failed');
+
+    const result = await generateImageTool.handler?.({
+      scene_number: 1,
+      prompt: 'A dramatic football training shot at sunset.',
+      image_type: 'scene',
+    });
+
+    expect(result).toMatchObject({
+      status: 'error',
+    });
+
+    const project = loadProject(tempRoot)!;
+    expect(project.assets).toEqual([]);
+    expect(project.content.images?.items ?? []).toEqual([]);
+
+    const manifestPath = join(projectRoot, 'assets', 'manifest.json');
+    if (fs.existsSync(manifestPath)) {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as {
+        assets?: unknown[];
+      };
+      expect(manifest.assets ?? []).toEqual([]);
+    }
   });
 });
