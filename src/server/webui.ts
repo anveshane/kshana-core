@@ -178,6 +178,7 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 /* Messages */
 .msg { padding: 10px 14px; border-radius: 8px; max-width: 100%; word-wrap: break-word; }
 .msg.agent { background: var(--bg-secondary); border: 1px solid var(--border); position: relative; }
+.msg.agent:empty, .msg.agent:has(.msg-content:empty) { display: none; }
 .msg .msg-copy-btn { position: absolute; top: 6px; right: 8px; font-size: 11px; color: var(--text-muted); background: var(--bg-tertiary); border: 1px solid transparent; border-radius: 3px; cursor: pointer; padding: 1px 6px; opacity: 0; transition: opacity 0.15s; }
 .msg:hover .msg-copy-btn { opacity: 0.6; }
 .msg .msg-copy-btn:hover { opacity: 1 !important; color: var(--text); border-color: var(--border); }
@@ -638,10 +639,21 @@ function handleStreamChunk(data) {
   maybeScroll();
 }
 
+// Periodic cleanup: remove any orphaned empty .msg.agent elements
+setInterval(function() {
+  document.querySelectorAll('.msg.agent').forEach(function(el) {
+    var content = el.querySelector('.msg-content');
+    if (content && !content.textContent.trim() && !content.querySelector('img') && !el.classList.contains('agent-thinking')) {
+      el.remove();
+    }
+  });
+}, 2000);
+
 function finalizeStream() {
   if (!streamingEl) return;
   var raw = streamingEl._rawText || '';
-  if (!raw.trim()) {
+  // Remove empty or whitespace-only streaming elements — prevents orphaned bordered lines
+  if (!raw.trim() || !raw.replace(/[\s\n\r\t]+/g, '')) {
     streamingEl.remove();
     streamingEl = null;
     return;
