@@ -40,18 +40,19 @@ Based on the current state, you can:
 - Use reference images to maintain character and setting consistency
 - Allow for iterative refinement based on user feedback
 
-### For Establishing Images
-- Generate one wide establishing shot per scene after character/setting reference images are approved
-- The establishing image shows the full physical space with all characters positioned
-- Uses setting_ref as image1, character refs as image2/image3 in Qwen Edit
+### For Establishing Images (MANDATORY)
+- **You MUST generate one establishing image per scene BEFORE generating any per-shot scene images.** This is not optional — establishing images are spatial anchors that ensure visual coherence between shots in the same scene.
+- Generate the establishing image as a wide shot showing the full physical space with all characters positioned
+- Uses setting_ref as image1, character refs as image2/image3 via image editing workflow
 - For scenes with 3+ characters, use multi-pass compositing (see image-generator subagent)
 - Prefer scenes with 1-2 characters to minimize compositing passes
+- **Correct ordering:** Reference images → Establishing images (all scenes) → Per-shot images → Videos
 
-### For Scene Mode (Continuous vs Multi-Shot)
-- When a scene's `sceneMode` is `"continuous"`, it uses a single long shot (8-10s)
-- In continuous mode, skip per-shot image prompt generation and scene image generation for that scene
-- Use the establishing image directly as the LTX-2 input frame (the shot has `useEstablishingAsFirstFrame: true`)
-- When `sceneMode` is `"multi_shot"` (default), proceed with normal shot breakdown and per-shot image generation
+### For Scene Mode (Single-Shot, Multi-Shot, Continuous)
+- **single_shot**: One shot of 4-10s — for simple scenes with a single beat or transition
+- **multi_shot**: 2-3 shots of 4-8s each — for complex scenes with dialogue, action beats, or visual variety
+- **continuous**: A single long shot of 8-10s using the establishing image directly as the LTX-2 input frame (`useEstablishingAsFirstFrame: true`). Skip per-shot image generation.
+- Let the narrative determine the mode — not every scene needs multiple shots
 
 ### For Video Generation
 - Scenes should flow naturally from one to the next

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeSegmentBreakdown } from '../../src/utils/durationUtils.js';
+import { computeSegmentBreakdown, computeDurationBudget } from '../../src/utils/durationUtils.js';
 
 describe('computeSegmentBreakdown', () => {
   // ── Valid durations ────────────────────────────────────────────────────
@@ -71,5 +71,109 @@ describe('computeSegmentBreakdown', () => {
   it('returns null for undefined-like falsy values', () => {
     // TypeScript prevents undefined, but at runtime it could happen
     expect(computeSegmentBreakdown(0)).toBeNull();
+  });
+});
+
+// =============================================================================
+// computeDurationBudget
+// =============================================================================
+
+describe('computeDurationBudget', () => {
+  // ── Duration tiers ──────────────────────────────────────────────────────
+
+  it('computes correct budget for 60s video', () => {
+    const result = computeDurationBudget(60);
+    expect(result).not.toBeNull();
+    expect(result!.totalDuration).toBe(60);
+    expect(result!.maxClipDuration).toBe(10);
+    expect(result!.minTotalShots).toBe(6);
+    expect(result!.suggestedSceneRange).toEqual({ min: 3, max: 5 });
+    expect(result!.avgShotDuration).toBe(10);
+    expect(result!.guidance).toContain('at least 6 total clips');
+    expect(result!.guidance).toContain('3-5 scenes');
+  });
+
+  it('uses ≤30s tier for short videos', () => {
+    const result = computeDurationBudget(20);
+    expect(result).not.toBeNull();
+    expect(result!.suggestedSceneRange).toEqual({ min: 2, max: 3 });
+    expect(result!.minTotalShots).toBe(2); // ceil(20/10)
+  });
+
+  it('uses 31-60s tier', () => {
+    const result = computeDurationBudget(45);
+    expect(result).not.toBeNull();
+    expect(result!.suggestedSceneRange).toEqual({ min: 3, max: 5 });
+    expect(result!.minTotalShots).toBe(5); // ceil(45/10)
+  });
+
+  it('uses 61-120s tier', () => {
+    const result = computeDurationBudget(90);
+    expect(result).not.toBeNull();
+    expect(result!.suggestedSceneRange).toEqual({ min: 5, max: 8 });
+    expect(result!.minTotalShots).toBe(9); // ceil(90/10)
+  });
+
+  it('uses 121-180s tier', () => {
+    const result = computeDurationBudget(150);
+    expect(result).not.toBeNull();
+    expect(result!.suggestedSceneRange).toEqual({ min: 8, max: 12 });
+    expect(result!.minTotalShots).toBe(15); // ceil(150/10)
+  });
+
+  // ── Boundary conditions ─────────────────────────────────────────────────
+
+  it('30s falls in ≤30s tier', () => {
+    const result = computeDurationBudget(30);
+    expect(result!.suggestedSceneRange).toEqual({ min: 2, max: 3 });
+  });
+
+  it('31s falls in 31-60s tier', () => {
+    const result = computeDurationBudget(31);
+    expect(result!.suggestedSceneRange).toEqual({ min: 3, max: 5 });
+  });
+
+  it('60s falls in 31-60s tier', () => {
+    const result = computeDurationBudget(60);
+    expect(result!.suggestedSceneRange).toEqual({ min: 3, max: 5 });
+  });
+
+  it('61s falls in 61-120s tier', () => {
+    const result = computeDurationBudget(61);
+    expect(result!.suggestedSceneRange).toEqual({ min: 5, max: 8 });
+  });
+
+  it('120s falls in 61-120s tier', () => {
+    const result = computeDurationBudget(120);
+    expect(result!.suggestedSceneRange).toEqual({ min: 5, max: 8 });
+  });
+
+  it('121s falls in 121-180s tier', () => {
+    const result = computeDurationBudget(121);
+    expect(result!.suggestedSceneRange).toEqual({ min: 8, max: 12 });
+  });
+
+  // ── Custom maxClipDuration ──────────────────────────────────────────────
+
+  it('handles custom maxClipDuration', () => {
+    const result = computeDurationBudget(60, 15);
+    expect(result).not.toBeNull();
+    expect(result!.maxClipDuration).toBe(15);
+    expect(result!.minTotalShots).toBe(4); // ceil(60/15)
+    expect(result!.avgShotDuration).toBe(15);
+  });
+
+  // ── Invalid inputs ──────────────────────────────────────────────────────
+
+  it('returns null for zero duration', () => {
+    expect(computeDurationBudget(0)).toBeNull();
+  });
+
+  it('returns null for negative duration', () => {
+    expect(computeDurationBudget(-10)).toBeNull();
+  });
+
+  it('returns null for NaN duration', () => {
+    expect(computeDurationBudget(NaN)).toBeNull();
   });
 });

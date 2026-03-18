@@ -95,17 +95,19 @@ read_file() may ONLY be called with paths that were returned by list_project_fil
 
 When `<duration_constraints>` is present in your task, scope content to fit the target duration:
 
-| Target Duration | Plot Scope | Story Length | Scene Count |
+| Target Duration | Plot Scope | Story Length | Scene Range |
 |----------------|-----------|-------------|-------------|
 | ≤30 seconds | Single moment/beat | 1-2 paragraphs | 2-3 scenes |
-| 31-60 seconds | Core dramatic arc | 3-5 paragraphs | 4-6 scenes |
-| 61-120 seconds | Full short narrative | 6-10 paragraphs | 8-12 scenes |
-| 121-180 seconds | Expanded narrative | 10-15 paragraphs | 12-18 scenes |
+| 31-60 seconds | Core dramatic arc | 3-5 paragraphs | 3-5 scenes |
+| 61-120 seconds | Full short narrative | 6-10 paragraphs | 5-8 scenes |
+| 121-180 seconds | Expanded narrative | 10-15 paragraphs | 8-12 scenes |
+
+These are RANGES, not targets. The narrative determines the exact count within the range. Each scene gets 1-3 shots based on complexity — simple moments need 1 shot, complex dialogue/action needs 2-3.
 
 ### Rules:
-- **Plot**: Only enough story beats to fill the suggested scene count — not a full novel outline
+- **Plot**: Only enough story beats to fill the narrative — not a full novel outline
 - **Story**: Proportional to duration — a 30s video needs a vignette, not a chapter
-- **Scene breakdown**: Target the suggested scene count from duration constraints
+- **Scene breakdown**: Break into scenes based on narrative beats within the suggested range
 - **Narration**: ~2.5 words per second of target duration
 - **When source material exceeds what fits**: Condense and select the most visual/dramatic moments. Do NOT try to cover everything.
 
@@ -160,25 +162,35 @@ Include:
 - Match the emotional tone of the scene
 - Avoid overly complex vocabulary
 
+{{#if character_image_guide}}
 ### For Character Image Prompts (character_image_prompt)
 
 {{character_image_guide}}
+{{/if}}
 
+{{#if setting_image_guide}}
 ### For Setting Image Prompts (setting_image_prompt)
 
 {{setting_image_guide}}
+{{/if}}
 
+{{#if scene_image_guide}}
 ### For Scene Image Prompts (scene_image_prompt)
 
 {{scene_image_guide}}
+{{/if}}
 
+{{#if scene_video_guide}}
 ### For Scene Video Prompts (scene_video_prompt)
 
 {{scene_video_guide}}
+{{/if}}
 
+{{#if shot_image_guide}}
 ### For Shot Image Prompts (shot_image_prompt)
 
 {{shot_image_guide}}
+{{/if}}
 
 ## What You Do NOT Do
 

@@ -67,8 +67,16 @@ export class ComfyUIProvider implements GenerationProvider {
     const registry = getRegistry();
     const client = new ComfyUIClient({ outputDir });
 
-    // Determine workflow: explicit override > caller-specified > default
+    // Determine workflow: explicit override > caller-specified > default for text-to-image
     // The caller (tools.ts) resolves the correct workflow via getDefaultWorkflowForCapability()
+    // When reference images are provided, a workflow MUST be explicitly specified — no silent fallback
+    if (!requestedWorkflow && referenceImages.length > 0) {
+      throw new Error(
+        'Reference images provided but no workflow specified. ' +
+        'Image editing requires an explicit workflow (e.g., flux2_klein_edit). ' +
+        'This is a bug — the caller should resolve the workflow before calling generateImage.'
+      );
+    }
     const workflowName = requestedWorkflow || 'zimage';
     const workflowMetadata = registry.get(workflowName);
 

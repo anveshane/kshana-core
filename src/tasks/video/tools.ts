@@ -495,6 +495,19 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
       ? getDefaultWorkflowForCapability('imageEditing')
       : undefined;
 
+    // Guard: image editing mode MUST have a valid workflow — never silently fall back to text-to-image
+    if (useImageEditing && !workflowName) {
+      job.status = 'failed';
+      job.error = 'No image editing workflow configured. Cannot fall back to text-to-image when editing was requested.';
+      job.updatedAt = Date.now();
+      return {
+        jobId,
+        status: 'error',
+        error: job.error,
+        suggestion: 'Ensure an imageEditing capability is configured in the provider registry (e.g., flux2_klein_edit).',
+      };
+    }
+
     const result = await provider.generateImage!(
       {
         prompt: enhancedPrompt,
@@ -912,8 +925,8 @@ This tool blocks until generation is complete and returns the result directly (a
       const parsed = parsePromptFile(promptContent);
       params = { ...params, prompt: parsed.prompt };
 
-      // Apply generation mode from prompt file if not explicitly provided
-      if (parsed.generationMode && !params.generation_mode) {
+      // Apply generation mode from prompt file (prompt file metadata is authoritative over LLM default)
+      if (parsed.generationMode) {
         params.generation_mode = parsed.generationMode;
       }
 
@@ -933,9 +946,7 @@ This tool blocks until generation is complete and returns the result directly (a
         if (resolvedRefs && resolvedRefs.length > 0) {
           params.reference_images = resolvedRefs;
           // Auto-set generation mode to image_text_to_image when we have references
-          if (!params.generation_mode) {
-            params.generation_mode = 'image_text_to_image';
-          }
+          params.generation_mode = 'image_text_to_image';
         } else if (parsed.generationMode === 'image_text_to_image') {
           // Prompt file specifies image_text_to_image but references couldn't be resolved
           return {
@@ -978,6 +989,10 @@ This tool blocks until generation is complete and returns the result directly (a
           'Use dispatch_image_agent with image_type "character_ref" or "setting_ref" to create reference images first.',
       };
     }
+
+    // Ensure the resolved generation mode is passed to submitImageGeneration
+    // (the agent may pass reference_images without explicitly setting generation_mode)
+    params.generation_mode = generationMode;
 
     // Submit and wait for generation (provider handles the full lifecycle)
     const submitResult = await submitImageGeneration(params);
@@ -1378,6 +1393,10 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
   return undefined;
 }
 
+// Track video generation failures per shot to enforce retry limits
+const videoFailureTracker = new Map<string, number>();
+const MAX_VIDEO_RETRIES = 2;
+
 /**
  * Generate video from single image tool.
  * This is a COMPLEX tool - requires user confirmation.
@@ -1390,6 +1409,8 @@ export const generateVideoFromImageTool: ToolDefinition = createTool(
 
 **IMPORTANT:** This tool takes a single shot image and animates it. Call it once per shot.
 A scene is composed of multiple shots — call this tool separately for each shot.
+
+**Retry limit:** If video generation fails twice for the same shot, this tool will refuse further attempts and return a skip recommendation. Move on to the next shot.
 
 **Input:** Single shot image artifact ID + motion prompt
 **Output:** Video clip of that shot with motion
@@ -1430,7 +1451,7 @@ This tool blocks until video generation is complete and returns the result direc
       },
       duration: {
         type: 'number',
-        description: 'Video duration in seconds (1-20, default 10)',
+        description: 'Video duration in seconds (4-20, default 10). Minimum 4s — shorter clips produce unreliable output. Values below 4 are automatically clamped to 4.',
       },
       width: {
         type: 'number',
@@ -1457,9 +1478,29 @@ This tool blocks until video generation is complete and returns the result direc
     const shotImageArtifactId = args['shot_image_artifact_id'] as string;
     const sceneNumber = args['scene_number'] as number;
     const shotNumber = args['shot_number'] as number;
+
+    // Enforce retry limit — prevent wasting time on stuck shots
+    const shotKey = `scene${sceneNumber}_shot${shotNumber}`;
+    const previousFailures = videoFailureTracker.get(shotKey) ?? 0;
+    if (previousFailures >= MAX_VIDEO_RETRIES) {
+      debugLog(`[generate_video_from_image] Skipping ${shotKey} — already failed ${previousFailures} times (max ${MAX_VIDEO_RETRIES})`);
+      return {
+        status: 'skipped',
+        error: `Video generation for scene ${sceneNumber}, shot ${shotNumber} has failed ${previousFailures} times. Skipping to avoid wasting pipeline time.`,
+        suggestion: 'Move on to the next shot. This shot can be retried manually later or with different parameters (e.g., longer duration, simpler motion prompt).',
+        failures: previousFailures,
+      };
+    }
+
     let motionPrompt = args['motion_prompt'] as string | undefined;
     const seed = args['seed'] as number | undefined;
-    const duration = args['duration'] as number | undefined;
+    const rawDuration = args['duration'] as number | undefined;
+    // Enforce minimum clip duration — LTX-2.3 produces unreliable output below 4s
+    const MIN_CLIP_DURATION = 4;
+    const duration = rawDuration !== undefined ? Math.max(rawDuration, MIN_CLIP_DURATION) : undefined;
+    if (rawDuration !== undefined && rawDuration < MIN_CLIP_DURATION) {
+      debugLog(`[generate_video_from_image] Clamped duration from ${rawDuration}s to ${MIN_CLIP_DURATION}s (minimum for reliable output)`);
+    }
     const videoWidth = args['width'] as number | undefined;
     const videoHeight = args['height'] as number | undefined;
     const segmentId = args['segment_id'] as string | undefined;
@@ -1644,10 +1685,21 @@ This tool blocks until video generation is complete and returns the result direc
       job.error = String(error);
       job.updatedAt = Date.now();
 
+      // Track failure for retry limiting
+      const failCount = (videoFailureTracker.get(shotKey) ?? 0) + 1;
+      videoFailureTracker.set(shotKey, failCount);
+      debugLog(`[generate_video_from_image] ${shotKey} failure #${failCount}/${MAX_VIDEO_RETRIES}: ${String(error)}`);
+
+      const retriesRemaining = MAX_VIDEO_RETRIES - failCount;
       return {
         status: 'error',
         job_id: jobId,
         error: String(error),
+        failures: failCount,
+        retries_remaining: retriesRemaining,
+        suggestion: retriesRemaining <= 0
+          ? `This shot has failed ${failCount} times. Skip it and move on to the next shot.`
+          : `${retriesRemaining} retry(s) remaining. Consider using a longer duration or simpler motion prompt.`,
       };
     }
     }); // end withVideoLock

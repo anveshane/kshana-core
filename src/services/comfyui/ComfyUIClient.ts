@@ -83,6 +83,43 @@ export class ComfyUIClient {
   }
 
   /**
+   * Fetch with retry for transient errors (502, 503, 429, network failures).
+   * Uses exponential backoff: 1s, 2s, 4s.
+   */
+  private async fetchWithRetry(
+    url: string,
+    options: RequestInit,
+    maxRetries: number = 3,
+  ): Promise<Response> {
+    const RETRYABLE_STATUS = new Set([502, 503, 429]);
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        const response = await fetch(url, options);
+        if (response.ok || !RETRYABLE_STATUS.has(response.status)) {
+          return response;
+        }
+        // Retryable HTTP status
+        lastError = new Error(`ComfyUI returned ${response.status}`);
+        debugLog(`[fetchWithRetry] ${response.status} on attempt ${attempt + 1}/${maxRetries + 1} for ${url}`);
+      } catch (err) {
+        // Network error (ECONNREFUSED, timeout, etc.)
+        lastError = err instanceof Error ? err : new Error(String(err));
+        debugLog(`[fetchWithRetry] Network error on attempt ${attempt + 1}/${maxRetries + 1}: ${lastError.message}`);
+      }
+
+      if (attempt < maxRetries) {
+        const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s
+        debugLog(`[fetchWithRetry] Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+
+    throw lastError ?? new Error('fetchWithRetry: all retries exhausted');
+  }
+
+  /**
    * Upload an image to ComfyUI input directory.
    */
   async uploadImage(
@@ -103,7 +140,7 @@ export class ComfyUIClient {
     formData.append('type', imageType);
     formData.append('overwrite', overwrite.toString());
 
-    const response = await fetch(url, {
+    const response = await this.fetchWithRetry(url, {
       method: 'POST',
       body: formData,
     });
@@ -134,7 +171,7 @@ export class ComfyUIClient {
       client_id: clientId,
     };
 
-    const response = await fetch(`${this.baseUrl}/prompt`, {
+    const response = await this.fetchWithRetry(`${this.baseUrl}/prompt`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -477,7 +514,7 @@ export class ComfyUIClient {
 
     const url = `${this.baseUrl}/view?${params.toString()}`;
 
-    const response = await fetch(url);
+    const response = await this.fetchWithRetry(url, {});
     if (!response.ok) {
       throw new Error(`Failed to download image: ${response.statusText}`);
     }
@@ -542,7 +579,7 @@ export class ComfyUIClient {
   // Helper methods
 
   private async getHistory(promptId: string): Promise<HistoryEntry | null> {
-    const response = await fetch(`${this.baseUrl}/history/${promptId}`);
+    const response = await this.fetchWithRetry(`${this.baseUrl}/history/${promptId}`, {});
     if (!response.ok) {
       return null;
     }

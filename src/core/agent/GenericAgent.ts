@@ -64,7 +64,7 @@ import {
 import { comfyProgressBus, type ComfyProgressHandler } from '../../services/comfyui/index.js';
 import { createTimelineSkeleton, loadTimeline, saveTimeline } from '../timeline/TimelineManager.js';
 import { parseSceneBreakdown } from './sceneBreakdownParser.js';
-import { computeSegmentBreakdown } from '../../utils/durationUtils.js';
+import { computeDurationBudget } from '../../utils/durationUtils.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -1820,9 +1820,9 @@ export class GenericAgent extends TypedEventEmitter {
 
       if (contentPromptResult.injectedSkills.length > 0) {
         this.emit({
-          type: 'notification',
-          level: 'info',
-          message: `Prompt skills injected for ${contentType}: ${contentPromptResult.injectedSkills.join(', ')}`,
+          type: 'agent_text',
+          text: `> **Skills loaded:** ${contentPromptResult.injectedSkills.join(', ')}\n\n`,
+          isFinal: false,
         });
       }
 
@@ -1831,16 +1831,16 @@ export class GenericAgent extends TypedEventEmitter {
       const cachedProject = loadProject();
       if (cachedProject?.targetDuration) {
         const totalDuration = cachedProject.targetDuration;
-        const breakdown = computeSegmentBreakdown(totalDuration);
+        const budget = computeDurationBudget(totalDuration);
 
-        if (breakdown) {
+        if (budget) {
           let scopeGuidance: string;
           if (totalDuration <= 30) scopeGuidance = 'This is a very short video — focus on ONE key moment, 2-3 scenes max.';
           else if (totalDuration <= 60) scopeGuidance = 'This is a short video — cover only the core dramatic arc.';
           else if (totalDuration <= 120) scopeGuidance = 'This is a medium-length video — cover the main narrative with moderate detail.';
           else scopeGuidance = 'This is a longer video — a fuller narrative is appropriate.';
 
-          durationSection = `\n<duration_constraints>\nTarget video duration: ${totalDuration} seconds\nSuggested scene/segment count: ${breakdown.segmentCount}\nSuggested duration per segment: ~${breakdown.segmentDuration} seconds\n${scopeGuidance}\n</duration_constraints>\n`;
+          durationSection = `\n<duration_constraints>\nTarget video duration: ${totalDuration} seconds\nMinimum total shots needed: ${budget.minTotalShots} (across all scenes)\nSuggested scene range: ${budget.suggestedSceneRange.min}-${budget.suggestedSceneRange.max} (let the narrative determine the exact count)\nAverage shot duration: ~${budget.avgShotDuration} seconds\nEach scene may have 1-3 shots based on its complexity.\nCRITICAL: Minimum shot duration is 4 seconds. The video model produces empty/failed output below 4s. Prefer 5-8 second shots.\n${scopeGuidance}\n</duration_constraints>\n`;
         }
       }
 
@@ -3016,9 +3016,9 @@ Respond in JSON format:
 
     if (contentPromptResult.injectedSkills.length > 0) {
       this.emit({
-        type: 'notification',
-        level: 'info',
-        message: `Prompt skills injected for ${contentType}: ${contentPromptResult.injectedSkills.join(', ')}`,
+        type: 'agent_text',
+        text: `> **Skills loaded:** ${contentPromptResult.injectedSkills.join(', ')}\n\n`,
+        isFinal: false,
       });
     }
 

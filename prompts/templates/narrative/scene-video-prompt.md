@@ -1,6 +1,6 @@
 # Scene Video Prompt Template (LTX-2 Multi-Shot)
 
-Break this scene into 2-4 cinematic shots, each optimized for the LTX-2 video generation model which transforms a scene image into a short video clip.
+Break this scene into 1-3 cinematic shots based on narrative complexity, each optimized for the LTX-2 video generation model which transforms a scene image into a short video clip.
 
 ## Scene Information
 
@@ -16,8 +16,9 @@ The establishing image path is available from the project state. Include it in t
 
 Choose one of two modes for this scene:
 
-- **multi_shot** (default): Break into 2-4 separate shots of 4-8 seconds each. Use for scenes with multiple beats, dialogue exchanges, or visual variety needs.
-- **continuous**: A single long shot of 8-10 seconds. Use for simple scenes with a single continuous action, minimal dialogue, or when the establishing shot already captures the key moment. In continuous mode, set the single shot's `useEstablishingAsFirstFrame: true` to use the establishing image directly as the LTX-2 input frame (no separate per-shot image generation needed).
+- **single_shot** (use for simple scenes): One shot of 4-10s. For scenes with a single beat, a brief moment, or a transition.
+- **multi_shot** (use for complex scenes): 2-3 shots of 4-8s each. For scenes with dialogue exchanges, action beats, or significant visual variety.
+- **continuous**: A single long shot of 8-10 seconds using the establishing image directly as the LTX-2 input frame (`useEstablishingAsFirstFrame: true`). Use when the establishing shot already captures the key moment and only subtle motion is needed.
 
 Set `sceneMode` in the output JSON accordingly.
 
@@ -33,7 +34,11 @@ Prefer 1-2 characters per scene where possible. Scenes with 3+ characters requir
 
 ## Multi-Shot Breakdown
 
-Each scene should be broken into 2-4 shots of 4-8 seconds each. LTX-2 generates short clips effectively — a single prompt trying to describe too much action produces poor results. Real video production uses multiple shots per scene.
+Each scene should be broken into 1-3 shots of 4-8 seconds each based on narrative complexity. Simple moments need just 1 shot. Complex dialogue or action scenes need 2-3 shots. Each shot must serve a narrative purpose — don't add shots just to fill time. LTX-2 generates short clips effectively — a single prompt trying to describe too much action produces poor results.
+
+**CRITICAL: Minimum shot duration is 4 seconds.** The LTX-2 model produces unreliable or empty output below 4s. Prefer 5-8 second shots for best quality. Never plan shots shorter than 4 seconds — if the math requires it, merge short shots together or redistribute duration.
+
+The orchestrator will provide a total duration budget. Distribute scene durations based on narrative weight — action-heavy scenes get more time, transitions get less.
 
 ### Shot Type Vocabulary
 

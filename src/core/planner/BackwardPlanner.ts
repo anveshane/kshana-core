@@ -7,7 +7,7 @@
  */
 
 import type { VideoTemplate, ArtifactTypeDefinition } from '../templates/types.js';
-import { computeSegmentBreakdown } from '../../utils/durationUtils.js';
+import { computeSegmentBreakdown, computeDurationBudget } from '../../utils/durationUtils.js';
 import { ArtifactGraph } from '../artifacts/ArtifactGraph.js';
 import type {
   UserGoal,
@@ -355,29 +355,41 @@ export class BackwardPlanner {
    */
   computeTimelineHints(goal: UserGoal, maxClipDuration: number = 10): TimelineHints {
     const totalDuration = goal.preferences.duration as number;
+    const budget = computeDurationBudget(totalDuration, maxClipDuration);
     const breakdown = computeSegmentBreakdown(totalDuration, maxClipDuration);
 
-    if (!breakdown) {
+    if (!budget || !breakdown) {
       return {
-        suggestedSegmentCount: 1,
-        suggestedSegmentDuration: 0,
         totalDuration: 0,
         maxClipDuration,
+        minTotalShots: 1,
+        suggestedSceneRange: { min: 1, max: 1 },
+        avgShotDuration: 0,
         reasoning: 'No duration specified in goal preferences.',
+        suggestedSegmentCount: 1,
+        suggestedSegmentDuration: 0,
       };
     }
 
     const reasoning =
-      `For a ${totalDuration}s video with ${maxClipDuration}s max clip duration, ` +
-      `you need at least ${breakdown.segmentCount} segment(s) of ~${breakdown.segmentDuration}s each. ` +
-      `After planning segments, call manage_timeline create_skeleton to create the timeline structure.`;
+      `Target duration: ${totalDuration}s. ` +
+      `You need at least ${budget.minTotalShots} total clips across all scenes. ` +
+      `Aim for ${budget.suggestedSceneRange.min}-${budget.suggestedSceneRange.max} scenes — ` +
+      `let the story determine the exact count. ` +
+      `Each scene can have 1-3 shots depending on complexity. ` +
+      `IMPORTANT: Every shot MUST be at least 4 seconds (video model minimum). Prefer 5-8s shots. ` +
+      `After planning scenes AND their shot breakdowns, create the timeline skeleton.`;
 
     return {
-      suggestedSegmentCount: breakdown.segmentCount,
-      suggestedSegmentDuration: breakdown.segmentDuration,
       totalDuration,
       maxClipDuration,
+      minTotalShots: budget.minTotalShots,
+      suggestedSceneRange: budget.suggestedSceneRange,
+      avgShotDuration: budget.avgShotDuration,
       reasoning,
+      // Deprecated fields for backward compatibility
+      suggestedSegmentCount: breakdown.segmentCount,
+      suggestedSegmentDuration: breakdown.segmentDuration,
     };
   }
 

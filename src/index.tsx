@@ -12,6 +12,18 @@ import { resetDebugLog } from './hooks/useAgent.js';
 import { startAnalyticsDashboard } from './server/analytics.js';
 import { killAllChildProcesses } from './utils/processRegistry.js';
 
+// Detect orphaned process: if our parent dies (reparented to PID 1), exit.
+// This catches the case where the terminal is closed without sending SIGHUP.
+const initialPpid = process.ppid;
+const orphanCheck = setInterval(() => {
+  if (process.ppid !== initialPpid) {
+    console.log('[kshana-ink] Parent process died, exiting.');
+    killAllChildProcesses();
+    process.exit(0);
+  }
+}, 5000);
+orphanCheck.unref(); // Don't keep the event loop alive just for this
+
 // Task type for agent specialization
 type TaskType = 'generic' | 'video';
 
@@ -239,6 +251,19 @@ if (cli) {
         { host: serverHost, port: serverPort }
       );
       await serverInstance.start();
+
+      // Graceful shutdown for server mode — stop server, kill children, exit process.
+      // Without process.exit() the Node event loop keeps the process alive as a zombie
+      // even after the parent shell is closed.
+      const serverShutdown = async (signal: string) => {
+        console.log(`\nReceived ${signal}, shutting down...`);
+        try { await serverInstance.stop(); } catch { /* best-effort */ }
+        killAllChildProcesses();
+        process.exit(0);
+      };
+      process.on('SIGINT', () => serverShutdown('SIGINT'));
+      process.on('SIGTERM', () => serverShutdown('SIGTERM'));
+      process.on('SIGHUP', () => serverShutdown('SIGHUP'));
     } catch (error) {
       console.error('Failed to start server:', error);
       process.exit(1);

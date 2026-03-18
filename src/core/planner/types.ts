@@ -188,16 +188,22 @@ export interface PlanStep {
  * Computed when the goal has a duration preference.
  */
 export interface TimelineHints {
-  /** Recommended number of segments to fill the duration */
-  suggestedSegmentCount: number;
-  /** Recommended duration per segment (seconds) */
-  suggestedSegmentDuration: number;
   /** Total target duration (seconds) */
   totalDuration: number;
   /** Maximum duration for a single generated clip (seconds) */
   maxClipDuration: number;
+  /** Physics constraint: minimum clips needed */
+  minTotalShots: number;
+  /** Narrative-driven scene range */
+  suggestedSceneRange: { min: number; max: number };
+  /** Target average shot duration */
+  avgShotDuration: number;
   /** Human-readable explanation for the agent */
   reasoning: string;
+  /** @deprecated Use minTotalShots and suggestedSceneRange instead */
+  suggestedSegmentCount: number;
+  /** @deprecated Use avgShotDuration instead */
+  suggestedSegmentDuration: number;
 }
 
 /**

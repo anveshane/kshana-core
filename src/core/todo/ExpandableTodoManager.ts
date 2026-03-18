@@ -237,8 +237,11 @@ export class ExpandableTodoManager {
     // Get existing completed todos to preserve them
     const existingCompleted = this.todos.filter(t => t.status === 'completed');
 
-    // Create new todos from input
-    const newTodos = todos.map(t => {
+    // Create new todos from input (filter out empty content items)
+    const newTodos = todos.filter(t => {
+      const content = (t['content'] as string | undefined) ?? '';
+      return content.trim().length > 0;
+    }).map(t => {
       const content = (t['content'] as string | undefined) ?? '';
       const status = normalizeStatus(t['status']);
       const activeForm = t['activeForm'] as string | undefined;
@@ -310,16 +313,18 @@ export class ExpandableTodoManager {
       };
     });
 
-    // Add new items that don't exist yet
+    // Add new items that don't exist yet (skip items with no content — status-only updates for unknown IDs)
     for (const u of updates) {
       const id = u['id'] as string | undefined;
       if (!id || existingIds.has(id)) continue;
 
       const content = u['content'] as string | undefined;
+      if (!content?.trim()) continue; // Don't create empty todos
+
       const status = u['status'] !== undefined ? normalizeStatus(u['status']) : 'pending';
       const activeForm = u['activeForm'] as string | undefined;
 
-      const item = createTodoItem(content ?? '', {
+      const item = createTodoItem(content, {
         status,
         activeForm,
         depth: 0,

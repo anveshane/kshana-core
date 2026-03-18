@@ -299,6 +299,10 @@ export function buildContentPrompt(
   const allInjectedSkills: string[] = [];
 
   for (const [guideName, guideContentType] of Object.entries(GUIDE_INJECTED_TYPES)) {
+    if (guideContentType !== contentType) {
+      templateVars[guideName] = '';  // suppress {{#if}} block for irrelevant guides
+      continue;
+    }
     const guideSkillCtx = resolveSkillContext(guideContentType);
     const resolved = resolveGuide(guideName, guideContentType, guideSkillCtx, projectDir);
     templateVars[guideName] = resolved.content;

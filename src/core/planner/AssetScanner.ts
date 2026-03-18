@@ -114,6 +114,13 @@ export class AssetScanner {
     registry: AssetRegistry,
     issues: ScanIssue[]
   ): void {
+    if (!project.artifacts) {
+      issues.push({
+        type: 'warning',
+        message: 'Project has no artifacts field — skipping artifact scan',
+      });
+      return;
+    }
     for (const [typeId, instances] of Object.entries(project.artifacts)) {
       if (!instances || typeof instances !== 'object') {
         continue;

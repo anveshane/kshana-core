@@ -109,10 +109,11 @@ AskUserQuestion(
 
 Work through plan steps in dependency order:
 - Use `generate_content` for all text/prompt artifacts
-- **Duration-aware content**: The `create_backward_plan` response includes `timelineHints` with suggested scene counts and durations. Reference these when writing `generate_content` instructions:
-  - For **plot**: "Create a plot outline with approximately N scenes/segments to fit a Xs video"
-  - For **story**: "Write a concise story that fits N scenes of ~Ds each"
-  - For **scene breakdown**: "Break the story into exactly N scenes"
+- **Duration-aware content**: The `create_backward_plan` response includes `timelineHints` with a duration budget. Reference these when writing `generate_content` instructions:
+  - For **plot**: "Create a plot outline for a Xs video — aim for MIN-MAX scenes based on the narrative"
+  - For **story**: "Write a concise story for a Xs video — let the narrative determine scene boundaries"
+  - For **scene breakdown**: "Break the story into scenes based on narrative beats. Aim for MIN-MAX scenes for a Xs video. Let the story determine natural scene boundaries."
+  - Each scene gets as many shots as it needs (1-3). Simple moments = 1 shot. Complex dialogue/action = 2-3 shots. Each shot must serve a narrative purpose.
   - The system auto-injects duration constraints, but your instruction should also reflect the scope
 - Use `generate_image` / `generate_video_from_image` for media
 - Get user approval before expensive operations (images, videos)
@@ -121,7 +122,7 @@ Work through plan steps in dependency order:
 
 ### 7. Create Timeline (MANDATORY for all video projects)
 
-**As soon as scenes/segments are known** (after scene breakdown is generated), create the timeline skeleton BEFORE generating any images or videos:
+Create the timeline skeleton AFTER shot breakdowns are complete for all scenes. Each shot becomes a timeline segment. Create it BEFORE generating any images or videos:
 
 ```
 manage_timeline(
@@ -143,6 +144,7 @@ The timeline.json is the **communication bridge between server and client**. The
 - Every video project MUST have a timeline, regardless of template
 - After generating each asset (image, video), call `update_segment` to reflect progress
 - On session resume: if scenes exist but no timeline.json, create it immediately
+- **Duration budget check**: After all shot breakdowns are complete, verify total shot durations sum to approximately the target duration. If over/under by >15%, adjust shot durations (not shot count)
 
 ---
 
@@ -208,7 +210,7 @@ The `prompt_file` / `motion_prompt_file` parameters read directly from the file 
 
 ## Multi-Shot Scene Video Generation (Per-Shot Backward Flow)
 
-When generating scene videos, each scene is broken into 2-4 cinematic shots. Each shot needs its own source image before video generation. Follow this backward dependency chain **per shot**:
+When generating scene videos, each scene is broken into 1-3 cinematic shots based on narrative complexity. Each shot needs its own source image before video generation. Follow this backward dependency chain **per shot**:
 
 ### The Flow
 

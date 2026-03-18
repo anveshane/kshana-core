@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadContentTypeSkills, clearPromptTemplateCache } from '../../src/core/prompts/loader.js';
+import { buildContentPrompt } from '../../src/core/prompts/index.js';
 
 describe('loadContentTypeSkills', () => {
   beforeEach(() => {
@@ -168,5 +169,63 @@ describe('loadContentTypeSkills', () => {
     expect(content).toContain('PROVIDER_LEVEL');
     expect(content).toContain('WORKFLOW_LEVEL');
     expect(loadedFiles).toHaveLength(4); // 1 built-in + 3 project-level
+  });
+});
+
+// ── Conditional guide injection in buildContentPrompt ────────────────────
+describe('buildContentPrompt conditional guide injection', () => {
+  beforeEach(() => {
+    clearPromptTemplateCache();
+  });
+
+  const GUIDE_HEADERS = [
+    'For Character Image Prompts',
+    'For Setting Image Prompts',
+    'For Scene Image Prompts',
+    'For Scene Video Prompts',
+    'For Shot Image Prompts',
+  ] as const;
+
+  it('non-image content type (plot) includes zero guide headers', () => {
+    const { prompt } = buildContentPrompt('Create a plot', 'plot');
+    for (const header of GUIDE_HEADERS) {
+      expect(prompt).not.toContain(header);
+    }
+  });
+
+  it('non-image content type (character) includes zero guide headers', () => {
+    const { prompt } = buildContentPrompt('Create a character', 'character');
+    for (const header of GUIDE_HEADERS) {
+      expect(prompt).not.toContain(header);
+    }
+  });
+
+  it('character_image_prompt includes only character image guide header', () => {
+    const { prompt } = buildContentPrompt('Create image prompt', 'character_image_prompt');
+    // Should have the character image guide header (with default guide content)
+    expect(prompt).toContain('For Character Image Prompts');
+    // Should NOT have other guide headers
+    expect(prompt).not.toContain('For Setting Image Prompts');
+    expect(prompt).not.toContain('For Scene Image Prompts');
+    expect(prompt).not.toContain('For Scene Video Prompts');
+    expect(prompt).not.toContain('For Shot Image Prompts');
+  });
+
+  it('setting_image_prompt includes only setting image guide header', () => {
+    const { prompt } = buildContentPrompt('Create image prompt', 'setting_image_prompt');
+    expect(prompt).toContain('For Setting Image Prompts');
+    expect(prompt).not.toContain('For Character Image Prompts');
+    expect(prompt).not.toContain('For Scene Image Prompts');
+    expect(prompt).not.toContain('For Scene Video Prompts');
+    expect(prompt).not.toContain('For Shot Image Prompts');
+  });
+
+  it('scene_video_prompt includes only scene video guide header', () => {
+    const { prompt } = buildContentPrompt('Create video prompt', 'scene_video_prompt');
+    expect(prompt).toContain('For Scene Video Prompts');
+    expect(prompt).not.toContain('For Character Image Prompts');
+    expect(prompt).not.toContain('For Setting Image Prompts');
+    expect(prompt).not.toContain('For Scene Image Prompts');
+    expect(prompt).not.toContain('For Shot Image Prompts');
   });
 });

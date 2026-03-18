@@ -243,7 +243,7 @@ const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
   id: 'scene_video_prompt',
   displayName: 'Multi-Shot Motion Prompts',
   category: 'structure',
-  description: 'Multi-shot breakdown of each scene into 2-4 cinematic shots with motion/camera direction',
+  description: 'Multi-shot breakdown of each scene into 1-3 cinematic shots (based on narrative complexity) with motion/camera direction',
   scope: 'chapter',
   isCollection: true,
   itemName: 'motion prompt',

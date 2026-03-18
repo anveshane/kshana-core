@@ -144,6 +144,29 @@ class WorkflowRegistry {
       qualityLevel: 'ultra',
     });
 
+    // 3c. FLUX 2 Klein Edit - Multi-reference image editing (default image editing workflow)
+    this.register({
+      name: 'flux2_klein_edit',
+      filename: 'flux2_klein_edit.json',
+      workflowType: WorkflowType.IMAGE_EDITING,
+      description: 'Multi-reference image editing using FLUX 2 Klein 9B. Supports 1-4 reference images for consistent scene generation with character and setting references.',
+      capabilities: [
+        'image-to-image',
+        'multi-image-input',
+        'intelligent-editing',
+        'scene-variation',
+        'consistency-preservation',
+        'reference-based-generation',
+      ],
+      displayName: 'FLUX 2 Klein Edit',
+      requiresBaseImage: true,
+      supportsTextPrompts: true,
+      supportsImageToImage: true,
+      outputFormat: 'image',
+      estimatedTimeSeconds: 15,
+      qualityLevel: 'high',
+    });
+
     // 4. LTX-2.3 GGUF - Video generation (supports both I2V and T2V via toggle)
     this.register({
       name: 'ltx23',

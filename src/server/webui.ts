@@ -276,6 +276,34 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .tool-md-result code { background: var(--bg-tertiary); padding: 1px 3px; border-radius: 2px; font-size: 12px; }
 .tool-md-result pre { background: #0d1117; padding: 8px; border-radius: 4px; margin: 4px 0; font-size: 11px; }
 
+/* Content Creator card */
+.content-creator-card { border: 1px solid var(--purple); border-radius: 8px; background: rgba(210,168,255,0.04); margin: 4px 0; overflow: hidden; }
+.content-creator-header { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; user-select: none; font-size: 12px; border-bottom: 1px solid rgba(210,168,255,0.15); }
+.content-creator-header:hover { background: rgba(210,168,255,0.06); }
+.cc-icon { font-size: 14px; flex-shrink: 0; }
+.cc-label { font-weight: 600; color: var(--purple); text-transform: uppercase; letter-spacing: 0.5px; font-size: 11px; }
+.cc-type-badge { font-size: 10px; color: var(--text-muted); background: var(--bg-tertiary); padding: 2px 8px; border-radius: 10px; }
+.cc-status { margin-left: auto; font-size: 10px; flex-shrink: 0; }
+.cc-status.started { color: var(--accent); }
+.cc-status.completed { color: var(--green-bright); }
+.cc-instruction { padding: 8px 12px; font-size: 13px; color: var(--text-muted); line-height: 1.5; border-bottom: 1px solid rgba(255,255,255,0.04); }
+.cc-instruction .cc-inst-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 4px; opacity: 0.7; }
+.cc-child-tools { max-height: 200px; overflow-y: auto; transition: max-height 0.3s ease, opacity 0.3s ease; }
+.cc-child-tools.collapsed { max-height: 0; overflow: hidden; opacity: 0.3; }
+.cc-output-section { display: none; border-top: 2px solid var(--purple); background: rgba(210,168,255,0.06); }
+.cc-output-section.visible { display: block; }
+.cc-output-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--purple); padding: 8px 12px 0; font-weight: 600; }
+.cc-output-content { padding: 8px 12px 12px; font-size: 13px; line-height: 1.6; }
+.cc-output-content h1, .cc-output-content h2, .cc-output-content h3 { color: var(--accent); margin: 8px 0 4px; }
+.cc-output-content h1 { font-size: 16px; } .cc-output-content h2 { font-size: 14px; } .cc-output-content h3 { font-size: 13px; }
+.cc-output-content p { margin: 4px 0; }
+.cc-output-content ul, .cc-output-content ol { padding-left: 18px; margin: 4px 0; }
+.cc-output-content strong { color: #e6edf3; }
+.cc-output-content code { background: var(--bg-tertiary); padding: 1px 4px; border-radius: 2px; font-size: 12px; }
+.cc-output-content pre { background: #0d1117; padding: 8px; border-radius: 4px; margin: 4px 0; font-size: 11px; overflow-x: auto; }
+.cc-footer { display: none; padding: 6px 12px; font-size: 11px; color: var(--green-bright); border-top: 1px solid rgba(255,255,255,0.04); }
+.cc-footer.visible { display: flex; align-items: center; gap: 6px; }
+
 /* Phase transition */
 .phase-transition { display: flex; align-items: center; gap: 8px; padding: 8px 16px; margin: 4px 0; background: linear-gradient(90deg, rgba(88,166,255,0.1) 0%, transparent 100%); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; }
 .phase-transition .phase-icon { font-size: 14px; }
@@ -544,6 +572,11 @@ function getOrCreateAgentGroup(agentName) {
   }
   // Close previous group
   closeAgentGroup();
+  // Suppress the "CONTENT CREATOR" label when an active CC card exists
+  if (name === 'Content Creator' && findActiveContentCreatorCard()) {
+    currentAgentGroup = { name, bodyEl: chatMessages };
+    return currentAgentGroup;
+  }
   // Add a label for the new agent
   var label = document.createElement('div');
   label.className = 'agent-label';
@@ -561,7 +594,7 @@ function closeAgentGroup() {
 function handleStreamChunk(data) {
   // Tool streaming goes into the tool card
   if (data.toolCallId) {
-    const entry = findToolEntry(data.toolCallId);
+    const entry = findToolEntry(data.toolCallId, data.toolName);
     if (entry) { handleToolStreaming(entry, data); return; }
   }
 
@@ -692,6 +725,48 @@ function isGenerateTool(name) {
   return t.includes('generate_image') || t.includes('generate_video') || t.includes('generate_content');
 }
 
+// Content Creator card helpers
+var activeContentCreatorCardId = null;
+
+function findActiveContentCreatorCard() {
+  if (!activeContentCreatorCardId) return null;
+  var entry = pendingTools[activeContentCreatorCardId];
+  if (entry && entry.isContentCreator) return entry;
+  activeContentCreatorCardId = null;
+  return null;
+}
+
+function toggleCCChildTools(header) {
+  var card = header.closest('.content-creator-card');
+  if (!card) return;
+  var childTools = card.querySelector('.cc-child-tools');
+  if (childTools) childTools.classList.toggle('collapsed');
+}
+
+function buildContentCreatorCard(genId, args) {
+  var card = document.createElement('div');
+  card.className = 'content-creator-card';
+  card.dataset.toolId = genId;
+  card.dataset.toolName = 'generate_content';
+
+  var contentType = args.content_type || 'content';
+  var instruction = args.instruction || '';
+
+  card.innerHTML =
+    '<div class="content-creator-header" onclick="toggleCCChildTools(this)">' +
+      '<span class="cc-icon">\\u270E</span>' +
+      '<span class="cc-label">Content Creator</span>' +
+      '<span class="cc-type-badge">' + escHtml(contentType) + '</span>' +
+      '<span class="cc-status started">\\u25CF</span>' +
+    '</div>' +
+    (instruction ? '<div class="cc-instruction"><div class="cc-inst-label">Instruction</div>' + escHtml(truncStr(instruction, 300)) + '</div>' : '') +
+    '<div class="cc-child-tools"></div>' +
+    '<div class="cc-output-section"><div class="cc-output-label">Generated Content</div><div class="cc-output-content"></div></div>' +
+    '<div class="cc-footer">\\u2713 Content created <span class="cc-duration"></span></div>';
+
+  return card;
+}
+
 function buildArtifactImg(artifactId, label) {
   var url = resolveArtifactUrl(artifactId);
   var displayLabel = label || artifactId;
@@ -803,6 +878,38 @@ function handleToolCall(data) {
     toolCounter++;
     const genId = 'tool_' + toolCounter;
 
+    // Content Creator child tools: nest inside the active CC card
+    var ccEntry = findActiveContentCreatorCard();
+    if (ccEntry && agentName === 'Content Creator' && toolName !== 'generate_content') {
+      var ccChildContainer = ccEntry.card.querySelector('.cc-child-tools');
+      if (ccChildContainer) {
+        var paramSummaryCC = getToolParamsSummary(toolName, data.arguments);
+        var catCC = getToolCategory(toolName);
+        var childCard = document.createElement('div');
+        childCard.className = 'tool-card faded';
+        childCard.dataset.toolId = genId;
+        childCard.dataset.toolName = toolName;
+        childCard.innerHTML =
+          '<div class="tool-header" onclick="toggleToolBody(this)">' +
+            '<span class="tool-chevron">&#9654;</span>' +
+            '<span class="tool-name cat-' + catCC + '">' + escHtml(toolName) + '</span>' +
+            (paramSummaryCC ? '<span class="tool-params-summary">' + paramSummaryCC + '</span>' : '') +
+            '<span class="tool-duration"></span>' +
+            '<span class="tool-status started">&#9679;</span>' +
+          '</div>' +
+          '<div class="tool-body">' +
+            '<div class="tool-section-label">Arguments</div>' +
+            '<pre>' + escHtml(JSON.stringify(data.arguments || {}, null, 2)) + '</pre>' +
+            '<div class="tool-streaming-content"></div>' +
+            '<div class="tool-result-section" style="display:none"></div>' +
+          '</div>';
+        ccChildContainer.appendChild(childCard);
+        pendingTools[genId] = { card: childCard, startTime: Date.now(), toolName };
+        maybeScroll();
+        return;
+      }
+    }
+
     // Get or create agent group
     const group = getOrCreateAgentGroup(agentName);
     const container = group.bodyEl;
@@ -840,6 +947,14 @@ function handleToolCall(data) {
 
     // Special rich rendering for generate tools
     if (isGenerateTool(toolName)) {
+      if (toolName === 'generate_content') {
+        var ccCard = buildContentCreatorCard(genId, data.arguments || {});
+        container.appendChild(ccCard);
+        pendingTools[genId] = { card: ccCard, startTime: Date.now(), toolName, isContentCreator: true };
+        activeContentCreatorCardId = genId;
+        maybeScroll();
+        return;
+      }
       var genCard = buildGenerateCard(genId, toolName, data.arguments || {});
       container.appendChild(genCard);
       pendingTools[genId] = { card: genCard, startTime: Date.now(), toolName };
@@ -903,6 +1018,37 @@ function handleToolCall(data) {
 
     // Skip result rendering for think tool — already shown in the card body
     if (entry.isThink) return;
+
+    // Content Creator card completion
+    if (entry.isContentCreator) {
+      if (entry._ccRenderTimer) { clearTimeout(entry._ccRenderTimer); entry._ccRenderTimer = null; }
+      var ccCard = entry.card;
+      // Final markdown render (no cursor)
+      var ccOutputContent = ccCard.querySelector('.cc-output-content');
+      if (ccOutputContent && entry._ccRawText) {
+        ccOutputContent.innerHTML = renderMarkdown(entry._ccRawText);
+      }
+      // Update status
+      var ccStatus = ccCard.querySelector('.cc-status');
+      if (ccStatus) {
+        ccStatus.className = 'cc-status ' + data.status;
+        ccStatus.innerHTML = data.status === 'completed' ? '&#10003;' : '&#10007;';
+      }
+      // Show footer with duration
+      var ccFooter = ccCard.querySelector('.cc-footer');
+      if (ccFooter && data.status === 'completed') {
+        var ccDurEl = ccFooter.querySelector('.cc-duration');
+        if (ccDurEl) ccDurEl.textContent = formatDuration(Date.now() - entry.startTime);
+        ccFooter.classList.add('visible');
+      }
+      // Collapse child tools
+      var ccChildTools = ccCard.querySelector('.cc-child-tools');
+      if (ccChildTools) ccChildTools.classList.add('collapsed');
+      // Clear active CC card
+      if (activeContentCreatorCardId === entryId) activeContentCreatorCardId = null;
+      maybeScroll();
+      return;
+    }
 
     const card = entry.card;
     const statusEl = card.querySelector('.tool-status');
@@ -1074,15 +1220,49 @@ function renderToolResult(container, toolName, result) {
   renderImagesInResult(container, resultStr);
 }
 
-function findToolEntry(toolCallId) {
-  // toolCallId from server is often empty; try matching by ID or return last pending
-  for (const [id, t] of Object.entries(pendingTools)) {
-    return t; // return most recent (usually only one pending at a time)
+function findToolEntry(toolCallId, toolName) {
+  // Try matching by toolName first (most reliable — toolCallId is often empty)
+  if (toolName) {
+    var byName = null;
+    for (const [id, t] of Object.entries(pendingTools)) {
+      if (t.toolName === toolName) byName = t;
+    }
+    if (byName) return byName;
   }
-  return null;
+  // Fallback: return last non-CC pending entry, then any last entry
+  var lastNonCC = null;
+  var last = null;
+  for (const [id, t] of Object.entries(pendingTools)) {
+    last = t;
+    if (!t.isContentCreator) lastNonCC = t;
+  }
+  return lastNonCC || last;
 }
 
 function handleToolStreaming(entry, data) {
+  // Content Creator card: route streaming to the output section
+  if (entry.isContentCreator) {
+    var outputSection = entry.card.querySelector('.cc-output-section');
+    var outputContent = entry.card.querySelector('.cc-output-content');
+    if (outputSection && outputContent) {
+      outputSection.classList.add('visible');
+      if (!entry._ccRawText) entry._ccRawText = '';
+      if (data.content) entry._ccRawText += data.content;
+      // Throttled markdown rendering
+      if (!entry._ccRenderTimer) {
+        entry._ccRenderTimer = setTimeout(function() {
+          entry._ccRenderTimer = null;
+          if (entry._ccRawText) {
+            outputContent.innerHTML = renderMarkdown(entry._ccRawText) + '<span class="streaming-cursor-inline"></span>';
+            maybeScroll();
+          }
+        }, 200);
+      }
+    }
+    maybeScroll();
+    return;
+  }
+
   const streamEl = entry.card.querySelector('.tool-streaming-content');
   if (!streamEl) return;
 
