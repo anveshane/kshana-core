@@ -806,21 +806,16 @@ async function waitForComfyUIJob(
  */
 export const generateImageTool: ToolDefinition = createTool(
   'generate_image',
-  `Generate an image using ComfyUI. Supports two modes:
+  `Generate an image using ComfyUI. The generation mode is automatically determined by image_type:
 
-1. **Text-to-Image** (generation_mode: "text_to_image"):
-   - For character reference images
-   - For setting reference images
-   - No reference_images needed
-
-2. **Image+Text-to-Image** (generation_mode: "image_text_to_image"):
-   - For scene images that need character/setting consistency
-   - Requires reference_images array with character and setting refs
-   - Uses reference images to maintain visual consistency
+- **character_ref / setting_ref**: Generates a standalone reference image from the prompt alone.
+- **establishing / scene**: Generates using reference images for visual consistency. You MUST provide reference_images — the tool will reject the call without them.
 
 This tool blocks until generation is complete and returns the result directly (artifact_id and file_path). No need to call wait_for_job separately.
 
-**Prompt source**: Provide EITHER \`prompt\` (inline text) OR \`prompt_file\` (path to .prompt.md file). Using \`prompt_file\` is preferred as it reads from approved prompt files.`,
+**Prompt source**: Provide EITHER \`prompt\` (inline text) OR \`prompt_file\` (path to .prompt.md file). Using \`prompt_file\` is preferred as it reads from approved prompt files.
+
+**IMPORTANT**: Establishing and scene images always require reference_images. Do not attempt to generate them without references.`,
   {
     type: 'object',
     properties: {
@@ -864,16 +859,10 @@ This tool blocks until generation is complete and returns the result directly (a
         type: 'string',
         description: 'Setting name (required for setting_ref type)',
       },
-      generation_mode: {
-        type: 'string',
-        description:
-          'Generation mode: text_to_image for refs, image_text_to_image for scenes with refs',
-        enum: ['text_to_image', 'image_text_to_image'],
-      },
       reference_images: {
         type: 'array',
         description:
-          'ONLY character and setting reference images for visual consistency (required for image_text_to_image mode). Do NOT include other scene images or shot images — only character_ref and setting_ref artifacts.',
+          'Character and setting reference images for visual consistency. REQUIRED for establishing and scene image types. Use read_project() to get artifact IDs for character_ref and setting_ref images.',
         items: {
           type: 'object',
           properties: {
