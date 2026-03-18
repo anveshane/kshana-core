@@ -124,15 +124,28 @@ export class WebSocketHandler {
       remoteFs = new RemoteClientFileSystem(socket, projectCache);
     }
 
-    // Try to resume an existing session (e.g. after browser reconnect)
+    // Try to resume an existing session (e.g. after browser reconnect or server restart)
     let sessionId: string;
+    let recovered = false;
     if (resumeSessionId && this.conversationManager.getSession(resumeSessionId)) {
+      // Session still in memory — direct resume
       sessionId = resumeSessionId;
       // Close any stale connection for this session
       const oldConn = this.connections.get(sessionId);
       if (oldConn) {
         try { oldConn.socket.close(); } catch { /* ignore */ }
         this.connections.delete(sessionId);
+      }
+    } else if (resumeSessionId && connectionMode === 'local') {
+      // Session not in memory — try recovering from persistent storage (post-restart)
+      const recoveredState = this.conversationManager.recoverSession(resumeSessionId);
+      if (recoveredState) {
+        sessionId = resumeSessionId;
+        recovered = true;
+      } else {
+        // Cannot recover — create fresh session
+        const session = this.conversationManager.createSession(connectionMode, remoteFs);
+        sessionId = session.id;
       }
     } else {
       // Create new session
@@ -158,10 +171,27 @@ export class WebSocketHandler {
     this.connections.set(sessionId, connectionState);
 
     // Send connected status
-    this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
-      status: 'connected',
-      message: `Session created (${connectionMode} mode)`,
-    }));
+    if (recovered) {
+      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+        status: 'connected',
+        message: 'Session recovered after server restart.',
+      }));
+      // Also send ready status so the UI knows the session is fully configured
+      const toolNames = this.conversationManager.getSessionToolNames(sessionId);
+      const persisted = this.conversationManager.getPersistedSession(sessionId);
+      const projectName = persisted?.projectDir?.replace('.kshana', '') ?? 'recovered';
+      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+        status: 'ready',
+        message: `Session recovered — project "${projectName}" restored. Send a task to continue.`,
+        tools: toolNames,
+        projectName,
+      }));
+    } else {
+      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+        status: 'connected',
+        message: `Session created (${connectionMode} mode)`,
+      }));
+    }
 
     // Set up message handler
     socket.on('message', async (data) => {

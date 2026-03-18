@@ -9,7 +9,7 @@
     "kshana-ink-server": "./dist/server/cli.js"
   },
   "scripts": {
-    "start": "tsx src/index.tsx",
+    "start": "tsx src/server/cli.ts",
     "fake": "KSHANA_FAKE_MODE=1 tsx src/index.tsx",
     "dev": "tsx watch src/index.tsx",
     "server": "tsx src/server/cli.ts",

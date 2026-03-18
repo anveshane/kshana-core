@@ -2,6 +2,10 @@
  * ConversationManager - Manages agent sessions and orchestrates conversations.
  * Each WebSocket connection can have one active conversation session.
  * Agent is created lazily when a project is selected via configureSessionForProject().
+ *
+ * Sessions are persisted to SQLite (via SessionStore) so they can be recovered
+ * after a server restart. Agent instances are ephemeral — on recovery, the agent
+ * is re-created from project.json state.
  */
 import { v4 as uuidv4 } from 'uuid';
 import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
@@ -18,6 +22,7 @@ import {
   createRemoteSession,
 } from '../core/fs/index.js';
 import { startTimer, stopTimer, checkpointTimer } from '../tasks/video/workflow/ProjectManager.js';
+import { SessionStore } from './SessionStore.js';
 
 const TIMER_CHECKPOINT_INTERVAL_MS = 60_000; // Flush elapsed time to disk every 60s
 
@@ -47,6 +52,16 @@ export interface ConversationEvents {
   onNotification?: (sessionId: string, data: { level: 'info' | 'warning' | 'error'; message: string }) => void;
 }
 
+/** Project configuration needed to reconstruct an agent on session recovery. */
+interface ProjectConfig {
+  templateId: string;
+  style: string;
+  duration: number;
+  projectDirName: string;
+  providerConfig?: { imageGeneration?: string; imageEditing?: string; videoGeneration?: string };
+  resolution?: string;
+}
+
 interface ActiveSession {
   state: SessionState;
   agent?: GenericAgent;
@@ -60,6 +75,8 @@ interface ActiveSession {
   remoteFs?: IFileSystem;
   /** Periodic timer checkpoint interval (flushes elapsedMs to disk) */
   timerCheckpointInterval?: ReturnType<typeof setInterval>;
+  /** Project config for persistence/recovery */
+  projectConfig?: ProjectConfig;
 }
 
 export class ConversationManager {
@@ -68,11 +85,13 @@ export class ConversationManager {
   private sessionTimeoutMs: number;
   private maxIterations: number;
   private cleanupInterval?: ReturnType<typeof setInterval>;
+  private store: SessionStore | null;
 
   constructor(config: ConversationManagerConfig) {
     this.llmConfig = config.llmConfig;
     this.sessionTimeoutMs = config.sessionTimeoutMs ?? 30 * 60 * 1000; // 30 minutes
     this.maxIterations = config.maxIterations ?? 50;
+    this.store = SessionStore.getInstance();
 
     // Start cleanup interval
     this.cleanupInterval = setInterval(() => this.cleanupStaleSessions(), 60 * 1000);
@@ -131,6 +150,16 @@ export class ConversationManager {
       session.state.autonomousMode = true;
     }
 
+    // Store project config for persistence/recovery
+    session.projectConfig = {
+      templateId,
+      style,
+      duration,
+      projectDirName: projectDir,
+      providerConfig,
+      resolution,
+    };
+
     // Apply provider config if provided
     if (providerConfig) {
       getProviderRegistry().setConfig(providerConfig);
@@ -158,6 +187,9 @@ export class ConversationManager {
       });
       session.initialized = false;
     });
+
+    // Persist session to SQLite
+    this.persistSession(session);
   }
 
   /**
@@ -169,10 +201,98 @@ export class ConversationManager {
   }
 
   /**
-   * Check if a session exists.
+   * Check if a session exists in memory.
    */
   hasSession(sessionId: string): boolean {
     return this.sessions.has(sessionId);
+  }
+
+  /**
+   * Check if a session can be recovered from persistent storage.
+   * Returns the persisted session data if available.
+   */
+  getPersistedSession(sessionId: string): { projectDir: string; templateId: string; style: string; duration: number; resolution?: string; autonomousMode: boolean; status: string } | undefined {
+    if (!this.store) return undefined;
+    const persisted = this.store.get(sessionId);
+    if (!persisted) return undefined;
+
+    // Check if it's within the recovery window (4 hours)
+    const RECOVERY_WINDOW_MS = 4 * 60 * 60 * 1000;
+    if (Date.now() - persisted.lastActivity > RECOVERY_WINDOW_MS) {
+      return undefined;
+    }
+
+    return {
+      projectDir: persisted.projectDir,
+      templateId: persisted.templateId,
+      style: persisted.style,
+      duration: persisted.duration,
+      resolution: persisted.resolution,
+      autonomousMode: persisted.autonomousMode,
+      status: persisted.status,
+    };
+  }
+
+  /**
+   * Recover a session from persistent storage after server restart.
+   * Creates a new in-memory session with the same ID and reconfigures the agent.
+   * Returns the SessionState if recovery succeeds, undefined otherwise.
+   */
+  recoverSession(sessionId: string): SessionState | undefined {
+    if (!this.store) return undefined;
+    const persisted = this.store.get(sessionId);
+    if (!persisted) return undefined;
+
+    // Check recovery window (4 hours)
+    const RECOVERY_WINDOW_MS = 4 * 60 * 60 * 1000;
+    if (Date.now() - persisted.lastActivity > RECOVERY_WINDOW_MS) {
+      return undefined;
+    }
+
+    // Recreate in-memory session
+    const now = Date.now();
+    const state: SessionState = {
+      id: sessionId,
+      createdAt: persisted.createdAt,
+      lastActivity: now,
+      status: 'idle', // Reset to idle — agent will be reconfigured
+      taskHistory: JSON.parse(persisted.taskHistory || '[]'),
+      autonomousMode: persisted.autonomousMode,
+    };
+
+    const activeSession: ActiveSession = {
+      state,
+      mode: 'local',
+    };
+
+    this.sessions.set(sessionId, activeSession);
+
+    // Reconfigure the agent from persisted project config
+    try {
+      const providerConfig = persisted.providerConfig
+        ? JSON.parse(persisted.providerConfig)
+        : undefined;
+
+      this.configureSessionForProject(
+        sessionId,
+        persisted.templateId,
+        persisted.style,
+        persisted.duration,
+        persisted.projectDir,
+        providerConfig,
+        persisted.autonomousMode,
+        persisted.resolution,
+      );
+
+      // Update store with new activity time
+      this.store.touch(sessionId, 'idle');
+
+      return state;
+    } catch {
+      // Recovery failed — clean up
+      this.sessions.delete(sessionId);
+      return undefined;
+    }
   }
 
   /**
@@ -211,6 +331,8 @@ export class ConversationManager {
     if (!session) return;
     session.state.autonomousMode = enabled;
     session.agent?.setAutonomousMode(enabled);
+    // Persist change
+    this.persistSession(session);
   }
 
   /**
@@ -252,6 +374,7 @@ export class ConversationManager {
       session.state.status = 'running';
       session.state.lastActivity = Date.now();
       session.state.taskHistory.push(task);
+      this.persistSession(session);
 
       // Create abort controller for cancellation
       session.abortController = new AbortController();
@@ -281,6 +404,7 @@ export class ConversationManager {
         } else if (result.status === 'error' || result.status === 'interrupted') {
           session.state.status = 'error';
         }
+        this.persistSession(session);
 
         return result;
       } catch (error) {
@@ -289,6 +413,7 @@ export class ConversationManager {
         try { stopTimer(); } catch { /* ignore */ }
         session.state.status = 'error';
         session.state.lastActivity = Date.now();
+        this.persistSession(session);
         throw error;
       } finally {
         // Clean up event listeners
@@ -357,6 +482,7 @@ export class ConversationManager {
         } else if (result.status === 'error' || result.status === 'interrupted') {
           session.state.status = 'error';
         }
+        this.persistSession(session);
 
         return result;
       } catch (error) {
@@ -365,6 +491,7 @@ export class ConversationManager {
         try { stopTimer(); } catch { /* ignore */ }
         session.state.status = 'error';
         session.state.lastActivity = Date.now();
+        this.persistSession(session);
         throw error;
       } finally {
         // Clean up event listeners
@@ -477,6 +604,7 @@ export class ConversationManager {
 
     session.state.status = 'idle';
     session.state.lastActivity = Date.now();
+    this.persistSession(session);
     return !!(session.agent || session.abortController);
   }
 
@@ -500,6 +628,8 @@ export class ConversationManager {
         .then(({ RemotionRenderer }) => RemotionRenderer.getInstance().cleanupSession(sessionId))
         .catch(() => { /* Remotion service may not be initialized */ });
       this.sessions.delete(sessionId);
+      // Remove from persistent store
+      this.store?.delete(sessionId);
       return true;
     }
     return false;
@@ -521,6 +651,30 @@ export class ConversationManager {
         this.deleteSession(sessionId);
       }
     }
+  }
+
+  /**
+   * Persist session metadata to SQLite store.
+   */
+  private persistSession(session: ActiveSession): void {
+    if (!this.store || !session.projectConfig) return;
+
+    this.store.save({
+      id: session.state.id,
+      projectDir: session.projectConfig.projectDirName,
+      templateId: session.projectConfig.templateId,
+      style: session.projectConfig.style,
+      duration: session.projectConfig.duration,
+      resolution: session.projectConfig.resolution,
+      autonomousMode: session.state.autonomousMode ?? false,
+      createdAt: session.state.createdAt,
+      lastActivity: session.state.lastActivity,
+      status: session.state.status,
+      taskHistory: JSON.stringify(session.state.taskHistory),
+      providerConfig: session.projectConfig.providerConfig
+        ? JSON.stringify(session.projectConfig.providerConfig)
+        : undefined,
+    });
   }
 
   /**
