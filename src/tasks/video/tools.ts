@@ -969,6 +969,21 @@ This tool blocks until generation is complete and returns the result directly (a
       };
     }
 
+    // Establishing and scene images MUST use reference images — never allow text-to-image fallback
+    // This prevents the agent from "helpfully" dropping references after an error
+    if (['establishing', 'scene'].includes(params.image_type ?? '') &&
+        (!params.reference_images || params.reference_images.length === 0)) {
+      return {
+        status: 'error',
+        error:
+          `${params.image_type} images REQUIRE reference images for visual consistency. ` +
+          'Text-to-image fallback is not allowed for this image type.',
+        suggestion:
+          'Ensure character and setting reference images exist in the project (use read_project() to check). ' +
+          'Pass them in the reference_images array. Do NOT attempt to generate establishing/scene images without references.',
+      };
+    }
+
     // Determine generation mode based on image_type and reference_images
     const generationMode =
       params.generation_mode ??
