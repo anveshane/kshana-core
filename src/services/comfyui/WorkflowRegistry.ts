@@ -191,9 +191,13 @@ class WorkflowRegistry {
       qualityLevel: 'standard',
     });
 
-    // Register built-in manifests
+    // Register built-in manifests (only those with populated parameterMap)
     for (const [name, manifest] of Object.entries(BUILTIN_MANIFESTS)) {
-      this.manifests.set(name, manifest);
+      if (manifest.parameterMap.positivePrompt || manifest.parameterMap.inputImages) {
+        this.manifests.set(name, manifest);
+      }
+      // Manifests with empty parameterMap will be auto-analyzed on first access
+      // and merged with the built-in overrides (postProcess, extra) at that time.
     }
   }
 

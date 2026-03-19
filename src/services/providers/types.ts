@@ -59,6 +59,8 @@ export interface ImageGenerationInput {
   referenceImages?: ProviderReferenceImage[];
   /** Optional workflow name override (for custom workflows) */
   workflowName?: string;
+  /** Abort signal for cancellation */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -79,6 +81,8 @@ export interface ImageEditInput {
   filenamePrefix?: string;
   /** Optional workflow name override (defaults to configured imageEditing workflow) */
   workflowName?: string;
+  /** Abort signal for cancellation */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -100,6 +104,8 @@ export interface VideoGenerationInput {
   filenamePrefix?: string;
   /** Optional workflow name override (for custom workflows) */
   workflowName?: string;
+  /** Abort signal for cancellation */
+  abortSignal?: AbortSignal;
 }
 
 /**

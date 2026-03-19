@@ -7,6 +7,7 @@ import fastifyWebsocket from '@fastify/websocket';
 import fastifyCors from '@fastify/cors';
 import { registerRoutes, type RouteOptions } from './routes.js';
 import { resetLLMLogger } from '../core/llm/index.js';
+import { killAllChildProcesses } from '../utils/processRegistry.js';
 import type { ConversationManager } from './ConversationManager.js';
 import type { WebSocketHandler } from './WebSocketHandler.js';
 
@@ -71,11 +72,19 @@ export async function createServer(
   const { conversationManager, wsHandler } = await registerRoutes(app, routeOptions);
 
   // Graceful shutdown handler
+  let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
+    if (shuttingDown) {
+      console.log('Force exit.');
+      process.exit(1);
+    }
+    shuttingDown = true;
     console.log('\nShutting down...');
+    killAllChildProcesses();
     wsHandler.shutdown();
     conversationManager.shutdown();
     await app.close();
+    process.exit(0);
   };
 
   // Handle process signals

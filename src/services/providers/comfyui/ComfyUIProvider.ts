@@ -63,6 +63,7 @@ export class ComfyUIProvider implements GenerationProvider {
       referenceImages = [],
       workflowName: requestedWorkflow,
     } = input;
+    const abortSignal = input.abortSignal;
 
     const registry = getRegistry();
     const client = new ComfyUIClient({ outputDir });
@@ -134,7 +135,7 @@ export class ComfyUIProvider implements GenerationProvider {
     debugLog(`Queued image generation (prompt=${promptId}, workflow=${workflowName})`);
     onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
 
-    await this.waitForCompletion(client, promptId, queueResult.clientId, onProgress);
+    await this.waitForCompletion(client, promptId, queueResult.clientId, onProgress, abortSignal);
     return this.downloadFirstOutput(client, promptId, outputDir, 'image/png');
   }
 
@@ -152,6 +153,7 @@ export class ComfyUIProvider implements GenerationProvider {
       outputDir,
       filenamePrefix = 'edit',
     } = input;
+    const abortSignal = input.abortSignal;
 
     const registry = getRegistry();
     const workflowName = input.workflowName || 'flux2_klein_edit';
@@ -203,7 +205,7 @@ export class ComfyUIProvider implements GenerationProvider {
     debugLog(`Queued image edit (prompt=${queueResult.promptId})`);
     onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
 
-    await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
+    await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress, abortSignal);
     return this.downloadFirstOutput(client, queueResult.promptId, outputDir, 'image/png');
   }
 
@@ -222,6 +224,7 @@ export class ComfyUIProvider implements GenerationProvider {
       filenamePrefix = 'video',
       workflowName: requestedWorkflow,
     } = input;
+    const abortSignal = input.abortSignal;
 
     if (!fs.existsSync(sourceImagePath)) {
       throw new Error(`Source image not found: ${sourceImagePath}`);
@@ -271,7 +274,7 @@ export class ComfyUIProvider implements GenerationProvider {
     debugLog(`Queued video generation (prompt=${queueResult.promptId}, workflow=${workflowName})`);
     onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
 
-    await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
+    await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress, abortSignal);
     return this.downloadFirstOutput(client, queueResult.promptId, outputDir, 'video/mp4');
   }
 
@@ -329,6 +332,7 @@ export class ComfyUIProvider implements GenerationProvider {
     promptId: string,
     clientId: string | undefined,
     onProgress?: ProviderProgressCallback,
+    signal?: AbortSignal,
   ): Promise<void> {
     const progressHandler = (info: { percentage: number; message: string; step?: number; maxSteps?: number; currentNode?: string }) => {
       onProgress?.({
@@ -350,11 +354,11 @@ export class ComfyUIProvider implements GenerationProvider {
           maxSteps: info.maxSteps,
           currentNode: info.currentNode,
         });
-      });
+      }, signal);
     } else {
       result = await client.waitForCompletion(promptId, (pct, msg) => {
         progressHandler({ percentage: pct, message: msg });
-      });
+      }, undefined, signal);
     }
 
     if (result.status !== 'completed' && result.status !== 'completed_with_timeout') {

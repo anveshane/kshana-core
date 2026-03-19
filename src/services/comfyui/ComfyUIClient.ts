@@ -201,7 +201,8 @@ export class ComfyUIClient {
   async waitForCompletion(
     promptId: string,
     progressCallback?: ProgressCallback,
-    pollInterval: number = 10
+    pollInterval: number = 10,
+    signal?: AbortSignal,
   ): Promise<CompletionResult> {
     const startTime = Date.now();
 
@@ -215,6 +216,11 @@ export class ComfyUIClient {
     }
 
     while (true) {
+      if (signal?.aborted) {
+        debugLog(`[waitForCompletion] Aborted for prompt=${promptId}`);
+        throw new DOMException('ComfyUI wait aborted', 'AbortError');
+      }
+
       const elapsed = (Date.now() - startTime) / 1000;
 
       // Emit progress update during polling
@@ -271,6 +277,7 @@ export class ComfyUIClient {
     promptId: string,
     clientId: string,
     progressCallback?: (info: WSProgressInfo) => void,
+    signal?: AbortSignal,
   ): Promise<CompletionResult> {
     const wsUrl = this.baseUrl.replace(/^http/, 'ws') + `/ws?clientId=${clientId}`;
     debugLog(`[waitForCompletionWS] Connecting to ${wsUrl} for prompt=${promptId}`);
@@ -291,11 +298,26 @@ export class ComfyUIClient {
         resolve(result);
       };
 
+      // Handle abort signal
+      if (signal) {
+        if (signal.aborted) {
+          reject(new DOMException('ComfyUI wait aborted', 'AbortError'));
+          return;
+        }
+        signal.addEventListener('abort', () => {
+          if (!resolved) {
+            resolved = true;
+            cleanup();
+            reject(new DOMException('ComfyUI wait aborted', 'AbortError'));
+          }
+        }, { once: true });
+      }
+
       try {
         ws = new WebSocket(wsUrl);
       } catch (err) {
         debugLog(`[waitForCompletionWS] Failed to create WebSocket: ${err}. Falling back to HTTP polling.`);
-        return this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined);
+        return this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined, undefined, signal);
       }
 
       ws.on('open', () => {
@@ -307,7 +329,7 @@ export class ComfyUIClient {
         if (!resolved) {
           resolved = true;
           cleanup();
-          this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+          this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined, undefined, signal)
             .then(resolve)
             .catch(reject);
         }
@@ -318,7 +340,7 @@ export class ComfyUIClient {
         // If not yet resolved, fall back to polling
         if (!resolved) {
           resolved = true;
-          this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+          this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined, undefined, signal)
             .then(resolve)
             .catch(reject);
         }
@@ -603,7 +625,10 @@ export class ComfyUIClient {
   }
 
   private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise(resolve => {
+      const timer = setTimeout(resolve, ms);
+      if (typeof timer === 'object' && 'unref' in timer) timer.unref();
+    });
   }
 
   /**

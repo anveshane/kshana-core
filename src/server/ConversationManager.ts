@@ -77,6 +77,8 @@ interface ActiveSession {
   timerCheckpointInterval?: ReturnType<typeof setInterval>;
   /** Project config for persistence/recovery */
   projectConfig?: ProjectConfig;
+  /** Promise tracking the currently in-flight run (prevents overlapping runs) */
+  runPromise?: Promise<unknown>;
 }
 
 export class ConversationManager {
@@ -362,8 +364,17 @@ export class ConversationManager {
       throw new Error('Session context not initialized. Configure project first.');
     }
 
-    // Run the entire agent execution inside the session context
-    return runInSession(session.sessionContext, async () => {
+    // Wait for any previous run to fully settle before starting a new one.
+    // This prevents a race where cancel sets status='idle' but the old run()
+    // hasn't returned yet — a new runTask could overlap and reset the abort flag.
+    if (session.runPromise) {
+      await session.runPromise.catch(() => {});
+      session.runPromise = undefined;
+    }
+
+    // Run the entire agent execution inside the session context.
+    // Track the promise so cancelTask + new runTask can wait for it to settle.
+    const promise = runInSession(session.sessionContext, async () => {
       // Initialize agent if not already done (queries model context length)
       if (!session.initialized) {
         await session.agent!.initialize();
@@ -419,8 +430,11 @@ export class ConversationManager {
         // Clean up event listeners
         session.agent!.removeAllListeners();
         session.abortController = undefined;
+        session.runPromise = undefined;
       }
     });
+    session.runPromise = promise;
+    return promise;
   }
 
   /**
@@ -449,7 +463,7 @@ export class ConversationManager {
       throw new Error('Session context not initialized.');
     }
 
-    return runInSession(session.sessionContext, async () => {
+    const promise = runInSession(session.sessionContext, async () => {
       // Update session state
       session.state.status = 'running';
       session.state.lastActivity = Date.now();
@@ -497,8 +511,11 @@ export class ConversationManager {
         // Clean up event listeners
         session.agent!.removeAllListeners();
         session.abortController = undefined;
+        session.runPromise = undefined;
       }
     });
+    session.runPromise = promise;
+    return promise;
   }
 
   /**
