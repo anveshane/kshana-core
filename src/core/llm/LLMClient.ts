@@ -293,10 +293,15 @@ export class LLMClient {
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
 
-      if (delta?.content) {
-        fullContent += delta.content;
-        logger.logStreamChunk(delta.content);
-        yield { content: delta.content, done: false };
+      // Reasoning models may send content via reasoning_content delta
+      const deltaAny = delta as unknown as Record<string, unknown> | undefined;
+      const textChunk = delta?.content
+        || (deltaAny?.['reasoning_content'] as string | undefined)
+        || '';
+      if (textChunk) {
+        fullContent += textChunk;
+        logger.logStreamChunk(textChunk);
+        yield { content: textChunk, done: false };
       }
 
       if (delta?.tool_calls) {
@@ -460,8 +465,14 @@ export class LLMClient {
       arguments: this.safeParseJson(tc.function.arguments),
     }));
 
+    // Reasoning models (deepseek format) put output in reasoning_content with empty content
+    const msg = choice.message as unknown as Record<string, unknown>;
+    const rawContent = (choice.message.content as string | null)
+      || (msg['reasoning_content'] as string | null)
+      || null;
+
     return {
-      content: this.cleanContent(choice.message.content),
+      content: this.cleanContent(rawContent),
       toolCalls,
       finishReason: choice.finish_reason,
       usage: response.usage

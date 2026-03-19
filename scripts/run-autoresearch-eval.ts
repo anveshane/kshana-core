@@ -22,6 +22,8 @@ import { dirname } from 'node:path';
 import { JudgeLLMClient } from '../src/testing/JudgeLLMClient.js';
 import type { JudgeRubric } from '../src/testing/JudgeLLMClient.js';
 import { PromptEvaluator } from '../src/testing/PromptEvaluator.js';
+import { LLMClient } from '../src/core/llm/LLMClient.js';
+import { getLLMConfig } from '../src/core/llm/config.js';
 import { loadMarkdown } from '../src/core/prompts/loader.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -123,117 +125,137 @@ function loadTier1Prompts(): Record<string, string> {
 // ---------------------------------------------------------------------------
 // Simulate pipeline output for a benchmark story
 // ---------------------------------------------------------------------------
+/**
+ * Retry wrapper for LLM calls — handles gateway timeouts from tunnels.
+ */
+async function retryGenerate(
+  llm: LLMClient,
+  options: Parameters<LLMClient['generate']>[0],
+  maxRetries = 2,
+): Promise<{ content: string | null }> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await llm.generate(options);
+    } catch (err) {
+      const status = (err as { status?: number }).status;
+      if (status === 504 || status === 502 || status === 503) {
+        if (attempt < maxRetries) {
+          const delay = (attempt + 1) * 5000;
+          console.error(`    Retry ${attempt + 1}/${maxRetries} after ${status} (waiting ${delay / 1000}s)...`);
+          await new Promise((r) => setTimeout(r, delay));
+          continue;
+        }
+      }
+      throw err;
+    }
+  }
+  return { content: null };
+}
+
 async function simulatePipelineOutput(
-  judge: JudgeLLMClient,
+  simulatorLLM: LLMClient,
   benchmark: { name: string; content: string },
   tier1Prompts: Record<string, string>,
 ): Promise<Record<string, string>> {
-  // For text tier: use the judge LLM to simulate what the pipeline would produce
-  // given the current prompts and the benchmark story.
-  // This is cheaper than running the actual pipeline.
+  // For text tier: use the agent LLM (same model as pipeline) to simulate output.
+  // The judge LLM is only used for scoring, not generation — this avoids issues
+  // with reasoning-only models that return null content.
+  // maxTokens kept low to avoid gateway timeouts on tunneled connections.
 
-  const contentCreatorPrompt = tier1Prompts['content-creator'] ?? '';
-
-  // Generate simulated outputs for each phase using the judge
   const phases: Record<string, string> = {};
 
-  // Story phase — simulate what the content-creator would produce
-  const storyResponse = await judge.generate({
-    messages: [
-      {
-        role: 'system',
-        content: `You are simulating the output of an AI video generation pipeline's content-creator phase. Given the system prompt and a story idea, produce what the content-creator agent would output: a detailed plot with scenes, characters, and narrative arc. Be realistic about what this prompt would produce.
-
-System prompt being evaluated:
-${contentCreatorPrompt.slice(0, 4000)}`,
-      },
-      {
-        role: 'user',
-        content: `Story idea: ${benchmark.content}\n\nGenerate the content-creator's output (plot, narrative arc, key scenes):`,
-      },
-    ],
-    temperature: 0.3,
-    maxTokens: 2000,
-  });
-  phases['story'] = storyResponse.content ?? '';
+  // Story phase
+  try {
+    console.error('    Phase: story...');
+    const contentCreatorPrompt = tier1Prompts['content-creator'] ?? '';
+    const r = await retryGenerate(simulatorLLM, {
+      messages: [
+        {
+          role: 'system',
+          content: `Simulate an AI video pipeline's content-creator. Given the prompt and story idea, produce a plot with scenes, characters, and narrative arc.\n\nPrompt excerpt:\n${contentCreatorPrompt.slice(0, 2000)}`,
+        },
+        { role: 'user', content: `Story idea: ${benchmark.content}\n\nGenerate plot, narrative arc, key scenes:` },
+      ],
+      temperature: 0.3,
+      maxTokens: 1000,
+    });
+    phases['story'] = r.content ?? '';
+  } catch (err) {
+    console.error(`    ERROR (story): ${err instanceof Error ? err.message : String(err)}`);
+    phases['story'] = '';
+  }
 
   // Characters phase
-  const charsResponse = await judge.generate({
-    messages: [
-      {
-        role: 'system',
-        content: `You are simulating an AI video pipeline's character/setting definition phase. Given a story, produce detailed character descriptions and setting descriptions that would be used for image generation.`,
-      },
-      {
-        role: 'user',
-        content: `Story: ${phases['story'].slice(0, 2000)}\n\nGenerate character and setting definitions:`,
-      },
-    ],
-    temperature: 0.3,
-    maxTokens: 1500,
-  });
-  phases['chars'] = charsResponse.content ?? '';
+  try {
+    console.error('    Phase: chars...');
+    const r = await retryGenerate(simulatorLLM, {
+      messages: [
+        { role: 'system', content: `Simulate an AI video pipeline's character/setting definition phase. Produce character descriptions and settings for image generation.` },
+        { role: 'user', content: `Story: ${phases['story'].slice(0, 1500)}\n\nGenerate characters and settings:` },
+      ],
+      temperature: 0.3,
+      maxTokens: 800,
+    });
+    phases['chars'] = r.content ?? '';
+  } catch (err) {
+    console.error(`    ERROR (chars): ${err instanceof Error ? err.message : String(err)}`);
+    phases['chars'] = '';
+  }
 
   // Scene breakdown phase
-  const scenesResponse = await judge.generate({
-    messages: [
-      {
-        role: 'system',
-        content: `You are simulating an AI video pipeline's scene breakdown phase. Given a story and characters, produce a numbered list of scenes with visual descriptions, camera suggestions, and key actions.`,
-      },
-      {
-        role: 'user',
-        content: `Story: ${phases['story'].slice(0, 2000)}\nCharacters: ${phases['chars'].slice(0, 1000)}\n\nGenerate scene breakdown:`,
-      },
-    ],
-    temperature: 0.3,
-    maxTokens: 2000,
-  });
-  phases['scenes'] = scenesResponse.content ?? '';
+  try {
+    console.error('    Phase: scenes...');
+    const r = await retryGenerate(simulatorLLM, {
+      messages: [
+        { role: 'system', content: `Simulate an AI video pipeline's scene breakdown. Produce numbered scenes with visual descriptions, camera suggestions, and actions.` },
+        { role: 'user', content: `Story: ${phases['story'].slice(0, 1500)}\nCharacters: ${phases['chars'].slice(0, 800)}\n\nGenerate scene breakdown:` },
+      ],
+      temperature: 0.3,
+      maxTokens: 1000,
+    });
+    phases['scenes'] = r.content ?? '';
+  } catch (err) {
+    console.error(`    ERROR (scenes): ${err instanceof Error ? err.message : String(err)}`);
+    phases['scenes'] = '';
+  }
 
   // Image prompts phase
-  const imageGeneratorPrompt = tier1Prompts['image-generator'] ?? '';
-  const imgResponse = await judge.generate({
-    messages: [
-      {
-        role: 'system',
-        content: `You are simulating an AI video pipeline's image prompt generation phase. Given scenes and characters, produce specific image generation prompts for each scene.
-
-Image generator prompt being evaluated:
-${imageGeneratorPrompt.slice(0, 3000)}`,
-      },
-      {
-        role: 'user',
-        content: `Scenes: ${phases['scenes'].slice(0, 2000)}\nCharacters: ${phases['chars'].slice(0, 1000)}\n\nGenerate image prompts for each scene:`,
-      },
-    ],
-    temperature: 0.3,
-    maxTokens: 2000,
-  });
-  phases['img_prompts'] = imgResponse.content ?? '';
+  try {
+    console.error('    Phase: img_prompts...');
+    const imageGeneratorPrompt = tier1Prompts['image-generator'] ?? '';
+    const r = await retryGenerate(simulatorLLM, {
+      messages: [
+        { role: 'system', content: `Simulate an AI video pipeline's image prompt generation. Produce image generation prompts for each scene.\n\nPrompt excerpt:\n${imageGeneratorPrompt.slice(0, 1500)}` },
+        { role: 'user', content: `Scenes: ${phases['scenes'].slice(0, 1500)}\nCharacters: ${phases['chars'].slice(0, 600)}\n\nGenerate image prompts:` },
+      ],
+      temperature: 0.3,
+      maxTokens: 1000,
+    });
+    phases['img_prompts'] = r.content ?? '';
+  } catch (err) {
+    console.error(`    ERROR (img_prompts): ${err instanceof Error ? err.message : String(err)}`);
+    phases['img_prompts'] = '';
+  }
 
   // Video prompts phase
-  const videoAssemblerPrompt = tier1Prompts['video-assembler'] ?? '';
-  const vidResponse = await judge.generate({
-    messages: [
-      {
-        role: 'system',
-        content: `You are simulating an AI video pipeline's video prompt phase. Given scenes and image descriptions, produce video/motion prompts describing camera movement and subject motion for each clip.
+  try {
+    console.error('    Phase: vid_prompts...');
+    const videoAssemblerPrompt = tier1Prompts['video-assembler'] ?? '';
+    const r = await retryGenerate(simulatorLLM, {
+      messages: [
+        { role: 'system', content: `Simulate an AI video pipeline's video/motion prompt phase. Produce camera movement and subject motion descriptions.\n\nPrompt excerpt:\n${videoAssemblerPrompt.slice(0, 1500)}` },
+        { role: 'user', content: `Scenes: ${phases['scenes'].slice(0, 1500)}\n\nGenerate video/motion prompts:` },
+      ],
+      temperature: 0.3,
+      maxTokens: 800,
+    });
+    phases['vid_prompts'] = r.content ?? '';
+  } catch (err) {
+    console.error(`    ERROR (vid_prompts): ${err instanceof Error ? err.message : String(err)}`);
+    phases['vid_prompts'] = '';
+  }
 
-Video assembler prompt being evaluated:
-${videoAssemblerPrompt.slice(0, 3000)}`,
-      },
-      {
-        role: 'user',
-        content: `Scenes: ${phases['scenes'].slice(0, 2000)}\n\nGenerate video/motion prompts:`,
-      },
-    ],
-    temperature: 0.3,
-    maxTokens: 1500,
-  });
-  phases['vid_prompts'] = vidResponse.content ?? '';
-
-  // Tool usage — simulate tool call sequence
+  // Tool usage — simulated (no LLM call needed)
   phases['tools'] = `[Simulated tool calls]
 Phase: plot → generate_content(story_type="narrative", ...)
 Phase: characters → generate_content(characters=[...], settings=[...])
@@ -287,8 +309,20 @@ async function main() {
 
   console.error(`Loaded ${benchmarks.length} benchmark(s), ${rubrics.length} rubric(s)`);
 
-  // Initialize judge
-  const judge = new JudgeLLMClient();
+  // Initialize LLM clients.
+  // Both simulator and judge need models that return content (not reasoning-only).
+  // Use LLM_EVAL_* env vars if set, otherwise fall back to Gemini (reliable content output).
+  const evalConfig = {
+    baseUrl: process.env['LLM_EVAL_BASE_URL']
+      ?? 'https://generativelanguage.googleapis.com/v1beta/openai/',
+    apiKey: process.env['LLM_EVAL_API_KEY']
+      ?? process.env['GOOGLE_API_KEY'] ?? '',
+    model: process.env['LLM_EVAL_MODEL']
+      ?? 'gemini-2.0-flash',
+  };
+  console.error(`Simulator LLM: ${evalConfig.model} @ ${evalConfig.baseUrl}`);
+  const simulatorLLM = new LLMClient(evalConfig);
+  const judge = new JudgeLLMClient(evalConfig);
 
   // Phase scores accumulator
   const phaseScores: Record<string, number[]> = {};
@@ -312,7 +346,7 @@ async function main() {
 
     // Simulate pipeline output for this benchmark
     console.error('  Simulating pipeline output...');
-    const pipelineOutput = await simulatePipelineOutput(judge, benchmark, tier1Prompts);
+    const pipelineOutput = await simulatePipelineOutput(simulatorLLM, benchmark, tier1Prompts);
 
     // Score each phase against its rubric
     for (const rubric of rubrics) {

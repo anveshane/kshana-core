@@ -212,7 +212,6 @@ export class JudgeLLMClient {
       messages: [{ role: 'user', content: prompt }],
       temperature: 0,
       maxTokens: 2000,
-      responseFormat: { type: 'json_object' },
     });
 
     const raw = response.content;
