@@ -269,12 +269,14 @@ def update_last_result_status(new_status: str) -> None:
     write_results_rows(rows)
 
 
-def run_evaluation(eval_tier: str, timeout_seconds: int = 600) -> dict[str, Any]:
+def run_evaluation(eval_tier: str, timeout_seconds: int = 1800, benchmark: str | None = None) -> dict[str, Any]:
     """Run the evaluation script and parse results."""
     cmd = [
         "pnpm", "tsx", "scripts/run-autoresearch-eval.ts",
         "--eval-tier", eval_tier,
     ]
+    if benchmark:
+        cmd.extend(["--benchmark", benchmark])
     try:
         proc = subprocess.run(
             cmd,
@@ -347,9 +349,19 @@ def extract_json_payload(text: str) -> Any:
         return json.loads(cleaned[s : e + 1])
 
 
-def run_stochastic_json(prompt: str, trace_file: Path | None = None) -> dict[str, Any]:
-    cmd = ["opencode", "run", "--format", "json", prompt]
-    proc = subprocess.run(cmd, cwd=str(REPO_ROOT), capture_output=True, text=True)
+def run_stochastic_json(prompt: str, trace_file: Path | None = None, allow_edit: bool = False) -> dict[str, Any]:
+    """Run claude CLI in print mode and parse JSON from its output."""
+    allowed_tools = "Read Glob Grep"
+    if allow_edit:
+        allowed_tools = "Read Glob Grep Edit"
+    cmd = [
+        "claude", "-p",
+        "--output-format", "json",
+        "--allowedTools", allowed_tools,
+        "--dangerously-skip-permissions",
+        prompt,
+    ]
+    proc = subprocess.run(cmd, cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=300)
     if trace_file is not None:
         trace_file.parent.mkdir(parents=True, exist_ok=True)
         trace_file.write_text(
@@ -357,8 +369,8 @@ def run_stochastic_json(prompt: str, trace_file: Path | None = None) -> dict[str
                 {
                     "command": cmd,
                     "return_code": proc.returncode,
-                    "stderr": proc.stderr,
-                    "stdout": proc.stdout,
+                    "stderr": proc.stderr[-2000:] if proc.stderr else "",
+                    "stdout": proc.stdout[-5000:] if proc.stdout else "",
                 },
                 indent=2,
                 sort_keys=True,
@@ -366,14 +378,57 @@ def run_stochastic_json(prompt: str, trace_file: Path | None = None) -> dict[str
             encoding="utf-8",
         )
     if proc.returncode != 0:
-        raise RuntimeError(f"opencode failed: {proc.stderr.strip()}")
-    text = extract_text_events(proc.stdout)
+        raise RuntimeError(f"claude failed (rc={proc.returncode}): {proc.stderr.strip()[-500:]}")
+
+    # claude -p --output-format json returns {"result": "<text>", ...}
+    text = ""
+    try:
+        envelope = json.loads(proc.stdout)
+        text = envelope.get("result", "")
+    except json.JSONDecodeError:
+        # Fallback: try the opencode event stream format
+        text = extract_text_events(proc.stdout)
+
     if not text:
-        raise RuntimeError("no text response found in opencode event stream")
+        raise RuntimeError("no text response found in claude output")
     payload = extract_json_payload(text)
     if not isinstance(payload, dict):
         raise RuntimeError("stochastic payload must be a JSON object")
     return payload
+
+
+def run_claude_edit(prompt: str, trace_file: Path | None = None) -> str:
+    """Run claude CLI with edit permissions. Returns the text result."""
+    cmd = [
+        "claude", "-p",
+        "--output-format", "json",
+        "--allowedTools", "Read Glob Grep Edit",
+        "--dangerously-skip-permissions",
+        prompt,
+    ]
+    proc = subprocess.run(cmd, cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=300)
+    if trace_file is not None:
+        trace_file.parent.mkdir(parents=True, exist_ok=True)
+        trace_file.write_text(
+            json.dumps(
+                {
+                    "command": cmd,
+                    "return_code": proc.returncode,
+                    "stderr": proc.stderr[-2000:] if proc.stderr else "",
+                    "stdout": proc.stdout[-5000:] if proc.stdout else "",
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+    if proc.returncode != 0:
+        raise RuntimeError(f"claude edit failed (rc={proc.returncode}): {proc.stderr.strip()[-500:]}")
+    try:
+        envelope = json.loads(proc.stdout)
+        return envelope.get("result", "")
+    except json.JSONDecodeError:
+        return proc.stdout
 
 
 def default_proposal(state: dict[str, Any], iteration: int) -> dict[str, Any]:
@@ -407,20 +462,26 @@ def default_proposal(state: dict[str, Any], iteration: int) -> dict[str, Any]:
 
 
 def validate_proposal_shape(proposal: dict[str, Any]) -> dict[str, Any]:
-    required = ["status", "target_file", "description", "change_plan", "commit_description"]
+    required = ["target_file", "description", "change_plan", "commit_description"]
     for key in required:
         if key not in proposal:
             raise RuntimeError(f"proposal missing required key: {key}")
-    if proposal["status"] not in {"ok", "need_input"}:
-        raise RuntimeError("proposal.status must be one of: ok, need_input")
+    # Normalize status — accept "proposed", "ok", "need_input" etc.
+    status = str(proposal.get("status", "ok")).lower()
+    if status in ("proposed", "ready", "approved"):
+        status = "ok"
     target = str(proposal["target_file"])
     if target not in TIER1_PROMPTS:
         raise RuntimeError(f"target_file must be a Tier 1 prompt: {TIER1_PROMPTS}")
+    # change_plan can be a list or string
+    change_plan = proposal["change_plan"]
+    if isinstance(change_plan, list):
+        change_plan = "\n".join(f"- {item}" for item in change_plan)
     return {
-        "status": str(proposal["status"]),
+        "status": status,
         "target_file": target,
         "description": str(proposal["description"]),
-        "change_plan": str(proposal["change_plan"]),
+        "change_plan": str(change_plan),
         "commit_description": str(proposal["commit_description"]),
     }
 
@@ -603,11 +664,11 @@ def ensure_setup_ready(state: dict[str, Any]) -> None:
         raise RuntimeError(msg)
 
 
-def run_baseline(state: dict[str, Any], eval_tier: str) -> None:
+def run_baseline(state: dict[str, Any], eval_tier: str, benchmark: str | None = None) -> None:
     run_id = state["run_id"]
     append_runner_log(run_id, "INFO", f"stage=baseline start eval_tier={eval_tier}")
 
-    result = run_evaluation(eval_tier)
+    result = run_evaluation(eval_tier, benchmark=benchmark)
     commit = short_head()
     scores = result.get("scores", {})
 
@@ -639,6 +700,7 @@ def run_loop_iteration(
     stochastic: bool,
     eval_tier: str,
     proposal_file: str | None,
+    benchmark: str | None = None,
 ) -> bool:
     run_id = state["run_id"]
     run_dir = run_paths(run_id)["run_dir"]
@@ -699,14 +761,18 @@ def run_loop_iteration(
                 pqs_breakdown = json.dumps(state.get("last_scores", {}), indent=2)
                 prompt = (
                     "You are running kshana-ink autoresearch prompt optimization. "
-                    "Propose ONE prompt modification to improve the Phase Quality Score. "
-                    "Return JSON with keys: status, target_file, description, change_plan, commit_description. "
+                    "Read the target prompt file first to understand what's there. "
+                    "Propose ONE prompt modification to improve the Phase Quality Score (PQS). "
+                    "Focus on the lowest-scoring phase. "
+                    "Return ONLY a JSON object (no markdown, no explanation) with these keys:\n"
+                    '  {"status": "ok", "target_file": "<path>", "description": "<what to change>", '
+                    '"change_plan": "<specific edits>", "commit_description": "<short commit msg>"}\n'
                     f"target_file must be one of: {TIER1_PROMPTS}\n\n"
                     f"Current PQS breakdown:\n{pqs_breakdown}\n\n"
                     f"Recent results:\n{tail}\n"
                 )
                 proposal = validate_proposal_shape(
-                    run_stochastic_json(prompt, trace_file=iter_dir / "propose_opencode.json")
+                    run_stochastic_json(prompt, trace_file=iter_dir / "propose_claude.json")
                 )
                 proposal_source = "llm"
             else:
@@ -731,13 +797,22 @@ def run_loop_iteration(
         elif stage == "apply":
             proposal = iter_state.get("proposal") or default_proposal(state, iteration)
             if stochastic and proposal.get("status") == "ok":
+                target = proposal['target_file']
                 prompt = (
-                    f"Apply this prompt experiment. Edit ONLY the file: {proposal['target_file']}. "
-                    "Make the specific changes described. Do not touch any other file. "
-                    "Return JSON with keys: status, summary. status must be applied or failed.\n\n"
+                    f"Read the file {target} first, then apply this prompt experiment. "
+                    f"Edit ONLY the file: {target}. "
+                    "Make the specific changes described in the proposal. Do not touch any other file. "
+                    "After editing, respond with JSON: {{\"status\": \"applied\", \"summary\": \"<what you changed>\"}}\n\n"
                     f"Experiment proposal:\n{json.dumps(proposal, indent=2)}"
                 )
-                apply_res = run_stochastic_json(prompt, trace_file=iter_dir / "apply_opencode.json")
+                # Use run_claude_edit for the actual file modification, then parse the result
+                result_text = run_claude_edit(prompt, trace_file=iter_dir / "apply_claude.json")
+                try:
+                    apply_res = extract_json_payload(result_text)
+                    if not isinstance(apply_res, dict):
+                        apply_res = {"status": "applied", "summary": result_text[:200]}
+                except Exception:
+                    apply_res = {"status": "applied", "summary": result_text[:200]}
             else:
                 apply_res = {"status": "applied", "summary": "manual/default proposal path"}
             iter_state["apply"] = apply_res
@@ -774,7 +849,7 @@ def run_loop_iteration(
 
         elif stage == "evaluate":
             append_runner_log(run_id, "INFO", f"loop iteration={iteration} stage=evaluate running eval_tier={eval_tier}")
-            eval_result = run_evaluation(eval_tier)
+            eval_result = run_evaluation(eval_tier, benchmark=benchmark)
             iter_state["eval"] = eval_result
             log_event(run_id, {
                 "type": "loop", "iteration": iteration, "stage": "evaluate",
@@ -797,7 +872,7 @@ def run_loop_iteration(
                     f"Eval status: {eval_result.get('status')}\n"
                     f"Stderr:\n{eval_result.get('stderr', '')}"
                 )
-                triage = run_stochastic_json(prompt, trace_file=iter_dir / "triage_opencode.json")
+                triage = run_stochastic_json(prompt, trace_file=iter_dir / "triage_claude.json")
             else:
                 triage = {"action": "mark_crash_and_discard", "reason": "non-success eval"}
             iter_state["triage"] = triage
@@ -885,6 +960,7 @@ def run_selected(
     stochastic: bool,
     eval_tier: str,
     proposal_file: str | None,
+    benchmark: str | None = None,
 ) -> None:
     append_runner_log(
         state["run_id"],
@@ -907,7 +983,7 @@ def run_selected(
         ensure_setup_ready(state)
 
     if "baseline" in top_selection and not state.get("baseline_done"):
-        run_baseline(state, eval_tier)
+        run_baseline(state, eval_tier, benchmark=benchmark)
         save_state(state)
     elif "baseline" in top_selection:
         append_runner_log(state["run_id"], "INFO", "stage=baseline skip reason=already_done")
@@ -920,7 +996,7 @@ def run_selected(
         completed = 0
         current = start_it
         while completed < loop_count:
-            run_loop_iteration(state, current, loop_only, stochastic, eval_tier, proposal_file)
+            run_loop_iteration(state, current, loop_only, stochastic, eval_tier, proposal_file, benchmark=benchmark)
             completed += 1
             current = int(state.get("iterations_completed", 0)) + 1
     elif "loop" in top_selection:
@@ -975,8 +1051,9 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--from-stage", choices=TOP_STAGES)
         sp.add_argument("--to-stage", choices=TOP_STAGES)
         sp.add_argument("--loop-only", help="Comma list of loop stages: propose,apply,commit,evaluate,triage,record,decide")
-        sp.add_argument("--no-stochastic", action="store_true", help="Disable opencode stochastic stages.")
+        sp.add_argument("--no-stochastic", action="store_true", help="Disable Claude-driven stochastic stages (propose/apply/triage).")
         sp.add_argument("--eval-tier", choices=["text", "images", "full"], default="text", help="Evaluation tier (default: text).")
+        sp.add_argument("--benchmark", help="Run single benchmark (simple|complex|edge-case). Default: all.")
         sp.add_argument("--proposal-file", help="Optional JSON file with proposal override.")
 
     s = sub.add_parser("start", help="Start a new run")
@@ -1033,7 +1110,7 @@ def main() -> int:
             f"config only={args.only} from_stage={args.from_stage} to_stage={args.to_stage} loop_only={args.loop_only} loops={args.loops} stochastic={stochastic} eval_tier={eval_tier}",
         )
         log_event(run_id, {"type": "run", "action": "start", "branch": branch})
-        run_selected(state, top_selection, max(0, args.loops), loop_only, stochastic, eval_tier, args.proposal_file)
+        run_selected(state, top_selection, max(0, args.loops), loop_only, stochastic, eval_tier, args.proposal_file, benchmark=getattr(args, 'benchmark', None))
         save_state(state)
         append_runner_log(run_id, "INFO", "command=start complete")
         print_status(state)
@@ -1048,7 +1125,7 @@ def main() -> int:
             f"config only={args.only} from_stage={args.from_stage} to_stage={args.to_stage} loop_only={args.loop_only} loops={args.loops} stochastic={stochastic} eval_tier={eval_tier}",
         )
         log_event(run_id, {"type": "run", "action": "resume"})
-        run_selected(state, top_selection, max(0, args.loops), loop_only, stochastic, eval_tier, args.proposal_file)
+        run_selected(state, top_selection, max(0, args.loops), loop_only, stochastic, eval_tier, args.proposal_file, benchmark=getattr(args, 'benchmark', None))
         save_state(state)
         append_runner_log(run_id, "INFO", "command=resume complete")
         print_status(state)
