@@ -1,0 +1,52 @@
+{
+  "name": "Image Prompt Quality",
+  "description": "Evaluates the quality of image generation prompts from the image prompt phase.",
+  "phase": "img_prompts",
+  "weight": 0.20,
+  "dimensions": [
+    {
+      "name": "specificity",
+      "weight": 0.30,
+      "criteria": "Are image prompts specific enough to generate the intended visual? Do they include concrete details about subject, composition, lighting, and style?",
+      "scoringGuide": {
+        "excellent": "Prompts are highly specific with detailed subject descriptions, composition guidance, lighting, color palette, and style references.",
+        "good": "Good specificity with most visual aspects covered. Minor areas left to model interpretation.",
+        "adequate": "Basic prompts that convey the general idea but lack precision.",
+        "poor": "Vague prompts that could generate wildly different images."
+      }
+    },
+    {
+      "name": "character_consistency",
+      "weight": 0.25,
+      "criteria": "Do image prompts maintain consistent character descriptions across scenes? Would the same character be recognizable across generated images?",
+      "scoringGuide": {
+        "excellent": "Character descriptions are consistent and detailed across all scenes. Same visual identity maintained.",
+        "good": "Mostly consistent. Minor variations that shouldn't affect recognition.",
+        "adequate": "Some inconsistencies in character descriptions across scenes.",
+        "poor": "Characters described differently across scenes. Would not look like the same person."
+      }
+    },
+    {
+      "name": "scene_faithfulness",
+      "weight": 0.25,
+      "criteria": "Do the image prompts faithfully represent the scene descriptions? Are all key elements from the scene present in the prompt?",
+      "scoringGuide": {
+        "excellent": "Every key element from the scene description is captured in the image prompt.",
+        "good": "Most scene elements present. Minor details omitted.",
+        "adequate": "Core scene represented but missing several important visual elements.",
+        "poor": "Image prompt significantly diverges from the scene description."
+      }
+    },
+    {
+      "name": "technical_quality",
+      "weight": 0.20,
+      "criteria": "Are prompts well-structured for the target image generation model? Do they follow best practices (no conflicting instructions, appropriate length)?",
+      "scoringGuide": {
+        "excellent": "Prompts follow best practices for image generation. Well-structured, no conflicts, appropriate length.",
+        "good": "Good structure overall. Minor formatting issues.",
+        "adequate": "Functional but not optimized. Some awkward phrasing or conflicting directions.",
+        "poor": "Poorly structured prompts. Conflicting instructions or inappropriate length."
+      }
+    }
+  ]
+}

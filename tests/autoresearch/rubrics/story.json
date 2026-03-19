@@ -1,0 +1,52 @@
+{
+  "name": "Story Quality",
+  "description": "Evaluates the quality of the generated plot/story from the content-creator phase.",
+  "phase": "story",
+  "weight": 0.20,
+  "dimensions": [
+    {
+      "name": "narrative_coherence",
+      "weight": 0.30,
+      "criteria": "Does the story have a clear beginning, middle, and end? Are events logically connected?",
+      "scoringGuide": {
+        "excellent": "Crystal clear narrative arc with seamless transitions between events. Every scene flows naturally from the previous one.",
+        "good": "Solid narrative structure with minor gaps. Most transitions are smooth.",
+        "adequate": "Basic narrative present but some events feel disconnected or rushed.",
+        "poor": "Story lacks clear structure. Events seem random or contradictory."
+      }
+    },
+    {
+      "name": "faithfulness_to_input",
+      "weight": 0.25,
+      "criteria": "Does the story faithfully adapt the user's original concept? Are all key elements from the input preserved?",
+      "scoringGuide": {
+        "excellent": "All elements from the user input are present and expanded upon naturally. Nothing important is dropped or contradicted.",
+        "good": "Most input elements preserved. Minor details might be adjusted but core concept intact.",
+        "adequate": "Core concept present but several input elements missing or significantly altered.",
+        "poor": "Story diverges significantly from the user's input. Key elements dropped or contradicted."
+      }
+    },
+    {
+      "name": "visual_translatability",
+      "weight": 0.25,
+      "criteria": "Is the story written in a way that translates well to visual scenes? Are there concrete, filmable moments rather than abstract ideas?",
+      "scoringGuide": {
+        "excellent": "Every scene is visually concrete with specific actions, settings, and visual details that can be directly filmed.",
+        "good": "Most scenes have clear visual elements. Some moments might be slightly abstract.",
+        "adequate": "Mix of visual and abstract elements. Some scenes would be hard to represent visually.",
+        "poor": "Story is mostly abstract, internal, or narrative-heavy with few filmable moments."
+      }
+    },
+    {
+      "name": "emotional_engagement",
+      "weight": 0.20,
+      "criteria": "Does the story evoke emotional engagement? Is there stakes, tension, or emotional resonance?",
+      "scoringGuide": {
+        "excellent": "Deeply engaging with clear emotional stakes. Viewer would feel invested in the outcome.",
+        "good": "Emotionally engaging with some genuine moments of connection or tension.",
+        "adequate": "Some emotional content but feels surface-level or formulaic.",
+        "poor": "Flat and emotionally disengaging. No stakes or tension."
+      }
+    }
+  ]
+}

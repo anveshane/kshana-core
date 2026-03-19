@@ -21,6 +21,51 @@ export interface PromptTestMapping {
 }
 
 /**
+ * Mapping from prompt files to affected evaluation phases.
+ * Used by autoresearch to determine which phases to re-evaluate
+ * when a prompt file changes.
+ */
+export interface PromptEvalPhaseMapping {
+  /** Glob pattern for prompt files */
+  promptPattern: string;
+  /** Eval phases affected by changes to this prompt */
+  evalPhases: string[];
+  /** Description */
+  description: string;
+}
+
+/**
+ * Default prompt → eval phase mappings for autoresearch.
+ */
+export const PROMPT_EVAL_PHASE_MAPPINGS: PromptEvalPhaseMapping[] = [
+  {
+    promptPattern: 'prompts/system/orchestrator.md',
+    evalPhases: ['story', 'chars', 'scenes', 'img_prompts', 'vid_prompts', 'tools'],
+    description: 'Main orchestrator affects all phases',
+  },
+  {
+    promptPattern: 'prompts/subagents/content-creator.md',
+    evalPhases: ['story', 'chars'],
+    description: 'Content creator affects story and character quality',
+  },
+  {
+    promptPattern: 'prompts/subagents/image-generator.md',
+    evalPhases: ['img_prompts'],
+    description: 'Image generator affects image prompt quality',
+  },
+  {
+    promptPattern: 'prompts/subagents/video-assembler.md',
+    evalPhases: ['vid_prompts', 'tools'],
+    description: 'Video assembler affects video prompts and tool usage',
+  },
+  {
+    promptPattern: 'prompts/templates/narrative/orchestrator.md',
+    evalPhases: ['story', 'scenes', 'tools'],
+    description: 'Narrative orchestrator affects story, scenes, and tool routing',
+  },
+];
+
+/**
  * Result of detecting prompt changes.
  */
 export interface ChangeDetectionResult {
@@ -200,6 +245,24 @@ export class PromptChangeDetector {
    */
   getMappings(): PromptTestMapping[] {
     return this.mappings;
+  }
+
+  /**
+   * Get the eval phases affected by changed prompt files.
+   * Used by autoresearch to determine which rubrics to re-evaluate.
+   */
+  getAffectedEvalPhases(changedPrompts: string[]): string[] {
+    const phases = new Set<string>();
+    for (const prompt of changedPrompts) {
+      for (const mapping of PROMPT_EVAL_PHASE_MAPPINGS) {
+        if (matchesPattern(prompt, mapping.promptPattern)) {
+          for (const phase of mapping.evalPhases) {
+            phases.add(phase);
+          }
+        }
+      }
+    }
+    return [...phases];
   }
 }
 

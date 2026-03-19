@@ -1,0 +1,52 @@
+{
+  "name": "Scene Breakdown",
+  "description": "Evaluates the quality of scene decomposition from the scene breakdown phase.",
+  "phase": "scenes",
+  "weight": 0.20,
+  "dimensions": [
+    {
+      "name": "coverage",
+      "weight": 0.25,
+      "criteria": "Does the scene breakdown cover the entire story? Are all narrative beats represented as scenes?",
+      "scoringGuide": {
+        "excellent": "Every narrative beat from the story is represented. No gaps in the visual storytelling.",
+        "good": "Most of the story is covered. Minor beats might be condensed but nothing critical is lost.",
+        "adequate": "Core story covered but several moments skipped or compressed.",
+        "poor": "Significant portions of the story are missing from the scene breakdown."
+      }
+    },
+    {
+      "name": "scene_granularity",
+      "weight": 0.25,
+      "criteria": "Are scenes appropriately granular? Not too few (losing detail) or too many (fragmented)?",
+      "scoringGuide": {
+        "excellent": "Scene count is well-calibrated. Each scene represents a distinct visual moment with clear purpose.",
+        "good": "Mostly appropriate granularity. A few scenes could be split or merged.",
+        "adequate": "Some scenes too broad or too narrow. Uneven granularity.",
+        "poor": "Either too few scenes (story compressed) or too many (fragmented narrative)."
+      }
+    },
+    {
+      "name": "visual_clarity",
+      "weight": 0.25,
+      "criteria": "Is each scene described with enough visual detail to generate an image? Are camera angles, compositions, and key visual elements specified?",
+      "scoringGuide": {
+        "excellent": "Each scene has a clear visual description including composition, key actions, and atmosphere.",
+        "good": "Good visual descriptions for most scenes. Some lack specific composition details.",
+        "adequate": "Basic scene descriptions that give a general idea but lack visual specificity.",
+        "poor": "Scene descriptions are too vague to guide image generation."
+      }
+    },
+    {
+      "name": "narrative_flow",
+      "weight": 0.25,
+      "criteria": "Do scenes flow naturally from one to the next? Is there visual continuity?",
+      "scoringGuide": {
+        "excellent": "Scenes flow seamlessly. Clear visual continuity with natural transitions.",
+        "good": "Good flow overall. Most transitions are smooth.",
+        "adequate": "Some jarring transitions between scenes.",
+        "poor": "Scenes feel disconnected. No visual continuity."
+      }
+    }
+  ]
+}

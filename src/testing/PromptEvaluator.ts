@@ -30,7 +30,8 @@ export type AssertionType =
   | 'tool_arg_equals' // Check tool argument value
   | 'tool_arg_contains' // Check tool argument contains value
   | 'tool_arg_length' // Check array argument length (min/max)
-  | 'tool_arg_exists'; // Check tool argument exists
+  | 'tool_arg_exists' // Check tool argument exists
+  | 'llm_judge'; // LLM-as-judge rubric scoring (value = rubric path, threshold in minScore)
 
 /**
  * Single assertion for an eval case
@@ -44,6 +45,10 @@ export interface Assertion {
   toolName?: string;
   /** For tool_arg assertions: the argument path (e.g., "todos[0].status") */
   argPath?: string;
+  /** For llm_judge: minimum acceptable overall score (0.0 to 1.0) */
+  minScore?: number;
+  /** For llm_judge: the input text to evaluate against */
+  judgeInput?: string;
 }
 
 /**
@@ -418,6 +423,17 @@ export class PromptEvaluator {
         const actualValue = this.getNestedValue(toolCall.arguments, argPath);
         if (actualValue === undefined) {
           return `Expected ${toolName}.${argPath} to exist, but it doesn't`;
+        }
+        return null;
+      }
+
+      case 'llm_judge': {
+        // LLM-as-judge assertion: value is the rubric file path, minScore is the threshold
+        // This is a placeholder that passes in mock mode — actual judge scoring
+        // happens in the autoresearch eval runner, not in individual eval fixtures.
+        // When used in fixtures, it validates that the output is non-empty and substantive.
+        if (output === null || output.trim().length < 10) {
+          return `llm_judge: output is too short or empty for meaningful evaluation`;
         }
         return null;
       }

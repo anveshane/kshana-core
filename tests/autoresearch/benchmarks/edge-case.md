@@ -1,0 +1,1 @@
+An elderly lighthouse keeper speaks directly to the audience about the sea. There are no other characters. She recalls storms, ships, and the one night she saved a drowning sailor fifty years ago. Her monologue shifts between past and present as the light rotates behind her.
