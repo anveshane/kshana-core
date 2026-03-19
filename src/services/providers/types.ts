@@ -68,7 +68,7 @@ export interface ImageEditInput {
   editPrompt: string;
   /** Absolute path to the base image to edit */
   baseImagePath: string;
-  /** Additional reference images (up to 2) */
+  /** Additional reference images (up to 4) */
   referenceImages?: string[];
   negativePrompt?: string;
   aspectRatio?: string;
@@ -77,6 +77,8 @@ export interface ImageEditInput {
   outputDir: string;
   /** Optional filename prefix */
   filenamePrefix?: string;
+  /** Optional workflow name override (defaults to configured imageEditing workflow) */
+  workflowName?: string;
 }
 
 /**

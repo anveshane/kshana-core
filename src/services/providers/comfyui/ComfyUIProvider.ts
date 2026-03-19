@@ -154,9 +154,10 @@ export class ComfyUIProvider implements GenerationProvider {
     } = input;
 
     const registry = getRegistry();
-    const workflowMetadata = registry.get('qwen_edit');
+    const workflowName = input.workflowName || 'flux2_klein_edit';
+    const workflowMetadata = registry.get(workflowName);
     if (!workflowMetadata) {
-      throw new Error("Workflow 'qwen_edit' not found");
+      throw new Error(`Workflow '${workflowName}' not found`);
     }
 
     if (!fs.existsSync(baseImagePath)) {
@@ -169,9 +170,9 @@ export class ComfyUIProvider implements GenerationProvider {
     onProgress?.({ percentage: 0, message: 'Uploading base image...', done: false });
     const uploadResult = await client.uploadImage(baseImagePath, 'input', true);
 
-    // Upload reference images (up to 2)
+    // Upload reference images (up to 4)
     const referenceImageFilenames: string[] = [];
-    for (const refPath of referenceImages.slice(0, 2)) {
+    for (const refPath of referenceImages.slice(0, 4)) {
       if (!fs.existsSync(refPath)) {
         throw new Error(`Reference image not found: ${refPath}`);
       }
@@ -185,7 +186,7 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Load and parameterize via manifest
     onProgress?.({ percentage: 0, message: 'Loading workflow...', done: false });
-    const workflow = this.loadAndParameterize('qwen_edit', {
+    const workflow = this.loadAndParameterize(workflowName, {
       prompt: editPrompt,
       negativePrompt,
       seed,

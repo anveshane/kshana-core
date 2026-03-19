@@ -426,23 +426,7 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
     // Get the project style configuration and enhance the prompt
     const styleConfig = getProjectStyleConfig();
 
-    const useImageEditing = generation_mode === 'image_text_to_image' && reference_images.length > 0;
-
-    // If image editing mode with references, prepend image mapping context
-    let basePrompt = prompt;
-    if (useImageEditing && reference_images.length > 0) {
-      const imageContext = reference_images
-        .map((ref, i) => `image ${i + 1} is a ${ref.type} reference for "${ref.name}"`)
-        .join('. ');
-      basePrompt = `${imageContext}. ${prompt}`;
-    }
-
-    const enhancedPrompt = `${basePrompt}, ${styleConfig.promptModifier}`;
-    const enhancedNegativePrompt = negative_prompt
-      ? `${negative_prompt}, ${styleConfig.negativePromptModifier}`
-      : styleConfig.negativePromptModifier;
-
-    // Resolve reference images to file paths
+    // Resolve reference images to file paths first, so useImageEditing is based on actual resolved refs
     const resolvedRefImages = reference_images
       .map(ref => {
         const refPath = findImagePathFromArtifactId(ref.image_id);
@@ -456,8 +440,25 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
       })
       .filter((r): r is NonNullable<typeof r> => r !== null);
 
-    // Fail if image editing mode but no references resolved
-    if (useImageEditing && resolvedRefImages.length === 0) {
+    // Determine image editing mode based on whether resolved references actually exist
+    const useImageEditing = resolvedRefImages.length > 0;
+
+    // If image editing mode with references, prepend image mapping context
+    let basePrompt = prompt;
+    if (useImageEditing) {
+      const imageContext = reference_images
+        .map((ref, i) => `image ${i + 1} is a ${ref.type} reference for "${ref.name}"`)
+        .join('. ');
+      basePrompt = `${imageContext}. ${prompt}`;
+    }
+
+    const enhancedPrompt = `${basePrompt}, ${styleConfig.promptModifier}`;
+    const enhancedNegativePrompt = negative_prompt
+      ? `${negative_prompt}, ${styleConfig.negativePromptModifier}`
+      : styleConfig.negativePromptModifier;
+
+    // Fail if agent explicitly requested image editing but no references resolved
+    if (generation_mode === 'image_text_to_image' && resolvedRefImages.length === 0) {
       job.status = 'failed';
       job.error = 'No reference images could be resolved or uploaded for image_text_to_image mode.';
       job.updatedAt = Date.now();
@@ -1765,15 +1766,17 @@ Blocks until video generation is complete and returns the result directly.`,
  */
 export const editImageTool: ToolDefinition = createTool(
   'edit_image',
-  `Edit or compose an image using ComfyUI's Qwen Edit workflow. Supports up to 3 input images.
+  `Edit or compose an image using FLUX Klein 9B. Supports up to 5 input images (1 base + 4 references).
 
-The base image becomes "image1" in the prompt. Additional reference_images become "image2" and "image3".
-To reference characters/settings, use natural phrasing like "Parvati from image1" or "the setting from image3".
+The base image becomes "image 1" in the prompt. Additional reference_images become "image 2", "image 3", etc.
+To reference characters/settings, use natural phrasing like "Parvati from image 1" or "the setting from image 3".
 
 IMPORTANT: The order of images matters. Match your prompt references to the image order:
-- image1 = base_image_path (primary/base image)
-- image2 = reference_images[0] (e.g. first character reference)
-- image3 = reference_images[1] (e.g. second character or setting reference)
+- image 1 = base_image_path (primary/base image)
+- image 2 = reference_images[0] (e.g. first character reference)
+- image 3 = reference_images[1] (e.g. second character or setting reference)
+- image 4 = reference_images[2] (e.g. third reference)
+- image 5 = reference_images[3] (e.g. fourth reference)
 
 DO NOT use this tool for adding text, subtitles, or dialogue overlays to images. Use compose_panel instead — it is instant, free, and produces better text rendering.
 
@@ -1798,7 +1801,7 @@ This tool blocks until generation is complete and returns the result directly (a
         type: 'array',
         items: { type: 'string' },
         description:
-          'Up to 2 additional reference image paths (become image2, image3). Use for character refs, setting refs, or style references.',
+          'Up to 4 additional reference image paths (become image 2, image 3, etc.). Use for character refs, setting refs, or style references.',
       },
       negative_prompt: {
         type: 'string',
@@ -1849,7 +1852,7 @@ This tool blocks until generation is complete and returns the result directly (a
       // Resolve reference image paths
       const resolvedRefs: string[] = [];
       if (params.reference_images) {
-        for (const refPath of params.reference_images.slice(0, 2)) {
+        for (const refPath of params.reference_images.slice(0, 4)) {
           let resolvedPath = refPath;
           if (!path.isAbsolute(resolvedPath) && !resolvedPath.startsWith('.')) {
             resolvedPath = path.join(getProjectDir(), resolvedPath);

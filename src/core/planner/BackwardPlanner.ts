@@ -92,10 +92,15 @@ export class BackwardPlanner {
     for (const artifactType of required) {
       const satisfaction = registry.satisfiedArtifacts.get(artifactType);
 
-      // Only skip if fully satisfied
-      if (satisfaction !== 'full') {
-        toCreate.add(artifactType);
+      // Skip if fully satisfied, or if partially satisfied for collection types
+      // (collection items are individually guarded by file-existence checks in generate_content)
+      if (satisfaction === 'full') continue;
+      if (satisfaction === 'partial') {
+        const typeDef = this.template?.artifactTypes?.[artifactType];
+        if (typeDef?.isCollection) continue; // Individual items handled by generate_content's idempotency
       }
+
+      toCreate.add(artifactType);
     }
 
     return toCreate;

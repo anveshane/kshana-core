@@ -274,7 +274,9 @@ export class AssetScanner {
     }
 
     // Map filename patterns to artifact types
-    const PROMPT_FILE_PATTERNS: Array<{ suffix: string; artifactType: string }> = [
+    // More specific patterns MUST come before general ones (shot before scene)
+    const PROMPT_FILE_PATTERNS: Array<{ suffix: string; nameRegex?: RegExp; artifactType: string }> = [
+      { suffix: '.prompt.md', nameRegex: /scene-\d+-shot-\d+\.prompt\.md$/, artifactType: 'shot_image_prompt' },
       { suffix: '.prompt.md', artifactType: 'scene_image_prompt' },
       { suffix: '.motion.json', artifactType: 'scene_video_prompt' },
       { suffix: '.motion.md', artifactType: 'scene_video_prompt' },
@@ -291,7 +293,10 @@ export class AssetScanner {
             walkDir(fullPath);
           } else if (entry.isFile()) {
             for (const pattern of PROMPT_FILE_PATTERNS) {
-              if (entry.name.endsWith(pattern.suffix)) {
+              const matches = pattern.nameRegex
+                ? pattern.nameRegex.test(entry.name)
+                : entry.name.endsWith(pattern.suffix);
+              if (matches) {
                 const itemId = entry.name.replace(pattern.suffix, '');
                 const assetId = `detected_${pattern.artifactType}_${itemId}`;
 

@@ -96,6 +96,7 @@ ${getStyles()}
       <div id="input-area">
         <textarea id="input-box" placeholder="Type a task..." rows="1"></textarea>
         <button id="send-btn" onclick="sendMessage()">Send</button>
+        <button id="stop-btn" onclick="stopAgent()" style="display:none">&#9632; Stop</button>
       </div>
     </div>
   </div>
@@ -348,6 +349,8 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 #send-btn { background: var(--accent); color: #fff; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; flex-shrink: 0; }
 #send-btn:hover { opacity: 0.9; }
 #send-btn:disabled { opacity: 0.4; cursor: default; }
+#stop-btn { background: var(--red, #e5534b); color: #fff; border: none; padding: 8px 20px; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 600; flex-shrink: 0; }
+#stop-btn:hover { opacity: 0.9; }
 
 /* File attachments */
 #attached-files { display: flex; gap: 8px; padding: 8px 16px 0; flex-wrap: wrap; }
@@ -429,6 +432,7 @@ let artifactCache = {}; // artifact_id -> { path, url, type }
 const chatMessages = document.getElementById('chat-messages');
 const inputBox = document.getElementById('input-box');
 const sendBtn = document.getElementById('send-btn');
+const stopBtn = document.getElementById('stop-btn');
 const projectSelect = document.getElementById('project-select');
 const scrollBtn = document.getElementById('scroll-btn');
 let activeQuestionCard = null; // currently active question card element
@@ -505,12 +509,17 @@ function handleServerMessage(msg) {
 }
 
 // ===== Status =====
+function stopAgent() {
+  wsSend({ type: 'cancel', sessionId: sessionId });
+}
+
 function handleStatus(data) {
-  if (data.status === 'connected') sendBtn.disabled = false;
-  else if (data.status === 'busy') sendBtn.disabled = true;
-  else if (data.status === 'completed') { sendBtn.disabled = false; finalizeStream(); closeAgentGroup(); }
+  if (data.status === 'connected') { sendBtn.disabled = false; sendBtn.style.display = ''; stopBtn.style.display = 'none'; }
+  else if (data.status === 'busy') { sendBtn.disabled = true; sendBtn.style.display = 'none'; stopBtn.style.display = ''; }
+  else if (data.status === 'completed') { sendBtn.disabled = false; sendBtn.style.display = ''; stopBtn.style.display = 'none'; finalizeStream(); closeAgentGroup(); }
   // When select_project or create_project completes, handle pending actions
   if (data.status === 'ready') {
+    sendBtn.disabled = false; sendBtn.style.display = ''; stopBtn.style.display = 'none';
     if (data.message && data.message.startsWith('Project "') && data.message.endsWith('" created')) {
       addSystemMessage(data.message);
       // Auto-select the newly created project in the dropdown
@@ -653,24 +662,31 @@ function finalizeStream() {
   if (!streamingEl) return;
   var raw = streamingEl._rawText || '';
   // Remove empty or whitespace-only streaming elements — prevents orphaned bordered lines
-  if (!raw.trim() || !raw.replace(/[\s\n\r\t]+/g, '')) {
+  if (!raw.trim()) {
     streamingEl.remove();
     streamingEl = null;
     return;
   }
-  // Convert streaming element into a tool-card style "think" card (no toolId — streaming origin)
-  var card = document.createElement('div');
-  card.className = 'tool-card think-card';
-  card.innerHTML =
-    '<div class="tool-header">' +
-      '<span class="tool-name cat-system">think</span>' +
-      '<button class="tool-copy-btn" onclick="copyCardText(this, event)">Copy</button>' +
-    '</div>' +
-    '<div class="tool-body" style="display:block">' +
-      '<div class="tool-md-result">' + renderMarkdown(raw.trim()) + '</div>' +
-    '</div>';
-  // Replace streaming el with the card
-  streamingEl.parentNode.replaceChild(card, streamingEl);
+  // Render final markdown content into the message bubble
+  streamingEl.classList.remove('agent-thinking');
+  var contentEl = streamingEl.querySelector('.msg-content');
+  if (contentEl) {
+    contentEl.innerHTML = renderMarkdown(raw.trim());
+  }
+  // Add copy button
+  if (!streamingEl.querySelector('.msg-copy-btn')) {
+    var copyBtn = document.createElement('button');
+    copyBtn.className = 'msg-copy-btn';
+    copyBtn.textContent = 'Copy';
+    copyBtn.onclick = function() {
+      navigator.clipboard.writeText(raw.trim()).then(function() {
+        copyBtn.textContent = 'Copied!';
+        copyBtn.classList.add('copied');
+        setTimeout(function() { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('copied'); }, 1500);
+      });
+    };
+    streamingEl.appendChild(copyBtn);
+  }
   streamingEl = null;
 }
 

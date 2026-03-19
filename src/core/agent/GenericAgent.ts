@@ -249,6 +249,9 @@ export class GenericAgent extends TypedEventEmitter {
   private consecutiveTextOnlyResponses = 0;
   private static readonly MAX_TEXT_ONLY_NUDGES = 3;
   private static readonly MAX_CONSECUTIVE_LOOP_WARNINGS = 3; // Force stop after this many warnings
+  // Track total generate_content calls to catch slow-burn loops where args differ each time
+  private generateContentCallCount = 0;
+  private static readonly MAX_GENERATE_CONTENT_CALLS = 50; // Safety ceiling for a single session
 
   // Context window tracking
   private tokenUsage = {
@@ -1489,6 +1492,20 @@ export class GenericAgent extends TypedEventEmitter {
       };
     }
 
+    // Track total generate_content calls — catches slow-burn loops where args differ each time
+    if (toolName === 'generate_content') {
+      this.generateContentCallCount++;
+      if (this.generateContentCallCount > GenericAgent.MAX_GENERATE_CONTENT_CALLS) {
+        return {
+          message:
+            `LOOP BLOCKED: generate_content has been called ${this.generateContentCallCount} times this session ` +
+            `(limit: ${GenericAgent.MAX_GENERATE_CONTENT_CALLS}). This likely indicates a planning loop. ` +
+            `Review what's already been generated and move to the next pipeline phase.`,
+          isHardError: true,
+        };
+      }
+    }
+
     // Also check for rapid tool repetition (same tool called consecutively)
     // Skip this check for generate_content — it's inherently a long-running productive
     // operation with built-in idempotency (file existence check). Check 1 (exact same
@@ -1818,13 +1835,7 @@ export class GenericAgent extends TypedEventEmitter {
       const contentPromptResult = buildContentPrompt(instruction, contentType as ContentType, undefined, getProjectDir());
       const contentSystemPrompt = contentPromptResult.prompt;
 
-      if (contentPromptResult.injectedSkills.length > 0) {
-        this.emit({
-          type: 'agent_text',
-          text: `> **Skills loaded:** ${contentPromptResult.injectedSkills.join(', ')}\n\n`,
-          isFinal: false,
-        });
-      }
+      // Skills loaded info is debug-only — don't emit to UI to avoid message clutter
 
       // Auto-inject duration context from project
       let durationSection = '';
