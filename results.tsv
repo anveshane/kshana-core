@@ -1,0 +1,16 @@
+commit	pqs	story	chars	scenes	img_prompts	vid_prompts	tools	status	description
+01e4c1b	0.0	0.00	0.00	0.00	0.00	0.00	0.00	crash	baseline
+01e4c1b	0.0	0.00	0.00	0.00	0.00	0.00	0.00	crash	iteration 1: improve story (score: 1.00)
+d5509a7	0.0	0.00	0.00	0.00	0.00	0.00	0.00	crash	baseline
+d5509a7	0.0	0.00	0.00	0.00	0.00	0.00	0.00	crash	iteration 1: improve story (score: 1.00)
+d5509a7	81.6	0.95	0.94	0.85	0.85	0.77	0.45	keep	baseline
+d5509a7	82.4	0.95	0.94	0.82	0.93	0.75	0.45	keep	iteration 1: improve tools (score: 0.45)
+d5509a7	81.2	0.95	0.93	0.84	0.88	0.72	0.45	keep	baseline
+d5509a7	81.4	0.95	0.92	0.80	0.90	0.79	0.45	keep	baseline
+2740b1a	81.5	0.94	0.94	0.82	0.86	0.80	0.45	keep	Add a consolidated Tool Quick Reference section listing every available tool with its exact call signature, required arguments, and the phase where it must be used — so the agent has a single lookup t
+8351057	84.1	0.96	0.97	0.97	0.90	0.93	0.25	keep	baseline
+8351057	85.4	0.97	0.97	0.97	0.93	0.93	0.29	keep	Create missing prompts/video/workflow.md template that 6 workflow eval fixtures (54 test cases) reference. All workflow structural validators fail with 'Failed to render prompt' because this file does
+1ec039f	84.1	0.97	0.96	0.96	0.90	0.94	0.25	discard	Add phase lifecycle tools (update_project, read_project, update_planner_stage, transition_phase) to the Tool Quick Reference table and add a Phase Lifecycle section explaining phase completion signals
+96a58b2	83.4	0.97	0.97	0.96	0.75	0.86	0.44	discard	iteration 3: improve tools (score: 0.29)
+92d5932	86.4	0.96	0.97	0.96	0.90	0.92	0.42	keep	Add missing phase lifecycle tools (update_project, read_project, EnterPlanMode, ExitPlanMode) to the Tool Quick Reference table and add a compact Phase Lifecycle subsection under Key Rules — these are
+2ea918a	86.7	0.96	0.97	0.96	0.93	0.91	0.40	keep	iteration 5: improve tools (score: 0.42)
