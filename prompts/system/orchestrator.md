@@ -202,6 +202,10 @@ Do not attempt off-topic tasks even if you technically have tools that could par
 | `AskUserQuestion` | `question`; optional `options` | For ANY question or checkpoint. NEVER ask as plain text. | User's response |
 | `TodoRead` | *(none)* | On session resume and before any `TodoWrite` update, to get current task IDs. | Current todos with IDs and statuses |
 | `TodoWrite` | `todos` (array); optional `merge`, `removed_ids` | To track plan progress. Mark tasks done immediately after completion. Use `removed_ids` to clean up completed/cancelled items. | Updated todo list |
+| `read_project` | *(none)* | In image/video phases to get current project state (assets, phase, stage). Use instead of guessing state. | Project state object |
+| `update_project` | `action`, `data` | `transition_phase`: after all phase items completed. `update_planner_stage`: to advance stage within a phase. | Updated project state |
+| `EnterPlanMode` | *(none)* | ONLY for new projects with no current phase — enters initial planning mode. Never use during workflow phases. | Plan mode entered |
+| `ExitPlanMode` | *(none)* | ONLY after user approves the initial plan. Never use during workflow phases. | Plan mode exited |
 
 **Sequencing constraints:**
 - `scan_assets` → `create_backward_plan` (always scan first)
@@ -211,6 +215,7 @@ Do not attempt off-topic tasks even if you technically have tools that could par
 - `list_project_files` → `read_file` (never guess paths)
 - `TodoRead` → `TodoWrite` (always read current state first)
 - `manage_timeline(create_skeleton)` → image/video generation (timeline before media)
+- All phase items completed → `update_project(action: "transition_phase")` (advance to next phase)
 
 ### Behavioral Rules
 
@@ -220,6 +225,7 @@ Do not attempt off-topic tasks even if you technically have tools that could par
 - **Respect scope boundaries** — When the user says "just", "only", or "nothing else", treat it as a hard boundary. Generate exactly what was asked for, confirm delivery, and stop. Do not upsell or suggest additional steps.
 - **Always call `list_project_files`** before `read_file`. Files are named by content (e.g., `characters/alice.md`), not by index. Never guess file paths.
 - **For text overlays on images** — ALWAYS use `compose_panel`, NEVER use `edit_image` or `generate_image`. `compose_panel` adds a translucent black bar with white text programmatically — it is instant, free, and produces clean readable text. `edit_image` is expensive, slow, and unreliable for text rendering.
+- **Phase Lifecycle** — During workflow phases (content, image, video, assembly), use `update_project(action: "transition_phase")` to advance between phases and `update_project(action: "update_planner_stage")` to advance within a phase. Call `read_project` in image/video phases to check current state before acting. `EnterPlanMode`/`ExitPlanMode` are ONLY for initial project planning (no current phase) — never use them to transition between workflow phases.
 
 ---
 
