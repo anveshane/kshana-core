@@ -34,6 +34,7 @@ import {
   LONG_CONTENT_THRESHOLD,
 } from '../context/index.js';
 import { CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
+import { PromptDAGExecutor, type PromptDAGParams } from '../tools/builtin/promptDAG.js';
 import { getContentCreatorTools, clearKnownProjectFiles, ReadCache, ListFilesCache } from '../tools/builtin/contentCreatorTools.js';
 import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
@@ -180,6 +181,7 @@ const SIMPLE_TOOLS = new Set([
   'dispatch_explore', // New skill-based architecture
   'dispatch_skill', // New skill-based architecture
   'generate_content', // Deterministic content generation
+  'generate_prompt',  // DAG-driven prompt generation
   'TodoWrite',
   'TodoRead',
   'todo_write', // back-compat during migration
@@ -1737,6 +1739,32 @@ export class GenericAgent extends TypedEventEmitter {
       });
       FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
       return result;
+    }
+
+    // Handle generate_prompt - DAG-driven prompt generation (image/video prompts)
+    if (toolCall.name === 'generate_prompt') {
+      const args = toolCall.arguments as unknown as PromptDAGParams;
+
+      debugLog(`[GenericAgent] generate_prompt: type=${args.prompt_type}, name=${args.name}, scene=${args.scene_number}, shot=${args.shot_number}`);
+
+      const executor = new PromptDAGExecutor(this.llm, getProjectDir());
+      const result = await executor.execute(args);
+
+      // Include loop warning in result if present
+      const finalResult = loopWarningMessage
+        ? { ...result, loop_warning: loopWarningMessage }
+        : result;
+
+      this.emit({
+        type: 'tool_result',
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        result: finalResult,
+        isError: result.status === 'error',
+        agentName: this.getEffectiveAgentName(),
+      });
+      FlowRecorder.getSession()?.onToolComplete(toolCall.id, finalResult, result.status === 'error');
+      return finalResult;
     }
 
     // Handle generate_content - content generation with instruction-based approach

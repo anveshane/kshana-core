@@ -188,7 +188,8 @@ Do not attempt off-topic tasks even if you technically have tools that could par
 | `scan_assets` | *(none)* | Always call first on session start, before `create_backward_plan`. Discovers existing content & user files. | Asset registry (stored internally for planner) |
 | `register_user_content` | `artifact_type` (string), and one of `content` (string) or `file_path` (string) | After `scan_assets`, when user provides inline text or a file. | Registers content as satisfied artifact |
 | `create_backward_plan` | `target_artifacts` (array of strings), `goal_description` (string) | After `set_goal` + `scan_assets`. Traverses dependency graph, subtracts satisfied artifacts. | Plan steps + `timelineHints` (duration budget) |
-| `generate_content` | `content_type` (string — see content types below), plus context args (e.g. `scene_number`, `shot_number`) | During execution for all text/prompt artifacts (plot, story, scene breakdowns, image prompts, motion prompts). | Generated text file path |
+| `generate_prompt` | `prompt_type` (string: `character_image`, `setting_image`, `scene_image`, `shot_image`, `scene_video`), plus `name` (for character/setting), `scene_number`, `shot_number` as needed | **Preferred for all image/video prompt generation.** Deterministic DAG pipeline: resolves context, makes ONE focused LLM call, validates output, persists. Faster and more reliable than `generate_content` for prompts. | Generated prompt file path + content |
+| `generate_content` | `content_type` (string — see content types below), plus context args (e.g. `scene_number`, `shot_number`) | During execution for **non-prompt** text artifacts (plot, story, scene breakdowns, narration). For image/video prompts, prefer `generate_prompt` instead. | Generated text file path |
 | `generate_image` | `prompt_file` (string — path to the `.prompt.md` file from `generate_content`) | After user approves a prompt from `generate_content`. Auto-detects mode, refs, negative prompt, aspect ratio from prompt file. | `job_id` — call `wait_for_job` to get result |
 | `generate_video_from_image` | `motion_prompt_file` (string — path to `.motion.json`), `scene_number` (integer); optional `scene_image_artifact_id` (string), `shot_image_artifact_ids` (object mapping shot number strings to artifact IDs, e.g. `{"1": "art_xxx", "2": "art_yyy"}`), `segment_id` (string, e.g. `"segment_1_shot_1"`) | After shot images exist. Pass `segment_id` to auto-update timeline (no separate `update_segment` needed). | `job_id` — call `wait_for_job` to get result |
 | `wait_for_job` | `job_id` (string — from `generate_image` or `generate_video_from_image` response) | Immediately after `generate_image` or `generate_video_from_image` returns. Blocks until complete. **Never skip this.** | Artifact ID + file path on success; error on failure |
@@ -207,18 +208,30 @@ Do not attempt off-topic tasks even if you technically have tools that could par
 | `EnterPlanMode` | *(none)* | ONLY for new projects with no current phase — enters initial planning mode. Never use during workflow phases. | Plan mode entered |
 | `ExitPlanMode` | *(none)* | ONLY after user approves the initial plan. Never use during workflow phases. | Plan mode exited |
 
+#### `generate_prompt` — Image/Video Prompt Generation (preferred)
+
+Use `generate_prompt` for all image and video prompt types. It uses a deterministic DAG pipeline that resolves context automatically, selects the correct provider-specific skill, and makes a single focused LLM call.
+
+| `prompt_type` | Required Args | Output |
+|---------------|---------------|--------|
+| `character_image` | `name` | `prompts/images/characters/{name}.prompt.md` |
+| `setting_image` | `name` | `prompts/images/settings/{name}.prompt.md` |
+| `scene_image` | `scene_number` | `prompts/images/scenes/scene-{n}.prompt.md` |
+| `shot_image` | `scene_number`, `shot_number` | `prompts/images/shots/scene-{n}-shot-{m}.prompt.md` |
+| `scene_video` | `scene_number` | `prompts/videos/scenes/scene-{n}.motion.json` |
+
+**Dependency**: `shot_image` requires `scene_video` for the same scene to exist first.
+
 #### `generate_content` Content Types
 
-The `content_type` argument determines what text artifact is generated. Common values:
+Use `generate_content` for non-prompt text artifacts. For image/video prompts, use `generate_prompt` instead.
+
 - **Planning**: `plot`, `story`, `scene_breakdown`
-- **Image prompts**: `character_image_prompt`, `setting_image_prompt`, `scene_image_prompt`, `shot_image_prompt`
-- **Video prompts**: `scene_video_prompt` (produces multi-shot motion prompt)
+- **Narration**: `narration`
 
 Always pass relevant context arguments alongside `content_type`:
-- `scene_number` — required for scene-level and shot-level content types
-- `shot_number` — required for shot-level content types (e.g. `shot_image_prompt`)
-- `character_name` — required for `character_image_prompt`
-- `setting_name` — required for `setting_image_prompt`
+- `scene_number` — required for scene-level content types
+- `chapter_number` — required for `story`
 
 #### `manage_timeline` Actions
 

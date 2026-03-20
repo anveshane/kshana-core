@@ -22,6 +22,10 @@ export {
   getRelevantContextTool,
 } from './contextTools.js';
 export { generateContentTool, CONTENT_TYPE_OUTPUT_FILES } from './generateContentTool.js';
+export { generatePromptTool } from './generatePromptTool.js';
+export type { PromptType } from './generatePromptTool.js';
+export { PromptDAGExecutor } from './promptDAG.js';
+export type { PromptDAGParams, PromptDAGResult } from './promptDAG.js';
 export { readProjectTool, readFileTool, getContentCreatorTools } from './contentCreatorTools.js';
 export {
   addInputTool,

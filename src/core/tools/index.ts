@@ -30,7 +30,10 @@ export {
   deleteContextTool,
   generateContentTool,
   CONTENT_TYPE_OUTPUT_FILES,
+  generatePromptTool,
+  PromptDAGExecutor,
 } from './builtin/index.js';
+export type { PromptType, PromptDAGParams, PromptDAGResult } from './builtin/index.js';
 
 // Re-export for convenience
 import { ToolRegistry } from './ToolRegistry.js';
@@ -41,6 +44,7 @@ import {
   todoWriteTool,
   todoReadTool,
   generateContentTool,
+  generatePromptTool,
   readFileTool,
 } from './builtin/index.js';
 
@@ -59,6 +63,7 @@ export function createDefaultToolRegistry(): ToolRegistry {
   registry.register(todoWriteTool);
   registry.register(todoReadTool);
   registry.register(generateContentTool);
+  registry.register(generatePromptTool);
   registry.register(readFileTool);
 
   return registry;
