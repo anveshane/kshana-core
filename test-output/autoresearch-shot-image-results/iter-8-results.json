@@ -1,0 +1,79 @@
+{
+  "iteration": 8,
+  "avgScore": 0.7,
+  "failures": {
+    "questionFailRates": {
+      "SHOT_TYPE_MATCH": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "NARRATIVE_MOMENT": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt only captures ships arriving and casting shadows, omitting the defining story beat of silver-white energy beams firing down and civilians dissolving into golden particles — the actual 'harvest' moment the shot is named for.",
+          "The incomplete draft captures only 'eyes dilating in horror' and misses the specific emotional arc (shock → denial → comprehension → horror) described in the motion JSON."
+        ]
+      },
+      "CHARACTER_FOCUS": {
+        "rate": 0.2,
+        "failReasons": [
+          "The draft attempts to weave in 'NYC invasion' and 'emotionless classroom' images as if they are secondary characters or scene elements, polluting a shot that should only focus on Mira."
+        ]
+      },
+      "SPATIAL_FRAMING": {
+        "rate": 0.2,
+        "failReasons": [
+          "The prompt states 'wide establishing shot' but omits camera angle (neutral/low/high) and depth of field, which are specified in the motion JSON (35mm at f/2.8)."
+        ]
+      },
+      "REF_IMAGES_SCOPED": {
+        "rate": 0.4,
+        "failReasons": [
+          "The draft incorrectly includes NYC invasion (image 3) and classroom (image 4) reference images in a close-up that should only reference Mira Voss (image 2).",
+          "The prompt references 'image 3' for the command center setting, but shot 1's referenceImages list only includes Rowan and Mira character refs — no setting reference image is scoped to this shot."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0.2,
+        "failReasons": [
+          "The incomplete prompt does not describe Mira's expected appearance in the ship context (tense posture, exploration gear, etc.) nor does it note any relevant differences from her reference image."
+        ]
+      },
+      "LIGHTING": {
+        "rate": 0.4,
+        "failReasons": [
+          "'Golden sunlight' implies daytime warmth but omits light direction (overhead, angled?) and quality (harsh, diffuse, blocked by ships?), making the lighting specification incomplete.",
+          "The prompt begins a lighting description ('Daylight filtered through the') but is truncated mid-sentence, leaving direction and quality unspecified."
+        ]
+      },
+      "CONTINUITY": {
+        "rate": 0.2,
+        "failReasons": [
+          "The prompt invents 'the chaotic energy of the NYC invasion flickering in her memory' which contradicts the scene — the screens show comatose humans' harvested memories, not Mira's personal recollections."
+        ]
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.2,
+        "failReasons": [
+          "The output is not flowing prose but a mixture of a self-evaluation checklist, internal reasoning notes, and an incomplete draft sentence cut off mid-thought."
+        ]
+      },
+      "STORY_ACCURATE": {
+        "rate": 0.8,
+        "failReasons": [
+          "The prompt describes 'gray afternoon sky' but the scene description explicitly sets this during a 'perfectly normal Manhattan morning,' and the phrase 'from image 3' in the prose is a spurious numbered reference that doesn't correspond to any available or correctly indexed reference image.",
+          "'Golden particles swirl around the ship edges' is an invented detail that contradicts the source — in the scene, golden particles come from people dissolving under the beams, not from the ships themselves.",
+          "The scene description specifies 'a perfectly normal Manhattan morning,' but the prompt contradicts this by describing 'the afternoon sun.'",
+          "The prompt fabricates Mira sitting in a 'sterile classroom setting' and NYC invasion memories, directly contradicting the source which places her inside a Warden harvester ship among rows of comatose humans."
+        ]
+      }
+    },
+    "avgScore": 0.7,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\nA wide establishing shot from a slightly low angle looking up at the Manhattan sky, the urban environment from image 3 filling the frame with skyscrapers and streets below. Dozens of obsidian-black triangular ships hover above the city, their geometric forms blocking out the sun and casting unnatural shadows across the buildings. Golden-white beams lance down from the vessels, striking the streets below with terrifying precision. Where the energy strikes, civilians dissolve into swirling clouds of luminous particles that rise like smoke into the gray afternoon sky. The scene captures the exact moment chaos erupts—people scattered across the streets below in frozen panic, their small figures dwarfed by the alien vessels above. Cool blue daylight filters through the smog, then is overwhelmed by the artificial silver glow of the beams. The mood is catastrophic silence broken by the hum of descending death.\n\n**Reference Images:**\n- Setting: NYC Invasion (active in this shot)\n\n**Negative Prompt:**\nnarrative commentary, motion verbs, temporal language, character dialogue, close-up framing, indoor classroom elements, character-specific details not present in the establishing shot\n\n**Aspect Ratio:**\n1:1\n\n**Generation Mode:**\nimage_text_to_image",
+      "**Image Prompt:**\nA wide establishing shot from slightly below, looking up at the Manhattan skyline from image 3 as obsidian triangular ships materialize in the daytime sky, their dark surfaces absorbing the golden sunlight. The ships block out the sun, casting unnatural geometric shadows across the city streets and buildings below. Golden particles swirl around the ship edges as they settle into position, creating a surreal contrast between the ordinary urban landscape and the impossible technology descending above. Deep focus keeps both the distant ships and foreground street-level details equally sharp.\n\n**Reference Images:**\n- Setting: nyc invasion (image 3)\n\n**Negative Prompt:**\nnarrative commentary, motion verbs, temporal language, character actions, close-ups, extreme close-ups, blurred depth of field, night or nighttime, rain or storm elements\n\n**Aspect Ratio:**\n1:1\n\n**Generation Mode:**\nimage_text_to_image"
+    ]
+  }
+}

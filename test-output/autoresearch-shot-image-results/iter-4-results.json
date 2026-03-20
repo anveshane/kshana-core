@@ -1,0 +1,86 @@
+{
+  "iteration": 4,
+  "avgScore": 0.58,
+  "failures": {
+    "questionFailRates": {
+      "SHOT_TYPE_MATCH": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt is a single letter 'A' and describes no composition whatsoever.",
+          "The prompt is empty and contains no composition or shot type information."
+        ]
+      },
+      "NARRATIVE_MOMENT": {
+        "rate": 0.4,
+        "failReasons": [
+          "A single letter conveys no story beat or narrative moment.",
+          "The prompt is empty and depicts no story beat whatsoever."
+        ]
+      },
+      "CHARACTER_FOCUS": {
+        "rate": 0.4,
+        "failReasons": [
+          "No characters are described at all.",
+          "The prompt is empty and describes no characters."
+        ]
+      },
+      "SPATIAL_FRAMING": {
+        "rate": 0.4,
+        "failReasons": [
+          "No camera distance, angle, or depth of field is described.",
+          "The prompt is empty and specifies no camera distance, angle, or depth of field."
+        ]
+      },
+      "REF_IMAGES_SCOPED": {
+        "rate": 0.6,
+        "failReasons": [
+          "No reference images are mentioned or scoped.",
+          "The prompt references three images (Mira char ref, NYC Invasion setting, Emotionless Classroom setting) but the source motion JSON only lists one reference image (Mira's character ref), and the setting references appear to be fabricated labels not present in the provided assets.",
+          "The prompt is empty and references no images."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0.4,
+        "failReasons": [
+          "No character appearance details or changes are described.",
+          "The prompt is empty and addresses no character appearance details."
+        ]
+      },
+      "LIGHTING": {
+        "rate": 0.4,
+        "failReasons": [
+          "No lighting source, direction, or quality is specified.",
+          "The prompt is empty and specifies no lighting."
+        ]
+      },
+      "CONTINUITY": {
+        "rate": 0.4,
+        "failReasons": [
+          "A single letter provides no visual content that could sit in sequence with any shot.",
+          "The prompt is empty and provides nothing that could establish continuity with adjacent shots."
+        ]
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.4,
+        "failReasons": [
+          "A single letter 'A' is neither prose nor a keyword list — it is not a prompt.",
+          "The prompt is empty and contains no prose."
+        ]
+      },
+      "STORY_ACCURATE": {
+        "rate": 0.4,
+        "failReasons": [
+          "No story details are depicted; the prompt contains no content at all.",
+          "The prompt is empty and depicts no story details at all."
+        ]
+      }
+    },
+    "avgScore": 0.58,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\nA wide establishing shot from a slightly low angle looking up at Manhattan's skyline as obsidian-black triangular alien ships materialize above the Empire State Building, blocking the sun and casting unnatural geometric shadows across the street below. Golden particles swirl where silver-white energy beams strike pedestrians mid-stride, dissolving them into glowing light that rises like smoke. Cars and taxis freeze with engines running, pedestrians frozen in terror mid-crossing as the city transforms from organized chaos to pure anarchy. The scene captures the exact moment the invasion becomes visible—ordinary NYC morning interrupted by impossible technology. Natural daylight suddenly filtered through alien vessels, creating cold, metallic tones mixed with the warm panic of people realizing their world has ended. The composition emphasizes scale: tiny humans against massive technological horrors.\n\n**Reference Images:**\n- Setting: NYC invasion (image 3)\n\n**Negative Prompt:**\nnarrative commentary, motion verbs, temporal language, excessive detail about characters not in shot, re-descriptions of appearance\n\n**Aspect Ratio:**\n1:1\n\n**Generation Mode:**\nimage_text_to_image",
+      "**Image Prompt:**\nA"
+    ]
+  }
+}

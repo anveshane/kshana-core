@@ -1,15 +1,18 @@
 /**
- * Autoresearch: iteratively optimize the scene_image guide prompt
- * using binary judge feedback across diverse scenes.
+ * Autoresearch: iteratively optimize the shot_image guide prompt
+ * using binary judge feedback across diverse shots.
+ *
+ * shot_image depends on scene_video (motion JSON must exist).
+ * Test cases use projects with both scene descriptions AND motion JSONs.
  *
  * Loop:
- *   1. Generate scene_image prompt (1 per scene, 5 scenes)
+ *   1. Generate shot_image prompt (1 per shot, 5 shots)
  *   2. Binary judge each output
  *   3. Aggregate failure patterns
  *   4. Ask optimizer LLM to revise the guide
  *   5. Write revised guide, repeat
  *
- * Usage: npx tsx test-output/autoresearch-scene-ref.ts
+ * Usage: npx tsx test-output/autoresearch-shot-image.ts
  */
 import 'dotenv/config';
 import { LLMClient, getLLMConfig } from '../src/core/llm/index.js';
@@ -29,26 +32,29 @@ import * as path from 'path';
 // Config
 // ---------------------------------------------------------------------------
 const PROJECT_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const RUBRIC_PATH = path.join(PROJECT_ROOT, 'tests', 'autoresearch', 'rubrics', 'scene-image-binary.json');
-const GUIDE_PATH = path.join(PROJECT_ROOT, 'prompts', 'skills', 'defaults', 'scene_image_guide.md');
-const SKILL_PATH = path.join(PROJECT_ROOT, 'prompts', 'skills', 'content-type', 'scene_image_prompt.comfyui.flux2_klein_edit.md');
+const RUBRIC_PATH = path.join(PROJECT_ROOT, 'tests', 'autoresearch', 'rubrics', 'shot-image-binary.json');
+const GUIDE_PATH = path.join(PROJECT_ROOT, 'prompts', 'skills', 'defaults', 'shot_image_guide.md');
+const SKILL_PATH = path.join(PROJECT_ROOT, 'prompts', 'skills', 'content-type', 'shot_image_prompt.comfyui.flux2_klein_edit.md');
 const CLAUDE_MODEL = process.env['EVAL_CLAUDE_MODEL'] ?? 'sonnet';
-const RESULTS_DIR = path.join(PROJECT_ROOT, 'test-output', 'autoresearch-scene-results');
+const RESULTS_DIR = path.join(PROJECT_ROOT, 'test-output', 'autoresearch-shot-image-results');
 
 const MAX_ITERATIONS = 10;
 
-// Diverse scene test cases — ALL verified to have plans/scenes/scene-N.md files
-// Mix of: sci-fi, drama, fantasy, multi-character, different emotional tones
-const TEST_SCENES: Array<{
+// Diverse shot test cases — ALL verified to have:
+//   1. plans/scenes/scene-N.md (scene description)
+//   2. prompts/videos/scenes/scene-N.motion.json (motion JSON with valid shots array)
+// Mix of: different shot types (establishing, close-up, reaction), different scenes
+const TEST_SHOTS: Array<{
   label: string;
   project: string;
   scene_number: number;
+  shot_number: number;
 }> = [
-  { label: 'Humanity Cycle scene 1 (sci-fi reveal)', project: 'humanitys_cycle_long_humanity-2.kshana', scene_number: 1 },
-  { label: 'Keerti scene 1 (Indian drama)', project: 'keerti_extremely_beautiful_young.kshana', scene_number: 1 },
-  { label: 'Keerti scene 3 (drama climax)', project: 'keerti_extremely_beautiful_young.kshana', scene_number: 3 },
-  { label: 'Nine Islands scene 2 (fantasy adventure)', project: 'world_nine_islands.kshana', scene_number: 2 },
-  { label: 'Humanity Cycle v1 scene 1 (sci-fi alternate)', project: 'humanitys_cycle_long_humanity.kshana', scene_number: 1 },
+  { label: 'Humanity scene 1 shot 1 (establishing)', project: 'humanitys_cycle_long_humanity-2.kshana', scene_number: 1, shot_number: 1 },
+  { label: 'Humanity scene 1 shot 2 (mid)', project: 'humanitys_cycle_long_humanity-2.kshana', scene_number: 1, shot_number: 2 },
+  { label: 'Humanity scene 1 shot 3 (close/reaction)', project: 'humanitys_cycle_long_humanity-2.kshana', scene_number: 1, shot_number: 3 },
+  { label: 'Humanity scene 2 shot 1 (establishing)', project: 'humanitys_cycle_long_humanity-2.kshana', scene_number: 2, shot_number: 1 },
+  { label: 'Humanity scene 3 shot 2 (mid)', project: 'humanitys_cycle_long_humanity-2.kshana', scene_number: 3, shot_number: 2 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -100,18 +106,20 @@ function extractRefImageNames(content: string): string[] {
 async function generateAndJudge(
   llm: LLMClient,
   rubric: ReturnType<typeof loadBinaryRubric>,
-  tc: typeof TEST_SCENES[number],
+  tc: typeof TEST_SHOTS[number],
 ): Promise<{ result: PromptDAGResult; judged: BinaryJudgeResult; label: string } | null> {
   const projectDir = path.resolve(tc.project);
   setActiveProjectDir(projectDir);
   const executor = new PromptDAGExecutor(llm, projectDir);
   const result = await executor.execute({
-    prompt_type: 'scene_image',
+    prompt_type: 'shot_image',
     scene_number: tc.scene_number,
+    shot_number: tc.shot_number,
     overwrite: true,
   });
 
   if (result.status !== 'success' || !result.content) {
+    console.log(`    Error: ${result.error || result.message || 'unknown'}`);
     return null;
   }
 
@@ -194,19 +202,20 @@ function buildOptimizerPrompt(
   return `You are an expert prompt engineer optimizing a guide prompt for an image-generation LLM.
 
 ## Context
-The guide prompt below instructs a local LLM to write SCENE IMAGE prompts — composing characters and settings into narrative moments.
+The guide prompt below instructs a local LLM to write SHOT IMAGE prompts — a single image for one specific shot from a multi-shot scene breakdown.
 The guide must be MODEL-AGNOSTIC — it will be used with different LLMs (Qwen, Llama, etc.).
-The LLM reads a scene description (with character profiles and setting profiles) and the guide, then outputs an image generation prompt.
+The LLM reads a scene description, the motion JSON (with shot details), character profiles, and the guide, then outputs an image generation prompt for that specific shot.
 A binary judge evaluates the output against ${rubric.questions.length} yes/no quality questions.
 
-Scene image prompts are unique because they:
-- Must reference existing character and setting reference images using "image N" notation
-- When characters need appearance changes from their reference (different clothing, injuries, etc.), describe those changes
-- When no changes needed, avoid redundantly re-describing what references already show
-- Must describe spatial arrangement, actions, and lighting
-- Must be flowing prose (not keyword lists)
+Shot image prompts are unique because they:
+- Target ONE specific shot from the motion JSON (not the whole scene)
+- Must match the shot type's framing (close-up = face fills frame, wide = full environment)
+- Should only include characters/references relevant to that specific shot
+- Must depict the specific narrative beat from that shot, not a generic composition
+- Must be faithful to the source story — correct actions, emotions, and location
+- When characters need appearance changes from their reference (different clothing, injuries), describe those changes
 
-This iteration tested ${failures.totalRuns} DIVERSE scenes (sci-fi, Indian drama, fantasy adventure, multi-character).
+This iteration tested ${failures.totalRuns} DIVERSE shots (establishing, mid, close-up/reaction across different scenes).
 This is iteration ${iteration} of optimization. Current average score: ${(failures.avgScore * 100).toFixed(0)}%.
 Format failures (LLM didn't produce valid output at all): ${failures.formatFailures}/${failures.totalRuns} runs.
 
@@ -240,13 +249,13 @@ CRITICAL RULES FOR YOUR OUTPUT:
 
 Revision guidelines:
 - The guide must be MODEL-AGNOSTIC. Do NOT include model-specific directives. Focus on SEMANTIC rules.
-- The scene description, character profiles, and setting profiles are injected in the USER prompt after the guide. The guide must tell the LLM how to USE this context.
+- The scene description, shot details (from motion JSON), and character profiles are injected in the USER prompt after the guide.
 - Format compliance (first line must be "**Image Prompt:**", no reasoning output) is handled SEPARATELY by the system — do NOT add format compliance rules.
 - Keep the output format section (Image Prompt, Reference Images, Negative Prompt, Aspect Ratio, Generation Mode) unchanged.
 - The provider-specific skill is appended separately — don't duplicate its content.
 - Focus on the TOP 5 failing questions. Don't over-engineer — simple, direct language works best.
-- Two modes exist: WITH reference images (30-80 words, use "image N") and WITHOUT reference images (80-120 words, describe everything). Both must be covered.
-- Key rules to preserve: describe appearance changes from reference when needed, mandatory lighting, prose quality.
+- Story faithfulness is critical: the shot must depict what actually happens in the source scene at that moment.
+- The shot type table mapping shot types to compositions is essential — preserve it.
 
 Remember: your ENTIRE response is saved directly as the guide file. Do not include any meta-commentary.`;
 }
@@ -265,10 +274,10 @@ async function main() {
   const originalGuide = fs.readFileSync(GUIDE_PATH, 'utf-8');
   fs.writeFileSync(path.join(RESULTS_DIR, 'original-guide.md'), originalGuide);
 
-  console.log(`Autoresearch: Scene Image Guide Optimization (Multi-Scene)`);
+  console.log(`Autoresearch: Shot Image Guide Optimization`);
   console.log(`LLM: ${config.model} | Judge: claude --model ${CLAUDE_MODEL}`);
-  console.log(`Scenes: ${TEST_SCENES.map(tc => tc.label).join(', ')}`);
-  console.log(`Runs/iter: ${TEST_SCENES.length} (1 per scene) | Max iters: ${MAX_ITERATIONS}`);
+  console.log(`Shots: ${TEST_SHOTS.map(tc => tc.label).join(', ')}`);
+  console.log(`Runs/iter: ${TEST_SHOTS.length} (1 per shot) | Max iters: ${MAX_ITERATIONS}`);
   console.log(`Guide: ${GUIDE_PATH}`);
   console.log();
 
@@ -280,9 +289,9 @@ async function main() {
     console.log(`${'='.repeat(70)}`);
 
     const results: Array<{ result: PromptDAGResult; judged: BinaryJudgeResult; label: string } | null> = [];
-    for (let i = 0; i < TEST_SCENES.length; i++) {
-      const tc = TEST_SCENES[i]!;
-      console.log(`  [${i + 1}/${TEST_SCENES.length}] ${tc.label}...`);
+    for (let i = 0; i < TEST_SHOTS.length; i++) {
+      const tc = TEST_SHOTS[i]!;
+      console.log(`  [${i + 1}/${TEST_SHOTS.length}] ${tc.label}...`);
       const start = Date.now();
       const r = await generateAndJudge(llm, rubric, tc);
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
@@ -311,8 +320,8 @@ async function main() {
     );
 
     // Check convergence
-    if (failures.avgScore >= 0.85) {
-      console.log(`\n  Target reached (>=85%). Stopping.`);
+    if (failures.avgScore >= 0.80) {
+      console.log(`\n  Target reached (>=80%). Stopping.`);
       break;
     }
 

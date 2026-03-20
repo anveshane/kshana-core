@@ -1,0 +1,79 @@
+{
+  "iteration": 3,
+  "avgScore": 0.72,
+  "failures": {
+    "questionFailRates": {
+      "SHOT_TYPE_MATCH": {
+        "rate": 0.2,
+        "failReasons": [
+          "No actual image prompt was produced — the output is internal chain-of-thought reasoning and bullet-point planning notes, not a composed prompt with any composition to evaluate."
+        ]
+      },
+      "NARRATIVE_MOMENT": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt depicts only ships arriving and casting shadows, entirely omitting the defining story beat — silver-white beams firing and people dissolving into golden particles — and the negative prompt actively blocks 'panic, chaos, action shot' which are core to this moment.",
+          "The output never reaches a drafted prompt; it trails off mid-sentence with planning deliberation rather than depicting any specific story beat."
+        ]
+      },
+      "CHARACTER_FOCUS": {
+        "rate": 0.2,
+        "failReasons": [
+          "No prompt exists to assess character focus; the reasoning debates whether to include Rowan but never commits to a final description."
+        ]
+      },
+      "SPATIAL_FRAMING": {
+        "rate": 0.4,
+        "failReasons": [
+          "Camera details appear only as planning notes ('Wide establishing, slightly low angle'), not as part of an actual composed prompt.",
+          "While 'close-up portrait' implies camera distance, the prompt omits camera angle and depth of field, both of which are specified in the motion JSON (85mm, f/1.8 shallow DOF)."
+        ]
+      },
+      "REF_IMAGES_SCOPED": {
+        "rate": 0.2,
+        "failReasons": [
+          "No reference images are cited in a final prompt; the output only deliberates about which to use without resolving the question."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0.2,
+        "failReasons": [
+          "No prompt was produced, so there is nothing to assess regarding character appearance deltas from reference images."
+        ]
+      },
+      "LIGHTING": {
+        "rate": 0.4,
+        "failReasons": [
+          "Lighting is partially implied (daytime, ships blotting the sun, geometric shadows) but lacks explicit source direction and quality specification (e.g., diffuse overcast from blocked sun, shadow direction from ship positions).",
+          "Lighting details appear only as deconstruction bullet points in the reasoning, never as part of a composed prompt with source, direction, and quality specified."
+        ]
+      },
+      "CONTINUITY": {
+        "rate": 0.2,
+        "failReasons": [
+          "Without an actual prompt image description, continuity with adjacent shots cannot be assessed."
+        ]
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.2,
+        "failReasons": [
+          "The output consists entirely of nested bullet points, numbered lists, italicized deliberation, and an incomplete draft sentence — the opposite of flowing prose."
+        ]
+      },
+      "STORY_ACCURATE": {
+        "rate": 0.4,
+        "failReasons": [
+          "The source description explicitly includes beams firing and people dissolving into golden particles mid-shot — the central visual event of Shot 1 — which the prompt entirely omits, making it inaccurate to the scripted story beat.",
+          "No final prompt exists to check for accuracy against the source scene description."
+        ]
+      }
+    },
+    "avgScore": 0.72,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\nA wide establishing shot from a slightly low angle looking up at a Manhattan sky dominated by jagged obsidian alien ships hovering above the Empire State Building. The city streets below are filled with ordinary life—taxi cabs, pedestrians, street vendors—now cast in unnatural geometric shadows as the ships blot out the sun. The scene is a striking contrast between normalcy and otherworldly intrusion, the ships' dark forms creating stark angular patterns against the daylight sky. The air feels tense, the silence before violence palpable.\n\n**Reference Images:**\n- Setting: NYC Invasion (image 3)\n\n**Negative Prompt:**\nclose-up, portrait, character focus, night scene, blue hour, rain, storm, dramatic facial expression, panic, chaos, action shot, vertical composition, cinematic blur\n\n**Aspect Ratio:**\n1:1\n\n**Generation Mode:**\nimage_text_to_image",
+      "**Image Prompt:**` followed by the text.\n        *   Length: 30-80 words.\n        *   Content: One frozen instant, flowing prose, include lighting, reference images (`image N`).\n        *   Mode: `image_text_to_image`.\n        *   Specific Shot Details: Wide establishing, low angle, Manhattan streets, alien ships, harvesting/disintegration effect.\n\n2.  **Deconstruct Shot 1 (\"The Sky Falls\"):**\n    *   **Visuals:** Manhattan streets, daytime turning chaotic. Obsidian-black triangular ships ripping through reality. Silver-white energy beams striking people. People dissolving into golden particles. Panic.\n    *   **Camera:** Wide establishing, slightly low angle looking up.\n    *   **Lighting:** Daylight turning unnatural with geometric shadows, then harsh silver-white beams.\n    *   **Reference Images Available:**\n        *   Image 1: Rowan (Character)\n        *   Image 2: Mira Voss (Character)\n        *   Image 3: NYC Invasion (Setting)\n        *   Image 4: Emotionless Classroom (Setting)\n    *   **Relevance:** Shot 1 is a wide establishing of the invasion. Image 3 (NYC Invasion) is the primary setting reference. Image 1 and 2 are characters not central to this specific wide shot (Rowan is in Shot 2). However, the prompt instructions say \"Reference every image as 'image N'\". Wait, looking at the constraints: \"Reference every image as 'image N' (with space before the number). Unreferenced images are ignored.\" This usually applies to the FLUX skill section. For the `scene_image_prompt` skill (which this task is based on), I need to check if I must force-reference all images or just the relevant ones.\n    *   *Correction:* The instruction says \"Reference every image as 'image N'... Unreferenced images are ignored.\" This is from the FLUX skill section. However, the main instruction block says \"Each shot has its own framing... uses only the reference images relevant to that shot.\"\n    *   *Decision:* Since Shot 1 is an establishing shot of the invasion, Image 3 is the critical one. Forcing unrelated character portraits (Rowan/Mira) into a wide shot of a ship over the Empire State Building would look wrong. I will focus on the relevant references for the *visual content* of the shot. However, if the system expects me to use the provided images, I should prioritize the setting. Let's look at the \"Reference Images\" list again. Image 3 is explicitly \"nyc invasion\".\n    *   *Wait, looking at the \"FLUX 2 Klein\" section:* It says \"Reference every image as 'image N'\". But this is a `scene_image_prompt` task. The \"Step 3 — Scope Reference Images\" section says: \"Count the reference images listed as available for this shot. Use only those numbers... If two images are listed, reference only 'image 1' and 'image 2'.\"\n    *   *Ambiguity:* The scene description lists 4 images. Shot 1 is a wide establishing. Image 3 is the setting. Images 1, 2, 4 are characters/other settings.\n    *   *Resolution:* I will write a prompt that describes the Shot 1 visual accurately. I will reference Image 3 primarily. If I must reference all, it will look weird (putting Rowan's face in a wide shot of a ship). I will prioritize the visual accuracy of the shot description over forced referencing of unrelated assets.\n    *   *Actually, looking at the instruction:* \"Use only those numbers... Never reference 'image 3' if only two images are available.\" This implies I should only reference what is *available for the shot*. The \"Reference Images\" section at the bottom lists 4 images generally for the scene.\n    *   *Refinement:* I will craft the prompt around the visual of Shot 1. I will reference Image 3 (NYC Invasion) as the setting. I might reference Image 1 or 2 if I can weave them in, but it's a wide shot. I'll focus on the scene description's visual requirements.\n\n3.  **Drafting the Prompt:**\n    *   *Subject:* Wide shot of Manhattan, black triangular"
+    ]
+  }
+}

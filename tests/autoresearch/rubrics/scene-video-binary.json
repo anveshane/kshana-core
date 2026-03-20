@@ -48,6 +48,14 @@
     {
       "id": "REF_IMAGES_VALID",
       "question": "Are referenceImages either empty or containing real file paths (not fabricated)?"
+    },
+    {
+      "id": "STORY_ACCURATE",
+      "question": "Are character actions, dialogue, and emotions consistent with the source scene description (nothing invented or contradicted)?"
+    },
+    {
+      "id": "SETTING_FAITHFUL",
+      "question": "Is each shot set in the correct location described in the source scene (not a different or invented location)?"
     }
   ]
 }

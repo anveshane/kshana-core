@@ -1,0 +1,74 @@
+{
+  "iteration": 2,
+  "avgScore": 0.74,
+  "failures": {
+    "questionFailRates": {
+      "SHOT_TYPE_MATCH": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "NARRATIVE_MOMENT": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt is truncated mid-sentence and omits the key story beat: energy beams dissolving people into golden particles and the eruption of panic.",
+          "The scene description specifies Rowan 'gestures emphatically' during a rallying speech, but the prompt shows Rowan with 'arms crossed'—a passive, contemplative pose that contradicts the specific action beat of a leader giving an urgent address."
+        ]
+      },
+      "CHARACTER_FOCUS": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "SPATIAL_FRAMING": {
+        "rate": 0.6,
+        "failReasons": [
+          "While 'wide establishing shot' is mentioned, the required 'slightly low angle looking up at sky' camera angle and depth of field are absent.",
+          "The prompt states 'tight close-up' for distance but omits camera angle and any depth-of-field specification, which the motion JSON explicitly details (85mm at f/1.8 pulling to f/2.8).",
+          "While camera distance ('wide shot') is noted, the prompt omits camera angle (the motion JSON implies a level, frontal framing) and depth of field (f/2.8 per motion JSON), leaving the spatial specification incomplete."
+        ]
+      },
+      "REF_IMAGES_SCOPED": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt references 'From image 3' but no reference images are listed as available, and shot 1's only reference is the NYC invasion setting ref — 'image 3' is a fabricated, non-existent reference.",
+          "The prompt references 'image 3' which does not exist — no reference images were available, and shot 1's motion JSON specifies only the NYC invasion setting ref, not any 'image 3'."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "LIGHTING": {
+        "rate": 0.4,
+        "failReasons": [
+          "Quality ('harsh') and implied direction (downward shadows) are present, but the light source is never explicitly named — it is unclear whether it is the blocked sun, the alien beams, or both.",
+          "The prompt is truncated before any lighting details and never specifies light source, direction, or quality."
+        ]
+      },
+      "CONTINUITY": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.4,
+        "failReasons": [
+          "The output is not flowing prose — it is a mix of internal reasoning, bullet points, numbered drafts, and is cut off mid-sentence, never producing a clean final prompt.",
+          "The prompt is cut off mid-sentence ('The sun is blocked by the massive'), making it an incomplete and unusable piece of prose."
+        ]
+      },
+      "STORY_ACCURATE": {
+        "rate": 0.4,
+        "failReasons": [
+          "The hallucinated 'image 3' reference and truncation aside, the prompt omits story-accurate details like beams dissolving people and geometric shadows, and fabricates a reference not present in the source material.",
+          "The prompt refers to Rowan as 'She' while the motion JSON and scene description consistently use male pronouns ('his face,' 'he gestures'), introducing a character-level factual error contradicting the source material."
+        ]
+      }
+    },
+    "avgScore": 0.74,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\nA wide establishing shot from slightly below, capturing Manhattan streets in the grip of invasion. From image 3, the urban environment shows taxi cabs halted and pedestrians scattered in sudden panic as obsidian-black triangular ships materialize above the Empire State Building, their presence rippling through the daylight. Silver-white energy beams lance downward from the vessels, striking the concrete with terrifying precision. Where beams connect to the ground, people dissolve into swirling clouds of golden particles that rise like smoke. The camera holds on this moment of transformation—the city's morning order collapsing into anarchy as citizens freeze in place or flee in every direction at once. Natural daylight filtered through the ships' unnatural geometric shadows creates a stark contrast between the familiar streetscape and the impossible technology above.",
+      "**Image Prompt:**`.\n        *   Length: 30-80 words.\n        *   Content: Flowing prose, one frozen instant, no motion verbs (\"is firing\" -> \"firing\" or \"fires\" but avoid \"was firing\" or \"is going to fire\").\n        *   References: Must use `image N` format for available images.\n        *   Lighting: Must specify source, direction, quality.\n        *   Mode: `image_text_to_image` (though the prompt instructions say \"text_to_image\" in the example, the header says \"Generation Mode: image_text_to_image\". I will follow the standard image prompting structure).\n        *   Negative Prompt & Aspect Ratio included in the requested output format based on the system instructions provided at the beginning of the conversation.\n\n2.  **Determine Image References:**\n    *   The scene is set in NYC Under Invasion.\n    *   **Shot 1** is a wide establishing shot of the city and sky.\n    *   **Available Images:**\n        *   Image 1: Rowan (Character) - Not relevant for the establishing shot of the city/sky.\n        *   Image 2: Mira Voss (Character) - Not relevant.\n        *   Image 3: NYC Invasion (Setting) - **Highly relevant.** Shows the setting.\n        *   Image 4: Emotionless Classroom (Setting) - Not relevant to the outdoor city scene.\n    *   **Decision:** Reference Image 3 for the setting.\n\n3.  **Drafting the Prompt:**\n    *   **Subject:** Wide establishing shot of Manhattan skyline under attack.\n    *   **Action:** Ships hovering, beams firing, people dissolving.\n    *   **Lighting:** Daytime turning unnatural, harsh shadows from ships, silver-white beam light.\n    *   **Composition:** Low angle looking up (as per shot description).\n    *   **Keywords to include:** Manhattan skyline, obsidian ships, silver beams, dissolving humans, golden particles, low angle, chaotic.\n\n    *   *Draft 1:* A wide establishing shot from a low angle looking up at the Manhattan skyline during a brutal alien invasion. Massive obsidian ships hover silently over the Empire State Building, blocking the sun with their dark triangular shapes. Silver-white energy beams lance down from the sky with terrifying precision. Where the light strikes, civilians dissolve into swirling clouds of golden particles that rise like smoke. The city street below is a chaotic mix of panicked people and freezing shadows. The light is harsh and directional, casting long geometric shadows across the pavement. The mood is one of absolute awe and sudden terror as the world unravels into light. Style: cinematic wide shot, high contrast, desaturated city tones interrupted by bright golden dissolution. Reference image 3 for the city setting.\n\n    *   *Refining for constraints:*\n        *   Word count check: ~95 words. Too long. Need to cut to 30-80.\n        *   Lighting check: \"Harsh and directional\".\n        *   Reference check: \"image 3\".\n\n    *   *Draft 2:* A low-angle wide establishing shot of the Manhattan skyline under alien attack. Massive obsidian ships hover over the Empire State Building, blocking the sun with dark triangular shapes. Silver-white energy beams lance down from the sky with terrifying precision. Where the light strikes, civilians dissolve into swirling clouds of golden particles that rise like smoke. The city street below is a chaotic mix of panicked people and freezing shadows. The light is harsh and directional, casting long geometric shadows across the pavement. The mood is one of absolute awe and sudden terror as the world unravels into light. Reference image 3 for the city setting.\n\n    *   *Draft 3 (Condensing):* A low-angle wide establishing shot of the Manhattan skyline under alien attack. Massive obsidian ships hover over the Empire State Building, blocking the sun with dark triangular shapes. Silver-white energy beams lance down from the sky with terrifying precision. Where the light strikes, civilians dissolve into swirling clouds of golden particles that rise like smoke. The city street below is a chaotic mix of panicked people and freezing shadows. The light is harsh and directional, casting long geometric shadows across the pavement. The mood is"
+    ]
+  }
+}

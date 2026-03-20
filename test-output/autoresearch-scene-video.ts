@@ -1,15 +1,15 @@
 /**
- * Autoresearch: iteratively optimize the scene_image guide prompt
+ * Autoresearch: iteratively optimize the scene_video guide prompt
  * using binary judge feedback across diverse scenes.
  *
  * Loop:
- *   1. Generate scene_image prompt (1 per scene, 5 scenes)
+ *   1. Generate scene_video motion JSON (1 per scene, 5 scenes)
  *   2. Binary judge each output
  *   3. Aggregate failure patterns
  *   4. Ask optimizer LLM to revise the guide
  *   5. Write revised guide, repeat
  *
- * Usage: npx tsx test-output/autoresearch-scene-ref.ts
+ * Usage: npx tsx test-output/autoresearch-scene-video.ts
  */
 import 'dotenv/config';
 import { LLMClient, getLLMConfig } from '../src/core/llm/index.js';
@@ -29,16 +29,15 @@ import * as path from 'path';
 // Config
 // ---------------------------------------------------------------------------
 const PROJECT_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const RUBRIC_PATH = path.join(PROJECT_ROOT, 'tests', 'autoresearch', 'rubrics', 'scene-image-binary.json');
-const GUIDE_PATH = path.join(PROJECT_ROOT, 'prompts', 'skills', 'defaults', 'scene_image_guide.md');
-const SKILL_PATH = path.join(PROJECT_ROOT, 'prompts', 'skills', 'content-type', 'scene_image_prompt.comfyui.flux2_klein_edit.md');
+const RUBRIC_PATH = path.join(PROJECT_ROOT, 'tests', 'autoresearch', 'rubrics', 'scene-video-binary.json');
+const GUIDE_PATH = path.join(PROJECT_ROOT, 'prompts', 'skills', 'defaults', 'scene_video_guide.md');
+const SKILL_PATH = path.join(PROJECT_ROOT, 'prompts', 'skills', 'content-type', 'scene_video_prompt.comfyui.ltx23.md');
 const CLAUDE_MODEL = process.env['EVAL_CLAUDE_MODEL'] ?? 'sonnet';
-const RESULTS_DIR = path.join(PROJECT_ROOT, 'test-output', 'autoresearch-scene-results');
+const RESULTS_DIR = path.join(PROJECT_ROOT, 'test-output', 'autoresearch-scene-video-results');
 
 const MAX_ITERATIONS = 10;
 
 // Diverse scene test cases — ALL verified to have plans/scenes/scene-N.md files
-// Mix of: sci-fi, drama, fantasy, multi-character, different emotional tones
 const TEST_SCENES: Array<{
   label: string;
   project: string;
@@ -106,7 +105,7 @@ async function generateAndJudge(
   setActiveProjectDir(projectDir);
   const executor = new PromptDAGExecutor(llm, projectDir);
   const result = await executor.execute({
-    prompt_type: 'scene_image',
+    prompt_type: 'scene_video',
     scene_number: tc.scene_number,
     overwrite: true,
   });
@@ -191,22 +190,22 @@ function buildOptimizerPrompt(
     ? failures.sampleOutputs.map((o, i) => `### Sample Output ${i + 1}\n\`\`\`\n${o}\n\`\`\``).join('\n\n')
     : '(all runs produced format failures — no valid outputs)';
 
-  return `You are an expert prompt engineer optimizing a guide prompt for an image-generation LLM.
+  return `You are an expert prompt engineer optimizing a guide prompt for a video-generation LLM.
 
 ## Context
-The guide prompt below instructs a local LLM to write SCENE IMAGE prompts — composing characters and settings into narrative moments.
+The guide prompt below instructs a local LLM to write SCENE VIDEO motion prompts — breaking a scene into 2-4 filmable shots with motion, camera work, and dialogue.
 The guide must be MODEL-AGNOSTIC — it will be used with different LLMs (Qwen, Llama, etc.).
-The LLM reads a scene description (with character profiles and setting profiles) and the guide, then outputs an image generation prompt.
+The LLM reads a scene description (with character profiles) and the guide, then outputs a JSON motion prompt.
 A binary judge evaluates the output against ${rubric.questions.length} yes/no quality questions.
 
-Scene image prompts are unique because they:
-- Must reference existing character and setting reference images using "image N" notation
-- When characters need appearance changes from their reference (different clothing, injuries, etc.), describe those changes
-- When no changes needed, avoid redundantly re-describing what references already show
-- Must describe spatial arrangement, actions, and lighting
-- Must be flowing prose (not keyword lists)
+Scene video prompts are unique because they:
+- Output structured JSON (not prose like image prompts)
+- Must break a narrative scene into 2-4 cinematic shots
+- Each shot needs description, camera work, duration, and optional dialogue
+- Must be faithful to the source scene — correct characters, actions, emotions, locations
+- Must show emotions through physical actions, not labels
 
-This iteration tested ${failures.totalRuns} DIVERSE scenes (sci-fi, Indian drama, fantasy adventure, multi-character).
+This iteration tested ${failures.totalRuns} DIVERSE scenes (sci-fi, Indian drama, fantasy adventure).
 This is iteration ${iteration} of optimization. Current average score: ${(failures.avgScore * 100).toFixed(0)}%.
 Format failures (LLM didn't produce valid output at all): ${failures.formatFailures}/${failures.totalRuns} runs.
 
@@ -240,13 +239,13 @@ CRITICAL RULES FOR YOUR OUTPUT:
 
 Revision guidelines:
 - The guide must be MODEL-AGNOSTIC. Do NOT include model-specific directives. Focus on SEMANTIC rules.
-- The scene description, character profiles, and setting profiles are injected in the USER prompt after the guide. The guide must tell the LLM how to USE this context.
-- Format compliance (first line must be "**Image Prompt:**", no reasoning output) is handled SEPARATELY by the system — do NOT add format compliance rules.
-- Keep the output format section (Image Prompt, Reference Images, Negative Prompt, Aspect Ratio, Generation Mode) unchanged.
+- The scene description and character profiles are injected in the USER prompt after the guide.
+- JSON format compliance (valid structure, required fields) is handled SEPARATELY by the system — focus on content quality.
 - The provider-specific skill is appended separately — don't duplicate its content.
 - Focus on the TOP 5 failing questions. Don't over-engineer — simple, direct language works best.
-- Two modes exist: WITH reference images (30-80 words, use "image N") and WITHOUT reference images (80-120 words, describe everything). Both must be covered.
-- Key rules to preserve: describe appearance changes from reference when needed, mandatory lighting, prose quality.
+- Story faithfulness is critical: shots must depict what actually happens in the source scene, with correct characters, emotions, and locations.
+- Show don't tell: emotions through physical actions ("jaw clenches", "fingers tremble") not labels ("she feels angry").
+- Each shot description should be a flowing paragraph in present tense.
 
 Remember: your ENTIRE response is saved directly as the guide file. Do not include any meta-commentary.`;
 }
@@ -265,7 +264,7 @@ async function main() {
   const originalGuide = fs.readFileSync(GUIDE_PATH, 'utf-8');
   fs.writeFileSync(path.join(RESULTS_DIR, 'original-guide.md'), originalGuide);
 
-  console.log(`Autoresearch: Scene Image Guide Optimization (Multi-Scene)`);
+  console.log(`Autoresearch: Scene Video Guide Optimization`);
   console.log(`LLM: ${config.model} | Judge: claude --model ${CLAUDE_MODEL}`);
   console.log(`Scenes: ${TEST_SCENES.map(tc => tc.label).join(', ')}`);
   console.log(`Runs/iter: ${TEST_SCENES.length} (1 per scene) | Max iters: ${MAX_ITERATIONS}`);
@@ -311,8 +310,8 @@ async function main() {
     );
 
     // Check convergence
-    if (failures.avgScore >= 0.85) {
-      console.log(`\n  Target reached (>=85%). Stopping.`);
+    if (failures.avgScore >= 0.80) {
+      console.log(`\n  Target reached (>=80%). Stopping.`);
       break;
     }
 
@@ -339,7 +338,7 @@ async function main() {
       revisedGuide.startsWith('**Root cause') ||
       revisedGuide.startsWith('**Key changes') ||
       revisedGuide.includes('Here are the key changes') ||
-      (!revisedGuide.includes('**') && !revisedGuide.includes('Image Prompt') && !revisedGuide.includes('PURPOSE'));
+      (!revisedGuide.includes('**') && !revisedGuide.includes('shot') && !revisedGuide.includes('PURPOSE'));
 
     if (looksLikeMetaCommentary) {
       console.log(`  WARNING: Optimizer returned meta-commentary, not a guide. Skipping this revision.`);

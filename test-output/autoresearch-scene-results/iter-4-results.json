@@ -1,0 +1,71 @@
+{
+  "iteration": 4,
+  "avgScore": 0.7333999999999999,
+  "failures": {
+    "questionFailRates": {
+      "CHARACTERS_PRESENT": {
+        "rate": 0.4,
+        "failReasons": [
+          "The generated prompt contains no actual content — it is a malformed template fragment with no characters described.",
+          "Scene 10 lists YOUNG GIRL, VILLAGERS (including Elder Mara), and CHILDREN as characters present, but the prompt omits Elder Mara and children entirely, only referencing generic villagers in the background."
+        ]
+      },
+      "CHARACTER_ACTIONS": {
+        "rate": 0.4,
+        "failReasons": [
+          "No prose or description of any kind was generated, so no character actions, poses, or gestures are present.",
+          "No characters appear in the prompt, so no physical actions, poses, or gazes are described."
+        ]
+      },
+      "SPATIAL_ARRANGEMENT": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt is empty of scene content and describes no spatial relationships whatsoever.",
+          "No characters are present, so no character-relative spatial arrangement can be described."
+        ]
+      },
+      "SETTING_GROUNDED": {
+        "rate": 0.2,
+        "failReasons": [
+          "No setting, location, or environmental detail appears anywhere in the generated output."
+        ]
+      },
+      "REF_IMAGES_USED": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0.2,
+        "failReasons": [
+          "The prompt contains no description of Kaito's flour-dusted apron, weathered hands, or any other appearance detail required by the scene."
+        ]
+      },
+      "LIGHTING": {
+        "rate": 0.4,
+        "failReasons": [
+          "No lighting direction, source, or quality is specified anywhere in the generated output.",
+          "The prompt mentions 'twilight' and a 'bruised purple sky' but does not specify a light source, direction, or quality."
+        ]
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.2,
+        "failReasons": [
+          "The output is a broken template fragment with bullet points, not flowing prose."
+        ]
+      },
+      "SCENE_FAITHFUL": {
+        "rate": 0.2,
+        "failReasons": [
+          "The generated output has no compositional content and depicts nothing from the source scene."
+        ]
+      }
+    },
+    "avgScore": 0.7333999999999999,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\nRowan from image 1 stands atop subway steps in the foreground, arms spread in a directing gesture, gaze fixed on the fleeing crowd. Behind him, the chaotic NYC street from image 3 fills the mid-ground with panicked civilians streaming left. Above, the alien ships hang motionless against the orange sky, geometric shadows falling across the pavement. Emergency orange light from a burning vehicle illuminates Rowan's uniform while cool blue daylight reflects off the steel steps. Cinematic, shallow depth of field capturing the tension of the evacuation.\n\n**Reference Images:**\n- Character: Rowan — image 1\n- Setting: NYC Invasion — image 3\n\n**Negative Prompt:**\nnarrative commentary, motion blur, temporal language, excessive detail",
+      "**Image Prompt:**`\n    *   Include Negative Prompt and Aspect Ratio as per the \"exact output format\" established in the system instructions."
+    ]
+  }
+}

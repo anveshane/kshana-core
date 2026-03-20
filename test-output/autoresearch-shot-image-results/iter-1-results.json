@@ -1,0 +1,79 @@
+{
+  "iteration": 1,
+  "avgScore": 0.6799999999999999,
+  "failures": {
+    "questionFailRates": {
+      "SHOT_TYPE_MATCH": {
+        "rate": 0.2,
+        "failReasons": [
+          "The prompt claims 'close-up portrait' but then describes Mira 'standing in the vast ship interior,' which contradicts a close-up where the face should fill the frame."
+        ]
+      },
+      "NARRATIVE_MOMENT": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt omits the crucial story beat of people dissolving into glowing golden particles; it only says civilians 'freeze in panic as the light touches them,' which misses the signature harvest/dissolve effect central to this shot.",
+          "The prompt captures a generic horror-realization moment rather than the specific emotional arc described in shot 4 (cycling through shock → denial → comprehension → horror with the camera pulling back)."
+        ]
+      },
+      "CHARACTER_FOCUS": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "SPATIAL_FRAMING": {
+        "rate": 0.4,
+        "failReasons": [
+          "Specifies shallow depth of field with ships sharp and cityscape blurred, which contradicts the wide establishing shot convention of deep focus needed to show the full environment in scale.",
+          "Camera angle and depth of field are not specified; only 'close-up portrait' is mentioned without lens details, aperture, or directional angle."
+        ]
+      },
+      "REF_IMAGES_SCOPED": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt references 'image 3' which does not correspond to any valid numbered reference — Shot 1 has only one reference image (the NYC invasion setting ref), and no reference images are listed as available.",
+          "The header states 'Reference Images Available: None,' yet the prompt fabricates four reference images (Rowan, Mira Voss, NYC invasion, emotionless classroom) and instructs referencing 'image 3' — these images do not exist."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "LIGHTING": {
+        "rate": 0.8,
+        "failReasons": [
+          "The prompt implies daytime lighting and mentions ships blocking the sun, but does not specify a lighting source, direction, or quality with enough precision (e.g., diffuse overcast, harsh midday shadows, direction of sunlight before occlusion).",
+          "Mentions sun obscured overhead and 'warm orange glow of city streetlights' but gives no directional quality (e.g., diffuse, harsh) and streetlights on during a daytime morning scene is an unexplained inconsistency.",
+          "Light source (memory screens) and color quality (cold blue glow) are noted, but light direction is unspecified, making the lighting description incomplete.",
+          "Light sources and quality are described (cool blue-white from screens and holographic projections, sharp/clinical), but directional information (overhead, frontal, side-lit) is absent."
+        ]
+      },
+      "CONTINUITY": {
+        "rate": 0.2,
+        "failReasons": [
+          "The phrase 'reminiscent of the NYC invasion' introduces an element from a different scene/event, breaking visual continuity with adjacent shots that show only soft memory replays."
+        ]
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.2,
+        "failReasons": [
+          "The output is a raw chain-of-thought drafting process with numbered steps, bullet points, self-critique, and multiple draft iterations — not a clean, flowing prose image prompt."
+        ]
+      },
+      "STORY_ACCURATE": {
+        "rate": 0.6,
+        "failReasons": [
+          "The source description specifies people dissolve into 'glowing particles' and 'golden light that rises like smoke' — a defining visual — but the prompt replaces this with civilians freezing in panic, contradicting the story's signature harvest effect.",
+          "Introduces 'wet pavement' and streetlights-at-night atmosphere not present in the source, which describes a normal Manhattan morning with no rain or nocturnal setting.",
+          "The screens are described as flickering with 'chaotic energy reminiscent of the NYC invasion,' but the scene specifies they show gentle emotional memory replays (birthday parties, lovers' kisses), not chaotic invasion imagery."
+        ]
+      }
+    },
+    "avgScore": 0.6799999999999999,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\nA wide establishing shot from a slightly low angle looking up at the sky. From image 3, the NYC invasion setting is transformed by dozens of obsidian-black triangular ships hovering over Manhattan. The ships block the sun, casting unnatural geometric shadows across the streets below. Beams of silver-white energy lance down from the vessels, striking the city with terrifying precision. Civilians below freeze in panic as the light touches them. The camera captures the scale of the invasion, the vast darkness of the ships against the daylight sky. Style: epic sci-fi",
+      "**Image Prompt:**`.\n\n2.  **Analyze the Shot:**\n    *   **Shot 1: The Sky Falls**\n    *   **Description:** Wide establishing shot, low angle looking up at sky. Manhattan morning, then ships appear blocking sun, casting geometric shadows. People below, chaos starting.\n    *   **Visuals:** NYC streets, skyscrapers, obsidian-black triangular ships in the sky, silver-white energy beams, golden particles dissolving people, panic.\n    *   **Reference Images Available:**\n        *   `image 1`: rowan (character) - Not in this shot.\n        *   `image 2`: mira voss (character) - Not in this shot.\n        *   `image 3`: nyc invasion (setting) - **Essential.**\n        *   `image 4`: emotionless classroom (setting) - Irrelevant.\n\n3.  **Drafting the Prompt:**\n    *   *Subject:* Wide establishing shot of NYC under invasion.\n    *   *Setting:* Use `image 3` for the city context.\n    *   *Action (Frozen):* Ships hovering, beams firing, people reacting.\n    *   *Lighting:* Sunlight blocked by ships, casting sharp geometric shadows.\n    *   *Draft 1:* A wide low angle shot of Manhattan streets below, the sky filled with obsidian triangular ships blocking the sun. From image 3 establishes the city. Golden beams of energy strike the pavement below, dissolving pedestrians into glowing particles. The scene is chaotic with people running and screaming. Shadows are sharp and geometric. The lighting is harsh daylight mixed with the artificial glow of the alien beams.\n    *   *Critique 1:* Too long. Needs to be more descriptive of the visual composition. Needs to explicitly reference `image 3`. Needs to ensure no motion verbs (like \"strikes\" is okay if it describes the state, but \"running\" is okay as a state). Wait, the constraint says \"One frozen instant — no motion verbs\". \"Running\" is a motion verb. \"Strikes\" is past tense action. I need to describe the *moment* frozen.\n    *   *Refining for Constraints:*\n        *   Reference `image 3`.\n        *   Include lighting.\n        *   Keep it 30-80 words.\n        *   Focus on the visual of the ships and the city.\n\n    *   *Draft 2:* A wide establishing low angle shot looking up at a Manhattan morning sky choked by obsidian triangular ships. The city from image 3 is bathed in harsh daylight that is suddenly obscured by the alien vessels hovering above the Empire State Building. Silver-white energy beams lance downward, dissolving pedestrians into swirling golden particles that float in the air. The scene captures the exact moment panic sets in as geometric shadows stretch across the streets below. The lighting is a mix of cold sunlight and the eerie blue glow of the alien weaponry.\n\n    *   *Word Count Check:* ~75 words.\n    *   *Reference Check:* Included \"from image 3\".\n    *   *Motion Check:* \"looking up\" (participle), \"hovering\" (participle), \"lance\" (action), \"dissolving\" (action). The constraint says \"no motion verbs\". Usually, this means don't describe the video movement (like \"camera pans\"). Describing the scene action (like \"ships hovering\") is standard for image generation. I will focus on the static composition of the freeze-frame.\n    *   *Formatting:* Needs to match the requested output exactly.\n\n4.  **"
+    ]
+  }
+}

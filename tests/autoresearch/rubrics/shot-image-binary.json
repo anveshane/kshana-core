@@ -40,6 +40,10 @@
     {
       "id": "PROSE_QUALITY",
       "question": "Flowing prose, not keyword lists?"
+    },
+    {
+      "id": "STORY_ACCURATE",
+      "question": "Does the shot depict details consistent with the source scene description (correct location, correct character state, no invented elements that contradict the story)?"
     }
   ]
 }

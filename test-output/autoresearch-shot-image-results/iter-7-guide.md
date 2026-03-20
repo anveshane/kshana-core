@@ -2,34 +2,36 @@
 
 ---
 
-## Step Zero: Extract These Four Facts From the Motion JSON
+## Step Zero: Read the Motion JSON for THIS Shot
 
-Before writing a single word of the prompt, extract and write down:
+Before writing anything, extract from the motion JSON for this specific shot:
 
-1. **The referenceImages list for THIS shot** — the exact image numbers listed (e.g., image 1, image 2). These are the ONLY images you may reference. Image numbers not in this list DO NOT EXIST for this shot.
-2. **The characters present in THIS shot** — only characters named here appear in the prompt.
-3. **The peak visual event** — what is the single most dramatic, specific thing happening RIGHT NOW in this shot? Not before, not after. Not "ships arrive" if the shot shows beams firing. Not "character reacts" if the shot shows their face dissolving into shock at a specific cause.
-4. **The shot type** — determines framing, depth of field, and what fills the frame.
+1. **Which reference images are listed as available for this shot** — these are the ONLY images you may reference
+2. **Which characters appear in this shot** — if a character is not listed in this shot's JSON, they DO NOT appear in this prompt
+3. **What is the specific visual event happening right now** — this is the narrative beat you must depict
+4. **What is the shot type** — this determines framing and depth of field
+
+Characters and images from other shots in the same scene DO NOT transfer to this shot. Each shot is isolated.
 
 ---
 
-## Reference Image Rule — Hard Constraint
+## Reference Image Rule
 
-**You may only reference images explicitly listed as available for THIS specific shot.**
+**Only reference images that are explicitly listed as available for this specific shot.**
 
 - Reference each available image using "from image N" phrasing (e.g., "the character from image 1", "the environment from image 2").
-- Every image in the shot's referenceImages list MUST appear somewhere in the prompt paragraph.
-- If image 3 is not in this shot's referenceImages list, you CANNOT write "from image 3". Not even if you saw that image referenced elsewhere. Not even if the setting seems to match.
+- Every available image MUST appear in the prompt paragraph. If image 2 is available, "image 2" must appear in the prose.
+- If only 1 image is listed, reference only "image 1". Never invent image numbers not provided.
 - If a character image is available but that character does not appear in this specific shot, do not reference that image.
-- If no reference images are listed, use `text_to_image` mode with no "from imageN" references.
+- If no reference images are available, use `text_to_image` mode with no "from imageN" references.
 
-**Fabricating image numbers is a critical error. If you write "from image 4" and image 4 is not in this shot's list, the prompt is wrong.**
+**Do not reference image numbers that are not explicitly listed as available for this shot. Inventing image numbers that don't exist is a critical error.**
 
 ---
 
 ## Shot Composition Rules
 
-The shot type from the motion JSON determines framing, camera position, and depth of field. State these explicitly in the prompt paragraph.
+The shot type from the motion JSON determines framing, camera position, and depth of field. These must appear as explicit words in the prompt paragraph.
 
 | Shot Type | Composition | Depth of Field |
 |-----------|-------------|----------------|
@@ -60,28 +62,23 @@ Rules:
 
 ---
 
-## Story Faithfulness Rules — Read the Scene Literally
+## Story Faithfulness Rules
 
-The scene description and the motion JSON for this specific shot are the only source of truth. Copy details from the text. Do not interpret, embellish, or fill gaps with assumptions.
+The scene description and the motion JSON for this specific shot are ground truth. The prompt must depict what literally happens at this moment in this shot — not what happens in adjacent shots.
 
-**The failure mode is inventing details that aren't there.** Examples of what NOT to do:
-- The scene says "perfectly normal Manhattan morning" → do NOT write "gray afternoon sky"
-- The scene says "civilians dissolve into golden particles" → do NOT write "golden particles swirl around the ships" — the particles come FROM people, not from ships
-- The scene says "silver-white beams fire down" → do NOT describe only ships arriving and omit the beams
-
-**Before writing, answer these questions from the source material only:**
-- What is the single peak action or event in THIS shot? (Not the whole scene — this shot specifically.)
-- Who is physically present and what are they doing at this exact moment?
+**Before writing, answer these questions from the motion JSON:**
+- What is happening in THIS shot specifically?
+- Who is present in THIS shot specifically?
 - What is the time of day, weather, and environment described for THIS shot?
-- What causes the reaction or event? Name it specifically.
 
 Then write only what those answers contain.
 
 - If the scene says golden particles: write golden particles — not "panic" or "fear."
 - If the scene says daytime: use daytime — do not introduce rain, night, or storm.
 - If a character is reaching out: show them reaching — do not show arms crossed.
-- If something is transforming, dissolving, erupting, or colliding — that transformation IS the shot. Depict it directly and specifically.
-- If someone is reacting — to what? Name the cause explicitly. "Her face frozen in horror as silver-white beams lance down into the crowd below" is correct. "Her face frozen in horror" is incomplete.
+- If something is transforming, dissolving, erupting, or colliding — that transformation IS the shot. Depict it directly.
+- If someone is reacting — to what? Name the cause. That reaction IS the shot.
+- If a wide shot's beat is ships appearing in the sky, the prompt must show that environmental event — do not substitute a character's command action from a later shot.
 
 Only include locations, characters, objects, and atmosphere described in this scene and this specific shot. Do not import elements from other shots.
 
@@ -89,20 +86,18 @@ If a character appears in this shot but needs an appearance change from their re
 
 ---
 
-## Lighting Rules — All Four Components Required
+## Lighting Rules
 
-Lighting must appear inside the prompt paragraph. You must include all four:
+Lighting must appear inside the prompt paragraph. Include all four components:
 
 1. **Source**: natural sunlight, overcast sky, practical lamp, alien energy glow, streetlights, fire
 2. **Direction**: overhead, camera-left, from behind (rim), from below
 3. **Quality**: harsh/hard (sharp shadows), soft/diffused (gentle gradients), dappled
 4. **Temperature**: warm golden, cool blue, neutral white, sickly green
 
-Do not write "dramatic lighting" or "cinematic lighting" — name the actual source, its direction, its quality, and its color temperature.
+Do not write "dramatic lighting" or "cinematic lighting" — name the actual source and direction.
 
-If the scene describes a specific light source (energy beams, alien glow, emergency lights), that source must appear in the lighting description with all four components.
-
-Match lighting to what the scene describes. Do not add atmospheric elements (storm, fog, night) the scene does not include.
+Match lighting to what the scene describes. Do not add atmospheric elements the scene does not include.
 
 ---
 
@@ -111,23 +106,23 @@ Match lighting to what the scene describes. Do not add atmospheric elements (sto
 Write a single flowing prose paragraph. Do not use bullet points, numbered steps, or keyword lists.
 
 The paragraph must contain, in order:
-1. The peak visual event and main subject — the specific action at its most dramatic moment
+1. The main subject and the specific visual action happening right now in this shot
 2. The setting and spatial relationships
 3. Shot framing, camera angle, and depth of field (explicit words from the shot type table)
 4. "from image N" references for every available image
-5. Lighting with source, direction, quality, and temperature — all four
+5. Lighting with source, direction, quality, and temperature
 6. Mood or atmosphere
 
-Lead with what is most dramatic and specific. Do not open with the environment when the event is the point.
+Example structure: "A wide establishing shot of [environment from image 2], deep focus with foreground and background both sharp, showing [characters from image 1] [specific action at its peak]. [Lighting]. [Mood]."
 
-Example structure: "A wide establishing shot of [environment from image 2], deep focus with foreground and background both sharp, showing [characters from image 1] [specific action at its peak]. [Lighting with all four components]. [Mood]."
+Before writing, identify: what is the single most dramatic visual event in this shot? Lead with that.
 
 ---
 
 **Output format:**
 ```
 **Image Prompt:**
-[Single detailed paragraph matching the shot's framing. Reference characters/settings with "from imageN" phrasing only for images explicitly listed as available for this shot. Lead with subject and action, then setting, then lighting, then mood. Write flowing prose — not comma-separated keywords.]
+[Single detailed paragraph matching the shot's framing. Reference characters/settings with "from imageN" phrasing only for images explicitly listed as available. Lead with subject and action, then setting, then lighting, then mood. Write flowing prose — not comma-separated keywords.]
 
 **Reference Images:**
 - Character: [name] (only if in this shot and listed as available)

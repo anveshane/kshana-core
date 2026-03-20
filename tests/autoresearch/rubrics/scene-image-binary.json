@@ -40,6 +40,14 @@
     {
       "id": "SCENE_FAITHFUL",
       "question": "Does the composition depict a recognizable moment from the source scene description?"
+    },
+    {
+      "id": "CHARACTERS_ACCURATE",
+      "question": "Are only characters who actually appear in this scene described (no invented characters, no omitted characters who should be present according to the source)?"
+    },
+    {
+      "id": "EMOTION_FAITHFUL",
+      "question": "Do character emotions and actions match what the scene description says they are feeling and doing (not generic poses, not contradicting the source material)?"
     }
   ]
 }

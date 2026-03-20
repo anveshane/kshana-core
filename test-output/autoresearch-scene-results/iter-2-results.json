@@ -1,0 +1,67 @@
+{
+  "iteration": 2,
+  "avgScore": 0.9272,
+  "failures": {
+    "questionFailRates": {
+      "CHARACTERS_PRESENT": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "CHARACTER_ACTIONS": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "SPATIAL_ARRANGEMENT": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "SETTING_GROUNDED": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "REF_IMAGES_USED": {
+        "rate": 0.2,
+        "failReasons": [
+          "No reference images are available per the header, yet the prompt incorrectly cites 'image 1' and 'image 3' as if references exist."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0.2,
+        "failReasons": [
+          "Since no reference images exist, Rowan's appearance (NYPD uniform, physical build) should be described in the prompt, but the prompt defers entirely to a non-existent 'image 1' without any character description."
+        ]
+      },
+      "LIGHTING": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.2,
+        "failReasons": [
+          "The output is not clean flowing prose — it contains bullet-pointed extraction notes, draft labels (Draft 1, Draft 2), critique sections, and an incomplete final sentence, making it meta-commentary and drafts rather than a finished prompt."
+        ]
+      },
+      "SCENE_FAITHFUL": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "CHARACTERS_ACCURATE": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "EMOTION_FAITHFUL": {
+        "rate": 0.2,
+        "failReasons": [
+          "The prompt does not convey the emotional undercurrents specified in the source — One's jaw tightening with leadership weight, Kael's furrowed brow, Lyra's pressed lips, and Ren's smirk giving way to fierce loyalty are all absent or genericized."
+        ]
+      }
+    },
+    "avgScore": 0.9272,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\nA wide establishing shot from slightly above, showing Rowan from image 1 standing atop subway steps in the foreground, arms spread in a directing gesture, gaze fixed on fleeing civilians. Behind him in the mid-ground, panicked people in office clothes and streetwear rush in all directions, some frozen in place staring upward. Above, the obsidian-black ships from image 3 block out the sun, casting geometric shadows across the Manhattan streets. Silver-white beams lance down from the ships, hitting the buildings and streets, where civilians dissolve into golden particles. Daylight mixed with the orange glow of the alien beams creates stark contrast across the scene. The camera captures a single frozen moment of organized chaos—Rowan's calm command contrasting with the anarchy below.\n\n**Reference Images:**\n- Character: Rowan — image 1\n- Setting: NYC Invasion — image 3\n\n**Negative Prompt:**\nblurry faces, distorted ships, excessive motion blur, washed-out colors, distorted text, extra limbs, morphed features\n\n**Aspect Ratio:**\n16:9",
+      "**Image Prompt:**`.\n        *   No meta-commentary, reasoning, or drafts.\n        *   Mode B (Text-to-Image): No reference images exist, so full descriptions are needed.\n        *   Word count: 80-250 words (though the \"Image Prompt\" section usually benefits from brevity, the constraints say 80-250 for Mode B).\n        *   Include character/setting physical descriptions.\n        *   Lighting is mandatory (source, direction, quality).\n        *   Frozen instant only (no motion verbs).\n        *   No narrative commentary (only visual facts).\n        *   Aspect Ratio: 16:9.\n        *   Generation Mode: text_to_image.\n\n2.  **Extract Key Visual Elements:**\n    *   **Subject:** Keerti (16, small frame, worn sandals, dried tear tracks, hollow eyes, clutching a nylon bag).\n    *   **Setting:** St. Mary's Home for Children (two-story building, faded paint, overgrown garden, bougainvillea, interior common room with mismatched chairs, chipped bookshelf, dusty sunlight).\n    *   **Lighting:** Golden hour exterior (warm side light), interior (slanted sunlight from windows, dust motes).\n    *   **Atmosphere:** Quiet, heavy, observational, cinematic realism.\n\n3.  **Drafting the Prompt (incorporating constraints):**\n    *   *Constraint Check:* Needs to be one frozen instant. The scene has two parts (exterior and interior). I should focus on the most emotionally resonant moment or combine them if possible, but usually, a prompt describes one specific composition. Given the \"Arrival\" theme, the moment Keerti stands before the gate or steps inside is key. Let's focus on the transition moment or the interior arrival, as it contains more character interaction potential. Actually, the prompt asks to compose characters and settings into a *single* frozen image. I will focus on the interior arrival moment (Shot 2) as it allows for the interaction between Keerti and the Matron and the background children.\n    *   *Visual Description:* Keerti stands near the entrance, clutching her bag. The Matron stands near the doorway watching her. Background children are paused in their play.\n    *   *Lighting:* Slanted sunlight from windows, dust motes visible. Warm wood tones, muted blues.\n    *   *Style:* Cinematic realism, natural light, shallow depth of field.\n\n4.  **Refining the Text (Iterative Process):**\n    *   *Draft 1:* A cinematic shot of Keerti standing inside the orphanage common room. She is small, wearing worn sandals, clutching a nylon bag. The Matron stands near the doorway watching her with kind eyes. Background children are frozen in play, a boy building a card house and girls whispering on a sofa. Dust motes float in slanted sunlight from the windows. The room has mismatched chairs and a chipped bookshelf. Keerti looks down, dried tear tracks on her cheeks. The Matron wears a simple cotton sari. The light is warm and golden, highlighting the dust.\n    *   *Critique 1:* A bit choppy. Needs to flow like prose. Needs to ensure \"frozen\" state is emphasized.\n    *   *Draft 2:* A medium-wide cinematic shot inside the common room of St. Mary's Home for Children. Keerti, a small sixteen-year-old in worn sandals, stands near the wooden entrance clutching a frayed nylon bag, her head bowed with hollow eyes and dried tear tracks on her cheeks. The Matron, a woman in a simple cotton sari with kind tired eyes, stands near the doorway watching Keerti, hands gently outstretched. In the background, children are frozen in quiet play—a boy with a card house, two girls whispering on a sofa, and a toddler clutching a worn teddy bear. Slanted sunlight cuts through the dusty air, illuminating floating motes and casting warm amber light on the mismatched chairs and chipped bookshelf. Keerti’s gaze is fixed downward on her bag, while the Matron’s expression"
+    ]
+  }
+}

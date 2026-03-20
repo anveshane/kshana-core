@@ -1,0 +1,78 @@
+{
+  "iteration": 1,
+  "avgScore": 0.9076000000000001,
+  "failures": {
+    "questionFailRates": {
+      "VALID_STRUCTURE": {
+        "rate": 0.2,
+        "failReasons": [
+          "The JSON is structurally valid with a shots array, but the required field names (shot_number, description, motion_description, camera_movement, duration_seconds) are not present — the prompt uses shotNumber, prompt, cameraWork, duration instead, and motion_description is absent as a distinct field."
+        ]
+      },
+      "SHOT_COUNT": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "DURATION_RANGE": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "SHOT_DESCRIPTIONS": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "SHOW_DONT_LABEL": {
+        "rate": 0.2,
+        "failReasons": [
+          "Several descriptions use emotional labels rather than physical shows — 'panicked crowds', 'determined focus', and 'jaw set in determination' label emotions instead of rendering them through purely physical action."
+        ]
+      },
+      "CAMERA_WORK": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "LOGICAL_SEQUENCE": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "SCENE_COVERAGE": {
+        "rate": 0.2,
+        "failReasons": [
+          "The prompt omits the emotional climax of the scene — Keerti's first genuine laugh at the mural — which is explicitly identified in the source as the key turning-point moment."
+        ]
+      },
+      "CHARACTER_IDENTITY": {
+        "rate": 0.4,
+        "failReasons": [
+          "Characters lack consistent visual anchors (no hair color, clothing, skin tone, or distinctive physical features) that would allow them to be recognized across shots or in future scenes.",
+          "Characters are named (ONE, KAEL, LYRA, REN) but described only through actions and props with minimal visual detail (e.g., no mention of One's sharp-featured face or silvery vein tracery, Kael's glowing irises, or other distinguishing physical traits) and no reference images are available."
+        ]
+      },
+      "DIALOGUE_DISTRIBUTED": {
+        "rate": 0.2,
+        "failReasons": [
+          "The scene has multiple lines of dialogue from Adil, Keerti, and Sham, but none are included in any shot description — Shot 2 only references 'throat clearing' without the actual spoken lines."
+        ]
+      },
+      "REF_IMAGES_VALID": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "STORY_ACCURATE": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "SETTING_FAITHFUL": {
+        "rate": 0,
+        "failReasons": []
+      }
+    },
+    "avgScore": 0.9076000000000001,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "{\n  \"sceneNumber\": 1,\n  \"sceneTitle\": \"The First Harvest\",\n  \"shots\": [\n    {\n      \"shotNumber\": 1,\n      \"shotType\": \"establishing\",\n      \"duration\": 6,\n      \"prompt\": \"A wide establishing shot of Manhattan morning with taxi cabs and pedestrians, then a jagged obsidian-black triangular ship rips through reality hovering over the Empire State Building, casting geometric shadows as silver-white energy beams lance down and dissolve people into glowing particles, panic erupts with cars screeching to halts.\",\n      \"dialogue\": null,\n      \"cameraWork\": \"wide establishing shot, slightly low angle, slow push-in\",\n      \"referenceImages\": [\n        \"assets/images/7SlBzXLB_SettingRef_NYCInvasion_00001_.png\"\n      ]\n    },\n    {\n      \"shotNumber\": 2,\n      \"shotType\": \"close-up\",\n      \"duration\": 7,\n      \"prompt\": \"Close-up on Rowan's face atop subway steps, sweat on brow and jaw clenched in focused intensity, NYPD uniform stark against orange and blue invasion colors, his eyes scan the crowd with tactical precision as he gives commanding orders to evacuate civilians.\",\n      \"dialogue\": \"THIS WAY! TO THE SUBWAY!\",\n      \"cameraWork\": \"close-up, shallow depth of field, steady follow\",\n      \"referenceImages\": [\n        \"assets/images/OE4Q8fNL_CharRef_Rowan_00001_.png\"\n      ]\n    },\n    {\n      \"shotNumber\": 3,\n      \"shotType\": \"medium\",\n      \"duration\": 7,\n      \"prompt\": \"Medium shot from slightly elevated position showing Rowan with a small group of civilians behind a food truck, he points to three evacuation routes and sprints to rescue a teenage boy from a charging beam, then leads them forward as a small island of purpose in the sea of panic.\",\n      \"dialogue\": \"You're alive because you move. You understand? MOVE!\",\n      \"cameraWork\": \"medium shot, handheld following action, slight pull back\",\n      \"referenceImages\": [\n        \"assets/images/OE4Q8fNL_CharRef_Rowan_00001_.png\",\n        \"assets/images/7SlBzXLB_SettingRef_NYCInvasion_00001_.png\"\n      ]\n    }\n  ],\n  \"totalSceneDuration\": 20,\n  \"referenceImages\": [\n    \"assets/images/OE4Q8fNL_CharRef_Rowan_00001_.png\",\n    \"assets/images/7SlBzXLB_SettingRef_NYCInvasion_00001_.png\"\n  ]\n}",
+      "{\n  \"sceneNumber\": 1,\n  \"sceneTitle\": \"Arrival & First Impressions\",\n  \"shots\": [\n    {\n      \"shot_number\": 1,\n      \"duration_seconds\": 6,\n      \"description\": \"A weathered taxi coughs to a stop in front of St. Mary's orphanage, the faded building looms in warm afternoon light with overgrown bougainvillea. Inside the back seat, Keerti's hands clutch her worn nylon bag, knuckles white as fingers tremble. The taxi door opens and afternoon light floods on Keerti's face revealing dried tear tracks on her cheeks. Her worn sandals touch the dusty ground as she steps out, tiny against the weight of the building. She pauses looking up at the orphanage, a breeze rustles the bougainvillea carrying damp earth and jasmine. Her wide empty eyes scan the facade as wind lifts a strand of dark hair from her forehead. She takes one step toward the gate then stops, feet refusing to move as the taxi driver closes the door with a soft thud.\",\n      \"motion_description\": \"Camera starts wide on the taxi and building, pushes in to close-up of Keerti's hands in the back seat, then pulls back to medium as she exits. Handheld close-up on her face, then medium shot as she stands beside the taxi. Ends on medium as she pauses, then handheld close-up of her eyes scanning, before pulling back to medium as she hesitates at the gate.\",\n      \"camera_movement\": \"Wide to close-up push, then pull-back to medium, handheld close-up with slight drift right, ending on medium with static frame\",\n      \"reference_images\": []\n    },\n    {\n      \"shot_number\": 2,\n      \"duration_seconds\": 7,\n      \"description\": \"The common room interior bathed in slanted sunlight with dust motes floating through windows. Keerti steps inside clutching her bag, hesitating at the threshold while the matron watches from the doorway. Close-up on the matron's kind eyes and slight smile as she softly says 'You'll be fine, dear.' Keerti moves to a wooden chair and sets her bag down, the thud echoing in the silence causing her to flinch. The camera pans across the room as background children pause their activities - a boy frozen mid-card-house, two girls stopped whispering, a toddler clutching a teddy bear. Close-up on Keerti's hands still resting on the bag, fingers curling into the worn fabric with a slight tremor. Tight close-up on her face as her eyes dart from child to child then down to the floor. A single tear escapes tracing through the dust on her cheek as she bites her lip trying to hold back more.\",\n      \"motion_description\": \"Wide shot establishes the common room with sunlight and floating dust, then cuts to medium as Keerti enters and the matron approaches with hands outstretched. Close-up on the matron's face and gentle voice, then back to medium as Keerti sets her bag on the chair. Camera pans across the room showing children pausing their activities, ending on tight close-up of Keerti's face as a tear escapes.\",\n      \"camera_movement\": \"Static wide establishing shot, medium shot with slight push-in toward Keerti, close-up on matron then back out, smooth pan across room, ending on tight close-up of Keerti's face\",\n      \"reference_images\": []\n    }\n  ],\n  \"total_scene_duration\": 13,\n  \"reference_images\": []\n}"
+    ]
+  }
+}

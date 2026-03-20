@@ -1,0 +1,73 @@
+{
+  "iteration": 3,
+  "avgScore": 0.6890000000000001,
+  "failures": {
+    "questionFailRates": {
+      "CHARACTERS_PRESENT": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt contains only a placeholder '[The actual descriptive text]' and never mentions Kaito or any character.",
+          "Scene 10 includes the Young Girl, villagers/ensemble, Elder Mara, and children, but the prompt only depicts the Young Girl kneeling alone with no other characters present."
+        ]
+      },
+      "CHARACTER_ACTIONS": {
+        "rate": 0.4,
+        "failReasons": [
+          "No character actions, poses, gestures, or gaze directions are described anywhere in the prompt.",
+          "No characters appear in the scene, so no character actions, poses, or gaze directions are described."
+        ]
+      },
+      "SPATIAL_ARRANGEMENT": {
+        "rate": 0.8,
+        "failReasons": [
+          "Rowan's position on the subway steps is clear, but the fleeing civilians lack any spatial placement relative to him (foreground, background, distance) — they are only referenced abstractly.",
+          "The prompt contains no spatial information — no foreground/background, no relative positioning of any elements.",
+          "The prompt places the girl in the foreground with hills in the background but omits any spatial arrangement of the other required characters (villagers, children, Elder Mara) relative to her.",
+          "No characters are present, so no character-relative spatial arrangement can be described."
+        ]
+      },
+      "SETTING_GROUNDED": {
+        "rate": 0.2,
+        "failReasons": [
+          "The bakery interior setting from the story is never mentioned; the prompt is an unfilled structural template."
+        ]
+      },
+      "REF_IMAGES_USED": {
+        "rate": 0.2,
+        "failReasons": [
+          "The source context states no reference images were available, yet the prompt fabricates 'image 1', 'image 3', and 'image 4' citations that do not exist."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "LIGHTING": {
+        "rate": 0.2,
+        "failReasons": [
+          "No lighting source, direction, or quality is specified anywhere in the prompt."
+        ]
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.2,
+        "failReasons": [
+          "The output is a bullet-pointed template skeleton with placeholder bracketed text, not flowing prose."
+        ]
+      },
+      "SCENE_FAITHFUL": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt depicts nothing — it is an incomplete template that never renders any moment from the source scene.",
+          "No source scene description was provided, so it is impossible to verify that the composition faithfully depicts a recognizable moment from the story."
+        ]
+      }
+    },
+    "avgScore": 0.6890000000000001,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\n\nRowan from image 1 stands atop subway steps in the middle of a Manhattan street from image 3, arms spread in a directing gesture toward the fleeing civilians. His NYPD uniform stark against the orange and blue of chaos, sweat on his brow, eyes fixed on the evacuation route. Above, obsidian-black ships from image 3 hover like geometric wounds in the sky, casting unnatural shadows across the buildings. Cool blue emergency lights from the subway entrance meet warm orange firelight reflecting off the street below. The classroom emptiness from image 4 echoes in his focused expression—the same calm he wore before the invasion. Golden particles swirl where a beam struck moments before, suspended in mid-air. Cinematic, shallow depth of field, shot on 35mm film.\n\n**Reference Images:**\n- Character: rowan — image 1\n- Setting: nyc invasion — image 3\n- Setting: emotionless classroom — image 4\n\n**Negative Prompt:**\nnarrative commentary, motion verbs, temporal language, excessive detail, blur, low resolution\n\n**Aspect Ratio:**\n16:9",
+      "**Image Prompt:** [The actual descriptive text]\n        2.  **Reference Images:** None (since there are no reference images provided)\n        3.  **Negative Prompt:** [Style-appropriate]\n        4.  **Aspect Ratio:** 16:9\n\n2.  **Deconstruct the Scene for Visual Elements:**"
+    ]
+  }
+}

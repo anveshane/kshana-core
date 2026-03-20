@@ -1,0 +1,74 @@
+{
+  "iteration": 7,
+  "avgScore": 0.7399999999999999,
+  "failures": {
+    "questionFailRates": {
+      "SHOT_TYPE_MATCH": {
+        "rate": 0.2,
+        "failReasons": [
+          "Shot 1 is a wide establishing shot where the environment should dominate, but the prompt centers Rowan as a 'central figure directing civilians,' which is character-focused behavior belonging to Shots 2–3, not a wide environmental shot."
+        ]
+      },
+      "NARRATIVE_MOMENT": {
+        "rate": 0.2,
+        "failReasons": [
+          "Shot 1's specific story beat is ships materializing, beams dissolving people into golden particles, and mass panic erupting — but the prompt conflates this with Shot 2's narrative of Rowan commanding evacuations, blending two distinct beats."
+        ]
+      },
+      "CHARACTER_FOCUS": {
+        "rate": 0.4,
+        "failReasons": [
+          "Shot 1's motion JSON lists no named characters and includes only the NYC Invasion setting reference — Rowan does not appear in Shot 1 at all, yet the prompt places him as a central described figure.",
+          "Shot 1's motion JSON lists only the NYC setting reference image; Rowan is not meant to be a focus here, yet the prompt includes his silhouette by name, pulling in a character whose spotlight is Shot 2."
+        ]
+      },
+      "SPATIAL_FRAMING": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "REF_IMAGES_SCOPED": {
+        "rate": 1,
+        "failReasons": [
+          "The prompt references 'image 3' inline ('casting unnatural shadows over the city from image 3'), but the available reference images section states None, and Shot 1's motion JSON lists only a single setting reference — this numbered image citation is incorrect and unsupported.",
+          "Shot 1's motion JSON only references the NYC Invasion setting image, but the prompt includes Rowan's character reference (image 1) which is scoped to Shots 2 and 3 only.",
+          "Shot 1's motion JSON only includes the NYC invasion setting reference image, but the prompt references 'image 1' to bring in Rowan's character reference, which belongs to Shots 2 and 3.",
+          "The prompt adds a setting reference ('nyc invasion image 3') not present in the motion JSON for shot 4, and a close-up with a blurred background does not require a setting reference image.",
+          "Shot 1's motion JSON only lists Rowan and Mira as references, but the prompt adds a setting reference (image 3 / NYCInvasion) that belongs to Shot 2, not this shot."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "LIGHTING": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "CONTINUITY": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.2,
+        "failReasons": [
+          "The prompt ends with a broken sentence fragment—'from image 1, the holographic interface, and the tactical command aesthetic from image 3'—that disrupts otherwise flowing prose."
+        ]
+      },
+      "STORY_ACCURATE": {
+        "rate": 0.6,
+        "failReasons": [
+          "The source description for Shot 1 contains no mention of Rowan — he does not appear until Shot 2 — making his inclusion here an invented element that contradicts the established scene structure.",
+          "The scene description explicitly says 'Manhattan morning' but the prompt describes 'golden afternoon light,' which is a direct factual contradiction of the source material.",
+          "The scene description consistently uses male pronouns for Rowan ('his face', 'his voice'), but the prompt refers to Rowan as 'she', contradicting the source material."
+        ]
+      }
+    },
+    "avgScore": 0.7399999999999999,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\nA wide establishing shot from a low angle looking up at the Manhattan sky, where jagged obsidian-black ships materialize, blocking the sun and casting unnatural shadows over the city from image 3. Below, the streets are filled with the chaotic energy of civilians freezing in place as silver-white beams lance down from the sky. Deep focus keeps the towering skyscrapers and the alien vessels equally sharp, emphasizing the scale of the invasion. The daylight is harsh and bright, interrupted by the cold, geometric shadows of the ships and the blinding silver light of the energy weapons. Where the beams strike, people dissolve into swirling clouds of golden light, rising like smoke into the smog. The mood is sudden apocalypse, capturing the exact moment the city transitions from a",
+      "**Image Prompt:**\nA wide establishing shot from a slightly low angle capturing the chaos of Manhattan streets during daytime under invasion. The sky is partially blocked by jagged, obsidian-black triangular ships casting unnatural geometric shadows over the city. Golden sunlight from above clashes with the cool blue shadow of the ships. From image 1, Rowan stands amidst the panic, his face a mask of focused intensity as he directs civilians away from the alien beams. From image 3, the NYC Invasion setting shows street vendors and pedestrians frozen or running in random directions, their forms illuminated by the harsh, silver-white energy beams striking the pavement. The lighting is a mix of natural daylight filtered through the dark ships and the eerie glow of the alien weaponry. The mood is one of absolute terror mixed with organized survival, as the city transforms from normalcy to anarchy in seconds.\n\n**Reference Images:**\n- Character: rowan (image 1) — central figure directing civilians\n- Setting: nyc invasion (image 3) — Manhattan streets and alien ships\n\n**Negative Prompt:**\ncalm, peaceful, sunset, night, dark, detailed background, portrait, illustration, cartoon, anime, blurry, low resolution, distorted, bad anatomy, extra limbs, missing fingers, fused fingers, too many fingers, long neck, mutation, bad hands, missing arms, extra arms, fused fingers, too many fingers, long neck, mutation, blurry, low resolution, distorted, bad anatomy, extra limbs, portrait, illustration, cartoon, anime, painting, drawing, sketch, text, watermark, signature, frame, border, box, colorbar, grayscale, sepia, desaturated, low saturation, oversaturated, vignette, dark, light, bright, high contrast, low contrast, black and white, monochrome, color, vibrant, colorful, pastel, neon, glowing, glowing edges, glowing highlights, rim light, rim lighting, outline, border, frame, box, colorbar, grayscale, sepia, desaturated, low saturation, oversaturated, vignette, dark, light, bright, high contrast, low contrast, black and white, monochrome, color, vibrant, colorful, pastel, neon, glowing, glowing edges, glowing highlights, rim light, rim lighting, outline, border, frame, box, colorbar, grayscale, sepia, desaturated, low saturation, oversaturated, vignette, dark, light, bright, high contrast, low contrast, black and white, monochrome\n\n**Aspect Ratio:**\n1:1\n\n**Generation Mode:**\nimage_text_to_image"
+    ]
+  }
+}

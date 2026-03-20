@@ -1,0 +1,107 @@
+{
+  "iteration": 6,
+  "avgScore": 0.15999999999999998,
+  "failures": {
+    "questionFailRates": {
+      "SHOT_TYPE_MATCH": {
+        "rate": 0.8,
+        "failReasons": [
+          "The output is internal reasoning/thinking text, not an image prompt — no composition was ever produced.",
+          "The output never delivers an actual wide establishing shot prompt — it is entirely composed of meta-reasoning steps and draft fragments, not a composed image prompt.",
+          "The output is a chain-of-thought reasoning trace, not an image prompt — no composition is described at all.",
+          "The prompt contains no composition or framing information whatsoever."
+        ]
+      },
+      "NARRATIVE_MOMENT": {
+        "rate": 1,
+        "failReasons": [
+          "No actual prompt was generated; the output ends mid-sentence before any story beat is described.",
+          "The specific story beat (ships materializing, beams firing, people dissolving into golden particles) is only referenced inside planning notes, never rendered as a concrete visual prompt.",
+          "No actual narrative moment is depicted; the output deliberates about rules rather than painting the story beat.",
+          "The prompt depicts no story beat or narrative moment at all.",
+          "The prompt captures Rowan before the holographic globe but omits key narrative elements from the shot description: Mira's face appearing on a side monitor, the weary commanders exchanging glances, and the context of Rowan's speech."
+        ]
+      },
+      "CHARACTER_FOCUS": {
+        "rate": 0.8,
+        "failReasons": [
+          "No prompt exists to evaluate character inclusion; the output is unfinished deliberation about which images to reference.",
+          "Shot 1 is a wide cityscape with no character focus, yet the reasoning explicitly attempts to include Rowan (image 1) and Mira Voss (image 2) to satisfy a misread global constraint.",
+          "The output never resolves to a prompt with or without characters — it only debates which characters belong.",
+          "No characters are described in the prompt."
+        ]
+      },
+      "SPATIAL_FRAMING": {
+        "rate": 1,
+        "failReasons": [
+          "No camera distance, angle, or depth-of-field language appears in the generated output.",
+          "Camera distance, angle, and depth of field appear only inside numbered reasoning steps, not in any delivered prompt text.",
+          "No camera distance, angle, or depth of field is specified anywhere in the output.",
+          "No camera distance, angle, or depth of field is specified.",
+          "While camera distance (wide) and motion (push-in) are mentioned, the prompt omits explicit camera angle and depth-of-field specification called for by the shot type."
+        ]
+      },
+      "REF_IMAGES_SCOPED": {
+        "rate": 1,
+        "failReasons": [
+          "Reference images are debated internally but never actually cited in a completed prompt.",
+          "The output tries to force all four reference images into an establishing cityscape shot, including the irrelevant Mira Voss (image 2) and emotionless classroom (image 4).",
+          "The output argues about which reference images to use but never emits a prompt that cites any 'from image N' phrase.",
+          "No reference images are mentioned or scoped to any shot.",
+          "The prompt references 'image 3' and 'image 1' but the Reference Images Available section states 'None', meaning the prompt fabricates image references that do not exist for this evaluation."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0.6,
+        "failReasons": [
+          "No prompt was written, so no appearance details — changed or otherwise — are present.",
+          "No character appearance is described, so no change or consistency with reference images is addressed.",
+          "No character appearance or modifications are described."
+        ]
+      },
+      "LIGHTING": {
+        "rate": 0.8,
+        "failReasons": [
+          "No lighting source, direction, or quality is specified anywhere in the output.",
+          "Lighting notes (harsh sunlight vs. silver-white beams) exist only inside draft-planning bullets, not as a specified element of an actual prompt.",
+          "No lighting source, direction, or quality is mentioned anywhere in the output.",
+          "No lighting source, direction, or quality is specified."
+        ]
+      },
+      "CONTINUITY": {
+        "rate": 0.8,
+        "failReasons": [
+          "Without a completed prompt there is nothing to place in sequence with adjacent shots.",
+          "Without a coherent delivered prompt, continuity with adjacent shots cannot be assessed, and the unresolved forced character references would break visual sequence.",
+          "Without an actual prompt, continuity with adjacent shots cannot be assessed.",
+          "The prompt provides no content that could be evaluated for scene continuity."
+        ]
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.8,
+        "failReasons": [
+          "The output is a chain-of-thought scratchpad, not flowing descriptive prose.",
+          "The entire output is keyword bullets, numbered meta-reasoning, and self-correction commentary — not flowing prose.",
+          "The output is a bulleted meta-deliberation with asterisks and reasoning notes — the opposite of flowing prose.",
+          "The prompt is not prose — it is an empty or malformed string with only punctuation characters."
+        ]
+      },
+      "STORY_ACCURATE": {
+        "rate": 0.8,
+        "failReasons": [
+          "No prompt was produced, so accuracy to the source scene cannot be assessed.",
+          "Attempting to include the emotionless classroom (image 4) and Mira Voss in a NYC invasion establishing shot introduces elements that contradict the scene's setting and cast.",
+          "No depiction exists to check against the source scene; the output is reasoning scaffolding, not a prompt.",
+          "No story details, location, or character state are present to assess accuracy."
+        ]
+      }
+    },
+    "avgScore": 0.15999999999999998,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\".\n        *   No extra thinking output.\n\n2.  **Determine Image References:**\n    *   The shot is a wide establishing of NYC Invasion.\n    *   **Image 3** is explicitly \"nyc invasion (setting)\". This is the primary reference for the location and atmosphere.\n    *   **Image 4** is \"emotionless classroom (setting)\". This seems irrelevant for a NYC street scene, unless the prompt implies a specific interior, but the scene description says \"Manhattan streets\". I will stick to Image 3 for the setting.\n    *   **Image 1 & 2** are characters (Rowan and Mira). They are not the primary focus of *Shot 1* (which focuses on the ships and the city). However, the instructions say \"Reference every image as 'image N'\". But the instructions also say \"Reference characters/settings with 'from imageN' phrasing only for images explicitly listed as available.\" and \"Only use reference images explicitly listed as available for this shot.\"\n    *   Looking at the \"Reference Images\" section provided in the input: Image 1 and 2 are characters. Image 3 and 4 are settings.\n    *   For Shot 1 (Wide Establishing), the visual content is the city and the ships. Image 3 is the NYC Invasion setting.\n    *   Since the instruction says \"Reference every image as 'image N'\", I should check if I need to force the characters in. Usually, for an establishing shot, you want the setting. If I force Rowan in, it contradicts the \"Wide Establishing\" description where he isn't the focus yet.\n    *   However, the hard constraint says: \"Reference every image as 'image N' (with space before the number). Unreferenced images are ignored.\" This implies I *must* use them if I want the model to see them, or perhaps it means \"for every image available to you\".\n    *   Actually, looking at the \"FLUX 2 Klein\" instructions: \"Every reference image MUST be referenced in the prompt using `image N`... Unreferenced images are ignored by the model.\"\n    *   But this is a \"Shot Prompt\" task. Usually, you only reference the images relevant to the shot. The instructions say \"Only use reference images explicitly listed as available for this shot.\"\n    *   For Shot 1, only Image 3 (Setting) makes sense visually. However, to be safe with the \"reference every image\" constraint, I might need to include them if the system expects it, but logically, referencing a character image for a wide establishing shot of ships is confusing.\n    *   Let's re-read the specific \"Shot Prompt\" instructions: \"Only use reference images explicitly listed as available for this shot.\"\n    *   The input lists 4 images generally for the scene. It doesn't explicitly filter them per shot.\n    *   I will prioritize Image 3 (Setting) as the core reference. I will try to incorporate the visual vibe of the \"invasion\" from Image 3.\n    *   Wait, the instruction says \"Reference every image as 'image N'\". If I don't reference Image 1 and 2, are they ignored? Yes.\n    *   Okay, I will focus on the visual content of the shot: The city (Image 3) and the ships.\n\n3.  **Drafting the Content:**\n    *   **Subject:**",
+      "**Image Prompt:**\". Confidence: High.\n    *   **Content:** Describe the visual content of Shot 1, focusing on the alien invasion in NYC.\n    *   **Reference Images:** The scene involves NYC invasion. I must reference the relevant images provided in the context (`image 1: rowan`, `image 2: mira voss`, `image 3: nyc invasion`, `image 4: emotionless classroom`).\n    *   **Shot Specifics:** Shot 1 is a \"Wide Establishing\" shot.\n    *   **Hard Constraints:** No thinking steps in the output. Just the prompt.\n    *   **Flux 2 Klein Rules:** \"Write flowing prose\", \"Reference every image as 'image N'\", \"Lighting is mandatory\".\n\n**Step-by-Step Reasoning:**\n\n1.  **Identify the Subject & Action (Shot 1):**\n    *   The shot is a \"Wide Establishing Shot\" of NYC under invasion.\n    *   Key visual: Ships appearing in the sky, beams firing, people dissolving into particles.\n    *   The prompt needs to capture this chaos and the scale of the invasion.\n\n2.  **Determine Shot Composition:**\n    *   **Framing:** Wide shot. Deep focus so the city and the sky are both sharp.\n    *   **Camera Angle:** Slightly low angle looking up at the sky (as per scene description).\n    *   **Lighting:** Daytime (overcast or bright sunlight contrasted with the unnatural light of the ships). The ships cast \"unnatural geometric shadows.\"\n\n3.  **Scope Reference Images:**\n    *   The instruction says: \"Reference every image as 'image N'\".\n    *   The available images are:\n        *   `image 1`: Rowan (Character)\n        *   `image 2`: Mira Voss (Character)\n        *   `image 3`: NYC Invasion (Setting)\n        *   `image 4`: Emotionless Classroom (Setting)\n    *   *Correction/Refinement:* The prompt instructions for this task specifically state: \"Reference every image as 'image N' (with space before the number). Unreferenced images are ignored.\"\n    *   However, Shot 1 is an establishing shot of the city. Rowan and Mira aren't physically *in* this specific wide shot of the sky and ships.\n    *   But the global constraint says \"Reference every image as 'image N'\".\n    *   I will reference `image 3` (NYC Invasion) as the primary setting. I will reference `image 1` and `image 2` to imply the characters are reacting or present in the scene context, or simply include them as requested by the \"HARD CONSTRAINTS\" if they apply to the whole output generation process.\n    *   Looking closely at the \"HARD CONSTRAINTS\" for *this* specific task: \"Reference every image as 'image N' (with space before the number). Unreferenced images are ignored.\"\n    *   This implies I *must* include references to the provided images (`image 1`, `image 2`, `image 3`, `image 4`) in the prompt text.\n\n4.  **Drafting the Prompt:**\n    *   *Lead:* Wide shot of Manhattan morning turning to chaos.\n    *   *Action:* Black triangular ships block the sun.\n    *   *Dissolution:* People turning to golden particles.\n    *   *References:* \"The city from image 3\", \"The character from image 1\" (perhaps implying the observer or a figure within), \"The environment from image 4\" (maybe as a contrast or just to satisfy the constraint).\n    *   *Lighting:* Harsh sunlight contrasted with the cold silver-white beams from the ships.\n\n5.  **Refining the Prose:**\n    *   \"A wide establishing shot of the Manhattan morning from image 3, suddenly interrupted by the arrival of jagged obsidian ships blocking the sun.\"\n    *   \"The city from image 3 below becomes a stage for chaos as silver-white beams lance down.\"\n    *   \"Pedestrians from the streets dissolve into swirling golden particles, their forms unraveling into light.\""
+    ]
+  }
+}

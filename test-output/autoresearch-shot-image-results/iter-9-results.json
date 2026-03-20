@@ -1,0 +1,63 @@
+{
+  "iteration": 9,
+  "avgScore": 0.8800000000000001,
+  "failures": {
+    "questionFailRates": {
+      "SHOT_TYPE_MATCH": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "NARRATIVE_MOMENT": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "CHARACTER_FOCUS": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "SPATIAL_FRAMING": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "REF_IMAGES_SCOPED": {
+        "rate": 0.8,
+        "failReasons": [
+          "The prompt references 'image 3' for the urban landscape, but Shot 1 has only one reference image (SettingRef_NYCInvasion) and the scene level has only two total — 'image 3' does not exist and appears hallucinated.",
+          "The motion JSON lists 'assets/images/7SlBzXLB_SettingRef_NYCInvasion_00001_.png' as a reference for this shot, but the prompt incorrectly states 'N/A (no reference images match this shot's content)'.",
+          "The prompt references 'image 2' and 'image 4' but the available reference images section states None, meaning the prompt is citing non-existent references.",
+          "The prompt references 'image 3' for the command center and 'image 1' for Rowan, but no reference images are listed as available for this shot, making these references to non-existent assets."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "LIGHTING": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "CONTINUITY": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "PROSE_QUALITY": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "STORY_ACCURATE": {
+        "rate": 0.4,
+        "failReasons": [
+          "The scene description and motion JSON both specify a 'Manhattan morning,' but the prompt describes 'warm golden afternoon sunlight,' directly contradicting the established time of day.",
+          "The prompt invents a 'classroom setting with empty desks' as background, which directly contradicts the source scene set inside a Warden harvester ship with rows of comatose humans."
+        ]
+      }
+    },
+    "avgScore": 0.8800000000000001,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\n\nA wide establishing shot from a low angle looking upward at the Manhattan sky from image 3, deep focus with foreground and background both sharp showing the cityscape. Dozens of jagged obsidian-black triangular ships hang motionless above the Empire State Building, blocking out the sun. Silver-white energy beams lance down from the vessels, striking the streets with terrifying precision. Civilians dissolve into swirling golden particles at the point of impact—their forms unraveling upward like smoke into glowing light. The scene is lit by the cold blue-gray of the ships' energy against the warm golden afternoon sunlight catching the city below. Panic radiates outward from the beams' epicenter, a shockwave of chaos frozen at its peak. Style: cinematic documentary. Mood: awe and terror.\n\n**Reference Images:**\n- Setting: NYC Invasion (image 3) — primary visual reference for the Manhattan streets and skyline\n\n**Negative Prompt:**\nnarrative commentary, motion verbs, temporal language, character re-descriptions, excessive detail beyond the shot\n\n**Aspect Ratio:**\n1:1\n\n**Generation Mode:**\nimage_text_to_image",
+      "**Image Prompt:**\n\nA wide establishing shot from a slightly low angle capturing Manhattan under alien invasion, image 3 providing the urban landscape and street-level chaos. Dozens of obsidian-black triangular ships hang motionless against the daytime sky, their presence blocking the sun with unnatural geometric shadows. Silver-white energy beams lance down from above, striking the streets with terrifying precision. Where the beams connect with civilians, people dissolve into swirling clouds of golden particles that rise like smoke into the air. The scene is bathed in harsh midday sunlight filtering through the ship shadows, creating stark contrasts between the bright urban chaos below and the dark vessels overhead. The depth of field is deep, keeping both the distant ships and the dissolving figures in sharp focus. The mood is overwhelming awe mixed with primal terror — a city that moments ago was ordinary is now witnessing something that defies comprehension."
+    ]
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "iteration": 5,
+  "avgScore": 0.8,
+  "failures": {
+    "questionFailRates": {
+      "CHARACTERS_PRESENT": {
+        "rate": 0.6,
+        "failReasons": [
+          "The scene lists Civilians as characters present, but the prompt depicts only Rowan and the Warden ships with no civilians visible in the composition.",
+          "Scene 10 specifies the Young Girl, Villagers (ensemble including Elder Mara), and Children, but the prompt only depicts the Young Girl kneeling alone — the community working in the field and children playing are entirely absent.",
+          "No source scene description was provided, so it is impossible to verify whether required characters are present; the prompt contains no characters at all."
+        ]
+      },
+      "CHARACTER_ACTIONS": {
+        "rate": 0.2,
+        "failReasons": [
+          "No characters appear in the prompt, so no physical actions, poses, or gaze directions are described."
+        ]
+      },
+      "SPATIAL_ARRANGEMENT": {
+        "rate": 0.2,
+        "failReasons": [
+          "No characters are present to arrange; only setting elements (foreground debris, horizon, skyscrapers) are spatially described."
+        ]
+      },
+      "SETTING_GROUNDED": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "REF_IMAGES_USED": {
+        "rate": 0.2,
+        "failReasons": [
+          "The prompt references 'image 1' but the evaluation header states no reference images are available, indicating a hallucinated reference."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "LIGHTING": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.4,
+        "failReasons": [
+          "The output is not flowing prose — it is a mix of checklist annotations ('Frozen instant? Yes', 'Lighting specified? Yes') and disconnected bullet-pointed sentence fragments rather than a unified image description.",
+          "The output contains leaked chain-of-thought reasoning including numbered word-count checks and multiple labeled revision drafts, which breaks prose flow entirely."
+        ]
+      },
+      "SCENE_FAITHFUL": {
+        "rate": 0.2,
+        "failReasons": [
+          "No source scene description was provided, making it impossible to verify whether this composition faithfully depicts a moment from the story."
+        ]
+      }
+    },
+    "avgScore": 0.8,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\nA wide establishing shot of Manhattan under invasion from image 3, taken from a slightly elevated position. Rowan from image 1 stands atop subway steps in the foreground, arms spread in a directing gesture, his NYPD uniform stark against the orange and blue of the invasion. Behind him, the obsidian-black triangular ships from image 3 hover over the Empire State Building, casting geometric shadows across the streets. Silver-white beams lance down from above, transforming the organized chaos into pure anarchy. Cool blue emergency light from the subway entrance at Rowan's feet contrasts with warm orange firelight reflecting off the pavement behind him. Cinematic, shallow depth of field with the ships in soft focus.\n\n**Reference Images:**\n- Character: rowan — image 1\n- Setting: nyc invasion — image 3\n\n**Negative Prompt:**\nblurry, distorted, extra limbs, poor anatomy, text overlays, watermark, low resolution\n\n**Aspect Ratio:**\n16:9\n\n**Generation Mode:**\nimage_text_to_image",
+      "**Image Prompt:**`? Yes.\n        *   Frozen instant? Yes (\"still\", \"rests\", \"fixed\").\n        *   Lighting specified? Yes (\"golden hour light\", \"warm sunlight\", \"catches the warm sunlight\").\n        *   Full description? Yes (Kaito's age, apron, setting details).\n        *   No narrative commentary? Yes.\n\n4.  **Final Polish:** Ensure the prose flows well and hits the visual keywords for an image generator.\n\n    *   \"A medium shot of Kaito, a fifty-two year old man with dark eyes and weathered skin, seated on a worn wooden stool in the center of a bakery.\"\n    *   \"He wears a white apron dusted with a fine layer of white flour that matches the golden hour light streaming through a high window.\"\n    *   \"His body is still, his dark gaze fixed intently on a small wooden door in the background.\"\n    *   \"Around him, cooling racks hold dark loaves of bread"
+    ]
+  }
+}

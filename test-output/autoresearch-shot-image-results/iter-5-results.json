@@ -1,0 +1,89 @@
+{
+  "iteration": 5,
+  "avgScore": 0.52,
+  "failures": {
+    "questionFailRates": {
+      "SHOT_TYPE_MATCH": {
+        "rate": 0.4,
+        "failReasons": [
+          "The prompt contains only a template placeholder '[text]' with no compositional description whatsoever.",
+          "No actual image prompt was produced — the output is raw internal reasoning/deliberation, not a composed wide establishing shot description."
+        ]
+      },
+      "NARRATIVE_MOMENT": {
+        "rate": 0.4,
+        "failReasons": [
+          "No story beat or narrative moment is depicted; the prompt is an unfilled template.",
+          "The specific story beat (ships materializing, beams dissolving people into golden particles, panic erupting) is referenced only in bullet-point analysis, never rendered as a narrative prompt."
+        ]
+      },
+      "CHARACTER_FOCUS": {
+        "rate": 0.4,
+        "failReasons": [
+          "No characters are described at all.",
+          "Although the reasoning correctly identifies that Rowan and Mira are absent from Shot 1, this insight was never translated into an actual prompt that scopes characters correctly."
+        ]
+      },
+      "SPATIAL_FRAMING": {
+        "rate": 0.6,
+        "failReasons": [
+          "No camera distance, angle, or depth of field is specified.",
+          "No camera distance, angle, or depth of field is described in prompt form; only a label ('wide establishing') appears in the analysis.",
+          "The prompt implies wide framing through compositional description but never specifies camera distance, lens angle, or depth of field explicitly."
+        ]
+      },
+      "REF_IMAGES_SCOPED": {
+        "rate": 0.8,
+        "failReasons": [
+          "No reference images are included or referenced.",
+          "The reasoning concludes Image 3 is appropriate, but no 'image 3' reference appears in a usable prompt — the decision was made but never executed.",
+          "The prompt adds 'image 3' (Warden Ship Interior setting) as a reference, but the motion JSON for shot 1 lists only Mira's character reference.",
+          "The prompt includes image 3 (NYC Invasion/setting ref) which is not listed in shot 1's referenceImages array—only Rowan and Mira refs belong to this shot."
+        ]
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0.4,
+        "failReasons": [
+          "No character appearance details or changes are described.",
+          "No character appearance context or change descriptions are present in any final prompt output."
+        ]
+      },
+      "LIGHTING": {
+        "rate": 0.4,
+        "failReasons": [
+          "No lighting source, direction, or quality is specified.",
+          "Lighting source, direction, and quality are entirely absent from the output."
+        ]
+      },
+      "CONTINUITY": {
+        "rate": 0.4,
+        "failReasons": [
+          "With no actual content, continuity with adjacent shots cannot be established.",
+          "With no actual prompt text, it is impossible to assess whether this shot could plausibly sit in sequence with Shots 2 and 3."
+        ]
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.6,
+        "failReasons": [
+          "The output is an unfilled template with a literal '[text]' placeholder, not prose.",
+          "The output is entirely bullet points, self-corrections, and meta-commentary — not flowing prose suitable for an image generator.",
+          "The output contains exposed chain-of-thought reasoning with numbered steps and bullet points rather than delivering a clean, flowing prose prompt; the final draft is also truncated mid-sentence."
+        ]
+      },
+      "STORY_ACCURATE": {
+        "rate": 0.4,
+        "failReasons": [
+          "No story details are present, so accuracy to the source scene cannot be assessed.",
+          "The analysis is story-accurate in its reasoning, but since no final prompt was emitted, there is no output to evaluate for accuracy."
+        ]
+      }
+    },
+    "avgScore": 0.52,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\n\nA wide establishing shot from a slightly low angle looking up at the Manhattan sky, where dozens of jagged obsidian-black triangular ships hang silently against a daytime sky, blocking out the sun with unnatural geometric shadows. Below, ordinary NYC streets freeze as silver-white energy beams lance downward from the vessels—where they strike, people dissolve into swirling golden particles that rise like smoke into the smog. Cars screech to halts, pedestrians scatter in every direction, their faces frozen in pure panic. The scene is lit by harsh midday sunlight filtered through the darkening cloud cover, casting cold blue-gray tones over the chaos. Deep focus keeps foreground taxis and background skyscrapers equally sharp. The mood is apocalyptic yet terrifyingly cinematic—a perfect moment of first contact where the world stops and stares upward.\n\n**Reference Images:**\n- Setting: NYC Invasion (image 3)\n\n**Negative Prompt:**\nnarrative text, motion blur, temporal language, extra characters, night time, rain, storm elements, novel-style prose, incomplete sentences, placeholder text\n\n**Aspect Ratio:**\n1:1\n\n**Generation Mode:**\nimage_text_to_image",
+      "**Image Prompt:** [text] \\n \\n **Aspect Ratio:** 1:1 \\n \\n **Generation Mode:** image_text_to_image`\n        *   Length: 30-80 words."
+    ]
+  }
+}

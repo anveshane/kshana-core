@@ -1,0 +1,93 @@
+{
+  "iteration": 1,
+  "avgScore": 0.5636,
+  "failures": {
+    "questionFailRates": {
+      "CHARACTERS_PRESENT": {
+        "rate": 0.6,
+        "failReasons": [
+          "Background children (boy building card house, two girls on sofa, toddler with teddy bear) are specified in the scene but absent from the prompt entirely.",
+          "The prompt mentions ONE and KAEL but omits LYRA (sword maintenance) and REN (bandana coiling), despite stating 'Four Starbird Raiders gather around the heavy table'.",
+          "The prompt is a broken template fragment with no characters described at all."
+        ]
+      },
+      "CHARACTER_ACTIONS": {
+        "rate": 0.8,
+        "failReasons": [
+          "Rowan has a gesture ('arm extended pointing') but no gaze direction is specified, and civilians are only described as 'fleeing' with no individual pose or gesture detail.",
+          "Keerti and the Matron receive minimal action description, but the background children are completely omitted so their physical actions/poses are never described.",
+          "Only ONE and KAEL have actions described; LYRA and REN are entirely absent from the prompt, leaving half the cast without any pose or gesture.",
+          "No character actions, poses, or gestures are described; the output is template scaffolding, not a prompt."
+        ]
+      },
+      "SPATIAL_ARRANGEMENT": {
+        "rate": 0.4,
+        "failReasons": [
+          "ONE at the table and KAEL near the far wall are placed, but LYRA (on a low crate) and REN (crouching near the table) are not positioned anywhere in the frame.",
+          "There is no spatial or compositional information whatsoever in the malformed output."
+        ]
+      },
+      "SETTING_GROUNDED": {
+        "rate": 0.2,
+        "failReasons": [
+          "No setting is described; the output contains only formatting instructions, not scene content."
+        ]
+      },
+      "REF_IMAGES_USED": {
+        "rate": 0,
+        "failReasons": []
+      },
+      "APPEARANCE_CHANGES": {
+        "rate": 0.4,
+        "failReasons": [
+          "With no reference images, the prompt should describe Rowan's NYPD uniform (a key visual detail from the scene), but it omits all costume/appearance information entirely.",
+          "No character appearances are described, so required appearance details (soot, uniform, scar) are entirely absent."
+        ]
+      },
+      "LIGHTING": {
+        "rate": 0.2,
+        "failReasons": [
+          "No lighting source, direction, or quality is specified anywhere in the output."
+        ]
+      },
+      "PROSE_QUALITY": {
+        "rate": 0.4,
+        "failReasons": [
+          "The submitted content is a process/drafting document with numbered steps, bullet points, italicized labels, and meta-commentary — it is not a clean, flowing prose image prompt.",
+          "The output is a fragment of template meta-instructions, not flowing prose describing a scene."
+        ]
+      },
+      "SCENE_FAITHFUL": {
+        "rate": 0.6,
+        "failReasons": [
+          "The prompt places Sham in the dining area alongside Adil and Keerti, but Sham only appears in the corridor (Shot 6), not in the dining area (Shot 5) — this conflates two distinct shots and locations.",
+          "The prompt is truncated mid-sentence and only depicts two of the four characters, missing the full tableau around the table that defines the scene.",
+          "The output contains no depiction of any moment from the source scene; it is pure template boilerplate."
+        ]
+      },
+      "CHARACTERS_ACCURATE": {
+        "rate": 0.6,
+        "failReasons": [
+          "Background children are present in the scene per the source description but are completely omitted from the prompt, violating the requirement that no specified characters be left out.",
+          "LYRA and REN are present in the source scene and should appear but are entirely omitted from the prompt's character descriptions.",
+          "No characters are mentioned at all, so the required character Rowan is omitted."
+        ]
+      },
+      "EMOTION_FAITHFUL": {
+        "rate": 0.6,
+        "failReasons": [
+          "The prompt has Keerti's eyes 'meeting the camera' (breaking the fourth wall) rather than looking at her plate or at Adil as the source specifies, and describes her plate as empty when the source says it is half-full.",
+          "ONE's magnetic spheres are described orbiting 'around his temples' rather than his wrists/forearms as the source specifies, and LYRA's tense readiness and REN's fierce loyalty are absent entirely.",
+          "No emotions or actions are described; the prompt failed to generate any scene content."
+        ]
+      }
+    },
+    "avgScore": 0.5636,
+    "formatFailures": 0,
+    "totalRuns": 5,
+    "sampleOutputs": [
+      "**Image Prompt:**\". Do NOT output any thinking...\"\n\n    *Let's verify the word count of the drafted prompt:*\n    \"Rowan from image 1 stands atop subway steps in the foreground, arm extended pointing down a street. Behind him, Manhattan streets from image 3 are filled with fleeing civilians, orange sunlight mixing with unnatural blue glow from above. A jagged black ship looms in the background against a smoky sky. Cinematic lighting, chaotic depth of field, golden hour streetlamps flickering against the grey invasion.\"",
+      "**Image Prompt:**\".\n    *   The prompt needs to describe the visual scene as if capturing that frozen instant.\n\n4.  **Drafting the Content:**\n    *   *Subject:* Keerti standing before the orphanage or just entering. Let's focus on the arrival moment at the gate or the threshold of the common room. The description mentions \"Exterior Taxi Arrival\" and \"Interior Common Room\". A single image usually captures the establishing moment. Let's aim for the threshold moment or the exterior arrival to capture the scale. Actually, the \"Arrival\" shot is strong. Let's focus on Keerti standing small against the large building.\n    *   *Physical Details:* Keerti (16, small frame, worn sandals, nylon bag). Matron (kind eyes, cotton sari). Setting (faded paint, bougainvillea, dusty windows).\n    *   *Lighting:* Golden hour warmth, long shadows.\n    *   *Pose/Position:* Keerti standing, looking up or down.\n    *   *Constraint Check:* 80-250 words. No narrative commentary.\n\n5.  **Refining the Prompt (Iterative Process):**\n    *   *Draft 1:* A medium shot of Keerti standing on the dusty pavement in front of St. Mary's Home for Children. She is a small sixteen-year-old girl with dark hair and hollow eyes, wearing worn rubber sandals with a repaired strap. She holds a thin nylon bag tightly against her chest. The orphanage building looms behind her, two stories high with faded paint and an overgrown garden of bougainvillea. Golden hour sunlight hits her face from the left, casting long shadows and highlighting dried tear tracks on her cheeks. The Matron stands in the doorway watching her, wearing a simple cotton sari. The atmosphere is quiet and heavy with grief. Cinematic realism, warm ambers and faded greens.\n    *   *Critique 1:* Good coverage. Needs to ensure \"frozen instant\" feel (avoid motion verbs). \"Holding\" is okay. \"Looms\" is okay.\n    *   *Refining for \"Frozen Instant\":* Ensure verbs describe static states. \"Holding\" is a state. \"Standing\" is a state.\n    *   *Word Count Check:* ~100 words. Perfect.\n\n6.  **Final Polish:**\n    *   Check against \"No Narrative Commentary\": \"Grief\" is an emotion, but \"hollow eyes\" is a visual. \"Heavy with grief\" borders on commentary. Let's change to \"heavy with silence\"."
+    ]
+  }
+}
