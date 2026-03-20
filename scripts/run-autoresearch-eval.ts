@@ -23,6 +23,12 @@ import { execFileSync } from 'node:child_process';
 import type { JudgeRubric } from '../src/testing/JudgeLLMClient.js';
 import { PromptEvaluator } from '../src/testing/PromptEvaluator.js';
 import { loadMarkdown } from '../src/core/prompts/loader.js';
+import {
+  type BinaryRubric,
+  buildBinaryScoringPrompt,
+  parseBinaryJudgeResponse,
+  type BinaryJudgeResult,
+} from '../src/testing/BinaryJudgeRubric.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -94,7 +100,26 @@ function loadRubrics(filter?: string): JudgeRubric[] {
       const content = readFileSync(join(dir, f), 'utf-8');
       return JSON.parse(content) as JudgeRubric;
     })
-    .filter((r) => !filter || (r.phase ?? '') === filter || r.name.toLowerCase().includes(filter ?? ''));
+    .filter((r) => {
+      // Skip binary rubrics from the dimension-based pipeline
+      if ((r as unknown as { format?: string }).format === 'binary') return false;
+      return !filter || (r.phase ?? '') === filter || r.name.toLowerCase().includes(filter ?? '');
+    });
+}
+
+function loadBinaryRubrics(filter?: string): BinaryRubric[] {
+  const dir = join(PROJECT_ROOT, 'tests', 'autoresearch', 'rubrics');
+  if (!existsSync(dir)) return [];
+  const files = readdirSync(dir).filter((f) => f.endsWith('.json'));
+  return files
+    .map((f) => {
+      const content = readFileSync(join(dir, f), 'utf-8');
+      return JSON.parse(content) as BinaryRubric;
+    })
+    .filter((r) => {
+      if (r.format !== 'binary') return false;
+      return !filter || r.phase === filter || r.name.toLowerCase().includes(filter ?? '');
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -325,6 +350,15 @@ function judgeScore(rubric: JudgeRubric, input: string, output: string): JudgeRe
 }
 
 // ---------------------------------------------------------------------------
+// Binary judge scoring via Claude CLI
+// ---------------------------------------------------------------------------
+function binaryJudgeScore(rubric: BinaryRubric, input: string, output: string): BinaryJudgeResult {
+  const prompt = buildBinaryScoringPrompt(rubric, output, input);
+  const raw = claudeCli(prompt);
+  return parseBinaryJudgeResponse(raw, rubric);
+}
+
+// ---------------------------------------------------------------------------
 // Run structural validators (existing eval fixtures)
 // ---------------------------------------------------------------------------
 async function runStructuralEvals(): Promise<{ passed: number; total: number }> {
@@ -352,18 +386,19 @@ async function main() {
   // Load resources
   const benchmarks = loadBenchmarks(values.benchmark as string | undefined);
   const rubrics = loadRubrics(values.rubric as string | undefined);
+  const binaryRubrics = loadBinaryRubrics(values.rubric as string | undefined);
   const tier1Prompts = loadTier1Prompts();
 
   if (benchmarks.length === 0) {
     console.error('No benchmarks found in tests/autoresearch/benchmarks/');
     process.exit(1);
   }
-  if (rubrics.length === 0) {
+  if (rubrics.length === 0 && binaryRubrics.length === 0) {
     console.error('No rubrics found in tests/autoresearch/rubrics/');
     process.exit(1);
   }
 
-  console.error(`Loaded ${benchmarks.length} benchmark(s), ${rubrics.length} rubric(s)`);
+  console.error(`Loaded ${benchmarks.length} benchmark(s), ${rubrics.length} dimension rubric(s), ${binaryRubrics.length} binary rubric(s)`);
 
   console.error(`LLM: claude -p --model ${CLAUDE_MODEL}`);
 
@@ -415,6 +450,35 @@ async function main() {
         }
       } catch (err) {
         console.error(`    ERROR scoring ${rubric.name}: ${err instanceof Error ? err.message : String(err)}`);
+        phaseScores[phaseKey]!.push(0);
+      }
+    }
+
+    // Score binary rubrics
+    for (const binaryRubric of binaryRubrics) {
+      const phaseKey = binaryRubric.phase;
+      if (!phaseKey || !PHASE_WEIGHTS[phaseKey]) continue;
+
+      const output = pipelineOutput[phaseKey] ?? '';
+      if (!output) {
+        phaseScores[phaseKey]!.push(0);
+        continue;
+      }
+
+      console.error(`  Scoring ${binaryRubric.name} (binary)...`);
+      try {
+        const result = binaryJudgeScore(binaryRubric, benchmark.content, output);
+        phaseScores[phaseKey]!.push(result.normalizedScore);
+
+        if (verbose) {
+          console.error(`    Score: ${result.score}/${result.total} (${(result.normalizedScore * 100).toFixed(0)}%)`);
+          for (const answer of result.answers) {
+            const mark = answer.answer ? 'YES' : ' NO';
+            console.error(`    [${mark}] ${answer.id}: ${answer.reasoning}`);
+          }
+        }
+      } catch (err) {
+        console.error(`    ERROR scoring ${binaryRubric.name}: ${err instanceof Error ? err.message : String(err)}`);
         phaseScores[phaseKey]!.push(0);
       }
     }

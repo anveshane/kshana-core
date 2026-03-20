@@ -1,0 +1,53 @@
+{
+  "name": "Scene Video Binary",
+  "description": "Binary yes/no evaluation of scene video prompt quality — does it break a scene into filmable shots with specific motion, camera work, and narrative coverage?",
+  "format": "binary",
+  "phase": "vid_prompts",
+  "promptType": "scene_video",
+  "questions": [
+    {
+      "id": "VALID_STRUCTURE",
+      "question": "Is the output valid JSON with a shots array containing at least 1 shot, each with required fields (shot_number, description, motion_description, camera_movement, duration_seconds)?"
+    },
+    {
+      "id": "SHOT_COUNT",
+      "question": "Are there 2-4 shots (the guide range)?"
+    },
+    {
+      "id": "DURATION_RANGE",
+      "question": "Is every shot duration between 4-8 seconds?"
+    },
+    {
+      "id": "SHOT_DESCRIPTIONS",
+      "question": "Is each shot description a flowing paragraph in present tense — not keywords or bullet points?"
+    },
+    {
+      "id": "SHOW_DONT_LABEL",
+      "question": "Do descriptions show emotions through physical actions ('tears stream', 'jaw clenches') not labels ('she is sad')?"
+    },
+    {
+      "id": "CAMERA_WORK",
+      "question": "Does every shot have specific, non-trivial camera movement or framing (not just 'static' or empty)?"
+    },
+    {
+      "id": "LOGICAL_SEQUENCE",
+      "question": "Do shots follow cinematic progression (establishing → close-up → reaction)?"
+    },
+    {
+      "id": "SCENE_COVERAGE",
+      "question": "Do shots collectively cover the full narrative arc of the source scene — not just one moment?"
+    },
+    {
+      "id": "CHARACTER_IDENTITY",
+      "question": "Are characters described with enough visual detail to be recognizable — or properly linked to reference images?"
+    },
+    {
+      "id": "DIALOGUE_DISTRIBUTED",
+      "question": "If the scene has dialogue, are lines distributed across the appropriate shots?"
+    },
+    {
+      "id": "REF_IMAGES_VALID",
+      "question": "Are referenceImages either empty or containing real file paths (not fabricated)?"
+    }
+  ]
+}

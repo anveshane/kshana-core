@@ -1,0 +1,53 @@
+{
+  "name": "Scene Image Binary",
+  "description": "Binary yes/no evaluation of scene image prompt quality — does it compose characters and settings into a narrative moment with correct spatial relationships?",
+  "format": "binary",
+  "phase": "img_prompts",
+  "promptType": "scene_image",
+  "questions": [
+    {
+      "id": "CHARACTERS_PRESENT",
+      "question": "Are all characters specified in the scene description present in the prompt?"
+    },
+    {
+      "id": "CHARACTER_ACTIONS",
+      "question": "Does the prompt describe what each character is physically doing (pose, gesture, gaze direction)?"
+    },
+    {
+      "id": "SPATIAL_ARRANGEMENT",
+      "question": "Does the prompt describe where characters are relative to each other and the setting (foreground/background, left/right, distance)?"
+    },
+    {
+      "id": "SETTING_GROUNDED",
+      "question": "Is the scene anchored in a specific physical location from the story (not a vague/generic environment)?"
+    },
+    {
+      "id": "REF_IMAGES_USED",
+      "question": "If reference images exist, does the prompt reference every one using 'image N' notation?"
+    },
+    {
+      "id": "NO_REDESCRIPTION",
+      "question": "When using reference images, does the prompt avoid re-describing character appearance (hair, eyes, clothing) that the reference already provides?"
+    },
+    {
+      "id": "LIGHTING",
+      "question": "Does the prompt specify lighting with source, direction, and quality?"
+    },
+    {
+      "id": "FROZEN_INSTANT",
+      "question": "Does it describe one frozen moment — no motion verbs ('walks', 'turns'), no temporal language ('slowly', 'begins to')?"
+    },
+    {
+      "id": "NO_NARRATIVE",
+      "question": "Is it free of invisible concepts ('sense of dread', 'weight of guilt', 'emphasizing loneliness')? Only what a camera captures."
+    },
+    {
+      "id": "PROSE_QUALITY",
+      "question": "Is it flowing prose (not comma-separated keywords, not bullet points)?"
+    },
+    {
+      "id": "SCENE_FAITHFUL",
+      "question": "Does the composition depict a recognizable moment from the source scene description?"
+    }
+  ]
+}
