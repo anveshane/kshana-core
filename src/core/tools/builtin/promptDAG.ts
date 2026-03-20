@@ -491,26 +491,31 @@ function buildHardConstraints(ctx: DAGContext): string {
     `- Do NOT include narrative commentary — only what a camera captures.`,
   );
 
-  // Format compliance directives — prevent reasoning-model output leakage
+  // Format compliance — model-agnostic
   lines.push(
     '',
     '## FORMAT COMPLIANCE',
     '- Your FIRST line must be exactly: **Image Prompt:**',
-    '- Do NOT output thinking, reasoning, notes, checklists, or meta-commentary.',
-    '- Do NOT output bracket placeholders like [Paragraph] or [Value] — write real descriptive text.',
-    '- Do NOT describe any location, scene, or environment — background is ALWAYS plain neutral studio.',
+    '- Do NOT output thinking, reasoning, notes, or meta-commentary.',
+    '- Write real descriptive text — no placeholders or templates.',
     '- Stop immediately after the Aspect Ratio line.',
   );
+
+  // Character-image-specific: neutral studio background
+  if (params.prompt_type === 'character_image') {
+    lines.push('- Background is ALWAYS plain neutral studio — no locations or environments.');
+  }
 
   return lines.join('\n');
 }
 
 /** Assemble the system prompt for the LLM call. */
-function assembleSystemPrompt(ctx: DAGContext): void {
-  // System prompt is the skill/guide only — keep it tight.
-  // Prepend /no_think to suppress chain-of-thought from thinking models (e.g., Qwen3.5).
+function assembleSystemPrompt(ctx: DAGContext, modelName?: string): void {
   const guide = ctx.skillContent || 'You are an expert image prompt writer.';
-  ctx.systemPrompt = `/no_think\n${guide}`;
+  // Prepend /no_think for Qwen thinking models to suppress chain-of-thought.
+  // Other models ignore or may be confused by this directive.
+  const isQwen = modelName ? /qwen/i.test(modelName) : false;
+  ctx.systemPrompt = isQwen ? `/no_think\n${guide}` : guide;
 }
 
 /** Assemble the user prompt for the LLM call. */
@@ -891,7 +896,7 @@ export class PromptDAGExecutor {
 
     try {
       // 6. Run DAG steps based on prompt type
-      this.runDAGSteps(ctx);
+      this.runDAGSteps(ctx, this.llm.getModel());
 
       // 7. LLM call
       await llmGenerate(ctx, this.llm);
@@ -950,7 +955,7 @@ export class PromptDAGExecutor {
   }
 
   /** Run the deterministic DAG steps for the given prompt type. */
-  private runDAGSteps(ctx: DAGContext): void {
+  private runDAGSteps(ctx: DAGContext, modelName?: string): void {
     const { prompt_type } = ctx.params;
 
     switch (prompt_type) {
@@ -959,7 +964,7 @@ export class PromptDAGExecutor {
         resolveEntity(ctx);
         checkRefImages(ctx);
         resolveSkillForType(ctx);
-        assembleSystemPrompt(ctx);
+        assembleSystemPrompt(ctx, modelName);
         assembleUserPrompt(ctx);
         break;
 
@@ -967,7 +972,7 @@ export class PromptDAGExecutor {
         resolveScene(ctx);
         checkRefImages(ctx);
         resolveSkillForType(ctx);
-        assembleSystemPrompt(ctx);
+        assembleSystemPrompt(ctx, modelName);
         assembleUserPrompt(ctx);
         break;
 
@@ -985,7 +990,7 @@ export class PromptDAGExecutor {
         resolveShot(ctx);
         checkRefImages(ctx);
         resolveSkillForType(ctx);
-        assembleSystemPrompt(ctx);
+        assembleSystemPrompt(ctx, modelName);
         assembleUserPrompt(ctx);
         break;
       }
@@ -994,7 +999,7 @@ export class PromptDAGExecutor {
         resolveScene(ctx);
         checkRefImages(ctx);
         resolveSkillForType(ctx);
-        assembleSystemPrompt(ctx);
+        assembleSystemPrompt(ctx, modelName);
         assembleUserPrompt(ctx);
         break;
     }

@@ -26,20 +26,12 @@
       "question": "If reference images exist, does the prompt reference every one using 'image N' notation?"
     },
     {
-      "id": "NO_REDESCRIPTION",
-      "question": "When using reference images, does the prompt avoid re-describing character appearance (hair, eyes, clothing) that the reference already provides?"
+      "id": "APPEARANCE_CHANGES",
+      "question": "If the scene requires a character to look different from their reference image (different clothing, injuries, disguise, age, wet/dirty/undressed), does the prompt describe those specific differences? If no appearance changes are needed, does the prompt avoid redundantly re-describing what the reference already shows?"
     },
     {
       "id": "LIGHTING",
       "question": "Does the prompt specify lighting with source, direction, and quality?"
-    },
-    {
-      "id": "FROZEN_INSTANT",
-      "question": "Does it describe one frozen moment — no motion verbs ('walks', 'turns'), no temporal language ('slowly', 'begins to')?"
-    },
-    {
-      "id": "NO_NARRATIVE",
-      "question": "Is it free of invisible concepts ('sense of dread', 'weight of guilt', 'emphasizing loneliness')? Only what a camera captures."
     },
     {
       "id": "PROSE_QUALITY",

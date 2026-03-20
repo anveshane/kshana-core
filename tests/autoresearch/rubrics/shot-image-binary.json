@@ -26,12 +26,8 @@
       "question": "Are only shot-relevant reference images included (close-up of Alice → only Alice's ref)?"
     },
     {
-      "id": "FROZEN_INSTANT",
-      "question": "One frozen moment — no motion verbs, no temporal language?"
-    },
-    {
-      "id": "NO_NARRATIVE",
-      "question": "Free of invisible concepts? Only what a camera captures?"
+      "id": "APPEARANCE_CHANGES",
+      "question": "If the shot requires a character to look different from their reference image (different clothing, injuries, disguise, wet/dirty/undressed), does the prompt describe those specific differences? If no changes are needed, does it avoid redundantly re-describing what the reference already shows?"
     },
     {
       "id": "LIGHTING",
