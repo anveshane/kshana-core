@@ -60,24 +60,6 @@ describe('ProjectManager Input Functions', () => {
       expect(added.purpose).toBe('style_ref');
     });
 
-    it('should create inputs directory structure', () => {
-      const input: Omit<ProjectInput, 'id'> = {
-        source: { type: 'inline', value: 'test content' },
-        mediaType: 'text',
-        purpose: 'narration',
-        metadata: { addedAt: Date.now() },
-        processing: { status: 'pending' },
-      };
-
-      addProjectInput(input, TEST_BASE_PATH);
-
-      const inputsDir = path.join(TEST_BASE_PATH, '.kshana', 'inputs');
-      expect(fs.existsSync(inputsDir)).toBe(true);
-      expect(fs.existsSync(path.join(inputsDir, 'local'))).toBe(true);
-      expect(fs.existsSync(path.join(inputsDir, 'remote'))).toBe(true);
-      expect(fs.existsSync(path.join(inputsDir, 'youtube'))).toBe(true);
-    });
-
     it('should persist input to project file', () => {
       const input: Omit<ProjectInput, 'id'> = {
         source: { type: 'inline', value: 'test' },

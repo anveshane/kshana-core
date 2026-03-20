@@ -14,7 +14,6 @@ export {
   askUserQuestionTool,
   askUserTool,
   taskTool,
-  // taskOutputTool - NOT IMPLEMENTED, removed to avoid confusion
   enterPlanModeTool,
   exitPlanModeTool,
   setTodosTool,

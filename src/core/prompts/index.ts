@@ -37,29 +37,6 @@ function toPromptContext(ctx: PromptRuntimeContext): PromptContext {
 // not in the system message. This avoids duplication.
 
 /**
- * DEPRECATED: Context variable info - no longer used.
- * Context variables have been replaced with dynamic file discovery.
- */
-export interface ContextVariable {
-  variableName: string;
-  label: string;
-  charCount: number;
-}
-
-/**
- * DEPRECATED: No longer builds context variables section.
- * Context variables have been replaced with dynamic file discovery.
- * Agents use list_project_files() + read_file() instead.
- *
- * Always returns empty string.
- */
-export function buildContextVariablesSection(_variables: ContextVariable[]): string {
-  // Context variables are no longer used - return empty
-  // Agents now use list_project_files() + read_file() for content discovery
-  return '';
-}
-
-/**
  * Build the complete system message for an agent.
  * Uses XML tags to wrap custom prompts for clear structure.
  *
@@ -358,41 +335,6 @@ export function buildImageGenerationPrompt(task: string, context?: string): stri
   const sub = loadAndRenderMarkdown('system/subagent.md', {});
   const img = loadAndRenderMarkdown('subagents/image-generator.md', {});
   return [base, sub, img, taskSection, contextSection].filter(Boolean).join('\n\n');
-}
-
-/**
- * Video generation prompt options.
- */
-export interface VideoGenerationPromptOptions {
-  task: string;
-  sceneNumber: number;
-  sceneImageArtifactId: string;
-  motionDescription?: string;
-  context?: string;
-}
-
-/**
- * Build the video generation sub-agent system prompt with task and context substitution.
- * Used for animating scene images into video clips.
- *
- * @param options - Video generation options including task, scene info, and motion description
- * @returns The complete video generation system prompt
- */
-export function buildVideoGenerationPrompt(options: VideoGenerationPromptOptions): string {
-  const { task, sceneNumber, sceneImageArtifactId, motionDescription, context } = options;
-
-  const taskSection = `<task>\n${task}\n</task>`;
-  const contextSection = context ? `\n<context>\n${context}\n</context>` : '';
-  const sceneNumberStr = String(sceneNumber);
-  const motionStr = motionDescription ?? 'subtle camera movement, natural motion';
-
-  const base = loadAndRenderMarkdown('system/base.md', {});
-  const sub = loadAndRenderMarkdown('system/subagent.md', {});
-  const vid = loadAndRenderMarkdown('subagents/video-assembler.md', {});
-
-  const sceneSection = `<scene>\n<scene_number>\n${sceneNumberStr}\n</scene_number>\n<scene_image_artifact_id>\n${sceneImageArtifactId}\n</scene_image_artifact_id>\n<motion_description>\n${motionStr}\n</motion_description>\n</scene>`;
-
-  return [base, sub, vid, taskSection, contextSection, sceneSection].filter(Boolean).join('\n\n');
 }
 
 /**

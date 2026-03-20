@@ -24,7 +24,6 @@ import type { UserGoal, ExecutionPlan, AssetRegistry } from '../../core/planner/
 import { getVideoGenerationTools, getGraphicNovelTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
 import { getFakeVideoGenerationTools } from './fakeTools.js';
 import { getInfographicTools, INFOGRAPHIC_COMPLEX_TOOLS } from './infographic-tools.js';
-import { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
 // Workflow imports
@@ -59,8 +58,6 @@ import {
 } from '../../templates/index.js';
 import type { VideoTemplate, GenericProjectFile } from '../../core/templates/types.js';
 
-// Re-export prompts
-export { VIDEO_CREATION_SYSTEM_PROMPT, getVideoCreationPrompt } from './prompts.js';
 
 // Re-export tools
 export {
@@ -136,11 +133,8 @@ export function createVideoAgent(config: VideoAgentConfig): GenericAgent {
   // Create LLM client
   const llm = new LLMClient(llmConfig);
 
-  // Get the video-specific prompt
-  const customPrompt = getVideoCreationPrompt({
-    includeCharacterGuidelines,
-    includeStoryboardGuidelines,
-  });
+  // Video-specific prompt (now handled by orchestrator system prompt)
+  const customPrompt = '';
 
   // Create the generic agent with video customization
   const agent = new GenericAgent(registry.getAll(), llm, {

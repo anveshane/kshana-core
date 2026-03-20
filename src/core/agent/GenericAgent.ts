@@ -36,7 +36,9 @@ import {
 import { CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
 import { PromptDAGExecutor, type PromptDAGParams } from '../tools/builtin/promptDAG.js';
 import { getContentCreatorTools, clearKnownProjectFiles, ReadCache, ListFilesCache } from '../tools/builtin/contentCreatorTools.js';
-import { buildContextVariablesSection, type ContextVariable } from '../prompts/index.js';
+// Context variables deprecated — kept as minimal stubs for compatibility
+interface ContextVariable { variableName: string; label: string; charCount: number; }
+function buildContextVariablesSection(_variables: ContextVariable[]): string { return ''; }
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { FlowRecorder } from '../../utils/FlowRecorder.js';
 import { ToolAnalytics } from '../../utils/ToolAnalytics.js';
