@@ -404,30 +404,15 @@ The user has already chosen "Narrative Story Video" and "${styleDisplay}" style.
 
   // Build sub-agent info section
   const subAgentSection = `
-## Available Sub-Agents
+## Available Tools
 
-You can delegate work using these dispatch tools:
-
-### dispatch_explore(query)
-Research agent that reads documentation and returns focused summaries.
-Use for: Understanding workflows, finding patterns, checking documentation.
-
-### dispatch_skill(skill_name, task)
-Specialized skill agents for creative work.
-
-| skill_name | Use For |
-|------------|---------|
-| content-writing | Plots, stories, characters, settings, scenes, narration |
-| image-prompting | Visual descriptions for image generation |
-| video-direction | Motion/camera descriptions for video clips |
-| research-synthesis | Documentary research and fact-gathering |
-| narration-scripting | Voice-over scripts with delivery marks |
-
-### Direct Tools (no dispatch needed)
+### Direct Tools
 - \`read_project\` - Read project.json with file summaries
 - \`update_project\` - Update project state, phase transitions
 - \`AskUserQuestion\` - Ask user for input with options
-- \`generate_content\` - Generate content (auto-injects context)
+- \`generate_content\` - Generate content (auto-injects context, supports DAG types: plot, story, character, setting, scene)
+- \`generate_image\` - Generate images directly
+- \`generate_video_from_image\` - Generate video from scene images
 `;
 
   // Build project state section

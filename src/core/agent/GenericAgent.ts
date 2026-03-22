@@ -17,15 +17,10 @@ import {
   buildSystemMessage,
   buildPlanningPrompt,
   buildContentPrompt,
-  buildImageGenerationPrompt,
-  buildExplorePrompt,
-  buildSkillPrompt,
   wrapUserTask,
   type ContentType,
-  type SkillType,
 } from '../prompts/index.js';
-import { loadAndRenderMarkdown } from '../prompts/loader.js';
-import type { AgentConfig, AgentStatus, GenericAgentResult } from './AgentResult.js';
+import type { AgentConfig, GenericAgentResult } from './AgentResult.js';
 import {
   contextStore,
   condenseUserInput,
@@ -54,7 +49,6 @@ import {
   projectExists,
   saveTodos,
   loadTodos,
-  registerFile,
 } from '../../tasks/video/workflow/ProjectManager.js';
 import type {
   CharacterData,
@@ -179,10 +173,6 @@ const SIMPLE_TOOLS = new Set([
   'ask_user', // back-compat during migration
   'dispatch_agent',
   'dispatch_content_agent',
-  'dispatch_image_agent',
-  'dispatch_video_agent',
-  'dispatch_explore', // New skill-based architecture
-  'dispatch_skill', // New skill-based architecture
   'generate_content', // Deterministic content generation
   'generate_prompt',  // DAG-driven prompt generation
   'TodoWrite',
@@ -274,9 +264,10 @@ export class GenericAgent extends TypedEventEmitter {
   // Claude SDK-style plan mode state
   private planModeActive = false;
 
-  // Think tag streaming filter state
+  // Streaming filter state — strips <think> and <tool_call> blocks from streamed text
   private thinkTagBuffer: string = '';
   private insideThinkTag: boolean = false;
+  private insideToolCallTag: boolean = false;
 
   // Analytics session ID (stable per agent instance)
   private analyticsSessionId: string;
@@ -298,77 +289,6 @@ export class GenericAgent extends TypedEventEmitter {
     this.analyticsSessionId = `${this.name}_${Date.now()}_${nanoid(6)}`;
   }
 
-  /**
-   * Run a sub-agent with the given tools and prompt.
-   * This creates a NEW GenericAgent instance that uses the same run() loop,
-   * ensuring consistent event emission and behavior.
-   *
-   * RECURSION PROTECTION: Sub-agents are created with isSubAgent=true and
-   * should only be given tools that cannot spawn more sub-agents.
-   */
-  private async runSubAgent(config: {
-    name: string;
-    tools: ToolDefinition[];
-    prompt: string;
-    task: string;
-    maxIterations?: number;
-    parentToolCallId?: string;
-  }): Promise<GenericAgentResult> {
-    // Prevent infinite recursion - sub-agents cannot spawn more sub-agents
-    if (this.isSubAgent) {
-      throw new Error('Sub-agents cannot spawn nested sub-agents');
-    }
-
-    // Convert Tool[] to Map<string, ToolDefinition>
-    const toolMap = new Map<string, ToolDefinition>();
-    for (const tool of config.tools) {
-      toolMap.set(tool.name, {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-        handler: tool.handler,
-      });
-    }
-
-    // Create the sub-agent with appropriate initialMode based on agent name
-    const initialMode = config.name === 'Content Agent' ? 'content' : 'orchestrator';
-    const subAgent = new GenericAgent(toolMap, this.llm, {
-      customPrompt: config.prompt,
-      name: config.name,
-      isSubAgent: true,
-      maxIterations: config.maxIterations ?? 10,
-      initialMode,
-    });
-
-    // Forward all events from sub-agent to parent
-    // This ensures the CLI sees everything the sub-agent does
-    subAgent.on('tool_call', event => this.emit(event));
-    subAgent.on('tool_result', event => this.emit(event));
-    subAgent.on('streaming_text', event => this.emit(event));
-    subAgent.on('agent_status', event => this.emit(event));
-    subAgent.on('agent_text', event => this.emit(event));
-    subAgent.on('notification', event => this.emit(event));
-    subAgent.on('context_usage', event => this.emit(event));
-
-    // Track sub-agent context for flow recording
-    if (config.parentToolCallId) {
-      FlowRecorder.getSession()?.enterSubAgent(config.name, config.parentToolCallId);
-    }
-
-    // Initialize and run the sub-agent using the SAME run() loop as main agent
-    await subAgent.initialize();
-    const result = await subAgent.run(config.task);
-
-    // Exit sub-agent context for flow recording
-    if (config.parentToolCallId) {
-      FlowRecorder.getSession()?.exitSubAgent();
-    }
-
-    // Clean up event listeners
-    subAgent.removeAllListeners();
-
-    return result;
-  }
 
   /**
    * Initialize the agent by querying model capabilities.
@@ -508,6 +428,7 @@ export class GenericAgent extends TypedEventEmitter {
 
   /**
    * Process a streaming chunk and separate <think> tag content from regular content.
+   * Also strips <tool_call> blocks that some models emit as text instead of structured tool_use.
    * Uses a buffer to handle tags that span multiple chunks.
    * Returns both regular content and thinking content.
    */
@@ -551,61 +472,84 @@ export class GenericAgent extends TypedEventEmitter {
           // Wait for more data
           break;
         }
-      } else {
-        // Look for opening <think> tag
-        const openIndex = this.thinkTagBuffer.indexOf('<think>');
-        if (openIndex !== -1) {
-          // Emit everything before the tag as output
-          output += this.thinkTagBuffer.slice(0, openIndex);
-          this.thinkTagBuffer = this.thinkTagBuffer.slice(openIndex + '<think>'.length);
-          this.insideThinkTag = true;
-          // Continue processing - there might be think content after
+      } else if (this.insideToolCallTag) {
+        // Look for closing </tool_call> tag
+        const closeIndex = this.thinkTagBuffer.indexOf('</tool_call>');
+        if (closeIndex !== -1) {
+          // Found closing tag - discard everything inside (it's leaked tool XML)
+          this.thinkTagBuffer = this.thinkTagBuffer.slice(closeIndex + '</tool_call>'.length);
+          this.insideToolCallTag = false;
+          // Continue processing - there might be more content after
         } else {
-          // No opening tag - also check for orphan </think> tags (malformed LLM output)
-          const orphanCloseIndex = this.thinkTagBuffer.indexOf('</think>');
-          if (orphanCloseIndex !== -1) {
-            // Strip orphan closing tag - emit content before it as output
-            output += this.thinkTagBuffer.slice(0, orphanCloseIndex);
-            this.thinkTagBuffer = this.thinkTagBuffer.slice(orphanCloseIndex + '</think>'.length);
-            // Continue processing - there might be more content after
+          // No closing tag yet - check for partial </tool_call>
+          if (this.couldBeTagPrefix(this.thinkTagBuffer, '</tool_call>')) {
+            for (let i = 1; i < '</tool_call>'.length && i <= this.thinkTagBuffer.length; i++) {
+              const suffix = this.thinkTagBuffer.slice(-i);
+              const prefix = '</tool_call>'.slice(0, i);
+              if (suffix === prefix) {
+                this.thinkTagBuffer = suffix;
+                break;
+              }
+            }
           } else {
-            // Check if buffer could end with partial <think> or partial </think>
-            const couldBeOpenPartial = this.couldBeTagPrefix(this.thinkTagBuffer, '<think>');
-            const couldBeClosePartial = this.couldBeTagPrefix(this.thinkTagBuffer, '</think>');
+            // No partial - discard all (still inside tool_call)
+            this.thinkTagBuffer = '';
+          }
+          break;
+        }
+      } else {
+        // Outside both tags — look for <think> or <tool_call> opening tags
+        const thinkOpenIndex = this.thinkTagBuffer.indexOf('<think>');
+        const toolCallOpenIndex = this.thinkTagBuffer.indexOf('<tool_call>');
 
-            if (couldBeOpenPartial || couldBeClosePartial) {
-              // Find where the potential partial starts (check both tags)
-              let partialLen = 0;
+        // Find whichever tag comes first
+        const firstTag = (thinkOpenIndex === -1 && toolCallOpenIndex === -1) ? 'none'
+          : (thinkOpenIndex === -1) ? 'tool_call'
+          : (toolCallOpenIndex === -1) ? 'think'
+          : (thinkOpenIndex <= toolCallOpenIndex) ? 'think' : 'tool_call';
 
-              // Check for partial <think>
-              for (let i = 1; i < '<think>'.length && i <= this.thinkTagBuffer.length; i++) {
-                const suffix = this.thinkTagBuffer.slice(-i);
-                const prefix = '<think>'.slice(0, i);
-                if (suffix === prefix) {
-                  partialLen = Math.max(partialLen, i);
+        if (firstTag === 'think') {
+          output += this.thinkTagBuffer.slice(0, thinkOpenIndex);
+          this.thinkTagBuffer = this.thinkTagBuffer.slice(thinkOpenIndex + '<think>'.length);
+          this.insideThinkTag = true;
+        } else if (firstTag === 'tool_call') {
+          output += this.thinkTagBuffer.slice(0, toolCallOpenIndex);
+          this.thinkTagBuffer = this.thinkTagBuffer.slice(toolCallOpenIndex + '<tool_call>'.length);
+          this.insideToolCallTag = true;
+        } else {
+          // No opening tag - check for orphan closing tags
+          const orphanCloseIndex = this.thinkTagBuffer.indexOf('</think>');
+          const orphanToolCloseIndex = this.thinkTagBuffer.indexOf('</tool_call>');
+
+          // Find first orphan
+          const firstOrphan = (orphanCloseIndex === -1 && orphanToolCloseIndex === -1) ? -1
+            : (orphanCloseIndex === -1) ? orphanToolCloseIndex
+            : (orphanToolCloseIndex === -1) ? orphanCloseIndex
+            : Math.min(orphanCloseIndex, orphanToolCloseIndex);
+          const orphanTag = (firstOrphan === orphanCloseIndex && orphanCloseIndex !== -1) ? '</think>' : '</tool_call>';
+
+          if (firstOrphan !== -1) {
+            output += this.thinkTagBuffer.slice(0, firstOrphan);
+            this.thinkTagBuffer = this.thinkTagBuffer.slice(firstOrphan + orphanTag.length);
+          } else {
+            // Check for partial tags at end of buffer
+            const tags = ['<think>', '</think>', '<tool_call>', '</tool_call>'];
+            let maxPartialLen = 0;
+            for (const tag of tags) {
+              for (let i = 1; i < tag.length && i <= this.thinkTagBuffer.length; i++) {
+                if (this.thinkTagBuffer.slice(-i) === tag.slice(0, i)) {
+                  maxPartialLen = Math.max(maxPartialLen, i);
                 }
               }
+            }
 
-              // Check for partial </think>
-              for (let i = 1; i < '</think>'.length && i <= this.thinkTagBuffer.length; i++) {
-                const suffix = this.thinkTagBuffer.slice(-i);
-                const prefix = '</think>'.slice(0, i);
-                if (suffix === prefix) {
-                  partialLen = Math.max(partialLen, i);
-                }
-              }
-
-              if (partialLen > 0) {
-                // Emit everything before the potential partial
-                output += this.thinkTagBuffer.slice(0, -partialLen);
-                this.thinkTagBuffer = this.thinkTagBuffer.slice(-partialLen);
-              }
+            if (maxPartialLen > 0) {
+              output += this.thinkTagBuffer.slice(0, -maxPartialLen);
+              this.thinkTagBuffer = this.thinkTagBuffer.slice(-maxPartialLen);
             } else {
-              // No potential partial - emit all as output
               output += this.thinkTagBuffer;
               this.thinkTagBuffer = '';
             }
-            // Wait for more data
             break;
           }
         }
@@ -621,6 +565,7 @@ export class GenericAgent extends TypedEventEmitter {
   private resetThinkTagFilter(): void {
     this.thinkTagBuffer = '';
     this.insideThinkTag = false;
+    this.insideToolCallTag = false;
   }
 
   /**
@@ -635,7 +580,12 @@ export class GenericAgent extends TypedEventEmitter {
       this.thinkTagBuffer = '';
       return { output: '', thinking };
     }
-    // Outside think tag - return remaining buffer as output
+    if (this.insideToolCallTag) {
+      // Still inside a tool_call tag - discard (leaked XML)
+      this.thinkTagBuffer = '';
+      return { output: '', thinking: '' };
+    }
+    // Outside both tags - return remaining buffer as output
     const output = this.thinkTagBuffer;
     this.thinkTagBuffer = '';
     return { output, thinking: '' };
@@ -921,106 +871,6 @@ export class GenericAgent extends TypedEventEmitter {
           content: JSON.stringify(planResult),
           toolCallId: 'planning-result',
           name: 'dispatch_agent',
-        });
-
-        // Emit status change back to thinking
-        this.emit({
-          type: 'agent_status',
-          status: 'thinking',
-          agentName: this.getEffectiveAgentName(),
-        });
-      } else if (this.imageGenState?.active) {
-        // Handle the image generation response
-        const imageResult = await this.handleImageGenResponse(userResponse);
-        const imageResultObj = imageResult as Record<string, unknown>;
-
-        // Check if image gen needs more input or is complete
-        if (imageResultObj['status'] === 'awaiting_prompt_approval') {
-          // Still waiting for user - emit question and return
-          this.waitingForUser = true;
-          this.pendingQuestion = imageResultObj['question'] as string;
-
-          this.emit({
-            type: 'question',
-            question: imageResultObj['question'] as string,
-            isConfirmation: false,
-            options: imageResultObj['options'] as Array<{ label: string; description?: string }>,
-            autoApproveTimeoutMs: imageResultObj['autoApproveTimeoutMs'] as number | undefined,
-            context: imageResultObj['prompt'] as string,
-          });
-
-          // Prompt is shown in QuestionPrompt context
-          return {
-            status: 'waiting_for_user',
-            output: '',
-            todos: this.todoManager.getTodos(),
-            pendingQuestion: imageResultObj['question'] as string,
-            options: imageResultObj['options'] as Array<{ label: string; description?: string }>,
-            autoApproveTimeoutMs: imageResultObj['autoApproveTimeoutMs'] as number | undefined,
-            questionContext: imageResultObj['content'] as string | undefined,
-          };
-        }
-
-        // Image generation is complete (generated, cancelled, or max_iterations)
-        // Add the result to messages and continue
-        this.waitingForUser = false;
-        this.pendingQuestion = undefined;
-
-        // Add the dispatch_image_agent result to messages
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(imageResult),
-          toolCallId: 'image-gen-result',
-          name: 'dispatch_image_agent',
-        });
-
-        // Emit status change back to thinking
-        this.emit({
-          type: 'agent_status',
-          status: 'thinking',
-          agentName: this.getEffectiveAgentName(),
-        });
-      } else if (this.videoGenState?.active) {
-        // Handle the video generation response
-        const videoResult = await this.handleVideoGenResponse(userResponse);
-        const videoResultObj = videoResult as Record<string, unknown>;
-
-        // Check if video gen needs more input or is complete
-        if (videoResultObj['status'] === 'awaiting_approval') {
-          // Still waiting for user - emit question and return
-          this.waitingForUser = true;
-          this.pendingQuestion = videoResultObj['question'] as string;
-
-          this.emit({
-            type: 'question',
-            question: videoResultObj['question'] as string,
-            isConfirmation: false,
-            options: videoResultObj['options'] as Array<{ label: string; description?: string }>,
-            autoApproveTimeoutMs: videoResultObj['autoApproveTimeoutMs'] as number | undefined,
-          });
-
-          return {
-            status: 'waiting_for_user',
-            output: '',
-            todos: this.todoManager.getTodos(),
-            pendingQuestion: videoResultObj['question'] as string,
-            options: videoResultObj['options'] as Array<{ label: string; description?: string }>,
-            autoApproveTimeoutMs: videoResultObj['autoApproveTimeoutMs'] as number | undefined,
-            questionContext: videoResultObj['content'] as string | undefined,
-          };
-        }
-
-        // Video generation is complete (generated, cancelled, or max_iterations)
-        // Add the result to messages and continue
-        this.waitingForUser = false;
-        this.pendingQuestion = undefined;
-
-        // Add the dispatch_video_agent result to messages
-        this.messages.push({
-          role: 'tool',
-          content: JSON.stringify(videoResult),
-          toolCallId: 'video-gen-result',
-          name: 'dispatch_video_agent',
         });
 
         // Emit status change back to thinking
@@ -2072,144 +1922,6 @@ export class GenericAgent extends TypedEventEmitter {
       return result;
     }
 
-    // Handle dispatch_image_agent specially - sub-agent for image prompt crafting + generation
-    if (toolCall.name === 'dispatch_image_agent') {
-      const result = await this.handleDispatchImageAgent(toolCall);
-      const resultObj = result as Record<string, unknown>;
-
-      // Check if image gen needs user verification
-      if (resultObj['status'] === 'awaiting_prompt_approval') {
-        // Emit tool result first
-        this.emit({
-          type: 'tool_result',
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          result,
-          isError: false,
-          agentName: this.getEffectiveAgentName(),
-        });
-
-        // Set up waiting state for user input
-        this.waitingForUser = true;
-        this.pendingQuestion = resultObj['question'] as string;
-
-        // Emit question event with options and auto-approve timeout
-        this.emit({
-          type: 'question',
-          question: resultObj['question'] as string,
-          isConfirmation: false,
-          options: resultObj['options'] as Array<{ label: string; description?: string }>,
-          autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
-          context: resultObj['prompt'] as string,
-        });
-
-        // Emit status change
-        this.emit({
-          type: 'agent_status',
-          status: 'waiting',
-          agentName: this.getEffectiveAgentName(),
-        });
-
-        // Return special marker to indicate we're pausing for user input
-        FlowRecorder.getSession()?.onToolComplete(toolCall.id, resultObj, false);
-        return { __awaiting_user_input: true, ...resultObj };
-      }
-
-      this.emit({
-        type: 'tool_result',
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        result,
-        isError: false,
-        agentName: this.getEffectiveAgentName(),
-      });
-      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
-      return result;
-    }
-
-    // Handle dispatch_video_agent specially - sub-agent for video generation
-    if (toolCall.name === 'dispatch_video_agent') {
-      const result = await this.handleDispatchVideoAgent(toolCall);
-      const resultObj = result as Record<string, unknown>;
-
-      // Check if video gen needs user verification
-      if (resultObj['status'] === 'awaiting_approval') {
-        // Emit tool result first
-        this.emit({
-          type: 'tool_result',
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          result,
-          isError: false,
-          agentName: this.getEffectiveAgentName(),
-        });
-
-        // Set up waiting state for user input
-        this.waitingForUser = true;
-        this.pendingQuestion = resultObj['question'] as string;
-
-        // Emit question event with options and auto-approve timeout
-        this.emit({
-          type: 'question',
-          question: resultObj['question'] as string,
-          isConfirmation: false,
-          options: resultObj['options'] as Array<{ label: string; description?: string }>,
-          autoApproveTimeoutMs: resultObj['autoApproveTimeoutMs'] as number | undefined,
-        });
-
-        // Emit status change
-        this.emit({
-          type: 'agent_status',
-          status: 'waiting',
-          agentName: this.getEffectiveAgentName(),
-        });
-
-        // Return special marker to indicate we're pausing for user input
-        FlowRecorder.getSession()?.onToolComplete(toolCall.id, resultObj, false);
-        return { __awaiting_user_input: true, ...resultObj };
-      }
-
-      this.emit({
-        type: 'tool_result',
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        result,
-        isError: false,
-        agentName: this.getEffectiveAgentName(),
-      });
-      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
-      return result;
-    }
-
-    // Handle dispatch_explore - spawns explore agent for documentation research
-    if (toolCall.name === 'dispatch_explore') {
-      const result = await this.handleDispatchExplore(toolCall);
-      this.emit({
-        type: 'tool_result',
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        result,
-        isError: false,
-        agentName: this.getEffectiveAgentName(),
-      });
-      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
-      return result;
-    }
-
-    // Handle dispatch_skill - spawns skill agent for specialized work
-    if (toolCall.name === 'dispatch_skill') {
-      const result = await this.handleDispatchSkill(toolCall);
-      this.emit({
-        type: 'tool_result',
-        toolCallId: toolCall.id,
-        toolName: toolCall.name,
-        result,
-        isError: false,
-        agentName: this.getEffectiveAgentName(),
-      });
-      FlowRecorder.getSession()?.onToolComplete(toolCall.id, result, false);
-      return result;
-    }
 
     const tool = this.tools.get(toolCall.name);
     if (!tool?.handler) {
@@ -2349,47 +2061,6 @@ export class GenericAgent extends TypedEventEmitter {
       return await this.handleDispatchContentAgent({
         ...toolCall,
         name: 'dispatch_content_agent',
-      });
-    }
-
-    if (subagentType === 'image-generator') {
-      return await this.handleDispatchImageAgent({
-        ...toolCall,
-        name: 'dispatch_image_agent',
-      });
-    }
-
-    if (subagentType === 'video-assembler') {
-      return await this.handleDispatchVideoAgent({
-        ...toolCall,
-        name: 'dispatch_video_agent',
-      });
-    }
-
-    // New skill-based architecture types
-    if (subagentType === 'Explore') {
-      return await this.handleDispatchExplore({
-        ...toolCall,
-        name: 'dispatch_explore',
-      });
-    }
-
-    // Map skill types to dispatch_skill
-    const skillTypes: SkillType[] = [
-      'content-writing',
-      'image-prompting',
-      'video-direction',
-      'research-synthesis',
-      'narration-scripting',
-    ];
-    if (skillTypes.includes(subagentType as SkillType)) {
-      return await this.handleDispatchSkill({
-        ...toolCall,
-        name: 'dispatch_skill',
-        arguments: {
-          ...args,
-          skill_name: subagentType,
-        },
       });
     }
 
@@ -2564,51 +2235,6 @@ export class GenericAgent extends TypedEventEmitter {
     gatheringContext: boolean;
   } | null = null;
 
-  // State for dispatch_image_agent sub-agent (image prompt planning + generation)
-  private imageGenState: {
-    active: boolean;
-    task: string;
-    context?: string;
-    messages: Message[];
-    currentPrompt: string;
-    negativePrompt: string;
-    aspectRatio: string;
-    iterations: number;
-    /** Parameters passed from parent for generate_image */
-    imageParams: {
-      scene_number: number;
-      image_type?: 'scene' | 'character_ref' | 'setting_ref';
-      character_name?: string;
-      setting_name?: string;
-    };
-    /** Reference images for consistency (used for scene generation) */
-    referenceImages?: Array<{
-      image_id: string;
-      type: 'character' | 'setting';
-      name: string;
-    }>;
-    /** Generation mode determined by image_type and reference availability */
-    generationMode: 'text_to_image' | 'image_text_to_image';
-    /** Tool call ID for streaming events */
-    toolCallId: string;
-  } | null = null;
-
-  // State for dispatch_video_agent sub-agent (video generation)
-  private videoGenState: {
-    active: boolean;
-    task: string;
-    sceneNumber: number;
-    sceneImageArtifactId?: string;
-    motionDescription?: string;
-    context?: string;
-    messages: Message[];
-    currentParams: {
-      duration: number;
-      fps: number;
-      motionStrength: number;
-    };
-    iterations: number;
-  } | null = null;
 
   /**
    * Handle dispatch_agent tool - spawns a sub-agent for planning.
@@ -3084,117 +2710,27 @@ Respond in JSON format:
   }
 
   /**
-   * Handle dispatch_content_agent tool - spawns a TRUE sub-agent for creative content generation.
-   * The sub-agent runs its own run() loop, using read_project and read_file tools to gather context.
-   * All tool calls from the sub-agent are forwarded to the parent, making them visible in the CLI.
+   * Handle dispatch_content_agent tool - routes through generate_content.
+   * Previously spawned a sub-agent via runSubAgent(), which crashed 100% of the time
+   * due to getContextLength() not existing on the sub-agent LLM instance.
+   * Now routes through the same DAG/legacy split that generate_content uses.
    */
   private async handleDispatchContentAgent(toolCall: ToolCall): Promise<unknown> {
     const args = toolCall.arguments;
     const task = args['task'] as string;
-    const contentType = args['content_type'] as ContentType;
-    const outputFile = args['output_file'] as string | undefined;
+    const contentType = args['content_type'] as string;
 
-    if (!task) {
-      return { error: 'No task/instruction provided for dispatch_content_agent' };
+    if (!task || !contentType) {
+      return { error: 'task and content_type are required' };
     }
 
-    if (!contentType) {
-      return { error: 'No content_type provided for dispatch_content_agent' };
-    }
-
-    // Validate content_type is one of the allowed types
-    const validContentTypes = [
-      // Narrative types
-      'plot', 'story', 'character', 'setting', 'scene', 'narration',
-      // Documentary/generic types
-      'outline', 'segment', 'thesis', 'research', 'script',
-    ];
-    if (!validContentTypes.includes(contentType)) {
-      return {
-        error: `Invalid content_type "${contentType}". Must be one of: ${validContentTypes.join(', ')}`,
-        suggestion:
-          'Use the appropriate content_type for your task. For example, use "character" for character profiles, "scene" for scene descriptions, "segment" for documentary segments.',
-      };
-    }
-
-    debugLog(
-      `[GenericAgent] Content creation via sub-agent: type=${contentType}, instruction="${task.substring(0, 100)}..."`
-    );
-
-    // Build the content prompt
-    const contentPromptResult = buildContentPrompt(task, contentType, undefined, getProjectDir());
-    const contentSystemPrompt = contentPromptResult.prompt;
-
-    if (contentPromptResult.injectedSkills.length > 0) {
-      this.emit({
-        type: 'agent_text',
-        text: `> **Skills loaded:** ${contentPromptResult.injectedSkills.join(', ')}\n\n`,
-        isFinal: false,
-      });
-    }
-
-    // Build the user task for the sub-agent
-    const subAgentTask = `First, use read_project() to understand the project structure, template type, and available files. Then use read_file() to fetch the relevant source material listed in the project files. Finally, generate the ${contentType} content based on this instruction:\n\n${task}`;
-
-    try {
-      // Run the sub-agent - it uses the SAME run() loop as the main agent
-      // All tool calls will be visible in the CLI via event forwarding
-      const result = await this.runSubAgent({
-        name: 'Content Agent',
-        tools: getContentCreatorTools(),
-        prompt: contentSystemPrompt,
-        task: subAgentTask,
-        maxIterations: 10,
-        parentToolCallId: toolCall.id,
-      });
-
-      // Extract the generated content from the sub-agent's output
-      const generatedContent = result.output || '';
-
-      // Always save content to disk — auto-generate outputFile if not specified
-      const effectiveOutputFile = outputFile || CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
-      if (generatedContent) {
-        try {
-          const projectDir = getProjectDir();
-          const filePath = path.join(projectDir, effectiveOutputFile);
-
-          // Ensure parent directory exists
-          const parentDir = path.dirname(filePath);
-          if (!fs.existsSync(parentDir)) {
-            fs.mkdirSync(parentDir, { recursive: true });
-          }
-
-          fs.writeFileSync(filePath, generatedContent, 'utf-8');
-          debugLog(`[GenericAgent] Saved content to ${filePath}`);
-
-          // Auto-persist to project registry
-          persistApprovedContent(contentType, undefined, generatedContent, effectiveOutputFile);
-
-          // Register file in project so other tools can discover it
-          if (projectExists()) {
-            registerFile(effectiveOutputFile, contentType, {
-              summary: generatedContent.slice(0, 200).trim(),
-            });
-          }
-        } catch (saveError) {
-          debugLog(`[GenericAgent] Error saving content to file: ${String(saveError)}`);
-        }
-      }
-
-      return {
-        status: result.status,
-        content: generatedContent,
-        content_type: contentType,
-        output_file: effectiveOutputFile,
-        message: `Content generated successfully — saved to ${effectiveOutputFile}`,
-      };
-    } catch (error) {
-      return {
-        error: `Content creation failed: ${String(error)}`,
-        task,
-        content_type: contentType,
-      };
-    }
+    // Route through the generate_content handler — same DAG/legacy split
+    // This avoids the broken runSubAgent path entirely
+    return this.executeTool({
+      id: toolCall.id,
+      name: 'generate_content',
+      arguments: { content_type: contentType, instruction: task, ...args },
+    });
   }
 
   /**
@@ -3772,764 +3308,6 @@ Respond in JSON format:
   }
 
 
-  /**
-   * Check if there's an active image generation session awaiting user input.
-   */
-  isImageGenActive(): boolean {
-    return this.imageGenState?.active ?? false;
-  }
-
-  /**
-   * Handle dispatch_image_agent tool - spawns a sub-agent for image prompt crafting.
-   * The sub-agent crafts detailed prompts, gets user feedback, and generates the image once approved.
-   *
-   * Supports two modes:
-   * 1. Text-to-Image: For character_ref/setting_ref (no reference images needed)
-   * 2. Image+Text-to-Image: For scenes (requires reference images for consistency)
-   */
-  private async handleDispatchImageAgent(toolCall: ToolCall): Promise<unknown> {
-    // Set mode for UI display
-    this.currentMode = 'image';
-
-    const args = toolCall.arguments;
-    const task = args['task'] as string;
-    let context = args['context'] as string | undefined;
-    const contextRef = args['context_ref'] as string | undefined;
-    const contextRefs = args['context_refs'] as string[] | undefined;
-    const sceneNumber = (args['scene_number'] as number) ?? 1;
-    const imageType = args['image_type'] as 'scene' | 'character_ref' | 'setting_ref' | undefined;
-    const characterName = args['character_name'] as string | undefined;
-    const settingName = args['setting_name'] as string | undefined;
-    const referenceImages = args['reference_images'] as
-      | Array<{
-          image_id: string;
-          type: 'character' | 'setting';
-          name: string;
-        }>
-      | undefined;
-
-    if (!task) {
-      this.currentMode = 'orchestrator';
-      return { error: 'No task provided for dispatch_image_agent' };
-    }
-
-    // Resolve context_refs (array) if provided - combines multiple contexts
-    if (contextRefs && contextRefs.length > 0) {
-      const contextParts: string[] = [];
-      for (const ref of contextRefs) {
-        const stored = contextStore.get(ref);
-        if (stored) {
-          contextParts.push(`## ${ref} (${stored.label})\n\n${stored.content}`);
-          debugLog(
-            `[GenericAgent] Resolved context_ref ${ref} for image agent (${stored.label}, ${stored.content.length} chars)`
-          );
-        } else {
-          debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
-        }
-      }
-      if (contextParts.length > 0) {
-        context = contextParts.join('\n\n---\n\n');
-      }
-    }
-    // Fallback to singular context_ref if provided
-    else if (contextRef) {
-      const stored = contextStore.get(contextRef);
-      if (stored) {
-        context = stored.content;
-        debugLog(
-          `[GenericAgent] Resolved context_ref ${contextRef} for image agent (${stored.label}, ${stored.content.length} chars)`
-        );
-      } else {
-        return { error: `Context reference not found: ${contextRef}` };
-      }
-    }
-
-    // Warn about long inline context that should use context_ref
-    if (context && context.length > 500 && !contextRef && !contextRefs) {
-      debugLog(
-        `[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_image_agent without context_ref.`
-      );
-    }
-
-    // Check if we're resuming an existing session
-    if (this.imageGenState?.active) {
-      return { error: 'Image generation already in progress' };
-    }
-
-    // Determine generation mode based on image type and reference availability
-    const isSceneImage = imageType === 'scene';
-    const hasReferences = referenceImages && referenceImages.length > 0;
-
-    // For scenes, always force image+text-to-image mode and require references
-    const generationMode: 'text_to_image' | 'image_text_to_image' = isSceneImage
-      ? 'image_text_to_image'
-      : 'text_to_image';
-
-    if (isSceneImage && !hasReferences) {
-      return {
-        error:
-          'Scene images must include reference_images for all characters in the scene and the setting reference.',
-        suggestion:
-          'Gather approved character_ref and setting_ref images, then retry scene generation with reference_images included.',
-        image_type: imageType,
-      };
-    }
-
-    // Build enhanced context for image+text-to-image mode
-    let enhancedContext = context ?? '';
-    if (generationMode === 'image_text_to_image' && referenceImages) {
-      const refDescriptions = referenceImages
-        .map(
-          ref =>
-            `- ${ref.type === 'character' ? 'Character' : 'Setting'} "${ref.name}" (ref: ${ref.image_id})`
-        )
-        .join('\n');
-      enhancedContext += `\n\n<reference_images>\nThe following reference images will be used for visual consistency:\n${refDescriptions}\n\nIMPORTANT: The generated image must maintain visual consistency with these references. Characters should look the same as in their reference images. Settings should match their reference style.\n</reference_images>`;
-    }
-
-    // Initialize image gen state with the specialized prompt
-    const imageGenSystemPrompt = buildImageGenerationPrompt(task, enhancedContext);
-
-    this.imageGenState = {
-      active: true,
-      task,
-      context: enhancedContext,
-      messages: [
-        { role: 'system', content: imageGenSystemPrompt },
-        {
-          role: 'user',
-          content:
-            '<request>\nPlease craft a detailed image generation prompt for this task.\n</request>',
-        },
-      ],
-      currentPrompt: '',
-      negativePrompt: '',
-      aspectRatio: '16:9',
-      iterations: 0,
-      imageParams: {
-        scene_number: sceneNumber,
-        image_type: imageType,
-        character_name: characterName,
-        setting_name: settingName,
-      },
-      referenceImages,
-      generationMode,
-      toolCallId: toolCall.id,
-    };
-
-    // Generate the initial prompt
-    return this.continueImageGenLoop();
-  }
-
-  /**
-   * Continue the image generation loop - generates prompt and asks for user approval.
-   */
-  private async continueImageGenLoop(): Promise<unknown> {
-    if (!this.imageGenState) {
-      return { error: 'No active image generation session' };
-    }
-
-    const maxIterations = 10;
-
-    if (this.imageGenState.iterations >= maxIterations) {
-      const result = {
-        status: 'max_iterations',
-        prompt: this.imageGenState.currentPrompt,
-        negative_prompt: this.imageGenState.negativePrompt,
-        aspect_ratio: this.imageGenState.aspectRatio,
-        task: this.imageGenState.task,
-        message: 'Reached maximum iterations for prompt refinement. Using the last version.',
-      };
-      this.imageGenState = null;
-      this.currentMode = 'orchestrator';
-      return result;
-    }
-
-    this.imageGenState.iterations++;
-
-    try {
-      // Generate or refine the prompt with streaming
-      let promptContent = '';
-      let isFirstChunk = true;
-
-      // If this is a subsequent iteration (after feedback), we need to reset the streaming display
-      const shouldReset = this.imageGenState.iterations > 1;
-
-      for await (const chunk of this.llm.generateStream({
-        messages: this.imageGenState.messages,
-        temperature: 0.7,
-      })) {
-        if (chunk.content) {
-          promptContent += chunk.content;
-          // Emit tool_streaming to show content inside the ToolCallDisplay
-          // On first chunk of a regeneration, include reset flag to clear old content and show display
-          this.emit({
-            type: 'tool_streaming',
-            toolCallId: this.imageGenState.toolCallId,
-            chunk: chunk.content,
-            done: false,
-            agentName: this.getEffectiveAgentName(),
-            toolName: 'dispatch_image_agent',
-            reset: shouldReset && isFirstChunk,
-          });
-          isFirstChunk = false;
-        }
-        if (chunk.done) {
-          this.emit({
-            type: 'tool_streaming',
-            toolCallId: this.imageGenState.toolCallId,
-            chunk: '',
-            done: true,
-            agentName: this.getEffectiveAgentName(),
-          });
-        }
-      }
-
-      // Parse the prompt components from the response
-      const parsed = this.parseImagePromptResponse(promptContent);
-      this.imageGenState.currentPrompt = parsed.prompt;
-      this.imageGenState.negativePrompt = parsed.negativePrompt;
-      this.imageGenState.aspectRatio = parsed.aspectRatio;
-
-      // Add assistant response to history
-      this.imageGenState.messages.push({
-        role: 'assistant',
-        content: promptContent,
-      });
-
-      // Return status indicating we need user approval
-      const verificationQuestion =
-        this.imageGenState.iterations === 1
-          ? "I've crafted an image prompt. Would you like to generate the image or provide feedback?"
-          : "I've updated the prompt based on your feedback. Would you like to generate the image or provide more feedback?";
-
-      return {
-        status: 'awaiting_prompt_approval',
-        prompt: this.imageGenState.currentPrompt,
-        negative_prompt: this.imageGenState.negativePrompt,
-        aspect_ratio: this.imageGenState.aspectRatio,
-        task: this.imageGenState.task,
-        iterations: this.imageGenState.iterations,
-        question: verificationQuestion,
-        options: [
-          {
-            label: 'Generate image',
-            description: 'Proceed with this prompt and generate the image',
-          },
-          { label: 'Provide feedback', description: 'Modify the prompt with your input' },
-        ],
-        autoApproveTimeoutMs: 15000, // 15 seconds countdown for image prompt approval
-      };
-    } catch (error) {
-      const failedTask = this.imageGenState?.task;
-      this.imageGenState = null;
-      this.currentMode = 'orchestrator';
-      return {
-        error: `Image prompt generation failed: ${String(error)}`,
-        task: failedTask,
-      };
-    }
-  }
-
-  /**
-   * Parse the image prompt response to extract prompt, negative prompt, and aspect ratio.
-   */
-  private parseImagePromptResponse(response: string): {
-    prompt: string;
-    negativePrompt: string;
-    aspectRatio: string;
-  } {
-    let prompt = '';
-    let negativePrompt = 'blurry, distorted, low quality, deformed, ugly, bad anatomy';
-    let aspectRatio = '16:9';
-
-    // Try to extract Image Prompt section
-    const promptMatch = response.match(
-      /\*\*Image Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i
-    );
-    if (promptMatch?.[1]) {
-      prompt = promptMatch[1].trim();
-    }
-
-    // Try to extract Negative Prompt section
-    const negativeMatch = response.match(
-      /\*\*Negative Prompt:\*\*\s*\n([^\n*]+(?:\n(?!\*\*)[^\n*]+)*)/i
-    );
-    if (negativeMatch?.[1]) {
-      negativePrompt = negativeMatch[1].trim();
-    }
-
-    // Try to extract Aspect Ratio section
-    const aspectMatch = response.match(/\*\*Aspect Ratio:\*\*\s*\n?\s*([^\n]+)/i);
-    if (aspectMatch?.[1]) {
-      const ratio = aspectMatch[1].trim();
-      // Validate aspect ratio format
-      if (/^\d+:\d+$/.test(ratio)) {
-        aspectRatio = ratio;
-      }
-    }
-
-    // If no structured prompt found, use the whole response as the prompt
-    if (!prompt) {
-      // Remove markdown headers and rationale sections
-      prompt =
-        response
-          .replace(/\*\*[^*]+\*\*/g, '')
-          .replace(/##[^\n]+\n/g, '')
-          .trim()
-          .split('\n')[0] || response.slice(0, 500);
-    }
-
-    return { prompt, negativePrompt, aspectRatio };
-  }
-
-  /**
-   * Handle user response to image generation prompt approval.
-   * Uses simple pattern matching to classify whether the response is approval or feedback.
-   */
-  async handleImageGenResponse(userResponse: string): Promise<unknown> {
-    if (!this.imageGenState) {
-      return { error: 'No active image generation session' };
-    }
-
-    // Classify user intent with simple pattern matching
-    const isApproval = this.classifyImageGenResponse(userResponse);
-
-    if (isApproval) {
-      // User approved - execute the actual image generation
-      return this.executeImageGeneration();
-    }
-
-    // User wants to provide feedback - use their input with XML tags
-    this.imageGenState.messages.push({
-      role: 'user',
-      content: `<user_feedback>\n${userResponse}\n</user_feedback>\n\n<request>\nPlease revise the image prompt based on the feedback above.\n</request>`,
-    });
-
-    // Continue the image gen loop
-    return this.continueImageGenLoop();
-  }
-
-  /**
-   * Classify whether user response indicates approval or feedback for image generation.
-   * Uses simple pattern matching - no LLM needed since options are predefined.
-   */
-  private classifyImageGenResponse(userResponse: string): boolean {
-    // Simple string matching - no LLM needed since options are predefined
-    const lower = userResponse.toLowerCase().trim();
-    const approvalPatterns = [
-      'generate image',
-      'generate',
-      'yes',
-      'ok',
-      'okay',
-      'go',
-      'create',
-      'make',
-      'proceed',
-      'lgtm',
-      'looks good',
-      'go ahead',
-      'y',
-      '1',
-    ];
-    return approvalPatterns.some(p => lower === p || lower.startsWith(p));
-  }
-
-  /**
-   * Execute the actual image generation after user approval.
-   */
-  private async executeImageGeneration(): Promise<unknown> {
-    if (!this.imageGenState) {
-      return { error: 'No active image generation session' };
-    }
-
-    const {
-      currentPrompt,
-      negativePrompt,
-      aspectRatio,
-      imageParams,
-      task,
-      referenceImages,
-      generationMode,
-    } = this.imageGenState;
-
-    // Get the generate_image tool
-    const generateImageTool = this.tools.get('generate_image');
-    if (!generateImageTool?.handler) {
-      this.imageGenState = null;
-      this.currentMode = 'orchestrator';
-      return {
-        error: 'generate_image tool not available',
-        prompt: currentPrompt,
-        task,
-      };
-    }
-
-    // Build arguments for generate_image
-    const generateArgs: Record<string, unknown> = {
-      prompt: currentPrompt,
-      negative_prompt: negativePrompt,
-      aspect_ratio: aspectRatio,
-      scene_number: imageParams.scene_number,
-      generation_mode: generationMode,
-    };
-
-    if (imageParams.image_type) {
-      generateArgs['image_type'] = imageParams.image_type;
-    }
-    if (imageParams.character_name) {
-      generateArgs['character_name'] = imageParams.character_name;
-    }
-    if (imageParams.setting_name) {
-      generateArgs['setting_name'] = imageParams.setting_name;
-    }
-
-    // Include reference images for image+text-to-image mode
-    if (generationMode === 'image_text_to_image' && referenceImages && referenceImages.length > 0) {
-      generateArgs['reference_images'] = referenceImages;
-    }
-
-    const toolCallId = `img-gen-${Date.now()}`;
-
-    // Emit that we're generating the image
-    this.emit({
-      type: 'tool_call',
-      toolCallId,
-      toolName: 'generate_image',
-      arguments: generateArgs,
-      agentName: this.getEffectiveAgentName(),
-    });
-
-    try {
-      // generate_image now waits inline for ComfyUI completion
-      const genResult = await Promise.resolve(generateImageTool.handler(generateArgs));
-      const genResultObj = genResult as Record<string, unknown>;
-
-      // Clear the state
-      const finalState = { ...this.imageGenState };
-      this.imageGenState = null;
-      this.currentMode = 'orchestrator';
-
-      const isError = genResultObj['status'] === 'error' || genResultObj['status'] === 'failed';
-
-      this.emit({
-        type: 'tool_result',
-        toolCallId,
-        toolName: 'generate_image',
-        result: genResult,
-        isError,
-        agentName: this.getEffectiveAgentName(),
-      });
-
-      if (isError) {
-        return {
-          status: 'error',
-          error: (genResultObj['error'] as string) || 'Image generation failed',
-          prompt: finalState.currentPrompt,
-          task: finalState.task,
-          job_id: genResultObj['job_id'],
-        };
-      }
-
-      return {
-        status: 'completed',
-        prompt: finalState.currentPrompt,
-        negative_prompt: finalState.negativePrompt,
-        aspect_ratio: finalState.aspectRatio,
-        task: finalState.task,
-        iterations: finalState.iterations,
-        job_id: genResultObj['job_id'],
-        artifact_id: genResultObj['artifact_id'],
-        file_path: genResultObj['file_path'],
-        message: 'Image generated successfully.',
-        next_steps: 'IMPORTANT: 1) Update the timeline using manage_timeline with update_segment. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.',
-      };
-    } catch (error) {
-      this.imageGenState = null;
-      this.currentMode = 'orchestrator';
-      return {
-        error: `Image generation failed: ${String(error)}`,
-        prompt: currentPrompt,
-        task,
-      };
-    }
-  }
-
-  /**
-   * Handle dispatch_video_agent tool - spawns a sub-agent for video generation.
-   * Presents video parameters to user for approval before generating.
-   */
-  private async handleDispatchVideoAgent(toolCall: ToolCall): Promise<unknown> {
-    // Set mode for UI display
-    this.currentMode = 'video';
-
-    const args = toolCall.arguments;
-    const task = args['task'] as string;
-    const sceneImageArtifactId = args['scene_image_artifact_id'] as string | undefined;
-    const sceneNumber = (args['scene_number'] as number) ?? 1;
-    const motionDescription = args['motion_description'] as string | undefined;
-    const contextRef = args['context_ref'] as string | undefined;
-    const contextRefs = args['context_refs'] as string[] | undefined;
-    const duration = (args['duration'] as number) ?? 4;
-
-    if (!task) {
-      this.currentMode = 'orchestrator';
-      return { error: 'No task provided for dispatch_video_agent' };
-    }
-
-    // scene_image_artifact_id is optional for stitching operations
-    // But required for single scene video generation
-    const isStitchOperation = task.toLowerCase().includes('stitch');
-    if (!sceneImageArtifactId && !isStitchOperation) {
-      this.currentMode = 'orchestrator';
-      return { error: 'No scene_image_artifact_id provided for dispatch_video_agent' };
-    }
-
-    // Resolve context_refs (array) if provided - combines multiple contexts
-    let context = '';
-    if (contextRefs && contextRefs.length > 0) {
-      const contextParts: string[] = [];
-      for (const ref of contextRefs) {
-        const stored = contextStore.get(ref);
-        if (stored) {
-          contextParts.push(`## ${ref} (${stored.label})\n\n${stored.content}`);
-          debugLog(
-            `[GenericAgent] Resolved context_ref ${ref} for video agent (${stored.label}, ${stored.content.length} chars)`
-          );
-        } else {
-          debugLog(`[GenericAgent] WARNING: Context reference not found: ${ref}`);
-        }
-      }
-      if (contextParts.length > 0) {
-        context = contextParts.join('\n\n---\n\n');
-      }
-    }
-    // Fallback to singular context_ref if provided
-    else if (contextRef) {
-      const stored = contextStore.get(contextRef);
-      if (stored) {
-        context = stored.content;
-        debugLog(
-          `[GenericAgent] Resolved context_ref ${contextRef} for video agent (${stored.label}, ${stored.content.length} chars)`
-        );
-      } else {
-        return { error: `Context reference not found: ${contextRef}` };
-      }
-    }
-
-    // Check if we're already in a video generation session
-    if (this.videoGenState?.active) {
-      return { error: 'Video generation already in progress' };
-    }
-
-    // Initialize video gen state
-    const currentParams = {
-      duration,
-      fps: 24,
-      motionStrength: 0.7,
-    };
-    this.videoGenState = {
-      active: true,
-      task,
-      sceneNumber,
-      sceneImageArtifactId,
-      motionDescription,
-      context,
-      messages: [],
-      currentParams,
-      iterations: 0,
-    };
-
-    // Build a summary for user approval
-    const paramSummary = `**Video Generation Parameters:**
-- Scene: #${sceneNumber}
-- Source Image: ${sceneImageArtifactId ?? 'N/A (stitch operation)'}
-- Duration: ${duration} seconds
-- Motion: ${motionDescription ?? 'Auto-determined based on scene'}
-- Task: ${task}`;
-
-    // Return status indicating we need user approval
-    return {
-      status: 'awaiting_approval',
-      params: currentParams,
-      scene_number: sceneNumber,
-      image_artifact_id: sceneImageArtifactId,
-      motion_description: motionDescription,
-      task,
-      question: `I'm ready to generate video for scene ${sceneNumber}. Here are the parameters:\n\n${paramSummary}\n\nWould you like to proceed or adjust the parameters?`,
-      options: [
-        { label: 'Generate video', description: 'Proceed with these parameters' },
-        { label: 'Provide feedback', description: 'Modify the parameters' },
-      ],
-      autoApproveTimeoutMs: 15000, // 15 seconds countdown
-    };
-  }
-
-  /**
-   * Handle user response to video generation approval.
-   */
-  async handleVideoGenResponse(userResponse: string): Promise<unknown> {
-    if (!this.videoGenState) {
-      return { error: 'No active video generation session' };
-    }
-
-    // Use simple pattern matching to classify response
-    const lower = userResponse.toLowerCase().trim();
-    const approvalPatterns = [
-      'yes',
-      'ok',
-      'okay',
-      'generate',
-      'go',
-      'proceed',
-      'create',
-      'make',
-      'lgtm',
-      'y',
-      '1',
-    ];
-    const isApproval = approvalPatterns.some(p => lower === p || lower.startsWith(p));
-
-    if (isApproval) {
-      // User approved - execute video generation
-      return this.executeVideoGeneration();
-    }
-
-    // User wants to provide feedback
-    this.videoGenState.iterations++;
-    if (this.videoGenState.iterations >= 5) {
-      const result = {
-        status: 'max_iterations',
-        params: this.videoGenState.currentParams,
-        task: this.videoGenState.task,
-        message: 'Reached maximum iterations for parameter refinement. Using the last version.',
-      };
-      this.videoGenState = null;
-      this.currentMode = 'orchestrator';
-      return result;
-    }
-
-    // Parse feedback for parameter changes (simple parsing)
-    if (lower.includes('duration') && /\d+/.test(lower)) {
-      const match = lower.match(/(\d+)\s*(?:s|sec|seconds?)?/);
-      if (match?.[1]) {
-        this.videoGenState.currentParams.duration = parseInt(match[1], 10);
-      }
-    }
-
-    // Return updated parameters for approval
-    return {
-      status: 'awaiting_approval',
-      params: this.videoGenState.currentParams,
-      scene_number: this.videoGenState.sceneNumber,
-      image_artifact_id: this.videoGenState.sceneImageArtifactId,
-      motion_description: this.videoGenState.motionDescription,
-      task: this.videoGenState.task,
-      iterations: this.videoGenState.iterations,
-      question: `I've updated the parameters based on your feedback. Would you like to proceed or make more adjustments?`,
-      options: [
-        { label: 'Generate video', description: 'Proceed with these parameters' },
-        { label: 'Provide feedback', description: 'Make more changes' },
-      ],
-      autoApproveTimeoutMs: 15000,
-    };
-  }
-
-  /**
-   * Execute the actual video generation after user approval.
-   */
-  private async executeVideoGeneration(): Promise<unknown> {
-    if (!this.videoGenState) {
-      return { error: 'No active video generation session' };
-    }
-
-    const { task, sceneNumber, sceneImageArtifactId, motionDescription, currentParams } =
-      this.videoGenState;
-
-    // Get the generate_video tool
-    const generateVideoTool = this.tools.get('generate_video');
-    if (!generateVideoTool?.handler) {
-      this.videoGenState = null;
-      this.currentMode = 'orchestrator';
-      return {
-        error: 'generate_video tool not available',
-        task,
-      };
-    }
-
-    // Build arguments for generate_video
-    const generateArgs: Record<string, unknown> = {
-      scene_number: sceneNumber,
-      scene_image_artifact_id: sceneImageArtifactId,
-      prompt: motionDescription, // generate_video uses 'prompt' for motion description
-      // duration and fps may be handled by the workflow
-    };
-
-    const toolCallId = `vid-gen-${Date.now()}`;
-
-    // Emit that we're generating the video
-    this.emit({
-      type: 'tool_call',
-      toolCallId,
-      toolName: 'generate_video',
-      arguments: generateArgs,
-      agentName: this.getEffectiveAgentName(),
-    });
-
-    try {
-      // generate_video now waits inline for ComfyUI completion
-      const genResult = await Promise.resolve(generateVideoTool.handler(generateArgs));
-      const genResultObj = genResult as Record<string, unknown>;
-
-      // Clear the state
-      const finalState = { ...this.videoGenState };
-      this.videoGenState = null;
-      this.currentMode = 'orchestrator';
-
-      const isError = genResultObj['status'] === 'error' || genResultObj['status'] === 'failed';
-
-      this.emit({
-        type: 'tool_result',
-        toolCallId,
-        toolName: 'generate_video',
-        result: genResult,
-        isError,
-        agentName: this.getEffectiveAgentName(),
-      });
-
-      if (isError) {
-        return {
-          status: 'error',
-          error: (genResultObj['error'] as string) || 'Video generation failed',
-          scene_number: finalState.sceneNumber,
-          task: finalState.task,
-          job_id: genResultObj['job_id'],
-        };
-      }
-
-      return {
-        status: 'completed',
-        scene_number: finalState.sceneNumber,
-        image_artifact_id: finalState.sceneImageArtifactId,
-        params: finalState.currentParams,
-        task: finalState.task,
-        iterations: finalState.iterations,
-        job_id: genResultObj['job_id'],
-        artifact_id: genResultObj['artifact_id'],
-        file_path: genResultObj['file_path'],
-        message: 'Video generated successfully.',
-        next_steps: 'IMPORTANT: 1) Update the timeline using manage_timeline with update_segment. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.',
-      };
-    } catch (error) {
-      this.videoGenState = null;
-      this.currentMode = 'orchestrator';
-      return {
-        error: `Video generation failed: ${String(error)}`,
-        task,
-      };
-    }
-  }
 
   /**
    * Handle ask_user tool - pauses execution.
@@ -4809,155 +3587,6 @@ Respond in JSON format:
     return false;
   }
 
-  /**
-   * Handle dispatch_explore tool - spawns an explore agent to research documentation.
-   * The explore agent reads relevant files in prompts/reference/ and returns a focused summary.
-   */
-  private async handleDispatchExplore(toolCall: ToolCall): Promise<unknown> {
-    const args = toolCall.arguments;
-    const query =
-      (args['query'] as string) || (args['task'] as string) || (args['prompt'] as string);
-
-    if (!query) {
-      return { error: 'No query provided for dispatch_explore' };
-    }
-
-    debugLog(`[GenericAgent] dispatch_explore: query="${query.substring(0, 100)}..."`);
-
-    try {
-      // Build the explore agent prompt
-      const explorePrompt = buildExplorePrompt(query);
-
-      // Get read_file tool for the explore agent
-      const { readFileTool, readProjectTool } =
-        await import('../tools/builtin/contentCreatorTools.js');
-      const { thinkTool } = await import('../tools/builtin/think.js');
-
-      // Run the explore sub-agent
-      const result = await this.runSubAgent({
-        name: 'Explore Agent',
-        tools: [readFileTool, readProjectTool, thinkTool],
-        prompt: explorePrompt,
-        task: `Research and summarize guidance for: ${query}`,
-        maxIterations: 15, // Allow multiple file reads
-        parentToolCallId: toolCall.id,
-      });
-
-      debugLog(`[GenericAgent] dispatch_explore completed: ${result.status}`);
-
-      return {
-        status: 'completed',
-        query,
-        summary: result.output || 'No summary generated',
-        message: 'Explore agent completed documentation research.',
-      };
-    } catch (error) {
-      debugLog(`[GenericAgent] dispatch_explore error: ${String(error)}`);
-      return {
-        status: 'error',
-        error: String(error),
-        query,
-      };
-    }
-  }
-
-  /**
-   * Handle dispatch_skill tool - spawns a skill agent for specialized creative work.
-   * Skill agents are autonomous and understand their domain.
-   */
-  private async handleDispatchSkill(toolCall: ToolCall): Promise<unknown> {
-    const args = toolCall.arguments;
-    const skillName = (args['skill_name'] as SkillType) || (args['skill'] as SkillType);
-    const task =
-      (args['task'] as string) || (args['instruction'] as string) || (args['prompt'] as string);
-    const contextRef = args['context_ref'] as string | undefined;
-    const contextRefs = args['context_refs'] as string[] | undefined;
-
-    if (!skillName) {
-      return { error: 'No skill_name provided for dispatch_skill' };
-    }
-
-    if (!task) {
-      return { error: 'No task provided for dispatch_skill' };
-    }
-
-    // Validate skill name
-    const validSkills: SkillType[] = [
-      'content-writing',
-      'image-prompting',
-      'video-direction',
-      'research-synthesis',
-      'narration-scripting',
-    ];
-    if (!validSkills.includes(skillName)) {
-      return { error: `Invalid skill_name: ${skillName}. Valid skills: ${validSkills.join(', ')}` };
-    }
-
-    debugLog(
-      `[GenericAgent] dispatch_skill: skill="${skillName}", task="${task.substring(0, 100)}..."`
-    );
-
-    // Resolve context from context store
-    let context = '';
-    if (contextRefs && contextRefs.length > 0) {
-      const contextParts: string[] = [];
-      for (const ref of contextRefs) {
-        const stored = contextStore.get(ref);
-        if (stored) {
-          contextParts.push(`## ${ref} (${stored.label})\n\n${stored.content}`);
-        }
-      }
-      context = contextParts.join('\n\n---\n\n');
-    } else if (contextRef) {
-      const stored = contextStore.get(contextRef);
-      if (stored) {
-        context = stored.content;
-      }
-    }
-
-    try {
-      // Build the skill agent prompt
-      const skillPrompt = buildSkillPrompt(skillName, task, context || undefined);
-
-      // Get tools appropriate for the skill
-      const { readFileTool, readProjectTool } =
-        await import('../tools/builtin/contentCreatorTools.js');
-      const { thinkTool } = await import('../tools/builtin/think.js');
-
-      // Base tools available to all skills
-      const skillTools = [readFileTool, readProjectTool, thinkTool];
-
-      // Run the skill sub-agent
-      const result = await this.runSubAgent({
-        name: `${skillName} Skill`,
-        tools: skillTools,
-        prompt: skillPrompt,
-        task,
-        maxIterations: 10,
-        parentToolCallId: toolCall.id,
-      });
-
-      debugLog(
-        `[GenericAgent] dispatch_skill completed: skill="${skillName}", status=${result.status}`
-      );
-
-      return {
-        status: 'completed',
-        skill: skillName,
-        task,
-        output: result.output || 'No output generated',
-        message: `${skillName} skill completed successfully.`,
-      };
-    } catch (error) {
-      debugLog(`[GenericAgent] dispatch_skill error: ${String(error)}`);
-      return {
-        status: 'error',
-        error: String(error),
-        skill: skillName,
-        task,
-      };
-    }
-  }
 
   /**
    * Compress conversation history when context approaches limit.

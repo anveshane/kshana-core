@@ -991,7 +991,7 @@ This tool blocks until generation is complete and returns the result directly (a
         error:
           'Reference images are required for image_text_to_image mode. Please generate character and setting reference images first.',
         suggestion:
-          'Use dispatch_image_agent with image_type "character_ref" or "setting_ref" to create reference images first.',
+          'Use generate_image with image_type "character_ref" or "setting_ref" to create reference images first.',
       };
     }
 

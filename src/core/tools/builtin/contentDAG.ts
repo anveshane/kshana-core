@@ -514,13 +514,18 @@ export class ContentDAGExecutor {
     }
 
     // 4. Load project
+    debugLog('ContentDAG', `Loading project from: ${this.projectDir}`);
+    const projectFilePath = path.join(this.projectDir, '.kshana', 'project.json');
+    const projectFileAlt = path.join(this.projectDir, 'project.json');
+    debugLog('ContentDAG', `Checking paths: ${projectFilePath} (exists=${fs.existsSync(projectFilePath)}), ${projectFileAlt} (exists=${fs.existsSync(projectFileAlt)})`);
     const project = loadProject(this.projectDir);
     if (!project) {
+      debugLog('ContentDAG', `No project found at ${this.projectDir} — loadProject returned null`);
       return {
         status: 'error',
         content_type: params.content_type,
         output_file: outputFile,
-        error: 'No project found. Create a project first.',
+        error: `No project found at "${this.projectDir}". Create a project first.`,
       };
     }
 
