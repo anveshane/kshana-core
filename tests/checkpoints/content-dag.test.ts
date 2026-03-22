@@ -698,6 +698,102 @@ describe('ContentDAGExecutor', () => {
   });
 
   // ==========================================================================
+  // PATH RESOLUTION — verifies ContentDAGExecutor resolves projectDir correctly
+  // from basePath, avoiding the double-nesting bug where loadProject() would
+  // join the project dir name twice (e.g. story.kshana/story.kshana/).
+  // ==========================================================================
+
+  describe('Path Resolution (no LLM needed)', () => {
+    it('loadProject succeeds when executor receives basePath (not resolved projectDir)', () => {
+      const { basePath } = scaffoldForDAG({
+        files: {},
+        currentPhase: WorkflowPhase.PLOT,
+        completedPhases: [],
+        originalInput: 'path resolution test',
+      });
+
+      // Directly test that loadProject(basePath) finds the project.
+      // This is the exact call ContentDAGExecutor.execute() makes internally.
+      // The double-nesting bug caused loadProject to look at
+      // basePath/projectDirName/projectDirName/project.json instead of
+      // basePath/projectDirName/project.json.
+      const project = loadProject(basePath);
+      expect(project).not.toBeNull();
+      expect(project!.version).toBe('2.0');
+    });
+
+    it('getProjectDir(basePath) resolves correctly for direct file I/O', () => {
+      const { basePath, projectDir } = scaffoldForDAG({
+        files: { 'plans/plot.md': '# Test Plot\n\nSome content.' },
+        currentPhase: WorkflowPhase.PLOT,
+        completedPhases: [],
+        originalInput: 'path nesting test',
+      });
+
+      // getProjectDir(basePath) should return the resolved project dir
+      const resolved = getProjectDir(basePath);
+      expect(resolved).toBe(projectDir);
+
+      // The resolved path should NOT contain the project dir name twice
+      const dirName = resolved.split('/').pop()!;
+      expect(resolved).not.toContain(`${dirName}/${dirName}`);
+    });
+  });
+
+  // ==========================================================================
+  // STREAMING EVENTS — verifies ContentDAGExecutor emits tool_streaming events
+  // with toolName so the UI can match them to the generate_content card.
+  // ==========================================================================
+
+  describe('Streaming Events', () => {
+    it('emits tool_streaming events with toolName: generate_content', async () => {
+      if (!llmAvailable) return;
+
+      const input = loadFixture('input.txt');
+      const { basePath } = scaffoldForDAG({
+        files: {},
+        currentPhase: WorkflowPhase.PLOT,
+        completedPhases: [],
+        originalInput: input,
+      });
+
+      const emittedEvents: Array<{ type: string; toolName?: string; toolCallId: string; done: boolean }> = [];
+      const captureEmit = (event: any) => {
+        emittedEvents.push({
+          type: event.type,
+          toolName: event.toolName,
+          toolCallId: event.toolCallId,
+          done: event.done,
+        });
+      };
+
+      const executor = new ContentDAGExecutor(llm, basePath, captureEmit, 'stream-test-id');
+      await executor.execute({
+        content_type: 'plot',
+        instruction: `Create a plot outline for: "${input.trim().slice(0, 100)}"`,
+      });
+
+      // Should have emitted streaming events
+      expect(emittedEvents.length).toBeGreaterThan(0);
+
+      // All events should have correct toolName and toolCallId
+      for (const evt of emittedEvents) {
+        expect(evt.type).toBe('tool_streaming');
+        expect(evt.toolName).toBe('generate_content');
+        expect(evt.toolCallId).toBe('stream-test-id');
+      }
+
+      // Last event should be the done marker
+      const lastEvent = emittedEvents[emittedEvents.length - 1];
+      expect(lastEvent.done).toBe(true);
+
+      // At least some non-done events should exist (actual content chunks)
+      const contentEvents = emittedEvents.filter(e => !e.done);
+      expect(contentEvents.length).toBeGreaterThan(0);
+    }, 120_000);
+  });
+
+  // ==========================================================================
   // OUTPUT CLEANING — verifies cleanOutput handles various LLM contamination
   // patterns. These are pure function tests, no LLM needed.
   // ==========================================================================
