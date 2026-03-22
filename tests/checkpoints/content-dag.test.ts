@@ -280,14 +280,14 @@ describe('ContentDAGExecutor', () => {
       if (!llmAvailable) return;
 
       const input = loadFixture('input.txt');
-      const { projectDir } = scaffoldForDAG({
+      const { projectDir, basePath } = scaffoldForDAG({
         files: {},
         currentPhase: WorkflowPhase.PLOT,
         completedPhases: [],
         originalInput: input,
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'fmt-plot');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'fmt-plot');
       const result = await executor.execute({
         content_type: 'plot',
         instruction: `Create a plot outline for this narrative concept: "${input.trim()}"`,
@@ -308,7 +308,7 @@ describe('ContentDAGExecutor', () => {
 
       const input = loadFixture('input.txt');
       const plot = loadFixture('plot.md');
-      const { projectDir } = scaffoldForDAG({
+      const { projectDir, basePath } = scaffoldForDAG({
         files: { 'plans/plot.md': plot },
         currentPhase: WorkflowPhase.STORY,
         completedPhases: [WorkflowPhase.PLOT],
@@ -316,7 +316,7 @@ describe('ContentDAGExecutor', () => {
         contentOverrides: { plot: { status: 'available', file: 'plans/plot.md' } },
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'fmt-story');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'fmt-story');
       const result = await executor.execute({
         content_type: 'story',
         instruction: 'Write a detailed story chapter. Include vivid prose, dialogue, and sensory details.',
@@ -338,7 +338,7 @@ describe('ContentDAGExecutor', () => {
 
       const input = loadFixture('input.txt');
       const story = loadFixture('chapter-1.story.md');
-      const { projectDir } = scaffoldForDAG({
+      const { projectDir, basePath } = scaffoldForDAG({
         files: { 'plans/chapters/chapter-1.story.md': story },
         currentPhase: WorkflowPhase.CHARACTERS_SETTINGS,
         completedPhases: [WorkflowPhase.PLOT, WorkflowPhase.STORY],
@@ -346,7 +346,7 @@ describe('ContentDAGExecutor', () => {
         contentOverrides: { story: { status: 'available', file: 'plans/chapters/chapter-1.story.md' } },
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'fmt-char');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'fmt-char');
       const result = await executor.execute({
         content_type: 'character',
         name: 'Jan',
@@ -368,7 +368,7 @@ describe('ContentDAGExecutor', () => {
 
       const input = loadFixture('input.txt');
       const story = loadFixture('chapter-1.story.md');
-      const { projectDir } = scaffoldForDAG({
+      const { projectDir, basePath } = scaffoldForDAG({
         files: { 'plans/chapters/chapter-1.story.md': story },
         currentPhase: WorkflowPhase.CHARACTERS_SETTINGS,
         completedPhases: [WorkflowPhase.PLOT, WorkflowPhase.STORY],
@@ -376,7 +376,7 @@ describe('ContentDAGExecutor', () => {
         contentOverrides: { story: { status: 'available', file: 'plans/chapters/chapter-1.story.md' } },
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'fmt-setting');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'fmt-setting');
       const result = await executor.execute({
         content_type: 'setting',
         name: 'Ashenmere Village',
@@ -400,7 +400,7 @@ describe('ContentDAGExecutor', () => {
       const story = loadFixture('chapter-1.story.md');
       const character = loadFixture('character-jan.profile.md');
       const setting = loadFixture('setting-village.profile.md');
-      const { projectDir } = scaffoldForDAG({
+      const { projectDir, basePath } = scaffoldForDAG({
         files: {
           'plans/chapters/chapter-1.story.md': story,
           'characters/jan.profile.md': character,
@@ -418,7 +418,7 @@ describe('ContentDAGExecutor', () => {
         settings: [{ name: 'Ashenmere Village', description: 'Remote mountain village' }],
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'fmt-scene');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'fmt-scene');
       const result = await executor.execute({
         content_type: 'scene',
         scene_number: 1,
@@ -453,7 +453,7 @@ describe('ContentDAGExecutor', () => {
         contentOverrides: { story: { status: 'available', file: 'plans/chapters/chapter-1.story.md' } },
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'reg-char');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'reg-char');
       const result = await executor.execute({
         content_type: 'character',
         name: 'Jan',
@@ -485,7 +485,7 @@ describe('ContentDAGExecutor', () => {
         contentOverrides: { story: { status: 'available', file: 'plans/chapters/chapter-1.story.md' } },
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'reg-setting');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'reg-setting');
       const result = await executor.execute({
         content_type: 'setting',
         name: 'Ashenmere Village',
@@ -525,7 +525,7 @@ describe('ContentDAGExecutor', () => {
         settings: [{ name: 'Ashenmere Village', description: 'Remote mountain village' }],
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'reg-scene');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'reg-scene');
       const result = await executor.execute({
         content_type: 'scene',
         scene_number: 1,
@@ -564,7 +564,7 @@ describe('ContentDAGExecutor', () => {
       });
 
       // 2. Generate character profile via ContentDAG
-      const contentDAG = new ContentDAGExecutor(llm, projectDir, noopEmit, 'chain-char');
+      const contentDAG = new ContentDAGExecutor(llm, basePath, noopEmit, 'chain-char');
       const charResult = await contentDAG.execute({
         content_type: 'character',
         name: 'Jan',
@@ -605,14 +605,14 @@ describe('ContentDAGExecutor', () => {
 
   describe('Param Validation', () => {
     it('rejects character without name', async () => {
-      const { projectDir } = scaffoldForDAG({
+      const { projectDir, basePath } = scaffoldForDAG({
         files: {},
         currentPhase: WorkflowPhase.CHARACTERS_SETTINGS,
         completedPhases: [],
         originalInput: 'test',
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'val-noname');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'val-noname');
       const result = await executor.execute({
         content_type: 'character',
         instruction: 'Create a character profile',
@@ -623,14 +623,14 @@ describe('ContentDAGExecutor', () => {
     });
 
     it('rejects setting without name', async () => {
-      const { projectDir } = scaffoldForDAG({
+      const { projectDir, basePath } = scaffoldForDAG({
         files: {},
         currentPhase: WorkflowPhase.CHARACTERS_SETTINGS,
         completedPhases: [],
         originalInput: 'test',
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'val-noname-s');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'val-noname-s');
       const result = await executor.execute({
         content_type: 'setting',
         instruction: 'Create a setting',
@@ -641,14 +641,14 @@ describe('ContentDAGExecutor', () => {
     });
 
     it('rejects scene without scene_number', async () => {
-      const { projectDir } = scaffoldForDAG({
+      const { projectDir, basePath } = scaffoldForDAG({
         files: {},
         currentPhase: WorkflowPhase.SCENES,
         completedPhases: [],
         originalInput: 'test',
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'val-noscene');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'val-noscene');
       const result = await executor.execute({
         content_type: 'scene',
         instruction: 'Create a scene',
@@ -660,14 +660,14 @@ describe('ContentDAGExecutor', () => {
 
     it('returns already_exists when file exists and overwrite=false', async () => {
       const plot = loadFixture('plot.md');
-      const { projectDir } = scaffoldForDAG({
+      const { projectDir, basePath } = scaffoldForDAG({
         files: { 'plans/plot.md': plot },
         currentPhase: WorkflowPhase.PLOT,
         completedPhases: [],
         originalInput: 'test',
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'val-exists');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'val-exists');
       const result = await executor.execute({
         content_type: 'plot',
         instruction: 'Create a plot',
@@ -679,14 +679,14 @@ describe('ContentDAGExecutor', () => {
     });
 
     it('rejects missing instruction', async () => {
-      const { projectDir } = scaffoldForDAG({
+      const { projectDir, basePath } = scaffoldForDAG({
         files: {},
         currentPhase: WorkflowPhase.PLOT,
         completedPhases: [],
         originalInput: 'test',
       });
 
-      const executor = new ContentDAGExecutor(llm, projectDir, noopEmit, 'val-noinstr');
+      const executor = new ContentDAGExecutor(llm, basePath, noopEmit, 'val-noinstr');
       const result = await executor.execute({
         content_type: 'plot',
         instruction: '',

@@ -1655,7 +1655,7 @@ export class GenericAgent extends TypedEventEmitter {
         const overwrite = args['overwrite'] as boolean | undefined;
         const executor = new ContentDAGExecutor(
           this.llm,
-          getProjectDir(),
+          process.cwd(),  // basePath — ContentDAGExecutor resolves projectDir internally
           (event) => this.emit(event),
           toolCall.id,
         );

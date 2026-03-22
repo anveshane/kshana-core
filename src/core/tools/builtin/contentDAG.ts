@@ -19,6 +19,7 @@ import {
   createDefaultSettingData,
 } from '../../../tasks/video/workflow/types.js';
 import {
+  getProjectDir,
   loadProject,
   updateContentStatus,
   addProjectFile,
@@ -72,6 +73,7 @@ export interface ContentDAGResult {
 interface ToolStreamingPayload {
   type: 'tool_streaming';
   toolCallId: string;
+  toolName?: string;
   chunk: string;
   done: boolean;
 }
@@ -356,9 +358,11 @@ function updateRegistry(
   params: ContentDAGParams,
   content: string,
   outputFile: string,
-  projectDir: string,
+  basePath: string,
 ): RegistryUpdateResult {
-  const project = loadProject(projectDir);
+  // loadProject() expects a base path (e.g. cwd), not a resolved project dir.
+  // It internally calls getProjectDir(basePath) to find the project.
+  const project = loadProject(basePath);
   if (!project) {
     return { updated: false };
   }
@@ -384,8 +388,8 @@ function updateRegistry(
         } else {
           project.characters.push(character);
         }
-        addContentItem(project, 'characters' as ContentTypeName, charName, outputFile, projectDir);
-        addProjectFile(project, 'character', outputFile, charName, projectDir);
+        addContentItem(project, 'characters' as ContentTypeName, charName, outputFile, basePath);
+        addProjectFile(project, 'character', outputFile, charName, basePath);
 
         debugLog('ContentDAG', `Saved character "${charName}" to project registry`);
         return { updated: true, action: `add_character: ${charName}` };
@@ -408,8 +412,8 @@ function updateRegistry(
         } else {
           project.settings.push(setting);
         }
-        addContentItem(project, 'settings' as ContentTypeName, settingName, outputFile, projectDir);
-        addProjectFile(project, 'setting', outputFile, settingName, projectDir);
+        addContentItem(project, 'settings' as ContentTypeName, settingName, outputFile, basePath);
+        addProjectFile(project, 'setting', outputFile, settingName, basePath);
 
         debugLog('ContentDAG', `Saved setting "${settingName}" to project registry`);
         return { updated: true, action: `add_setting: ${settingName}` };
@@ -438,10 +442,10 @@ function updateRegistry(
         }
 
         // Also update content.scenes status
-        updateContentStatus(project, 'scenes' as ContentTypeName, 'available', projectDir);
+        updateContentStatus(project, 'scenes' as ContentTypeName, 'available', basePath);
 
         // Track in files array
-        addProjectFile(project, 'scene', outputFile, `Scene ${sceneNumber}`, projectDir);
+        addProjectFile(project, 'scene', outputFile, `Scene ${sceneNumber}`, basePath);
 
         debugLog('ContentDAG', `Registered scene ${sceneNumber} in project.scenes[] and content registry`);
         return { updated: true, action: `add_scene: ${sceneNumber}` };
@@ -449,8 +453,8 @@ function updateRegistry(
 
       case 'plot':
       case 'story': {
-        updateContentStatus(project, contentType as ContentTypeName, 'available', projectDir);
-        addProjectFile(project, contentType, outputFile, undefined, projectDir);
+        updateContentStatus(project, contentType as ContentTypeName, 'available', basePath);
+        addProjectFile(project, contentType, outputFile, undefined, basePath);
         debugLog('ContentDAG', `Updated ${contentType} status to available`);
         return { updated: true, action: `update_content_status: ${contentType}` };
       }
@@ -469,12 +473,18 @@ function updateRegistry(
 // ---------------------------------------------------------------------------
 
 export class ContentDAGExecutor {
+  /** Resolved project directory (e.g. /path/to/story.kshana) — for direct file I/O */
+  private projectDir: string;
+
   constructor(
     private llm: LLMClient,
-    private projectDir: string,
+    /** Base path (e.g. cwd). ProjectManager functions derive projectDir from this + session context. */
+    private basePath: string,
     private emit: EmitFn,
     private toolCallId: string,
-  ) {}
+  ) {
+    this.projectDir = getProjectDir(basePath);
+  }
 
   async execute(params: ContentDAGParams): Promise<ContentDAGResult> {
     // 1. Validate params
@@ -514,18 +524,19 @@ export class ContentDAGExecutor {
     }
 
     // 4. Load project
-    debugLog('ContentDAG', `Loading project from: ${this.projectDir}`);
-    const projectFilePath = path.join(this.projectDir, '.kshana', 'project.json');
-    const projectFileAlt = path.join(this.projectDir, 'project.json');
-    debugLog('ContentDAG', `Checking paths: ${projectFilePath} (exists=${fs.existsSync(projectFilePath)}), ${projectFileAlt} (exists=${fs.existsSync(projectFileAlt)})`);
-    const project = loadProject(this.projectDir);
+    // IMPORTANT: loadProject() expects a *base path* (e.g. cwd), NOT a resolved
+    // project dir. It internally calls getProjectDir(basePath) which joins the
+    // session's activeProjectDir onto basePath. Passing an already-resolved
+    // projectDir causes double-nesting (projectDir/projectDir/project.json).
+    debugLog('ContentDAG', `Loading project (basePath=${this.basePath}, projectDir=${this.projectDir})`);
+    const project = loadProject(this.basePath);
     if (!project) {
-      debugLog('ContentDAG', `No project found at ${this.projectDir} — loadProject returned null`);
+      debugLog('ContentDAG', `No project found — loadProject(${this.basePath}) returned null`);
       return {
         status: 'error',
         content_type: params.content_type,
         output_file: outputFile,
-        error: `No project found at "${this.projectDir}". Create a project first.`,
+        error: 'No project found. Create a project first.',
       };
     }
 
@@ -599,7 +610,7 @@ export class ContentDAGExecutor {
       //     the scan picks up the LLM heading (e.g. "Jan the Blacksmith") as a
       //     separate entity from params.name ("Jan"). Registering first means our
       //     entry is already in the project when the file hits disk.
-      const registryResult = updateRegistry(params.content_type, params, rawOutput, outputFile, this.projectDir);
+      const registryResult = updateRegistry(params.content_type, params, rawOutput, outputFile, this.basePath);
 
       // 14. Persist file (after registry update)
       this.persistFile(outputFile, rawOutput);
@@ -644,6 +655,7 @@ export class ContentDAGExecutor {
         this.emit({
           type: 'tool_streaming',
           toolCallId: this.toolCallId,
+          toolName: 'generate_content',
           chunk: chunk.content,
           done: false,
         });
@@ -654,6 +666,7 @@ export class ContentDAGExecutor {
     this.emit({
       type: 'tool_streaming',
       toolCallId: this.toolCallId,
+      toolName: 'generate_content',
       chunk: '',
       done: true,
     });
