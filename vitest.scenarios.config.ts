@@ -9,7 +9,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['tests/scenarios/**/*.test.ts', 'tests/golden/**/*.test.ts'],
+    include: ['tests/scenarios/**/*.test.ts', 'tests/golden/**/*.test.ts', 'tests/checkpoints/**/*.test.ts'],
     fileParallelism: false,
   },
 });

@@ -21,6 +21,7 @@
     "test:coverage": "vitest run --coverage",
     "test:evals": "vitest run tests/evals/",
     "test:evals:live": "EVAL_MODE=live vitest run tests/evals/",
+    "test:checkpoints": "vitest run tests/checkpoints/ --config vitest.scenarios.config.ts",
     "test:scenarios": "vitest run --config vitest.scenarios.config.ts",
     "test:golden": "GOLDEN_FLOW=1 vitest run --config vitest.scenarios.config.ts tests/golden/",
     "test:replay": "vitest run tests/replay/",

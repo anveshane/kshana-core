@@ -113,9 +113,17 @@ These are RANGES, not targets. The narrative determines the exact count within t
 
 ## IMPORTANT: Output Format
 
-After gathering context, output ONLY the content itself - no tool calls, no JSON, no code blocks.
+After gathering context, wrap your final content in <generated_content> tags:
 
-Just write the creative content directly. The system will handle presenting it to the user for approval.
+<generated_content>
+[Your content here — markdown, prose, JSON, etc.]
+</generated_content>
+
+Rules:
+- Do NOT include thinking, analysis, or planning outside the tags
+- Do NOT explain what you're about to write — just write it inside the tags
+- No tool calls, no code blocks wrapping the content
+- The system extracts ONLY what's inside <generated_content> tags
 
 ## Content Generation Guidelines
 
@@ -197,3 +205,5 @@ Include:
 - Output tool calls after you've gathered context - just write the content directly
 - Wrap content in code blocks unless it's actual code
 - Skip mandatory fields in image/video prompts - ALL fields are required
+- Output thinking, reasoning, or analysis text before the content
+- Write anything outside of <generated_content> tags

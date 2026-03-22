@@ -39,3 +39,9 @@ prompt-optimizer/
 
 # Local outputs (generated images/videos)
 outputs/
+
+# Test output artifacts
+test-output/
+
+# Workflow run artifacts
+workflows/runs/
