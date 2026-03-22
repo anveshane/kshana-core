@@ -35,6 +35,7 @@ import {
 } from '../context/index.js';
 import { CONTENT_TYPE_OUTPUT_FILES } from '../tools/builtin/generateContentTool.js';
 import { PromptDAGExecutor, type PromptDAGParams } from '../tools/builtin/promptDAG.js';
+import { ContentDAGExecutor, DAG_CONTENT_TYPES, type ContentType as ContentDAGType } from '../tools/builtin/contentDAG.js';
 import { getContentCreatorTools, clearKnownProjectFiles, ReadCache, ListFilesCache } from '../tools/builtin/contentCreatorTools.js';
 // Context variables deprecated — kept as minimal stubs for compatibility
 interface ContextVariable { variableName: string; label: string; charCount: number; }
@@ -119,7 +120,7 @@ function persistApprovedContent(
             description: extractDescription(content),
             approvalStatus: 'approved' as const,
           };
-          saveCharacter(character);
+          saveCharacter(character, getProjectDir());
           debugLog(`[GenericAgent] Auto-persisted character "${name}" to project registry`);
           return { persisted: true, action: `add_character: ${name}` };
         }
@@ -132,7 +133,7 @@ function persistApprovedContent(
             description: extractDescription(content),
             approvalStatus: 'approved' as const,
           };
-          saveSetting(setting);
+          saveSetting(setting, getProjectDir());
           debugLog(`[GenericAgent] Auto-persisted setting "${name}" to project registry`);
           return { persisted: true, action: `add_setting: ${name}` };
         }
@@ -1799,6 +1800,75 @@ export class GenericAgent extends TypedEventEmitter {
         `[GenericAgent] generate_content: content_type=${contentType}, instruction=${instruction.substring(0, 100)}...`
       );
 
+      // Route DAG content types through ContentDAGExecutor
+      if (DAG_CONTENT_TYPES.includes(contentType as ContentDAGType)) {
+        const overwrite = args['overwrite'] as boolean | undefined;
+        const executor = new ContentDAGExecutor(
+          this.llm,
+          getProjectDir(),
+          (event) => this.emit(event),
+          toolCall.id,
+        );
+        const dagResult = await executor.execute({
+          content_type: contentType as ContentDAGType,
+          instruction,
+          name,
+          scene_number: sceneNumber,
+          chapter_number: chapterNumber,
+          overwrite,
+        });
+
+        // Auto-create timeline skeleton after scene generation
+        if ((contentType === 'scene_breakdown' || contentType === 'scene') && dagResult.status === 'success') {
+          try {
+            const generatedContent = dagResult.content ?? '';
+            const projectDir = getProjectDir();
+            const timelineProject = loadProject();
+
+            if (generatedContent && projectDir && timelineProject?.targetDuration) {
+              const existingTimeline = loadTimeline(projectDir);
+              if (!existingTimeline) {
+                const parsedScenes = parseSceneBreakdown(generatedContent);
+                if (parsedScenes.length > 0) {
+                  const descriptors = parsedScenes.map(s => ({
+                    label: s.label,
+                    suggestedDuration: s.suggestedDuration,
+                  }));
+                  const timeline = createTimelineSkeleton(timelineProject.targetDuration, descriptors);
+                  saveTimeline(projectDir, timeline);
+                  debugLog(
+                    `[GenericAgent] Auto-created timeline skeleton with ${parsedScenes.length} segments from ${contentType}`
+                  );
+                  this.emit({
+                    type: 'notification',
+                    level: 'info',
+                    message: `Timeline skeleton auto-created with ${parsedScenes.length} segments (${timelineProject.targetDuration}s total)`,
+                  });
+                }
+              }
+            }
+          } catch (err) {
+            debugLog(`[GenericAgent] Auto-timeline creation failed (non-fatal): ${err}`);
+          }
+        }
+
+        // Include loop warning in result if present
+        const finalDagResult = loopWarningMessage
+          ? { ...dagResult, loop_warning: loopWarningMessage }
+          : dagResult;
+
+        this.emit({
+          type: 'tool_result',
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          result: finalDagResult,
+          isError: dagResult.status === 'error',
+          agentName: this.getEffectiveAgentName(),
+        });
+        FlowRecorder.getSession()?.onToolComplete(toolCall.id, finalDagResult, dagResult.status === 'error');
+        return finalDagResult;
+      }
+
       // Build the output file path
       let outputFile = CONTENT_TYPE_OUTPUT_FILES[contentType] || `plans/${contentType}.md`;
 
@@ -3402,6 +3472,8 @@ Respond in JSON format:
         let content = '';
         let isFirstChunk = true;
         const shouldReset = this.contentState.iterations > 1;
+        let generatedContentTagSeen = false;
+        let streamPrefixBuffer = '';
 
         debugLog(`[GenericAgent] Starting content generation with streaming`);
 
@@ -3430,18 +3502,59 @@ Respond in JSON format:
               this.emit({ type: 'streaming_think', chunk: thinking, done: false });
             }
 
-            // Emit regular content as tool streaming
+            // Emit regular content as tool streaming (with tag-aware filtering)
             if (output) {
-              this.emit({
-                type: 'tool_streaming',
-                toolCallId: this.contentState.toolCallId,
-                chunk: output,
-                done: false,
-                agentName: 'Content Creator',
-                toolName: 'generate_content',
-                reset: isFirstChunk && shouldReset,
-              });
-              isFirstChunk = false;
+              if (!generatedContentTagSeen) {
+                streamPrefixBuffer += output;
+                const tagIdx = streamPrefixBuffer.indexOf('<generated_content>');
+                if (tagIdx >= 0) {
+                  generatedContentTagSeen = true;
+                  const afterTag = streamPrefixBuffer.slice(tagIdx + '<generated_content>'.length);
+                  if (afterTag) {
+                    const stripped = afterTag.replace(/<\/generated_content>[\s\S]*$/, '');
+                    if (stripped) {
+                      this.emit({
+                        type: 'tool_streaming',
+                        toolCallId: this.contentState.toolCallId,
+                        chunk: stripped,
+                        done: false,
+                        agentName: 'Content Creator',
+                        toolName: 'generate_content',
+                        reset: isFirstChunk && shouldReset,
+                      });
+                      isFirstChunk = false;
+                    }
+                  }
+                } else if (streamPrefixBuffer.length > 2000) {
+                  // Fallback: model didn't use tags, start showing content anyway
+                  generatedContentTagSeen = true;
+                  this.emit({
+                    type: 'tool_streaming',
+                    toolCallId: this.contentState.toolCallId,
+                    chunk: streamPrefixBuffer,
+                    done: false,
+                    agentName: 'Content Creator',
+                    toolName: 'generate_content',
+                    reset: isFirstChunk && shouldReset,
+                  });
+                  isFirstChunk = false;
+                }
+              } else {
+                // Already past the tag — stream content, stripping closing tag
+                const stripped = output.replace(/<\/generated_content>[\s\S]*$/, '');
+                if (stripped) {
+                  this.emit({
+                    type: 'tool_streaming',
+                    toolCallId: this.contentState.toolCallId,
+                    chunk: stripped,
+                    done: false,
+                    agentName: 'Content Creator',
+                    toolName: 'generate_content',
+                    reset: isFirstChunk && shouldReset,
+                  });
+                  isFirstChunk = false;
+                }
+              }
             }
           }
 
@@ -3472,6 +3585,7 @@ Respond in JSON format:
               chunk: '',
               done: true,
               agentName: 'Content Creator',
+              toolName: 'generate_content',
             });
           }
         }
@@ -3486,6 +3600,21 @@ Respond in JSON format:
               .replace(/<function=[^>]*>[\s\S]*?<\/function>/g, '') // Leaked function calls
               .trim()
           : '';
+
+        // Extract from <generated_content> tags if present
+        const gcMatch = cleanedContent.match(/<generated_content>([\s\S]*?)<\/generated_content>/);
+        if (gcMatch && gcMatch[1]) {
+          cleanedContent = gcMatch[1].trim();
+        } else if (cleanedContent) {
+          // Fallback heuristic: if substantial text (>200 chars) precedes the first
+          // markdown heading, it's likely thinking preamble — strip it
+          const firstHeading = cleanedContent.match(/^([\s\S]+?\n)(#{1,3} .+)/m);
+          const preamble = firstHeading?.[1];
+          if (preamble && preamble.length > 200) {
+            cleanedContent = cleanedContent.slice(preamble.length).trimStart();
+            debugLog(`[GenericAgent] Stripped ${preamble.length} chars of likely thinking preamble`);
+          }
+        }
 
         // For scene_video_prompt, emit a formatted display to replace raw JSON stream
         if (this.contentState.contentType === 'scene_video_prompt' && cleanedContent) {

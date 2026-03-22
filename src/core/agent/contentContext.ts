@@ -23,43 +23,7 @@ export interface PreloadedContext {
   filesRead: string[];
 }
 
-/**
- * Safely read a file from the project directory.
- * Returns the content or null if not found.
- */
-function readProjectFile(projectDir: string, relativePath: string): string | null {
-  try {
-    const fullPath = path.isAbsolute(relativePath)
-      ? relativePath
-      : path.join(projectDir, relativePath);
-    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-      return fs.readFileSync(fullPath, 'utf-8');
-    }
-  } catch {
-    // File not readable
-  }
-  return null;
-}
-
-/**
- * Find the file path for a character profile.
- */
-function getCharacterFilePath(project: ProjectFile, charName: string): string | undefined {
-  const itemFiles = project.content?.characters?.itemFiles;
-  if (itemFiles?.[charName]) return itemFiles[charName];
-  const safeName = charName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  return `characters/${safeName}.profile.md`;
-}
-
-/**
- * Find the file path for a setting profile.
- */
-function getSettingFilePath(project: ProjectFile, settingName: string): string | undefined {
-  const itemFiles = project.content?.settings?.itemFiles;
-  if (itemFiles?.[settingName]) return itemFiles[settingName];
-  const safeName = settingName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  return `settings/${safeName}.profile.md`;
-}
+import { readProjectFile, getCharacterFilePath, getSettingFilePath } from '../utils/projectFileUtils.js';
 
 /**
  * Build a reference images section listing verified paths.

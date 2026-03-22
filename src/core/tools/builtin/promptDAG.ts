@@ -186,33 +186,7 @@ function getLengthConstraint(
 // File reading helpers
 // ---------------------------------------------------------------------------
 
-function readProjectFile(projectDir: string, relativePath: string): string | null {
-  try {
-    const fullPath = path.isAbsolute(relativePath)
-      ? relativePath
-      : path.join(projectDir, relativePath);
-    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-      return fs.readFileSync(fullPath, 'utf-8');
-    }
-  } catch {
-    // File not readable
-  }
-  return null;
-}
-
-function getCharacterFilePath(project: ProjectFile, charName: string): string {
-  const itemFiles = project.content?.characters?.itemFiles;
-  if (itemFiles?.[charName]) return itemFiles[charName]!;
-  const safeName = charName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  return `characters/${safeName}.profile.md`;
-}
-
-function getSettingFilePath(project: ProjectFile, settingName: string): string {
-  const itemFiles = project.content?.settings?.itemFiles;
-  if (itemFiles?.[settingName]) return itemFiles[settingName]!;
-  const safeName = settingName.toLowerCase().replace(/[^a-z0-9]+/g, '_');
-  return `settings/${safeName}.profile.md`;
-}
+import { readProjectFile, getCharacterFilePath, getSettingFilePath } from '../../utils/projectFileUtils.js';
 
 // ---------------------------------------------------------------------------
 // DAG Steps

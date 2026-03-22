@@ -1,0 +1,52 @@
+{
+  "sceneNumber": 1,
+  "sceneTitle": "The Forge at Dusk",
+  "totalSceneDuration": 24,
+  "shots": [
+    {
+      "shotNumber": 1,
+      "shotType": "establishing",
+      "prompt": "A medieval blacksmith's forge at dusk, warm orange firelight spilling from the open doorway, the village of Ashenmere visible in the background with stone buildings and slate roofs, unnaturally long shadows stretching across the cobblestone path, dense pine forest on the ridges behind, mist clinging to mountain peaks, cinematic wide shot",
+      "duration": 5,
+      "cameraWork": "slow push-in from village exterior toward the forge entrance",
+      "characters": [],
+      "mood": "quiet foreboding"
+    },
+    {
+      "shotNumber": 2,
+      "shotType": "medium",
+      "prompt": "Young muscular blacksmith Jan hammering a glowing cherry-red horseshoe on a massive scarred anvil, sparks cascading in the dim workshop, leather apron over linen shirt with rolled sleeves, calloused hands gripping iron tongs, forge fire casting warm orange light on his focused face, soot-dusted dark brown hair, medieval fantasy setting",
+      "duration": 6,
+      "cameraWork": "medium shot, slight orbit around the anvil",
+      "characters": ["Jan"],
+      "mood": "focused craftsmanship"
+    },
+    {
+      "shotNumber": 3,
+      "shotType": "detail",
+      "prompt": "Close-up of hammer striking glowing iron on the anvil surface, bright orange sparks exploding outward, the worn and pitted surface of the ancient anvil visible, warm firelight reflections, shallow depth of field, medieval blacksmith workshop",
+      "duration": 4,
+      "cameraWork": "tight close-up, slight slow motion",
+      "characters": [],
+      "mood": "rhythmic intensity"
+    },
+    {
+      "shotNumber": 4,
+      "shotType": "medium-wide",
+      "prompt": "Jan pausing his work and looking toward the workshop windows, outside the glass the village is unnaturally dark for late afternoon, deep shadows pressing against the window panes like a living presence, the forge fire behind Jan casting his silhouette, uneasy expression on his weathered young face",
+      "duration": 5,
+      "cameraWork": "slow dolly from Jan toward the darkening windows",
+      "characters": ["Jan"],
+      "mood": "creeping unease"
+    },
+    {
+      "shotNumber": 5,
+      "shotType": "medium",
+      "prompt": "Elderly woman Maren standing in the forge doorway silhouetted against fading twilight, thin frame wrapped in wool shawl, sharp eyes catching the forge light, holding a leather-bound journal beneath her shawl, the premature darkness behind her, medieval village elder with weathered face and deep-lined features",
+      "duration": 4,
+      "cameraWork": "reverse shot from Jan's perspective, slight low angle",
+      "characters": ["Maren"],
+      "mood": "ominous revelation"
+    }
+  ]
+}
