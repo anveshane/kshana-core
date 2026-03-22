@@ -789,7 +789,7 @@ function buildContentCreatorCard(genId, args) {
     '</div>' +
     (instruction ? '<div class="cc-instruction"><div class="cc-inst-label">Instruction</div>' + escHtml(truncStr(instruction, 300)) + '</div>' : '') +
     '<div class="cc-child-tools"></div>' +
-    '<div class="cc-output-section"><div class="cc-output-label">Generated Content</div><div class="cc-output-content"></div></div>' +
+    '<div class="cc-output-section visible"><div class="cc-output-label">Generated Content</div><div class="cc-output-content"><span class="streaming-cursor-inline"></span> Generating ' + escHtml(contentType) + '...</div></div>' +
     '<div class="cc-footer">\\u2713 Content created <span class="cc-duration"></span></div>';
 
   return card;
