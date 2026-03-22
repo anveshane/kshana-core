@@ -145,7 +145,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
   }, [taskType, started]);
 
   // Load project files into context store when in video mode with existing project
-  // This ensures $story, $plot, etc. are available for fetch_context calls
+  // This ensures $story, $plot, etc. are available for context resolution
   const contextsLoadedRef = React.useRef(false);
   React.useEffect(() => {
     if (taskType === 'video' && existingProject && !contextsLoadedRef.current) {

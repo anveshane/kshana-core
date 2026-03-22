@@ -2844,7 +2844,7 @@ export class GenericAgent extends TypedEventEmitter {
         plan_ref: variableName,
         task: this.planningState.task,
         iterations: this.planningState.iterations,
-        message: `Plan "${name}" approved. Summary: ${summary}\n\nTo read the full plan, use fetch_context with ${variableName}.`,
+        message: `Plan "${name}" approved. Summary: ${summary}`,
         next_steps:
           'IMPORTANT: Now update the project state - call update_project to: 1) Set planner stage to "complete", 2) Mark the current phase as "completed", 3) Transition to the next phase.',
       };
@@ -3847,7 +3847,7 @@ Respond in JSON format:
     // Warn about long inline context that should use context_ref
     if (context && context.length > 500 && !contextRef && !contextRefs) {
       debugLog(
-        `[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_image_agent without context_ref. Consider using store_context.`
+        `[GenericAgent] WARNING: Long context (${context.length} chars) passed to dispatch_image_agent without context_ref.`
       );
     }
 
