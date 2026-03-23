@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   kshana-ink-prod:
     image: ${PROD_IMAGE:-kshana-ink:latest}
@@ -29,9 +27,6 @@ services:
     image: nginx:1.27-alpine
     container_name: kshana-ink-nginx
     restart: unless-stopped
-    depends_on:
-      - kshana-ink-prod
-      - kshana-ink-dev
     ports:
       - "80:80"
     volumes:
