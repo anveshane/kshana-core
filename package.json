@@ -4,9 +4,21 @@
   "description": "Generic CLI agent framework with React Ink",
   "type": "module",
   "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./server": "./dist/server/index.cjs",
+    "./server/cli": "./dist/server/cli.cjs",
+    "./core/llm": "./dist/core/llm/index.cjs"
+  },
+  "files": [
+    "dist",
+    "prompts",
+    "workflows",
+    "README.md"
+  ],
   "bin": {
     "kshana-ink": "./dist/index.js",
-    "kshana-ink-server": "./dist/server/cli.js"
+    "kshana-ink-server": "./dist/server/cli.cjs"
   },
   "scripts": {
     "start": "tsx src/index.tsx",

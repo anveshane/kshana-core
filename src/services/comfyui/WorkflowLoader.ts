@@ -21,8 +21,8 @@ function debugLog(message: string): void {
 }
 
 // Get __dirname equivalent for ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentDir =
+  typeof __dirname === 'string' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Get the workflows directory path.
@@ -47,7 +47,7 @@ function getWorkflowsDir(): string {
   try {
     // In node_modules, we might be at kshana-desktop/node_modules/kshana-ink
     // or in a monorepo structure
-    let searchDir = __dirname;
+    let searchDir = currentDir;
     for (let i = 0; i < 5; i++) {
       const desktopWorkflows = path.join(searchDir, '..', '..', 'workflows');
       if (fs.existsSync(desktopWorkflows)) {
@@ -73,7 +73,7 @@ function getWorkflowsDir(): string {
   // 3. Try kshana-ink/workflows (current package)
   // When running from source: src/services/comfyui/WorkflowLoader.ts -> workflows/
   // When running from dist: dist/services/comfyui/WorkflowLoader.js -> workflows/
-  const inkWorkflows = path.resolve(__dirname, '..', '..', 'workflows');
+  const inkWorkflows = path.resolve(currentDir, '..', '..', 'workflows');
   if (fs.existsSync(inkWorkflows)) {
     return inkWorkflows;
   }

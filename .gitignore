@@ -39,3 +39,6 @@ prompt-optimizer/
 
 # Local outputs (generated images/videos)
 outputs/
+
+# Packed release artifacts
+*.tgz
