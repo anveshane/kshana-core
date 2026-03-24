@@ -32,6 +32,7 @@ import { AssetScanner } from './AssetScanner.js';
 import { resolveInputs, writeOutput } from './contentResolver.js';
 import { extractCollectionItems } from './collectionExtractor.js';
 import type { ArtifactCategory } from '../templates/types.js';
+import { resolveGuide, loadContentTypeSkills, type SkillResolutionContext } from '../prompts/loader.js';
 
 /**
  * Configuration for creating an ExecutorAgent.
@@ -489,7 +490,16 @@ export class ExecutorAgent extends TypedEventEmitter {
   ): { system: string; user: string } {
     const typeDef = this.config.template.artifactTypes[node.typeId];
     const category = typeDef?.category ?? 'concept';
-    const systemPrompt = CATEGORY_PROMPTS[category] ?? CATEGORY_PROMPTS.concept;
+    let systemPrompt = CATEGORY_PROMPTS[category] ?? CATEGORY_PROMPTS.concept;
+
+    // Inject model-specific skills for image/video prompt generation
+    const skillTypes = ['visual_ref', 'clip'] as const;
+    if (skillTypes.includes(category as typeof skillTypes[number])) {
+      const skillContent = this.loadSkillsForNode(node);
+      if (skillContent) {
+        systemPrompt += `\n\n<model_skills>\n${skillContent}\n</model_skills>`;
+      }
+    }
 
     const task = node.itemId
       ? `Create ${typeDef?.displayName ?? node.typeId} for "${node.itemId}"`
@@ -500,6 +510,74 @@ export class ExecutorAgent extends TypedEventEmitter {
       : task;
 
     return { system: systemPrompt, user };
+  }
+
+  /**
+   * Load skill guides and model-specific skills for a node.
+   * Returns combined skill content or null if none found.
+   */
+  private loadSkillsForNode(node: ExecutionNode): string | null {
+    const parts: string[] = [];
+
+    // Map node types to guide names and content types for skill resolution
+    const guideMap: Record<string, string> = {
+      character_image: 'character_image_guide',
+      setting_image: 'setting_image_guide',
+      scene_image: 'scene_image_guide',
+      shot_image_prompt: 'shot_image_guide',
+      scene_video_prompt: 'scene_video_guide',
+      scene_video: 'scene_video_guide',
+    };
+
+    // Content type names for skill file resolution
+    const contentTypeMap: Record<string, string> = {
+      character_image: 'character_image_prompt',
+      setting_image: 'setting_image_prompt',
+      scene_image: 'scene_image_prompt',
+      shot_image_prompt: 'shot_image_prompt',
+      scene_video_prompt: 'scene_video_prompt',
+      scene_video: 'scene_video_prompt',
+    };
+
+    // 1. Load default guide (universal rules)
+    const guideName = guideMap[node.typeId];
+    if (guideName) {
+      try {
+        const guide = resolveGuide(guideName, contentTypeMap[node.typeId] ?? node.typeId);
+        if (guide.content) {
+          parts.push(guide.content);
+          this.log(`  Loaded guide: ${guide.source}`);
+        }
+      } catch {
+        // Guide not found — non-fatal
+      }
+    }
+
+    // 2. Load model-specific skills (layered on top of guide)
+    const contentType = contentTypeMap[node.typeId];
+    if (contentType) {
+      // Try to resolve skill context from provider registry
+      let skillContext: SkillResolutionContext | undefined;
+      try {
+        const { getProviderRegistry } = require('../../services/providers/index.js');
+        const config = getProviderRegistry().getConfig();
+        const isVideo = node.typeId.includes('video');
+        const providerId = isVideo ? config.videoGeneration : config.imageGeneration;
+        if (providerId) {
+          skillContext = { providerId };
+        }
+      } catch {
+        // Provider registry not available — use defaults
+      }
+
+      const skills = loadContentTypeSkills(contentType, skillContext);
+      if (skills.content) {
+        parts.push(skills.content);
+        this.log(`  Loaded skills: ${skills.loadedFiles.join(', ')}`);
+      }
+    }
+
+    return parts.length > 0 ? parts.join('\n\n') : null;
   }
 
   // ===========================================================================
