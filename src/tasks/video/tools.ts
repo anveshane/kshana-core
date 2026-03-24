@@ -1004,8 +1004,9 @@ export function parsePromptFile(content: string): PromptFileMetadata {
   };
 
   // Check for structured prompt format (scene prompts)
+  // Handles both: "**Image Prompt:**\n content" AND "**Image Prompt:** content on same line"
   const imagePromptMatch = content.match(
-    /\*\*Image Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
+    /\*\*Image Prompt:\*\*\s*\n?([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
   );
   if (imagePromptMatch && imagePromptMatch[1]) {
     result.prompt = imagePromptMatch[1].trim();
@@ -1085,14 +1086,14 @@ export function parsePromptFile(content: string): PromptFileMetadata {
 
   // Parse negative prompt
   const negativeMatch = content.match(
-    /\*\*Negative Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
+    /\*\*Negative Prompt:\*\*\s*\n?([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
   );
   if (negativeMatch && negativeMatch[1]) {
     result.negativePrompt = negativeMatch[1].trim();
   }
 
   // Parse aspect ratio
-  const aspectMatch = content.match(/\*\*Aspect Ratio:\*\*\s*\n\s*([\d:]+)/i);
+  const aspectMatch = content.match(/\*\*Aspect Ratio:\*\*\s*\n?\s*([\d:]+)/i);
   if (aspectMatch && aspectMatch[1]) {
     result.aspectRatio = aspectMatch[1].trim();
   }

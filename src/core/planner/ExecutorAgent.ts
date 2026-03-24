@@ -1484,6 +1484,28 @@ Rules:
       return null;
     }
 
+    // Check if image generation provider is available
+    try {
+      const provider = getProviderRegistry().getImageGenerator();
+      if (!provider) {
+        this.log(`  Media gen: no image generation provider configured`);
+        this.emit({
+          type: 'notification',
+          level: 'warning',
+          message: `No image provider available — skipping media gen for ${node.displayName}. Prompt saved.`,
+        });
+        return null;
+      }
+    } catch (err) {
+      this.log(`  Media gen: provider check failed: ${String(err)}`);
+      this.emit({
+        type: 'notification',
+        level: 'warning',
+        message: `Image provider not reachable — skipping media gen for ${node.displayName}. Prompt saved.`,
+      });
+      return null;
+    }
+
     const typeDef = this.config.template.artifactTypes[node.typeId];
     const category = typeDef?.category;
 
