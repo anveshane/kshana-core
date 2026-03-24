@@ -684,12 +684,16 @@ export class ExecutorAgent extends TypedEventEmitter {
   ): { system: string; user: string; loadedSkills: string[] } {
     const typeDef = this.config.template.artifactTypes[node.typeId];
     const category = typeDef?.category ?? 'concept';
-    let systemPrompt = CATEGORY_PROMPTS[category] ?? CATEGORY_PROMPTS.concept;
+
+    // shot_image_prompt is categorized as 'structure' in the template but it's actually
+    // an image edit prompt (FLUX Klein composition with references). Use visual_ref treatment.
+    const effectiveCategory = node.typeId === 'shot_image_prompt' ? 'visual_ref' : category;
+    let systemPrompt = CATEGORY_PROMPTS[effectiveCategory] ?? CATEGORY_PROMPTS.concept;
 
     // Inject model-specific skills for image/video prompt generation
     const loadedSkills: string[] = [];
-    const skillTypes = ['visual_ref', 'clip'] as const;
-    if (skillTypes.includes(category as typeof skillTypes[number])) {
+    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip';
+    if (needsSkills) {
       const skills = this.loadSkillsForNode(node);
       if (skills.content) {
         systemPrompt += `\n\n<model_skills>\n${skills.content}\n</model_skills>`;
@@ -960,7 +964,8 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     // Use lower temperature and suppress thinking for formulaic tasks (prompts)
     const typeDef = this.config.template.artifactTypes[node.typeId];
-    const isFormulaic = typeDef?.category === 'visual_ref' || typeDef?.category === 'clip';
+    const isFormulaic = typeDef?.category === 'visual_ref' || typeDef?.category === 'clip'
+      || node.typeId === 'shot_image_prompt';
 
     const options: GenerateOptions = {
       messages,
