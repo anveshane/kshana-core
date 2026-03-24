@@ -29,7 +29,7 @@ import type {
 import { DependencyGraphExecutor } from './DependencyGraphExecutor.js';
 import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
-import { resolveInputs, writeOutput } from './contentResolver.js';
+import { resolveInputs, writeOutput, getOutputPath as getOutputPathFn } from './contentResolver.js';
 import { extractCollectionItems } from './collectionExtractor.js';
 import type { ArtifactCategory } from '../templates/types.js';
 import { resolveGuide, loadContentTypeSkills, type SkillResolutionContext } from '../prompts/loader.js';
@@ -917,8 +917,6 @@ Rules:
 
       // Try provider registry first, fall back to hardcoded defaults
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { getProviderRegistry } = require('../../services/providers/index.js');
         const config = getProviderRegistry().getConfig();
         const isVideo = node.typeId.includes('video');
         const providerId = isVideo ? config.videoGeneration : config.imageGeneration;
@@ -1043,8 +1041,7 @@ Rules:
 
   private findExistingPromptFile(node: ExecutionNode): string | null {
     // Compute the expected prompt path using the same logic as writeOutput
-    const { getOutputPath } = require('./contentResolver.js') as typeof import('./contentResolver.js');
-    const expectedPath = getOutputPath(node, this.config.projectDir, this.config.template);
+    const expectedPath = getOutputPathFn(node, this.config.projectDir, this.config.template);
     const fullPath = join(this.config.projectDir, expectedPath);
     if (existsSync(fullPath)) {
       return expectedPath;
