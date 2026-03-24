@@ -449,4 +449,159 @@ describe('DependencyGraphExecutor', () => {
       expect(executor.producesCollectionItems(finalNode)).toBe(false);
     });
   });
+
+  describe('recursive cascade expansion', () => {
+    // Template with scene → scene_video_prompt → shot_image_prompt chain
+    // scene_image depends on shot_image_prompt (matching), final_video depends on scene_image
+    const createCascadeTemplate = (): VideoTemplate => {
+      const base = createTestTemplate();
+      return {
+        ...base,
+        artifactTypes: {
+          plot: base.artifactTypes.plot,
+          story: base.artifactTypes.story,
+          character: base.artifactTypes.character,
+          scene: {
+            ...base.artifactTypes.scene,
+            dependencies: [
+              { artifactTypeId: 'story', required: true, usage: 'context' },
+            ],
+          },
+          scene_video_prompt: {
+            id: 'scene_video_prompt',
+            displayName: 'Motion Prompts',
+            category: 'structure',
+            description: 'Shot breakdown',
+            isCollection: true,
+            itemName: 'motion prompt',
+            outputFormat: 'markdown',
+            filePattern: 'prompts/videos/{{name}}.motion.md',
+            agentType: 'content',
+            promptFile: 'svp.md',
+            isExpensive: false,
+            requiresPerItemApproval: false,
+            dependencies: [
+              { artifactTypeId: 'scene', required: true, usage: 'context', scope: 'matching' },
+            ],
+          },
+          shot_image_prompt: {
+            id: 'shot_image_prompt',
+            displayName: 'Shot Image Prompts',
+            category: 'structure',
+            description: 'Per-shot image prompts',
+            isCollection: true,
+            itemName: 'shot prompt',
+            outputFormat: 'markdown',
+            filePattern: 'prompts/images/shots/scene-{{index}}-shot-{{subindex}}.prompt.md',
+            agentType: 'content',
+            promptFile: 'sip.md',
+            isExpensive: false,
+            requiresPerItemApproval: false,
+            dependencies: [
+              { artifactTypeId: 'scene_video_prompt', required: true, usage: 'context', scope: 'matching' },
+            ],
+          },
+          scene_image: {
+            ...base.artifactTypes.scene_image,
+            dependencies: [
+              { artifactTypeId: 'shot_image_prompt', required: true, usage: 'context', scope: 'matching' },
+            ],
+          },
+          final_video: {
+            ...base.artifactTypes.final_video,
+            dependencies: [
+              { artifactTypeId: 'scene_image', required: true, usage: 'input', scope: 'all' },
+            ],
+          },
+        },
+      };
+    };
+
+    it('cascades scene expansion through scene_video_prompt to shot_image_prompt', () => {
+      const t = createCascadeTemplate();
+      const executor = buildExecutor(t);
+
+      // Complete prerequisites
+      executor.markStarted('plot');
+      executor.markCompleted('plot');
+      executor.markStarted('story');
+      executor.markCompleted('story');
+
+      // Expand scenes — should cascade to scene_video_prompt AND shot_image_prompt
+      executor.expandCollection('scene', [
+        { itemId: 'scene_1', name: 'Scene 1' },
+        { itemId: 'scene_2', name: 'Scene 2' },
+      ]);
+
+      // scene_video_prompt should be expanded per-scene
+      expect(executor.getNode('scene_video_prompt')).toBeUndefined();
+      expect(executor.getNode('scene_video_prompt:scene_1')).toBeDefined();
+      expect(executor.getNode('scene_video_prompt:scene_2')).toBeDefined();
+
+      // shot_image_prompt should ALSO be expanded per-scene (recursive cascade)
+      expect(executor.getNode('shot_image_prompt')).toBeUndefined();
+      expect(executor.getNode('shot_image_prompt:scene_1')).toBeDefined();
+      expect(executor.getNode('shot_image_prompt:scene_2')).toBeDefined();
+
+      // shot_image_prompt:scene_1 should depend on scene_video_prompt:scene_1
+      expect(executor.getNode('shot_image_prompt:scene_1')?.dependencies).toContain('scene_video_prompt:scene_1');
+    });
+
+    it('allows per-shot expansion of shot_image_prompt:scene_N', () => {
+      const t = createCascadeTemplate();
+      const executor = buildExecutor(t);
+
+      executor.markStarted('plot');
+      executor.markCompleted('plot');
+      executor.markStarted('story');
+      executor.markCompleted('story');
+
+      // First expansion: scenes
+      executor.expandCollection('scene', [
+        { itemId: 'scene_1', name: 'Scene 1' },
+      ]);
+
+      // Verify shot_image_prompt:scene_1 exists and is a collection
+      const sipNode = executor.getNode('shot_image_prompt:scene_1');
+      expect(sipNode).toBeDefined();
+      expect(sipNode?.isCollection).toBe(true);
+
+      // Second expansion: shots within scene_1
+      executor.expandCollection('shot_image_prompt:scene_1', [
+        { itemId: 'scene_1_shot_1', name: 'Shot 1' },
+        { itemId: 'scene_1_shot_2', name: 'Shot 2' },
+        { itemId: 'scene_1_shot_3', name: 'Shot 3' },
+      ]);
+
+      // Per-shot nodes should exist
+      expect(executor.getNode('shot_image_prompt:scene_1')).toBeUndefined(); // replaced
+      expect(executor.getNode('shot_image_prompt:scene_1_shot_1')).toBeDefined();
+      expect(executor.getNode('shot_image_prompt:scene_1_shot_2')).toBeDefined();
+      expect(executor.getNode('shot_image_prompt:scene_1_shot_3')).toBeDefined();
+
+      // Each should depend on scene_video_prompt:scene_1
+      expect(executor.getNode('shot_image_prompt:scene_1_shot_1')?.dependencies).toContain('scene_video_prompt:scene_1');
+    });
+  });
+
+  describe('media node determinism', () => {
+    it('marks node as failed when media generation returns null (not completed with prompt path)', () => {
+      const executor = buildExecutor(template);
+      executor.markStarted('plot');
+      executor.markCompleted('plot');
+      executor.markStarted('story');
+      executor.markCompleted('story');
+      executor.markStarted('character');
+      executor.markCompleted('character');
+
+      // Simulate: character_image starts, LLM writes prompt, media gen fails
+      executor.markStarted('character_image');
+      // If media fails, it should be markFailed not markCompleted
+      executor.markFailed('character_image', 'Media generation failed');
+
+      expect(executor.getNode('character_image')?.status).toBe('failed');
+      // Dependents should not be ready
+      expect(executor.getNextReady().map(n => n.typeId)).not.toContain('scene_image');
+    });
+  });
 });

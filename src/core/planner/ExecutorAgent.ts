@@ -344,6 +344,12 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     try {
       this.emit({ type: 'agent_status', status: 'thinking', agentName });
+
+      // Expand any collection nodes whose dependencies are already completed
+      // (handles session resume where scene_video_prompt completed in a prior run
+      // but shot_image_prompt wasn't expanded into per-shot nodes)
+      await this.expandPendingCollections();
+
       this.emitTodoUpdate();
 
       // Main execution loop
@@ -883,6 +889,57 @@ export class ExecutorAgent extends TypedEventEmitter {
    * Check if a prompt file already exists on disk for a media node.
    * Returns the relative path if found, null otherwise.
    */
+  /**
+   * Expand any pending collection nodes whose dependencies are already completed.
+   * This handles session resume where e.g. scene_video_prompt completed in a prior
+   * run but shot_image_prompt wasn't expanded into per-shot nodes.
+   */
+  private async expandPendingCollections(): Promise<void> {
+    const allNodes = this.executor.getAllNodes();
+
+    for (const node of allNodes) {
+      if (!node.isCollection || node.status !== 'pending') continue;
+
+      // Check if all dependencies are completed
+      const allDepsComplete = node.dependencies.every(depId => {
+        const dep = this.executor.getNode(depId);
+        return dep && (dep.status === 'completed' || dep.status === 'skipped');
+      });
+      if (!allDepsComplete) continue;
+
+      // This collection node is ready but not expanded.
+      // Find the dependency that produces collection items and extract from it.
+      for (const depId of node.dependencies) {
+        const dep = this.executor.getNode(depId);
+        if (!dep?.outputPath || dep.typeId !== 'scene_video_prompt') continue;
+
+        const fullPath = join(this.config.projectDir, dep.outputPath);
+        if (!existsSync(fullPath)) continue;
+
+        const content = readFileSync(fullPath, 'utf-8');
+        const items = await extractCollectionItems(dep, content, this.llm);
+        if (!items?.shots?.length) continue;
+
+        const sceneId = dep.itemId;
+        if (!sceneId) continue;
+
+        const shotItems = items.shots.map(s => ({
+          itemId: `${sceneId}_shot_${s.shotNumber}`,
+          name: `Shot ${s.shotNumber}: ${s.shotType}`,
+        }));
+
+        this.log(`  Startup expansion: ${node.id} → ${shotItems.map(i => i.name).join(', ')}`);
+        this.executor.expandCollection(node.id, shotItems);
+        this.emit({
+          type: 'notification',
+          level: 'info',
+          message: `Expanded ${node.displayName}: ${shotItems.map(i => i.name).join(', ')}`,
+        });
+        break; // Only need one dependency to trigger expansion
+      }
+    }
+  }
+
   private findExistingPromptFile(node: ExecutionNode): string | null {
     // Compute the expected prompt path using the same logic as writeOutput
     const { getOutputPath } = require('./contentResolver.js') as typeof import('./contentResolver.js');

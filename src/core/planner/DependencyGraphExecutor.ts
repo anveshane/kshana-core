@@ -347,6 +347,8 @@ export class DependencyGraphExecutor {
       const otherDeps = dependent.dependencies.filter(d => d !== dependent.typeId && d !== sourceTypeId);
       const itemDeps = [...otherDeps, sourceItemId];
 
+      // Preserve isCollection from type def — allows further sub-expansion
+      // (e.g., shot_image_prompt per-scene → per-shot)
       const itemNode: ExecutionNode = {
         id: itemNodeId,
         typeId: dependent.typeId,
@@ -354,7 +356,7 @@ export class DependencyGraphExecutor {
         status: 'pending',
         displayName: `${depTypeDef.displayName}: ${item.name}`,
         isExpensive: depTypeDef.isExpensive,
-        isCollection: false,
+        isCollection: depTypeDef.isCollection,  // preserve from type def for further expansion
         dependencies: itemDeps,
         dependents: [...dependent.dependents],
       };
