@@ -20,6 +20,8 @@ export default defineConfig([
       'core/llm/index': 'src/core/llm/index.ts',
     },
     format: ['cjs'],
+    // Maps import.meta.url to a __filename-based URL in CJS output (avoids empty-import-meta warnings and broken paths).
+    shims: true,
     dts: false,
     clean: false,
     splitting: false,

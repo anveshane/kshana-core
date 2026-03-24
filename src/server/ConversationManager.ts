@@ -189,6 +189,19 @@ export class ConversationManager {
   }
 
   /**
+   * Refresh a session's activity timestamp to keep it eligible for resume.
+   */
+  touchSession(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return false;
+    }
+
+    session.state.lastActivity = Date.now();
+    return true;
+  }
+
+  /**
    * Check if a session has a configured agent.
    */
   isSessionConfigured(sessionId: string): boolean {
@@ -214,6 +227,7 @@ export class ConversationManager {
     }
 
     session.remoteFs = remoteFs;
+    session.state.lastActivity = Date.now();
   }
 
   /**
