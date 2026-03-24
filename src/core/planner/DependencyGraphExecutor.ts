@@ -463,6 +463,14 @@ export class DependencyGraphExecutor {
   }
 
   /**
+   * Add a node to the graph. Used for repairing missing nodes on session restore.
+   */
+  addNode(node: ExecutionNode): void {
+    this.nodes.set(node.id, node);
+    this.updatedAt = Date.now();
+  }
+
+  /**
    * Get all nodes.
    */
   getAllNodes(): ExecutionNode[] {

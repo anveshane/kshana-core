@@ -164,6 +164,10 @@ export class ExecutorAgent extends TypedEventEmitter {
           this.executor.invalidateNode(node.id);
         }
       }
+
+      // Repair missing nodes: if a node references a dependency that doesn't exist,
+      // recreate it from the template. This fixes graph corruption from manual resets.
+      this.repairMissingNodes();
     } else {
       const scanner = new AssetScanner(config.template);
       const scanResult = scanner.scan(config.projectDir, config.project);
@@ -952,6 +956,70 @@ Rules:
    * Check if a prompt file already exists on disk for a media node.
    * Returns the relative path if found, null otherwise.
    */
+  /**
+   * Repair missing nodes in the graph. If a node references a dependency
+   * that doesn't exist, recreate it from the template definition.
+   * This fixes graph corruption from manual resets or incomplete expansions.
+   */
+  private repairMissingNodes(): void {
+    const allNodes = this.executor.getAllNodes();
+    let repaired = 0;
+
+    for (const node of allNodes) {
+      for (const depId of node.dependencies) {
+        if (!this.executor.getNode(depId)) {
+          // Missing dependency — try to recreate it
+          // Parse the depId to get typeId and itemId: "shot_image_prompt:scene_1" → typeId=shot_image_prompt, itemId=scene_1
+          const colonIdx = depId.indexOf(':');
+          const typeId = colonIdx >= 0 ? depId.slice(0, colonIdx) : depId;
+          const itemId = colonIdx >= 0 ? depId.slice(colonIdx + 1) : undefined;
+          const typeDef = this.config.template.artifactTypes[typeId];
+
+          if (typeDef) {
+            // Find what this node should depend on from the template
+            const templateDeps = typeDef.dependencies
+              .filter((d: { required: boolean }) => d.required)
+              .map((d: { artifactTypeId: string; scope?: string }) => {
+                if (d.scope === 'matching' && itemId) {
+                  return `${d.artifactTypeId}:${itemId}`;
+                }
+                return d.artifactTypeId;
+              })
+              .filter((d: string) => this.executor.getNode(d));
+
+            this.executor.addNode({
+              id: depId,
+              typeId,
+              itemId,
+              status: 'pending',
+              displayName: `${typeDef.displayName}${itemId ? ': ' + itemId : ''}`,
+              isExpensive: typeDef.isExpensive,
+              isCollection: typeDef.isCollection,
+              dependencies: templateDeps,
+              dependents: [node.id],
+            });
+
+            // Wire the dependency's own deps to point back to it
+            for (const td of templateDeps) {
+              const tdNode = this.executor.getNode(td);
+              if (tdNode && !tdNode.dependents.includes(depId)) {
+                tdNode.dependents.push(depId);
+              }
+            }
+
+            this.log(`  Repaired missing node: ${depId} (needed by ${node.id})`);
+            repaired++;
+          }
+        }
+      }
+    }
+
+    if (repaired > 0) {
+      this.log(`Repaired ${repaired} missing node(s)`);
+      this.persistState();
+    }
+  }
+
   /**
    * Expand any pending collection nodes whose dependencies are already completed.
    * This handles session resume where e.g. scene_video_prompt completed in a prior
