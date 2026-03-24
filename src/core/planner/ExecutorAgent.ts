@@ -444,24 +444,35 @@ export class ExecutorAgent extends TypedEventEmitter {
               if (nodeCategory === 'visual_ref' || nodeCategory === 'clip') {
                 if (this.config.parallelMediaGeneration) {
                   // Parallel mode: fire-and-forget, collect result later
-                  const mediaPromise = this.executeMediaGeneration(node, outputPath, toolCallId)
+                  // The node stays as 'in_progress' until media completes
+                  const capturedOutputPath = outputPath;
+                  const mediaPromise = this.executeMediaGeneration(node, capturedOutputPath, toolCallId)
                     .then(mediaPath => {
                       if (mediaPath) {
-                        // Update node output path to actual media file
                         this.executor.markCompleted(node.id, mediaPath);
                         this.persistState();
                         this.emitTodoUpdate();
                         this.log(`  [parallel] Media ready: ${node.id} → ${mediaPath}`);
+                      } else {
+                        // Media failed — mark as failed so it doesn't pollute downstream
+                        this.executor.markFailed(node.id, 'Media generation failed (prompt saved)');
+                        this.persistState();
+                        this.emitTodoUpdate();
+                        this.log(`  [parallel] Media failed: ${node.id} — prompt at ${capturedOutputPath}`);
                       }
                       return mediaPath;
                     })
                     .catch(err => {
-                      this.log(`  [parallel] Media failed: ${node.id} — ${String(err)}`);
+                      this.executor.markFailed(node.id, String(err));
+                      this.persistState();
+                      this.log(`  [parallel] Media error: ${node.id} — ${String(err)}`);
                       return null;
                     });
                   this.pendingMedia.set(node.id, mediaPromise);
-                  // Don't await — continue to next node
+                  // Don't mark completed here — the parallel handler will do it
+                  // Skip the markCompleted below by continuing
                   this.log(`  [parallel] Media generation queued for ${node.id}`);
+                  continue; // Skip markCompleted — parallel handler owns the node status
                 } else {
                   // Serial mode: block until media is generated
                   const mediaPath = await this.executeMediaGeneration(node, outputPath, toolCallId);
@@ -1392,6 +1403,12 @@ export class ExecutorAgent extends TypedEventEmitter {
 
       if (!sceneImagePath) {
         this.log(`  No scene image found in dependencies`);
+        return null;
+      }
+
+      // Verify the scene image is an actual image, not a prompt file
+      if (sceneImagePath.endsWith('.md') || sceneImagePath.endsWith('.txt')) {
+        this.log(`  Scene image is a prompt file, not an actual image: ${sceneImagePath}`);
         return null;
       }
 
