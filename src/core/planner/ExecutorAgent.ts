@@ -94,18 +94,18 @@ Output ONLY the description — no explanations, no tool calls, no meta-commenta
 Create a detailed scene description including action, dialogue, character positions, and visual details.
 Output ONLY the scene content — no explanations, no tool calls, no meta-commentary.`,
 
-  visual_ref: `You are an expert image prompt engineer.
+  visual_ref: `You are an expert image prompt engineer. Do NOT think or reason — respond directly with the prompt.
 Create a detailed image generation prompt for the described subject.
 Include: subject description, composition, lighting, style, and camera angle.
-Format your output as:
+Format your output EXACTLY as:
 **Image Prompt:** [detailed prompt]
 **Negative Prompt:** [things to avoid]
 **Aspect Ratio:** [ratio like 16:9, 1:1, etc.]
-Output ONLY the prompt — no explanations, no tool calls, no meta-commentary.`,
+Output ONLY these three sections. No thinking, no explanations, no preamble.`,
 
-  clip: `You are a video direction expert.
+  clip: `You are a video direction expert. Do NOT think or reason — respond directly with the prompt.
 Generate a detailed motion/animation prompt describing camera movement, character actions, and timing.
-Output ONLY the motion prompt — no explanations, no tool calls, no meta-commentary.`,
+Output ONLY the motion prompt. No thinking, no explanations, no preamble.`,
 
   final: `You are a video assembly specialist.
 Generate assembly instructions for combining video clips into a final video.
@@ -856,13 +856,16 @@ export class ExecutorAgent extends TypedEventEmitter {
       { role: 'user', content: user },
     ];
 
+    // Use lower temperature and suppress thinking for formulaic tasks (prompts)
+    const typeDef = this.config.template.artifactTypes[node.typeId];
+    const isFormulaic = typeDef?.category === 'visual_ref' || typeDef?.category === 'clip';
+
     const options: GenerateOptions = {
       messages,
-      temperature: 0.7,
+      temperature: isFormulaic ? 0.3 : 0.7,
     };
 
     // For content types that need structured output (scene_video_prompt), use JSON
-    const typeDef = this.config.template.artifactTypes[node.typeId];
     if (typeDef?.outputFormat === 'json') {
       options.responseFormat = { type: 'json_object' };
     }
