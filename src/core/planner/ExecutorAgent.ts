@@ -428,6 +428,51 @@ export class ExecutorAgent extends TypedEventEmitter {
               }
               finalOutputPath = assemblyResult;
             } else {
+              // For media nodes: check if prompt file already exists on disk (from a previous run)
+              // If so, skip LLM and go straight to media generation
+              const isMediaNode = nodeCategory === 'visual_ref' || nodeCategory === 'clip';
+              if (isMediaNode) {
+                const existingPromptPath = this.findExistingPromptFile(node);
+                if (existingPromptPath) {
+                  this.log(`  Prompt file already exists: ${existingPromptPath} — skipping LLM`);
+                  this.emit({
+                    type: 'tool_result',
+                    toolCallId,
+                    toolName,
+                    result: { status: 'skipped', file: existingPromptPath, reason: 'prompt already exists' },
+                    agentName,
+                  });
+                  this.emit({
+                    type: 'notification',
+                    level: 'info',
+                    message: `Skipping LLM for ${node.displayName} — prompt exists, going to image gen`,
+                  });
+
+                  // Go straight to media generation
+                  const mediaPath = await this.executeMediaGeneration(node, existingPromptPath, toolCallId);
+                  if (mediaPath) {
+                    finalOutputPath = mediaPath;
+                  } else {
+                    this.executor.markFailed(node.id, 'Media generation failed (prompt saved, will retry)');
+                    this.emitTodoUpdate();
+                    continue;
+                  }
+
+                  // Skip the LLM + write section below
+                  // Jump to emit summary + mark completed
+                  this.emit({
+                    type: 'agent_text',
+                    text: `**${node.displayName}** generated → \`${finalOutputPath}\``,
+                    isFinal: false,
+                  });
+                  this.executor.markCompleted(node.id, finalOutputPath);
+                  this.persistState();
+                  this.emitTodoUpdate();
+                  this.log(`  COMPLETED: ${node.id}`);
+                  continue;
+                }
+              }
+
               // Generate content via LLM (pure completion, no tools)
               this.log(`  Calling LLM...`);
               const content = await this.generateForNode(node, system, user, toolCallId, toolName);
@@ -814,6 +859,21 @@ export class ExecutorAgent extends TypedEventEmitter {
   // ===========================================================================
   // Private: Tool display helpers
   // ===========================================================================
+
+  /**
+   * Check if a prompt file already exists on disk for a media node.
+   * Returns the relative path if found, null otherwise.
+   */
+  private findExistingPromptFile(node: ExecutionNode): string | null {
+    // Compute the expected prompt path using the same logic as writeOutput
+    const { getOutputPath } = require('./contentResolver.js') as typeof import('./contentResolver.js');
+    const expectedPath = getOutputPath(node, this.config.projectDir, this.config.template);
+    const fullPath = join(this.config.projectDir, expectedPath);
+    if (existsSync(fullPath)) {
+      return expectedPath;
+    }
+    return null;
+  }
 
   /**
    * Get a clean, descriptive tool name for the UI based on node type and category.
@@ -1282,16 +1342,16 @@ export class ExecutorAgent extends TypedEventEmitter {
         settingName = node.itemId;
       }
       progressHandler = (event) => {
-        const chunk = event.done
-          ? `Complete! (${event.percentage}%)`
-          : `${event.message} (${event.percentage}%)`;
+        // Use reset: true so each progress update REPLACES the previous one
+        // Format matches webui.ts progress bar detector: "Step N/M (X%)"
         this.emit({
           type: 'tool_streaming',
           toolCallId: genCallId,
-          chunk: chunk + '\n',
+          chunk: event.message,
           done: false,
           agentName,
           toolName,
+          reset: true,  // Replace previous content instead of appending
         });
       };
       comfyProgressBus.onProgress(progressHandler);
@@ -1300,7 +1360,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       this.emit({
         type: 'tool_streaming',
         toolCallId: genCallId,
-        chunk: `Generating ${node.displayName}...\n`,
+        chunk: `Generating ${node.displayName}...`,
         done: false,
         agentName,
         toolName,
