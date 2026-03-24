@@ -39,6 +39,7 @@ import {
   parsePromptFile,
   jobs as mediaJobs,
 } from '../../tasks/video/tools.js';
+import { comfyProgressBus, type ComfyProgressHandler } from '../../services/comfyui/index.js';
 import {
   loadTimeline,
   saveTimeline,
@@ -1203,14 +1204,17 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     // Emit a tool_call for the actual image generation
     const genCallId = `img_${node.id}_${Date.now()}`;
-    const toolName = `generate_image_${node.typeId}`;
+    const toolName = `generate_image`;
     this.emit({
       type: 'tool_call',
       toolCallId: genCallId,
       toolName,
-      arguments: { prompt_file: promptFilePath, node: node.displayName },
+      arguments: { item: node.displayName },
       agentName,
     });
+
+    // Subscribe to ComfyUI progress and forward to tool_streaming
+    let progressHandler: ComfyProgressHandler | null = null;
 
     try {
       // Read and parse the prompt file
@@ -1235,6 +1239,20 @@ export class ExecutorAgent extends TypedEventEmitter {
         imageType = 'setting_ref';
         settingName = node.itemId;
       }
+      progressHandler = (event) => {
+        const chunk = event.done
+          ? `Complete! (${event.percentage}%)`
+          : `${event.message} (${event.percentage}%)`;
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId: genCallId,
+          chunk: chunk + '\n',
+          done: false,
+          agentName,
+          toolName,
+        });
+      };
+      comfyProgressBus.onProgress(progressHandler);
 
       // Emit progress start
       this.emit({
@@ -1263,6 +1281,9 @@ export class ExecutorAgent extends TypedEventEmitter {
         })),
       });
 
+      // Unsubscribe from progress
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+
       // Get the result from the job store
       const job = mediaJobs.get(result.jobId);
       const artifactId = job?.result?.artifactId;
@@ -1282,7 +1303,7 @@ export class ExecutorAgent extends TypedEventEmitter {
           type: 'tool_result',
           toolCallId: genCallId,
           toolName,
-          result: { status: 'completed', file: filePath, artifact_id: artifactId },
+          result: { status: 'completed', file_path: filePath, artifact_id: artifactId },
           agentName,
         });
         return filePath;
@@ -1300,6 +1321,7 @@ export class ExecutorAgent extends TypedEventEmitter {
         return null;
       }
     } catch (error) {
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
       this.log(`  Image generation error: ${String(error)}`);
       this.emit({
         type: 'tool_result',
@@ -1325,12 +1347,12 @@ export class ExecutorAgent extends TypedEventEmitter {
     this.log(`  Generating video from prompt: ${promptFilePath}`);
 
     const genCallId = `vid_${node.id}_${Date.now()}`;
-    const toolName = `generate_video_${node.typeId}`;
+    const toolName = `generate_video`;
     this.emit({
       type: 'tool_call',
       toolCallId: genCallId,
       toolName,
-      arguments: { prompt_file: promptFilePath, node: node.displayName },
+      arguments: { item: node.displayName },
       agentName,
     });
 
@@ -1411,7 +1433,7 @@ export class ExecutorAgent extends TypedEventEmitter {
         type: 'tool_result',
         toolCallId: genCallId,
         toolName,
-        result: { status: 'completed', file: relPath },
+        result: { status: 'completed', file_path: relPath },
         agentName,
       });
       return relPath;
