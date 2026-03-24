@@ -168,10 +168,15 @@ export function getOutputPath(
     const safeName = node.itemId.toLowerCase().replace(/[^a-z0-9]+/g, '_');
     filePath = filePath.replace('{{name}}', safeName);
     filePath = filePath.replace('{{id}}', node.itemId);
-    // Extract index from itemId if it's like "scene_1"
-    const indexMatch = node.itemId.match(/(\d+)/);
-    if (indexMatch && indexMatch[1]) {
-      filePath = filePath.replace('{{index}}', indexMatch[1]);
+
+    // Extract scene index (first number) and shot/sub index (second number)
+    // e.g., "scene_1" → index=1, "scene_1_shot_3" → index=1, subindex=3
+    const allNumbers = node.itemId.match(/\d+/g);
+    if (allNumbers && allNumbers[0]) {
+      filePath = filePath.replace('{{index}}', allNumbers[0]);
+    }
+    if (allNumbers && allNumbers[1]) {
+      filePath = filePath.replace('{{subindex}}', allNumbers[1]);
     }
   }
 
