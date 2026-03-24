@@ -60,6 +60,13 @@ export interface ExecutorAgentConfig {
   goal: UserGoal;
   /** Name shown in events */
   name?: string;
+  /**
+   * When true, media generation (image/video via ComfyUI) runs in parallel
+   * with LLM prompt generation. Use this when the image/video provider is on
+   * a separate server from the LLM. When false (default), everything runs
+   * serially — suitable when LLM and ComfyUI share the same machine.
+   */
+  parallelMediaGeneration?: boolean;
 }
 
 /**
@@ -121,6 +128,8 @@ export class ExecutorAgent extends TypedEventEmitter {
   private logPath: string;
   private currentPhase = '';
   private retriedNodes = new Set<string>();
+  /** Pending media generation promises (parallel mode) */
+  private pendingMedia = new Map<string, Promise<string | null>>();
 
   constructor(llm: LLMClient, config: ExecutorAgentConfig) {
     super();
@@ -318,6 +327,13 @@ export class ExecutorAgent extends TypedEventEmitter {
         const readyNodes = this.executor.getNextReady();
 
         if (readyNodes.length === 0) {
+          // In parallel mode, if we have pending media, await them and retry
+          if (this.pendingMedia.size > 0) {
+            this.log(`Awaiting ${this.pendingMedia.size} pending media generation(s)...`);
+            await Promise.all(this.pendingMedia.values());
+            this.pendingMedia.clear();
+            continue;  // Re-check for ready nodes
+          }
           this.log('STUCK: No ready nodes but not complete. Failed deps?');
           break;
         }
@@ -326,6 +342,18 @@ export class ExecutorAgent extends TypedEventEmitter {
 
         for (const node of readyNodes) {
           if (this.stopped) break;
+
+          // In parallel mode: await any pending media this node depends on
+          if (this.config.parallelMediaGeneration) {
+            for (const depId of node.dependencies) {
+              const pending = this.pendingMedia.get(depId);
+              if (pending) {
+                this.log(`  Waiting for pending media: ${depId}`);
+                await pending;
+                this.pendingMedia.delete(depId);
+              }
+            }
+          }
 
           this.executor.markStarted(node.id);
           this.emitPhaseIfChanged(node);
@@ -413,9 +441,32 @@ export class ExecutorAgent extends TypedEventEmitter {
 
               // For media nodes: execute actual generation after prompt is written
               if (nodeCategory === 'visual_ref' || nodeCategory === 'clip') {
-                const mediaPath = await this.executeMediaGeneration(node, outputPath, toolCallId);
-                if (mediaPath) {
-                  outputPath = mediaPath;  // Update to actual media file path
+                if (this.config.parallelMediaGeneration) {
+                  // Parallel mode: fire-and-forget, collect result later
+                  const mediaPromise = this.executeMediaGeneration(node, outputPath, toolCallId)
+                    .then(mediaPath => {
+                      if (mediaPath) {
+                        // Update node output path to actual media file
+                        this.executor.markCompleted(node.id, mediaPath);
+                        this.persistState();
+                        this.emitTodoUpdate();
+                        this.log(`  [parallel] Media ready: ${node.id} → ${mediaPath}`);
+                      }
+                      return mediaPath;
+                    })
+                    .catch(err => {
+                      this.log(`  [parallel] Media failed: ${node.id} — ${String(err)}`);
+                      return null;
+                    });
+                  this.pendingMedia.set(node.id, mediaPromise);
+                  // Don't await — continue to next node
+                  this.log(`  [parallel] Media generation queued for ${node.id}`);
+                } else {
+                  // Serial mode: block until media is generated
+                  const mediaPath = await this.executeMediaGeneration(node, outputPath, toolCallId);
+                  if (mediaPath) {
+                    outputPath = mediaPath;  // Update to actual media file path
+                  }
                 }
               }
 
@@ -480,6 +531,13 @@ export class ExecutorAgent extends TypedEventEmitter {
             }
           }
         }
+      }
+
+      // Await any remaining pending media before finalizing
+      if (this.pendingMedia.size > 0) {
+        this.log(`Awaiting ${this.pendingMedia.size} final pending media generation(s)...`);
+        await Promise.all(this.pendingMedia.values());
+        this.pendingMedia.clear();
       }
 
       // Done

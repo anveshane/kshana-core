@@ -800,6 +800,12 @@ export interface CreateExecutorAgentOptions {
   goalDescription: string;
   /** Custom project description from user */
   customProjectDescription?: string;
+  /**
+   * Run media generation (images/videos via ComfyUI) in parallel with LLM prompt generation.
+   * Enable when the image/video provider is on a separate server from the LLM.
+   * Default: false (serial — suitable when LLM and ComfyUI share the same machine).
+   */
+  parallelMediaGeneration?: boolean;
 }
 
 /**
@@ -849,6 +855,7 @@ export function createExecutorAgent(options: CreateExecutorAgentOptions): Execut
     projectDir,
     goal,
     name: 'kshana-executor',
+    parallelMediaGeneration: options.parallelMediaGeneration,
   });
 }
 
