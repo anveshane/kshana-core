@@ -691,10 +691,44 @@ export class ExecutorAgent extends TypedEventEmitter {
     const typeDef = this.config.template.artifactTypes[node.typeId];
     const category = typeDef?.category ?? 'concept';
 
-    // shot_image_prompt is categorized as 'structure' in the template but it's actually
-    // an image edit prompt (FLUX Klein composition with references). Use visual_ref treatment.
+    // Special handling for specific node types that need different prompts than their category
+    // - shot_image_prompt: uses visual_ref treatment (FLUX Klein edit prompt)
+    // - scene_video_prompt: uses structured JSON output for deterministic parsing
     const effectiveCategory = node.typeId === 'shot_image_prompt' ? 'visual_ref' : category;
-    let systemPrompt = CATEGORY_PROMPTS[effectiveCategory] ?? CATEGORY_PROMPTS.concept;
+
+    let systemPrompt: string;
+    if (node.typeId === 'scene_video_prompt') {
+      systemPrompt = `You are a cinematic shot planner. Break a scene into individual shots.
+Output ONLY valid JSON — no markdown, no explanation, no thinking. Respond with the JSON object directly.
+
+The JSON must follow this exact structure:
+{
+  "sceneNumber": <number>,
+  "sceneTitle": "<title>",
+  "totalDuration": <seconds>,
+  "shots": [
+    {
+      "shotNumber": <number>,
+      "shotType": "<establishing|wide|medium|close_up|extreme_close_up|over_shoulder|pov|tracking|reaction>",
+      "duration": <seconds>,
+      "description": "<what is visible in this shot — action, composition, atmosphere>",
+      "cameraWork": "<camera movement and angle>",
+      "characters": ["<character_item_id>", ...],
+      "setting": "<setting_item_id or null>"
+    }
+  ]
+}
+
+Rules:
+- Shot durations must sum to totalDuration
+- Each shot should be 3-10 seconds
+- characters array uses the item IDs (e.g., "elara_vance", "mr_halloway") — only characters present in this shot
+- setting uses the item ID of the location (e.g., "the_dregs") or null if no specific setting
+- description should be specific and visual — what a camera sees in this frozen/moving moment
+- Vary shot types for cinematic interest (don't repeat the same type)`;
+    } else {
+      systemPrompt = CATEGORY_PROMPTS[effectiveCategory] ?? CATEGORY_PROMPTS.concept;
+    }
 
     // Inject model-specific skills for image/video prompt generation
     const loadedSkills: string[] = [];
@@ -1029,8 +1063,8 @@ export class ExecutorAgent extends TypedEventEmitter {
       temperature: isFormulaic ? 0.3 : 0.7,
     };
 
-    // For content types that need structured output (scene_video_prompt), use JSON
-    if (typeDef?.outputFormat === 'json') {
+    // Force JSON output for scene_video_prompt (structured shot breakdown)
+    if (node.typeId === 'scene_video_prompt' || typeDef?.outputFormat === 'json') {
       options.responseFormat = { type: 'json_object' };
     }
 

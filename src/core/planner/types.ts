@@ -405,6 +405,14 @@ export interface CollectionItems {
   /** Scene descriptions found */
   scenes?: Array<{ sceneNumber: number; title: string; summary: string }>;
 
-  /** Shots extracted from a scene video prompt */
-  shots?: Array<{ shotNumber: number; shotType: string; description: string }>;
+  /** Shots extracted from a scene video prompt (structured JSON) */
+  shots?: Array<{
+    shotNumber: number;
+    shotType: string;
+    duration: number;
+    description: string;
+    cameraWork?: string;
+    characters?: string[];
+    setting?: string | null;
+  }>;
 }

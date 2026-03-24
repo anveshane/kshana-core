@@ -28,8 +28,8 @@ export async function extractCollectionItems(
     case 'outline':
       return extractFromOutline(content, llm);
     case 'scene_video_prompt':
-      // Shots can be parsed from the markdown structure — no LLM call needed
-      return extractShotsFromMotionPrompt(content);
+      // Parse structured JSON output — no LLM call, no regex needed
+      return extractShotsFromJson(content);
     default:
       return null;
   }
@@ -86,41 +86,65 @@ Rules:
  * Extract segments/sources/locations from a documentary outline.
  */
 /**
- * Extract individual shots from a scene_video_prompt's markdown output.
- * No LLM call needed — parses the **SHOT N:** pattern directly.
+ * Structured JSON shot format from scene_video_prompt output.
  */
-function extractShotsFromMotionPrompt(content: string): CollectionItems {
-  const shots: CollectionItems['shots'] = [];
+interface SceneVideoPromptJson {
+  sceneNumber?: number;
+  sceneTitle?: string;
+  totalDuration?: number;
+  shots: Array<{
+    shotNumber: number;
+    shotType: string;
+    duration: number;
+    description: string;
+    cameraWork?: string;
+    characters?: string[];
+    setting?: string | null;
+  }>;
+}
 
-  // Match patterns like "**SHOT 1: THE ESTABLISHING**" or "**Shot 1:**"
+/**
+ * Extract shots from a scene_video_prompt's structured JSON output.
+ * No LLM call, no regex — direct JSON parse.
+ */
+function extractShotsFromJson(content: string): CollectionItems {
+  try {
+    const parsed = JSON.parse(content) as SceneVideoPromptJson;
+
+    if (!parsed.shots || !Array.isArray(parsed.shots) || parsed.shots.length === 0) {
+      return { shots: undefined };
+    }
+
+    return {
+      shots: parsed.shots.map(s => ({
+        shotNumber: s.shotNumber,
+        shotType: s.shotType ?? `shot_${s.shotNumber}`,
+        duration: s.duration ?? 5,
+        description: s.description ?? '',
+        cameraWork: s.cameraWork,
+        characters: s.characters,
+        setting: s.setting,
+      })),
+    };
+  } catch {
+    // If JSON parse fails, try the legacy regex approach as fallback
+    return extractShotsFromMarkdownFallback(content);
+  }
+}
+
+/**
+ * Fallback: extract shots from markdown if JSON parse fails.
+ * Handles legacy motion prompt files that used markdown format.
+ */
+function extractShotsFromMarkdownFallback(content: string): CollectionItems {
+  const shots: CollectionItems['shots'] = [];
   const shotPattern = /\*\*SHOT\s+(\d+)[:\s]*([^*]*)\*\*/gi;
   let match;
 
   while ((match = shotPattern.exec(content)) !== null) {
     const shotNumber = parseInt(match[1] ?? '0', 10);
     const shotType = (match[2] ?? '').trim().replace(/^[:\s-]+/, '').toLowerCase();
-
-    // Extract the description — everything until the next **SHOT or end of content
-    const startIdx = match.index + match[0].length;
-    const nextMatch = shotPattern.exec(content);
-    const endIdx = nextMatch ? nextMatch.index : content.length;
-    // Reset regex position since we peeked ahead
-    if (nextMatch) {
-      shotPattern.lastIndex = match.index + match[0].length;
-    }
-
-    const description = content.slice(startIdx, endIdx).trim().slice(0, 200);
-
-    shots.push({ shotNumber, shotType: shotType || `shot_${shotNumber}`, description });
-  }
-
-  // If no shots found with the pattern, try a simpler numbered pattern
-  if (shots.length === 0) {
-    const simplePattern = /(?:^|\n)#+\s*Shot\s+(\d+)/gi;
-    while ((match = simplePattern.exec(content)) !== null) {
-      const shotNumber = parseInt(match[1] ?? '0', 10);
-      shots.push({ shotNumber, shotType: `shot_${shotNumber}`, description: '' });
-    }
+    shots.push({ shotNumber, shotType: shotType || `shot_${shotNumber}`, duration: 5, description: '' });
   }
 
   return { shots: shots.length > 0 ? shots : undefined };
