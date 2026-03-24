@@ -192,10 +192,25 @@ export class ExecutorAgent extends TypedEventEmitter {
     const typeDef = this.config.template.artifactTypes[node.typeId];
     const category = typeDef?.category ?? 'concept';
 
-    // Map categories to user-friendly phase names
-    const phaseNames: Record<string, string> = {
+    // Use node typeId for more specific phase names, fall back to category
+    const typePhaseNames: Record<string, string> = {
+      plot: 'Plot Development',
+      story: 'Story Writing',
+      character: 'Character Development',
+      setting: 'Setting Development',
+      scene: 'Scene Breakdown',
+      character_image: 'Character Reference Images',
+      setting_image: 'Setting Reference Images',
+      scene_video_prompt: 'Shot Planning',
+      shot_image_prompt: 'Shot Image Prompts',
+      scene_image: 'Scene Image Generation',
+      scene_video: 'Video Generation',
+      final_video: 'Final Assembly',
+    };
+
+    const categoryPhaseNames: Record<string, string> = {
       concept: 'Plot Development',
-      structure: 'Story Writing',
+      structure: 'Content Writing',
       entity: 'Character Development',
       environment: 'Setting Development',
       segment: 'Scene Breakdown',
@@ -204,7 +219,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       final: 'Final Assembly',
     };
 
-    const phaseName = phaseNames[category] ?? category;
+    const phaseName = typePhaseNames[node.typeId] ?? categoryPhaseNames[category] ?? category;
 
     if (phaseName !== this.currentPhase) {
       const fromPhase = this.currentPhase || 'starting';
