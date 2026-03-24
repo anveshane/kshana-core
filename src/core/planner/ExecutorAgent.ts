@@ -467,6 +467,13 @@ export class ExecutorAgent extends TypedEventEmitter {
                   const mediaPath = await this.executeMediaGeneration(node, outputPath, toolCallId);
                   if (mediaPath) {
                     outputPath = mediaPath;  // Update to actual media file path
+                  } else {
+                    // Media generation failed — node should NOT be marked completed
+                    // The prompt file is preserved so retry will skip LLM and go straight to image gen
+                    this.executor.markFailed(node.id, 'Media generation failed (prompt saved, will retry)');
+                    this.emitTodoUpdate();
+                    this.log(`  Media gen failed for ${node.id} — marked failed, prompt preserved at ${outputPath}`);
+                    continue;
                   }
                 }
               }
