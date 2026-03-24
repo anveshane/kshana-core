@@ -859,9 +859,16 @@ Rules:
       ? `Create ${typeDef?.displayName ?? node.typeId} for "${node.itemId}"`
       : `Create ${typeDef?.displayName ?? node.typeId}`;
 
+    // For shot_image_prompt: tell the LLM which image N maps to which character/setting
+    // Actual file resolution happens later at shot image generation time, not prompt time
+    let referenceImageContext = '';
+    if (node.typeId === 'shot_image_prompt' && node.itemId) {
+      referenceImageContext = this.buildShotReferenceMapping(node);
+    }
+
     const user = inputs.contextBlock
-      ? `${task}${projectContext}\n\n${inputs.contextBlock}`
-      : `${task}${projectContext}`;
+      ? `${task}${projectContext}${referenceImageContext}\n\n${inputs.contextBlock}`
+      : `${task}${projectContext}${referenceImageContext}`;
 
     return { system: systemPrompt, user, loadedSkills };
   }
@@ -1142,6 +1149,65 @@ Rules:
       }
     }
     return null;
+  }
+
+  /**
+   * Build reference image mapping for a shot_image_prompt node.
+   * Reads the scene_video_prompt JSON to find which characters/setting are in this shot,
+   * then tells the LLM which image N maps to what. Actual file resolution happens at
+   * image generation time, not prompt generation time.
+   */
+  private buildShotReferenceMapping(node: ExecutionNode): string {
+    if (!node.itemId) return '';
+
+    // Extract scene ID and shot number: "scene_1_shot_2" → sceneId="scene_1", shotNum=2
+    const sceneMatch = node.itemId.match(/(scene_\d+)/);
+    const shotMatch = node.itemId.match(/shot_(\d+)/);
+    if (!sceneMatch) return '';
+
+    const sceneId = sceneMatch[1];
+    const shotNum = shotMatch?.[1] ? parseInt(shotMatch[1], 10) : 1;
+
+    // Find the scene_video_prompt output and read the JSON
+    const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+    if (!svpNode?.outputPath) return '';
+
+    const fullPath = join(this.config.projectDir, svpNode.outputPath);
+    if (!existsSync(fullPath)) return '';
+
+    try {
+      let content = readFileSync(fullPath, 'utf-8').trim();
+      if (content.startsWith('```')) {
+        content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      }
+      const parsed = JSON.parse(content);
+      const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
+      if (!shot) return '';
+
+      // Build the image reference mapping
+      const refs: string[] = [];
+      let imageNum = 1;
+
+      // Characters first
+      const characters: string[] = shot.characters ?? [];
+      for (const charId of characters) {
+        refs.push(`- image ${imageNum}: Character reference for "${charId}"`);
+        imageNum++;
+      }
+
+      // Then setting
+      if (shot.setting) {
+        refs.push(`- image ${imageNum}: Setting reference for "${shot.setting}"`);
+      }
+
+      if (refs.length === 0) {
+        return '\n\n<reference_images>\nNo reference images available for this shot. Use text_to_image mode — do NOT reference any image N.\n</reference_images>';
+      }
+
+      return `\n\n<reference_images>\nThe following reference images are available for this shot. Use "from image N" to reference them:\n${refs.join('\n')}\n\nOnly reference images listed above. Do NOT fabricate image numbers.\n</reference_images>`;
+    } catch {
+      return '';
+    }
   }
 
   private findExistingPromptFile(node: ExecutionNode): string | null {
