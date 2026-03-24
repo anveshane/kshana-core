@@ -304,6 +304,14 @@ export class ExecutorAgent extends TypedEventEmitter {
   }
 
   /**
+   * Toggle parallel media generation at runtime.
+   */
+  setParallelMediaGeneration(enabled: boolean): void {
+    this.config.parallelMediaGeneration = enabled;
+    this.log(`Parallel media generation: ${enabled ? 'enabled' : 'disabled'}`);
+  }
+
+  /**
    * Run the dependency graph execution loop.
    *
    * This is the main entry point, matching GenericAgent.run() signature.

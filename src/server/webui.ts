@@ -31,6 +31,7 @@ ${getStyles()}
         <div id="context-bar"><div id="context-fill"></div></div>
         <span id="context-label">CTX 0%</span>
       </div>
+      <button id="parallel-media-btn" title="Toggle parallel media generation (for remote ComfyUI)" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:13px;">&#9655; Serial</button>
       <button id="provider-settings-btn" title="Provider Settings" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:13px;">&#9881; Providers</button>
       <span id="conn-status" class="conn-dot disconnected" title="Disconnected"></span>
     </div>
@@ -401,6 +402,7 @@ let questionTimerInterval = null; // auto-approve countdown interval
 var newProjectState = null; // { step, templateId, templateName, style, styleName, duration, durationLabel, templates, durationPresets }
 var pendingAutoTask = null; // task string to send once select_project completes
 var autonomousModeActive = false; // autonomous mode flag
+var parallelMediaActive = false; // parallel media generation flag
 var sessionTimerInterval = null; // session timer update interval
 var sessionElapsedMs = 0; // accumulated elapsed ms from server
 var sessionTimerLocalStart = null; // Date.now() when local ticking started
@@ -2245,6 +2247,26 @@ autoBtn.addEventListener('click', function() {
   updateAutoBtnStyle();
   wsSend({ type: 'set_autonomous', sessionId: sessionId, data: { enabled: autonomousModeActive } });
   showToast('Autonomous mode ' + (autonomousModeActive ? 'enabled' : 'disabled'), 'info');
+});
+
+// ===== Parallel Media Toggle =====
+var parallelBtn = document.getElementById('parallel-media-btn');
+function updateParallelBtnStyle() {
+  if (parallelMediaActive) {
+    parallelBtn.textContent = '⇉ Parallel';
+    parallelBtn.style.color = '#58a6ff';
+    parallelBtn.style.borderColor = '#58a6ff';
+  } else {
+    parallelBtn.textContent = '▷ Serial';
+    parallelBtn.style.color = '#aaa';
+    parallelBtn.style.borderColor = '#444';
+  }
+}
+parallelBtn.addEventListener('click', function() {
+  parallelMediaActive = !parallelMediaActive;
+  updateParallelBtnStyle();
+  wsSend({ type: 'set_parallel_media', sessionId: sessionId, data: { enabled: parallelMediaActive } });
+  showToast('Media generation: ' + (parallelMediaActive ? 'parallel (remote server)' : 'serial (local)'), 'info');
 });
 
 // ===== Provider Settings =====

@@ -218,6 +218,18 @@ export class ConversationManager {
   }
 
   /**
+   * Toggle parallel media generation on a running session.
+   */
+  setParallelMediaGeneration(sessionId: string, enabled: boolean): void {
+    const session = this.sessions.get(sessionId);
+    if (!session?.agent) return;
+    // ExecutorAgent exposes setParallelMediaGeneration
+    if ('setParallelMediaGeneration' in session.agent) {
+      (session.agent as { setParallelMediaGeneration(e: boolean): void }).setParallelMediaGeneration(enabled);
+    }
+  }
+
+  /**
    * Run a task in a session.
    * Wraps execution in the session's context so all tool/file operations
    * see the correct project directory and filesystem.
