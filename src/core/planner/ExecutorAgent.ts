@@ -469,8 +469,8 @@ export class ExecutorAgent extends TypedEventEmitter {
                     message: `Skipping LLM for ${node.displayName} — prompt exists, going to image gen`,
                   });
 
-                  // Go straight to media generation
-                  const mediaPath = await this.executeMediaGeneration(node, existingPromptPath, toolCallId);
+                  // Go straight to media generation (with retry)
+                  const mediaPath = await this.executeMediaGenerationWithRetry(node, existingPromptPath, toolCallId);
                   if (mediaPath) {
                     finalOutputPath = mediaPath;
                   } else {
@@ -579,8 +579,8 @@ export class ExecutorAgent extends TypedEventEmitter {
                   this.log(`  [parallel] Media generation queued for ${node.id}`);
                   continue; // Skip markCompleted — parallel handler owns the node status
                 } else {
-                  // Serial mode: block until media is generated
-                  const mediaPath = await this.executeMediaGeneration(node, outputPath, toolCallId);
+                  // Serial mode: block until media is generated (with retry)
+                  const mediaPath = await this.executeMediaGenerationWithRetry(node, outputPath, toolCallId);
                   if (mediaPath) {
                     outputPath = mediaPath;  // Update to actual media file path
                   } else {
@@ -1037,6 +1037,34 @@ Rules:
     } catch (e) {
       return { valid: false, error: `JSON parse error: ${String(e)}` };
     }
+  }
+
+  /**
+   * Execute media generation with retry. Retries up to maxRetries times
+   * with a delay between attempts for transient ComfyUI failures.
+   */
+  private async executeMediaGenerationWithRetry(
+    node: ExecutionNode,
+    promptPath: string,
+    toolCallId: string,
+    maxRetries = 2,
+  ): Promise<string | null> {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const result = await this.executeMediaGeneration(node, promptPath, toolCallId);
+      if (result) return result;
+
+      if (attempt < maxRetries) {
+        const delay = (attempt + 1) * 5000; // 5s, 10s
+        this.log(`  Media gen failed for ${node.id}, retrying in ${delay / 1000}s (attempt ${attempt + 1}/${maxRetries})...`);
+        this.emit({
+          type: 'notification',
+          level: 'warning',
+          message: `Retrying ${node.displayName} in ${delay / 1000}s...`,
+        });
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+    return null;
   }
 
   private findExistingPromptFile(node: ExecutionNode): string | null {
