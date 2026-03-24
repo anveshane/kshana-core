@@ -218,6 +218,8 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .tool-name.cat-system { color: var(--text-muted); background: rgba(139,148,158,0.08); }
 .tool-name.cat-default { color: var(--code-green); background: rgba(126,231,135,0.08); }
 .tool-params-summary { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; opacity: 0.7; }
+.tool-args-clean { font-size: 12px; color: var(--text-muted); padding: 4px 8px; margin-bottom: 4px; opacity: 0.8; }
+.tool-args-clean b { color: var(--text-secondary); }
 .tool-status { font-size: 10px; padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
 .tool-status.started { color: var(--accent); }
 .tool-status.completed { color: var(--green-bright); opacity: 0.6; }
@@ -846,18 +848,32 @@ function handleToolCall(data) {
     card.dataset.toolId = genId;
     card.dataset.toolName = toolName;
 
+    // Executor tool cards (generate_*, gen_*, extract_*) start expanded with clean arg display
+    const isExecutorTool = /^(generate_|gen_|extract_)/.test(toolName);
+    const chevronClass = isExecutorTool ? 'tool-chevron open' : 'tool-chevron';
+    const bodyClass = isExecutorTool ? 'tool-body open' : 'tool-body';
+
+    // Format arguments: executor tools get clean display, others get JSON
+    let argsHtml;
+    if (isExecutorTool) {
+      const args = data.arguments || {};
+      const parts = Object.entries(args).map(function(kv) { return '<b>' + escHtml(kv[0]) + ':</b> ' + escHtml(String(kv[1])); });
+      argsHtml = parts.length > 0 ? '<div class="tool-args-clean">' + parts.join(' &middot; ') + '</div>' : '';
+    } else {
+      argsHtml = '<div class="tool-section-label">Arguments</div><pre>' + escHtml(JSON.stringify(data.arguments || {}, null, 2)) + '</pre>';
+    }
+
     card.innerHTML =
       '<div class="tool-header" onclick="toggleToolBody(this)">' +
-        '<span class="tool-chevron">&#9654;</span>' +
+        '<span class="' + chevronClass + '">&#9654;</span>' +
         '<span class="tool-name cat-' + cat + '">' + escHtml(toolName) + '</span>' +
         (paramSummary ? '<span class="tool-params-summary">' + paramSummary + '</span>' : '') +
         '<span class="tool-duration"></span>' +
         '<button class="tool-copy-btn" onclick="copyCardText(this, event)">Copy</button>' +
         '<span class="tool-status started">&#9679;</span>' +
       '</div>' +
-      '<div class="tool-body">' +
-        '<div class="tool-section-label">Arguments</div>' +
-        '<pre>' + escHtml(JSON.stringify(data.arguments || {}, null, 2)) + '</pre>' +
+      '<div class="' + bodyClass + '">' +
+        argsHtml +
         '<div class="tool-streaming-content"></div>' +
         '<div class="tool-result-section" style="display:none"></div>' +
       '</div>';
@@ -1102,8 +1118,26 @@ function handleToolStreaming(entry, data) {
       if (text) text.textContent = data.content;
     }
   } else {
-    if (data.reset) streamEl.textContent = '';
-    if (data.content) streamEl.textContent += data.content;
+    // Accumulate raw text for markdown rendering
+    if (data.reset) { streamEl.textContent = ''; streamEl._rawText = ''; }
+    if (data.content) {
+      if (!streamEl._rawText) streamEl._rawText = '';
+      streamEl._rawText += data.content;
+      // Render as markdown for executor tools, plain text for others
+      var isExec = entry.toolName && /^(generate_|gen_|extract_)/.test(entry.toolName);
+      if (isExec) {
+        streamEl.innerHTML = renderMarkdown(streamEl._rawText) + '<span class="streaming-cursor-inline"></span>';
+      } else {
+        streamEl.textContent = streamEl._rawText;
+      }
+    }
+    if (data.done && streamEl._rawText) {
+      // Final render without cursor
+      var isExecFinal = entry.toolName && /^(generate_|gen_|extract_)/.test(entry.toolName);
+      if (isExecFinal) {
+        streamEl.innerHTML = renderMarkdown(streamEl._rawText);
+      }
+    }
   }
 
   // Auto-open tool body (gen-cards are always open via CSS, but regular tool cards need the class)

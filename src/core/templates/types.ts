@@ -5,7 +5,7 @@
  * that can support any type of AI-generated video through configurable templates.
  */
 
-import type { PersistedGoal } from '../planner/types.js';
+import type { PersistedGoal, ExecutorState } from '../planner/types.js';
 
 // =============================================================================
 // ARTIFACT CATEGORIES
@@ -603,6 +603,9 @@ export interface GenericProjectFile {
 
   /** Persisted user goal for session resumption */
   goal?: PersistedGoal;
+
+  /** Dependency graph executor state for session resume */
+  executorState?: ExecutorState;
 }
 
 /**

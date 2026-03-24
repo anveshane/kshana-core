@@ -13,6 +13,7 @@ import {
   createProject,
   loadProjectFilesAsContexts,
   createAgentForProject,
+  createExecutorAgent,
   type ProjectStyle,
   // Template system imports
   initializeVideoTemplates,
@@ -154,9 +155,19 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     }
   }, [taskType, existingProject]);
 
-  // Create tools and prompt via shared factory (same as web UI)
-  const { tools, customPrompt } = React.useMemo(() => {
+  // Create tools/prompt for generic mode, or an executor agent for video mode
+  const { tools, customPrompt, executorAgent } = React.useMemo(() => {
     if (taskType === 'video') {
+      // Create ExecutorAgent for video projects — deterministic dependency graph execution
+      const agent = createExecutorAgent({
+        templateId: selectedTemplateId,
+        style: selectedStyle,
+        duration: selectedDuration,
+        llmConfig: llmConfig!,
+        targetArtifacts: ['final_video'],
+        goalDescription: customProjectDescription ?? 'Create a video project',
+      });
+      // Still need tools for generic fallback; executor doesn't use them
       const result = createAgentForProject({
         templateId: selectedTemplateId,
         style: selectedStyle,
@@ -164,11 +175,12 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         llmConfig: llmConfig!,
         customProjectDescription,
       });
-      return { tools: result.tools, customPrompt: result.customPrompt };
+      return { tools: result.tools, customPrompt: result.customPrompt, executorAgent: agent };
     }
     return {
       tools: createDefaultToolRegistry().getAll(),
       customPrompt: agentConfig?.customPrompt,
+      executorAgent: undefined,
     };
   }, [taskType, agentConfig?.customPrompt, selectedTemplateId, selectedStyle, selectedDuration, customProjectDescription, llmConfig]);
 
@@ -241,6 +253,7 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
       customPrompt,
     },
     onEvent: handleAgentEvent,
+    prebuiltAgent: executorAgent,
   });
 
   // Handle global keyboard shortcuts

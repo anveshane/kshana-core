@@ -4,9 +4,10 @@
  * Agent is created lazily when a project is selected via configureSessionForProject().
  */
 import { v4 as uuidv4 } from 'uuid';
-import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
-import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
-import { createAgentForProject } from '../tasks/video/index.js';
+import type { GenericAgentResult } from '../core/agent/index.js';
+import type { LLMClientConfig } from '../core/llm/index.js';
+import { createExecutorAgent } from '../tasks/video/index.js';
+import type { TypedEventEmitter } from '../events/EventEmitter.js';
 import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -47,9 +48,23 @@ export interface ConversationEvents {
   onNotification?: (sessionId: string, data: { level: 'info' | 'warning' | 'error'; message: string }) => void;
 }
 
+/**
+ * Common interface for agents that can be used in sessions.
+ * Both GenericAgent and ExecutorAgent satisfy this.
+ */
+interface SessionAgent extends TypedEventEmitter {
+  initialize(): Promise<void>;
+  run(task: string, userResponse?: string): Promise<GenericAgentResult>;
+  stop(): void;
+  isRunning(): boolean;
+  getToolNames(): string[];
+  setAutonomousMode(enabled: boolean): void;
+  injectInput?(input: string): void;
+}
+
 interface ActiveSession {
   state: SessionState;
-  agent?: GenericAgent;
+  agent?: SessionAgent;
   abortController?: AbortController;
   initialized?: boolean;
   /** Per-session context for file system and project isolation */
@@ -135,24 +150,15 @@ export class ConversationManager {
       getProviderRegistry().setConfig(providerConfig);
     }
 
-    const effectiveMaxIterations = autonomousMode ? Number.MAX_SAFE_INTEGER : this.maxIterations;
-
-    // Create agent inside the session context so tools see the right project dir
+    // Create executor agent inside the session context so tools see the right project dir
     runInSession(session.sessionContext, () => {
-      const { tools, customPrompt, agentName } = createAgentForProject({
+      session.agent = createExecutorAgent({
         templateId,
         style,
         duration,
         llmConfig: this.llmConfig,
-        maxIterations: effectiveMaxIterations,
-      });
-
-      const llm = new LLMClient(this.llmConfig);
-      session.agent = new GenericAgent(tools, llm, {
-        maxIterations: effectiveMaxIterations,
-        customPrompt,
-        name: agentName,
-        autonomousMode,
+        targetArtifacts: ['final_video'],
+        goalDescription: 'Create a video project',
       });
       session.initialized = false;
     });
@@ -377,7 +383,7 @@ export class ConversationManager {
    */
   private setupEventListeners(
     sessionId: string,
-    agent: GenericAgent,
+    agent: SessionAgent,
     events?: ConversationEvents
   ): void {
     if (!events) return;
