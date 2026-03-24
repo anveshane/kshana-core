@@ -513,7 +513,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.log(`  LLM returned ${content.length} chars`);
 
               // Validate JSON output for nodes that require it
-              if (node.typeId === 'scene_video_prompt') {
+              if (node.typeId === 'scene_video_prompt' || node.typeId === 'shot_image_prompt') {
                 const validation = this.validateJsonOutput(content, node);
                 if (!validation.valid) {
                   this.log(`  JSON validation failed: ${validation.error} — retrying...`);
@@ -770,6 +770,30 @@ Rules:
 - setting uses the item ID of the location (e.g., "the_dregs") or null if no specific setting
 - description should be specific and visual — what a camera sees in this frozen/moving moment
 - Vary shot types for cinematic interest (don't repeat the same type)`;
+    } else if (node.typeId === 'shot_image_prompt') {
+      systemPrompt = `You are an expert image prompt engineer for FLUX Klein image editing.
+Output ONLY valid JSON — no markdown, no explanation, no thinking. Respond with the JSON object directly.
+
+The JSON must follow this exact structure:
+{
+  "imagePrompt": "<flowing prose describing the composition — reference characters/settings as 'from image N'>",
+  "negativePrompt": "<what to avoid>",
+  "aspectRatio": "16:9",
+  "generationMode": "image_text_to_image" or "text_to_image",
+  "references": [
+    { "imageNumber": 1, "type": "character", "refId": "<the ref_id from the available references>" },
+    { "imageNumber": 2, "type": "setting", "refId": "<the ref_id from the available references>" }
+  ]
+}
+
+Rules:
+- imagePrompt: write flowing prose, NOT keywords. Describe composition, poses, spatial arrangement, lighting.
+- Reference characters as "the [description] from image N" where N matches the imageNumber
+- Reference settings as "the [location] from image N"
+- Only reference images listed in the available references — do NOT fabricate image numbers
+- If no references are available, set generationMode to "text_to_image" and references to []
+- The references array MUST match exactly which image N you used in the imagePrompt
+- Describe one frozen instant — no motion verbs, no narrative commentary`;
     } else {
       systemPrompt = CATEGORY_PROMPTS[effectiveCategory] ?? CATEGORY_PROMPTS.concept;
     }
@@ -1117,6 +1141,18 @@ Rules:
         }
       }
 
+      if (node.typeId === 'shot_image_prompt') {
+        if (!parsed.imagePrompt || typeof parsed.imagePrompt !== 'string') {
+          return { valid: false, error: 'Missing "imagePrompt" string' };
+        }
+        if (!parsed.generationMode) {
+          return { valid: false, error: 'Missing "generationMode"' };
+        }
+        if (!Array.isArray(parsed.references)) {
+          return { valid: false, error: 'Missing "references" array' };
+        }
+      }
+
       return { valid: true };
     } catch (e) {
       return { valid: false, error: `JSON parse error: ${String(e)}` };
@@ -1184,27 +1220,37 @@ Rules:
       const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
       if (!shot) return '';
 
-      // Build the image reference mapping
-      const refs: string[] = [];
+      // Build available reference images list
+      // The LLM will include the ref_id in its JSON output so we can resolve files later
+      const availableRefs: Array<{ imageNumber: number; type: string; refId: string; label: string }> = [];
       let imageNum = 1;
 
-      // Characters first
       const characters: string[] = shot.characters ?? [];
       for (const charId of characters) {
-        refs.push(`- image ${imageNum}: Character reference for "${charId}"`);
-        imageNum++;
+        const charImageNode = this.executor.getNode(`character_image:${charId}`);
+        if (charImageNode?.status === 'completed' && charImageNode.outputPath?.endsWith('.png')) {
+          availableRefs.push({ imageNumber: imageNum, type: 'character', refId: `character_image:${charId}`, label: charId });
+          imageNum++;
+        }
       }
 
-      // Then setting
       if (shot.setting) {
-        refs.push(`- image ${imageNum}: Setting reference for "${shot.setting}"`);
+        const settingImageNode = this.executor.getNode(`setting_image:${shot.setting}`);
+        if (settingImageNode?.status === 'completed' && settingImageNode.outputPath?.endsWith('.png')) {
+          availableRefs.push({ imageNumber: imageNum, type: 'setting', refId: `setting_image:${shot.setting}`, label: shot.setting });
+          imageNum++;
+        }
       }
 
-      if (refs.length === 0) {
-        return '\n\n<reference_images>\nNo reference images available for this shot. Use text_to_image mode — do NOT reference any image N.\n</reference_images>';
+      if (availableRefs.length === 0) {
+        return '\n\n<available_references>\nNo reference images available. Set generationMode to "text_to_image" and references to [].\n</available_references>';
       }
 
-      return `\n\n<reference_images>\nThe following reference images are available for this shot. Use "from image N" to reference them:\n${refs.join('\n')}\n\nOnly reference images listed above. Do NOT fabricate image numbers.\n</reference_images>`;
+      const refList = availableRefs.map(r =>
+        `- image ${r.imageNumber}: ${r.type} "${r.label}" (ref_id: "${r.refId}")`
+      ).join('\n');
+
+      return `\n\n<available_references>\nAvailable reference images for this shot:\n${refList}\n\nUse "from image N" in your imagePrompt. Include each used reference in the "references" array with its ref_id.\n</available_references>`;
     } catch {
       return '';
     }
@@ -1298,8 +1344,8 @@ Rules:
       temperature: isFormulaic ? 0.3 : 0.7,
     };
 
-    // Force JSON output for scene_video_prompt (structured shot breakdown)
-    if (node.typeId === 'scene_video_prompt' || typeDef?.outputFormat === 'json') {
+    // Force JSON output for structured nodes
+    if (node.typeId === 'scene_video_prompt' || node.typeId === 'shot_image_prompt' || typeDef?.outputFormat === 'json') {
       options.responseFormat = { type: 'json_object' };
     }
 
