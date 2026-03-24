@@ -457,47 +457,52 @@ export class ExecutorAgent extends TypedEventEmitter {
               }
               finalOutputPath = assemblyResult;
             } else {
-              // For media nodes: check if prompt file already exists on disk (from a previous run)
-              // If so, skip LLM and go straight to media generation
+              // Check if prompt/output file already exists on disk (from a previous run)
+              // For media nodes (visual_ref/clip): skip LLM, go to image/video generation
+              // For prompt-only nodes (shot_image_prompt): skip LLM, mark completed
               const isMediaNode = nodeCategory === 'visual_ref' || nodeCategory === 'clip';
-              if (isMediaNode) {
+              const isPromptOnlyNode = node.typeId === 'shot_image_prompt';
+              if (isMediaNode || isPromptOnlyNode) {
                 const existingPromptPath = this.findExistingPromptFile(node);
                 if (existingPromptPath) {
                   this.log(`  Prompt file already exists: ${existingPromptPath} — skipping LLM`);
+
+                  if (isMediaNode) {
+                    // Media node: skip LLM, go straight to image/video generation
+                    this.emit({
+                      type: 'notification',
+                      level: 'info',
+                      message: `Skipping LLM for ${node.displayName} — prompt exists, going to image gen`,
+                    });
+                    const mediaPath = await this.executeMediaGenerationWithRetry(node, existingPromptPath, toolCallId);
+                    if (mediaPath) {
+                      finalOutputPath = mediaPath;
+                    } else {
+                      this.executor.markFailed(node.id, 'Media generation failed (prompt saved, will retry)');
+                      this.emitTodoUpdate();
+                      continue;
+                    }
+                  } else {
+                    // Prompt-only node: just mark completed with the existing file
+                    finalOutputPath = existingPromptPath;
+                  }
+
                   this.emit({
                     type: 'tool_result',
                     toolCallId,
                     toolName,
-                    result: { status: 'skipped', file: existingPromptPath, reason: 'prompt already exists' },
+                    result: { status: 'skipped', file: finalOutputPath, reason: 'already exists' },
                     agentName,
                   });
                   this.emit({
-                    type: 'notification',
-                    level: 'info',
-                    message: `Skipping LLM for ${node.displayName} — prompt exists, going to image gen`,
-                  });
-
-                  // Go straight to media generation (with retry)
-                  const mediaPath = await this.executeMediaGenerationWithRetry(node, existingPromptPath, toolCallId);
-                  if (mediaPath) {
-                    finalOutputPath = mediaPath;
-                  } else {
-                    this.executor.markFailed(node.id, 'Media generation failed (prompt saved, will retry)');
-                    this.emitTodoUpdate();
-                    continue;
-                  }
-
-                  // Skip the LLM + write section below
-                  // Jump to emit summary + mark completed
-                  this.emit({
                     type: 'agent_text',
-                    text: `**${node.displayName}** generated → \`${finalOutputPath}\``,
+                    text: `**${node.displayName}** → \`${finalOutputPath}\` (exists, skipped)`,
                     isFinal: false,
                   });
                   this.executor.markCompleted(node.id, finalOutputPath);
                   this.persistState();
                   this.emitTodoUpdate();
-                  this.log(`  COMPLETED: ${node.id}`);
+                  this.log(`  COMPLETED (skipped): ${node.id} → ${finalOutputPath}`);
                   continue;
                 }
               }
