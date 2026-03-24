@@ -369,7 +369,11 @@ export class DependencyGraphExecutor {
     }
 
     // Update any nodes that depended on the old type-level dependent
-    for (const downstreamId of dependent.dependents) {
+    // Collect downstream nodes before modifying to avoid mutation during iteration
+    const downstreamIds = [...dependent.dependents];
+    const downstreamCollections: ExecutionNode[] = [];
+
+    for (const downstreamId of downstreamIds) {
       const downstream = this.nodes.get(downstreamId);
       if (!downstream) continue;
 
@@ -379,10 +383,30 @@ export class DependencyGraphExecutor {
         downstream.dependencies.push(newDep.id);
         newDep.dependents.push(downstreamId);
       }
+
+      // Track collection dependents for recursive cascade
+      if (downstream.isCollection) {
+        downstreamCollections.push(downstream);
+      }
     }
 
     // Remove the old type-level dependent node
     this.nodes.delete(dependent.id);
+
+    // Recursive cascade: expand any downstream collection nodes that have
+    // matching scope on the type we just expanded
+    for (const downstream of downstreamCollections) {
+      const downstreamTypeDef = this.template.artifactTypes[downstream.typeId];
+      if (!downstreamTypeDef) continue;
+
+      const downstreamDep = downstreamTypeDef.dependencies.find(
+        (d: ArtifactDependency) => d.artifactTypeId === dependent.typeId,
+      );
+
+      if (downstreamDep?.scope === 'matching') {
+        this.expandMatchingDependent(downstream, dependent.typeId, items, downstreamDep);
+      }
+    }
   }
 
   // ===========================================================================
