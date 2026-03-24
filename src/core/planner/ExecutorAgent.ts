@@ -496,8 +496,39 @@ export class ExecutorAgent extends TypedEventEmitter {
 
               // Generate content via LLM (pure completion, no tools)
               this.log(`  Calling LLM...`);
-              const content = await this.generateForNode(node, system, user, toolCallId, toolName);
+              let content = await this.generateForNode(node, system, user, toolCallId, toolName);
               this.log(`  LLM returned ${content.length} chars`);
+
+              // Validate JSON output for nodes that require it
+              if (node.typeId === 'scene_video_prompt') {
+                const validation = this.validateJsonOutput(content, node);
+                if (!validation.valid) {
+                  this.log(`  JSON validation failed: ${validation.error} — retrying...`);
+                  this.emit({
+                    type: 'notification',
+                    level: 'warning',
+                    message: `Invalid JSON from LLM for ${node.displayName} — retrying`,
+                  });
+                  // Retry once with correction prompt
+                  const retryContent = await this.generateForNode(
+                    node,
+                    system + '\n\nCRITICAL: Your output MUST be valid JSON. Do not include markdown, backticks, or any text outside the JSON object.',
+                    user,
+                    toolCallId,
+                    toolName,
+                  );
+                  const retryValidation = this.validateJsonOutput(retryContent, node);
+                  if (retryValidation.valid) {
+                    content = retryContent;
+                    this.log(`  Retry succeeded — valid JSON`);
+                  } else {
+                    this.log(`  Retry also failed: ${retryValidation.error}`);
+                    this.executor.markFailed(node.id, `Invalid JSON output after retry: ${retryValidation.error}`);
+                    this.emitTodoUpdate();
+                    continue;
+                  }
+                }
+              }
 
               // Write prompt/content to disk
               let outputPath = writeOutput(
@@ -971,6 +1002,42 @@ Rules:
         });
         break; // Only need one dependency to trigger expansion
       }
+    }
+  }
+
+  /**
+   * Validate that LLM output is valid JSON with required fields.
+   */
+  private validateJsonOutput(content: string, node: ExecutionNode): { valid: boolean; error?: string } {
+    // Strip markdown code fences if the LLM wrapped the JSON
+    let cleaned = content.trim();
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+
+    try {
+      const parsed = JSON.parse(cleaned);
+
+      if (node.typeId === 'scene_video_prompt') {
+        if (!parsed.shots || !Array.isArray(parsed.shots)) {
+          return { valid: false, error: 'Missing "shots" array' };
+        }
+        if (parsed.shots.length === 0) {
+          return { valid: false, error: '"shots" array is empty' };
+        }
+        for (const shot of parsed.shots) {
+          if (typeof shot.shotNumber !== 'number') {
+            return { valid: false, error: 'Shot missing "shotNumber"' };
+          }
+          if (!shot.description) {
+            return { valid: false, error: `Shot ${shot.shotNumber} missing "description"` };
+          }
+        }
+      }
+
+      return { valid: true };
+    } catch (e) {
+      return { valid: false, error: `JSON parse error: ${String(e)}` };
     }
   }
 

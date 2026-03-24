@@ -109,7 +109,12 @@ interface SceneVideoPromptJson {
  */
 function extractShotsFromJson(content: string): CollectionItems {
   try {
-    const parsed = JSON.parse(content) as SceneVideoPromptJson;
+    // Strip markdown code fences if the LLM wrapped the JSON
+    let cleaned = content.trim();
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+    const parsed = JSON.parse(cleaned) as SceneVideoPromptJson;
 
     if (!parsed.shots || !Array.isArray(parsed.shots) || parsed.shots.length === 0) {
       return { shots: undefined };
