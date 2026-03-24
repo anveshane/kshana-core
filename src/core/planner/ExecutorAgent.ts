@@ -122,6 +122,7 @@ export class ExecutorAgent extends TypedEventEmitter {
     this.log('=== ExecutorAgent initialized ===');
     this.log(`Template: ${config.template.id}, Goal: ${config.goal.description}`);
     this.log(`Target artifacts: ${config.goal.targetArtifacts.join(', ')}`);
+    this.log(`Preferences: ${JSON.stringify(config.goal.preferences)}`);
 
     // Build or restore executor
     if (config.project.executorState) {
@@ -330,10 +331,17 @@ export class ExecutorAgent extends TypedEventEmitter {
             this.log(`  Reference images: ${inputs.referenceImages.length}`);
             this.log(`  Context block length: ${inputs.contextBlock.length} chars`);
 
+            // 2. Build prompt based on node type (also loads skills)
+            const { system, user, loadedSkills } = this.buildPromptForNode(node, inputs);
+            this.log(`  Prompt built: system=${system.length} chars, user=${user.length} chars`);
+
             // Emit tool_call so the UI shows what we're generating and its inputs
             const toolCallId = `exec_${node.id}_${Date.now()}`;
             const toolName = this.getToolDisplayName(node);
             const toolArgs = this.getToolDisplayArgs(node, inputs);
+            if (loadedSkills.length > 0) {
+              toolArgs['skills'] = loadedSkills.join(', ');
+            }
             this.emit({
               type: 'tool_call',
               toolCallId,
@@ -341,10 +349,6 @@ export class ExecutorAgent extends TypedEventEmitter {
               arguments: toolArgs,
               agentName,
             });
-
-            // 2. Build prompt based on node type
-            const { system, user } = this.buildPromptForNode(node, inputs);
-            this.log(`  Prompt built: system=${system.length} chars, user=${user.length} chars`);
 
             // 3. For expensive ops, ask user approval
             if (node.isExpensive) {
@@ -487,18 +491,90 @@ export class ExecutorAgent extends TypedEventEmitter {
   private buildPromptForNode(
     node: ExecutionNode,
     inputs: ResolvedInputs,
-  ): { system: string; user: string } {
+  ): { system: string; user: string; loadedSkills: string[] } {
     const typeDef = this.config.template.artifactTypes[node.typeId];
     const category = typeDef?.category ?? 'concept';
     let systemPrompt = CATEGORY_PROMPTS[category] ?? CATEGORY_PROMPTS.concept;
 
     // Inject model-specific skills for image/video prompt generation
+    const loadedSkills: string[] = [];
     const skillTypes = ['visual_ref', 'clip'] as const;
     if (skillTypes.includes(category as typeof skillTypes[number])) {
-      const skillContent = this.loadSkillsForNode(node);
-      if (skillContent) {
-        systemPrompt += `\n\n<model_skills>\n${skillContent}\n</model_skills>`;
+      const skills = this.loadSkillsForNode(node);
+      if (skills.content) {
+        systemPrompt += `\n\n<model_skills>\n${skills.content}\n</model_skills>`;
+        loadedSkills.push(...skills.files);
       }
+    }
+
+    // Inject duration/project constraints with per-scene and per-shot specifics
+    const duration = this.config.goal.preferences.duration as number | undefined;
+    const style = this.config.goal.preferences.style as string | undefined;
+    const allNodes = this.executor.getAllNodes();
+    const sceneCount = allNodes.filter(n => n.typeId === 'scene').length;
+    const perSceneDuration = duration && sceneCount > 0 ? Math.round(duration / sceneCount) : 0;
+
+    let projectContext = '';
+    const parts: string[] = [];
+
+    if (style) {
+      parts.push(`**Visual style:** ${style}`);
+    }
+    if (duration) {
+      parts.push(`**Target video duration:** ${duration} seconds (${Math.floor(duration / 60)}m ${duration % 60}s)`);
+    }
+
+    // Scene-level: inject this scene's duration allocation
+    if (node.typeId === 'scene' || node.typeId === 'scene_video_prompt') {
+      if (perSceneDuration > 0) {
+        parts.push(`**This scene's duration:** ~${perSceneDuration} seconds`);
+        parts.push(`**Shot planning:** Break this scene into shots that total ~${perSceneDuration}s. Each shot should be 3-10 seconds.`);
+      }
+      if (sceneCount > 0) {
+        // Figure out which scene number this is
+        const sceneNum = node.itemId?.match(/(\d+)/)?.[1] ?? '?';
+        parts.push(`**Scene ${sceneNum} of ${sceneCount}**`);
+      }
+    }
+
+    // Shot-level: inject this shot's duration based on scene allocation and shot count
+    if (node.typeId === 'shot_image_prompt' || node.typeId === 'scene_video' || node.typeId === 'scene_image') {
+      // Extract scene ID from itemId (e.g., "scene_1_shot_2" → "scene_1")
+      const sceneMatch = node.itemId?.match(/(scene_\d+)/);
+      const sceneId = sceneMatch?.[1];
+
+      if (sceneId && perSceneDuration > 0) {
+        // Count how many shots this scene has
+        const shotsInScene = allNodes.filter(n =>
+          n.typeId === 'shot_image_prompt' && n.itemId?.startsWith(sceneId),
+        ).length;
+        const perShotDuration = shotsInScene > 0
+          ? Math.round(perSceneDuration / shotsInScene)
+          : perSceneDuration;
+
+        parts.push(`**Scene:** ${sceneId} (~${perSceneDuration}s total)`);
+        if (shotsInScene > 0) {
+          parts.push(`**Shots in this scene:** ${shotsInScene}`);
+          parts.push(`**This shot's duration:** ~${perShotDuration} seconds`);
+        }
+      }
+
+      // Extract shot number for display
+      const shotMatch = node.itemId?.match(/shot_(\d+)/);
+      if (shotMatch) {
+        parts.push(`**Shot number:** ${shotMatch[1]}`);
+      }
+    }
+
+    // General pacing for other nodes
+    if (parts.length === 0 && (duration || style)) {
+      if (duration && sceneCount > 0) {
+        parts.push(`**Scenes:** ${sceneCount} scenes, ~${perSceneDuration}s per scene`);
+      }
+    }
+
+    if (parts.length > 0) {
+      projectContext = `\n\n<project_constraints>\n${parts.join('\n')}\n</project_constraints>`;
     }
 
     const task = node.itemId
@@ -506,18 +582,19 @@ export class ExecutorAgent extends TypedEventEmitter {
       : `Create ${typeDef?.displayName ?? node.typeId}`;
 
     const user = inputs.contextBlock
-      ? `${task}\n\n${inputs.contextBlock}`
-      : task;
+      ? `${task}${projectContext}\n\n${inputs.contextBlock}`
+      : `${task}${projectContext}`;
 
-    return { system: systemPrompt, user };
+    return { system: systemPrompt, user, loadedSkills };
   }
 
   /**
    * Load skill guides and model-specific skills for a node.
    * Returns combined skill content or null if none found.
    */
-  private loadSkillsForNode(node: ExecutionNode): string | null {
+  private loadSkillsForNode(node: ExecutionNode): { content: string | null; files: string[] } {
     const parts: string[] = [];
+    const loadedFiles: string[] = [];
 
     // Map node types to guide names and content types for skill resolution
     const guideMap: Record<string, string> = {
@@ -546,6 +623,7 @@ export class ExecutorAgent extends TypedEventEmitter {
         const guide = resolveGuide(guideName, contentTypeMap[node.typeId] ?? node.typeId);
         if (guide.content) {
           parts.push(guide.content);
+          loadedFiles.push(guide.source);
           this.log(`  Loaded guide: ${guide.source}`);
         }
       } catch {
@@ -556,28 +634,51 @@ export class ExecutorAgent extends TypedEventEmitter {
     // 2. Load model-specific skills (layered on top of guide)
     const contentType = contentTypeMap[node.typeId];
     if (contentType) {
-      // Try to resolve skill context from provider registry
+      // Map node types to their expected workflow for skill file resolution
+      // character/setting images → zimage (text-to-image generation)
+      // scene/shot images → flux2_klein_edit (image editing with references)
+      // video → ltx23
+      const workflowMap: Record<string, string> = {
+        character_image: 'zimage',
+        setting_image: 'zimage',
+        scene_image: 'flux2_klein_edit',
+        shot_image_prompt: 'flux2_klein_edit',
+        scene_video_prompt: 'ltx23',
+        scene_video: 'ltx23',
+      };
+
       let skillContext: SkillResolutionContext | undefined;
+      const workflowName = workflowMap[node.typeId];
+
+      // Try provider registry first, fall back to hardcoded defaults
       try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const { getProviderRegistry } = require('../../services/providers/index.js');
         const config = getProviderRegistry().getConfig();
         const isVideo = node.typeId.includes('video');
         const providerId = isVideo ? config.videoGeneration : config.imageGeneration;
         if (providerId) {
-          skillContext = { providerId };
+          skillContext = { providerId, workflowName };
         }
       } catch {
-        // Provider registry not available — use defaults
+        // Provider registry not available — use comfyui as default
+        if (workflowName) {
+          skillContext = { providerId: 'comfyui', workflowName };
+        }
       }
 
       const skills = loadContentTypeSkills(contentType, skillContext);
       if (skills.content) {
         parts.push(skills.content);
+        loadedFiles.push(...skills.loadedFiles);
         this.log(`  Loaded skills: ${skills.loadedFiles.join(', ')}`);
       }
     }
 
-    return parts.length > 0 ? parts.join('\n\n') : null;
+    return {
+      content: parts.length > 0 ? parts.join('\n\n') : null,
+      files: loadedFiles,
+    };
   }
 
   // ===========================================================================
