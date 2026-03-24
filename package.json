@@ -9,9 +9,9 @@
     "kshana-ink-server": "./dist/server/cli.js"
   },
   "scripts": {
-    "start": "tsx src/index.tsx",
-    "fake": "KSHANA_FAKE_MODE=1 tsx src/index.tsx",
-    "dev": "tsx watch src/index.tsx",
+    "start": "NODE_OPTIONS='--max-old-space-size=8192' tsx src/index.tsx",
+    "fake": "NODE_OPTIONS='--max-old-space-size=8192' KSHANA_FAKE_MODE=1 tsx src/index.tsx",
+    "dev": "NODE_OPTIONS='--max-old-space-size=8192' tsx watch src/index.tsx",
     "server": "NODE_OPTIONS='--max-old-space-size=8192' tsx src/server/cli.ts",
     "server:dev": "NODE_OPTIONS='--max-old-space-size=8192' tsx watch src/server/cli.ts",
     "test:client": "tsx src/server/testClient.ts",

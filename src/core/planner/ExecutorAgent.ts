@@ -871,14 +871,38 @@ export class ExecutorAgent extends TypedEventEmitter {
       options.responseFormat = { type: 'json_object' };
     }
 
-    // Stream the generation with <think> tag separation:
-    // - Thinking content → streaming_think events (shown in UI, not saved)
-    // - Actual content → tool_streaming events (shown in UI AND saved to file)
-    const contentChunks: string[] = [];
     const agentName = this.config.name ?? 'kshana-executor';
     const effectiveToolName = toolDisplayName ?? `generate_${node.typeId}`;
+    const hasThinking = this.llm.hasImplicitThinking;
 
-    // State machine for parsing <think> tags across chunk boundaries
+    // Simple streaming path (no think tags) — avoids memory-heavy buffer accumulation
+    if (!hasThinking) {
+      const chunks: string[] = [];
+      for await (const chunk of this.llm.generateStream(options)) {
+        if (chunk.content) {
+          chunks.push(chunk.content);
+          if (toolCallId) {
+            this.emit({
+              type: 'tool_streaming',
+              toolCallId, chunk: chunk.content, done: false,
+              agentName, toolName: effectiveToolName,
+            });
+          }
+        }
+      }
+      if (toolCallId) {
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId, chunk: '', done: true,
+          agentName, toolName: effectiveToolName,
+        });
+      }
+      return chunks.join('');
+    }
+
+    // Think-tag parsing path — separates <think> blocks from content
+    // Uses incremental flush to avoid unbounded buffer growth
+    const contentChunks: string[] = [];
     let buffer = '';
     let insideThink = false;
 
@@ -887,34 +911,29 @@ export class ExecutorAgent extends TypedEventEmitter {
 
       buffer += chunk.content;
 
-      // Process buffer for <think> tags
+      // Process buffer — flush as much as possible each iteration
       while (buffer.length > 0) {
         if (insideThink) {
           const closeIdx = buffer.indexOf('</think>');
           if (closeIdx !== -1) {
-            // Emit thinking content up to the close tag
             const thinkContent = buffer.slice(0, closeIdx);
             if (thinkContent) {
               this.emit({ type: 'streaming_think', chunk: thinkContent, done: false });
             }
             buffer = buffer.slice(closeIdx + '</think>'.length);
             insideThink = false;
-            // Signal thinking done
             this.emit({ type: 'streaming_think', chunk: '', done: true });
           } else {
-            // No close tag yet — emit what we have as thinking, keep potential partial tag
-            const keepLen = '</think>'.length - 1;
-            if (buffer.length > keepLen) {
-              const safe = buffer.slice(0, buffer.length - keepLen);
-              this.emit({ type: 'streaming_think', chunk: safe, done: false });
-              buffer = buffer.slice(buffer.length - keepLen);
+            // Flush all but the last 8 chars (potential partial </think>)
+            if (buffer.length > 8) {
+              this.emit({ type: 'streaming_think', chunk: buffer.slice(0, -8), done: false });
+              buffer = buffer.slice(-8);
             }
             break;
           }
         } else {
           const openIdx = buffer.indexOf('<think>');
           if (openIdx !== -1) {
-            // Emit content before the think tag
             const content = buffer.slice(0, openIdx);
             if (content) {
               contentChunks.push(content);
@@ -929,10 +948,9 @@ export class ExecutorAgent extends TypedEventEmitter {
             buffer = buffer.slice(openIdx + '<think>'.length);
             insideThink = true;
           } else {
-            // No think tag — check for potential partial <think> at the end
-            const keepLen = '<think>'.length - 1;
-            if (buffer.length > keepLen) {
-              const safe = buffer.slice(0, buffer.length - keepLen);
+            // Flush all but the last 7 chars (potential partial <think>)
+            if (buffer.length > 7) {
+              const safe = buffer.slice(0, -7);
               contentChunks.push(safe);
               if (toolCallId) {
                 this.emit({
@@ -941,7 +959,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                   agentName, toolName: effectiveToolName,
                 });
               }
-              buffer = buffer.slice(buffer.length - keepLen);
+              buffer = buffer.slice(-7);
             }
             break;
           }
@@ -949,7 +967,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       }
     }
 
-    // Flush remaining buffer as content
+    // Flush remaining buffer
     if (buffer.length > 0 && !insideThink) {
       contentChunks.push(buffer);
       if (toolCallId) {
@@ -960,8 +978,6 @@ export class ExecutorAgent extends TypedEventEmitter {
         });
       }
     }
-
-    // Signal streaming done
     if (toolCallId) {
       this.emit({
         type: 'tool_streaming',
