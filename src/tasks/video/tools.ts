@@ -34,6 +34,11 @@ import {
   updateScene,
   getProjectStyleConfig,
 } from './workflow/index.js';
+import {
+  ensureProjectPathDir,
+  readProjectText,
+  writeProjectBufferAtPath,
+} from './workflow/projectFileIO.js';
 
 /**
  * A single shot within a multi-shot scene breakdown.
@@ -58,6 +63,40 @@ export interface MultiShotMotionPrompt {
   shots: ShotPrompt[];
   totalSceneDuration: number;
   referenceImages: string[]; // all ref images for the scene
+}
+
+function readPromptSourceFile(
+  filePath: string,
+): { content?: string; error?: string; suggestion?: string } {
+  if (path.isAbsolute(filePath)) {
+    if (!fs.existsSync(filePath)) {
+      return {
+        error: `Prompt file not found: ${filePath}`,
+        suggestion: 'Check that the prompt file path is correct and the file exists.',
+      };
+    }
+
+    return { content: fs.readFileSync(filePath, 'utf-8') };
+  }
+
+  const content = readProjectText(filePath);
+  if (content == null) {
+    return {
+      error: `Prompt file not found: ${filePath}`,
+      suggestion:
+        'Check that the prompt file path is correct and that it exists under the active project.',
+    };
+  }
+
+  return { content };
+}
+
+function projectPromptFileExists(filePath: string): boolean {
+  if (path.isAbsolute(filePath)) {
+    return fs.existsSync(filePath);
+  }
+
+  return readProjectText(filePath) != null;
 }
 
 /**
@@ -200,6 +239,7 @@ export interface ImageGenerationParams {
   negative_prompt?: string;
   aspect_ratio?: string;
   seed?: number;
+  shot_number?: number;
   image_type?: 'scene' | 'character_ref' | 'setting_ref';
   character_name?: string;
   setting_name?: string;
@@ -247,10 +287,28 @@ function withVideoLock<T>(fn: () => Promise<T>): Promise<T> {
 // Get the project assets directory
 export function getAssetsDir(): string {
   const assetsDir = path.join(getProjectDir(), 'assets', 'images');
-  if (!fs.existsSync(assetsDir)) {
+  if (!ensureProjectPathDir(assetsDir) && !fs.existsSync(assetsDir)) {
     fs.mkdirSync(assetsDir, { recursive: true });
   }
   return assetsDir;
+}
+
+function persistProjectBinaryOutput(
+  outputDir: string,
+  outputFilename: string,
+  buffer: Buffer,
+): string {
+  const outputPath = path.join(outputDir, outputFilename);
+
+  if (!ensureProjectPathDir(outputDir) && !fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  if (!writeProjectBufferAtPath(outputPath, buffer)) {
+    fs.writeFileSync(outputPath, buffer);
+  }
+
+  return outputPath;
 }
 
 /**
@@ -580,11 +638,15 @@ async function waitForComfyUIJob(
     const firstImage = images[0]!;
     const outputFilename = `${nanoid(8)}_${firstImage.filename}`;
     debugLog(`[waitForComfyUIJob] Downloading ${firstImage.filename} (subfolder=${firstImage.subfolder}, type=${firstImage.type}) to ${assetsDir}/${outputFilename}`);
-    const savedPath = await client.downloadImage(
+    const downloaded = await client.downloadOutput(
       firstImage.filename,
       firstImage.subfolder,
       firstImage.type,
-      outputFilename
+    );
+    const savedPath = persistProjectBinaryOutput(
+      assetsDir,
+      outputFilename,
+      downloaded.buffer,
     );
 
     // Create artifact ID
@@ -723,6 +785,11 @@ This tool blocks until generation is complete and returns the result directly (a
         description:
           'Path to prompt file (e.g., "prompts/images/characters/alice.prompt.md"). Reads the prompt from this file instead of requiring inline prompt text.',
       },
+      shot_number: {
+        type: 'number',
+        description:
+          'Shot number within the scene. Use this when generating a specific scene shot image.',
+      },
       negative_prompt: {
         type: 'string',
         description: 'What to avoid in the image (optional)',
@@ -784,23 +851,41 @@ This tool blocks until generation is complete and returns the result directly (a
   },
   async args => {
     let params = args as unknown as ImageGenerationParams;
+    const shotNumber = args['shot_number'] as number | undefined;
 
     // If prompt_file is provided, read and parse the prompt from the file
-    const promptFile = args['prompt_file'] as string | undefined;
-    if (promptFile) {
-      const fullPath = path.join(getProjectDir(), promptFile);
-      if (!fs.existsSync(fullPath)) {
+    let promptFile = args['prompt_file'] as string | undefined;
+    if (params.image_type === 'scene' && promptFile) {
+      const resolvedPromptFile = resolveScenePromptFile(
+        promptFile,
+        params.scene_number,
+        shotNumber
+      );
+      if (resolvedPromptFile.error) {
         return {
           status: 'error',
-          error: `Prompt file not found: ${promptFile}`,
-          suggestion: 'Check that the prompt file path is correct and the file exists.',
+          error: resolvedPromptFile.error,
+          suggestion: resolvedPromptFile.suggestion,
         };
       }
-      const promptContent = fs.readFileSync(fullPath, 'utf-8');
+      promptFile = resolvedPromptFile.promptFile;
+    }
+    if (promptFile) {
+      const promptFileResult = readPromptSourceFile(promptFile);
+      if (promptFileResult.error || promptFileResult.content == null) {
+        return {
+          status: 'error',
+          error: promptFileResult.error ?? `Prompt file not found: ${promptFile}`,
+          suggestion:
+            promptFileResult.suggestion ??
+            'Check that the prompt file path is correct and the file exists.',
+        };
+      }
+      const promptContent = promptFileResult.content;
 
       // Parse the prompt file for both prompt text and metadata
       const parsed = parsePromptFile(promptContent);
-      params = { ...params, prompt: parsed.prompt };
+      params = { ...params, prompt: parsed.prompt, shot_number: shotNumber };
 
       // Apply generation mode from prompt file if not explicitly provided
       if (parsed.generationMode && !params.generation_mode) {
@@ -1212,6 +1297,87 @@ function resolveReferencesToPaths(
   return resolved.length > 0 ? resolved : null;
 }
 
+function normalizeNameKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function findReferenceImagePathInProject(
+  project: ReturnType<typeof loadProject>,
+  type: 'character' | 'setting',
+  lookup: string
+): string | undefined {
+  if (!project) {
+    return undefined;
+  }
+
+  const entries = type === 'character' ? project.characters : project.settings;
+  const normalizedLookup = normalizeNameKey(lookup.replace(/^(character|setting)[-_]/i, ''));
+  const projectDir = getProjectDir();
+
+  for (const entry of entries) {
+    const normalizedName = normalizeNameKey(entry.name);
+    const logicalId = `${type}${normalizedName}`;
+    const normalizedReferenceId = entry.referenceImageId
+      ? normalizeNameKey(entry.referenceImageId)
+      : '';
+
+    if (
+      normalizedLookup !== normalizedName &&
+      normalizedLookup !== logicalId &&
+      normalizedLookup !== normalizedReferenceId
+    ) {
+      continue;
+    }
+
+    if (entry.referenceImagePath) {
+      return path.isAbsolute(entry.referenceImagePath)
+        ? entry.referenceImagePath
+        : path.join(projectDir, entry.referenceImagePath);
+    }
+
+    if (entry.referenceImageId) {
+      const imagePath = project.content?.images?.itemFiles?.[entry.referenceImageId];
+      if (imagePath) {
+        return path.isAbsolute(imagePath) ? imagePath : path.join(projectDir, imagePath);
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function resolveScenePromptFile(
+  promptFile: string,
+  sceneNumber: number,
+  shotNumber?: number
+): { promptFile?: string; error?: string; suggestion?: string } {
+  const normalized = promptFile.replace(/\\/g, '/');
+  const isMotionPrompt = /^prompts\/videos\/scenes\/.+\.motion\.(json|md)$/i.test(normalized);
+
+  if (!isMotionPrompt) {
+    return { promptFile };
+  }
+
+  if (!shotNumber) {
+    return {
+      error: `Scene image generation cannot use motion prompt file "${promptFile}" directly.`,
+      suggestion:
+        `Generate or supply the matching shot prompt file under prompts/images/shots/ for scene ${sceneNumber}.`,
+    };
+  }
+
+  const shotPromptFile = `prompts/images/shots/scene-${sceneNumber}-shot-${shotNumber}.prompt.md`;
+  if (!projectPromptFileExists(shotPromptFile)) {
+    return {
+      error:
+        `Scene image generation requires the shot prompt file "${shotPromptFile}". Motion prompt "${promptFile}" cannot be used as prompt_file.`,
+      suggestion: `Generate the shot prompt first, then retry with ${shotPromptFile}.`,
+    };
+  }
+
+  return { promptFile: shotPromptFile };
+}
+
 /**
  * Helper function to find image path from artifact ID.
  */
@@ -1223,6 +1389,23 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
 
   const project = loadProject();
   if (!project) return undefined;
+
+  const projectImagePath = project.content?.images?.itemFiles?.[artifactId];
+  if (projectImagePath) {
+    return path.isAbsolute(projectImagePath)
+      ? projectImagePath
+      : path.join(getProjectDir(), projectImagePath);
+  }
+
+  const characterReferencePath = findReferenceImagePathInProject(project, 'character', artifactId);
+  if (characterReferencePath) {
+    return characterReferencePath;
+  }
+
+  const settingReferencePath = findReferenceImagePathInProject(project, 'setting', artifactId);
+  if (settingReferencePath) {
+    return settingReferencePath;
+  }
 
   // Check project assets manifest
   const assetsDir = path.join(getProjectDir(), 'assets');
@@ -1276,7 +1459,7 @@ A scene is composed of multiple shots — call this tool separately for each sho
 
 This tool blocks until video generation is complete and returns the result directly (artifact_id and file_path). No need to call wait_for_job separately. Generate videos one at a time.
 
-**Motion prompt source**: Provide EITHER \`motion_prompt\` (inline text) OR \`motion_prompt_file\` (path to prompt file). Using \`motion_prompt_file\` is preferred as it reads from approved prompt files. If the file is a multi-shot JSON, you MUST specify \`shot_number\` to select the prompt for this shot.`,
+**Motion prompt source**: Provide EITHER \`motion_prompt\` (inline text) OR \`motion_prompt_file\` (path to prompt file). Using \`motion_prompt_file\` is preferred as it reads from approved prompt files. If the file is a multi-shot JSON, you MUST specify \`shot_number\` to select the prompt for this shot. If \`duration\` is omitted and the motion JSON includes a shot duration, that approved shot duration is used automatically.`,
   {
     type: 'object',
     properties: {
@@ -1333,7 +1516,7 @@ This tool blocks until video generation is complete and returns the result direc
     const shotNumber = args['shot_number'] as number;
     let motionPrompt = args['motion_prompt'] as string | undefined;
     const seed = args['seed'] as number | undefined;
-    const duration = args['duration'] as number | undefined;
+    let duration = args['duration'] as number | undefined;
     const videoWidth = args['width'] as number | undefined;
     const videoHeight = args['height'] as number | undefined;
     const segmentId = args['segment_id'] as string | undefined;
@@ -1341,15 +1524,19 @@ This tool blocks until video generation is complete and returns the result direc
     // If motion_prompt_file is provided, read and extract the prompt for this shot
     const motionPromptFile = args['motion_prompt_file'] as string | undefined;
     if (motionPromptFile) {
-      const fullPath = path.join(getProjectDir(), motionPromptFile);
-      if (!fs.existsSync(fullPath)) {
+      const motionPromptFileResult = readPromptSourceFile(motionPromptFile);
+      if (motionPromptFileResult.error || motionPromptFileResult.content == null) {
         return {
           status: 'error',
-          error: `Motion prompt file not found: ${motionPromptFile}`,
-          suggestion: 'Check that the motion prompt file path is correct and the file exists.',
+          error:
+            motionPromptFileResult.error ??
+            `Motion prompt file not found: ${motionPromptFile}`,
+          suggestion:
+            motionPromptFileResult.suggestion ??
+            'Check that the motion prompt file path is correct and the file exists.',
         };
       }
-      const promptContent = fs.readFileSync(fullPath, 'utf-8');
+      const promptContent = motionPromptFileResult.content;
 
       if (motionPromptFile.endsWith('.json')) {
         const motionData = parseMotionPrompt(promptContent);
@@ -1363,6 +1550,9 @@ This tool blocks until video generation is complete and returns the result direc
         }
 
         motionPrompt = targetShot.prompt;
+        if (duration == null && Number.isFinite(targetShot.duration) && targetShot.duration > 0) {
+          duration = targetShot.duration;
+        }
         if (targetShot.dialogue) {
           motionPrompt += ` The character speaks: "${targetShot.dialogue}"`;
         }
@@ -1511,6 +1701,7 @@ This tool blocks until video generation is complete and returns the result direc
           shot_number: shotNumber,
           image_artifact: shotImageArtifactId,
           motion_prompt: motionPrompt,
+          duration,
         },
       };
     } catch (error) {

@@ -97,6 +97,12 @@ export {
   addNewScene,
   updateScene,
   updateSceneApproval,
+  saveImagePrompt,
+  loadImagePrompt,
+  saveVideoPrompt,
+  loadVideoPrompt,
+  updateImagePromptApproval,
+  updateVideoPromptApproval,
   // Asset functions
   addAsset,
   getAssets,

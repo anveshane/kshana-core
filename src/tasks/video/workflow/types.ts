@@ -610,6 +610,7 @@ export interface ProjectFile {
 
   /** Persisted user goal for session resumption */
   goal?: PersistedGoal;
+
 }
 
 /**

@@ -38,6 +38,11 @@ import {
   type ConfigureProjectData,
   type CreateProjectData,
 } from './types.js';
+import {
+  getDisconnectionCategory,
+  getConnectionStatusMessage,
+  shouldRemoveTrackedConnection,
+} from './webSocketHandlerUtils.js';
 
 interface ConnectionState {
   socket: WebSocket;
@@ -123,12 +128,15 @@ export class WebSocketHandler {
 
     // Try to resume an existing session (e.g. after browser reconnect)
     let sessionId: string;
+    let resumedSession = false;
     if (resumeSessionId && this.conversationManager.getSession(resumeSessionId)) {
       sessionId = resumeSessionId;
+      resumedSession = true;
       // Close any stale connection for this session
       const oldConn = this.connections.get(sessionId);
       if (oldConn) {
-        try { oldConn.socket.close(); } catch { /* ignore */ }
+        console.info(`[WebSocketHandler] Replacing stale socket for resumed session ${sessionId}`);
+        try { oldConn.socket.close(1000, 'session_resumed_elsewhere'); } catch { /* ignore */ }
         this.connections.delete(sessionId);
       }
     } else {
@@ -157,7 +165,7 @@ export class WebSocketHandler {
     // Send connected status
     this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
       status: 'connected',
-      message: `Session created (${connectionMode} mode)`,
+      message: getConnectionStatusMessage(connectionMode, resumedSession),
     }));
 
     // Set up message handler
@@ -167,8 +175,13 @@ export class WebSocketHandler {
     });
 
     // Set up close handler
-    socket.on('close', () => {
-      this.handleDisconnection(sessionId);
+    socket.on('close', (code, reasonBuffer) => {
+      const reason = reasonBuffer.toString();
+      this.handleDisconnection(
+        sessionId,
+        socket,
+        `socket_close:${code}${reason ? `:${reason}` : ''}`,
+      );
     });
 
     // Set up error handler
@@ -544,7 +557,19 @@ export class WebSocketHandler {
    * so the browser can reconnect and resume (e.g. after network blips).
    * The session will be cleaned up by the ConversationManager's stale-session timer.
    */
-  private handleDisconnection(sessionId: string): void {
+  private handleDisconnection(sessionId: string, socket: WebSocket, reason: string): void {
+    const tracked = this.connections.get(sessionId);
+    const category = getDisconnectionCategory(reason);
+    if (!shouldRemoveTrackedConnection(tracked?.socket, socket)) {
+      console.info(
+        `[WebSocketHandler] Ignoring disconnection for stale socket session=${sessionId} category=${category} reason=${reason}`,
+      );
+      return;
+    }
+
+    console.info(
+      `[WebSocketHandler] Removing connection session=${sessionId} category=${category} reason=${reason}`,
+    );
     this.connections.delete(sessionId);
   }
 
@@ -737,7 +762,7 @@ export class WebSocketHandler {
       if (!state.isAlive) {
         // Connection is dead, terminate it
         state.socket.terminate();
-        this.handleDisconnection(sessionId);
+        this.handleDisconnection(sessionId, state.socket, 'heartbeat_timeout');
       } else {
         // Mark as not alive and send ping
         state.isAlive = false;
@@ -757,7 +782,7 @@ export class WebSocketHandler {
     // Close all connections
     for (const [sessionId, state] of this.connections) {
       state.socket.close(1001, 'Server shutting down');
-      this.handleDisconnection(sessionId);
+      this.handleDisconnection(sessionId, state.socket, 'server_shutdown');
     }
   }
 }

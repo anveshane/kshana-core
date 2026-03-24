@@ -5,8 +5,11 @@
  * No tool concerns — this module is the core logic layer.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
+import {
+  readProjectText,
+  writeProjectText,
+} from '../../tasks/video/workflow/projectFileIO.js';
 import type {
   Timeline,
   TimelineSegment,
@@ -30,6 +33,10 @@ const DEFAULT_CONSTRAINTS: DurationConstraints = {
 };
 
 const TIMELINE_FILENAME = 'timeline.json';
+
+function roundTimelineTime(value: number): number {
+  return Math.round(value * 100) / 100;
+}
 
 /**
  * Calculate how to divide total duration among segments.
@@ -389,56 +396,91 @@ export function splitSegmentIntoShots(
   sceneSegmentId: string,
   shots: Array<{ label: string; duration: number; metadata?: Record<string, unknown> }>
 ): Timeline {
-  const segmentIndex = timeline.segments.findIndex(s => s.id === sceneSegmentId);
-  if (segmentIndex === -1) {
-    throw new Error(`Segment not found: ${sceneSegmentId}`);
-  }
   if (shots.length === 0) {
     throw new Error('shots array must not be empty');
   }
 
-  const sceneSegment = timeline.segments[segmentIndex]!;
-  const sceneStart = sceneSegment.startTime;
-  const sceneDuration = sceneSegment.duration;
+  const directSegmentIndex = timeline.segments.findIndex(s => s.id === sceneSegmentId);
+  const existingShotIndexes = timeline.segments
+    .map((segment, index) => ({ segment, index }))
+    .filter(({ segment }) => segment.id.startsWith(`${sceneSegmentId}_shot_`))
+    .map(({ index }) => index);
 
-  // Proportionally scale shot durations to fill the scene's allocated time
+  const segmentIndex = directSegmentIndex >= 0 ? directSegmentIndex : existingShotIndexes[0] ?? -1;
+  if (segmentIndex === -1) {
+    throw new Error(`Segment not found: ${sceneSegmentId}`);
+  }
+
+  const replacementCount = directSegmentIndex >= 0 ? 1 : existingShotIndexes.length;
+  const replacementSegments =
+    directSegmentIndex >= 0
+      ? [timeline.segments[segmentIndex]!]
+      : timeline.segments.slice(segmentIndex, segmentIndex + replacementCount);
+
+  const sceneSegment = replacementSegments[0]!;
+  const sceneStart = sceneSegment.startTime;
+  const sceneDuration = roundTimelineTime(
+    replacementSegments.reduce((sum, segment) => sum + segment.duration, 0)
+  );
   const totalShotDuration = shots.reduce((sum, s) => sum + s.duration, 0);
-  const scale = sceneDuration / totalShotDuration;
+  if (!Number.isFinite(totalShotDuration) || totalShotDuration <= 0) {
+    throw new Error('shots must have a positive total duration');
+  }
 
   const shotSegments: TimelineSegment[] = [];
   let currentTime = sceneStart;
 
   for (let i = 0; i < shots.length; i++) {
     const shot = shots[i]!;
-    const isLast = i === shots.length - 1;
-    const shotDuration = isLast
-      ? Math.round((sceneSegment.endTime - currentTime) * 100) / 100
-      : Math.round(shot.duration * scale * 100) / 100;
+    if (!Number.isFinite(shot.duration) || shot.duration <= 0) {
+      throw new Error(`shot ${i + 1} must have a positive duration`);
+    }
+    const shotDuration = roundTimelineTime(shot.duration);
+    const shotStart = roundTimelineTime(currentTime);
+    const shotEnd = roundTimelineTime(currentTime + shotDuration);
 
     shotSegments.push({
       id: `${sceneSegmentId}_shot_${i + 1}`,
       label: shot.label,
-      startTime: Math.round(currentTime * 100) / 100,
-      endTime: Math.round((currentTime + shotDuration) * 100) / 100,
+      startTime: shotStart,
+      endTime: shotEnd,
       duration: shotDuration,
-      compositingMode: sceneSegment.compositingMode,
+      compositingMode: replacementSegments[Math.min(i, replacementSegments.length - 1)]?.compositingMode ?? sceneSegment.compositingMode,
+      compositingMetadata:
+        replacementSegments[Math.min(i, replacementSegments.length - 1)]?.compositingMetadata ??
+        sceneSegment.compositingMetadata,
       fillStatus: 'planned',
       layers: [],
+      ...(i === 0 && sceneSegment.transition
+        ? { transition: sceneSegment.transition }
+        : {}),
       ...(shot.metadata ? { metadata: shot.metadata } : {}),
     });
 
-    currentTime += shotDuration;
+    currentTime = shotEnd;
   }
+
+  const replacementDuration = roundTimelineTime(currentTime - sceneStart);
+  const durationDelta = roundTimelineTime(replacementDuration - sceneDuration);
+
+  const shiftedTrailingSegments = timeline.segments
+    .slice(segmentIndex + replacementCount)
+    .map(segment => ({
+      ...segment,
+      startTime: roundTimelineTime(segment.startTime + durationDelta),
+      endTime: roundTimelineTime(segment.endTime + durationDelta),
+    }));
 
   // Replace the scene segment with the shot segments
   const updatedSegments = [
     ...timeline.segments.slice(0, segmentIndex),
     ...shotSegments,
-    ...timeline.segments.slice(segmentIndex + 1),
+    ...shiftedTrailingSegments,
   ];
 
   const updated: Timeline = {
     ...timeline,
+    totalDuration: roundTimelineTime(timeline.totalDuration + durationDelta),
     segments: updatedSegments,
   };
   updated.validation = validateTimeline(updated);
@@ -450,13 +492,11 @@ export function splitSegmentIntoShots(
  * Returns null if the file doesn't exist.
  */
 export function loadTimeline(projectDir: string): Timeline | null {
-  const filePath = join(projectDir, TIMELINE_FILENAME);
-  if (!existsSync(filePath)) {
-    return null;
-  }
-
   try {
-    const raw = readFileSync(filePath, 'utf-8');
+    const raw = readProjectText(join(projectDir, TIMELINE_FILENAME));
+    if (!raw) {
+      return null;
+    }
     return JSON.parse(raw) as Timeline;
   } catch {
     return null;
@@ -468,14 +508,11 @@ export function loadTimeline(projectDir: string): Timeline | null {
  * Creates the project directory if it doesn't exist.
  */
 export function saveTimeline(projectDir: string, timeline: Timeline): void {
-  const filePath = join(projectDir, TIMELINE_FILENAME);
-  const dir = dirname(filePath);
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-
   // Revalidate before saving
   timeline.validation = validateTimeline(timeline);
 
-  writeFileSync(filePath, JSON.stringify(timeline, null, 2), 'utf-8');
+  writeProjectText(
+    join(projectDir, TIMELINE_FILENAME),
+    JSON.stringify(timeline, null, 2),
+  );
 }

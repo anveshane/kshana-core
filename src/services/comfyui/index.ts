@@ -4,7 +4,14 @@
  * Provides ComfyUI integration for image and video generation.
  */
 
-export { ComfyUIClient, type ComfyUIClientConfig, type ProgressCallback, type ImageInfo, type WSProgressInfo } from './ComfyUIClient.js';
+export {
+  ComfyUIClient,
+  type ComfyUIClientConfig,
+  type ProgressCallback,
+  type ImageInfo,
+  type DownloadedOutput,
+  type WSProgressInfo,
+} from './ComfyUIClient.js';
 
 export {
   loadWorkflowTemplate,

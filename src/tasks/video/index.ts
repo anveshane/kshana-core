@@ -235,14 +235,19 @@ export function createGoalDrivenToolRegistry(
 
   // Create project manager to get project state (sync for tool registration)
   const projectManager = createProjectManager(basePath);
-  const project = projectManager.projectExistsSync()
-    ? projectManager.loadProjectQuick()
-    : projectManager.createEmptyProject(finalTemplateId);
 
   // Create planner tool context — use getter so project dir is resolved at execution time
   const plannerContext: PlannerToolContext = {
     template,
-    project,
+    getProject: () => {
+      const workflowProject = loadProject(basePath);
+      if (workflowProject) {
+        return workflowProject as unknown as GenericProjectFile;
+      }
+      return projectManager.projectExistsSync()
+        ? projectManager.loadProjectQuick()
+        : projectManager.createEmptyProject(finalTemplateId);
+    },
     getProjectDir: () => getProjectDir(basePath),
   };
 

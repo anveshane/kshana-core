@@ -17,6 +17,7 @@ import {
 } from './tools.js';
 import type { GenerationJob } from './tools.js';
 import { getProjectDir, addAsset } from './workflow/index.js';
+import { readProjectText } from './workflow/projectFileIO.js';
 
 // ─── Placeholder image generation ────────────────────────────────────────────
 
@@ -30,6 +31,18 @@ const ASPECT_DIMENSIONS: Record<string, [number, number]> = {
 
 // Uniform dark background for all fake images
 const FAKE_BG_COLOR = '#1a1a2e';
+
+function readPromptSourceFile(filePath: string): string | null {
+  if (path.isAbsolute(filePath)) {
+    if (!fs.existsSync(filePath)) {
+      return null;
+    }
+
+    return fs.readFileSync(filePath, 'utf-8');
+  }
+
+  return readProjectText(filePath);
+}
 
 function escapeXml(str: string): string {
   return str
@@ -157,12 +170,9 @@ async function fakeGenerateImageHandler(
   let promptText = promptInline;
   if (!promptText && promptFile) {
     try {
-      const projectDir = getProjectDir();
-      const fullPromptPath = path.isAbsolute(promptFile)
-        ? promptFile
-        : path.join(projectDir, promptFile);
-      if (fs.existsSync(fullPromptPath)) {
-        promptText = fs.readFileSync(fullPromptPath, 'utf-8').trim();
+      const promptContent = readPromptSourceFile(promptFile);
+      if (promptContent != null) {
+        promptText = promptContent.trim();
       }
     } catch {
       // Fall back to showing the file path
@@ -286,12 +296,9 @@ async function fakeGenerateVideoHandler(
   let motionPromptText = motionPromptInline;
   if (!motionPromptText && motionPromptFile) {
     try {
-      const projectDir = getProjectDir();
-      const fullPromptPath = path.isAbsolute(motionPromptFile)
-        ? motionPromptFile
-        : path.join(projectDir, motionPromptFile);
-      if (fs.existsSync(fullPromptPath)) {
-        motionPromptText = fs.readFileSync(fullPromptPath, 'utf-8').trim();
+      const motionPromptContent = readPromptSourceFile(motionPromptFile);
+      if (motionPromptContent != null) {
+        motionPromptText = motionPromptContent.trim();
       }
     } catch {
       // Fall back
