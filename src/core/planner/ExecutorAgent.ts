@@ -10,8 +10,8 @@
  * writing, and progress tracking happens in deterministic code.
  */
 
-import { writeFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname, relative } from 'path';
 import { TypedEventEmitter } from '../../events/EventEmitter.js';
 import { LLMClient } from '../llm/index.js';
 import type { Message, GenerateOptions } from '../llm/types.js';
@@ -33,6 +33,22 @@ import { resolveInputs, writeOutput } from './contentResolver.js';
 import { extractCollectionItems } from './collectionExtractor.js';
 import type { ArtifactCategory } from '../templates/types.js';
 import { resolveGuide, loadContentTypeSkills, type SkillResolutionContext } from '../prompts/loader.js';
+// Media generation imports
+import {
+  submitImageGeneration,
+  parsePromptFile,
+  jobs as mediaJobs,
+} from '../../tasks/video/tools.js';
+import {
+  loadTimeline,
+  saveTimeline,
+  createTimelineSkeleton,
+  updateSegmentLayers,
+  validateTimeline,
+} from '../timeline/TimelineManager.js';
+import { assembleVideos, resolveSegmentFilePaths } from '../timeline/FFmpegAssembler.js';
+import { getProviderRegistry } from '../../services/providers/index.js';
+import { addAsset } from '../../tasks/video/workflow/index.js';
 
 /**
  * Configuration for creating an ExecutorAgent.
@@ -361,47 +377,76 @@ export class ExecutorAgent extends TypedEventEmitter {
               }
             }
 
-            // 4. Generate content via LLM (pure completion, no tools)
-            this.log(`  Calling LLM...`);
-            const content = await this.generateForNode(node, system, user, toolCallId, toolName);
-            this.log(`  LLM returned ${content.length} chars`);
+            // 4. Handle based on category
+            const nodeTypeDef = this.config.template.artifactTypes[node.typeId];
+            const nodeCategory = nodeTypeDef?.category;
+            let finalOutputPath: string;
 
-            // 5. Write output to disk
-            const outputPath = writeOutput(
-              node, content, this.config.projectDir, this.config.template,
-            );
-            this.log(`  Written to: ${outputPath}`);
+            if (nodeCategory === 'final') {
+              // Final assembly — skip LLM, go straight to deterministic assembly
+              const assemblyResult = await this.executeFinalAssembly(node, toolCallId);
+              if (!assemblyResult) {
+                this.executor.markFailed(node.id, 'Final assembly failed');
+                continue;
+              }
+              finalOutputPath = assemblyResult;
+            } else {
+              // Generate content via LLM (pure completion, no tools)
+              this.log(`  Calling LLM...`);
+              const content = await this.generateForNode(node, system, user, toolCallId, toolName);
+              this.log(`  LLM returned ${content.length} chars`);
 
-            // Emit tool_result so the UI shows the output
-            this.emit({
-              type: 'tool_result',
-              toolCallId,
-              toolName,
-              result: {
-                status: 'completed',
-                file: outputPath,
-              },
-              agentName,
-            });
+              // Write prompt/content to disk
+              let outputPath = writeOutput(
+                node, content, this.config.projectDir, this.config.template,
+              );
+              this.log(`  Written to: ${outputPath}`);
 
-            // 6. Emit human-readable summary
+              // Emit tool_result for the prompt generation
+              this.emit({
+                type: 'tool_result',
+                toolCallId,
+                toolName,
+                result: { status: 'completed', file: outputPath },
+                agentName,
+              });
+
+              // For media nodes: execute actual generation after prompt is written
+              if (nodeCategory === 'visual_ref' || nodeCategory === 'clip') {
+                const mediaPath = await this.executeMediaGeneration(node, outputPath, toolCallId);
+                if (mediaPath) {
+                  outputPath = mediaPath;  // Update to actual media file path
+                }
+              }
+
+              finalOutputPath = outputPath;
+            }
+
+            // 5. Emit human-readable summary
             this.emit({
               type: 'agent_text',
-              text: `**${node.displayName}** generated → \`${outputPath}\``,
+              text: `**${node.displayName}** generated → \`${finalOutputPath}\``,
               isFinal: false,
             });
 
-            // 7. Extract collection items if this node produces them
-            // Check both: (a) has collection dependents, (b) is a known expansion-producing type
-            const needsExpansion = this.executor.producesCollectionItems(node)
-              || node.typeId === 'scene_video_prompt';  // produces shots
-            if (needsExpansion) {
-              this.log(`  Extracting collection items...`);
-              await this.handleCollectionExpansion(node, content);
+            // 6. Extract collection items if this node produces them
+            // (only for LLM-generated content nodes, not final assembly)
+            if (nodeCategory !== 'final') {
+              const needsExpansion = this.executor.producesCollectionItems(node)
+                || node.typeId === 'scene_video_prompt';  // produces shots
+              if (needsExpansion && nodeCategory !== 'visual_ref' && nodeCategory !== 'clip') {
+                // Read content back from the prompt file for extraction
+                const writtenFile = join(this.config.projectDir, finalOutputPath);
+                if (existsSync(writtenFile)) {
+                  const writtenContent = readFileSync(writtenFile, 'utf-8');
+                  this.log(`  Extracting collection items...`);
+                  await this.handleCollectionExpansion(node, writtenContent);
+                }
+              }
             }
 
-            // 8. Mark completed and persist state
-            this.executor.markCompleted(node.id, outputPath);
+            // 7. Mark completed and persist state
+            this.executor.markCompleted(node.id, finalOutputPath);
             this.persistState();
             this.emitTodoUpdate();
             this.log(`  COMPLETED: ${node.id}`);
@@ -1049,6 +1094,435 @@ export class ExecutorAgent extends TypedEventEmitter {
   /**
    * Persist executor state to project.json.
    */
+  // ===========================================================================
+  // Private: Deterministic media generation
+  // ===========================================================================
+
+  /**
+   * Execute actual media generation after the LLM has written a prompt file.
+   * This is deterministic — reads the prompt file, calls the provider, saves the result.
+   * Returns the actual media file path, or null if generation fails.
+   */
+  private async executeMediaGeneration(
+    node: ExecutionNode,
+    promptFilePath: string,
+    toolCallId: string,
+  ): Promise<string | null> {
+    const agentName = this.config.name ?? 'kshana-executor';
+    const projectDir = this.config.projectDir;
+    const fullPromptPath = join(projectDir, promptFilePath);
+
+    if (!existsSync(fullPromptPath)) {
+      this.log(`  Media gen: prompt file not found: ${fullPromptPath}`);
+      return null;
+    }
+
+    const typeDef = this.config.template.artifactTypes[node.typeId];
+    const category = typeDef?.category;
+
+    if (category === 'visual_ref') {
+      return this.executeImageGeneration(node, fullPromptPath, toolCallId, agentName);
+    } else if (category === 'clip') {
+      return this.executeVideoGeneration(node, fullPromptPath, toolCallId, agentName);
+    }
+
+    return null;
+  }
+
+  /**
+   * Generate an actual image from a prompt file via the provider.
+   */
+  private async executeImageGeneration(
+    node: ExecutionNode,
+    promptFilePath: string,
+    toolCallId: string,
+    agentName: string,
+  ): Promise<string | null> {
+    this.log(`  Generating image from prompt: ${promptFilePath}`);
+
+    // Emit a tool_call for the actual image generation
+    const genCallId = `img_${node.id}_${Date.now()}`;
+    const toolName = `generate_image_${node.typeId}`;
+    this.emit({
+      type: 'tool_call',
+      toolCallId: genCallId,
+      toolName,
+      arguments: { prompt_file: promptFilePath, node: node.displayName },
+      agentName,
+    });
+
+    try {
+      // Read and parse the prompt file
+      const content = readFileSync(promptFilePath, 'utf-8');
+      const parsed = parsePromptFile(content);
+
+      if (!parsed.prompt) {
+        this.log(`  No prompt found in file`);
+        return null;
+      }
+
+      // Determine image type from node type
+      let imageType: 'character_ref' | 'setting_ref' | 'scene' = 'scene';
+      let characterName: string | undefined;
+      let settingName: string | undefined;
+      const sceneNumber = parseInt(node.itemId?.match(/(\d+)/)?.[1] ?? '1', 10);
+
+      if (node.typeId === 'character_image') {
+        imageType = 'character_ref';
+        characterName = node.itemId;
+      } else if (node.typeId === 'setting_image') {
+        imageType = 'setting_ref';
+        settingName = node.itemId;
+      }
+
+      // Emit progress start
+      this.emit({
+        type: 'tool_streaming',
+        toolCallId: genCallId,
+        chunk: `Generating ${node.displayName}...\n`,
+        done: false,
+        agentName,
+        toolName,
+      });
+
+      // Call the actual image generation (blocks until done)
+      const result = await submitImageGeneration({
+        scene_number: sceneNumber,
+        prompt: parsed.prompt,
+        negative_prompt: parsed.negativePrompt,
+        aspect_ratio: parsed.aspectRatio ?? '1:1',
+        image_type: imageType,
+        character_name: characterName,
+        setting_name: settingName,
+        generation_mode: parsed.generationMode ?? 'text_to_image',
+        reference_images: parsed.references?.map(r => ({
+          image_id: r.refId ?? r.path ?? r.name,
+          type: r.type as 'character' | 'setting',
+          name: r.name,
+        })),
+      });
+
+      // Get the result from the job store
+      const job = mediaJobs.get(result.jobId);
+      const artifactId = job?.result?.artifactId;
+      const filePath = job?.result?.path;
+
+      if (result.status === 'completed' && filePath) {
+        this.log(`  Image generated: ${filePath} (artifact: ${artifactId})`);
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId: genCallId,
+          chunk: `Image saved to ${filePath}`,
+          done: true,
+          agentName,
+          toolName,
+        });
+        this.emit({
+          type: 'tool_result',
+          toolCallId: genCallId,
+          toolName,
+          result: { status: 'completed', file: filePath, artifact_id: artifactId },
+          agentName,
+        });
+        return filePath;
+      } else {
+        const error = result.error ?? job?.error ?? 'Unknown error';
+        this.log(`  Image generation failed: ${error}`);
+        this.emit({
+          type: 'tool_result',
+          toolCallId: genCallId,
+          toolName,
+          result: { status: 'error', error },
+          agentName,
+          isError: true,
+        });
+        return null;
+      }
+    } catch (error) {
+      this.log(`  Image generation error: ${String(error)}`);
+      this.emit({
+        type: 'tool_result',
+        toolCallId: genCallId,
+        toolName,
+        result: { status: 'error', error: String(error) },
+        agentName,
+        isError: true,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Generate an actual video from a motion prompt file + scene image.
+   */
+  private async executeVideoGeneration(
+    node: ExecutionNode,
+    promptFilePath: string,
+    toolCallId: string,
+    agentName: string,
+  ): Promise<string | null> {
+    this.log(`  Generating video from prompt: ${promptFilePath}`);
+
+    const genCallId = `vid_${node.id}_${Date.now()}`;
+    const toolName = `generate_video_${node.typeId}`;
+    this.emit({
+      type: 'tool_call',
+      toolCallId: genCallId,
+      toolName,
+      arguments: { prompt_file: promptFilePath, node: node.displayName },
+      agentName,
+    });
+
+    try {
+      // Find the scene image from completed dependencies
+      let sceneImagePath: string | undefined;
+      for (const depId of node.dependencies) {
+        const dep = this.executor.getNode(depId);
+        if (dep?.typeId === 'scene_image' && dep.outputPath) {
+          sceneImagePath = dep.outputPath;
+          break;
+        }
+      }
+
+      if (!sceneImagePath) {
+        this.log(`  No scene image found in dependencies`);
+        return null;
+      }
+
+      // Read motion prompt
+      const motionContent = readFileSync(promptFilePath, 'utf-8');
+      const sceneNumber = parseInt(node.itemId?.match(/(\d+)/)?.[1] ?? '1', 10);
+      const shotNumber = parseInt(node.itemId?.match(/shot_(\d+)/)?.[1] ?? '1', 10);
+
+      this.emit({
+        type: 'tool_streaming',
+        toolCallId: genCallId,
+        chunk: `Generating video for ${node.displayName}...\n`,
+        done: false,
+        agentName,
+        toolName,
+      });
+
+      // Call video generation via provider
+      const provider = getProviderRegistry().getVideoGenerator();
+      if (!provider?.generateVideo) {
+        this.log(`  No video generation provider available`);
+        return null;
+      }
+
+      const assetsDir = join(this.config.projectDir, 'assets', 'videos');
+      if (!existsSync(assetsDir)) mkdirSync(assetsDir, { recursive: true });
+
+      const result = await provider.generateVideo(
+        {
+          sourceImagePath: join(this.config.projectDir, sceneImagePath),
+          prompt: motionContent,
+          outputDir: assetsDir,
+          filenamePrefix: `scene_${sceneNumber}_shot_${shotNumber}`,
+        },
+        (info) => {
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: genCallId,
+            chunk: `Step ${info.step ?? 0}/${info.maxSteps ?? 0} (${info.percentage}%)`,
+            done: info.done,
+            agentName,
+            toolName,
+          });
+        },
+      );
+
+      const relPath = relative(this.config.projectDir, result.filePath);
+      this.log(`  Video generated: ${relPath}`);
+
+      // Register asset
+      const artifactId = `vid_${Date.now()}`;
+      try {
+        addAsset({
+          id: artifactId,
+          type: 'scene_video',
+          path: relPath,
+          createdAt: Date.now(),
+        });
+      } catch { /* non-fatal */ }
+
+      this.emit({
+        type: 'tool_result',
+        toolCallId: genCallId,
+        toolName,
+        result: { status: 'completed', file: relPath },
+        agentName,
+      });
+      return relPath;
+    } catch (error) {
+      this.log(`  Video generation error: ${String(error)}`);
+      this.emit({
+        type: 'tool_result',
+        toolCallId: genCallId,
+        toolName,
+        result: { status: 'error', error: String(error) },
+        agentName,
+        isError: true,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Execute final video assembly from timeline. Purely deterministic — no LLM.
+   * Creates timeline skeleton if needed, validates, and runs FFmpeg.
+   */
+  private async executeFinalAssembly(
+    node: ExecutionNode,
+    toolCallId: string,
+  ): Promise<string | null> {
+    const agentName = this.config.name ?? 'kshana-executor';
+    const projectDir = this.config.projectDir;
+
+    this.log(`  Starting final assembly`);
+    this.emit({
+      type: 'tool_streaming',
+      toolCallId,
+      chunk: 'Assembling final video from timeline...\n',
+      done: false,
+      agentName,
+      toolName: 'assemble_final_video',
+    });
+
+    try {
+      // Create timeline if it doesn't exist
+      let timeline = loadTimeline(projectDir);
+      if (!timeline) {
+        // Build skeleton from completed scene nodes
+        const sceneNodes = this.executor.getAllNodes()
+          .filter(n => n.typeId === 'scene' && n.status === 'completed')
+          .sort((a, b) => (a.itemId ?? '').localeCompare(b.itemId ?? ''));
+
+        const duration = (this.config.goal.preferences.duration as number) ?? 120;
+        const perScene = sceneNodes.length > 0 ? duration / sceneNodes.length : duration;
+
+        timeline = createTimelineSkeleton(
+          duration,
+          sceneNodes.map(s => ({
+            label: s.displayName,
+            suggestedDuration: perScene,
+          })),
+        );
+        saveTimeline(projectDir, timeline);
+        this.log(`  Created timeline skeleton: ${sceneNodes.length} segments`);
+      }
+
+      // Update segments with video file paths from completed scene_video nodes
+      const videoNodes = this.executor.getAllNodes()
+        .filter(n => n.typeId === 'scene_video' && n.status === 'completed' && n.outputPath);
+
+      for (const vn of videoNodes) {
+        const segIdx = parseInt(vn.itemId?.match(/(\d+)/)?.[1] ?? '0', 10) - 1;
+        const segId = timeline.segments[segIdx]?.id;
+        if (segId && vn.outputPath) {
+          timeline = updateSegmentLayers(timeline, segId, [{
+            type: 'visual',
+            filePath: vn.outputPath,
+            label: vn.displayName,
+            source: 'generated',
+          }]);
+        }
+      }
+      saveTimeline(projectDir, timeline);
+
+      // Validate
+      const validation = validateTimeline(timeline);
+      this.emit({
+        type: 'tool_streaming',
+        toolCallId,
+        chunk: `Timeline: ${validation.filledDuration}s filled, ${validation.gaps.length} gaps, ${validation.warnings.length} warnings\n`,
+        done: false,
+        agentName,
+        toolName: 'assemble_final_video',
+      });
+
+      if (!validation.isComplete) {
+        this.log(`  Timeline incomplete: ${validation.warnings.join(', ')}`);
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId,
+          chunk: `Warning: Timeline not complete. Proceeding with available segments.\n`,
+          done: false,
+          agentName,
+          toolName: 'assemble_final_video',
+        });
+      }
+
+      // Resolve segment file paths
+      const resolution = resolveSegmentFilePaths(timeline, projectDir);
+      if (resolution.errors.length > 0) {
+        this.log(`  Resolution errors: ${resolution.errors.join(', ')}`);
+      }
+
+      if (resolution.resolved.length === 0) {
+        this.log(`  No segments resolved — cannot assemble`);
+        return null;
+      }
+
+      // Run FFmpeg assembly
+      const outputDir = join(projectDir, 'assets', 'videos', 'final');
+      if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+      const outputPath = join(outputDir, 'final_video.mp4');
+
+      this.emit({
+        type: 'tool_streaming',
+        toolCallId,
+        chunk: `Running FFmpeg assembly: ${resolution.resolved.length} segments...\n`,
+        done: false,
+        agentName,
+        toolName: 'assemble_final_video',
+      });
+
+      const result = await assembleVideos(resolution.resolved, outputPath);
+
+      if (result.success) {
+        const relPath = relative(projectDir, result.outputPath);
+        this.log(`  Final video assembled: ${relPath} (${result.duration}s, ${result.fileSize} bytes)`);
+
+        // Register asset
+        try {
+          addAsset({
+            id: `final-video-${Date.now()}`,
+            type: 'final_video',
+            path: relPath,
+            createdAt: Date.now(),
+            metadata: { duration: result.duration, fileSize: result.fileSize },
+          });
+        } catch { /* non-fatal */ }
+
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId,
+          chunk: `Final video: ${relPath} (${Math.round(result.duration)}s)`,
+          done: true,
+          agentName,
+          toolName: 'assemble_final_video',
+        });
+
+        return relPath;
+      } else {
+        this.log(`  Assembly failed`);
+        return null;
+      }
+    } catch (error) {
+      this.log(`  Assembly error: ${String(error)}`);
+      this.emit({
+        type: 'tool_result',
+        toolCallId,
+        toolName: 'assemble_final_video',
+        result: { status: 'error', error: String(error) },
+        agentName,
+        isError: true,
+      });
+      return null;
+    }
+  }
+
   private persistState(): void {
     try {
       this.config.project.executorState = this.executor.getState();

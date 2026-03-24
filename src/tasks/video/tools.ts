@@ -257,7 +257,7 @@ export function getAssetsDir(): string {
  * Submit an image generation job.
  * Uses the provider registry to route to the configured provider (ComfyUI, Google, xAI).
  */
-async function submitImageGeneration(params: ImageGenerationParams): Promise<{
+export async function submitImageGeneration(params: ImageGenerationParams): Promise<{
   jobId: string;
   status: string;
   error?: string;
@@ -906,7 +906,7 @@ This tool blocks until generation is complete and returns the result directly (a
 /**
  * Parsed metadata from a prompt file.
  */
-interface PromptFileMetadata {
+export interface PromptFileMetadata {
   /** The actual prompt text */
   prompt: string;
   /** Generation mode (text_to_image or image_text_to_image) */
@@ -933,7 +933,7 @@ interface PromptFileMetadata {
  *
  * The actual prompt is typically the first paragraph after the header.
  */
-function extractPromptFromMarkdown(content: string): string {
+export function extractPromptFromMarkdown(content: string): string {
   // Try structured prompt headers first (used by .motion.md and .prompt.md)
   const motionMatch = content.match(
     /\*\*Motion Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
@@ -997,7 +997,7 @@ function extractPromptFromMarkdown(content: string): string {
  * 16:9
  * ```
  */
-function parsePromptFile(content: string): PromptFileMetadata {
+export function parsePromptFile(content: string): PromptFileMetadata {
   const result: PromptFileMetadata = {
     prompt: '',
     references: [],
@@ -1103,7 +1103,7 @@ function parsePromptFile(content: string): PromptFileMetadata {
 /**
  * Resolve reference names to actual image paths from project state.
  */
-function resolveReferencesToPaths(
+export function resolveReferencesToPaths(
   references: PromptFileMetadata['references']
 ): Array<{ image_id: string; type: 'character' | 'setting'; name: string }> | null {
   const project = loadProject();
@@ -1215,7 +1215,7 @@ function resolveReferencesToPaths(
 /**
  * Helper function to find image path from artifact ID.
  */
-function findImagePathFromArtifactId(artifactId: string): string | undefined {
+export function findImagePathFromArtifactId(artifactId: string): string | undefined {
   // If the input is already an existing absolute file path, return it directly
   if (path.isAbsolute(artifactId) && fs.existsSync(artifactId)) {
     return artifactId;
