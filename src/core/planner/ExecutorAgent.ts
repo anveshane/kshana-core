@@ -156,11 +156,15 @@ export class ExecutorAgent extends TypedEventEmitter {
         config.project.executorState,
         config.template,
       );
-      // Auto-retry previously failed nodes (transient errors from last session)
-      const failedNodes = this.executor.getAllNodes().filter(n => n.status === 'failed');
-      if (failedNodes.length > 0) {
-        this.log(`Resetting ${failedNodes.length} failed node(s) for retry: ${failedNodes.map(n => n.id).join(', ')}`);
-        for (const node of failedNodes) {
+      // Reset stuck nodes from previous session:
+      // - 'failed' nodes: transient errors, retry them
+      // - 'in_progress'/'ready' nodes: server crashed mid-execution, reset to pending
+      const stuckNodes = this.executor.getAllNodes().filter(
+        n => n.status === 'failed' || n.status === 'in_progress' || n.status === 'ready',
+      );
+      if (stuckNodes.length > 0) {
+        this.log(`Resetting ${stuckNodes.length} stuck node(s) for retry: ${stuckNodes.map(n => `${n.id}(${n.status})`).join(', ')}`);
+        for (const node of stuckNodes) {
           this.executor.invalidateNode(node.id);
         }
       }
