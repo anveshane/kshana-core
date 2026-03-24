@@ -372,7 +372,35 @@ export class ExecutorAgent extends TypedEventEmitter {
             this.pendingMedia.clear();
             continue;  // Re-check for ready nodes
           }
-          this.log('STUCK: No ready nodes but not complete. Failed deps?');
+
+          // Try to self-repair: fix stale deps, reset stuck nodes, expand collections
+          this.log('No ready nodes — attempting self-repair...');
+          const beforeCount = this.executor.getAllNodes().filter(n => n.status === 'pending').length;
+          this.repairMissingNodes();
+          await this.expandPendingCollections();
+
+          // Also reset any failed nodes to give them another chance
+          const failedNodes = this.executor.getAllNodes().filter(n => n.status === 'failed');
+          for (const fn of failedNodes) {
+            this.executor.invalidateNode(fn.id);
+          }
+
+          const afterCount = this.executor.getAllNodes().filter(n => n.status === 'pending').length;
+          const newReady = this.executor.getNextReady();
+
+          if (newReady.length > 0) {
+            this.log(`Self-repair unblocked ${newReady.length} node(s)`);
+            this.emit({
+              type: 'notification',
+              level: 'info',
+              message: `Self-repair unblocked ${newReady.length} node(s) — continuing`,
+            });
+            this.persistState();
+            this.emitTodoUpdate();
+            continue;  // Re-enter loop with repaired state
+          }
+
+          this.log(`STUCK: Self-repair could not unblock. Before=${beforeCount} After=${afterCount}`);
           break;
         }
 
