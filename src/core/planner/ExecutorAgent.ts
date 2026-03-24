@@ -586,6 +586,20 @@ export class ExecutorAgent extends TypedEventEmitter {
                 agentName,
               });
 
+              // For shot_image_prompt: generate the actual shot image from the structured JSON
+              if (node.typeId === 'shot_image_prompt') {
+                const shotImagePath = await this.executeShotImageGeneration(node, content, toolCallId);
+                if (shotImagePath) {
+                  outputPath = shotImagePath;
+                } else {
+                  // Image gen failed but prompt is saved — mark failed for retry
+                  this.executor.markFailed(node.id, 'Shot image generation failed (prompt saved, will retry)');
+                  this.emitTodoUpdate();
+                  this.log(`  Shot image gen failed for ${node.id}`);
+                  continue;
+                }
+              }
+
               // For media nodes: execute actual generation after prompt is written
               if (nodeCategory === 'visual_ref' || nodeCategory === 'clip') {
                 if (this.config.parallelMediaGeneration) {
@@ -1762,6 +1776,152 @@ Rules:
     }
 
     return null;
+  }
+
+  /**
+   * Generate a shot image from structured JSON prompt.
+   * Reads the JSON, resolves refIds to actual image paths, calls ComfyUI with FLUX Klein.
+   */
+  private async executeShotImageGeneration(
+    node: ExecutionNode,
+    jsonContent: string,
+    toolCallId: string,
+  ): Promise<string | null> {
+    const agentName = this.config.name ?? 'kshana-executor';
+
+    try {
+      // Parse the structured JSON
+      let cleaned = jsonContent.trim();
+      if (cleaned.startsWith('```')) {
+        cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      }
+      const shotJson = JSON.parse(cleaned) as {
+        imagePrompt: string;
+        negativePrompt?: string;
+        aspectRatio?: string;
+        generationMode: string;
+        references: Array<{ imageNumber: number; type: string; refId: string }>;
+      };
+
+      if (!shotJson.imagePrompt) {
+        this.log(`  No imagePrompt in shot JSON`);
+        return null;
+      }
+
+      // Resolve refIds to actual file paths from the executor graph
+      const resolvedRefs = shotJson.references
+        .map(ref => {
+          const refNode = this.executor.getNode(ref.refId);
+          if (!refNode?.outputPath?.endsWith('.png')) {
+            this.log(`  Reference ${ref.refId} not resolved (node: ${refNode?.status}, path: ${refNode?.outputPath})`);
+            return null;
+          }
+          return {
+            image_id: join(this.config.projectDir, refNode.outputPath),
+            type: ref.type as 'character' | 'setting',
+            name: ref.refId.split(':')[1] ?? ref.refId,
+          };
+        })
+        .filter((r): r is NonNullable<typeof r> => r !== null);
+
+      this.log(`  Shot image: ${resolvedRefs.length}/${shotJson.references.length} refs resolved`);
+
+      // Determine generation mode based on resolved references
+      const hasRefs = resolvedRefs.length > 0;
+      const generationMode = hasRefs ? 'image_text_to_image' : 'text_to_image';
+
+      // Emit tool_call for the image generation
+      const genCallId = `shotimg_${node.id}_${Date.now()}`;
+      const toolName = 'generate_shot_image';
+      this.emit({
+        type: 'tool_call',
+        toolCallId: genCallId,
+        toolName,
+        arguments: {
+          item: node.displayName,
+          mode: generationMode,
+          references: resolvedRefs.map(r => `${r.name} (${r.type})`).join(', ') || 'none',
+        },
+        agentName,
+      });
+
+      // Subscribe to ComfyUI progress
+      let progressHandler: ComfyProgressHandler | null = null;
+      progressHandler = (event) => {
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId: genCallId,
+          chunk: event.message,
+          done: false,
+          agentName,
+          toolName,
+          reset: true,
+        });
+      };
+      comfyProgressBus.onProgress(progressHandler);
+
+      this.emit({
+        type: 'tool_streaming',
+        toolCallId: genCallId,
+        chunk: `Generating shot image (${generationMode})...`,
+        done: false,
+        agentName,
+        toolName,
+      });
+
+      const sceneNumber = parseInt(node.itemId?.match(/scene_(\d+)/)?.[1] ?? '1', 10);
+
+      const result = await submitImageGeneration({
+        scene_number: sceneNumber,
+        prompt: shotJson.imagePrompt,
+        negative_prompt: shotJson.negativePrompt,
+        aspect_ratio: shotJson.aspectRatio ?? '16:9',
+        image_type: 'scene',
+        generation_mode: generationMode,
+        reference_images: hasRefs ? resolvedRefs : undefined,
+      });
+
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+
+      const job = mediaJobs.get(result.jobId);
+      const filePath = job?.result?.path;
+      const artifactId = job?.result?.artifactId;
+
+      if (result.status === 'completed' && filePath) {
+        this.log(`  Shot image generated: ${filePath}`);
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId: genCallId,
+          chunk: `Image saved to ${filePath}`,
+          done: true,
+          agentName,
+          toolName,
+        });
+        this.emit({
+          type: 'tool_result',
+          toolCallId: genCallId,
+          toolName,
+          result: { status: 'completed', file_path: filePath, artifact_id: artifactId },
+          agentName,
+        });
+        return filePath;
+      } else {
+        if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+        this.log(`  Shot image failed: ${result.error ?? job?.error}`);
+        this.emit({
+          type: 'tool_result',
+          toolCallId: genCallId,
+          toolName,
+          result: { status: 'error', error: result.error ?? job?.error },
+          agentName,
+          isError: true,
+        });
+        return null;
+      }
+    } catch (error) {
+      this.log(`  Shot image error: ${String(error)}`);
+      return null;
+    }
   }
 
   /**
