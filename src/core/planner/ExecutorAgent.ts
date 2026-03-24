@@ -1006,17 +1006,43 @@ Rules:
     let repaired = 0;
 
     for (const node of allNodes) {
-      for (const depId of node.dependencies) {
-        if (!this.executor.getNode(depId)) {
-          // Missing dependency — try to recreate it
-          // Parse the depId to get typeId and itemId: "shot_image_prompt:scene_1" → typeId=shot_image_prompt, itemId=scene_1
-          const colonIdx = depId.indexOf(':');
-          const typeId = colonIdx >= 0 ? depId.slice(0, colonIdx) : depId;
-          const itemId = colonIdx >= 0 ? depId.slice(colonIdx + 1) : undefined;
-          const typeDef = this.config.template.artifactTypes[typeId];
+      const newDeps = [...node.dependencies];
+      let changed = false;
 
+      for (let i = 0; i < newDeps.length; i++) {
+        const depId = newDeps[i]!;
+        if (this.executor.getNode(depId)) continue; // dependency exists, fine
+
+        // Missing dependency — check if per-item nodes exist (expanded in previous session)
+        const colonIdx = depId.indexOf(':');
+        const typeId = colonIdx >= 0 ? depId.slice(0, colonIdx) : depId;
+        const itemId: string | undefined = colonIdx >= 0 ? depId.slice(colonIdx + 1) : undefined;
+
+        // Look for per-item nodes that match this type+item prefix
+        const expandedNodes = allNodes.filter(n =>
+          n.typeId === typeId && n.itemId && itemId && n.itemId.startsWith(itemId + '_'),
+        );
+
+        if (expandedNodes.length > 0) {
+          // The type-level node was expanded into per-item nodes in a previous session.
+          // Rewire: replace the stale dep with all per-item nodes.
+          this.log(`  Rewiring ${node.id}: ${depId} → ${expandedNodes.map(n => n.id).join(', ')}`);
+          newDeps.splice(i, 1, ...expandedNodes.map(n => n.id));
+          i += expandedNodes.length - 1; // adjust index
+
+          // Wire dependents on the per-item nodes
+          for (const en of expandedNodes) {
+            if (!en.dependents.includes(node.id)) {
+              en.dependents.push(node.id);
+            }
+          }
+
+          changed = true;
+          repaired++;
+        } else {
+          // No expanded nodes found — recreate the missing node from template
+          const typeDef = this.config.template.artifactTypes[typeId];
           if (typeDef) {
-            // Find what this node should depend on from the template
             const templateDeps = typeDef.dependencies
               .filter((d: { required: boolean }) => d.required)
               .map((d: { artifactTypeId: string; scope?: string }) => {
@@ -1030,7 +1056,7 @@ Rules:
             this.executor.addNode({
               id: depId,
               typeId,
-              itemId,
+              itemId: itemId ?? typeId,
               status: 'pending',
               displayName: `${typeDef.displayName}${itemId ? ': ' + itemId : ''}`,
               isExpensive: typeDef.isExpensive,
@@ -1039,7 +1065,6 @@ Rules:
               dependents: [node.id],
             });
 
-            // Wire the dependency's own deps to point back to it
             for (const td of templateDeps) {
               const tdNode = this.executor.getNode(td);
               if (tdNode && !tdNode.dependents.includes(depId)) {
@@ -1052,10 +1077,14 @@ Rules:
           }
         }
       }
+
+      if (changed) {
+        node.dependencies = newDeps;
+      }
     }
 
     if (repaired > 0) {
-      this.log(`Repaired ${repaired} missing node(s)`);
+      this.log(`Repaired ${repaired} missing/stale reference(s)`);
       this.persistState();
     }
   }
