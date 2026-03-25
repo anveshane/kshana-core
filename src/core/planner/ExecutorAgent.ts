@@ -365,6 +365,9 @@ export class ExecutorAgent extends TypedEventEmitter {
       this.emitTodoUpdate();
 
       // Main execution loop
+      let selfRepairCount = 0;
+      const MAX_SELF_REPAIRS = 3;
+
       while (!this.executor.isComplete() && !this.stopped) {
         const readyNodes = this.executor.getNextReady();
 
@@ -377,9 +380,14 @@ export class ExecutorAgent extends TypedEventEmitter {
             continue;  // Re-check for ready nodes
           }
 
-          // Try to self-repair: fix stale deps, reset stuck nodes, expand collections
-          this.log('No ready nodes — attempting self-repair...');
-          const beforeCount = this.executor.getAllNodes().filter(n => n.status === 'pending').length;
+          // Limit self-repair attempts to prevent infinite loops
+          if (selfRepairCount >= MAX_SELF_REPAIRS) {
+            this.log(`STUCK: Max self-repair attempts (${MAX_SELF_REPAIRS}) reached. Stopping.`);
+            break;
+          }
+
+          selfRepairCount++;
+          this.log(`No ready nodes — attempting self-repair (${selfRepairCount}/${MAX_SELF_REPAIRS})...`);
           this.repairMissingNodes();
           await this.expandPendingCollections();
 
@@ -389,7 +397,6 @@ export class ExecutorAgent extends TypedEventEmitter {
             this.executor.invalidateNode(fn.id);
           }
 
-          const afterCount = this.executor.getAllNodes().filter(n => n.status === 'pending').length;
           const newReady = this.executor.getNextReady();
 
           if (newReady.length > 0) {
@@ -401,12 +408,15 @@ export class ExecutorAgent extends TypedEventEmitter {
             });
             this.persistState();
             this.emitTodoUpdate();
-            continue;  // Re-enter loop with repaired state
+            continue;
           }
 
-          this.log(`STUCK: Self-repair could not unblock. Before=${beforeCount} After=${afterCount}`);
+          this.log(`STUCK: Self-repair attempt ${selfRepairCount} could not unblock any nodes.`);
           break;
         }
+
+        // Reset repair counter on successful progress
+        selfRepairCount = 0;
 
         this.log(`Ready nodes: ${readyNodes.map(n => n.id).join(', ')}`);
 
