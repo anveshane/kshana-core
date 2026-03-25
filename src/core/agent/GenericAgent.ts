@@ -2664,7 +2664,7 @@ export class GenericAgent extends TypedEventEmitter {
     }
 
     // Apply todo updates.
-    // - merge=false: replace list (preserving any existing completed items via manager logic)
+    // - merge=false: replace list
     // - merge=true: merge by id onto existing items
     const result = merge
       ? this.todoManager.mergeTodosById(todos)
@@ -3328,10 +3328,10 @@ Respond in JSON format:
 
       return {
         status: result.status,
-        content: validatedContent?.content ?? generatedContent,
         content_type: contentType,
         output_file: effectiveOutputFile,
-        message: `Content generated successfully — saved to ${effectiveOutputFile}`,
+        file_saved: true,
+        message: `Content generated and saved to ${effectiveOutputFile}`,
       };
     } catch (error) {
       return {
