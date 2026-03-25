@@ -93,9 +93,10 @@ jobs:
           HEALTHCHECK_URL="http://${GCE_HOST}/api/v1/health"
           DEPLOY_ENVIRONMENT="production"
           if [ "${GITHUB_REF_NAME}" = "dev" ]; then
+            DEV_PORT=81
             TARGET_SERVICE="kshana-ink-dev"
             TARGET_ENV_FILE=".env.dev"
-            HEALTHCHECK_URL="http://${GCE_HOST}/dev/api/v1/health"
+            HEALTHCHECK_URL="http://${GCE_HOST}:${DEV_PORT}/api/v1/health"
             DEPLOY_ENVIRONMENT="staging"
           fi
 

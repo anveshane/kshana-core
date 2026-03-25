@@ -599,6 +599,9 @@ export class GenericAgent extends TypedEventEmitter {
   private thinkTagBuffer: string = '';
   private insideThinkTag: boolean = false;
 
+  // Tool-call XML streaming filter state (suppresses <tool_call>...</tool_call> from visible output)
+  private insideToolCallTag: boolean = false;
+
   // Analytics session ID (stable per agent instance)
   private analyticsSessionId: string;
 
@@ -929,7 +932,7 @@ export class GenericAgent extends TypedEventEmitter {
       }
     }
 
-    return { output, thinking };
+    return { output: this.stripToolCallBlocks(output), thinking };
   }
 
   /**
@@ -938,6 +941,41 @@ export class GenericAgent extends TypedEventEmitter {
   private resetThinkTagFilter(): void {
     this.thinkTagBuffer = '';
     this.insideThinkTag = false;
+    this.insideToolCallTag = false;
+  }
+
+  /**
+   * Strip <tool_call>...</tool_call> blocks from a text chunk, maintaining
+   * state across chunks so blocks that span multiple chunks are handled correctly.
+   */
+  private stripToolCallBlocks(text: string): string {
+    let result = '';
+    let remaining = text;
+
+    while (remaining.length > 0) {
+      if (this.insideToolCallTag) {
+        const closeIdx = remaining.indexOf('</tool_call>');
+        if (closeIdx !== -1) {
+          remaining = remaining.slice(closeIdx + '</tool_call>'.length);
+          this.insideToolCallTag = false;
+        } else {
+          // Still inside a tool_call block — discard everything remaining
+          break;
+        }
+      } else {
+        const openIdx = remaining.indexOf('<tool_call>');
+        if (openIdx !== -1) {
+          result += remaining.slice(0, openIdx);
+          remaining = remaining.slice(openIdx + '<tool_call>'.length);
+          this.insideToolCallTag = true;
+        } else {
+          result += remaining;
+          break;
+        }
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -1115,12 +1153,15 @@ export class GenericAgent extends TypedEventEmitter {
           }
         }
 
-        // Clean content (remove <think> tags including orphaned ones)
+        // Clean content (remove <think> and <tool_call> tags including orphaned ones)
         const cleanedContent = content
           ? content
               .replace(/<think>.*?<\/think>/gs, '') // Complete think blocks
               .replace(/<think>.*$/gs, '') // Orphan opening tag
               .replace(/<\/think>/g, '') // Orphan closing tag
+              .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '') // Complete tool_call blocks
+              .replace(/<tool_call>[\s\S]*$/g, '') // Orphan opening tag
+              .replace(/<\/tool_call>/g, '') // Orphan closing tag
               .trim()
           : null;
 
@@ -3617,12 +3658,15 @@ Respond in JSON format:
           }
         }
 
-        // Clean content (remove <think> tags including orphaned ones)
+        // Clean content (remove <think> and <tool_call> tags including orphaned ones)
         let cleanedContent = content
           ? content
               .replace(/<think>.*?<\/think>/gs, '') // Complete think blocks
               .replace(/<think>.*$/gs, '') // Orphan opening tag
               .replace(/<\/think>/g, '') // Orphan closing tag
+              .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '') // Complete tool_call blocks
+              .replace(/<tool_call>[\s\S]*$/g, '') // Orphan opening tag
+              .replace(/<\/tool_call>/g, '') // Orphan closing tag
               .trim()
           : '';
 
