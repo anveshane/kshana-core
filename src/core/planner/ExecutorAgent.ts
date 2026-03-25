@@ -483,6 +483,16 @@ export class ExecutorAgent extends TypedEventEmitter {
                 continue;
               }
               finalOutputPath = assemblyResult;
+            } else if (node.typeId === 'shot_video') {
+              // Shot video — purely deterministic: take shot image + motion → video provider
+              // No LLM needed. The shot image comes from shot_image_prompt dependency,
+              // the motion comes from scene_video_prompt (via shot's scene).
+              const videoResult = await this.executeShotVideo(node, toolCallId);
+              if (!videoResult) {
+                this.executor.markFailed(node.id, 'Shot video generation failed');
+                continue;
+              }
+              finalOutputPath = videoResult;
             } else {
               // Check if prompt/output file already exists on disk (from a previous run)
               // For media nodes (visual_ref/clip) and shot_image_prompt: skip LLM, go to generation
@@ -2064,6 +2074,182 @@ Rules:
     } catch (error) {
       if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
       this.log(`  Image generation error: ${String(error)}`);
+      this.emit({
+        type: 'tool_result',
+        toolCallId: genCallId,
+        toolName,
+        result: { status: 'error', error: String(error) },
+        agentName,
+        isError: true,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Generate a shot video — purely deterministic, no LLM.
+   * Takes: shot image (from shot_image_prompt dep) + motion description (from scene_video_prompt JSON)
+   * Calls video provider to generate the clip.
+   */
+  private async executeShotVideo(
+    node: ExecutionNode,
+    toolCallId: string,
+  ): Promise<string | null> {
+    const agentName = this.config.name ?? 'kshana-executor';
+
+    // 1. Find the shot image from shot_image_prompt dependency
+    let shotImagePath: string | undefined;
+    for (const depId of node.dependencies) {
+      const dep = this.executor.getNode(depId);
+      if (dep?.outputPath?.endsWith('.png') || dep?.outputPath?.endsWith('.jpg')) {
+        shotImagePath = dep.outputPath;
+        break;
+      }
+    }
+
+    if (!shotImagePath) {
+      this.log(`  No shot image found for ${node.id}`);
+      return null;
+    }
+
+    // 2. Get motion description from scene_video_prompt JSON
+    // Extract scene and shot number from itemId: "scene_1_shot_2"
+    const sceneMatch = node.itemId?.match(/scene_(\d+)/);
+    const shotMatch = node.itemId?.match(/shot_(\d+)/);
+    const sceneNum = sceneMatch?.[1] ? parseInt(sceneMatch[1], 10) : 1;
+    const shotNum = shotMatch?.[1] ? parseInt(shotMatch[1], 10) : 1;
+
+    const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
+    let motionPrompt = '';
+    let shotDuration = 5;
+
+    if (svpNode?.outputPath) {
+      const svpPath = join(this.config.projectDir, svpNode.outputPath);
+      if (existsSync(svpPath)) {
+        try {
+          let content = readFileSync(svpPath, 'utf-8').trim();
+          if (content.startsWith('```')) {
+            content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+          }
+          const parsed = JSON.parse(content);
+          const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
+          if (shot) {
+            motionPrompt = shot.description || '';
+            if (shot.cameraWork) motionPrompt += ' ' + shot.cameraWork;
+            shotDuration = shot.duration || 5;
+          }
+        } catch {
+          this.log(`  Failed to parse scene_video_prompt JSON for motion`);
+        }
+      }
+    }
+
+    if (!motionPrompt) {
+      motionPrompt = `Cinematic shot with subtle camera movement, scene ${sceneNum} shot ${shotNum}`;
+    }
+
+    // 3. Emit tool_call
+    const genCallId = `shotvid_${node.id}_${Date.now()}`;
+    const toolName = 'generate_shot_video';
+    this.emit({
+      type: 'tool_call',
+      toolCallId: genCallId,
+      toolName,
+      arguments: { item: node.displayName, source_image: shotImagePath, duration: shotDuration },
+      agentName,
+    });
+
+    // 4. Subscribe to progress
+    let progressHandler: ComfyProgressHandler | null = null;
+    progressHandler = (event) => {
+      this.emit({
+        type: 'tool_streaming',
+        toolCallId: genCallId,
+        chunk: event.message,
+        done: false,
+        agentName,
+        toolName,
+        reset: true,
+      });
+    };
+    comfyProgressBus.onProgress(progressHandler);
+
+    this.emit({
+      type: 'tool_streaming',
+      toolCallId: genCallId,
+      chunk: `Generating shot video (${shotDuration}s)...`,
+      done: false,
+      agentName,
+      toolName,
+    });
+
+    try {
+      // 5. Call video provider
+      const provider = getProviderRegistry().getVideoGenerator();
+      if (!provider?.generateVideo) {
+        this.log(`  No video generation provider available`);
+        if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+        return null;
+      }
+
+      const assetsDir = join(this.config.projectDir, 'assets', 'videos', 'shots');
+      if (!existsSync(assetsDir)) mkdirSync(assetsDir, { recursive: true });
+
+      const result = await provider.generateVideo(
+        {
+          sourceImagePath: join(this.config.projectDir, shotImagePath),
+          prompt: motionPrompt,
+          durationSeconds: shotDuration,
+          outputDir: assetsDir,
+          filenamePrefix: `scene_${sceneNum}_shot_${shotNum}`,
+        },
+        (info) => {
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: genCallId,
+            chunk: info.message,
+            done: false,
+            agentName,
+            toolName,
+            reset: true,
+          });
+        },
+      );
+
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+
+      const relPath = relative(this.config.projectDir, result.filePath);
+      this.log(`  Shot video generated: ${relPath} (${shotDuration}s)`);
+
+      try {
+        addAsset({
+          id: `shotvid_${Date.now()}`,
+          type: 'scene_video',
+          path: relPath,
+          createdAt: Date.now(),
+          metadata: { sceneNumber: sceneNum, shotNumber: shotNum, duration: shotDuration },
+        });
+      } catch { /* non-fatal */ }
+
+      this.emit({
+        type: 'tool_streaming',
+        toolCallId: genCallId,
+        chunk: `Video saved to ${relPath}`,
+        done: true,
+        agentName,
+        toolName,
+      });
+      this.emit({
+        type: 'tool_result',
+        toolCallId: genCallId,
+        toolName,
+        result: { status: 'completed', file_path: relPath },
+        agentName,
+      });
+      return relPath;
+    } catch (error) {
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+      this.log(`  Shot video error: ${String(error)}`);
       this.emit({
         type: 'tool_result',
         toolCallId: genCallId,
