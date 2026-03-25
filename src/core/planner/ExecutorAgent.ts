@@ -2405,79 +2405,73 @@ Rules:
     });
 
     try {
-      // Create timeline if it doesn't exist
-      let timeline = loadTimeline(projectDir);
-      if (!timeline) {
-        // Build skeleton from completed scene nodes
-        const sceneNodes = this.executor.getAllNodes()
-          .filter(n => n.typeId === 'scene' && n.status === 'completed')
-          .sort((a, b) => (a.itemId ?? '').localeCompare(b.itemId ?? ''));
+      // Collect all completed shot videos in order (scene_1_shot_1, scene_1_shot_2, ..., scene_2_shot_1, ...)
+      const shotVideoNodes = this.executor.getAllNodes()
+        .filter(n => n.typeId === 'shot_video' && n.status === 'completed' && n.outputPath)
+        .sort((a, b) => (a.itemId ?? '').localeCompare(b.itemId ?? ''));
 
-        const duration = (this.config.goal.preferences.duration as number) ?? 120;
-        const perScene = sceneNodes.length > 0 ? duration / sceneNodes.length : duration;
-
-        timeline = createTimelineSkeleton(
-          duration,
-          sceneNodes.map(s => ({
-            label: s.displayName,
-            suggestedDuration: perScene,
-          })),
-        );
-        saveTimeline(projectDir, timeline);
-        this.log(`  Created timeline skeleton: ${sceneNodes.length} segments`);
+      if (shotVideoNodes.length === 0) {
+        this.log(`  No completed shot videos found — cannot assemble`);
+        return null;
       }
 
-      // Update segments with video file paths from completed scene_video nodes
-      const videoNodes = this.executor.getAllNodes()
-        .filter(n => n.typeId === 'scene_video' && n.status === 'completed' && n.outputPath);
-
-      for (const vn of videoNodes) {
-        const segIdx = parseInt(vn.itemId?.match(/(\d+)/)?.[1] ?? '0', 10) - 1;
-        const segId = timeline.segments[segIdx]?.id;
-        if (segId && vn.outputPath) {
-          timeline = updateSegmentLayers(timeline, segId, [{
-            type: 'visual',
-            filePath: vn.outputPath,
-            label: vn.displayName,
-            source: 'generated',
-          }]);
-        }
-      }
-      saveTimeline(projectDir, timeline);
-
-      // Validate
-      const validation = validateTimeline(timeline);
+      this.log(`  Found ${shotVideoNodes.length} shot videos for assembly`);
       this.emit({
         type: 'tool_streaming',
         toolCallId,
-        chunk: `Timeline: ${validation.filledDuration}s filled, ${validation.gaps.length} gaps, ${validation.warnings.length} warnings\n`,
+        chunk: `Found ${shotVideoNodes.length} shot videos. Assembling...\n`,
         done: false,
         agentName,
         toolName: 'assemble_final_video',
       });
 
-      if (!validation.isComplete) {
-        this.log(`  Timeline incomplete: ${validation.warnings.join(', ')}`);
-        this.emit({
-          type: 'tool_streaming',
-          toolCallId,
-          chunk: `Warning: Timeline not complete. Proceeding with available segments.\n`,
-          done: false,
-          agentName,
-          toolName: 'assemble_final_video',
-        });
-      }
+      // Build resolved segments directly from shot video nodes (skip timeline system)
+      let currentTime = 0;
+      const resolvedSegments = shotVideoNodes.map(vn => {
+        const filePath = join(projectDir, vn.outputPath!);
+        // Estimate duration from scene_video_prompt JSON or default to 5s
+        const sceneMatch = vn.itemId?.match(/scene_(\d+)/);
+        const shotMatch = vn.itemId?.match(/shot_(\d+)/);
+        const sceneNum = sceneMatch?.[1] ? parseInt(sceneMatch[1], 10) : 1;
+        const shotNum = shotMatch?.[1] ? parseInt(shotMatch[1], 10) : 1;
 
-      // Resolve segment file paths
-      const resolution = resolveSegmentFilePaths(timeline, projectDir);
-      if (resolution.errors.length > 0) {
-        this.log(`  Resolution errors: ${resolution.errors.join(', ')}`);
-      }
+        let duration = 5;
+        // Try to get actual duration from scene_video_prompt JSON
+        const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
+        if (svpNode?.outputPath) {
+          try {
+            const svpPath = join(projectDir, svpNode.outputPath);
+            if (existsSync(svpPath)) {
+              let content = readFileSync(svpPath, 'utf-8').trim();
+              if (content.startsWith('```')) content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+              const parsed = JSON.parse(content);
+              const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
+              if (shot?.duration) duration = shot.duration;
+            }
+          } catch { /* use default */ }
+        }
 
-      if (resolution.resolved.length === 0) {
-        this.log(`  No segments resolved — cannot assemble`);
-        return null;
-      }
+        const segment = {
+          segmentId: vn.id,
+          label: vn.displayName,
+          startTime: currentTime,
+          endTime: currentTime + duration,
+          duration,
+          filePath,
+          mediaType: 'video' as const,
+        };
+        currentTime += duration;
+        return segment;
+      });
+
+      this.emit({
+        type: 'tool_streaming',
+        toolCallId,
+        chunk: `Total duration: ${currentTime}s from ${resolvedSegments.length} shots\n`,
+        done: false,
+        agentName,
+        toolName: 'assemble_final_video',
+      });
 
       // Run FFmpeg assembly
       const outputDir = join(projectDir, 'assets', 'videos', 'final');
@@ -2487,13 +2481,13 @@ Rules:
       this.emit({
         type: 'tool_streaming',
         toolCallId,
-        chunk: `Running FFmpeg assembly: ${resolution.resolved.length} segments...\n`,
+        chunk: `Running FFmpeg assembly...\n`,
         done: false,
         agentName,
         toolName: 'assemble_final_video',
       });
 
-      const result = await assembleVideos(resolution.resolved, outputPath);
+      const result = await assembleVideos(resolvedSegments, outputPath);
 
       if (result.success) {
         const relPath = relative(projectDir, result.outputPath);
