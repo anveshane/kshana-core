@@ -434,46 +434,11 @@ export class ExecutorAgent extends TypedEventEmitter {
           });
 
           try {
-            // 1. Resolve inputs — code reads all dependency files
-            const inputs = resolveInputs(node, this.executor, this.config.projectDir);
-            this.log(`  Inputs resolved: ${inputs.filesRead.length} files read: ${inputs.filesRead.join(', ') || '(none)'}`);
-            this.log(`  Reference images: ${inputs.referenceImages.length}`);
-            this.log(`  Context block length: ${inputs.contextBlock.length} chars`);
-
-            // 2. Build prompt based on node type (also loads skills)
-            const { system, user, loadedSkills } = this.buildPromptForNode(node, inputs);
-            this.log(`  Prompt built: system=${system.length} chars, user=${user.length} chars`);
-
-            // Emit tool_call so the UI shows what we're generating and its inputs
-            const toolCallId = `exec_${node.id}_${Date.now()}`;
-            const toolName = this.getToolDisplayName(node);
-            const toolArgs = this.getToolDisplayArgs(node, inputs);
-            if (loadedSkills.length > 0) {
-              toolArgs['skills'] = loadedSkills.join(', ');
-            }
-            this.emit({
-              type: 'tool_call',
-              toolCallId,
-              toolName,
-              arguments: toolArgs,
-              agentName,
-            });
-
-            // 3. For expensive ops, ask user approval
-            if (node.isExpensive) {
-              this.log(`  Expensive op — requesting approval`);
-              const approved = await this.askApproval(node, inputs);
-              if (!approved) {
-                this.log(`  Skipped by user`);
-                this.executor.markFailed(node.id, 'Skipped by user');
-                continue;
-              }
-            }
-
-            // 4. Handle based on category
+            // Check for deterministic nodes FIRST — these skip LLM entirely
             const nodeTypeDef = this.config.template.artifactTypes[node.typeId];
             const nodeCategory = nodeTypeDef?.category;
             let finalOutputPath = '';
+            const toolCallId = `exec_${node.id}_${Date.now()}`;
 
             if (nodeCategory === 'final') {
               // Final assembly — skip LLM, go straight to deterministic assembly
@@ -485,8 +450,6 @@ export class ExecutorAgent extends TypedEventEmitter {
               finalOutputPath = assemblyResult;
             } else if (node.typeId === 'shot_video') {
               // Shot video — purely deterministic: take shot image + motion → video provider
-              // No LLM needed. The shot image comes from shot_image_prompt dependency,
-              // the motion comes from scene_video_prompt (via shot's scene).
               const videoResult = await this.executeShotVideo(node, toolCallId);
               if (!videoResult) {
                 this.executor.markFailed(node.id, 'Shot video generation failed');
@@ -494,8 +457,43 @@ export class ExecutorAgent extends TypedEventEmitter {
               }
               finalOutputPath = videoResult;
             } else {
+              // Non-deterministic node — needs LLM (or skip-if-exists)
+              // 1. Resolve inputs
+              const inputs = resolveInputs(node, this.executor, this.config.projectDir);
+              this.log(`  Inputs resolved: ${inputs.filesRead.length} files read: ${inputs.filesRead.join(', ') || '(none)'}`);
+              this.log(`  Reference images: ${inputs.referenceImages.length}`);
+              this.log(`  Context block length: ${inputs.contextBlock.length} chars`);
+
+              // 2. Build prompt
+              const { system, user, loadedSkills } = this.buildPromptForNode(node, inputs);
+              this.log(`  Prompt built: system=${system.length} chars, user=${user.length} chars`);
+
+              // 3. Emit tool_call
+              const toolName = this.getToolDisplayName(node);
+              const toolArgs = this.getToolDisplayArgs(node, inputs);
+              if (loadedSkills.length > 0) {
+                toolArgs['skills'] = loadedSkills.join(', ');
+              }
+              this.emit({
+                type: 'tool_call',
+                toolCallId,
+                toolName,
+                arguments: toolArgs,
+                agentName,
+              });
+
+              // 4. For expensive ops, ask user approval
+              if (node.isExpensive) {
+                this.log(`  Expensive op — requesting approval`);
+                const approved = await this.askApproval(node, inputs);
+                if (!approved) {
+                  this.log(`  Skipped by user`);
+                  this.executor.markFailed(node.id, 'Skipped by user');
+                  continue;
+                }
+              }
+
               // Check if prompt/output file already exists on disk (from a previous run)
-              // For media nodes (visual_ref/clip) and shot_image_prompt: skip LLM, go to generation
               const isMediaNode = nodeCategory === 'visual_ref' || nodeCategory === 'clip';
               const needsImageGen = node.typeId === 'shot_image_prompt';
               if (isMediaNode || needsImageGen) {
