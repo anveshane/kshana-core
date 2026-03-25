@@ -14,6 +14,8 @@
     "dev": "NODE_OPTIONS='--max-old-space-size=8192' tsx watch src/index.tsx",
     "server": "NODE_OPTIONS='--max-old-space-size=8192' tsx src/server/cli.ts",
     "server:dev": "NODE_OPTIONS='--max-old-space-size=8192' tsx watch src/server/cli.ts",
+    "kill": "pkill -f 'tsx.*src/index.tsx' || true; pkill -f 'tsx.*src/server/cli.ts' || true; echo 'All kshana processes killed'",
+    "restart": "pnpm kill && pnpm start",
     "test:client": "tsx src/server/testClient.ts",
     "build": "tsup",
     "test": "vitest",
