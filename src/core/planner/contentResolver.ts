@@ -63,6 +63,16 @@ export function resolveInputs(
 **Creating:** ${node.displayName}
 **Type:** ${node.typeId}${node.itemId ? `\n**Item:** ${node.itemId}` : ''}`);
 
+  // For root nodes (no dependencies, e.g., plot): inject original_input.md as context
+  if (node.dependencies.length === 0) {
+    const originalInput = readFile(projectDir, 'original_input.md');
+    if (originalInput) {
+      filesRead.push('original_input.md');
+      dependencies['original_input'] = originalInput;
+      sections.push(`### Original User Input\n**File:** original_input.md\n\n${originalInput}`);
+    }
+  }
+
   // Read each dependency's output
   for (const depId of node.dependencies) {
     const depNode = executor.getNode(depId);
