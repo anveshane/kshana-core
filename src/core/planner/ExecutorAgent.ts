@@ -473,7 +473,7 @@ export class ExecutorAgent extends TypedEventEmitter {
             // 4. Handle based on category
             const nodeTypeDef = this.config.template.artifactTypes[node.typeId];
             const nodeCategory = nodeTypeDef?.category;
-            let finalOutputPath: string;
+            let finalOutputPath = '';
 
             if (nodeCategory === 'final') {
               // Final assembly — skip LLM, go straight to deterministic assembly
@@ -485,16 +485,31 @@ export class ExecutorAgent extends TypedEventEmitter {
               finalOutputPath = assemblyResult;
             } else {
               // Check if prompt/output file already exists on disk (from a previous run)
-              // For media nodes (visual_ref/clip): skip LLM, go to image/video generation
-              // For prompt-only nodes (shot_image_prompt): skip LLM, mark completed
+              // For media nodes (visual_ref/clip) and shot_image_prompt: skip LLM, go to generation
               const isMediaNode = nodeCategory === 'visual_ref' || nodeCategory === 'clip';
-              const isPromptOnlyNode = node.typeId === 'shot_image_prompt';
-              if (isMediaNode || isPromptOnlyNode) {
+              const needsImageGen = node.typeId === 'shot_image_prompt';
+              if (isMediaNode || needsImageGen) {
                 const existingPromptPath = this.findExistingPromptFile(node);
                 if (existingPromptPath) {
                   this.log(`  Prompt file already exists: ${existingPromptPath} — skipping LLM`);
 
-                  if (isMediaNode) {
+                  if (needsImageGen) {
+                    // Shot image prompt: skip LLM, generate shot image from JSON
+                    this.emit({
+                      type: 'notification',
+                      level: 'info',
+                      message: `Skipping LLM for ${node.displayName} — prompt exists, generating shot image`,
+                    });
+                    const jsonContent = readFileSync(join(this.config.projectDir, existingPromptPath), 'utf-8');
+                    const shotImagePath = await this.executeShotImageGeneration(node, jsonContent, toolCallId);
+                    if (shotImagePath) {
+                      finalOutputPath = shotImagePath;
+                    } else {
+                      this.executor.markFailed(node.id, 'Shot image generation failed (prompt saved, will retry)');
+                      this.emitTodoUpdate();
+                      continue;
+                    }
+                  } else if (isMediaNode) {
                     // Media node: skip LLM, go straight to image/video generation
                     this.emit({
                       type: 'notification',
@@ -509,9 +524,6 @@ export class ExecutorAgent extends TypedEventEmitter {
                       this.emitTodoUpdate();
                       continue;
                     }
-                  } else {
-                    // Prompt-only node: just mark completed with the existing file
-                    finalOutputPath = existingPromptPath;
                   }
 
                   this.emit({
@@ -2086,24 +2098,25 @@ Rules:
     });
 
     try {
-      // Find the scene image from completed dependencies
-      let sceneImagePath: string | undefined;
+      // Find the source image from completed dependencies
+      // For shot_video: the source image comes from shot_image_prompt (which generates the shot image)
+      // For legacy scene_video: would come from scene_image
+      let sourceImagePath: string | undefined;
       for (const depId of node.dependencies) {
         const dep = this.executor.getNode(depId);
-        if (dep?.typeId === 'scene_image' && dep.outputPath) {
-          sceneImagePath = dep.outputPath;
+        if (dep?.outputPath?.endsWith('.png') || dep?.outputPath?.endsWith('.jpg')) {
+          sourceImagePath = dep.outputPath;
           break;
         }
       }
 
-      if (!sceneImagePath) {
-        this.log(`  No scene image found in dependencies`);
-        return null;
-      }
-
-      // Verify the scene image is an actual image, not a prompt file
-      if (sceneImagePath.endsWith('.md') || sceneImagePath.endsWith('.txt')) {
-        this.log(`  Scene image is a prompt file, not an actual image: ${sceneImagePath}`);
+      if (!sourceImagePath) {
+        this.log(`  No source image found in dependencies for video gen`);
+        this.log(`  Dependencies: ${node.dependencies.join(', ')}`);
+        for (const depId of node.dependencies) {
+          const dep = this.executor.getNode(depId);
+          this.log(`    ${depId}: status=${dep?.status}, outputPath=${dep?.outputPath}`);
+        }
         return null;
       }
 
@@ -2133,7 +2146,7 @@ Rules:
 
       const result = await provider.generateVideo(
         {
-          sourceImagePath: join(this.config.projectDir, sceneImagePath),
+          sourceImagePath: join(this.config.projectDir, sourceImagePath),
           prompt: motionContent,
           outputDir: assetsDir,
           filenamePrefix: `scene_${sceneNumber}_shot_${shotNumber}`,
