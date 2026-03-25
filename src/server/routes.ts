@@ -134,6 +134,7 @@ export async function registerRoutes(
         });
       }
 
+      conversationManager.touchSession(sessionId);
       return reply.send(session);
     }
   );

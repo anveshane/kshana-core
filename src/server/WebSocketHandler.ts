@@ -132,6 +132,7 @@ export class WebSocketHandler {
     if (resumeSessionId && this.conversationManager.getSession(resumeSessionId)) {
       sessionId = resumeSessionId;
       resumedSession = true;
+      this.conversationManager.touchSession(sessionId);
       // Close any stale connection for this session
       const oldConn = this.connections.get(sessionId);
       if (oldConn) {
@@ -171,6 +172,7 @@ export class WebSocketHandler {
     // Set up message handler
     socket.on('message', async (data) => {
       connectionState.isAlive = true;
+      this.conversationManager.touchSession(sessionId);
       await this.handleMessage(sessionId, socket, data.toString());
     });
 
@@ -193,6 +195,7 @@ export class WebSocketHandler {
     // Set up pong handler for heartbeat
     socket.on('pong', () => {
       connectionState.isAlive = true;
+      this.conversationManager.touchSession(sessionId);
     });
   }
 

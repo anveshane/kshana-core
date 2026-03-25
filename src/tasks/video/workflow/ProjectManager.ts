@@ -2687,6 +2687,8 @@ TodoWrite(merge: false, todos: [
 \`\`\`
 
 **CRITICAL**: Use \`merge: false\` to REPLACE the old todos. This clears the todo list from the previous phase.
+**CRITICAL**: Use the canonical item ids from project state when creating this list. Do not invent a new id family for items that already exist.
+Every later \`TodoWrite(merge: true)\` update in this phase MUST reuse those same ids.
 `;
   }
 
@@ -2737,7 +2739,7 @@ After generating, get user approval before moving to the next scene.
 
 **CRITICAL - After User Approval:**
 1. Update scene with update_project(action: 'update_scene_approval', ...)
-2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current scene as 'completed' and the next as 'in_progress'
+2. **MUST** call TodoWrite(merge: true, todos: [...]) using the existing canonical todo ids to mark the current scene as 'completed' and the next as 'in_progress'
 3. Then generate the next scene image
 
 **DO NOT skip the TodoWrite call!**
@@ -2753,7 +2755,7 @@ After generating, get user approval before moving to the next item.
 
 **CRITICAL - After User Approval:**
 1. Update with update_project(action: 'update_${nextItem.type}_approval', ...)
-2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current item as 'completed' and the next as 'in_progress'
+2. **MUST** call TodoWrite(merge: true, todos: [...]) using the existing canonical todo ids to mark the current item as 'completed' and the next as 'in_progress'
 3. Then generate the next reference image
 
 **DO NOT skip the TodoWrite call!**
@@ -2769,7 +2771,7 @@ After generating, get user approval before moving to the next scene.
 
 **CRITICAL - After User Approval:**
 1. Update scene with update_project(action: 'update_scene_approval', ...)
-2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current scene as 'completed' and the next as 'in_progress'
+2. **MUST** call TodoWrite(merge: true, todos: [...]) using the existing canonical todo ids to mark the current scene as 'completed' and the next as 'in_progress'
 3. Then generate the next video
 
 **DO NOT skip the TodoWrite call!**
@@ -2785,7 +2787,7 @@ After creating, get user approval before moving to the next scene.
 
 **CRITICAL - After User Approval:**
 1. Register the scene with update_project(action: 'add_scene', data: { scene_number: ${nextItem.name}, title: '...' })
-2. **MUST** call TodoWrite(merge: true, todos: [{ id: 'scene-${nextItem.name}', status: 'completed' }, { id: 'scene-NEXT', status: 'in_progress' }])
+2. **MUST** call TodoWrite(merge: true, todos: [...]) using the existing canonical todo ids from the current todo list. Do not create placeholder ids like \`scene-NEXT\`.
 3. Then create the next scene
 
 **DO NOT skip the TodoWrite call! The todo list MUST be updated after each scene approval.**
@@ -2802,7 +2804,7 @@ After creating, get user approval before moving to the next item.
 
 **CRITICAL - After User Approval:**
 1. Register the item with update_project(action: 'add_${nextItem.type}', ...)
-2. **MUST** call TodoWrite(merge: true, todos: [...]) to mark the current item as 'completed' and the next as 'in_progress'
+2. **MUST** call TodoWrite(merge: true, todos: [...]) using the existing canonical todo ids to mark the current item as 'completed' and the next as 'in_progress'
 3. Then create the next item
 
 **DO NOT skip the TodoWrite call!**
