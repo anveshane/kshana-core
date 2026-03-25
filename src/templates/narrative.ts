@@ -228,8 +228,8 @@ const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
   requiresPerItemApproval: true,
   dependencies: [
     { artifactTypeId: 'scene', required: true, usage: 'context', scope: 'matching' },
-    { artifactTypeId: 'character_image', required: false, usage: 'reference', scope: 'matching' },
-    { artifactTypeId: 'setting_image', required: false, usage: 'reference', scope: 'matching' },
+    { artifactTypeId: 'character_image', required: true, usage: 'reference', scope: 'all' },
+    { artifactTypeId: 'setting_image', required: true, usage: 'reference', scope: 'all' },
   ],
 };
 
@@ -249,8 +249,8 @@ const shotImagePromptArtifact: ArtifactTypeDefinition = {
   requiresPerItemApproval: false,
   dependencies: [
     { artifactTypeId: 'scene_video_prompt', required: true, usage: 'context', scope: 'matching' },
-    { artifactTypeId: 'character_image', required: false, usage: 'reference', scope: 'matching' },
-    { artifactTypeId: 'setting_image', required: false, usage: 'reference', scope: 'matching' },
+    { artifactTypeId: 'character_image', required: true, usage: 'reference', scope: 'all' },
+    { artifactTypeId: 'setting_image', required: true, usage: 'reference', scope: 'all' },
   ],
 };
 
