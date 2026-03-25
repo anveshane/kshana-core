@@ -4,6 +4,7 @@
  * Utilities for running the executor one step at a time and validating outputs.
  */
 
+import 'dotenv/config';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
