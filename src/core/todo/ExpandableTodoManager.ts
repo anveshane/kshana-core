@@ -231,9 +231,12 @@ export class ExpandableTodoManager {
 
   /**
    * Direct todo list write - for backwards compatibility and testing.
-   * Replaces the current todo list.
+   * Preserves completed todos that are not in the new list.
    */
   writeTodos(todos: Array<Record<string, unknown>>): TodoManagerResult {
+    // Get existing completed todos to preserve them
+    const existingCompleted = this.todos.filter(t => t.status === 'completed');
+
     // Create new todos from input
     const newTodos = todos.map(t => {
       const content = (t['content'] as string | undefined) ?? '';
@@ -252,11 +255,20 @@ export class ExpandableTodoManager {
       return item;
     });
 
-    this.todos = newTodos;
+    // Check if new todos contain the completed ones (by content)
+    const newContents = new Set(newTodos.map(t => t.content.toLowerCase()));
+
+    // Add back completed todos that are missing from new list
+    const preservedCompleted = existingCompleted.filter(
+      completed => !newContents.has(completed.content.toLowerCase())
+    );
+
+    // Combine: preserved completed first, then new todos
+    this.todos = [...preservedCompleted, ...newTodos];
 
     return {
       status: 'success',
-      message: `Todo list replaced with ${this.todos.length} items`,
+      message: `Todo list updated with ${this.todos.length} items (${preservedCompleted.length} completed preserved)`,
       todos: this.todos,
     };
   }
