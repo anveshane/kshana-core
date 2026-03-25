@@ -4,7 +4,7 @@
  * Template for creating narrative/story-based videos.
  * This is a refactoring of the original 8-phase workflow into the generic template system.
  *
- * Flow: plot → story → characters/settings → scenes → ref_images → scene_images → videos → final
+ * Flow: plot → story → characters/settings → scenes → ref_images → shot_breakdown → shot_images → shot_videos → final
  */
 
 import type {
@@ -254,86 +254,33 @@ const shotImagePromptArtifact: ArtifactTypeDefinition = {
   ],
 };
 
-const sceneImageArtifact: ArtifactTypeDefinition = {
-  id: 'scene_image',
-  displayName: 'Scene Images',
-  category: 'visual_ref',
-  description: 'Generated images for each scene using character and setting references',
+// shot_video: generates a video clip from each shot image using the motion prompt
+// A scene is an array of shots — each shot starts with a shot image
+const shotVideoArtifact: ArtifactTypeDefinition = {
+  id: 'shot_video',
+  displayName: 'Shot Videos',
+  category: 'clip',
+  description: 'Video clips for each shot, generated from shot images with motion prompts',
   scope: 'chapter',
   isCollection: true,
-  itemName: 'scene image',
-  outputFormat: 'image',
-  filePattern: 'chapters/{{chapter}}/assets/images/scenes/scene_{{index}}.png',
-  agentType: 'image',
-  promptFile: 'narrative/scene-image.md',
+  itemName: 'shot video',
+  outputFormat: 'video',
+  filePattern: 'assets/videos/shots/scene-{{index}}-shot-{{subindex}}.mp4',
+  agentType: 'video',
+  promptFile: 'common/shot-video.md',
   isExpensive: true,
   requiresPerItemApproval: true,
   dependencies: [
-    {
-      artifactTypeId: 'scene',
-      required: true,
-      usage: 'context',
-      scope: 'matching',
-    },
     {
       artifactTypeId: 'shot_image_prompt',
-      required: true,
-      usage: 'context',
-      scope: 'matching',
-    },
-    {
-      artifactTypeId: 'character_image',
-      required: true,
-      usage: 'reference',
-      scope: 'matching',
-    },
-    {
-      artifactTypeId: 'setting_image',
-      required: true,
-      usage: 'reference',
-      scope: 'matching',
-    },
-  ],
-  metadataSchema: {
-    sceneId: { type: 'string', required: true, description: 'ID of the source scene' },
-    characterRefs: { type: 'array', required: false, description: 'Character image IDs used' },
-    settingRef: { type: 'string', required: false, description: 'Setting image ID used' },
-    seed: { type: 'number', required: false, description: 'Generation seed for reproducibility' },
-  },
-};
-
-const sceneVideoArtifact: ArtifactTypeDefinition = {
-  id: 'scene_video',
-  displayName: 'Scene Videos',
-  category: 'clip',
-  description: 'Video clips for each scene generated from scene images',
-  scope: 'chapter',
-  isCollection: true,
-  itemName: 'scene video',
-  outputFormat: 'video',
-  filePattern: 'chapters/{{chapter}}/assets/videos/scenes/scene_{{index}}.mp4',
-  agentType: 'video',
-  promptFile: 'common/scene-video.md',
-  isExpensive: true,
-  requiresPerItemApproval: true,
-  dependencies: [
-    {
-      artifactTypeId: 'scene',
-      required: true,
-      usage: 'context',
-      scope: 'matching',
-    },
-    {
-      artifactTypeId: 'scene_image',
       required: true,
       usage: 'input',
       scope: 'matching',
     },
   ],
   metadataSchema: {
-    sceneId: { type: 'string', required: true, description: 'ID of the source scene' },
-    imageId: { type: 'string', required: true, description: 'Source scene image ID' },
-    duration: { type: 'number', required: false, description: 'Video duration in seconds' },
+    shotNumber: { type: 'number', required: true, description: 'Shot number within the scene' },
+    duration: { type: 'number', required: false, description: 'Shot duration in seconds' },
   },
 };
 
@@ -352,7 +299,7 @@ const finalVideoArtifact: ArtifactTypeDefinition = {
   requiresPerItemApproval: false,
   dependencies: [
     {
-      artifactTypeId: 'scene_video',
+      artifactTypeId: 'shot_video',
       required: true,
       usage: 'input',
       scope: 'all',
@@ -498,20 +445,20 @@ const phases: PhaseDefinition[] = [
     promptFile: 'narrative/phases/shot-breakdown.md',
   },
   {
-    id: 'scene_images',
-    displayName: 'Scene Image Generation',
-    description: 'Generate images for each scene using reference images',
+    id: 'shot_images',
+    displayName: 'Shot Image Generation',
+    description: 'Generate images for each shot using character/setting references via FLUX Klein',
     order: 6,
-    artifactTypes: ['scene_image'],
+    artifactTypes: ['shot_image_prompt'],
     requiresConfirmation: true,
-    promptFile: 'narrative/phases/scene-images.md',
+    promptFile: 'narrative/phases/shot-images.md',
   },
   {
     id: 'video_generation',
-    displayName: 'Video Generation',
-    description: 'Generate video clips for each scene',
+    displayName: 'Shot Video Generation',
+    description: 'Generate video clips for each shot from shot images',
     order: 7,
-    artifactTypes: ['scene_video'],
+    artifactTypes: ['shot_video'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/video-generation.md',
   },
@@ -668,8 +615,7 @@ export const narrativeTemplate: VideoTemplate = {
     setting_image: settingImageArtifact,
     scene_video_prompt: sceneVideoPromptArtifact,
     shot_image_prompt: shotImagePromptArtifact,
-    scene_image: sceneImageArtifact,
-    scene_video: sceneVideoArtifact,
+    shot_video: shotVideoArtifact,
     final_video: finalVideoArtifact,
   },
   phases,

@@ -211,8 +211,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       setting_image: 'Setting Reference Images',
       scene_video_prompt: 'Shot Planning',
       shot_image_prompt: 'Shot Image Prompts',
-      scene_image: 'Scene Image Generation',
-      scene_video: 'Video Generation',
+      shot_video: 'Shot Video Generation',
       final_video: 'Final Assembly',
     };
 
@@ -951,20 +950,18 @@ Rules:
     const guideMap: Record<string, string> = {
       character_image: 'character_image_guide',
       setting_image: 'setting_image_guide',
-      scene_image: 'scene_image_guide',
       shot_image_prompt: 'shot_image_guide',
       scene_video_prompt: 'scene_video_guide',
-      scene_video: 'scene_video_guide',
+      shot_video: 'scene_video_guide',
     };
 
     // Content type names for skill file resolution
     const contentTypeMap: Record<string, string> = {
       character_image: 'character_image_prompt',
       setting_image: 'setting_image_prompt',
-      scene_image: 'scene_image_prompt',
       shot_image_prompt: 'shot_image_prompt',
       scene_video_prompt: 'scene_video_prompt',
-      scene_video: 'scene_video_prompt',
+      shot_video: 'scene_video_prompt',
     };
 
     // 1. Load default guide (universal rules)
@@ -992,10 +989,9 @@ Rules:
       const workflowMap: Record<string, string> = {
         character_image: 'zimage',
         setting_image: 'zimage',
-        scene_image: 'flux2_klein_edit',
         shot_image_prompt: 'flux2_klein_edit',
         scene_video_prompt: 'ltx23',
-        scene_video: 'ltx23',
+        shot_video: 'ltx23',
       };
 
       let skillContext: SkillResolutionContext | undefined;
