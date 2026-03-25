@@ -142,33 +142,34 @@ export function getOutputPath(
 
   let filePath = typeDef.filePattern;
 
-  // The executor generates text/markdown for ALL node types — it never produces
-  // actual images, videos, or JSON. Override file patterns that expect media or JSON
-  // to use the correct text extensions (.prompt.md, .motion.md).
+  // Override file patterns for nodes that produce prompts (not actual media).
+  // Image prompts → .json, motion prompts → .json
   const isMediaCategory = typeDef.category === 'visual_ref' || typeDef.category === 'clip';
-  const isJsonPromptFile = typeDef.outputFormat === 'json' && typeDef.filePattern.includes('prompt');
 
-  if (isMediaCategory || isJsonPromptFile) {
+  if (isMediaCategory) {
     const safeName = node.itemId
       ? node.itemId.toLowerCase().replace(/[^a-z0-9]+/g, '_')
       : node.typeId;
 
     if (typeDef.category === 'visual_ref') {
-      // Image prompts: prompts/images/<subdir>/<name>.prompt.md
+      // Character/setting image prompts as JSON
       const subdir = node.typeId.includes('character') ? 'characters'
         : node.typeId.includes('setting') ? 'settings'
         : node.typeId.includes('scene') ? 'scenes'
         : 'other';
-      filePath = `prompts/images/${subdir}/${safeName}.prompt.md`;
-    } else if (node.typeId.includes('video_prompt') || node.typeId.includes('motion')) {
-      // Motion/video prompts: prompts/videos/scenes/<name>.motion.md
-      filePath = `prompts/videos/scenes/${safeName}.motion.md`;
+      filePath = `prompts/images/${subdir}/${safeName}.json`;
     } else if (typeDef.category === 'clip') {
-      filePath = `prompts/videos/scenes/${safeName}.motion.md`;
-    } else {
-      // Other JSON prompt types → markdown
-      filePath = filePath.replace('.json', '.md');
+      // Clip nodes don't generate files (deterministic)
+      filePath = `prompts/videos/scenes/${safeName}.json`;
     }
+  }
+
+  // scene_video_prompt: uses template filePattern (already .motion.json) but with safe name
+  if (node.typeId === 'scene_video_prompt' || node.typeId.includes('video_prompt')) {
+    const safeName = node.itemId
+      ? node.itemId.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+      : node.typeId;
+    filePath = `prompts/videos/scenes/${safeName}.json`;
   }
 
   // Substitute placeholders

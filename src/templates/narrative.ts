@@ -242,7 +242,7 @@ const shotImagePromptArtifact: ArtifactTypeDefinition = {
   isCollection: true,
   itemName: 'shot prompt',
   outputFormat: 'markdown',
-  filePattern: 'prompts/images/shots/scene-{{index}}-shot-{{subindex}}.prompt.md',
+  filePattern: 'prompts/images/shots/scene-{{index}}-shot-{{subindex}}.json',
   agentType: 'content',
   promptFile: 'narrative/shot-image-prompt.md',
   isExpensive: false,

@@ -95,14 +95,19 @@ Output ONLY the description — no explanations, no tool calls, no meta-commenta
 Create a detailed scene description including action, dialogue, character positions, and visual details.
 Output ONLY the scene content — no explanations, no tool calls, no meta-commentary.`,
 
-  visual_ref: `You are an expert image prompt engineer. Do NOT think or reason — respond directly with the prompt.
-Create a detailed image generation prompt for the described subject.
-Include: subject description, composition, lighting, style, and camera angle.
-Format your output EXACTLY as:
-**Image Prompt:** [detailed prompt]
-**Negative Prompt:** [things to avoid]
-**Aspect Ratio:** [ratio like 16:9, 1:1, etc.]
-Output ONLY these three sections. No thinking, no explanations, no preamble.`,
+  visual_ref: `You are an expert image prompt engineer. Do NOT think or reason — respond directly.
+Output ONLY valid JSON — no markdown, no explanation, no thinking.
+
+The JSON must follow this exact structure:
+{
+  "imagePrompt": "<detailed image generation prompt — flowing prose, 80-250 words>",
+  "negativePrompt": "<things to avoid>",
+  "aspectRatio": "<ratio like 16:9, 1:1, etc.>"
+}
+
+Rules:
+- imagePrompt: descriptive flowing prose, NOT keywords. Include subject, composition, lighting, style.
+- No generationMode or references fields — this is always text-to-image.`,
 
   clip: `You are a video direction expert. Do NOT think or reason — respond directly with the prompt.
 Generate a detailed motion/animation prompt describing camera movement, character actions, and timing.
@@ -560,7 +565,8 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.log(`  LLM returned ${content.length} chars`);
 
               // Validate JSON output for nodes that require it
-              if (node.typeId === 'scene_video_prompt' || node.typeId === 'shot_image_prompt') {
+              const jsonValidatedTypes = ['scene_video_prompt', 'shot_image_prompt', 'character_image', 'setting_image'];
+              if (jsonValidatedTypes.includes(node.typeId)) {
                 const validation = this.validateJsonOutput(content, node);
                 if (!validation.valid) {
                   this.log(`  JSON validation failed: ${validation.error} — retrying...`);
@@ -1240,6 +1246,18 @@ Rules:
         }
       }
 
+      if (node.typeId === 'character_image' || node.typeId === 'setting_image') {
+        if (!parsed.imagePrompt || typeof parsed.imagePrompt !== 'string') {
+          return { valid: false, error: 'Missing "imagePrompt" string' };
+        }
+        if (typeof parsed.negativePrompt !== 'string') {
+          return { valid: false, error: 'Missing "negativePrompt" string' };
+        }
+        if (typeof parsed.aspectRatio !== 'string') {
+          return { valid: false, error: 'Missing "aspectRatio" string' };
+        }
+      }
+
       return { valid: true };
     } catch (e) {
       return { valid: false, error: `JSON parse error: ${String(e)}` };
@@ -1431,8 +1449,9 @@ Rules:
       temperature: isFormulaic ? 0.3 : 0.7,
     };
 
-    // Force JSON output for structured nodes
-    if (node.typeId === 'scene_video_prompt' || node.typeId === 'shot_image_prompt' || typeDef?.outputFormat === 'json') {
+    // Force JSON output for all structured/image prompt nodes
+    const jsonNodeTypes = ['scene_video_prompt', 'shot_image_prompt', 'character_image', 'setting_image'];
+    if (jsonNodeTypes.includes(node.typeId) || typeDef?.outputFormat === 'json') {
       options.responseFormat = { type: 'json_object' };
     }
 
@@ -1966,11 +1985,26 @@ Rules:
     let progressHandler: ComfyProgressHandler | null = null;
 
     try {
-      // Read and parse the prompt file
-      const content = readFileSync(promptFilePath, 'utf-8');
-      const parsed = parsePromptFile(content);
+      // Read and parse the JSON prompt file
+      const rawContent = readFileSync(promptFilePath, 'utf-8');
+      let cleaned = rawContent.trim();
+      if (cleaned.startsWith('```')) {
+        cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      }
 
-      if (!parsed.prompt) {
+      let parsed: { imagePrompt?: string; prompt?: string; negativePrompt?: string; aspectRatio?: string; generationMode?: string; references?: Array<{ refId?: string; path?: string; name: string; type: string }> };
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch {
+        // Fallback: try legacy markdown parsing
+        parsed = parsePromptFile(rawContent);
+        if (parsed.prompt) {
+          parsed.imagePrompt = parsed.prompt;
+        }
+      }
+
+      const prompt = parsed.imagePrompt ?? parsed.prompt;
+      if (!prompt) {
         this.log(`  No prompt found in file`);
         return null;
       }
@@ -2014,20 +2048,16 @@ Rules:
       });
 
       // Call the actual image generation (blocks until done)
+      // Character/setting images are always text_to_image (no references)
       const result = await submitImageGeneration({
         scene_number: sceneNumber,
-        prompt: parsed.prompt,
+        prompt,
         negative_prompt: parsed.negativePrompt,
         aspect_ratio: parsed.aspectRatio ?? '1:1',
         image_type: imageType,
         character_name: characterName,
         setting_name: settingName,
-        generation_mode: parsed.generationMode ?? 'text_to_image',
-        reference_images: parsed.references?.map(r => ({
-          image_id: r.refId ?? r.path ?? r.name,
-          type: r.type as 'character' | 'setting',
-          name: r.name,
-        })),
+        generation_mode: 'text_to_image',
       });
 
       // Unsubscribe from progress
