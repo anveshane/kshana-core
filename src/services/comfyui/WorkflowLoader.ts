@@ -408,6 +408,12 @@ export function parameterizeLtx23Workflow(
     }
     // Node 110: Negative prompt — leave as-is (workflow has good built-in defaults)
 
+    // Node 165: ImageResizeKJv2 — fix interpolation method for quality downscaling
+    else if (nodeId === 165 && node.widgets_values) {
+      // widgets_values: [width, height, upscale_method, keep_proportion, pad_color, crop_position, divisible_by, device]
+      node.widgets_values[2] = 'lanczos';  // was 'nearest-exact' — lanczos is best for downscaling
+      debugLog(`[Ltx23] Set resize method (node 165) to lanczos`);
+    }
     // Node 167: Input image
     else if (nodeId === 167 && node.widgets_values && params.inputImageFilename) {
       node.widgets_values[0] = params.inputImageFilename;
