@@ -2235,13 +2235,22 @@ Rules:
   ): Promise<string | null> {
     const agentName = this.config.name ?? 'kshana-executor';
 
-    // 1. Find the shot image from shot_image_prompt dependency
+    // 1. Find the MATCHING shot image (same itemId)
     let shotImagePath: string | undefined;
-    for (const depId of node.dependencies) {
-      const dep = this.executor.getNode(depId);
-      if (dep?.outputPath?.endsWith('.png') || dep?.outputPath?.endsWith('.jpg')) {
-        shotImagePath = dep.outputPath;
-        break;
+    const matchingImageId = `shot_image:${node.itemId}`;
+    const matchingImageNode = this.executor.getNode(matchingImageId);
+    if (matchingImageNode?.status === 'completed' && matchingImageNode.outputPath) {
+      shotImagePath = matchingImageNode.outputPath;
+    }
+    if (!shotImagePath) {
+      // Fallback: find matching by itemId in dependencies
+      for (const depId of node.dependencies) {
+        const dep = this.executor.getNode(depId);
+        if (dep && dep.itemId === node.itemId && dep.outputPath &&
+            (dep.outputPath.endsWith('.png') || dep.outputPath.endsWith('.jpg'))) {
+          shotImagePath = dep.outputPath;
+          break;
+        }
       }
     }
 
