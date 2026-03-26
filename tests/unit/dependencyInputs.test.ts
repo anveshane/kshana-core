@@ -111,6 +111,20 @@ beforeAll(() => {
     { itemId: 'scene_2_shot_1', name: 'Shot 1' },
   ]);
 
+  // Complete shot_image_prompt per-shot nodes with distinct outputs
+  const shotPrompts: Record<string, string> = {
+    'shot_image_prompt:scene_1_shot_1': 'prompts/images/shots/scene-1-shot-1.json',
+    'shot_image_prompt:scene_1_shot_2': 'prompts/images/shots/scene-1-shot-2.json',
+    'shot_image_prompt:scene_2_shot_1': 'prompts/images/shots/scene-2-shot-1.json',
+  };
+  for (const [nodeId, outputPath] of Object.entries(shotPrompts)) {
+    const node = executor.getNode(nodeId);
+    if (node) {
+      executor.markStarted(nodeId);
+      executor.markCompleted(nodeId, outputPath);
+    }
+  }
+
   // Create all output files on disk
   const textFiles: Record<string, string> = {
     'original_input.md': 'A story about Alice and Bob in the park.',
@@ -128,6 +142,9 @@ beforeAll(() => {
     'prompts/images/settings/house.json': '{"imagePrompt":"House exterior","negativePrompt":"bad","aspectRatio":"16:9"}',
     'prompts/videos/scenes/scene_1.json': '{"sceneNumber":1,"sceneTitle":"Arrival","totalDuration":10,"shots":[{"shotNumber":1,"shotType":"wide","duration":5,"description":"Wide shot","characters":["alice"],"setting":"park"},{"shotNumber":2,"shotType":"close_up","duration":5,"description":"Close up","characters":["alice","bob"],"setting":"park"}]}',
     'prompts/videos/scenes/scene_2.json': '{"sceneNumber":2,"sceneTitle":"Meeting","totalDuration":10,"shots":[{"shotNumber":1,"shotType":"medium","duration":10,"description":"Medium shot","characters":["bob"],"setting":"house"}]}',
+    'prompts/images/shots/scene-1-shot-1.json': '{"imagePrompt":"Wide shot of alice from image 1 in park from image 2","negativePrompt":"bad","aspectRatio":"16:9","generationMode":"image_text_to_image","references":[{"imageNumber":1,"type":"character","refId":"character_image:alice"},{"imageNumber":2,"type":"setting","refId":"setting_image:park"}]}',
+    'prompts/images/shots/scene-1-shot-2.json': '{"imagePrompt":"Close up of alice from image 1 and bob from image 2 in park from image 3","negativePrompt":"bad","aspectRatio":"16:9","generationMode":"image_text_to_image","references":[{"imageNumber":1,"type":"character","refId":"character_image:alice"},{"imageNumber":2,"type":"character","refId":"character_image:bob"},{"imageNumber":3,"type":"setting","refId":"setting_image:park"}]}',
+    'prompts/images/shots/scene-2-shot-1.json': '{"imagePrompt":"Medium shot of bob from image 1 in house from image 2","negativePrompt":"bad","aspectRatio":"16:9","generationMode":"image_text_to_image","references":[{"imageNumber":1,"type":"character","refId":"character_image:bob"},{"imageNumber":2,"type":"setting","refId":"setting_image:house"}]}',
   };
 
   for (const [filePath, content] of Object.entries(textFiles)) {
@@ -327,6 +344,48 @@ describe('shot_image_prompt dependencies', () => {
 
     // No reference images — those are resolved at ComfyUI time by refId
     expect(inputs.referenceImages.length).toBe(0);
+  });
+});
+
+// =====================================================================
+// Shot Image: must resolve the MATCHING shot_image_prompt, not any
+// =====================================================================
+describe('shot_image matching', () => {
+  it('each shot_image reads ONLY its matching shot_image_prompt JSON', () => {
+    // shot_image:scene_1_shot_1 should read scene-1-shot-1.json (not scene-1-shot-2.json)
+    const shot1 = executor.getNode('shot_image:scene_1_shot_1');
+    if (!shot1) return;
+    const inputs1 = resolveInputs(shot1, executor, projectDir);
+    const jsonFiles1 = inputs1.filesRead.filter(f => f.includes('shots/') && f.endsWith('.json'));
+    expect(jsonFiles1).toContain('prompts/images/shots/scene-1-shot-1.json');
+    expect(jsonFiles1).not.toContain('prompts/images/shots/scene-1-shot-2.json');
+    expect(jsonFiles1).not.toContain('prompts/images/shots/scene-2-shot-1.json');
+  });
+
+  it('different shot_images get different prompt files', () => {
+    const shot1 = executor.getNode('shot_image:scene_1_shot_1');
+    const shot2 = executor.getNode('shot_image:scene_1_shot_2');
+    if (!shot1 || !shot2) return;
+
+    const inputs1 = resolveInputs(shot1, executor, projectDir);
+    const inputs2 = resolveInputs(shot2, executor, projectDir);
+
+    const json1 = inputs1.filesRead.filter(f => f.includes('shots/'));
+    const json2 = inputs2.filesRead.filter(f => f.includes('shots/'));
+
+    // They must read different files
+    expect(json1).not.toEqual(json2);
+    expect(json1).toContain('prompts/images/shots/scene-1-shot-1.json');
+    expect(json2).toContain('prompts/images/shots/scene-1-shot-2.json');
+  });
+
+  it('shot_image across scenes reads the correct scene prompt', () => {
+    const scene2shot = executor.getNode('shot_image:scene_2_shot_1');
+    if (!scene2shot) return;
+    const inputs = resolveInputs(scene2shot, executor, projectDir);
+    const jsonFiles = inputs.filesRead.filter(f => f.includes('shots/'));
+    expect(jsonFiles).toContain('prompts/images/shots/scene-2-shot-1.json');
+    expect(jsonFiles).not.toContain('prompts/images/shots/scene-1-shot-1.json');
   });
 });
 
