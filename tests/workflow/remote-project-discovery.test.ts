@@ -182,6 +182,51 @@ describe('remote project discovery', () => {
     });
   });
 
+  it('backfills generated asset files from project metadata when remote cache is stale', async () => {
+    const projectRoot = '/Users/indhicdev/Documents/test-dev-server/test-dev-server.kshana';
+
+    await withRemoteProjectSession(projectRoot, async (remoteFs) => {
+      seedRemoteNarrativeProject(remoteFs);
+
+      const project = loadProject();
+      if (!project) {
+        throw new Error('Failed to load remote project');
+      }
+
+      project.content.images = {
+        status: 'partial',
+        items: ['img_scene_1'],
+        itemFiles: {
+          img_scene_1: 'assets/images/scene-1.png',
+        },
+      };
+      saveProject(project);
+
+      remoteFs.cache.markDirectory('assets');
+      remoteFs.cache.setFile(
+        'assets/manifest.json',
+        JSON.stringify({
+          assets: [
+            {
+              id: 'img_scene_1',
+              type: 'scene_image',
+              path: 'assets/images/scene-1.png',
+            },
+          ],
+        }),
+      );
+
+      const result = await listProjectFilesTool.handler?.({}) as {
+        status: string;
+        files: Array<{ path: string }>;
+      };
+
+      expect(result.status).toBe('success');
+      expect(result.files.map(file => file.path)).toContain('assets/images/scene-1.png');
+      expect(result.files.map(file => file.path)).toContain('assets/manifest.json');
+    });
+  });
+
   it('rejects absolute paths outside the project root in remote mode', async () => {
     const projectRoot = '/Users/indhicdev/Documents/test-dev-server/test-dev-server.kshana';
 

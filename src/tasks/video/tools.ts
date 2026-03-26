@@ -23,7 +23,12 @@ function debugLog(message: string): void {
     // Ignore logging errors
   }
 }
-import { loadTimeline, updateSegmentLayers, saveTimeline } from '../../core/timeline/TimelineManager.js';
+import {
+  buildShotSegmentId,
+  loadTimeline,
+  updateSegmentLayers,
+  saveTimeline,
+} from '../../core/timeline/TimelineManager.js';
 import type { TimelineLayerEntry } from '../../core/timeline/types.js';
 import {
   getProjectDir,
@@ -247,6 +252,8 @@ export interface ImageGenerationParams {
   reference_images?: ReferenceImage[];
   /** Generation mode: text-to-image or image+text-to-image */
   generation_mode?: 'text_to_image' | 'image_text_to_image';
+  /** Timeline segment to auto-link for shot images */
+  segment_id?: string;
 }
 
 /**
@@ -331,8 +338,10 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
     image_type = 'scene',
     character_name,
     setting_name,
+    shot_number,
     generation_mode = 'text_to_image',
     reference_images = [],
+    segment_id,
   } = params;
 
   // Determine filename prefix based on image type
@@ -492,8 +501,14 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
         id: artifactId,
         type: assetType,
         path: relativePath,
+        scene_number: assetType === 'scene_image' ? scene_number : undefined,
+        version: 1,
         createdAt: Date.now(),
-        metadata: { jobId, provider: provider.id },
+        metadata: buildPlacementMetadata(
+          assetType === 'scene_image' ? scene_number : undefined,
+          assetType === 'scene_image' ? shot_number : undefined,
+          { jobId, provider: provider.id },
+        ),
       });
     } catch {
       // Project may not exist yet
@@ -501,6 +516,32 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
 
     // Link artifact to project entity
     linkArtifactToProject(context, artifactId, relativePath);
+
+    const autoSegmentId =
+      assetType === 'scene_image'
+        ? resolveAutoSegmentId(scene_number, shot_number, segment_id)
+        : undefined;
+    if (autoSegmentId) {
+      try {
+        const timeline = loadTimeline(projectDir);
+        if (timeline) {
+          const layer: TimelineLayerEntry = {
+            type: 'visual',
+            artifactId,
+            filePath: relativePath,
+            label: `Scene ${scene_number} Shot ${shot_number} image`,
+            source: 'generated',
+          };
+          const updated = updateSegmentLayers(timeline, autoSegmentId, [layer], undefined, prompt);
+          saveTimeline(projectDir, updated);
+          debugLog(
+            `[generate_image] Auto-updated timeline segment ${autoSegmentId} with artifact ${artifactId}`,
+          );
+        }
+      } catch (e) {
+        debugLog(`[generate_image] Timeline auto-update failed for ${autoSegmentId}: ${e}`);
+      }
+    }
 
     // Update job as completed
     job.status = 'completed';
@@ -681,8 +722,15 @@ async function waitForComfyUIJob(
         id: artifactId,
         type: assetType,
         path: relativePath,
+        scene_number:
+          job.context?.entityType === 'scene' ? job.context.sceneNumber : undefined,
+        version: 1,
         createdAt: Date.now(),
-        metadata: { jobId: job.id, promptId: job.promptId },
+        metadata: buildPlacementMetadata(
+          job.context?.entityType === 'scene' ? job.context.sceneNumber : undefined,
+          job.context?.entityType === 'scene' ? job.context.shotNumber : undefined,
+          { jobId: job.id, promptId: job.promptId },
+        ),
       });
     } catch {
       // Project may not exist yet, that's OK
@@ -790,6 +838,11 @@ This tool blocks until generation is complete and returns the result directly (a
         description:
           'Shot number within the scene. Use this when generating a specific scene shot image.',
       },
+      segment_id: {
+        type: 'string',
+        description:
+          'Optional timeline segment ID to auto-update with this generated shot image. If omitted for scene shots, the tool derives segment_${scene_number - 1}_shot_${shot_number}.',
+      },
       negative_prompt: {
         type: 'string',
         description: 'What to avoid in the image (optional)',
@@ -852,6 +905,7 @@ This tool blocks until generation is complete and returns the result directly (a
   async args => {
     let params = args as unknown as ImageGenerationParams;
     const shotNumber = args['shot_number'] as number | undefined;
+    const segmentIdArg = args['segment_id'] as string | undefined;
 
     // If prompt_file is provided, read and parse the prompt from the file
     let promptFile = args['prompt_file'] as string | undefined;
@@ -885,7 +939,7 @@ This tool blocks until generation is complete and returns the result directly (a
 
       // Parse the prompt file for both prompt text and metadata
       const parsed = parsePromptFile(promptContent);
-      params = { ...params, prompt: parsed.prompt, shot_number: shotNumber };
+      params = { ...params, prompt: parsed.prompt, shot_number: shotNumber, segment_id: segmentIdArg };
 
       // Apply generation mode from prompt file if not explicitly provided
       if (parsed.generationMode && !params.generation_mode) {
@@ -955,7 +1009,11 @@ This tool blocks until generation is complete and returns the result directly (a
     }
 
     // Submit and wait for generation (provider handles the full lifecycle)
-    const submitResult = await submitImageGeneration(params);
+    const submitResult = await submitImageGeneration({
+      ...params,
+      shot_number: shotNumber,
+      segment_id: segmentIdArg,
+    });
 
     if (submitResult.status === 'error') {
       return {
@@ -978,12 +1036,17 @@ This tool blocks until generation is complete and returns the result directly (a
       generation_mode: generationMode,
       params: {
         scene_number: params.scene_number,
+        shot_number: shotNumber,
         image_type: params.image_type ?? 'scene',
         prompt: params.prompt,
         generation_mode: generationMode,
         reference_count: params.reference_images?.length ?? 0,
         references: params.reference_images?.map(r => `${r.type}:${r.name}`) ?? [],
       },
+      segment_id: resolveAutoSegmentId(params.scene_number, shotNumber, segmentIdArg),
+      timeline_updated:
+        (params.image_type ?? 'scene') === 'scene' &&
+        resolveAutoSegmentId(params.scene_number, shotNumber, segmentIdArg) !== undefined,
     };
   }
 );
@@ -1387,6 +1450,19 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
     return artifactId;
   }
 
+  const normalizedRelativePath = artifactId.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+  if (
+    normalizedRelativePath &&
+    normalizedRelativePath !== '.' &&
+    normalizedRelativePath !== '..' &&
+    !normalizedRelativePath.startsWith('../')
+  ) {
+    const candidatePath = path.join(getProjectDir(), normalizedRelativePath);
+    if (fs.existsSync(candidatePath)) {
+      return candidatePath;
+    }
+  }
+
   const project = loadProject();
   if (!project) return undefined;
 
@@ -1433,6 +1509,37 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
   }
 
   return undefined;
+}
+
+function buildPlacementMetadata(
+  sceneNumber: number | undefined,
+  shotNumber: number | undefined,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const metadata: Record<string, unknown> = { ...extra };
+
+  if (sceneNumber !== undefined) {
+    metadata['placementNumber'] = sceneNumber;
+  }
+  if (shotNumber !== undefined) {
+    metadata['shot_number'] = shotNumber;
+  }
+
+  return metadata;
+}
+
+function resolveAutoSegmentId(
+  sceneNumber: number,
+  shotNumber: number | undefined,
+  explicitSegmentId?: string,
+): string | undefined {
+  if (explicitSegmentId?.trim()) {
+    return explicitSegmentId.trim();
+  }
+  if (shotNumber === undefined) {
+    return undefined;
+  }
+  return buildShotSegmentId(sceneNumber, shotNumber);
 }
 
 /**
@@ -1519,7 +1626,11 @@ This tool blocks until video generation is complete and returns the result direc
     let duration = args['duration'] as number | undefined;
     const videoWidth = args['width'] as number | undefined;
     const videoHeight = args['height'] as number | undefined;
-    const segmentId = args['segment_id'] as string | undefined;
+    const segmentId = resolveAutoSegmentId(
+      sceneNumber,
+      shotNumber,
+      args['segment_id'] as string | undefined,
+    );
 
     // If motion_prompt_file is provided, read and extract the prompt for this shot
     const motionPromptFile = args['motion_prompt_file'] as string | undefined;
@@ -1572,7 +1683,19 @@ This tool blocks until video generation is complete and returns the result direc
     // Resolve the single shot image
     const imagePath = findImagePathFromArtifactId(shotImageArtifactId);
     if (!imagePath || !fs.existsSync(imagePath)) {
-      return { status: 'error', error: `Image not found for artifact: ${shotImageArtifactId}` };
+      const normalizedRelativePath = shotImageArtifactId.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+      const looksLikeProjectPath =
+        normalizedRelativePath.includes('/') &&
+        normalizedRelativePath !== '.' &&
+        normalizedRelativePath !== '..' &&
+        !normalizedRelativePath.startsWith('../');
+      const inputKind = path.isAbsolute(shotImageArtifactId) || looksLikeProjectPath
+        ? 'path'
+        : 'artifact';
+      return {
+        status: 'error',
+        error: `Image not found for ${inputKind}: ${shotImageArtifactId}`,
+      };
     }
 
     const assetsDir = path.join(getProjectDir(), 'assets', 'videos');
@@ -1650,8 +1773,13 @@ This tool blocks until video generation is complete and returns the result direc
           id: artifactId,
           type: 'scene_video',
           path: relativePath,
+          scene_number: sceneNumber,
+          version: 1,
           createdAt: Date.now(),
-          metadata: { jobId, provider: provider.id },
+          metadata: buildPlacementMetadata(sceneNumber, shotNumber, {
+            jobId,
+            provider: provider.id,
+          }),
         });
       } catch {
         // Project may not exist yet

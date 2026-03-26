@@ -72,7 +72,7 @@ import {
 } from './types.js';
 // read_file is imported from the canonical source — single definition for the entire system
 import { readFileTool } from '../../../core/tools/builtin/contentCreatorTools.js';
-import { listProjectTree, projectDirExists } from './projectFileIO.js';
+import { listProjectTree, projectDirExists, readProjectText } from './projectFileIO.js';
 export { readFileTool };
 
 /**
@@ -80,6 +80,60 @@ export { readFileTool };
  * These are internal/debug directories that agents shouldn't see or access.
  */
 const EXCLUDED_DIRECTORIES = ['flows', 'logs', '.git'];
+
+function normalizeProjectFilePath(filePath: string): string | null {
+  const normalized = filePath.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+  if (!normalized || normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
+    return null;
+  }
+  return normalized;
+}
+
+function collectTrackedAssetPaths(project: ProjectFile | null): string[] {
+  const paths = new Set<string>();
+
+  const addPath = (value: unknown) => {
+    if (typeof value !== 'string') {
+      return;
+    }
+    const normalized = normalizeProjectFilePath(value);
+    if (normalized) {
+      paths.add(normalized);
+    }
+  };
+
+  const registry = project?.content ?? {};
+  for (const entry of Object.values(registry)) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const itemFiles = (entry as { itemFiles?: Record<string, string> }).itemFiles;
+    if (!itemFiles) {
+      continue;
+    }
+
+    for (const filePath of Object.values(itemFiles)) {
+      addPath(filePath);
+    }
+  }
+
+  const manifestContent = readProjectText('assets/manifest.json');
+  if (manifestContent) {
+    try {
+      const manifest = JSON.parse(manifestContent) as {
+        assets?: Array<{ path?: string }>;
+      };
+      for (const asset of manifest.assets ?? []) {
+        addPath(asset.path);
+      }
+    } catch {
+      // Ignore malformed manifest content and fall back to tracked project paths.
+    }
+  }
+
+  return Array.from(paths).sort((a, b) => a.localeCompare(b));
+}
 
 /**
  * List project files tool - returns the directory structure of the .kshana project.
@@ -129,6 +183,21 @@ This is the primary way to find available project content.`,
       maxDepth: 3,
       excludeDirectories: EXCLUDED_DIRECTORIES,
     });
+    const trackedAssetPaths = collectTrackedAssetPaths(loadProject());
+    const knownPaths = new Set(allFiles.map(file => file.path));
+
+    for (const assetPath of trackedAssetPaths) {
+      if (knownPaths.has(assetPath)) {
+        continue;
+      }
+      allFiles.push({
+        path: assetPath,
+        type: 'file',
+      });
+      knownPaths.add(assetPath);
+    }
+
+    allFiles.sort((a, b) => a.path.localeCompare(b.path));
 
     // Categorize files by type
     const categorized: Record<string, string[]> = {

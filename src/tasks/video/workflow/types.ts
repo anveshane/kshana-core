@@ -454,6 +454,8 @@ export interface AssetInfo {
   id: string;
   type: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'scene_infographic' | 'final_video';
   path: string;
+  scene_number?: number;
+  version?: number;
   createdAt: number;
   metadata?: Record<string, unknown>;
 }
