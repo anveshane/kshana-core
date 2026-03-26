@@ -204,10 +204,12 @@ function main() {
     // has completed per-item nodes AND those items are stable (not pending further expansion).
     // Map of which types expand based on which upstream items:
     const MATCHING_SOURCE: Record<string, string> = {
-      'scene_video_prompt': 'scene',     // one per scene
-      'character_image': 'character',     // one per character
-      'setting_image': 'setting',         // one per setting
-      // shot_image_prompt, shot_image, shot_video: expand from shots (runtime only)
+      'scene_video_prompt': 'scene',        // one per scene
+      'character_image': 'character',       // one per character
+      'setting_image': 'setting',           // one per setting
+      'shot_image_prompt': 'scene',         // one per scene (further expanded to per-shot at runtime)
+      'shot_image': 'scene',               // one per scene (further expanded to per-shot at runtime)
+      'shot_video': 'scene',               // one per scene (further expanded to per-shot at runtime)
     };
 
     let matchingItems: Array<{ itemId: string; name: string }> | null = null;
@@ -257,7 +259,7 @@ function main() {
           status: 'pending',
           displayName: displayName,
           isExpensive: false,
-          isCollection: typeId === 'scene_video_prompt' || typeId === 'shot_image_prompt',
+          isCollection: ['scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video'].includes(typeId),
           dependencies: wireDeps,
           dependents: [],
         };
