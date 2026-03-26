@@ -221,7 +221,13 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .tool-params-summary { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; opacity: 0.7; }
 .tool-args-clean { font-size: 12px; color: var(--text-muted); padding: 4px 8px; margin-bottom: 4px; opacity: 0.8; }
 .tool-args-clean b { color: var(--text-secondary); }
-.tool-arg-thumb { max-height: 120px; border-radius: 4px; vertical-align: middle; cursor: pointer; margin: 2px 0; }
+.tool-arg-images { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.tool-arg-img-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.tool-arg-thumb { max-height: 140px; border-radius: 6px; cursor: pointer; border: 1px solid var(--border); }
+.tool-arg-thumb:hover { border-color: var(--accent); }
+.tool-arg-img-label { font-size: 10px; color: var(--text-muted); text-transform: capitalize; }
+.tool-args-text { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.tool-arg-prompt { font-size: 12px; color: var(--text-secondary); line-height: 1.5; padding: 6px 8px; background: var(--bg-tertiary); border-radius: 4px; border-left: 2px solid var(--accent); }
 .tool-status { font-size: 10px; padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
 .tool-status.started { color: var(--accent); }
 .tool-status.completed { color: var(--green-bright); opacity: 0.6; }
@@ -868,16 +874,26 @@ function handleToolCall(data) {
     let argsHtml;
     if (isExecutorTool) {
       const args = data.arguments || {};
-      const parts = Object.entries(args).map(function(kv) {
-        var val = String(kv[1]);
-        // If value is an image path, render as inline thumbnail
+      var images = [];
+      var textParts = [];
+      var promptText = '';
+      Object.entries(args).forEach(function(kv) {
+        var key = kv[0], val = String(kv[1]);
         if (/\.(png|jpg|jpeg|webp)$/i.test(val) && selectedProject) {
           var imgUrl = '/api/v1/assets/' + selectedProject + '/' + val;
-          return '<b>' + escHtml(kv[0]) + ':</b> <img src="' + imgUrl + '" class="tool-arg-thumb" onclick="openLightbox(this.src)" onerror="this.remove()">';
+          var label = key.replace(/^ref_\d+_/, '').replace(/_/g, ' ');
+          images.push('<div class="tool-arg-img-wrap"><img src="' + imgUrl + '" class="tool-arg-thumb" onclick="openLightbox(this.src)" onerror="this.remove()"><div class="tool-arg-img-label">' + escHtml(label) + '</div></div>');
+        } else if (key === 'prompt') {
+          promptText = val;
+        } else {
+          textParts.push('<b>' + escHtml(key) + ':</b> ' + escHtml(val));
         }
-        return '<b>' + escHtml(kv[0]) + ':</b> ' + escHtml(val);
       });
-      argsHtml = parts.length > 0 ? '<div class="tool-args-clean">' + parts.join(' &middot; ') + '</div>' : '';
+      var sections = [];
+      if (images.length > 0) sections.push('<div class="tool-arg-images">' + images.join('') + '</div>');
+      if (textParts.length > 0) sections.push('<div class="tool-args-text">' + textParts.join(' &middot; ') + '</div>');
+      if (promptText) sections.push('<div class="tool-arg-prompt">' + escHtml(promptText) + '</div>');
+      argsHtml = sections.length > 0 ? '<div class="tool-args-clean">' + sections.join('') + '</div>' : '';
     } else {
       argsHtml = '<div class="tool-section-label">Arguments</div><pre>' + escHtml(JSON.stringify(data.arguments || {}, null, 2)) + '</pre>';
     }
