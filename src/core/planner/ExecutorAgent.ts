@@ -723,9 +723,9 @@ export class ExecutorAgent extends TypedEventEmitter {
             // 6. Extract collection items if this node produces them
             // (only for LLM-generated content nodes, not final assembly)
             if (nodeCategory !== 'final') {
-              const needsExpansion = this.executor.producesCollectionItems(node)
-                || node.typeId === 'scene_video_prompt';  // produces shots
-              if (needsExpansion && nodeCategory !== 'visual_ref' && nodeCategory !== 'clip') {
+              // Only story (extracts chars/settings/scenes) and scene_video_prompt (extracts shots) produce collection items
+              const needsExpansion = node.typeId === 'story' || node.typeId === 'scene_video_prompt';
+              if (needsExpansion) {
                 // Read content back from the prompt file for extraction
                 const writtenFile = join(this.config.projectDir, finalOutputPath);
                 if (existsSync(writtenFile)) {
