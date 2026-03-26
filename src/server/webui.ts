@@ -362,6 +362,7 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .wizard-duration-cards { display: flex; flex-wrap: wrap; gap: 8px; }
 .wizard-duration-btn { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px; color: var(--text); transition: all 0.15s; }
 .wizard-duration-btn:hover { border-color: var(--accent); background: #1c3a5c; }
+.wizard-duration-btn.selected { border-color: var(--accent); background: #1c3a5c; }
 .wizard-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .wizard-summary-tag { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 11px; color: var(--accent); }
 
@@ -2152,11 +2153,13 @@ function showWizardStep(step) {
 
     presets.forEach(function(p) {
       var btn = document.createElement('button');
-      btn.className = 'wizard-duration-btn';
+      btn.className = 'wizard-duration-btn' + (newProjectState.duration === p.seconds ? ' selected' : '');
       btn.textContent = p.label;
       btn.onclick = function() {
         newProjectState.duration = p.seconds;
         newProjectState.durationLabel = p.label;
+        btnRow.querySelectorAll('.wizard-duration-btn').forEach(function(c) { c.classList.remove('selected'); });
+        btn.classList.add('selected');
         showWizardStep('autonomous');
       };
       btnRow.appendChild(btn);

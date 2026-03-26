@@ -63,6 +63,7 @@ export function createTestExecutor(
   projectDir: string,
   llm: LLMClient,
   template: VideoTemplate = narrativeTemplate,
+  options?: { stopAfterNodeType?: string; skipMediaGeneration?: boolean },
 ): ExecutorAgent {
   const project = JSON.parse(readFileSync(join(projectDir, 'project.json'), 'utf-8')) as GenericProjectFile;
 
@@ -76,6 +77,8 @@ export function createTestExecutor(
       description: 'Create a 1-minute cinematic video',
     },
     name: 'e2e-test',
+    stopAfterNodeType: options?.stopAfterNodeType,
+    skipMediaGeneration: options?.skipMediaGeneration,
   });
 }
 

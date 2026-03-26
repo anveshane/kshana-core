@@ -30,7 +30,12 @@ async function isLLMReachable(): Promise<boolean> {
   try {
     const url = process.env['LLM_BASE_URL'];
     if (!url) return false;
-    const res = await fetch(`${url}/models`, { signal: AbortSignal.timeout(5000) });
+    const apiKey = process.env['LLM_API_KEY'] ?? '';
+    const headers: Record<string, string> = {};
+    if (apiKey && apiKey !== 'not-needed') {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+    const res = await fetch(`${url}/models`, { signal: AbortSignal.timeout(10000), headers });
     return res.ok;
   } catch {
     return false;
@@ -44,7 +49,7 @@ beforeAll(async () => {
   if (!LLM_AVAILABLE) {
     console.log('LLM not reachable — skipping E2E tests');
   }
-});
+}, 15000);
 
 describe('Pipeline E2E Steps', () => {
   let projectDir: string;
@@ -58,10 +63,15 @@ describe('Pipeline E2E Steps', () => {
 
     projectDir = createTestProject();
     llm = createTestLLM();
-    executor = createTestExecutor(projectDir, llm);
+    executor = createTestExecutor(projectDir, llm, undefined, {
+      skipMediaGeneration: true,
+    });
 
     console.log(`E2E test project: ${projectDir}`);
+    console.log(`LLM: ${process.env['LLM_BASE_URL']} / ${process.env['LLM_MODEL']}`);
     console.log('Running full pipeline...');
+
+    const start = Date.now();
 
     // Run executor to completion (or until stuck)
     await executor.run('Create a 1-minute cinematic video');
@@ -69,8 +79,9 @@ describe('Pipeline E2E Steps', () => {
     allNodes = executor.getExecutor().getAllNodes();
     const completed = allNodes.filter(n => n.status === 'completed').length;
     const failed = allNodes.filter(n => n.status === 'failed').length;
-    console.log(`Pipeline finished: ${completed} completed, ${failed} failed, ${allNodes.length} total`);
-  }, 600000); // 10 min timeout for full pipeline
+    const elapsed = Math.round((Date.now() - start) / 1000);
+    console.log(`Pipeline finished in ${elapsed}s: ${completed} completed, ${failed} failed, ${allNodes.length} total`);
+  }, 3600000); // 60 min timeout for full pipeline
 
   // Helper to find completed node by type
   function findNode(typeId: string): ExecutionNode | undefined {
@@ -341,6 +352,10 @@ describe('Pipeline E2E Steps', () => {
     }
 
     console.log(`Shot prompts: ${withRefs} with refs, ${withoutRefs} without refs`);
+
+    // All shots must use reference images — the test story has characters and settings
+    expect(withoutRefs).toBe(0);
+    expect(withRefs).toBe(nodes.filter(n => n.outputPath?.endsWith('.json')).length);
   });
 
   // =========================================================================

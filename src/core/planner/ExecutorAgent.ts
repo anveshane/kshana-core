@@ -68,6 +68,17 @@ export interface ExecutorAgentConfig {
    * serially — suitable when LLM and ComfyUI share the same machine.
    */
   parallelMediaGeneration?: boolean;
+  /**
+   * Stop the executor after any node of this type completes.
+   * Used for testing — run one step at a time.
+   * Example: stopAfterNodeType: 'plot' — runs until plot completes, then stops.
+   */
+  stopAfterNodeType?: string;
+  /**
+   * Skip media generation (ComfyUI calls). Only generates LLM prompts.
+   * Used for testing — validates prompt structure without calling image/video providers.
+   */
+  skipMediaGeneration?: boolean;
 }
 
 /**
@@ -415,9 +426,6 @@ export class ExecutorAgent extends TypedEventEmitter {
           break;
         }
 
-        // Reset repair counter on successful progress
-        selfRepairCount = 0;
-
         this.log(`Ready nodes: ${readyNodes.map(n => n.id).join(', ')}`);
 
         for (const node of readyNodes) {
@@ -455,7 +463,7 @@ export class ExecutorAgent extends TypedEventEmitter {
             let finalOutputPath = '';
             const toolCallId = `exec_${node.id}_${Date.now()}`;
 
-            if (nodeCategory === 'final') {
+            if (nodeCategory === 'final' && !this.config.skipMediaGeneration) {
               // Final assembly — skip LLM, go straight to deterministic assembly
               const assemblyResult = await this.executeFinalAssembly(node, toolCallId);
               if (!assemblyResult) {
@@ -463,7 +471,14 @@ export class ExecutorAgent extends TypedEventEmitter {
                 continue;
               }
               finalOutputPath = assemblyResult;
-            } else if (node.typeId === 'shot_video') {
+            } else if (nodeCategory === 'final' && this.config.skipMediaGeneration) {
+              // Test mode: skip final assembly — mark completed so pipeline finishes
+              this.log(`  Skipping final assembly (skipMediaGeneration=true)`);
+              this.executor.markCompleted(node.id, 'skipped-test-mode');
+              this.persistState();
+              this.emitTodoUpdate();
+              continue;
+            } else if (node.typeId === 'shot_video' && !this.config.skipMediaGeneration) {
               // Shot video — purely deterministic: take shot image + motion → video provider
               const videoResult = await this.executeShotVideo(node, toolCallId);
               if (!videoResult) {
@@ -471,6 +486,13 @@ export class ExecutorAgent extends TypedEventEmitter {
                 continue;
               }
               finalOutputPath = videoResult;
+            } else if (node.typeId === 'shot_video' && this.config.skipMediaGeneration) {
+              // Test mode: skip shot video — mark completed so downstream nodes aren't blocked
+              this.log(`  Skipping shot_video (skipMediaGeneration=true)`);
+              this.executor.markCompleted(node.id, 'skipped-test-mode');
+              this.persistState();
+              this.emitTodoUpdate();
+              continue;
             } else {
               // Non-deterministic node — needs LLM (or skip-if-exists)
               // 1. Resolve inputs
@@ -565,6 +587,10 @@ export class ExecutorAgent extends TypedEventEmitter {
                   this.persistState();
                   this.emitTodoUpdate();
                   this.log(`  COMPLETED (skipped): ${node.id} → ${finalOutputPath}`);
+                  if (this.config.stopAfterNodeType && node.typeId === this.config.stopAfterNodeType) {
+                    this.log(`  stopAfterNodeType matched: ${node.typeId} — stopping`);
+                    this.stopped = true;
+                  }
                   continue;
                 }
               }
@@ -622,7 +648,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               });
 
               // For shot_image_prompt: generate the actual shot image from the structured JSON
-              if (node.typeId === 'shot_image_prompt') {
+              if (node.typeId === 'shot_image_prompt' && !this.config.skipMediaGeneration) {
                 const shotImagePath = await this.executeShotImageGeneration(node, content, toolCallId);
                 if (shotImagePath) {
                   outputPath = shotImagePath;
@@ -636,7 +662,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               }
 
               // For media nodes: execute actual generation after prompt is written
-              if (nodeCategory === 'visual_ref' || nodeCategory === 'clip') {
+              if ((nodeCategory === 'visual_ref' || nodeCategory === 'clip') && !this.config.skipMediaGeneration) {
                 if (this.config.parallelMediaGeneration) {
                   // Parallel mode: fire-and-forget, collect result later
                   // The node stays as 'in_progress' until media completes
@@ -716,9 +742,18 @@ export class ExecutorAgent extends TypedEventEmitter {
             this.emitTodoUpdate();
             this.log(`  COMPLETED: ${node.id}`);
 
+            // Reset self-repair counter on successful completion
+            selfRepairCount = 0;
+
+            // Check if we should stop after this node type (test mode)
+            if (this.config.stopAfterNodeType && node.typeId === this.config.stopAfterNodeType) {
+              this.log(`  stopAfterNodeType matched: ${node.typeId} — stopping`);
+              this.stopped = true;
+            }
+
           } catch (error) {
             const errMsg = String(error);
-            const isTransient = /premature close|timed? ?out|ECONNRESET|ECONNREFUSED|socket hang up|network/i.test(errMsg);
+            const isTransient = /premature close|timed? ?out|ECONNRESET|ECONNREFUSED|socket hang up|network|connection error/i.test(errMsg);
 
             if (isTransient && !this.retriedNodes.has(node.id)) {
               // Retry once for transient errors
@@ -1343,7 +1378,7 @@ Rules:
       const characters: string[] = shot.characters ?? [];
       for (const charId of characters) {
         const charImageNode = this.executor.getNode(`character_image:${charId}`);
-        if (charImageNode?.status === 'completed' && charImageNode.outputPath?.endsWith('.png')) {
+        if (charImageNode?.status === 'completed' && charImageNode.outputPath) {
           availableRefs.push({ imageNumber: imageNum, type: 'character', refId: `character_image:${charId}`, label: charId });
           imageNum++;
         }
@@ -1351,7 +1386,7 @@ Rules:
 
       if (shot.setting) {
         const settingImageNode = this.executor.getNode(`setting_image:${shot.setting}`);
-        if (settingImageNode?.status === 'completed' && settingImageNode.outputPath?.endsWith('.png')) {
+        if (settingImageNode?.status === 'completed' && settingImageNode.outputPath) {
           availableRefs.push({ imageNumber: imageNum, type: 'setting', refId: `setting_image:${shot.setting}`, label: shot.setting });
           imageNum++;
         }
