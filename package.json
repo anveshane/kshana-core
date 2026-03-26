@@ -17,6 +17,7 @@
     "kill": "pkill -f 'tsx.*src/index.tsx' || true; pkill -f 'tsx.*src/server/cli.ts' || true; echo 'All kshana processes killed'",
     "reboot": "pnpm kill && pnpm start",
     "test:client": "tsx src/server/testClient.ts",
+    "reset": "tsx scripts/reset-project.ts",
     "build": "tsup",
     "test": "vitest run tests/unit/",
     "test:ci": "vitest run tests/unit/",
