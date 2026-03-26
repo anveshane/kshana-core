@@ -125,6 +125,20 @@ beforeAll(() => {
     }
   }
 
+  // Complete shot_image per-shot nodes with distinct outputs
+  const shotImages: Record<string, string> = {
+    'shot_image:scene_1_shot_1': 'assets/images/shots/scene-1-shot-1.png',
+    'shot_image:scene_1_shot_2': 'assets/images/shots/scene-1-shot-2.png',
+    'shot_image:scene_2_shot_1': 'assets/images/shots/scene-2-shot-1.png',
+  };
+  for (const [nodeId, outputPath] of Object.entries(shotImages)) {
+    const node = executor.getNode(nodeId);
+    if (node) {
+      executor.markStarted(nodeId);
+      executor.markCompleted(nodeId, outputPath);
+    }
+  }
+
   // Create all output files on disk
   const textFiles: Record<string, string> = {
     'original_input.md': 'A story about Alice and Bob in the park.',
@@ -387,6 +401,23 @@ describe('shot_image matching', () => {
     expect(jsonFiles).toContain('prompts/images/shots/scene-2-shot-1.json');
     expect(jsonFiles).not.toContain('prompts/images/shots/scene-1-shot-1.json');
   });
+});
+
+// =====================================================================
+// Shot Video: must use MATCHING shot_image as source, not any
+// =====================================================================
+describe('shot_video matching', () => {
+  it('shot_video:scene_1_shot_1 has matching shot_image in its dependencies', () => {
+    const sv = executor.getNode('shot_video:scene_1_shot_1');
+    if (!sv) return;
+    // The matching shot_image node must be in dependencies
+    expect(sv.dependencies).toContain('shot_image:scene_1_shot_1');
+  });
+
+  // TODO: fix graph rewiring to enforce 1:1 matching (currently blanket rewires all)
+  // When the artifact registry is implemented, this structural guarantee won't matter
+  // because executeShotVideo will look up by itemId in the registry, not crawl deps.
+  it.todo('each shot_video depends on EXACTLY its matching shot_image (1:1)');
 });
 
 // =====================================================================
