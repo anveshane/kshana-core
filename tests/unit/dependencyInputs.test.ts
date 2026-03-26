@@ -1,0 +1,348 @@
+/**
+ * Dependency Input Verification Tests
+ *
+ * Verifies that each node type receives ONLY its declared dependencies
+ * as context — no unwanted files, no binary data, no cross-contamination.
+ *
+ * These tests create a mock project with known files, run resolveInputs,
+ * and assert exactly which files are read for each node type.
+ */
+
+import { describe, it, expect, beforeAll } from 'vitest';
+import { mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { DependencyGraphExecutor } from '../../src/core/planner/DependencyGraphExecutor.js';
+import { BackwardPlanner } from '../../src/core/planner/BackwardPlanner.js';
+import { resolveInputs } from '../../src/core/planner/contentResolver.js';
+import { narrativeTemplate } from '../../src/templates/narrative.js';
+import type { ExecutionNode, AssetRegistry } from '../../src/core/planner/types.js';
+
+let projectDir: string;
+let executor: DependencyGraphExecutor;
+
+/**
+ * Build a fully expanded executor with all nodes completed and output files on disk.
+ */
+beforeAll(() => {
+  projectDir = join(tmpdir(), `kshana-dep-test-${Date.now()}`);
+  mkdirSync(projectDir, { recursive: true });
+
+  // Create the executor from a proper backward plan
+  const planner = new BackwardPlanner(narrativeTemplate);
+  const registry: AssetRegistry = { assets: new Map(), satisfiedArtifacts: new Map(), lastScanAt: Date.now() };
+  const plan = planner.buildPlan(
+    { targetArtifacts: ['final_video'], preferences: {}, description: 'test' },
+    registry,
+  );
+  executor = DependencyGraphExecutor.fromPlan(plan, narrativeTemplate);
+
+  // Expand collections to simulate a real pipeline
+  // story → characters, settings, scenes
+  executor.markStarted('story');
+  executor.markCompleted('story', 'chapters/chapter_1/plans/story.md');
+  executor.expandCollection('character', [
+    { itemId: 'alice', name: 'Alice' },
+    { itemId: 'bob', name: 'Bob' },
+  ]);
+  executor.expandCollection('setting', [
+    { itemId: 'park', name: 'Park' },
+    { itemId: 'house', name: 'House' },
+  ]);
+  executor.expandCollection('scene', [
+    { itemId: 'scene_1', name: 'Scene 1' },
+    { itemId: 'scene_2', name: 'Scene 2' },
+  ]);
+
+  // Mark all expanded nodes as completed with appropriate output paths
+  const nodeOutputs: Record<string, string> = {
+    'plot': 'chapters/chapter_1/plans/plot.md',
+    'character:alice': 'characters/alice.md',
+    'character:bob': 'characters/bob.md',
+    'setting:park': 'settings/park.md',
+    'setting:house': 'settings/house.md',
+    'scene:scene_1': 'chapters/chapter_1/scenes/scene_1.md',
+    'scene:scene_2': 'chapters/chapter_1/scenes/scene_2.md',
+    'character_image:alice': 'assets/images/charref_alice.png',
+    'character_image:bob': 'assets/images/charref_bob.png',
+    'setting_image:park': 'assets/images/settingref_park.png',
+    'setting_image:house': 'assets/images/settingref_house.png',
+  };
+
+  // Expand character_image, setting_image, scene_video_prompt
+  executor.expandCollection('character_image', [
+    { itemId: 'alice', name: 'Alice' },
+    { itemId: 'bob', name: 'Bob' },
+  ]);
+  executor.expandCollection('setting_image', [
+    { itemId: 'park', name: 'Park' },
+    { itemId: 'house', name: 'House' },
+  ]);
+  executor.expandCollection('scene_video_prompt', [
+    { itemId: 'scene_1', name: 'Scene 1' },
+    { itemId: 'scene_2', name: 'Scene 2' },
+  ]);
+
+  // Mark all nodes completed
+  for (const [nodeId, outputPath] of Object.entries(nodeOutputs)) {
+    const node = executor.getNode(nodeId);
+    if (node && node.status !== 'completed') {
+      executor.markStarted(nodeId);
+      executor.markCompleted(nodeId, outputPath);
+    }
+  }
+
+  // Create scene_video_prompt outputs and expand to shots
+  for (const sceneId of ['scene_1', 'scene_2']) {
+    const svpId = `scene_video_prompt:${sceneId}`;
+    const svpNode = executor.getNode(svpId);
+    if (svpNode) {
+      executor.markStarted(svpId);
+      executor.markCompleted(svpId, `prompts/videos/scenes/${sceneId}.json`);
+    }
+  }
+
+  // Expand shots from scene_video_prompt
+  executor.expandCollection('shot_image_prompt:scene_1', [
+    { itemId: 'scene_1_shot_1', name: 'Shot 1' },
+    { itemId: 'scene_1_shot_2', name: 'Shot 2' },
+  ]);
+  executor.expandCollection('shot_image_prompt:scene_2', [
+    { itemId: 'scene_2_shot_1', name: 'Shot 1' },
+  ]);
+
+  // Create all output files on disk
+  const textFiles: Record<string, string> = {
+    'original_input.md': 'A story about Alice and Bob in the park.',
+    'chapters/chapter_1/plans/plot.md': '# Plot\nAlice meets Bob.',
+    'chapters/chapter_1/plans/story.md': '# Story\nAlice and Bob go to the park.',
+    'characters/alice.md': '# Alice\nA brave girl.',
+    'characters/bob.md': '# Bob\nA kind boy.',
+    'settings/park.md': '# Park\nA sunny park.',
+    'settings/house.md': '# House\nA cozy house.',
+    'chapters/chapter_1/scenes/scene_1.md': '# Scene 1\nAlice arrives at the park.',
+    'chapters/chapter_1/scenes/scene_2.md': '# Scene 2\nBob meets Alice.',
+    'prompts/images/characters/alice.json': '{"imagePrompt":"Alice portrait","negativePrompt":"bad","aspectRatio":"1:1"}',
+    'prompts/images/characters/bob.json': '{"imagePrompt":"Bob portrait","negativePrompt":"bad","aspectRatio":"1:1"}',
+    'prompts/images/settings/park.json': '{"imagePrompt":"Park landscape","negativePrompt":"bad","aspectRatio":"16:9"}',
+    'prompts/images/settings/house.json': '{"imagePrompt":"House exterior","negativePrompt":"bad","aspectRatio":"16:9"}',
+    'prompts/videos/scenes/scene_1.json': '{"sceneNumber":1,"sceneTitle":"Arrival","totalDuration":10,"shots":[{"shotNumber":1,"shotType":"wide","duration":5,"description":"Wide shot","characters":["alice"],"setting":"park"},{"shotNumber":2,"shotType":"close_up","duration":5,"description":"Close up","characters":["alice","bob"],"setting":"park"}]}',
+    'prompts/videos/scenes/scene_2.json': '{"sceneNumber":2,"sceneTitle":"Meeting","totalDuration":10,"shots":[{"shotNumber":1,"shotType":"medium","duration":10,"description":"Medium shot","characters":["bob"],"setting":"house"}]}',
+  };
+
+  for (const [filePath, content] of Object.entries(textFiles)) {
+    const fullPath = join(projectDir, filePath);
+    mkdirSync(join(fullPath, '..'), { recursive: true });
+    writeFileSync(fullPath, content);
+  }
+
+  // Create binary image files (small fake PNGs)
+  const binaryFiles = [
+    'assets/images/charref_alice.png',
+    'assets/images/charref_bob.png',
+    'assets/images/settingref_park.png',
+    'assets/images/settingref_house.png',
+  ];
+  for (const filePath of binaryFiles) {
+    const fullPath = join(projectDir, filePath);
+    mkdirSync(join(fullPath, '..'), { recursive: true });
+    writeFileSync(fullPath, Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])); // PNG header
+  }
+});
+
+function getNode(id: string): ExecutionNode {
+  const node = executor.getNode(id);
+  if (!node) throw new Error(`Node ${id} not found`);
+  return node;
+}
+
+// =====================================================================
+// Plot: should only get original_input.md (no dependencies)
+// =====================================================================
+describe('plot dependencies', () => {
+  it('receives only original_input.md', () => {
+    const node = getNode('plot');
+    const inputs = resolveInputs(node, executor, projectDir);
+
+    expect(inputs.filesRead).toEqual(['original_input.md']);
+    expect(inputs.referenceImages).toEqual([]);
+    expect(inputs.contextBlock).toContain('original_input.md');
+    expect(inputs.contextBlock).not.toContain('.png');
+  });
+});
+
+// =====================================================================
+// Story: should only get plot output
+// =====================================================================
+describe('story dependencies', () => {
+  it('receives only plot.md', () => {
+    const node = getNode('story');
+    const inputs = resolveInputs(node, executor, projectDir);
+
+    expect(inputs.filesRead).toEqual(['chapters/chapter_1/plans/plot.md']);
+    expect(inputs.referenceImages).toEqual([]);
+    expect(inputs.contextBlock).toContain('plot.md');
+    expect(inputs.contextBlock).not.toContain('story.md');
+    expect(inputs.contextBlock).not.toContain('.png');
+  });
+});
+
+// =====================================================================
+// Character: should only get story
+// =====================================================================
+describe('character dependencies', () => {
+  it('receives only story.md', () => {
+    const node = getNode('character:alice');
+    const inputs = resolveInputs(node, executor, projectDir);
+
+    expect(inputs.filesRead).toEqual(['chapters/chapter_1/plans/story.md']);
+    expect(inputs.referenceImages).toEqual([]);
+    expect(inputs.contextBlock).not.toContain('.png');
+  });
+});
+
+// =====================================================================
+// Setting: should only get story
+// =====================================================================
+describe('setting dependencies', () => {
+  it('receives only story.md', () => {
+    const node = getNode('setting:park');
+    const inputs = resolveInputs(node, executor, projectDir);
+
+    expect(inputs.filesRead).toEqual(['chapters/chapter_1/plans/story.md']);
+    expect(inputs.referenceImages).toEqual([]);
+    expect(inputs.contextBlock).not.toContain('.png');
+  });
+});
+
+// =====================================================================
+// Character Image: should only get matching character profile
+// =====================================================================
+describe('character_image dependencies', () => {
+  it('receives only the matching character markdown', () => {
+    const node = getNode('character_image:alice');
+    const inputs = resolveInputs(node, executor, projectDir);
+
+    expect(inputs.filesRead).toContain('characters/alice.md');
+    expect(inputs.filesRead).not.toContain('characters/bob.md');
+    expect(inputs.referenceImages).toEqual([]);
+    expect(inputs.contextBlock).not.toContain('.png');
+    expect(inputs.contextBlock.length).toBeLessThan(5000);
+  });
+});
+
+// =====================================================================
+// Setting Image: should only get matching setting profile
+// =====================================================================
+describe('setting_image dependencies', () => {
+  it('receives only the matching setting markdown', () => {
+    const node = getNode('setting_image:park');
+    const inputs = resolveInputs(node, executor, projectDir);
+
+    expect(inputs.filesRead).toContain('settings/park.md');
+    expect(inputs.filesRead).not.toContain('settings/house.md');
+    expect(inputs.referenceImages).toEqual([]);
+    expect(inputs.contextBlock).not.toContain('.png');
+    expect(inputs.contextBlock.length).toBeLessThan(5000);
+  });
+});
+
+// =====================================================================
+// Scene: should get story + all characters + all settings (text only)
+// =====================================================================
+describe('scene dependencies', () => {
+  it('receives story and all character/setting profiles', () => {
+    const node = getNode('scene:scene_1');
+    const inputs = resolveInputs(node, executor, projectDir);
+
+    expect(inputs.filesRead).toContain('chapters/chapter_1/plans/story.md');
+    expect(inputs.filesRead).toContain('characters/alice.md');
+    expect(inputs.filesRead).toContain('characters/bob.md');
+    expect(inputs.filesRead).toContain('settings/park.md');
+    expect(inputs.filesRead).toContain('settings/house.md');
+    expect(inputs.referenceImages).toEqual([]);
+    expect(inputs.contextBlock).not.toContain('.png');
+  });
+});
+
+// =====================================================================
+// Scene Video Prompt: should get matching scene + ref images (NOT binary)
+// =====================================================================
+describe('scene_video_prompt dependencies', () => {
+  it('receives matching scene text and image refs but NO binary data', () => {
+    const node = getNode('scene_video_prompt:scene_1');
+    const inputs = resolveInputs(node, executor, projectDir);
+
+    // Should read the scene markdown
+    expect(inputs.filesRead).toContain('chapters/chapter_1/scenes/scene_1.md');
+    // Should NOT read scene_2
+    expect(inputs.filesRead).not.toContain('chapters/chapter_1/scenes/scene_2.md');
+
+    // Should list image files as read (tracked) but NOT in context text
+    expect(inputs.filesRead).toContain('assets/images/charref_alice.png');
+    expect(inputs.filesRead).toContain('assets/images/charref_bob.png');
+    expect(inputs.filesRead).toContain('assets/images/settingref_park.png');
+    expect(inputs.filesRead).toContain('assets/images/settingref_house.png');
+
+    // Reference images should be populated
+    expect(inputs.referenceImages.length).toBeGreaterThanOrEqual(2);
+    expect(inputs.referenceImages.some(r => r.type === 'character')).toBe(true);
+    expect(inputs.referenceImages.some(r => r.type === 'setting')).toBe(true);
+
+    // Context block must NOT contain binary PNG data
+    expect(inputs.contextBlock).not.toContain('\x89PNG');
+    expect(inputs.contextBlock.length).toBeLessThan(50000);
+  });
+
+  it('context block is a reasonable size', () => {
+    const node = getNode('scene_video_prompt:scene_1');
+    const inputs = resolveInputs(node, executor, projectDir);
+
+    // Should be small — just the scene markdown + metadata
+    expect(inputs.contextBlock.length).toBeLessThan(10000);
+  });
+});
+
+// =====================================================================
+// Shot Image Prompt: should get matching scene_video_prompt + ref images
+// =====================================================================
+describe('shot_image_prompt dependencies', () => {
+  it('receives scene_video_prompt JSON and image refs but NO binary data', () => {
+    const node = getNode('shot_image_prompt:scene_1_shot_1');
+    if (!node) return; // May not exist if expansion didn't work
+    const inputs = resolveInputs(node, executor, projectDir);
+
+    // Should read the scene_video_prompt JSON
+    const jsonFiles = inputs.filesRead.filter(f => f.endsWith('.json'));
+    expect(jsonFiles.length).toBeGreaterThanOrEqual(1);
+
+    // Should list image files but NOT include them in text context
+    expect(inputs.contextBlock).not.toContain('\x89PNG');
+    expect(inputs.contextBlock.length).toBeLessThan(50000);
+
+    // Should have reference images
+    expect(inputs.referenceImages.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+// =====================================================================
+// No binary data should ever appear in any node's context
+// =====================================================================
+describe('no binary contamination', () => {
+  it('no node receives PNG data in its context block', () => {
+    const allNodes = executor.getAllNodes();
+    for (const node of allNodes) {
+      if (node.status !== 'completed' && node.status !== 'pending') continue;
+      // Skip nodes whose dependencies aren't all completed
+      const depsComplete = node.dependencies.every(depId => {
+        const dep = executor.getNode(depId);
+        return dep && dep.status === 'completed';
+      });
+      if (!depsComplete) continue;
+
+      const inputs = resolveInputs(node, executor, projectDir);
+      expect(inputs.contextBlock).not.toContain('\x89PNG');
+      expect(inputs.contextBlock.length).toBeLessThan(100000);
+    }
+  });
+});
