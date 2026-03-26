@@ -50,6 +50,10 @@ export interface ImageGenerationInput {
   prompt: string;
   negativePrompt?: string;
   aspectRatio?: string;
+  /** Override width in pixels (takes precedence over aspectRatio) */
+  width?: number;
+  /** Override height in pixels (takes precedence over aspectRatio) */
+  height?: number;
   seed?: number;
   /** Directory where the output file should be saved */
   outputDir: string;

@@ -506,6 +506,10 @@ export function parameterizeWorkflowByName(
     prompt: string;
     negativePrompt?: string;
     aspectRatio?: string;
+    /** Override width in pixels (takes precedence over aspectRatio) */
+    width?: number;
+    /** Override height in pixels (takes precedence over aspectRatio) */
+    height?: number;
     style?: string;
     seed?: number;
     inputImageFilename?: string;
@@ -520,11 +524,15 @@ export function parameterizeWorkflowByName(
   const filenamePrefix = params.filenamePrefix || `Scene${params.sceneNumber}`;
 
   if (workflowName === 'chroma_radiance') {
-    let [width, height] = [1024, 1024];
-    if (aspectRatio === '16:9') [width, height] = [1536, 864];
-    else if (aspectRatio === '9:16') [width, height] = [864, 1536];
-    else if (aspectRatio === '4:3') [width, height] = [1366, 1024];
-    else if (aspectRatio === '3:4') [width, height] = [1024, 1366];
+    let [width, height] = params.width && params.height
+      ? [params.width, params.height]
+      : [1024, 1024];
+    if (!params.width) {
+      if (aspectRatio === '16:9') [width, height] = [1536, 864];
+      else if (aspectRatio === '9:16') [width, height] = [864, 1536];
+      else if (aspectRatio === '4:3') [width, height] = [1366, 1024];
+      else if (aspectRatio === '3:4') [width, height] = [1024, 1366];
+    }
 
     return parameterizeChromaRadianceWorkflow(template, {
       prompt: params.prompt,
@@ -535,11 +543,15 @@ export function parameterizeWorkflowByName(
       filenamePrefix,
     });
   } else if (workflowName === 'zimage') {
-    let [width, height] = [1024, 1024];
-    if (aspectRatio === '16:9') [width, height] = [1536, 864];
-    else if (aspectRatio === '9:16') [width, height] = [864, 1536];
-    else if (aspectRatio === '4:3') [width, height] = [1366, 1024];
-    else if (aspectRatio === '3:4') [width, height] = [1024, 1366];
+    let [width, height] = params.width && params.height
+      ? [params.width, params.height]
+      : [1024, 1024];
+    if (!params.width) {
+      if (aspectRatio === '16:9') [width, height] = [1536, 864];
+      else if (aspectRatio === '9:16') [width, height] = [864, 1536];
+      else if (aspectRatio === '4:3') [width, height] = [1366, 1024];
+      else if (aspectRatio === '3:4') [width, height] = [1024, 1366];
+    }
 
     return parameterizeZImageWorkflow(template, {
       prompt: params.prompt,

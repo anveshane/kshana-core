@@ -199,6 +199,10 @@ export interface ImageGenerationParams {
   prompt: string;
   negative_prompt?: string;
   aspect_ratio?: string;
+  /** Override width in pixels (takes precedence over aspect_ratio) */
+  width?: number;
+  /** Override height in pixels (takes precedence over aspect_ratio) */
+  height?: number;
   seed?: number;
   image_type?: 'scene' | 'character_ref' | 'setting_ref';
   character_name?: string;
@@ -406,6 +410,8 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
         prompt: enhancedPrompt,
         negativePrompt: enhancedNegativePrompt,
         aspectRatio: aspect_ratio,
+        width: params.width,
+        height: params.height,
         seed,
         outputDir: getAssetsDir(),
         filenamePrefix,

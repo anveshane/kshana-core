@@ -2020,11 +2020,17 @@ Rules:
 
       const sceneNumber = parseInt(node.itemId?.match(/scene_(\d+)/)?.[1] ?? '1', 10);
 
+      // Shot images match the project's video resolution
+      const shotWidth = this.config.project.resolutionWidth;
+      const shotHeight = this.config.project.resolutionHeight;
+
       const result = await submitImageGeneration({
         scene_number: sceneNumber,
         prompt: shotJson.imagePrompt,
         negative_prompt: shotJson.negativePrompt,
         aspect_ratio: shotJson.aspectRatio ?? '16:9',
+        width: shotWidth,
+        height: shotHeight,
         image_type: 'scene',
         generation_mode: generationMode,
         reference_images: hasRefs ? resolvedRefs : undefined,
