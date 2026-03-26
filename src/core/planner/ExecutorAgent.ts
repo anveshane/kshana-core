@@ -1390,26 +1390,22 @@ Rules:
       const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
       if (!shot) return '';
 
-      // Build available reference images list
-      // The LLM will include the ref_id in its JSON output so we can resolve files later
+      // Build reference image list from the scene_video_prompt JSON.
+      // The refIds are deterministic (character_image:{charId}, setting_image:{settingId}).
+      // Actual .png resolution happens at ComfyUI generation time, not here.
+      // This allows shot prompts to be generated before/in parallel with image generation.
       const availableRefs: Array<{ imageNumber: number; type: string; refId: string; label: string }> = [];
       let imageNum = 1;
 
       const characters: string[] = shot.characters ?? [];
       for (const charId of characters) {
-        const charImageNode = this.executor.getNode(`character_image:${charId}`);
-        if (charImageNode?.status === 'completed' && charImageNode.outputPath) {
-          availableRefs.push({ imageNumber: imageNum, type: 'character', refId: `character_image:${charId}`, label: charId });
-          imageNum++;
-        }
+        availableRefs.push({ imageNumber: imageNum, type: 'character', refId: `character_image:${charId}`, label: charId });
+        imageNum++;
       }
 
       if (shot.setting) {
-        const settingImageNode = this.executor.getNode(`setting_image:${shot.setting}`);
-        if (settingImageNode?.status === 'completed' && settingImageNode.outputPath) {
-          availableRefs.push({ imageNumber: imageNum, type: 'setting', refId: `setting_image:${shot.setting}`, label: shot.setting });
-          imageNum++;
-        }
+        availableRefs.push({ imageNumber: imageNum, type: 'setting', refId: `setting_image:${shot.setting}`, label: shot.setting });
+        imageNum++;
       }
 
       if (availableRefs.length === 0) {

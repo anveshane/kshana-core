@@ -53,7 +53,7 @@ const TEMPLATE_DEPS: Record<string, string[]> = {
   character_image: ['character'],
   setting_image: ['setting'],
   scene_video_prompt: ['scene', 'character_image', 'setting_image'],
-  shot_image_prompt: ['scene_video_prompt', 'character_image', 'setting_image'],
+  shot_image_prompt: ['scene_video_prompt'],
   shot_video: ['shot_image_prompt'],
   final_video: ['shot_video'],
 };

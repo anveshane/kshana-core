@@ -304,24 +304,29 @@ describe('scene_video_prompt dependencies', () => {
 });
 
 // =====================================================================
-// Shot Image Prompt: should get matching scene_video_prompt + ref images
+// Shot Image Prompt: should ONLY get matching scene_video_prompt JSON
+// Reference images are resolved by refId at generation time, not here.
 // =====================================================================
 describe('shot_image_prompt dependencies', () => {
-  it('receives scene_video_prompt JSON and image refs but NO binary data', () => {
+  it('receives only scene_video_prompt JSON — no images, no binary data', () => {
     const node = getNode('shot_image_prompt:scene_1_shot_1');
     if (!node) return; // May not exist if expansion didn't work
     const inputs = resolveInputs(node, executor, projectDir);
 
-    // Should read the scene_video_prompt JSON
+    // Should read scene_video_prompt JSON(s) only
     const jsonFiles = inputs.filesRead.filter(f => f.endsWith('.json'));
     expect(jsonFiles.length).toBeGreaterThanOrEqual(1);
 
-    // Should list image files but NOT include them in text context
-    expect(inputs.contextBlock).not.toContain('\x89PNG');
-    expect(inputs.contextBlock.length).toBeLessThan(50000);
+    // Should NOT have any image files in filesRead
+    const imageFiles = inputs.filesRead.filter(f => /\.(png|jpg|jpeg|webp)$/.test(f));
+    expect(imageFiles.length).toBe(0);
 
-    // Should have reference images
-    expect(inputs.referenceImages.length).toBeGreaterThanOrEqual(2);
+    // No binary data in context
+    expect(inputs.contextBlock).not.toContain('\x89PNG');
+    expect(inputs.contextBlock.length).toBeLessThan(10000);
+
+    // No reference images — those are resolved at ComfyUI time by refId
+    expect(inputs.referenceImages.length).toBe(0);
   });
 });
 

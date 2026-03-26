@@ -248,9 +248,11 @@ const shotImagePromptArtifact: ArtifactTypeDefinition = {
   isExpensive: false,
   requiresPerItemApproval: false,
   dependencies: [
+    // Only depends on scene_video_prompt for the shot structure + character/setting IDs.
+    // Reference images (character_image, setting_image) are resolved by refId at
+    // ComfyUI generation time, NOT at prompt generation time. This allows shot prompts
+    // to be generated in parallel with image generation.
     { artifactTypeId: 'scene_video_prompt', required: true, usage: 'context', scope: 'matching' },
-    { artifactTypeId: 'character_image', required: true, usage: 'reference', scope: 'all' },
-    { artifactTypeId: 'setting_image', required: true, usage: 'reference', scope: 'all' },
   ],
 };
 
