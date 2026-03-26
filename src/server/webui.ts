@@ -1868,7 +1868,21 @@ async function loadProjectDetails(name) {
     const res = await fetch('/api/v1/projects/' + name);
     if (!res.ok) return;
     const data = await res.json();
-    document.getElementById('phase-display').textContent = (data.currentPhase || 'unknown').replace(/_/g, ' ');
+    // Derive phase: use currentPhase, or infer from executor state
+    var phase = data.currentPhase;
+    if (!phase && data.executorState && data.executorState.nodes) {
+      var nodes = data.executorState.nodes;
+      // Find the last in-progress or most recent pending type
+      var inProgress = Object.values(nodes).find(function(n) { return n.status === 'in_progress'; });
+      if (inProgress) {
+        phase = inProgress.typeId;
+      } else {
+        // Find first pending node to show what's next
+        var firstPending = Object.values(nodes).find(function(n) { return n.status === 'pending'; });
+        if (firstPending) phase = firstPending.typeId;
+      }
+    }
+    document.getElementById('phase-display').textContent = (phase || '-').replace(/_/g, ' ');
     if (data.todos && data.todos.length > 0) {
       const list = document.getElementById('todo-list');
       list.innerHTML = data.todos.map(function(t) {
