@@ -397,7 +397,44 @@ export class ExecutorAgent extends TypedEventEmitter {
             continue;  // Re-check for ready nodes
           }
 
-          // Limit self-repair attempts to prevent infinite loops
+          // Check if we're stuck because of failed nodes blocking downstream
+          const failedNodes = this.executor.getAllNodes().filter(n => n.status === 'failed');
+          const pendingNodes = this.executor.getAllNodes().filter(n => n.status === 'pending');
+
+          if (failedNodes.length > 0 && pendingNodes.length > 0) {
+            // There are failed nodes blocking progress — retry them
+            if (selfRepairCount >= MAX_SELF_REPAIRS) {
+              // Max retries reached — notify user and stop
+              this.log(`STUCK: ${failedNodes.length} failed node(s) after ${MAX_SELF_REPAIRS} retry attempts. Stopping.`);
+              this.emit({
+                type: 'notification',
+                level: 'error',
+                message: `${failedNodes.length} node(s) failed after retries: ${failedNodes.map(n => n.displayName).join(', ')}. Send any message to retry.`,
+              });
+              break;
+            }
+
+            selfRepairCount++;
+            const retryDelay = selfRepairCount * 10000; // 10s, 20s, 30s backoff
+            this.log(`Retrying ${failedNodes.length} failed node(s) (attempt ${selfRepairCount}/${MAX_SELF_REPAIRS}, waiting ${retryDelay / 1000}s)...`);
+            this.emit({
+              type: 'notification',
+              level: 'info',
+              message: `Retrying ${failedNodes.length} failed node(s) in ${retryDelay / 1000}s (attempt ${selfRepairCount}/${MAX_SELF_REPAIRS})...`,
+            });
+
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+
+            for (const fn of failedNodes) {
+              this.executor.invalidateNode(fn.id);
+              this.retriedNodes.delete(fn.id); // allow transient retry again
+            }
+            this.persistState();
+            this.emitTodoUpdate();
+            continue;
+          }
+
+          // No failed nodes — try structural self-repair
           if (selfRepairCount >= MAX_SELF_REPAIRS) {
             this.log(`STUCK: Max self-repair attempts (${MAX_SELF_REPAIRS}) reached. Stopping.`);
             break;
@@ -407,12 +444,6 @@ export class ExecutorAgent extends TypedEventEmitter {
           this.log(`No ready nodes — attempting self-repair (${selfRepairCount}/${MAX_SELF_REPAIRS})...`);
           this.repairMissingNodes();
           await this.expandPendingCollections();
-
-          // Also reset any failed nodes to give them another chance
-          const failedNodes = this.executor.getAllNodes().filter(n => n.status === 'failed');
-          for (const fn of failedNodes) {
-            this.executor.invalidateNode(fn.id);
-          }
 
           const newReady = this.executor.getNextReady();
 
@@ -743,7 +774,7 @@ export class ExecutorAgent extends TypedEventEmitter {
 
           } catch (error) {
             const errMsg = String(error);
-            const isTransient = /premature close|timed? ?out|ECONNRESET|ECONNREFUSED|socket hang up|network|connection error/i.test(errMsg);
+            const isTransient = /premature close|timed? ?out|ECONNRESET|ECONNREFUSED|socket hang up|network|connection error|502|503|429/i.test(errMsg);
 
             if (isTransient && !this.retriedNodes.has(node.id)) {
               // Retry once for transient errors
