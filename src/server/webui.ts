@@ -280,6 +280,8 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .tool-md-result pre { background: #0d1117; padding: 8px; border-radius: 4px; margin: 4px 0; font-size: 11px; }
 
 /* Phase transition */
+.reconnect-separator { text-align: center; padding: 8px 0; margin: 12px 0; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 11px; }
+.reconnect-separator span { background: var(--bg); padding: 0 12px; position: relative; top: -1px; }
 .phase-transition { display: flex; align-items: center; gap: 8px; padding: 8px 16px; margin: 4px 0; background: linear-gradient(90deg, rgba(88,166,255,0.1) 0%, transparent 100%); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; }
 .phase-transition .phase-icon { font-size: 14px; }
 .phase-transition .phase-text { font-size: 13px; color: var(--accent); font-weight: 600; }
@@ -433,6 +435,14 @@ function connect() {
     // the executor is already running from the previous connection.
     // Suppress noisy "Connected/Resuming" messages on reconnect.
     if (selectedProject) {
+      // Add visual separator in chat
+      closeAgentGroup();
+      var sep = document.createElement('div');
+      sep.className = 'reconnect-separator';
+      sep.innerHTML = '<span>Reconnected</span>';
+      chatMessages.appendChild(sep);
+      maybeScroll();
+
       wsSend({ type: 'select_project', sessionId, data: { projectName: selectedProject } });
       // Refresh sidebar state on reconnect
       loadProjectAssets(selectedProject);
