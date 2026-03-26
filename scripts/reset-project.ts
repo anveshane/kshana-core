@@ -184,78 +184,138 @@ function main() {
     resetCount++;
   }
 
-  // Phase 5: Recreate missing type-level collection nodes
-  // If a type-level node was removed (because it was expanded and then deleted),
-  // we need to recreate it as a pending collection placeholder
+  // Phase 5: Recreate collection nodes — either as per-item nodes (if upstream has items)
+  // or as type-level placeholders. Delete any existing type-level node first.
   for (const typeId of resetTypes) {
     if (!COLLECTION_TYPES.has(typeId)) continue;
 
-    // Check if a type-level node exists (no itemId)
-    const exists = Object.values(nodes).some(n => n.typeId === typeId && !n.itemId);
-    if (exists) continue;
+    // Remove existing type-level node (will be replaced by per-item or fresh placeholder)
+    if (nodes[typeId]) {
+      delete nodes[typeId];
+    }
+    // Also remove any existing per-item nodes of this type (already done in Phase 3 but be safe)
+    for (const nid of Object.keys(nodes)) {
+      if (nodes[nid]!.typeId === typeId) delete nodes[nid];
+    }
 
-    console.log(`  Recreating collection node: ${typeId}`);
-
-    // Build dependencies from the template definition
-    // Map each template dependency to the actual node ID in the graph
     const typeDeps = TEMPLATE_DEPS[typeId] ?? [];
-    const wireDeps: string[] = [];
-    for (const dep of typeDeps) {
-      // If the dependency type has expanded per-item nodes, depend on the type-level node
-      // (which may also be pending/recreated). If it has no per-item nodes, use it directly.
-      if (nodes[dep]) {
-        wireDeps.push(dep);
-      }
-      // Also check for expanded per-item nodes of this dependency type
-      const perItemNodes = Object.values(nodes).filter(
-        n => n.typeId === dep && n.itemId && n.status === 'completed'
-      );
-      for (const pin of perItemNodes) {
-        if (!wireDeps.includes(pin.id)) {
-          wireDeps.push(pin.id);
-        }
-      }
-    }
 
-    const newNode: ExecutionNode = {
-      id: typeId,
-      typeId: typeId,
-      status: 'pending',
-      displayName: typeId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-      isExpensive: false,
-      isCollection: true,
-      dependencies: wireDeps,
-      dependents: [],
+    // Only expand into per-item nodes if the PRIMARY matching-scope dependency
+    // has completed per-item nodes AND those items are stable (not pending further expansion).
+    // Map of which types expand based on which upstream items:
+    const MATCHING_SOURCE: Record<string, string> = {
+      'scene_video_prompt': 'scene',     // one per scene
+      'character_image': 'character',     // one per character
+      'setting_image': 'setting',         // one per setting
+      // shot_image_prompt, shot_image, shot_video: expand from shots (runtime only)
     };
-    nodes[typeId] = newNode;
 
-    // Wire dependents: any existing node that should depend on this type
-    for (const [otherType, otherDeps] of Object.entries(TEMPLATE_DEPS)) {
-      if (otherDeps.includes(typeId) && nodes[otherType]) {
-        if (!nodes[otherType]!.dependencies.includes(typeId)) {
-          nodes[otherType]!.dependencies.push(typeId);
-        }
-        if (!newNode.dependents.includes(otherType)) {
-          newNode.dependents.push(otherType);
-        }
+    let matchingItems: Array<{ itemId: string; name: string }> | null = null;
+    const sourceType = MATCHING_SOURCE[typeId];
+    if (sourceType) {
+      const sourceNodes = Object.values(nodes).filter(
+        n => n.typeId === sourceType && n.itemId && n.status === 'completed'
+      );
+      if (sourceNodes.length > 0) {
+        matchingItems = sourceNodes.map(n => ({
+          itemId: n.itemId!,
+          name: n.displayName.split(': ').pop() ?? n.itemId!,
+        }));
       }
     }
 
-    // Also wire to dependents' per-item nodes
-    for (const otherNode of Object.values(nodes)) {
-      if (otherNode.id === typeId) continue;
-      const otherTemplateDeps = TEMPLATE_DEPS[otherNode.typeId] ?? [];
-      if (otherTemplateDeps.includes(typeId)) {
-        if (!otherNode.dependencies.includes(typeId)) {
-          otherNode.dependencies.push(typeId);
+    if (matchingItems && matchingItems.length > 0) {
+      // Create per-item nodes matching the upstream items
+      console.log(`  Recreating ${matchingItems.length} per-item nodes for: ${typeId}`);
+      for (const item of matchingItems) {
+        const itemNodeId = `${typeId}:${item.itemId}`;
+        const displayName = `${typeId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}: ${item.name}`;
+
+        // Build dependencies: matching-scope deps get the matching item, all-scope deps get all items
+        const wireDeps: string[] = [];
+        for (const depType of typeDeps) {
+          const matchingNode = nodes[`${depType}:${item.itemId}`];
+          if (matchingNode) {
+            wireDeps.push(matchingNode.id);
+          } else {
+            // Try all-scope: add all per-item nodes of this dep type
+            const allNodes = Object.values(nodes).filter(n => n.typeId === depType && n.itemId);
+            for (const n of allNodes) {
+              if (!wireDeps.includes(n.id)) wireDeps.push(n.id);
+            }
+            // Or the type-level node
+            if (allNodes.length === 0 && nodes[depType]) {
+              wireDeps.push(depType);
+            }
+          }
         }
-        if (!newNode.dependents.includes(otherNode.id)) {
-          newNode.dependents.push(otherNode.id);
+
+        const newNode: ExecutionNode = {
+          id: itemNodeId,
+          typeId: typeId,
+          itemId: item.itemId,
+          status: 'pending',
+          displayName: displayName,
+          isExpensive: false,
+          isCollection: typeId === 'scene_video_prompt' || typeId === 'shot_image_prompt',
+          dependencies: wireDeps,
+          dependents: [],
+        };
+        nodes[itemNodeId] = newNode;
+
+        // Wire upstream dependents
+        for (const depId of wireDeps) {
+          if (nodes[depId] && !nodes[depId]!.dependents.includes(itemNodeId)) {
+            nodes[depId]!.dependents.push(itemNodeId);
+          }
+        }
+
+        resetCount++;
+      }
+    } else {
+      // No matching upstream items — create a type-level placeholder
+      console.log(`  Recreating collection node: ${typeId}`);
+      const wireDeps: string[] = [];
+      for (const depType of typeDeps) {
+        if (nodes[depType]) wireDeps.push(depType);
+        const perItemNodes = Object.values(nodes).filter(
+          n => n.typeId === depType && n.itemId
+        );
+        for (const pin of perItemNodes) {
+          if (!wireDeps.includes(pin.id)) wireDeps.push(pin.id);
+        }
+      }
+
+      const newNode: ExecutionNode = {
+        id: typeId,
+        typeId: typeId,
+        status: 'pending',
+        displayName: typeId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        isExpensive: false,
+        isCollection: true,
+        dependencies: wireDeps,
+        dependents: [],
+      };
+      nodes[typeId] = newNode;
+      resetCount++;
+    }
+
+    // Wire downstream dependents for all new nodes of this type
+    const newNodesOfType = Object.values(nodes).filter(n => n.typeId === typeId);
+    for (const newNode of newNodesOfType) {
+      for (const otherNode of Object.values(nodes)) {
+        if (otherNode.id === newNode.id) continue;
+        const otherDeps = TEMPLATE_DEPS[otherNode.typeId] ?? [];
+        if (otherDeps.includes(typeId)) {
+          if (!otherNode.dependencies.includes(newNode.id)) {
+            otherNode.dependencies.push(newNode.id);
+          }
+          if (!newNode.dependents.includes(otherNode.id)) {
+            newNode.dependents.push(otherNode.id);
+          }
         }
       }
     }
-
-    resetCount++;
   }
 
   // Phase 6: Clean up output directories for shot-related files
@@ -281,8 +341,8 @@ function main() {
   // Phase 7: Clean up stale references — remove deps/dependents pointing to non-existent nodes
   const nodeIds = new Set(Object.keys(nodes));
   for (const node of Object.values(nodes)) {
-    node.dependencies = [...new Set(node.dependencies.filter(d => nodeIds.has(d)))];
-    node.dependents = [...new Set(node.dependents.filter(d => nodeIds.has(d)))];
+    node.dependencies = Array.from(new Set(node.dependencies.filter(d => nodeIds.has(d))));
+    node.dependents = Array.from(new Set(node.dependents.filter(d => nodeIds.has(d))));
   }
 
   // Phase 8: Clear completedAt on the executor state
