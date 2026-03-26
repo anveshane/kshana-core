@@ -3,10 +3,12 @@
  * These tools integrate with ComfyUI for actual image/video generation.
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { nanoid } from 'nanoid';
 import { createTool } from '../../core/tools/index.js';
 import type { ToolDefinition } from '../../core/llm/index.js';
+import { getCurrentSession, getSessionFs } from '../../core/fs/index.js';
 import {
   ComfyUIClient,
   comfyProgressBus,
@@ -41,6 +43,7 @@ import {
 } from './workflow/index.js';
 import {
   ensureProjectPathDir,
+  projectExists as projectPathExists,
   readProjectText,
   writeProjectBufferAtPath,
 } from './workflow/projectFileIO.js';
@@ -1446,7 +1449,7 @@ function resolveScenePromptFile(
  */
 function findImagePathFromArtifactId(artifactId: string): string | undefined {
   // If the input is already an existing absolute file path, return it directly
-  if (path.isAbsolute(artifactId) && fs.existsSync(artifactId)) {
+  if (path.isAbsolute(artifactId) && (fs.existsSync(artifactId) || projectPathExists(artifactId))) {
     return artifactId;
   }
 
@@ -1458,7 +1461,11 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
     !normalizedRelativePath.startsWith('../')
   ) {
     const candidatePath = path.join(getProjectDir(), normalizedRelativePath);
-    if (fs.existsSync(candidatePath)) {
+    if (
+      fs.existsSync(candidatePath) ||
+      projectPathExists(normalizedRelativePath) ||
+      projectPathExists(candidatePath)
+    ) {
       return candidatePath;
     }
   }
@@ -1509,6 +1516,48 @@ function findImagePathFromArtifactId(artifactId: string): string | undefined {
   }
 
   return undefined;
+}
+
+async function ensureLocalVideoSourceImage(
+  imagePath: string,
+): Promise<{ localPath?: string; cleanup?: () => void }> {
+  if (fs.existsSync(imagePath)) {
+    return { localPath: imagePath };
+  }
+
+  const session = getCurrentSession();
+  if (session?.mode !== 'remote') {
+    return {};
+  }
+
+  try {
+    const sessionFs = getSessionFs();
+    if (!(await sessionFs.exists(imagePath))) {
+      return {};
+    }
+
+    const imageBuffer = await sessionFs.readFileBuffer(imagePath);
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kshana-video-source-'));
+    const extension = path.extname(imagePath) || '.png';
+    const tempPath = path.join(tempDir, `source${extension}`);
+    fs.writeFileSync(tempPath, imageBuffer);
+
+    return {
+      localPath: tempPath,
+      cleanup: () => {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // Ignore temp cleanup failures
+        }
+      },
+    };
+  } catch (error) {
+    debugLog(
+      `[generate_video_from_image] Failed to materialize remote image ${imagePath}: ${String(error)}`,
+    );
+    return {};
+  }
 }
 
 function buildPlacementMetadata(
@@ -1682,7 +1731,10 @@ This tool blocks until video generation is complete and returns the result direc
 
     // Resolve the single shot image
     const imagePath = findImagePathFromArtifactId(shotImageArtifactId);
-    if (!imagePath || !fs.existsSync(imagePath)) {
+    const sourceImage = imagePath
+      ? await ensureLocalVideoSourceImage(imagePath)
+      : { localPath: undefined as string | undefined };
+    if (!imagePath || !sourceImage.localPath) {
       const normalizedRelativePath = shotImageArtifactId.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
       const looksLikeProjectPath =
         normalizedRelativePath.includes('/') &&
@@ -1746,7 +1798,7 @@ This tool blocks until video generation is complete and returns the result direc
 
       const result = await provider.generateVideo(
         {
-          sourceImagePath: imagePath,
+          sourceImagePath: sourceImage.localPath,
           prompt: motionPrompt,
           durationSeconds: duration,
           width: videoWidth,
@@ -1842,6 +1894,8 @@ This tool blocks until video generation is complete and returns the result direc
         job_id: jobId,
         error: String(error),
       };
+    } finally {
+      sourceImage.cleanup?.();
     }
     }); // end withVideoLock
   }
