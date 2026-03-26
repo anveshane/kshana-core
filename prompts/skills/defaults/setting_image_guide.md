@@ -121,7 +121,7 @@ Do not write "a sense of dread" or "profound sadness." Describe only the physica
 
 ## What NOT to Include
 
-### No People, Characters, or Figures — Absolute Rule
+### No People, Characters, or Character-Specific Props — Absolute Rule
 No people, crowds, soldiers, aliens, silhouettes, or human/humanoid forms of any kind. This includes:
 - "background figures" → forbidden
 - "a lone figure in the distance" → forbidden
@@ -129,7 +129,13 @@ No people, crowds, soldiers, aliens, silhouettes, or human/humanoid forms of any
 - "a shape that might be human" → forbidden
 - "evidence of struggle" implying a person → describe only the physical damage
 
-If the setting canonically contains living beings, describe the **architecture and physical space as if unoccupied**. The space is empty. Describe only walls, floors, objects, and structures.
+**No character-specific props or personal belongings.** The setting image is a clean environment — no shoes, bags, clothing, food, personal items, or objects that belong to a specific character. These will be composited in later during shot generation.
+- "a pair of chappals next to running shoes" → forbidden (character props)
+- "a tiffin bag on the bench" → forbidden (character prop)
+- "a diary on the table" → forbidden (character prop)
+- Generic environment objects are fine: "a bench," "lockers," "starting blocks on the track"
+
+If the setting canonically contains living beings, describe the **architecture and physical space as if unoccupied**. The space is empty. Describe only walls, floors, structures, and generic environmental objects.
 
 ### No Narrative Contamination
 Describe only what a camera captures in a single still frame. Do not describe:
