@@ -420,13 +420,12 @@ function connect() {
   ws.onopen = () => {
     setConnStatus('connected');
     reconnectDelay = 1000;
-    addSystemMessage('Connected to server');
 
     // Auto-resume: if we had an active project before disconnect,
     // re-select it to restore UI state. Don't send a new task —
     // the executor is already running from the previous connection.
+    // Suppress noisy "Connected/Resuming" messages on reconnect.
     if (selectedProject) {
-      addSystemMessage('Resuming project: ' + selectedProject);
       wsSend({ type: 'select_project', sessionId, data: { projectName: selectedProject } });
     }
   };
