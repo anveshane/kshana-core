@@ -444,6 +444,9 @@ function connect() {
       maybeScroll();
 
       wsSend({ type: 'select_project', sessionId, data: { projectName: selectedProject } });
+      // Resume execution if server restarted. If executor is already running
+      // (WebSocket-only reconnect), the server will reject the duplicate task.
+      pendingAutoTask = 'Continue working on the existing project.';
       // Refresh sidebar state on reconnect
       loadProjectAssets(selectedProject);
       loadProjectDetails(selectedProject);
@@ -1621,6 +1624,8 @@ function showToast(message, level) {
 
 // ===== Error =====
 function handleError(data) {
+  // Suppress "already running" error from auto-resume on reconnect
+  if (data.message && data.message.includes('already has a running task')) return;
   const el = document.createElement('div');
   el.className = 'msg error';
   el.innerHTML = '<div class="msg-content"><strong>Error:</strong> ' + escHtml(data.message) + '</div>';
