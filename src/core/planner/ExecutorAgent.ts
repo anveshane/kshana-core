@@ -1985,6 +1985,7 @@ Rules:
         arguments: {
           item: node.displayName,
           mode: generationMode,
+          prompt: shotJson.imagePrompt,
           ...Object.fromEntries(resolvedRefs.map((r, i) => [
             `ref_${i + 1}_${r.type}`,
             r.image_id.replace(this.config.projectDir + '/', ''),
@@ -2305,7 +2306,7 @@ Rules:
       type: 'tool_call',
       toolCallId: genCallId,
       toolName,
-      arguments: { item: node.displayName, source_image: shotImagePath, duration: shotDuration },
+      arguments: { item: node.displayName, source_image: shotImagePath, duration: shotDuration, prompt: motionPrompt },
       agentName,
     });
 
