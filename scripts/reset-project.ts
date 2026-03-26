@@ -355,11 +355,12 @@ function main() {
     node.dependents = Array.from(new Set(node.dependents.filter(d => nodeIds.has(d))));
   }
 
-  // Phase 8: Clear completedAt on the executor state
+  // Phase 8: Clear completedAt and reset phase
   if (project.executorState) {
     project.executorState.completedAt = undefined;
     project.executorState.updatedAt = Date.now();
   }
+  project.currentPhase = undefined;
 
   // Save
   writeFileSync(projectPath, JSON.stringify(project, null, 2));
