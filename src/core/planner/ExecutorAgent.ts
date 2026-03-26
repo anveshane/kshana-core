@@ -883,10 +883,25 @@ The JSON must follow this exact structure:
 Rules:
 - Shot durations must sum to totalDuration
 - Each shot should be 3-10 seconds
-- characters array uses the item IDs (e.g., "elara_vance", "mr_halloway") — only characters present in this shot
-- setting uses the item ID of the location (e.g., "the_dregs") or null if no specific setting
+- characters array MUST use ONLY the exact item IDs listed below — no variations, no full names, no other IDs
+- setting MUST use ONLY the exact item IDs listed below or null if no specific setting
 - description should be specific and visual — what a camera sees in this frozen/moving moment
 - Vary shot types for cinematic interest (don't repeat the same type)`;
+
+      // Inject the actual available character and setting IDs
+      const charIds = this.executor.getAllNodes()
+        .filter(n => n.typeId === 'character_image' && n.status === 'completed')
+        .map(n => n.itemId)
+        .filter(Boolean);
+      const settingIds = this.executor.getAllNodes()
+        .filter(n => n.typeId === 'setting_image' && n.status === 'completed')
+        .map(n => n.itemId)
+        .filter(Boolean);
+
+      if (charIds.length > 0 || settingIds.length > 0) {
+        systemPrompt += `\n\nAvailable character IDs (use EXACTLY these in the "characters" array):\n${charIds.map(id => `- "${id}"`).join('\n')}`;
+        systemPrompt += `\n\nAvailable setting IDs (use EXACTLY one of these in the "setting" field):\n${settingIds.map(id => `- "${id}"`).join('\n')}`;
+      }
     } else if (node.typeId === 'shot_image_prompt') {
       systemPrompt = `You are an expert image prompt engineer for FLUX Klein image editing.
 Output ONLY valid JSON — no markdown, no explanation, no thinking. Respond with the JSON object directly.
