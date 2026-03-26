@@ -289,6 +289,24 @@ describe('Pipeline E2E Steps', () => {
 
       const totalDuration = shots.reduce((sum, s) => sum + (s.duration as number), 0);
       console.log(`scene_video_prompt ${node.itemId}: ${shots.length} shots, ${totalDuration}s`);
+
+      // Validate character/setting IDs match actual nodes in the graph
+      const validCharIds = new Set(
+        allNodes.filter(n => n.typeId === 'character' && n.status === 'completed').map(n => n.itemId),
+      );
+      const validSettingIds = new Set(
+        allNodes.filter(n => n.typeId === 'setting' && n.status === 'completed').map(n => n.itemId),
+      );
+
+      for (const shot of shots) {
+        const chars = (shot.characters ?? []) as string[];
+        for (const charId of chars) {
+          expect(validCharIds.has(charId)).toBe(true);
+        }
+        if (shot.setting && shot.setting !== null) {
+          expect(validSettingIds.has(shot.setting as string)).toBe(true);
+        }
+      }
     }
   });
 
