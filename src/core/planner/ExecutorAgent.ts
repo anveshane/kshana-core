@@ -1985,7 +1985,10 @@ Rules:
         arguments: {
           item: node.displayName,
           mode: generationMode,
-          references: resolvedRefs.map(r => `${r.name} (${r.type})`).join(', ') || 'none',
+          ...Object.fromEntries(resolvedRefs.map((r, i) => [
+            `ref_${i + 1}_${r.type}`,
+            r.image_id.replace(this.config.projectDir + '/', ''),
+          ])),
         },
         agentName,
       });

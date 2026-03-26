@@ -867,7 +867,15 @@ function handleToolCall(data) {
     let argsHtml;
     if (isExecutorTool) {
       const args = data.arguments || {};
-      const parts = Object.entries(args).map(function(kv) { return '<b>' + escHtml(kv[0]) + ':</b> ' + escHtml(String(kv[1])); });
+      const parts = Object.entries(args).map(function(kv) {
+        var val = String(kv[1]);
+        // If value is an image path, render as inline thumbnail
+        if (/\.(png|jpg|jpeg|webp)$/i.test(val) && selectedProject) {
+          var imgUrl = '/api/v1/assets/' + selectedProject + '/' + val;
+          return '<b>' + escHtml(kv[0]) + ':</b> <img src="' + imgUrl + '" style="max-height:120px;border-radius:4px;vertical-align:middle;cursor:pointer" onclick="openLightbox(this.src)" onerror="this.outerHTML=\'' + escHtml(val) + '\'">';
+        }
+        return '<b>' + escHtml(kv[0]) + ':</b> ' + escHtml(val);
+      });
       argsHtml = parts.length > 0 ? '<div class="tool-args-clean">' + parts.join(' &middot; ') + '</div>' : '';
     } else {
       argsHtml = '<div class="tool-section-label">Arguments</div><pre>' + escHtml(JSON.stringify(data.arguments || {}, null, 2)) + '</pre>';
