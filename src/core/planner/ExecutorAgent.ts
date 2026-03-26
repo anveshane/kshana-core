@@ -358,7 +358,8 @@ export class ExecutorAgent extends TypedEventEmitter {
    */
   async run(_task: string, _userResponse?: string): Promise<GenericAgentResult> {
     if (this.running) {
-      this.log('run() called while already running — ignoring');
+      this.log(`CONCURRENT RUN BLOCKED — run() called while already running`);
+      this.log(`  Caller stack: ${new Error().stack?.split('\n').slice(1, 4).join(' <- ')}`);
       return { status: 'completed', output: 'Already running', todos: [] };
     }
     this.running = true;
