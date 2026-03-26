@@ -514,6 +514,20 @@ export class WebSocketHandler {
       // Create the project on disk
       createProject(data.content, data.style, undefined, data.duration, data.templateId);
 
+      // Store resolution in project.json
+      if (data.resolution || data.resolutionWidth) {
+        const { join } = await import('path');
+        const { readFileSync, writeFileSync } = await import('fs');
+        const projFile = join(process.cwd(), projectDirName, 'project.json');
+        try {
+          const projData = JSON.parse(readFileSync(projFile, 'utf-8'));
+          projData.resolution = data.resolution || '480p';
+          projData.resolutionWidth = data.resolutionWidth || 848;
+          projData.resolutionHeight = data.resolutionHeight || 480;
+          writeFileSync(projFile, JSON.stringify(projData, null, 2));
+        } catch { /* non-fatal */ }
+      }
+
       // Configure the session agent for this project
       this.conversationManager.configureSessionForProject(
         sessionId,

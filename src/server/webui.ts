@@ -1659,6 +1659,9 @@ function sendMessage() {
         templateId: newProjectState.templateId,
         style: newProjectState.style,
         duration: newProjectState.duration,
+        resolution: newProjectState.resolution || '480p',
+        resolutionWidth: newProjectState.resolutionWidth || 848,
+        resolutionHeight: newProjectState.resolutionHeight || 480,
         content: text,
         autonomousMode: newProjectState.autonomousMode || false,
       },
@@ -2111,7 +2114,15 @@ function removeWizardStepsFrom(stepOrder) {
   inputBox.placeholder = 'Type a task...';
 }
 
-var WIZARD_STEP_ORDER = { template: 1, style: 2, duration: 3, autonomous: 4, content: 5 };
+var WIZARD_STEP_ORDER = { template: 1, style: 2, duration: 3, resolution: 4, autonomous: 5, content: 6 };
+
+var RESOLUTION_PRESETS = [
+  { id: '480p', label: '480p', width: 848, height: 480, desc: 'Fast preview' },
+  { id: '720p', label: '720p', width: 1280, height: 720, desc: 'Standard' },
+  { id: '1080p', label: '1080p', width: 1920, height: 1080, desc: 'Full HD' },
+  { id: '2k', label: '2K', width: 2560, height: 1440, desc: 'High quality' },
+  { id: '4k', label: '4K', width: 3840, height: 2160, desc: 'Ultra HD' },
+];
 
 function showWizardStep(step) {
   if (!newProjectState) return;
@@ -2217,7 +2228,7 @@ function showWizardStep(step) {
         newProjectState.durationLabel = p.label;
         btnRow.querySelectorAll('.wizard-duration-btn').forEach(function(c) { c.classList.remove('selected'); });
         btn.classList.add('selected');
-        showWizardStep('autonomous');
+        showWizardStep('resolution');
       };
       btnRow.appendChild(btn);
     });
@@ -2237,7 +2248,7 @@ function showWizardStep(step) {
       if (val > 0) {
         newProjectState.duration = val;
         newProjectState.durationLabel = val + ' seconds';
-        showWizardStep('autonomous');
+        showWizardStep('resolution');
       }
     };
     customInput.addEventListener('keydown', function(e) {
@@ -2247,15 +2258,50 @@ function showWizardStep(step) {
     customWrap.appendChild(customOk);
     btnRow.appendChild(customWrap);
 
+  } else if (step === 'resolution') {
+    if (!newProjectState.resolution) {
+      newProjectState.resolution = '480p';
+      newProjectState.resolutionWidth = 848;
+      newProjectState.resolutionHeight = 480;
+    }
+    card.innerHTML =
+      '<div class="wizard-step-label">Step 4 of 6</div>' +
+      '<div class="wizard-step-title">Choose Resolution</div>' +
+      '<div class="wizard-summary">' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.durationLabel) + '</span>' +
+      '</div>' +
+      '<div class="wizard-duration-cards"></div>';
+    var resBtnRow = card.querySelector('.wizard-duration-cards');
+    RESOLUTION_PRESETS.forEach(function(r) {
+      var btn = document.createElement('button');
+      btn.className = 'wizard-duration-btn' + (newProjectState.resolution === r.id ? ' selected' : '');
+      btn.innerHTML = '<b>' + r.label + '</b><br><span style="font-size:10px;opacity:0.7">' + r.width + '×' + r.height + ' · ' + r.desc + '</span>';
+      btn.onclick = function() {
+        newProjectState.resolution = r.id;
+        newProjectState.resolutionWidth = r.width;
+        newProjectState.resolutionHeight = r.height;
+        resBtnRow.querySelectorAll('.wizard-duration-btn').forEach(function(c) { c.classList.remove('selected'); });
+        btn.classList.add('selected');
+        showWizardStep('autonomous');
+      };
+      resBtnRow.appendChild(btn);
+    });
+    chatMessages.appendChild(card);
+    maybeScroll();
+    return;
+
   } else if (step === 'autonomous') {
     newProjectState.autonomousMode = false;
     card.innerHTML =
-      '<div class="wizard-step-label">Step 4 of 5</div>' +
+      '<div class="wizard-step-label">Step 5 of 6</div>' +
       '<div class="wizard-step-title">Autonomous Mode</div>' +
       '<div class="wizard-summary">' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.durationLabel) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.resolution) + '</span>' +
       '</div>' +
       '<div style="margin:12px 0;display:flex;align-items:center;gap:12px;">' +
         '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;color:var(--text);">' +
@@ -2278,7 +2324,7 @@ function showWizardStep(step) {
 
   } else if (step === 'content') {
     card.innerHTML =
-      '<div class="wizard-step-label">Step 5 of 5</div>' +
+      '<div class="wizard-step-label">Step 6 of 6</div>' +
       '<div class="wizard-step-title">Describe Your Project</div>' +
       '<div class="wizard-summary">' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +

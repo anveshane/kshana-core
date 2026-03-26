@@ -303,6 +303,12 @@ export interface CreateProjectData {
   style: string;
   duration: number;
   content: string;
+  /** Video resolution preset (e.g., '480p', '720p', '1080p', '4k') */
+  resolution?: string;
+  /** Video width in pixels */
+  resolutionWidth?: number;
+  /** Video height in pixels */
+  resolutionHeight?: number;
   /** Optional per-capability provider configuration */
   providerConfig?: {
     imageGeneration?: string;

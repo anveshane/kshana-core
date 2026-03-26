@@ -586,6 +586,15 @@ export interface GenericProjectFile {
   /** Current chapter being worked on */
   currentChapter?: string;
 
+  /** Video resolution preset (e.g., '480p', '720p', '1080p', '4k') */
+  resolution?: string;
+
+  /** Video width in pixels */
+  resolutionWidth?: number;
+
+  /** Video height in pixels */
+  resolutionHeight?: number;
+
   /** Original user input */
   originalInput?: string;
 
