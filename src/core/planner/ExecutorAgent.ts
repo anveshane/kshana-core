@@ -357,6 +357,10 @@ export class ExecutorAgent extends TypedEventEmitter {
    * actual execution is driven by the graph.
    */
   async run(_task: string, _userResponse?: string): Promise<GenericAgentResult> {
+    if (this.running) {
+      this.log('run() called while already running — ignoring');
+      return { status: 'completed', output: 'Already running', todos: [] };
+    }
     this.running = true;
     this.stopped = false;
 
