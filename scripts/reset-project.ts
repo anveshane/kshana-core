@@ -203,26 +203,31 @@ function main() {
     // Only expand into per-item nodes if the PRIMARY matching-scope dependency
     // has completed per-item nodes AND those items are stable (not pending further expansion).
     // Map of which types expand based on which upstream items:
-    const MATCHING_SOURCE: Record<string, string> = {
-      'scene_video_prompt': 'scene',        // one per scene
-      'character_image': 'character',       // one per character
-      'setting_image': 'setting',           // one per setting
-      'shot_image_prompt': 'scene',         // one per scene (further expanded to per-shot at runtime)
-      'shot_image': 'scene',               // one per scene (further expanded to per-shot at runtime)
-      'shot_video': 'scene',               // one per scene (further expanded to per-shot at runtime)
+    // Determine which upstream items to match against.
+    // For shot_image/shot_video: if upstream has per-shot nodes, use those directly.
+    // Otherwise fall back to per-scene.
+    const MATCHING_SOURCE: Record<string, string[]> = {
+      'scene_video_prompt': ['scene'],
+      'character_image': ['character'],
+      'setting_image': ['setting'],
+      'shot_image_prompt': ['scene'],
+      'shot_image': ['shot_image_prompt', 'scene'],   // prefer per-shot, fall back to per-scene
+      'shot_video': ['shot_image', 'shot_image_prompt', 'scene'],  // prefer per-shot
     };
 
     let matchingItems: Array<{ itemId: string; name: string }> | null = null;
-    const sourceType = MATCHING_SOURCE[typeId];
-    if (sourceType) {
+    const sourceTypes = MATCHING_SOURCE[typeId] ?? [];
+    for (const sourceType of sourceTypes) {
       const sourceNodes = Object.values(nodes).filter(
-        n => n.typeId === sourceType && n.itemId && n.status === 'completed'
+        n => n.typeId === sourceType && n.itemId &&
+        (n.status === 'completed' || n.status === 'pending')
       );
       if (sourceNodes.length > 0) {
         matchingItems = sourceNodes.map(n => ({
           itemId: n.itemId!,
           name: n.displayName.split(': ').pop() ?? n.itemId!,
         }));
+        break; // use the first source that has items
       }
     }
 
@@ -259,7 +264,10 @@ function main() {
           status: 'pending',
           displayName: displayName,
           isExpensive: false,
-          isCollection: ['scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video'].includes(typeId),
+          // Per-scene collection nodes can expand further to per-shot at runtime
+          // Per-shot nodes (itemId contains 'shot_') are leaf nodes
+          isCollection: ['scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video'].includes(typeId)
+            && !item.itemId.includes('shot_'),
           dependencies: wireDeps,
           dependents: [],
         };
