@@ -434,6 +434,10 @@ function connect() {
     // Suppress noisy "Connected/Resuming" messages on reconnect.
     if (selectedProject) {
       wsSend({ type: 'select_project', sessionId, data: { projectName: selectedProject } });
+      // Refresh sidebar state on reconnect
+      loadProjectAssets(selectedProject);
+      loadProjectDetails(selectedProject);
+      loadArtifactCache(selectedProject);
     }
   };
 
