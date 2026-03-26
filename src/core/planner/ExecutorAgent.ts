@@ -1867,10 +1867,15 @@ Rules:
     node: ExecutionNode,
     toolCallId: string,
   ): Promise<string | null> {
-    // Find the shot_image_prompt dependency and read its JSON output
-    const promptDep = node.dependencies
-      .map(depId => this.executor.getNode(depId))
-      .find(n => n?.typeId === 'shot_image_prompt' && n.status === 'completed');
+    // Find the MATCHING shot_image_prompt dependency (same itemId) and read its JSON output
+    const matchingPromptId = `shot_image_prompt:${node.itemId}`;
+    let promptDep = this.executor.getNode(matchingPromptId);
+    if (!promptDep || promptDep.status !== 'completed') {
+      // Fallback: find any shot_image_prompt dep with matching itemId
+      promptDep = node.dependencies
+        .map(depId => this.executor.getNode(depId))
+        .find(n => n?.typeId === 'shot_image_prompt' && n.itemId === node.itemId && n.status === 'completed') ?? undefined;
+    }
 
     if (!promptDep?.outputPath) {
       this.log(`  No completed shot_image_prompt dependency for ${node.id}`);
