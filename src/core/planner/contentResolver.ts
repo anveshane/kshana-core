@@ -79,13 +79,20 @@ export function resolveInputs(
     if (!depNode) continue;
     if (depNode.status !== 'completed' && depNode.status !== 'skipped') continue;
 
-    // Read the dependency's output file
+    // Read the dependency's output file (skip binary files like images/videos)
     if (depNode.outputPath) {
-      const content = readFile(projectDir, depNode.outputPath);
-      if (content) {
+      const ext = depNode.outputPath.split('.').pop()?.toLowerCase() ?? '';
+      const isBinary = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'webm', 'mov'].includes(ext);
+      if (!isBinary) {
+        const content = readFile(projectDir, depNode.outputPath);
+        if (content) {
+          filesRead.push(depNode.outputPath);
+          dependencies[depId] = content;
+          sections.push(`### ${depNode.displayName}\n**File:** ${depNode.outputPath}\n\n${content}`);
+        }
+      } else {
+        // Binary files are tracked as reference images, not text context
         filesRead.push(depNode.outputPath);
-        dependencies[depId] = content;
-        sections.push(`### ${depNode.displayName}\n**File:** ${depNode.outputPath}\n\n${content}`);
       }
     }
 

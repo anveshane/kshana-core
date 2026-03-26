@@ -423,11 +423,11 @@ function connect() {
     addSystemMessage('Connected to server');
 
     // Auto-resume: if we had an active project before disconnect,
-    // re-select it and continue execution without user action
+    // re-select it to restore UI state. Don't send a new task —
+    // the executor is already running from the previous connection.
     if (selectedProject) {
       addSystemMessage('Resuming project: ' + selectedProject);
       wsSend({ type: 'select_project', sessionId, data: { projectName: selectedProject } });
-      pendingAutoTask = 'Continue working on the existing project. The project state is already injected - proceed with the next step.';
     }
   };
 
