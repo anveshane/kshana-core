@@ -2346,11 +2346,18 @@ Rules:
       const assetsDir = join(this.config.projectDir, 'assets', 'videos', 'shots');
       if (!existsSync(assetsDir)) mkdirSync(assetsDir, { recursive: true });
 
+      // Video resolution — 480p for faster generation, can be upscaled later
+      // TODO: read from project preferences when resolution picker is added
+      const videoWidth = 848;
+      const videoHeight = 480;
+
       const result = await provider.generateVideo(
         {
           sourceImagePath: join(this.config.projectDir, shotImagePath),
           prompt: motionPrompt,
           durationSeconds: shotDuration,
+          width: videoWidth,
+          height: videoHeight,
           outputDir: assetsDir,
           filenamePrefix: `scene_${sceneNum}_shot_${shotNum}`,
         },
