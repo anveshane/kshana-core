@@ -30,12 +30,13 @@ describe('Full Narrative Pipeline', () => {
       const executor = buildExecutor(template);
       const typeIds = new Set(executor.getAllNodes().map(n => n.typeId));
 
-      // Required chain: plot → story → scene → scene_video_prompt → shot_image_prompt → shot_video → final_video
+      // Required chain: plot → story → scene → scene_video_prompt → shot_image_prompt → shot_image → shot_video → final_video
       expect(typeIds).toContain('plot');
       expect(typeIds).toContain('story');
       expect(typeIds).toContain('scene');
       expect(typeIds).toContain('scene_video_prompt');
       expect(typeIds).toContain('shot_image_prompt');
+      expect(typeIds).toContain('shot_image');
       expect(typeIds).toContain('shot_video');
       expect(typeIds).toContain('final_video');
 
@@ -65,10 +66,18 @@ describe('Full Narrative Pipeline', () => {
       expect(fv!.dependencies).toContain('shot_video');
     });
 
-    it('shot_video depends on shot_image_prompt (matching scope)', () => {
+    it('shot_video depends on shot_image (matching scope)', () => {
       const executor = buildExecutor(template);
       const sv = executor.getNode('shot_video');
-      expect(sv!.dependencies).toContain('shot_image_prompt');
+      expect(sv!.dependencies).toContain('shot_image');
+    });
+
+    it('shot_image depends on shot_image_prompt + character_image + setting_image', () => {
+      const executor = buildExecutor(template);
+      const si = executor.getNode('shot_image');
+      expect(si!.dependencies).toContain('shot_image_prompt');
+      expect(si!.dependencies).toContain('character_image');
+      expect(si!.dependencies).toContain('setting_image');
     });
 
     it('shot_image_prompt depends on scene_video_prompt (matching scope)', () => {
@@ -141,7 +150,7 @@ describe('Full Narrative Pipeline', () => {
       }
     });
 
-    it('expanding scene cascades through scene_video_prompt to shot_image_prompt to shot_video', () => {
+    it('expanding scene cascades through scene_video_prompt to shot_image_prompt to shot_image to shot_video', () => {
       const executor = buildExecutor(template);
       executor.markStarted('plot');
       executor.markCompleted('plot');
@@ -163,9 +172,13 @@ describe('Full Narrative Pipeline', () => {
       expect(executor.getNode('shot_image_prompt:scene_1')).toBeDefined();
       expect(executor.getNode('shot_image_prompt:scene_1')?.isCollection).toBe(true);
 
-      // shot_video cascaded
+      // shot_image cascaded (depends on shot_image_prompt + reference images)
+      expect(executor.getNode('shot_image:scene_1')).toBeDefined();
+      expect(executor.getNode('shot_image:scene_1')?.dependencies).toContain('shot_image_prompt:scene_1');
+
+      // shot_video cascaded (depends on shot_image, not shot_image_prompt)
       expect(executor.getNode('shot_video:scene_1')).toBeDefined();
-      expect(executor.getNode('shot_video:scene_1')?.dependencies).toContain('shot_image_prompt:scene_1');
+      expect(executor.getNode('shot_video:scene_1')?.dependencies).toContain('shot_image:scene_1');
     });
   });
 
@@ -209,8 +222,12 @@ describe('Full Narrative Pipeline', () => {
       expect(executor.getNode('shot_video:scene_1_shot_2')).toBeDefined();
       expect(executor.getNode('shot_video:scene_1_shot_3')).toBeDefined();
 
-      // shot_video depends on corresponding shot_image_prompt
-      expect(executor.getNode('shot_video:scene_1_shot_1')?.dependencies).toContain('shot_image_prompt:scene_1_shot_1');
+      // shot_image should also expand (depends on shot_image_prompt + ref images)
+      expect(executor.getNode('shot_image:scene_1_shot_1')).toBeDefined();
+      expect(executor.getNode('shot_image:scene_1_shot_1')?.dependencies).toContain('shot_image_prompt:scene_1_shot_1');
+
+      // shot_video depends on corresponding shot_image (not shot_image_prompt)
+      expect(executor.getNode('shot_video:scene_1_shot_1')?.dependencies).toContain('shot_image:scene_1_shot_1');
     });
 
     it('per-shot nodes are ready when scene_video_prompt is completed', () => {
@@ -263,8 +280,8 @@ describe('Full Narrative Pipeline', () => {
     });
   });
 
-  describe('transition: shot_image_prompt → shot_video → final_video', () => {
-    it('shot_video becomes ready after shot_image_prompt completes with image', () => {
+  describe('transition: shot_image_prompt → shot_image → shot_video → final_video', () => {
+    it('shot_video becomes ready after shot_image completes', () => {
       const executor = buildExecutor(template);
       executor.markStarted('plot');
       executor.markCompleted('plot');
@@ -272,8 +289,18 @@ describe('Full Narrative Pipeline', () => {
       executor.markCompleted('story');
 
       executor.expandCollection('scene', [{ itemId: 'scene_1', name: 'S1' }]);
+      executor.expandCollection('character', [{ itemId: 'char_1', name: 'C1' }]);
+      executor.expandCollection('setting', [{ itemId: 'set_1', name: 'S1' }]);
       executor.markStarted('scene:scene_1');
       executor.markCompleted('scene:scene_1');
+      executor.markStarted('character:char_1');
+      executor.markCompleted('character:char_1');
+      executor.markStarted('setting:set_1');
+      executor.markCompleted('setting:set_1');
+      executor.markStarted('character_image:char_1');
+      executor.markCompleted('character_image:char_1', 'assets/images/char_1.png');
+      executor.markStarted('setting_image:set_1');
+      executor.markCompleted('setting_image:set_1', 'assets/images/set_1.png');
       executor.markStarted('scene_video_prompt:scene_1');
       executor.markCompleted('scene_video_prompt:scene_1');
 
@@ -281,15 +308,23 @@ describe('Full Narrative Pipeline', () => {
         { itemId: 'scene_1_shot_1', name: 'Shot 1' },
       ]);
 
-      // Complete shot_image_prompt with an image path
+      // Complete shot_image_prompt (JSON prompt)
       executor.markStarted('shot_image_prompt:scene_1_shot_1');
-      executor.markCompleted('shot_image_prompt:scene_1_shot_1', 'assets/shots/s1_shot1.png');
+      executor.markCompleted('shot_image_prompt:scene_1_shot_1', 'prompts/shots/s1_shot1.json');
 
-      // shot_video:scene_1_shot_1 should exist and its deps should be completed
+      // shot_image should exist and depend on shot_image_prompt + ref images
+      const siNode = executor.getNode('shot_image:scene_1_shot_1');
+      expect(siNode).toBeDefined();
+      expect(siNode!.dependencies).toContain('shot_image_prompt:scene_1_shot_1');
+
+      // Complete shot_image (actual .png from ComfyUI)
+      executor.markStarted('shot_image:scene_1_shot_1');
+      executor.markCompleted('shot_image:scene_1_shot_1', 'assets/shots/s1_shot1.png');
+
+      // shot_video should depend on shot_image
       const svNode = executor.getNode('shot_video:scene_1_shot_1');
       expect(svNode).toBeDefined();
-      // Verify it depends on the per-shot node, not the type-level
-      expect(svNode!.dependencies).toContain('shot_image_prompt:scene_1_shot_1');
+      expect(svNode!.dependencies).toContain('shot_image:scene_1_shot_1');
     });
 
     it('final_video becomes ready after ALL shot_videos complete', () => {
@@ -310,7 +345,10 @@ describe('Full Narrative Pipeline', () => {
       ]);
 
       executor.markStarted('shot_image_prompt:scene_1_shot_1');
-      executor.markCompleted('shot_image_prompt:scene_1_shot_1', 'shot1.png');
+      executor.markCompleted('shot_image_prompt:scene_1_shot_1', 'shot1.json');
+
+      executor.markStarted('shot_image:scene_1_shot_1');
+      executor.markCompleted('shot_image:scene_1_shot_1', 'shot1.png');
 
       executor.markStarted('shot_video:scene_1_shot_1');
       executor.markCompleted('shot_video:scene_1_shot_1', 'shot1.mp4');

@@ -227,6 +227,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       setting_image: 'Setting Reference Images',
       scene_video_prompt: 'Shot Planning',
       shot_image_prompt: 'Shot Image Prompts',
+      shot_image: 'Shot Image Generation',
       shot_video: 'Shot Video Generation',
       final_video: 'Final Assembly',
     };
@@ -498,6 +499,21 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.persistState();
               this.emitTodoUpdate();
               continue;
+            } else if (node.typeId === 'shot_image' && !this.config.skipMediaGeneration) {
+              // Shot image — deterministic: read prompt JSON, resolve refs, call ComfyUI
+              const shotImageResult = await this.executeShotImage(node, toolCallId);
+              if (!shotImageResult) {
+                this.executor.markFailed(node.id, 'Shot image generation failed');
+                continue;
+              }
+              finalOutputPath = shotImageResult;
+            } else if (node.typeId === 'shot_image' && this.config.skipMediaGeneration) {
+              // Test mode: skip shot image generation
+              this.log(`  Skipping shot_image (skipMediaGeneration=true)`);
+              this.executor.markCompleted(node.id, 'skipped-test-mode');
+              this.persistState();
+              this.emitTodoUpdate();
+              continue;
             } else {
               // Non-deterministic node — needs LLM (or skip-if-exists)
               // 1. Resolve inputs
@@ -537,29 +553,12 @@ export class ExecutorAgent extends TypedEventEmitter {
 
               // Check if prompt/output file already exists on disk (from a previous run)
               const isMediaNode = nodeCategory === 'visual_ref' || nodeCategory === 'clip';
-              const needsImageGen = node.typeId === 'shot_image_prompt';
-              if (isMediaNode || needsImageGen) {
+              if (isMediaNode) {
                 const existingPromptPath = this.findExistingPromptFile(node);
                 if (existingPromptPath) {
                   this.log(`  Prompt file already exists: ${existingPromptPath} — skipping LLM`);
 
-                  if (needsImageGen) {
-                    // Shot image prompt: skip LLM, generate shot image from JSON
-                    this.emit({
-                      type: 'notification',
-                      level: 'info',
-                      message: `Skipping LLM for ${node.displayName} — prompt exists, generating shot image`,
-                    });
-                    const jsonContent = readFileSync(join(this.config.projectDir, existingPromptPath), 'utf-8');
-                    const shotImagePath = await this.executeShotImageGeneration(node, jsonContent, toolCallId);
-                    if (shotImagePath) {
-                      finalOutputPath = shotImagePath;
-                    } else {
-                      this.executor.markFailed(node.id, 'Shot image generation failed (prompt saved, will retry)');
-                      this.emitTodoUpdate();
-                      continue;
-                    }
-                  } else if (isMediaNode) {
+                  if (isMediaNode) {
                     // Media node: skip LLM, go straight to image/video generation
                     this.emit({
                       type: 'notification',
@@ -651,20 +650,6 @@ export class ExecutorAgent extends TypedEventEmitter {
                 result: { status: 'completed', file: outputPath },
                 agentName,
               });
-
-              // For shot_image_prompt: generate the actual shot image from the structured JSON
-              if (node.typeId === 'shot_image_prompt' && !this.config.skipMediaGeneration) {
-                const shotImagePath = await this.executeShotImageGeneration(node, content, toolCallId);
-                if (shotImagePath) {
-                  outputPath = shotImagePath;
-                } else {
-                  // Image gen failed but prompt is saved — mark failed for retry
-                  this.executor.markFailed(node.id, 'Shot image generation failed (prompt saved, will retry)');
-                  this.emitTodoUpdate();
-                  this.log(`  Shot image gen failed for ${node.id}`);
-                  continue;
-                }
-              }
 
               // For media nodes: execute actual generation after prompt is written
               if ((nodeCategory === 'visual_ref' || nodeCategory === 'clip') && !this.config.skipMediaGeneration) {
@@ -1872,6 +1857,34 @@ Rules:
     }
 
     return null;
+  }
+
+  /**
+   * Execute a shot_image node: read the prompt JSON from the shot_image_prompt dependency,
+   * resolve reference image paths, and submit to ComfyUI.
+   */
+  private async executeShotImage(
+    node: ExecutionNode,
+    toolCallId: string,
+  ): Promise<string | null> {
+    // Find the shot_image_prompt dependency and read its JSON output
+    const promptDep = node.dependencies
+      .map(depId => this.executor.getNode(depId))
+      .find(n => n?.typeId === 'shot_image_prompt' && n.status === 'completed');
+
+    if (!promptDep?.outputPath) {
+      this.log(`  No completed shot_image_prompt dependency for ${node.id}`);
+      return null;
+    }
+
+    const jsonPath = join(this.config.projectDir, promptDep.outputPath);
+    if (!existsSync(jsonPath)) {
+      this.log(`  Shot image prompt file not found: ${jsonPath}`);
+      return null;
+    }
+
+    const jsonContent = readFileSync(jsonPath, 'utf-8');
+    return this.executeShotImageGeneration(node, jsonContent, toolCallId);
   }
 
   /**

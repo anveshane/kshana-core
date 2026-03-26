@@ -32,12 +32,13 @@ import { join } from 'path';
 
 // Pipeline stages in order — each stage includes the types that get reset
 const STAGES: Record<string, string[]> = {
-  plot: ['plot', 'story', 'character', 'setting', 'scene', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_video', 'final_video'],
-  story: ['story', 'character', 'setting', 'scene', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_video', 'final_video'],
-  characters: ['character', 'setting', 'scene', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_video', 'final_video'],
-  character_image: ['character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_video', 'final_video'],
-  scene_video_prompt: ['scene_video_prompt', 'shot_image_prompt', 'shot_video', 'final_video'],
-  shot_image_prompt: ['shot_image_prompt', 'shot_video', 'final_video'],
+  plot: ['plot', 'story', 'character', 'setting', 'scene', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  story: ['story', 'character', 'setting', 'scene', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  characters: ['character', 'setting', 'scene', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  character_image: ['character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  scene_video_prompt: ['scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  shot_image_prompt: ['shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  shot_image: ['shot_image', 'shot_video', 'final_video'],
   shot_video: ['shot_video', 'final_video'],
   final_video: ['final_video'],
 };
@@ -54,7 +55,8 @@ const TEMPLATE_DEPS: Record<string, string[]> = {
   setting_image: ['setting'],
   scene_video_prompt: ['scene', 'character_image', 'setting_image'],
   shot_image_prompt: ['scene_video_prompt'],
-  shot_video: ['shot_image_prompt'],
+  shot_image: ['shot_image_prompt', 'character_image', 'setting_image'],
+  shot_video: ['shot_image'],
   final_video: ['shot_video'],
 };
 
@@ -62,7 +64,7 @@ const TEMPLATE_DEPS: Record<string, string[]> = {
 const COLLECTION_TYPES = new Set([
   'character', 'setting', 'scene',
   'character_image', 'setting_image',
-  'scene_video_prompt', 'shot_image_prompt', 'shot_video',
+  'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video',
 ]);
 
 interface ExecutionNode {

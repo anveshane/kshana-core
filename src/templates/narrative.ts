@@ -256,6 +256,34 @@ const shotImagePromptArtifact: ArtifactTypeDefinition = {
   ],
 };
 
+// shot_image: generates the actual shot image from the prompt JSON + reference images via ComfyUI
+// This is the ComfyUI execution step — it needs the actual .png reference images
+const shotImageArtifact: ArtifactTypeDefinition = {
+  id: 'shot_image',
+  displayName: 'Shot Images',
+  category: 'visual_ref',
+  description: 'Generated shot images from prompts with reference image compositing via FLUX Klein',
+  scope: 'chapter',
+  isCollection: true,
+  itemName: 'shot image',
+  outputFormat: 'image',
+  filePattern: 'assets/images/shots/scene-{{index}}-shot-{{subindex}}.png',
+  agentType: 'image',
+  promptFile: 'narrative/shot-image.md',
+  isExpensive: true,
+  requiresPerItemApproval: false,
+  dependencies: [
+    // The prompt JSON tells us what to generate and which refs to use
+    { artifactTypeId: 'shot_image_prompt', required: true, usage: 'input', scope: 'matching' },
+    // Actual .png files needed for FLUX Klein image-to-image compositing
+    { artifactTypeId: 'character_image', required: true, usage: 'reference', scope: 'all' },
+    { artifactTypeId: 'setting_image', required: true, usage: 'reference', scope: 'all' },
+  ],
+  metadataSchema: {
+    shotNumber: { type: 'number', required: true, description: 'Shot number within the scene' },
+  },
+};
+
 // shot_video: generates a video clip from each shot image using the motion prompt
 // A scene is an array of shots — each shot starts with a shot image
 const shotVideoArtifact: ArtifactTypeDefinition = {
@@ -274,7 +302,7 @@ const shotVideoArtifact: ArtifactTypeDefinition = {
   requiresPerItemApproval: true,
   dependencies: [
     {
-      artifactTypeId: 'shot_image_prompt',
+      artifactTypeId: 'shot_image',
       required: true,
       usage: 'input',
       scope: 'matching',
@@ -442,7 +470,7 @@ const phases: PhaseDefinition[] = [
     displayName: 'Shot Breakdown',
     description: 'Break scenes into cinematic shots and generate per-shot image prompts',
     order: 5,
-    artifactTypes: ['scene_video_prompt', 'shot_image_prompt'],
+    artifactTypes: ['scene_video_prompt', 'shot_image_prompt', 'shot_image'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/shot-breakdown.md',
   },
@@ -608,6 +636,7 @@ export const narrativeTemplate: VideoTemplate = {
     setting_image: settingImageArtifact,
     scene_video_prompt: sceneVideoPromptArtifact,
     shot_image_prompt: shotImagePromptArtifact,
+    shot_image: shotImageArtifact,
     shot_video: shotVideoArtifact,
     final_video: finalVideoArtifact,
   },
