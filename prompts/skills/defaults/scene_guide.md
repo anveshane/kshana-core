@@ -102,7 +102,7 @@ If any line is missing, go back and add it to the appropriate shot before finali
 
 ### Insert Shots, Cutaways & Establishing Shots — REQUIRED
 
-Not every shot should have characters. A cinematic scene MUST include at least one **character-free shot** that serves one of these purposes:
+Not every shot should have characters. A cinematic scene should include **character-free shots** where appropriate — these create breathing room and visual storytelling. Consider including at least one that serves one of these purposes:
 
 **Time/Place Establishing:**
 - Sunrise over rooftops to signal morning

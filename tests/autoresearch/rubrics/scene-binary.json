@@ -53,6 +53,10 @@
     {
       "id": "STORY_PROGRESSION",
       "question": "Comparing to the provided story: does this scene advance the narrative — does something change (information revealed, relationship shifted, tension raised, decision made) that moves the story forward from where the previous scene left off?"
+    },
+    {
+      "id": "INSERT_SHOTS",
+      "question": "Does the scene use cinematic visual storytelling beyond character shots — such as insert shots, cutaways, or establishing shots (e.g., environment details, time-of-day cues, atmospheric moments, tension-building objects)? Answer YES if the scene includes at least one such shot, OR if the scene's pacing genuinely wouldn't benefit from one (e.g., a rapid unbroken action sequence)."
     }
   ]
 }
