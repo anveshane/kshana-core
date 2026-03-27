@@ -18,12 +18,13 @@ if (projectDirs.length === 0) {
   process.exit(1);
 }
 
-function claudeP(prompt: string): string {
+function claudeP(prompt: string, jsonSchema?: Record<string, unknown>): string {
   const tmpFile = `/tmp/eval-svp-${Date.now()}.txt`;
   writeFileSync(tmpFile, prompt);
   try {
-    const raw = execSync(`cat "${tmpFile}" | claude -p --output-format json`, {
-      encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, timeout: 180000,
+    const schemaArg = jsonSchema ? ` --json-schema '${JSON.stringify(jsonSchema)}'` : '';
+    const raw = execSync(`cat "${tmpFile}" | claude -p --output-format json${schemaArg}`, {
+      encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, timeout: 300000,
     });
     return JSON.parse(raw).result || raw;
   } finally {
@@ -72,14 +73,32 @@ ${svpJson}
 ## Questions
 ${questionsBlock}
 
-Respond with ONLY a JSON object:
-{"answers":{"SCENE_COVERAGE":{"answer":"YES","reason":"..."},...},"score":N,"total":${rubric.questions.length}}`;
+Answer each question YES or NO with a brief reason.`;
+
+      // Build JSON schema
+      const answerProps: Record<string, unknown> = {};
+      for (const q of rubric.questions) {
+        answerProps[q.id] = {
+          type: 'object',
+          properties: {
+            answer: { type: 'string', enum: ['YES', 'NO'] },
+            reason: { type: 'string' },
+          },
+          required: ['answer', 'reason'],
+        };
+      }
+      const evalSchema = {
+        type: 'object',
+        properties: {
+          answers: { type: 'object', properties: answerProps, required: rubric.questions.map((q: { id: string }) => q.id) },
+          score: { type: 'number' },
+          total: { type: 'number' },
+        },
+        required: ['answers', 'score', 'total'],
+      };
 
       try {
-        let result = claudeP(prompt).trim();
-        if (result.startsWith('```')) {
-          result = result.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-        }
+        const result = claudeP(prompt, evalSchema);
         const parsed = JSON.parse(result);
         console.log(`Score: ${parsed.score}/${parsed.total}`);
         for (const [id, val] of Object.entries(parsed.answers) as [string, any][]) {

@@ -54,12 +54,13 @@ const llm = new LLMClient({
   model: process.env['LLM_MODEL'],
 });
 
-function claudeP(prompt: string): string {
+function claudeP(prompt: string, jsonSchema?: Record<string, unknown>): string {
   const tmpFile = `/tmp/ar-svp-${Date.now()}.txt`;
   writeFileSync(tmpFile, prompt);
   try {
-    const raw = execSync(`cat "${tmpFile}" | claude -p --output-format json`, {
-      encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, timeout: 180000,
+    const schemaArg = jsonSchema ? ` --json-schema '${JSON.stringify(jsonSchema)}'` : '';
+    const raw = execSync(`cat "${tmpFile}" | claude -p --output-format json${schemaArg}`, {
+      encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, timeout: 300000,
     });
     return JSON.parse(raw).result || raw;
   } finally {
@@ -130,10 +131,31 @@ ${svpJson}
 ## Questions
 ${questions}
 
-Respond ONLY JSON: {"answers":{"ID":{"answer":"YES","reason":"..."},...},"score":N,"total":${rubric.questions.length}}`;
+Answer each question YES or NO with a brief reason.`;
 
-  let result = claudeP(prompt).trim();
-  if (result.startsWith('```')) result = result.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  // Build JSON schema for structured eval response
+  const answerProps: Record<string, unknown> = {};
+  for (const q of rubric.questions) {
+    answerProps[q.id] = {
+      type: 'object',
+      properties: {
+        answer: { type: 'string', enum: ['YES', 'NO'] },
+        reason: { type: 'string' },
+      },
+      required: ['answer', 'reason'],
+    };
+  }
+  const evalSchema = {
+    type: 'object',
+    properties: {
+      answers: { type: 'object', properties: answerProps, required: rubric.questions.map((q: { id: string }) => q.id) },
+      score: { type: 'number' },
+      total: { type: 'number' },
+    },
+    required: ['answers', 'score', 'total'],
+  };
+
+  const result = claudeP(prompt, evalSchema);
   const parsed = JSON.parse(result);
   const failures = Object.entries(parsed.answers)
     .filter(([, v]: [string, any]) => v.answer === 'NO')
@@ -160,9 +182,16 @@ ${allFailures.map(f => `- ${f}`).join('\n')}
 
 Rewrite the guide to fix failures while keeping what works. Be specific — add rules, examples, and formatting requirements that directly address each failure.
 
-Output ONLY the improved guide. Start with **PURPOSE**:`;
+Output ONLY the improved guide. Start with **PURPOSE**:
+Do NOT include any preamble, explanation of changes, commentary, or "Here's the improved guide" text. The very first line of your response must be "**PURPOSE**:".`;
 
-  return claudeP(prompt);
+  let result = claudeP(prompt);
+  // Strip any preamble before **PURPOSE**
+  const purposeIdx = result.indexOf('**PURPOSE**');
+  if (purposeIdx > 0) {
+    result = result.substring(purposeIdx);
+  }
+  return result;
 }
 
 async function main() {
