@@ -12,7 +12,7 @@
     },
     {
       "id": "DIALOGUE",
-      "question": "Does the scene include actual dialogue lines for the characters (not just 'they talk' or 'she speaks' but quoted words they say)?"
+      "question": "If this scene requires dialogue (characters speak in the corresponding story segment), does the generated scene include the actual quoted dialogue lines? If the story has no dialogue for this scene segment, answer YES — correctly omitting dialogue is correct."
     },
     {
       "id": "VISUAL_CONTINUITY",

@@ -24,16 +24,81 @@ A scene description with explicit shot-by-shot breakdown. Each shot must include
 
 ## Rules
 
+### Dialogue (CRITICAL — Mandatory Pre-Step)
+
+**Before writing ANY shots, you MUST complete the Dialogue Inventory step below. This is not optional. It is part of the required output.**
+
+#### Step 1: Dialogue Inventory (MUST appear in your output)
+
+Scan the scene segment you were given. Find every instance where a character speaks — every quoted line, every reported speech, every "he said / she asked / they whispered" construction. Write them out as a numbered checklist at the top of your output under the heading `**DIALOGUE INVENTORY**`. Format:
+
+```
+**DIALOGUE INVENTORY**
+1. CHARACTER — "Exact words from story"
+2. CHARACTER — "Exact words from story"
+3. CHARACTER — "Exact words from story"
+...
+```
+
+If the scene segment contains zero dialogue, write:
+```
+**DIALOGUE INVENTORY**
+None — this scene contains no spoken dialogue.
+```
+
+**This inventory is your contract.** Every line listed here MUST appear in the shots below. No exceptions.
+
+#### Step 2: Place Every Line Into Shots
+
+As you write shots, assign every inventory line to a specific shot. Each dialogue line must appear formatted as:
+
+**CHARACTER NAME:** "Exact dialogue from the story" *(delivery note)*
+
+Do not summarize, paraphrase, condense, or skip any line. Do not replace spoken words with action descriptions. Do not convert dialogue into narrated thought or internal monologue.
+
+**Common traps to avoid:**
+
+Source story says: *Ram said, "I can't do this anymore."*
+✅ CORRECT: **RAM:** "I can't do this anymore." *(quiet, strained)*
+❌ WRONG: *Ram turns away, unable to continue.* (Dialogue converted to action — the spoken line is lost)
+❌ WRONG: *Ram expresses that he can't go on.* (Summarized instead of quoted)
+❌ WRONG: Omitting the line entirely
+
+Source story says: *"Wait," she called out. "You forgot this."*
+✅ CORRECT:
+**PRIYA:** "Wait." *(calling out)*
+**PRIYA:** "You forgot this." *(softer, extending her hand)*
+❌ WRONG: *She calls after him, holding out the object.* (Dialogue replaced with action)
+
+Source story says: *He muttered something about being late and grabbed his coat.*
+✅ CORRECT: **ARJUN:** "I'm late." *(muttered, grabbing his coat)* — If the story gives indirect speech, reconstruct the most faithful direct-speech version.
+❌ WRONG: *He grabs his coat, in a hurry.* (The spoken content is erased)
+
+#### Step 3: Delivery Notes
+
+Include a delivery note in parentheses after EVERY dialogue line: *(whispered)*, *(sharp)*, *(breaking)*, *(matter-of-fact)*, *(under breath)*, *(pleading)*, etc. Never leave a dialogue line without a delivery note.
+
+#### Step 4: Post-Check (MUST appear in your output)
+
+After writing all shots, revisit your Dialogue Inventory. For each numbered line, confirm it appears in a shot. Write the verification at the bottom of your output under `**DIALOGUE CHECK**`:
+
+```
+**DIALOGUE CHECK**
+1. ✅ SHOT 3
+2. ✅ SHOT 5
+3. ✅ SHOT 5
+...
+All inventory lines placed.
+```
+
+If any line is missing, go back and add it to the appropriate shot before finalizing.
+
+---
+
 ### Shot Breakdown
 - Label each shot: **SHOT 1 (Duration: Xs)**
 - Specify shot type for every shot
 - Total shot durations must approximately match the scene's target duration
-
-### Dialogue
-- If the story contains dialogue for this scene, include it verbatim
-- Format as: **CHARACTER NAME:** "Dialogue line"
-- Include delivery notes in parentheses: (whispered), (sharp), (breaking)
-- If a scene has no dialogue in the story, describe the silence explicitly
 
 ### Character Actions
 - Every shot must describe what characters physically DO — not what they feel
@@ -68,25 +133,42 @@ A scene description with explicit shot-by-shot breakdown. Each shot must include
 - Do not invent events, characters, or details not in the story
 - Do not contradict established facts
 - If the story describes a specific action, include it
+- **If the story describes a character speaking, include the exact spoken words as dialogue — never convert speech into narrated action or internal thought**
 
 ---
 
 ## Output Format
 
 ```
+**DIALOGUE INVENTORY**
+1. CHARACTER — "Line"
+2. CHARACTER — "Line"
+[... all lines from source scene segment]
+
+---
+
 **SCENE [N]: [TITLE]**
 
 **[INT/EXT]. [LOCATION] - [TIME]**
 
 **SHOT 1 (Duration: Xs)**
 **[SHOT TYPE]**
-[Visual description with character action, dialogue, sound cues]
+[Visual description with character action, sound cues]
+**CHARACTER NAME:** "Dialogue line" *(delivery note)*
 
 **SHOT 2 (Duration: Xs)**
 **[SHOT TYPE]**
 [Visual description...]
 
 [Continue for all shots]
+
+---
+
+**DIALOGUE CHECK**
+1. ✅ SHOT [N]
+2. ✅ SHOT [N]
+[... one entry per inventory line]
+All inventory lines placed.
 ```
 
-Output ONLY the scene content — no explanations, no meta-commentary.
+Output ONLY the scene content — no explanations, no meta-commentary outside the required format sections.
