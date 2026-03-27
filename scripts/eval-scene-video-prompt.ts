@@ -26,7 +26,9 @@ function claudeP(prompt: string, jsonSchema?: Record<string, unknown>): string {
     const raw = execSync(`cat "${tmpFile}" | claude -p --output-format json${schemaArg}`, {
       encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, timeout: 300000,
     });
-    return JSON.parse(raw).result || raw;
+    const envelope = JSON.parse(raw);
+    if (envelope.structured_output) return JSON.stringify(envelope.structured_output);
+    return envelope.result || raw;
   } finally {
     try { unlinkSync(tmpFile); } catch { /* */ }
   }

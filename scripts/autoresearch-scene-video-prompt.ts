@@ -58,11 +58,21 @@ function claudeP(prompt: string, jsonSchema?: Record<string, unknown>): string {
   const tmpFile = `/tmp/ar-svp-${Date.now()}.txt`;
   writeFileSync(tmpFile, prompt);
   try {
-    const schemaArg = jsonSchema ? ` --json-schema '${JSON.stringify(jsonSchema)}'` : '';
-    const raw = execSync(`cat "${tmpFile}" | claude -p --output-format json${schemaArg}`, {
+    let cmd = `cat "${tmpFile}" | claude -p --output-format json`;
+    if (jsonSchema) {
+      const schemaFile = `/tmp/ar-svp-schema-${Date.now()}.json`;
+      writeFileSync(schemaFile, JSON.stringify(jsonSchema));
+      cmd += ` --json-schema '${JSON.stringify(jsonSchema)}'`;
+    }
+    const raw = execSync(cmd, {
       encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, timeout: 300000,
     });
-    return JSON.parse(raw).result || raw;
+    const envelope = JSON.parse(raw);
+    // --json-schema puts result in structured_output, not result
+    if (envelope.structured_output) {
+      return JSON.stringify(envelope.structured_output);
+    }
+    return envelope.result || raw;
   } finally {
     try { unlinkSync(tmpFile); } catch { /* */ }
   }
