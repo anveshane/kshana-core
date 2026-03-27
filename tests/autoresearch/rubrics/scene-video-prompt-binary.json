@@ -53,6 +53,14 @@
     {
       "id": "SOUND_CUES",
       "question": "Do the shot descriptions include sound/audio cues — either explicitly named sounds, dialogue references, or ambient audio? At least half the shots should reference what is heard, not just what is seen."
+    },
+    {
+      "id": "GENERATION_STRATEGY",
+      "question": "Does each shot have a sensible generationStrategy? Character-free shots (establishing, atmosphere, inserts) should be 't2v'. Shots with characters visible from the start should be 'i2v'. Shots where characters enter mid-shot should be 'i2v_late_entry'. Is there at least one 't2v' or 'i2v_late_entry' shot in the scene (not all shots should be 'i2v')?"
+    },
+    {
+      "id": "FIRST_LAST_FRAME",
+      "question": "Do shots that need visual anchoring (long shots 6s+, shots with significant visual change, shots that chain into the next) include a lastFrame description? And do all shots have a firstFrame? The lastFrame should be omitted for short static shots."
     }
   ]
 }
