@@ -500,7 +500,21 @@ export function parameterizeLtx23Workflow(
     }
   }
 
-  // Bypass LoraLoaderModelOnly nodes with lora_name "None" (ComfyUI rejects "None")
+  // Remove ALL LoRA nodes — the base GGUF model is already distilled, no LoRAs needed.
+  // Rewire: node 330 (UnetLoaderGGUF) → node 303 (SetNode 'model_with_lora')
+  // Chain was: 330 → 134 (LoraLoaderModelOnly) → 301 (Power Lora Loader) → 303
+  const node303 = apiWorkflow['303'] as { inputs?: Record<string, unknown> } | undefined;
+  if (node303 && apiWorkflow['134']) {
+    // Point SetNode directly to the base model loader
+    node303.inputs = node303.inputs || {};
+    node303.inputs['value'] = ['330', 0];
+    // Remove LoRA nodes
+    delete apiWorkflow['134'];
+    delete apiWorkflow['301'];
+    debugLog(`[Ltx23] Removed LoRA nodes 134, 301 — wired model 330 → 303 directly`);
+  }
+
+  // Bypass any remaining LoraLoaderModelOnly nodes with lora_name "None"
   bypassLoraLoaderNodesWithNone(apiWorkflow);
 
   return apiWorkflow;
