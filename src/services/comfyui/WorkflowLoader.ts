@@ -473,16 +473,11 @@ export function parameterizeLtx23Workflow(
     node290.inputs = node290.inputs || {};
     node290.inputs['value'] = t2vMode;
   }
-  // Bypass end frame (node 161) when using I2V with start image only.
-  // Without this, the same image anchors both start and end, forcing a loop.
-  if (!t2vMode) {
-    const node161 = apiWorkflow['161'] as { inputs?: Record<string, unknown> } | undefined;
-    if (node161) {
-      node161.inputs = node161.inputs || {};
-      node161.inputs['bypass'] = true;
-      debugLog(`[Ltx23] Bypassing end frame (node 161) — start image only`);
-    }
-  }
+  // In I2V mode, both node 160 and 161 must be active:
+  // Node 161 injects the image into pass 1 (initial generation)
+  // Node 160 injects the image into pass 2 (upscale/refine)
+  // Both use the same source image as the start frame reference.
+  // The t2v_mode boolean already controls bypass for both nodes.
   const node140 = apiWorkflow['140'] as { inputs?: Record<string, unknown> } | undefined;
   if (node140) {
     node140.inputs = node140.inputs || {};
