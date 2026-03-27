@@ -1,0 +1,220 @@
+#!/usr/bin/env tsx
+/**
+ * Autoresearch: optimize scene_video_prompt_guide.md
+ *
+ * Usage:
+ *   pnpm tsx scripts/autoresearch-scene-video-prompt.ts [iterations] [project-dir]
+ */
+
+import 'dotenv/config';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
+import { join } from 'path';
+import { execSync } from 'child_process';
+import { LLMClient } from '../src/core/llm/index.js';
+
+const MAX_ITERATIONS = parseInt(process.argv[2] || '3', 10);
+const PROJECT_DIR = process.argv[3] || 'air_already_thick_promise.kshana';
+const GUIDE_PATH = 'prompts/skills/defaults/scene_video_prompt_guide.md';
+const RUBRIC_PATH = 'tests/autoresearch/rubrics/scene-video-prompt-binary.json';
+const OUTPUT_DIR = 'test-output/autoresearch-svp';
+
+if (!existsSync(OUTPUT_DIR)) mkdirSync(OUTPUT_DIR, { recursive: true });
+
+const rubric = JSON.parse(readFileSync(RUBRIC_PATH, 'utf-8'));
+const story = existsSync(join(PROJECT_DIR, 'chapters/chapter_1/plans/story.md'))
+  ? readFileSync(join(PROJECT_DIR, 'chapters/chapter_1/plans/story.md'), 'utf-8') : '';
+
+// Load scenes
+const scenes: string[] = [];
+for (let i = 1; i <= 10; i++) {
+  const p = join(PROJECT_DIR, `chapters/chapter_1/scenes/scene_${i}.md`);
+  if (!existsSync(p)) break;
+  scenes.push(readFileSync(p, 'utf-8'));
+}
+
+// Get character/setting IDs
+const charIds: string[] = [];
+const settingIds: string[] = [];
+const charDir = join(PROJECT_DIR, 'characters');
+const setDir = join(PROJECT_DIR, 'settings');
+if (existsSync(charDir)) {
+  for (const f of readdirSync(charDir)) {
+    if (f.endsWith('.md')) charIds.push(f.replace('.md', ''));
+  }
+}
+if (existsSync(setDir)) {
+  for (const f of readdirSync(setDir)) {
+    if (f.endsWith('.md')) settingIds.push(f.replace('.md', ''));
+  }
+}
+
+const llm = new LLMClient({
+  baseUrl: process.env['LLM_BASE_URL'],
+  apiKey: process.env['LLM_API_KEY'],
+  model: process.env['LLM_MODEL'],
+});
+
+function claudeP(prompt: string): string {
+  const tmpFile = `/tmp/ar-svp-${Date.now()}.txt`;
+  writeFileSync(tmpFile, prompt);
+  try {
+    const raw = execSync(`cat "${tmpFile}" | claude -p --output-format json`, {
+      encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024, timeout: 180000,
+    });
+    return JSON.parse(raw).result || raw;
+  } finally {
+    try { unlinkSync(tmpFile); } catch { /* */ }
+  }
+}
+
+async function generateSVP(guide: string, sceneNum: number): Promise<string> {
+  const scene = scenes[sceneNum - 1] || '';
+  const systemPrompt = `You are a cinematic shot planner. Break a scene into individual shots.
+Output ONLY valid JSON — no markdown, no explanation, no thinking.
+
+<guide>
+${guide}
+</guide>
+
+Available character IDs (use EXACTLY these):
+${charIds.map(id => `- "${id}"`).join('\n')}
+
+Available setting IDs (use EXACTLY these):
+${settingIds.map(id => `- "${id}"`).join('\n')}
+
+The JSON must follow this structure:
+{
+  "sceneNumber": ${sceneNum},
+  "sceneTitle": "<title>",
+  "totalDuration": <seconds>,
+  "shots": [
+    {
+      "shotNumber": <number>,
+      "shotType": "<type>",
+      "duration": <seconds>,
+      "description": "<visual + audio description>",
+      "cameraWork": "<camera direction>",
+      "characters": ["<id>", ...],
+      "setting": "<id or null>"
+    }
+  ]
+}`;
+
+  const response = await llm.generate({
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Break this scene into shots:\n\n${scene}` },
+    ],
+    temperature: 0.7,
+  });
+  return response.content || '';
+}
+
+function evaluateSVP(svpJson: string, sceneNum: number): { score: number; total: number; failures: string[] } {
+  const scene = scenes[sceneNum - 1] || '';
+  const questions = rubric.questions
+    .map((q: { id: string; question: string }, i: number) => `${i + 1}. [${q.id}] ${q.question}`)
+    .join('\n');
+
+  const prompt = `Be strict. Evaluate this scene_video_prompt JSON.
+
+## Story
+${story}
+
+## Scene Description
+${scene}
+
+## Scene Video Prompt JSON
+${svpJson}
+
+## Questions
+${questions}
+
+Respond ONLY JSON: {"answers":{"ID":{"answer":"YES","reason":"..."},...},"score":N,"total":${rubric.questions.length}}`;
+
+  let result = claudeP(prompt).trim();
+  if (result.startsWith('```')) result = result.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  const parsed = JSON.parse(result);
+  const failures = Object.entries(parsed.answers)
+    .filter(([, v]: [string, any]) => v.answer === 'NO')
+    .map(([k]) => k);
+  return { score: parsed.score, total: parsed.total, failures };
+}
+
+function proposeImprovement(guide: string, evalResults: Array<{ sceneNum: number; score: number; total: number; failures: string[] }>): string {
+  const summary = evalResults.map(r =>
+    `Scene ${r.sceneNum}: ${r.score}/${r.total} — Failed: ${r.failures.join(', ') || 'none'}`
+  ).join('\n');
+  const allFailures = [...new Set(evalResults.flatMap(r => r.failures))];
+
+  const prompt = `You are optimizing a prompt guide for scene_video_prompt generation — breaking scenes into cinematic shots as JSON.
+
+## Current Guide
+${guide}
+
+## Evaluation Results
+${summary}
+
+## Common Failures
+${allFailures.map(f => `- ${f}`).join('\n')}
+
+Rewrite the guide to fix failures while keeping what works. Be specific — add rules, examples, and formatting requirements that directly address each failure.
+
+Output ONLY the improved guide. Start with **PURPOSE**:`;
+
+  return claudeP(prompt);
+}
+
+async function main() {
+  console.log(`Autoresearch: Scene Video Prompt Guide`);
+  console.log(`Project: ${PROJECT_DIR} (${scenes.length} scenes)`);
+  console.log(`Characters: ${charIds.join(', ')}`);
+  console.log(`Settings: ${settingIds.join(', ')}\n`);
+
+  let guide = readFileSync(GUIDE_PATH, 'utf-8');
+
+  for (let iter = 1; iter <= MAX_ITERATIONS; iter++) {
+    console.log(`\n${'='.repeat(50)}`);
+    console.log(`ITERATION ${iter}/${MAX_ITERATIONS}`);
+    console.log(`${'='.repeat(50)}`);
+
+    const evalResults: Array<{ sceneNum: number; score: number; total: number; failures: string[] }> = [];
+    let totalScore = 0, totalQ = 0;
+
+    for (let s = 1; s <= Math.min(scenes.length, 3); s++) {
+      console.log(`  Generating SVP ${s}...`);
+      const svp = await generateSVP(guide, s);
+      writeFileSync(join(OUTPUT_DIR, `iter-${iter}-svp-${s}.json`), svp);
+
+      console.log(`  Evaluating SVP ${s}...`);
+      try {
+        const result = evaluateSVP(svp, s);
+        evalResults.push({ sceneNum: s, ...result });
+        totalScore += result.score;
+        totalQ += result.total;
+        console.log(`    Score: ${result.score}/${result.total}`);
+        if (result.failures.length > 0) console.log(`    Failed: ${result.failures.join(', ')}`);
+      } catch (e) {
+        console.error(`    Eval error: ${e}`);
+      }
+    }
+
+    const pct = totalQ > 0 ? (totalScore / totalQ * 100).toFixed(1) : '0';
+    console.log(`\n  >> Iteration ${iter}: ${totalScore}/${totalQ} (${pct}%)`);
+
+    writeFileSync(join(OUTPUT_DIR, `iter-${iter}-guide.md`), guide);
+    writeFileSync(join(OUTPUT_DIR, `iter-${iter}-results.json`), JSON.stringify({ totalScore, totalQ, pct, evalResults }, null, 2));
+
+    if (totalScore === totalQ) { console.log(`  PERFECT — stopping.`); break; }
+
+    if (iter < MAX_ITERATIONS) {
+      console.log(`  Proposing improvement...`);
+      guide = proposeImprovement(guide, evalResults);
+      writeFileSync(GUIDE_PATH, guide);
+      console.log(`  Guide updated (${guide.length} chars)`);
+    }
+  }
+  console.log(`\nDone. Results in ${OUTPUT_DIR}/`);
+}
+
+main().catch(e => { console.error('Fatal:', e); process.exit(1); });

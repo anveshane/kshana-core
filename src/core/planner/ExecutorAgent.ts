@@ -948,7 +948,7 @@ Rules:
 
     // Inject guides/skills for relevant categories
     const loadedSkills: string[] = [];
-    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment';
+    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'scene_video_prompt';
     if (needsSkills) {
       const skills = this.loadSkillsForNode(node);
       if (skills.content) {
@@ -1058,7 +1058,7 @@ Rules:
       character_image: 'character_image_guide',
       setting_image: 'setting_image_guide',
       shot_image_prompt: 'shot_image_guide',
-      scene_video_prompt: 'scene_video_guide',
+      scene_video_prompt: 'scene_video_prompt_guide',
       shot_video: 'scene_video_guide',
       scene: 'scene_guide',
     };
