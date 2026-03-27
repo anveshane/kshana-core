@@ -102,8 +102,8 @@ Output ONLY the profile content — no explanations, no tool calls, no meta-comm
 Create a vivid, detailed description of the location including atmosphere, key features, and sensory details.
 Output ONLY the description — no explanations, no tool calls, no meta-commentary.`,
 
-  segment: `You are a creative writer specializing in scene descriptions.
-Create a detailed scene description including action, dialogue, character positions, and visual details.
+  segment: `You are a creative writer specializing in cinematic scene descriptions.
+Create a detailed, shootable scene description with shot-by-shot breakdown.
 Output ONLY the scene content — no explanations, no tool calls, no meta-commentary.`,
 
   visual_ref: `You are an expert image prompt engineer. Do NOT think or reason — respond directly.
@@ -946,9 +946,9 @@ Rules:
       systemPrompt = CATEGORY_PROMPTS[effectiveCategory] ?? CATEGORY_PROMPTS.concept;
     }
 
-    // Inject model-specific skills for image/video prompt generation
+    // Inject guides/skills for relevant categories
     const loadedSkills: string[] = [];
-    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip';
+    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment';
     if (needsSkills) {
       const skills = this.loadSkillsForNode(node);
       if (skills.content) {
@@ -1060,6 +1060,7 @@ Rules:
       shot_image_prompt: 'shot_image_guide',
       scene_video_prompt: 'scene_video_guide',
       shot_video: 'scene_video_guide',
+      scene: 'scene_guide',
     };
 
     // Content type names for skill file resolution
