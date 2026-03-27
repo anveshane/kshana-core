@@ -533,6 +533,15 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.emitTodoUpdate();
               continue;
             } else if (node.typeId === 'shot_image' && !this.config.skipMediaGeneration) {
+              // Check generation strategy — t2v shots skip image gen
+              const shotStrategy = this.getGenerationStrategy(node);
+              if (shotStrategy === 't2v') {
+                this.log(`  Skipping shot_image (t2v strategy — text-to-video, no image needed)`);
+                this.executor.markCompleted(node.id, 'skipped-t2v');
+                this.persistState();
+                this.emitTodoUpdate();
+                continue;
+              }
               // Shot image — deterministic: read prompt JSON, resolve refs, call ComfyUI
               const shotImageResult = await this.executeShotImage(node, toolCallId);
               if (!shotImageResult) {
@@ -1933,6 +1942,38 @@ Rules:
   }
 
   /**
+   * Read the generationStrategy for a shot node from the scene_video_prompt JSON.
+   */
+  private getGenerationStrategy(node: ExecutionNode): string {
+    if (!node.itemId) return 'i2v';
+
+    const sceneMatch = node.itemId.match(/scene_(\d+)/);
+    const shotMatch = node.itemId.match(/shot_(\d+)/);
+    if (!sceneMatch) return 'i2v';
+
+    const sceneNum = parseInt(sceneMatch[1]!, 10);
+    const shotNum = shotMatch?.[1] ? parseInt(shotMatch[1], 10) : 1;
+
+    const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
+    if (!svpNode?.outputPath) return 'i2v';
+
+    const fullPath = join(this.config.projectDir, svpNode.outputPath);
+    if (!existsSync(fullPath)) return 'i2v';
+
+    try {
+      let content = readFileSync(fullPath, 'utf-8').trim();
+      if (content.startsWith('```')) {
+        content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      }
+      const parsed = JSON.parse(content);
+      const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
+      return shot?.generationStrategy || 'i2v';
+    } catch {
+      return 'i2v';
+    }
+  }
+
+  /**
    * Execute a shot_image node: read the prompt JSON from the shot_image_prompt dependency,
    * resolve reference image paths, and submit to ComfyUI.
    */
@@ -2321,7 +2362,19 @@ Rules:
     const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
     let motionPrompt = '';
     let shotDuration = 5;
+    let generationStrategy = 'i2v';
 
+    // 1. Try to use shot_motion_directive (preferred — LTX-optimized)
+    const motionDirectiveNode = this.executor.getNode(`shot_motion_directive:${node.itemId}`);
+    if (motionDirectiveNode?.status === 'completed' && motionDirectiveNode.outputPath) {
+      const mdPath = join(this.config.projectDir, motionDirectiveNode.outputPath);
+      if (existsSync(mdPath)) {
+        motionPrompt = readFileSync(mdPath, 'utf-8').trim();
+        this.log(`  Using motion directive: ${motionPrompt.substring(0, 80)}...`);
+      }
+    }
+
+    // 2. Read shot metadata from scene_video_prompt JSON
     if (svpNode?.outputPath) {
       const svpPath = join(this.config.projectDir, svpNode.outputPath);
       if (existsSync(svpPath)) {
@@ -2333,12 +2386,16 @@ Rules:
           const parsed = JSON.parse(content);
           const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
           if (shot) {
-            // Support both new (firstFrame) and legacy (description) formats
-            const desc = shot.firstFrame?.description ?? shot.description ?? '';
-            motionPrompt = desc;
-            if (shot.cameraWork) motionPrompt += ' ' + shot.cameraWork;
-            if (shot.soundCue) motionPrompt += ' ' + shot.soundCue;
             shotDuration = shot.duration || 5;
+            generationStrategy = shot.generationStrategy || 'i2v';
+
+            // Fallback: if no motion directive, use description + cameraWork
+            if (!motionPrompt) {
+              const desc = shot.firstFrame?.description ?? shot.description ?? '';
+              motionPrompt = desc;
+              if (shot.cameraWork) motionPrompt += ' ' + shot.cameraWork;
+              if (shot.soundCue) motionPrompt += ' ' + shot.soundCue;
+            }
           }
         } catch {
           this.log(`  Failed to parse scene_video_prompt JSON for motion`);
@@ -2350,6 +2407,15 @@ Rules:
       motionPrompt = `Cinematic shot with subtle camera movement, scene ${sceneNum} shot ${shotNum}`;
     }
 
+    // For t2v strategy, we don't need a source image
+    const isT2V = generationStrategy === 't2v';
+    if (isT2V) {
+      this.log(`  t2v strategy — no source image needed`);
+    } else if (!shotImagePath) {
+      this.log(`  No shot image found for ${node.id}`);
+      return null;
+    }
+
     // 3. Emit tool_call
     const genCallId = `shotvid_${node.id}_${Date.now()}`;
     const toolName = 'generate_shot_video';
@@ -2357,7 +2423,7 @@ Rules:
       type: 'tool_call',
       toolCallId: genCallId,
       toolName,
-      arguments: { item: node.displayName, source_image: shotImagePath, duration: shotDuration, prompt: motionPrompt },
+      arguments: { item: node.displayName, source_image: isT2V ? '(text-to-video)' : shotImagePath, duration: shotDuration, prompt: motionPrompt },
       agentName,
     });
 
@@ -2403,7 +2469,7 @@ Rules:
 
       const result = await provider.generateVideo(
         {
-          sourceImagePath: join(this.config.projectDir, shotImagePath),
+          sourceImagePath: isT2V ? '' : join(this.config.projectDir, shotImagePath),
           prompt: motionPrompt,
           durationSeconds: shotDuration,
           width: videoWidth,
