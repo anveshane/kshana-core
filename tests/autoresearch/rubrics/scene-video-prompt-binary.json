@@ -1,0 +1,58 @@
+{
+  "name": "Scene Video Prompt Binary",
+  "description": "Binary yes/no evaluation of scene_video_prompt JSON quality — the shot breakdown that drives all downstream image and video generation.",
+  "format": "binary",
+  "phase": "scene_video_prompt",
+  "promptType": "scene_video_prompt",
+  "context": ["scene", "story"],
+  "questions": [
+    {
+      "id": "SCENE_COVERAGE",
+      "question": "Do the shots collectively cover the full scene description — every key action, event, and beat from the scene is represented in at least one shot? No significant moments are skipped."
+    },
+    {
+      "id": "SHOT_VARIETY",
+      "question": "Do the shots use at least 3 different shot types (e.g., wide, medium, close_up, extreme_close_up, tracking, over_shoulder, pov)? Not all the same type."
+    },
+    {
+      "id": "CHARACTER_IDS",
+      "question": "Does every shot that depicts a character correctly list them in the characters array using the exact character item IDs? No shots that show a character but have an empty characters array."
+    },
+    {
+      "id": "SETTING_IDS",
+      "question": "Does every shot specify the correct setting item ID that matches the location shown? No null settings when the shot clearly takes place in a named location."
+    },
+    {
+      "id": "DURATION_SUM",
+      "question": "Do the individual shot durations sum approximately to the totalDuration field (within ±20%)? No wildly mismatched totals."
+    },
+    {
+      "id": "SHOT_DESCRIPTIONS",
+      "question": "Does every shot description contain specific, visual details — what a camera physically sees in this frozen moment? No vague descriptions like 'the scene continues' or 'characters interact'."
+    },
+    {
+      "id": "CAMERA_WORK",
+      "question": "Does every shot include a cameraWork field with specific camera direction (angle, movement, framing, depth of field)? No empty or generic camera directions."
+    },
+    {
+      "id": "SHOT_FLOW",
+      "question": "Do the shots flow logically from one to the next — is there a clear visual sequence that a video editor could assemble without confusion? No random jumps in location or time without motivation."
+    },
+    {
+      "id": "EMOTIONAL_ARC",
+      "question": "Do the shots collectively build an emotional arc across the scene — tension rises, mood shifts, something changes from the first shot to the last?"
+    },
+    {
+      "id": "INSERT_SHOTS",
+      "question": "Does the shot breakdown include at least one character-free shot — an insert, cutaway, or establishing shot showing environment, objects, or atmosphere? Answer YES if present, or if the scene's rapid pacing genuinely wouldn't benefit from one."
+    },
+    {
+      "id": "SCENE_FAITHFUL",
+      "question": "Comparing to the provided scene description: do the shots accurately represent the scene's events, characters, and details without inventing new elements or contradicting the scene?"
+    },
+    {
+      "id": "SOUND_CUES",
+      "question": "Do the shot descriptions include sound/audio cues — either explicitly named sounds, dialogue references, or ambient audio? At least half the shots should reference what is heard, not just what is seen."
+    }
+  ]
+}
