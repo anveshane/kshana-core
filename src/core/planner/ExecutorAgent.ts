@@ -223,6 +223,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       character: 'Character Development',
       setting: 'Setting Development',
       scene: 'Scene Breakdown',
+      world_style: 'World Style',
       character_image: 'Character Reference Images',
       setting_image: 'Setting Reference Images',
       scene_video_prompt: 'Shot Planning',
@@ -967,7 +968,7 @@ Rules:
 
     // Inject guides/skills for relevant categories
     const loadedSkills: string[] = [];
-    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'scene_video_prompt';
+    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'scene_video_prompt' || node.typeId === 'world_style';
     if (needsSkills) {
       const skills = this.loadSkillsForNode(node);
       if (skills.content) {
@@ -1080,6 +1081,7 @@ Rules:
       scene_video_prompt: 'scene_video_prompt_guide',
       shot_video: 'scene_video_guide',
       scene: 'scene_guide',
+      world_style: 'world_style_guide',
     };
 
     // Content type names for skill file resolution

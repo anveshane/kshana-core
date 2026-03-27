@@ -212,6 +212,29 @@ const settingImageArtifact: ArtifactTypeDefinition = {
   },
 };
 
+// world_style: defines the visual/auditory style bible for the entire project
+// Generated once, injected as context into all downstream prompts
+const worldStyleArtifact: ArtifactTypeDefinition = {
+  id: 'world_style',
+  displayName: 'World Style Bible',
+  category: 'structure',
+  description: 'Visual and auditory style guide ensuring consistency across all shots — color palette, lighting, atmosphere, sound world',
+  scope: 'chapter',
+  isCollection: false,
+  outputFormat: 'markdown',
+  filePattern: 'plans/world_style.md',
+  agentType: 'content',
+  promptFile: 'narrative/world-style.md',
+  isExpensive: false,
+  requiresPerItemApproval: false,
+  dependencies: [
+    { artifactTypeId: 'story', required: true, usage: 'context', scope: 'matching' },
+    { artifactTypeId: 'scene', required: true, usage: 'context', scope: 'all' },
+    { artifactTypeId: 'setting', required: true, usage: 'context', scope: 'all' },
+  ],
+  metadataSchema: {},
+};
+
 const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
   id: 'scene_video_prompt',
   displayName: 'Multi-Shot Motion Prompts',
@@ -230,6 +253,7 @@ const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
     { artifactTypeId: 'scene', required: true, usage: 'context', scope: 'matching' },
     { artifactTypeId: 'character_image', required: true, usage: 'reference', scope: 'all' },
     { artifactTypeId: 'setting_image', required: true, usage: 'reference', scope: 'all' },
+    { artifactTypeId: 'world_style', required: true, usage: 'context', scope: 'matching' },
   ],
 };
 
@@ -253,6 +277,7 @@ const shotImagePromptArtifact: ArtifactTypeDefinition = {
     // ComfyUI generation time, NOT at prompt generation time. This allows shot prompts
     // to be generated in parallel with image generation.
     { artifactTypeId: 'scene_video_prompt', required: true, usage: 'context', scope: 'matching' },
+    { artifactTypeId: 'world_style', required: true, usage: 'context', scope: 'matching' },
   ],
 };
 
@@ -457,6 +482,15 @@ const phases: PhaseDefinition[] = [
     promptFile: 'narrative/phases/breakdown.md',
   },
   {
+    id: 'world_style',
+    displayName: 'World Style',
+    description: 'Define the visual and auditory style bible for the project',
+    order: 3.5,
+    artifactTypes: ['world_style'],
+    requiresConfirmation: false,
+    promptFile: 'narrative/phases/world-style.md',
+  },
+  {
     id: 'reference_images',
     displayName: 'Reference Image Generation',
     description: 'Generate reference images for characters and settings',
@@ -632,6 +666,7 @@ export const narrativeTemplate: VideoTemplate = {
     character: characterArtifact,
     setting: settingArtifact,
     scene: sceneArtifact,
+    world_style: worldStyleArtifact,
     character_image: characterImageArtifact,
     setting_image: settingImageArtifact,
     scene_video_prompt: sceneVideoPromptArtifact,

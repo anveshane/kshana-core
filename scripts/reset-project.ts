@@ -32,9 +32,10 @@ import { join } from 'path';
 
 // Pipeline stages in order — each stage includes the types that get reset
 const STAGES: Record<string, string[]> = {
-  plot: ['plot', 'story', 'character', 'setting', 'scene', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
-  story: ['story', 'character', 'setting', 'scene', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
-  characters: ['character', 'setting', 'scene', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  plot: ['plot', 'story', 'character', 'setting', 'scene', 'world_style', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  story: ['story', 'character', 'setting', 'scene', 'world_style', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  characters: ['character', 'setting', 'scene', 'world_style', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  world_style: ['world_style', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
   character_image: ['character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
   scene_video_prompt: ['scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
   shot_image_prompt: ['shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
@@ -51,6 +52,7 @@ const TEMPLATE_DEPS: Record<string, string[]> = {
   character: ['story'],
   setting: ['story'],
   scene: ['story', 'character', 'setting'],
+  world_style: ['story', 'scene', 'setting'],
   character_image: ['character'],
   setting_image: ['setting'],
   scene_video_prompt: ['scene', 'character_image', 'setting_image'],

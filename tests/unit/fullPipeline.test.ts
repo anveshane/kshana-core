@@ -252,6 +252,10 @@ describe('Full Narrative Pipeline', () => {
       executor.markCompleted('character_image:char_1', 'char1.png');
       executor.markStarted('setting_image:set_1');
       executor.markCompleted('setting_image:set_1', 'set1.png');
+      // Complete world_style (dependency of scene_video_prompt)
+      executor.markStarted('world_style');
+      executor.markCompleted('world_style', 'plans/world_style.md');
+
       executor.markStarted('scene_video_prompt:scene_1');
       executor.markCompleted('scene_video_prompt:scene_1');
 
