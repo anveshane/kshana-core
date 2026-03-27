@@ -489,6 +489,12 @@ export function parameterizeLtx23Workflow(
     node140.inputs['filename_prefix'] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23';
   }
 
+  // Debug: log start/end frame node state
+  const dbg160 = apiWorkflow['160'] as { inputs?: Record<string, unknown>; class_type?: string } | undefined;
+  const dbg161 = apiWorkflow['161'] as { inputs?: Record<string, unknown>; class_type?: string } | undefined;
+  debugLog(`[Ltx23] Node 160 (start frame): ${JSON.stringify(dbg160?.inputs)}`);
+  debugLog(`[Ltx23] Node 161 (end frame): ${JSON.stringify(dbg161?.inputs)}`);
+
   // Remove non-essential nodes
   const nodesToRemove = ['Note', 'MarkdownNote'];
   for (const [nodeId, node] of Object.entries(apiWorkflow)) {
