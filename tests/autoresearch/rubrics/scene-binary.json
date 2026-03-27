@@ -1,0 +1,58 @@
+{
+  "name": "Scene Quality Binary",
+  "description": "Binary yes/no evaluation of scene description quality for cinematic video generation. Each scene must be a complete, shootable mini-screenplay.",
+  "format": "binary",
+  "phase": "scenes",
+  "promptType": "scene",
+  "context": ["story"],
+  "questions": [
+    {
+      "id": "SHOT_BREAKDOWN",
+      "question": "Does the scene contain explicit shot-by-shot breakdown with shot types (WIDE, CLOSE UP, MEDIUM, etc.) and clear descriptions of what the camera sees in each shot?"
+    },
+    {
+      "id": "DIALOGUE",
+      "question": "Does the scene include actual dialogue lines for the characters (not just 'they talk' or 'she speaks' but quoted words they say)?"
+    },
+    {
+      "id": "VISUAL_CONTINUITY",
+      "question": "Could a director shoot this scene with consistent visual continuity — are character positions, props, and spatial relationships maintained across shots within the scene?"
+    },
+    {
+      "id": "CHARACTER_ACTION",
+      "question": "Does each shot describe specific physical actions characters perform (not vague like 'reacts' but concrete like 'her fingers tighten around the strap' or 'he turns his head sharply to the left')?"
+    },
+    {
+      "id": "DURATION_AWARE",
+      "question": "Does the scene include timing markers or duration cues for each shot (e.g., 'Duration: 5s' or 'SHOT 1 (00:00 - 00:05)') that fit the target video duration?"
+    },
+    {
+      "id": "SENSORY_DETAIL",
+      "question": "Does the scene include at least two sensory details beyond visual — sound effects, ambient audio, music cues, or tactile descriptions (e.g., 'the hiss of hydraulics', 'cold metal against skin')?"
+    },
+    {
+      "id": "SETTING_GROUNDED",
+      "question": "Is the scene firmly grounded in a specific physical location with environmental details that match the setting profile (not generic or unanchored in space)?"
+    },
+    {
+      "id": "CHARACTER_APPEARANCE",
+      "question": "Are characters described with enough physical detail to maintain visual consistency with their character profiles (clothing, distinguishing features, body language)?"
+    },
+    {
+      "id": "EMOTIONAL_ARC",
+      "question": "Does the scene have a clear emotional progression — does the mood or tension shift from the beginning to the end of the scene?"
+    },
+    {
+      "id": "TRANSITION_READY",
+      "question": "Does the scene end in a state that naturally leads to the next scene — is there a clear exit point or transition moment (not just an abrupt stop)?"
+    },
+    {
+      "id": "STORY_FAITHFUL",
+      "question": "Comparing to the provided story: does this scene accurately depict events, characters, and details from the story — without inventing new plot points, adding characters not in the story, or contradicting established facts?"
+    },
+    {
+      "id": "STORY_PROGRESSION",
+      "question": "Comparing to the provided story: does this scene advance the narrative — does something change (information revealed, relationship shifted, tension raised, decision made) that moves the story forward from where the previous scene left off?"
+    }
+  ]
+}

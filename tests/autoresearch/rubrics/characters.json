@@ -1,0 +1,52 @@
+{
+  "name": "Characters & Settings",
+  "description": "Evaluates the quality of character and setting definitions from the characters/settings phase.",
+  "phase": "chars",
+  "weight": 0.15,
+  "dimensions": [
+    {
+      "name": "character_distinctiveness",
+      "weight": 0.30,
+      "criteria": "Are characters visually and personality-wise distinct from each other? Could an artist draw each one without confusion?",
+      "scoringGuide": {
+        "excellent": "Each character has unique physical details, clothing, and personality traits. No two could be confused.",
+        "good": "Characters are mostly distinct. Minor overlaps in description but generally differentiable.",
+        "adequate": "Some characters feel interchangeable. Descriptions are generic.",
+        "poor": "Characters are barely described or nearly identical."
+      }
+    },
+    {
+      "name": "visual_specificity",
+      "weight": 0.30,
+      "criteria": "Are character and setting descriptions specific enough for image generation? Do they include concrete visual details?",
+      "scoringGuide": {
+        "excellent": "Descriptions include specific colors, materials, lighting, and spatial details. Ready for direct image prompt use.",
+        "good": "Good level of detail with most visual aspects covered. Minor gaps.",
+        "adequate": "Basic descriptions present but lacking specificity for image generation.",
+        "poor": "Vague or abstract descriptions that cannot guide image generation."
+      }
+    },
+    {
+      "name": "consistency",
+      "weight": 0.20,
+      "criteria": "Are character and setting descriptions internally consistent? No contradictions across different mentions?",
+      "scoringGuide": {
+        "excellent": "Perfect internal consistency. All references to characters/settings align.",
+        "good": "Mostly consistent with minor discrepancies that don't affect the overall picture.",
+        "adequate": "Some noticeable inconsistencies but core descriptions stable.",
+        "poor": "Frequent contradictions in descriptions."
+      }
+    },
+    {
+      "name": "story_alignment",
+      "weight": 0.20,
+      "criteria": "Do the characters and settings match what the story requires? Are all needed characters defined?",
+      "scoringGuide": {
+        "excellent": "All characters and settings from the story are fully defined. Nothing missing.",
+        "good": "Most characters/settings defined. Minor missing elements.",
+        "adequate": "Key characters present but some story-required elements missing.",
+        "poor": "Major characters or settings from the story are undefined."
+      }
+    }
+  ]
+}

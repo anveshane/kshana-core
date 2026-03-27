@@ -1,0 +1,49 @@
+{
+  "name": "Setting Image Binary",
+  "description": "Binary yes/no evaluation of setting image prompt quality — does it establish a recognizable, specific environment?",
+  "format": "binary",
+  "phase": "img_prompts",
+  "promptType": "setting_image",
+  "questions": [
+    {
+      "id": "PHYSICAL_MATERIALS",
+      "question": "Does the prompt name specific real-world materials or textures (e.g., 'cracked concrete', 'rusted steel', 'polished marble')?"
+    },
+    {
+      "id": "ARCHITECTURAL_STYLE",
+      "question": "Does the prompt specify or clearly imply an architectural/environmental style (e.g., 'Art Deco', 'brutalist', 'organic alien biostructure')?"
+    },
+    {
+      "id": "SCALE",
+      "question": "Does the prompt convey the scale of the space (intimate/vast, ceiling height, room size, horizon distance)?"
+    },
+    {
+      "id": "KEY_OBJECTS",
+      "question": "Does the prompt include at least 3 distinct physical objects or structural elements that define the space?"
+    },
+    {
+      "id": "COLOR_PALETTE",
+      "question": "Does the prompt establish a dominant color palette or color relationships?"
+    },
+    {
+      "id": "LIGHTING",
+      "question": "Does the prompt specify lighting source, direction, and quality?"
+    },
+    {
+      "id": "ATMOSPHERE",
+      "question": "Does the prompt describe atmospheric conditions (haze, dust, steam, rain, time of day)?"
+    },
+    {
+      "id": "NO_PEOPLE",
+      "question": "Is the setting completely free of human figures, characters, or crowds?"
+    },
+    {
+      "id": "SPATIAL_DEPTH",
+      "question": "Does the prompt describe foreground, midground, or background layers — giving the space depth?"
+    },
+    {
+      "id": "STORY_MATCH",
+      "question": "Does the setting match the narrative context it was created for (correct location, correct era/tech level)?"
+    }
+  ]
+}
