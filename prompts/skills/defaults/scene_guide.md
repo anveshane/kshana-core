@@ -100,6 +100,36 @@ If any line is missing, go back and add it to the appropriate shot before finali
 - Specify shot type for every shot
 - Total shot durations must approximately match the scene's target duration
 
+### Insert Shots, Cutaways & Establishing Shots — REQUIRED
+
+Not every shot should have characters. A cinematic scene MUST include at least one **character-free shot** that serves one of these purposes:
+
+**Time/Place Establishing:**
+- Sunrise over rooftops to signal morning
+- A clock on the wall showing the hour
+- Shadows lengthening across a floor to show time passing
+- Rain beginning to streak a window
+
+**Atmosphere & Mood:**
+- Wind moving through empty trees
+- Dust particles floating in a beam of light
+- Steam rising from a cup left on a table
+- A corridor stretching into darkness
+
+**Narrative Tension:**
+- A door handle, still and waiting
+- A dripping tap in silence
+- An empty chair where someone sat moments ago
+- A phone screen lighting up, unanswered
+
+**Transition & Punctuation:**
+- An exterior wide shot of the building before cutting inside
+- The moon or stars to mark a night scene
+- Birds scattering from a rooftop after a loud event
+- Traffic moving below a window to ground the location in a city
+
+Place these shots where they create **breathing room** — between intense character moments, at the start of a scene to establish place, or at the end before a transition. They should feel like a filmmaker's eye noticing the world around the characters, not just the characters themselves.
+
 ### Character Actions
 - Every shot must describe what characters physically DO — not what they feel
 - BAD: "She reacts with sadness"
