@@ -888,21 +888,40 @@ The JSON must follow this exact structure:
       "shotNumber": <number>,
       "shotType": "<establishing|wide|medium|close_up|extreme_close_up|over_shoulder|pov|tracking|reaction>",
       "duration": <seconds>,
-      "description": "<what is visible in this shot — action, composition, atmosphere>",
+      "generationStrategy": "<i2v|t2v|i2v_late_entry>",
+      "firstFrame": {
+        "description": "<what the camera sees at the START of this shot>",
+        "characters": ["<character_item_id>", ...],
+        "setting": "<setting_item_id or null>"
+      },
+      "lastFrame": {
+        "description": "<what the camera sees at the END of this shot — omit this field entirely if the end state is the same as the start>",
+        "characters": ["<character_item_id>", ...],
+        "setting": "<setting_item_id or null>"
+      },
       "cameraWork": "<camera movement and angle>",
-      "characters": ["<character_item_id>", ...],
-      "setting": "<setting_item_id or null>"
+      "soundCue": "<what is heard — ambient, effects, dialogue, or explicit silence>"
     }
   ]
 }
 
-Rules:
-- Shot durations must sum to totalDuration
+generationStrategy rules:
+- "i2v": first frame has characters visible → generate first-frame image (+ optional last-frame), then image-to-video
+- "t2v": no characters in first frame AND no lastFrame → text-to-video only, skip image generation
+- "i2v_late_entry": first frame has NO characters but lastFrame HAS characters → character enters mid-shot
+
+lastFrame rules:
+- OMIT lastFrame entirely for short shots (3-4s), static shots, or when the end looks the same as the start
+- INCLUDE lastFrame when: the shot has a clear visual endpoint different from the start, the shot needs to chain into the next shot, or it's a long shot (6s+) that may drift
+- Shot N's lastFrame should visually match Shot N+1's firstFrame for smooth transitions
+
+General rules:
+- Shot durations must sum to totalDuration exactly
 - Each shot should be 3-10 seconds
-- characters array MUST use ONLY the exact item IDs listed below — no variations, no full names, no other IDs
-- setting MUST use ONLY the exact item IDs listed below or null if no specific setting
-- description should be specific and visual — what a camera sees in this frozen/moving moment
-- Vary shot types for cinematic interest (don't repeat the same type)`;
+- characters arrays MUST use ONLY the exact item IDs listed below
+- setting MUST use ONLY the exact item IDs listed below or null
+- Vary shot types for cinematic interest
+- Every shot must have a soundCue — even if it's "dead silence"`;
 
       // Inject the actual available character and setting IDs
       const charIds = this.executor.getAllNodes()
@@ -1310,8 +1329,20 @@ Rules:
           if (typeof shot.shotNumber !== 'number') {
             return { valid: false, error: 'Shot missing "shotNumber"' };
           }
-          if (!shot.description) {
-            return { valid: false, error: `Shot ${shot.shotNumber} missing "description"` };
+          // Support both old format (description) and new format (firstFrame)
+          if (!shot.firstFrame && !shot.description) {
+            return { valid: false, error: `Shot ${shot.shotNumber} missing "firstFrame" or "description"` };
+          }
+          if (shot.firstFrame && !shot.firstFrame.description) {
+            return { valid: false, error: `Shot ${shot.shotNumber} firstFrame missing "description"` };
+          }
+          if (!shot.generationStrategy) {
+            // Auto-classify if missing
+            const hasCharsFirst = shot.firstFrame?.characters?.length > 0;
+            const hasCharsLast = shot.lastFrame?.characters?.length > 0;
+            if (!hasCharsFirst && !hasCharsLast) shot.generationStrategy = 't2v';
+            else if (hasCharsFirst) shot.generationStrategy = 'i2v';
+            else shot.generationStrategy = 'i2v_late_entry';
           }
         }
       }
@@ -1414,14 +1445,16 @@ Rules:
       const availableRefs: Array<{ imageNumber: number; type: string; refId: string; label: string }> = [];
       let imageNum = 1;
 
-      const characters: string[] = shot.characters ?? [];
+      // Support both new (firstFrame) and legacy (top-level) formats
+      const characters: string[] = shot.firstFrame?.characters ?? shot.characters ?? [];
       for (const charId of characters) {
         availableRefs.push({ imageNumber: imageNum, type: 'character', refId: `character_image:${charId}`, label: charId });
         imageNum++;
       }
 
-      if (shot.setting) {
-        availableRefs.push({ imageNumber: imageNum, type: 'setting', refId: `setting_image:${shot.setting}`, label: shot.setting });
+      const setting = shot.firstFrame?.setting ?? shot.setting;
+      if (setting) {
+        availableRefs.push({ imageNumber: imageNum, type: 'setting', refId: `setting_image:${setting}`, label: setting });
         imageNum++;
       }
 
@@ -2292,8 +2325,11 @@ Rules:
           const parsed = JSON.parse(content);
           const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
           if (shot) {
-            motionPrompt = shot.description || '';
+            // Support both new (firstFrame) and legacy (description) formats
+            const desc = shot.firstFrame?.description ?? shot.description ?? '';
+            motionPrompt = desc;
             if (shot.cameraWork) motionPrompt += ' ' + shot.cameraWork;
+            if (shot.soundCue) motionPrompt += ' ' + shot.soundCue;
             shotDuration = shot.duration || 5;
           }
         } catch {

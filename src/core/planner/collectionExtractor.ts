@@ -96,10 +96,24 @@ interface SceneVideoPromptJson {
     shotNumber: number;
     shotType: string;
     duration: number;
-    description: string;
+    generationStrategy?: string;
+    // New format: firstFrame/lastFrame
+    firstFrame?: {
+      description: string;
+      characters?: string[];
+      setting?: string | null;
+    };
+    lastFrame?: {
+      description: string;
+      characters?: string[];
+      setting?: string | null;
+    };
+    // Legacy format (still supported)
+    description?: string;
     cameraWork?: string;
     characters?: string[];
     setting?: string | null;
+    soundCue?: string;
   }>;
 }
 
@@ -125,10 +139,11 @@ function extractShotsFromJson(content: string): CollectionItems {
         shotNumber: s.shotNumber,
         shotType: s.shotType ?? `shot_${s.shotNumber}`,
         duration: s.duration ?? 5,
-        description: s.description ?? '',
+        // Support both new (firstFrame) and legacy (description) formats
+        description: s.firstFrame?.description ?? s.description ?? '',
         cameraWork: s.cameraWork,
-        characters: s.characters,
-        setting: s.setting,
+        characters: s.firstFrame?.characters ?? s.characters,
+        setting: s.firstFrame?.setting ?? s.setting,
       })),
     };
   } catch {
