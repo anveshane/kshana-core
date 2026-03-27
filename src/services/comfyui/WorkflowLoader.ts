@@ -419,7 +419,7 @@ export function parameterizeLtx23Workflow(
       node.widgets_values[0] = params.inputImageFilename;
       debugLog(`[Ltx23] Set input image (node 167) to: ${params.inputImageFilename}`);
     }
-    // Node 290: T2V mode toggle
+    // Node 290: T2V mode toggle (controls start frame bypass via node 160)
     else if (nodeId === 290 && node.widgets_values) {
       node.widgets_values[0] = t2vMode;
       debugLog(`[Ltx23] Set T2V mode (node 290) to: ${t2vMode}`);
@@ -472,6 +472,16 @@ export function parameterizeLtx23Workflow(
   if (node290) {
     node290.inputs = node290.inputs || {};
     node290.inputs['value'] = t2vMode;
+  }
+  // Bypass end frame (node 161) when using I2V with start image only.
+  // Without this, the same image anchors both start and end, forcing a loop.
+  if (!t2vMode) {
+    const node161 = apiWorkflow['161'] as { inputs?: Record<string, unknown> } | undefined;
+    if (node161) {
+      node161.inputs = node161.inputs || {};
+      node161.inputs['bypass'] = true;
+      debugLog(`[Ltx23] Bypassing end frame (node 161) — start image only`);
+    }
   }
   const node140 = apiWorkflow['140'] as { inputs?: Record<string, unknown> } | undefined;
   if (node140) {
