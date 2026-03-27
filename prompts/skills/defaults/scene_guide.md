@@ -18,7 +18,7 @@ A scene description with explicit shot-by-shot breakdown. Each shot must include
 3. **Visual description** — what the camera sees, in specific physical detail
 4. **Character action** — concrete physical movements, not vague reactions
 5. **Dialogue** — if characters speak, include their actual quoted words
-6. **Sound/audio cues** — ambient sound, effects, silence, music direction
+6. **Sound/audio cues** — EVERY shot MUST have a `**SOUND:**` line. This is not optional. Options include: ambient sound, sound effects, dialogue delivery, music direction, or explicit silence ("dead silence", "absence of sound", "only the hum of the air conditioner"). A shot with no sound direction is incomplete.
 
 ---
 

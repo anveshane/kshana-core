@@ -27,8 +27,8 @@
       "question": "Does the scene include timing markers or duration cues for each shot (e.g., 'Duration: 5s' or 'SHOT 1 (00:00 - 00:05)') that fit the target video duration?"
     },
     {
-      "id": "SENSORY_DETAIL",
-      "question": "Does the scene include at least two sensory details beyond visual — sound effects, ambient audio, music cues, or tactile descriptions (e.g., 'the hiss of hydraulics', 'cold metal against skin')?"
+      "id": "SOUND_DESIGN",
+      "question": "Does every shot in the scene include an explicit sound/audio direction — whether it's ambient sound, sound effects, dialogue audio, music cues, or explicitly stated silence/absence of sound? A shot with no audio direction at all is a failure."
     },
     {
       "id": "SETTING_GROUNDED",
