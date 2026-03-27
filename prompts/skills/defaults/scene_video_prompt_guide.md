@@ -11,9 +11,16 @@
 
 ### Shot Structure
 - Each shot must have: shotNumber, shotType, duration, description, cameraWork, characters, setting
-- Shot durations must sum to totalDuration
 - Each shot should be 3-10 seconds
 - Use at least 3 different shot types — vary for cinematic interest
+
+### Duration Arithmetic (CRITICAL)
+- Set `totalDuration` to match the scene's target duration
+- After writing all shots, **add up every shot's duration** and verify the sum equals `totalDuration` exactly
+- If the sum is wrong, adjust shot durations before outputting
+- Example: totalDuration=20, shots=[5s, 4s, 6s, 5s] → 5+4+6+5=20 ✓
+- Example: totalDuration=20, shots=[5s, 4s, 3s, 4s] → 5+4+3+4=16 ✗ (6 seconds missing!)
+- **This is a hard constraint — a mismatch is a failure**
 
 ### Character & Setting IDs
 - characters array MUST use ONLY the exact item IDs provided — no variations, no full names
@@ -39,12 +46,14 @@
 - If a shot is intentionally silent, state it explicitly: "Absolute silence"
 - Sound sells the moment — a dripping tap, wind, breathing, fabric rustling, a distant siren
 
-### Insert & Establishing Shots
-- Include at least one character-free shot where appropriate:
-  - Environment establishing: the room before anyone enters
-  - Object insert: a scanner on the floor, a dripping tap, blood on fabric
-  - Atmosphere: dust in light, steam rising, rain on glass
-  - Time marker: sunrise, a clock, shadows shifting
+### Insert & Establishing Shots (REQUIRED)
+- At least one shot MUST have `"characters": []` — a purely character-free shot
+- This is not optional. Every scene needs at least one of:
+  - **Environment establishing**: the room before anyone enters, an exterior wide
+  - **Object insert**: a scanner on the floor, a dripping tap, blood on fabric
+  - **Atmosphere**: dust in light, steam rising, rain on glass
+  - **Time marker**: sunrise, a clock, shadows shifting
+- Default placement: shot 1 as an establishing shot, or just before the climactic moment as a tension beat
 - These create breathing room between intense character moments
 
 ### Emotional Arc
@@ -56,3 +65,13 @@
 - Shots must flow logically — a viewer watching them in sequence should understand the scene
 - If a character moves between locations, show the transition
 - Don't jump between incompatible compositions without motivation
+
+---
+
+## Pre-Output Checklist
+
+Before finalizing your JSON, verify:
+1. **Duration sum** — Add up all shot durations. Does the total equal `totalDuration`? If not, fix it.
+2. **Insert shot** — Is there at least one shot with `"characters": []`? If not, add one.
+3. **Sound cues** — Does every shot description mention what is heard? If not, add audio.
+4. **Character IDs** — Every shot showing a character has their exact ID in the array? No empty arrays when characters are visible?
