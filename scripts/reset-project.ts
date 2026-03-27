@@ -37,8 +37,9 @@ const STAGES: Record<string, string[]> = {
   characters: ['character', 'setting', 'scene', 'world_style', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
   world_style: ['world_style', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
   character_image: ['character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
-  scene_video_prompt: ['scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  scene_video_prompt: ['scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video', 'final_video'],
   shot_image_prompt: ['shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
+  shot_motion_directive: ['shot_motion_directive', 'shot_video', 'final_video'],
   shot_image: ['shot_image', 'shot_video', 'final_video'],
   shot_video: ['shot_video', 'final_video'],
   final_video: ['final_video'],
@@ -55,8 +56,9 @@ const TEMPLATE_DEPS: Record<string, string[]> = {
   world_style: ['story', 'scene', 'setting'],
   character_image: ['character'],
   setting_image: ['setting'],
-  scene_video_prompt: ['scene', 'character_image', 'setting_image'],
+  scene_video_prompt: ['scene', 'character_image', 'setting_image', 'world_style'],
   shot_image_prompt: ['scene_video_prompt'],
+  shot_motion_directive: ['scene_video_prompt', 'world_style'],
   shot_image: ['shot_image_prompt', 'character_image', 'setting_image'],
   shot_video: ['shot_image'],
   final_video: ['shot_video'],
@@ -66,7 +68,7 @@ const TEMPLATE_DEPS: Record<string, string[]> = {
 const COLLECTION_TYPES = new Set([
   'character', 'setting', 'scene',
   'character_image', 'setting_image',
-  'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video',
+  'scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video',
 ]);
 
 interface ExecutionNode {
@@ -213,8 +215,9 @@ function main() {
       'character_image': ['character'],
       'setting_image': ['setting'],
       'shot_image_prompt': ['scene'],
-      'shot_image': ['shot_image_prompt', 'scene'],   // prefer per-shot, fall back to per-scene
-      'shot_video': ['shot_image', 'shot_image_prompt', 'scene'],  // prefer per-shot
+      'shot_motion_directive': ['scene'],
+      'shot_image': ['shot_image_prompt', 'scene'],
+      'shot_video': ['shot_image', 'shot_motion_directive', 'shot_image_prompt', 'scene'],
     };
 
     let matchingItems: Array<{ itemId: string; name: string }> | null = null;

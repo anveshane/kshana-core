@@ -228,6 +228,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       setting_image: 'Setting Reference Images',
       scene_video_prompt: 'Shot Planning',
       shot_image_prompt: 'Shot Image Prompts',
+      shot_motion_directive: 'Shot Motion Directives',
       shot_image: 'Shot Image Generation',
       shot_video: 'Shot Video Generation',
       final_video: 'Final Assembly',
@@ -968,7 +969,7 @@ Rules:
 
     // Inject guides/skills for relevant categories
     const loadedSkills: string[] = [];
-    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'scene_video_prompt' || node.typeId === 'world_style';
+    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'scene_video_prompt' || node.typeId === 'world_style' || node.typeId === 'shot_motion_directive';
     if (needsSkills) {
       const skills = this.loadSkillsForNode(node);
       if (skills.content) {
@@ -1082,6 +1083,7 @@ Rules:
       shot_video: 'scene_video_guide',
       scene: 'scene_guide',
       world_style: 'world_style_guide',
+      shot_motion_directive: 'motion_directive_guide',
     };
 
     // Content type names for skill file resolution
@@ -1775,26 +1777,30 @@ Rules:
         name: `Shot ${s.shotNumber}: ${s.shotType}`,
       }));
 
-      // Find the shot_image_prompt node for this scene and expand it
+      // Find the shot_image_prompt and shot_motion_directive nodes for this scene and expand them
       const shotPromptNodeId = `shot_image_prompt:${sceneId}`;
       const shotPromptNode = this.executor.getNode(shotPromptNodeId);
-      if (shotPromptNode) {
+      const motionDirectiveNodeId = `shot_motion_directive:${sceneId}`;
+      const motionDirectiveNode = this.executor.getNode(motionDirectiveNodeId);
+
+      if (shotPromptNode || motionDirectiveNode) {
         this.log(`  Expanding shots for ${sceneId}: ${shotItems.map(i => i.name).join(', ')}`);
-        this.executor.expandCollection(`shot_image_prompt:${sceneId}`, shotItems);
+        if (shotPromptNode) {
+          this.executor.expandCollection(`shot_image_prompt:${sceneId}`, shotItems);
+        }
+        if (motionDirectiveNode) {
+          this.executor.expandCollection(`shot_motion_directive:${sceneId}`, shotItems);
+        }
         this.emit({
           type: 'notification',
           level: 'info',
           message: `Expanded shots for ${sceneId}: ${shotItems.map(i => i.name).join(', ')}`,
         });
       } else {
-        this.log(`  No shot_image_prompt node found for ${sceneId} — creating per-shot nodes directly`);
-        // The shot_image_prompt might not have been expanded to per-scene yet,
-        // or might use a different node ID pattern. Create shot nodes manually.
+        this.log(`  No shot_image_prompt or shot_motion_directive node found for ${sceneId}`);
         for (const shot of shotItems) {
           const shotNodeId = `shot_image_prompt:${shot.itemId}`;
           if (!this.executor.getNode(shotNodeId)) {
-            // We can't add arbitrary nodes to the executor without expandCollection.
-            // Log it — this case means the graph structure doesn't support per-shot expansion yet.
             this.log(`  WARNING: Cannot create shot node ${shotNodeId} — no parent collection node to expand`);
           }
         }

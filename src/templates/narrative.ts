@@ -281,6 +281,29 @@ const shotImagePromptArtifact: ArtifactTypeDefinition = {
   ],
 };
 
+// shot_motion_directive: rewrites shot description into concise LTX-optimized motion prompt
+// Separate LLM call per shot — produces 1-2 sentences focused on camera movement and physical action
+const shotMotionDirectiveArtifact: ArtifactTypeDefinition = {
+  id: 'shot_motion_directive',
+  displayName: 'Shot Motion Directives',
+  category: 'structure',
+  description: 'Concise, LTX-optimized motion prompts per shot — camera movement, subject action, atmosphere',
+  scope: 'chapter',
+  isCollection: true,
+  itemName: 'motion directive',
+  outputFormat: 'markdown',
+  filePattern: 'prompts/motion/scene-{{index}}-shot-{{subindex}}.txt',
+  agentType: 'content',
+  promptFile: 'narrative/shot-motion-directive.md',
+  isExpensive: false,
+  requiresPerItemApproval: false,
+  dependencies: [
+    { artifactTypeId: 'scene_video_prompt', required: true, usage: 'context', scope: 'matching' },
+    { artifactTypeId: 'world_style', required: true, usage: 'context', scope: 'matching' },
+  ],
+  metadataSchema: {},
+};
+
 // shot_image: generates the actual shot image from the prompt JSON + reference images via ComfyUI
 // This is the ComfyUI execution step — it needs the actual .png reference images
 const shotImageArtifact: ArtifactTypeDefinition = {
@@ -330,6 +353,12 @@ const shotVideoArtifact: ArtifactTypeDefinition = {
       artifactTypeId: 'shot_image',
       required: true,
       usage: 'input',
+      scope: 'matching',
+    },
+    {
+      artifactTypeId: 'shot_motion_directive',
+      required: true,
+      usage: 'context',
       scope: 'matching',
     },
   ],
@@ -504,7 +533,7 @@ const phases: PhaseDefinition[] = [
     displayName: 'Shot Breakdown',
     description: 'Break scenes into cinematic shots and generate per-shot image prompts',
     order: 5,
-    artifactTypes: ['scene_video_prompt', 'shot_image_prompt', 'shot_image'],
+    artifactTypes: ['scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/shot-breakdown.md',
   },
@@ -671,6 +700,7 @@ export const narrativeTemplate: VideoTemplate = {
     setting_image: settingImageArtifact,
     scene_video_prompt: sceneVideoPromptArtifact,
     shot_image_prompt: shotImagePromptArtifact,
+    shot_motion_directive: shotMotionDirectiveArtifact,
     shot_image: shotImageArtifact,
     shot_video: shotVideoArtifact,
     final_video: finalVideoArtifact,
