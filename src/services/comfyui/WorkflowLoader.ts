@@ -484,11 +484,20 @@ export function parameterizeLtx23Workflow(
     node140.inputs['filename_prefix'] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23';
   }
 
+  // Explicitly set bypass on I2V nodes based on t2v mode.
+  // The node-format links (GetNode → bypass) don't propagate in API format,
+  // so we must set them directly.
+  const node160api = apiWorkflow['160'] as { inputs?: Record<string, unknown> } | undefined;
+  const node161api = apiWorkflow['161'] as { inputs?: Record<string, unknown> } | undefined;
+  if (t2vMode) {
+    if (node160api) { node160api.inputs = node160api.inputs || {}; node160api.inputs['bypass'] = true; }
+    if (node161api) { node161api.inputs = node161api.inputs || {}; node161api.inputs['bypass'] = true; }
+    debugLog(`[Ltx23] T2V mode — bypassing both I2V nodes (160, 161)`);
+  }
+
   // Debug: log start/end frame node state
-  const dbg160 = apiWorkflow['160'] as { inputs?: Record<string, unknown>; class_type?: string } | undefined;
-  const dbg161 = apiWorkflow['161'] as { inputs?: Record<string, unknown>; class_type?: string } | undefined;
-  debugLog(`[Ltx23] Node 160 (start frame): ${JSON.stringify(dbg160?.inputs)}`);
-  debugLog(`[Ltx23] Node 161 (end frame): ${JSON.stringify(dbg161?.inputs)}`);
+  debugLog(`[Ltx23] Node 160 (start frame): ${JSON.stringify(node160api?.inputs)}`);
+  debugLog(`[Ltx23] Node 161 (end frame): ${JSON.stringify(node161api?.inputs)}`);
 
   // Remove non-essential nodes
   const nodesToRemove = ['Note', 'MarkdownNote'];
