@@ -215,7 +215,9 @@ export class ComfyUIProvider implements GenerationProvider {
       filenamePrefix = 'video',
     } = input;
 
-    if (!fs.existsSync(sourceImagePath)) {
+    const isT2V = !sourceImagePath || !fs.existsSync(sourceImagePath);
+
+    if (!isT2V && !fs.existsSync(sourceImagePath)) {
       throw new Error(`Source image not found: ${sourceImagePath}`);
     }
 
@@ -233,9 +235,14 @@ export class ComfyUIProvider implements GenerationProvider {
 
     const client = new ComfyUIClient({ outputDir });
 
-    // Upload source image
-    onProgress?.({ percentage: 0, message: 'Uploading source image...', done: false });
-    const uploadResult = await client.uploadImage(sourceImagePath, 'input', true);
+    // Upload source image (skip for t2v)
+    let uploadResult: { name: string } | null = null;
+    if (!isT2V) {
+      onProgress?.({ percentage: 0, message: 'Uploading source image...', done: false });
+      uploadResult = await client.uploadImage(sourceImagePath, 'input', true);
+    } else {
+      onProgress?.({ percentage: 0, message: 'Text-to-video mode...', done: false });
+    }
 
     // Load and parameterize workflow
     onProgress?.({ percentage: 0, message: 'Loading workflow...', done: false });
@@ -244,7 +251,7 @@ export class ComfyUIProvider implements GenerationProvider {
       sceneNumber: 0,
       prompt,
       seed,
-      inputImageFilename: uploadResult.name,
+      inputImageFilename: uploadResult?.name,
       filenamePrefix,
       durationSeconds,
       width,
