@@ -218,8 +218,17 @@ export class ExecutorAgent extends TypedEventEmitter {
     // 1. Check in-memory lock (same-process concurrency)
     const existing = ExecutorAgent.activeProjects.get(projectDir);
     if (existing) {
-      this.log(`LOCK BLOCKED (in-memory): project already has active executor from session=${existing.sessionId}, started=${new Date(existing.startedAt).toISOString()}`);
-      return false;
+      // Stale lock check: if the lock is older than 30 minutes, assume it's stale
+      // (executor crashed, WebSocket dropped, server hot-reloaded without cleanup)
+      const ageMs = Date.now() - existing.startedAt;
+      const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+      if (ageMs > STALE_THRESHOLD_MS) {
+        this.log(`Removing stale in-memory lock (session=${existing.sessionId}, age=${Math.round(ageMs / 60000)}m)`);
+        ExecutorAgent.activeProjects.delete(projectDir);
+      } else {
+        this.log(`LOCK BLOCKED (in-memory): project already has active executor from session=${existing.sessionId}, started=${new Date(existing.startedAt).toISOString()}`);
+        return false;
+      }
     }
 
     // 2. Check file-based lock (cross-process concurrency)
@@ -2768,6 +2777,13 @@ Rules:
 
     this.log(`  Starting final assembly`);
     this.emit({
+      type: 'tool_call',
+      toolCallId,
+      toolName: 'assemble_final_video',
+      arguments: { item: node.displayName },
+      agentName,
+    });
+    this.emit({
       type: 'tool_streaming',
       toolCallId,
       chunk: 'Assembling final video from timeline...\n',
@@ -2808,7 +2824,9 @@ Rules:
         const shotNum = shotMatch?.[1] ? parseInt(shotMatch[1], 10) : 1;
 
         let duration = 5;
-        // Try to get actual duration from scene_video_prompt JSON
+        let transition: string | undefined;
+        let transitionDuration: number | undefined;
+        // Try to get actual duration and transition from scene_video_prompt JSON
         const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
         if (svpNode?.outputPath) {
           try {
@@ -2819,6 +2837,14 @@ Rules:
               const parsed = JSON.parse(content);
               const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
               if (shot?.duration) duration = shot.duration;
+              if (shot?.transition) {
+                transition = shot.transition;
+                // Default transition durations by type
+                transitionDuration = transition === 'cut' ? undefined
+                  : transition === 'flash_to_white' ? 0.2
+                  : transition === 'dip_to_black' ? 0.8
+                  : 0.5;
+              }
             }
           } catch { /* use default */ }
         }
@@ -2831,15 +2857,23 @@ Rules:
           duration,
           filePath,
           mediaType: 'video' as const,
+          transition,
+          transitionDuration,
         };
         currentTime += duration;
         return segment;
       });
 
+      // Log transition data for debugging
+      const transitionSummary = resolvedSegments
+        .filter(s => s.transition && s.transition !== 'cut')
+        .map(s => `${s.segmentId}:${s.transition}(${s.transitionDuration}s)`);
+      this.log(`  Transitions: ${transitionSummary.length > 0 ? transitionSummary.join(', ') : 'none (all cuts)'}`);
+
       this.emit({
         type: 'tool_streaming',
         toolCallId,
-        chunk: `Total duration: ${currentTime}s from ${resolvedSegments.length} shots\n`,
+        chunk: `Total duration: ${currentTime}s from ${resolvedSegments.length} shots (${transitionSummary.length} transitions)\n`,
         done: false,
         agentName,
         toolName: 'assemble_final_video',

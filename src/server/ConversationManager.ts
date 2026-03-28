@@ -31,7 +31,7 @@ export interface ConversationManagerConfig {
 export interface ConversationEvents {
   onProgress?: (sessionId: string, percentage: number, message: string) => void;
   onToolCall?: (sessionId: string, toolName: string, args: Record<string, unknown>, agentName?: string) => void;
-  onToolResult?: (sessionId: string, toolName: string, result: unknown, agentName?: string) => void;
+  onToolResult?: (sessionId: string, toolName: string, result: unknown, agentName?: string, toolCallId?: string) => void;
   onTodoUpdate?: (sessionId: string, todos: ExpandableTodoItem[]) => void;
   onAgentText?: (sessionId: string, text: string, isFinal: boolean) => void;
   onQuestion?: (sessionId: string, question: string, isConfirmation: boolean, options?: Array<{ label: string; description?: string }>, autoApproveTimeoutMs?: number) => void;
@@ -414,7 +414,7 @@ export class ConversationManager {
 
     if (events.onToolResult) {
       agent.on('tool_result', (data) => {
-        events.onToolResult!(sessionId, data.toolName, data.result, data.agentName);
+        events.onToolResult!(sessionId, data.toolName, data.result, data.agentName, data.toolCallId);
       });
     }
 

@@ -363,65 +363,57 @@ export async function assembleVideos(
   const hasTransitions = segments.some((s, i) => i > 0 && s.transition && s.transition !== 'cut');
 
   if (hasTransitions) {
-    // Build xfade chain for video, acrossfade chain for audio
+    // Build xfade chain for video, acrossfade chain for audio.
     // xfade works pairwise: [v0][v1]xfade=...[vx0]; [vx0][v2]xfade=...[vx1]; ...
+    //
+    // CRITICAL: offset = time in the ACCUMULATED output where transition begins.
+    // After each xfade, accumulated duration = prev_accumulated + next_duration - transition_overlap.
     let prevVideoLabel = 'v0';
     let prevAudioLabel = 'a0';
+    let accumulatedDuration = segments[0]!.duration;
+
+    // Map our transition names to FFmpeg xfade transition names
+    const xfadeMap: Record<string, string> = {
+      crossfade: 'fade',
+      fade: 'fadeblack',
+      dissolve: 'fade',
+      dip_to_black: 'fadeblack',
+      flash_to_white: 'fadewhite',
+      wipe_left: 'wipeleft',
+      wipe_right: 'wiperight',
+      wipe_up: 'wipeup',
+      wipe_down: 'wipedown',
+      circle_open: 'circleopen',
+      circle_close: 'circleclose',
+      radial: 'radial',
+      slide_left: 'slideleft',
+      slide_right: 'slideright',
+    };
 
     for (let i = 1; i < segments.length; i++) {
       const seg = segments[i]!;
       const transition = seg.transition ?? 'cut';
-      const tDur = seg.transitionDuration ?? 0.5;
+      const isFlash = transition === 'flash_to_white';
+      const tDur = transition === 'cut' ? 0.01 : isFlash ? Math.min(seg.transitionDuration ?? 0.2, 0.3) : (seg.transitionDuration ?? 0.5);
 
-      // Calculate offset: point in the accumulated timeline where transition starts
-      // = duration of previous accumulated video minus transition duration
-      const prevDuration = segments[i - 1]!.duration;
-      const offset = Math.max(0, prevDuration - tDur);
+      // Offset = end of accumulated output minus transition overlap
+      const offset = Math.max(0, accumulatedDuration - tDur);
 
       const outVideoLabel = i < segments.length - 1 ? `vx${i}` : 'outv';
       const outAudioLabel = i < segments.length - 1 ? `ax${i}` : 'outa';
 
-      if (transition === 'cut') {
-        // For cut transitions within an xfade chain, use xfade with offset at clip end (no overlap)
-        filterParts.push(
-          `[${prevVideoLabel}][v${i}]xfade=transition=fade:duration=0.01:offset=${prevDuration - 0.01}[${outVideoLabel}]`
-        );
-      } else if (transition === 'dip_to_black') {
-        // Fade out → black → fade in: use fadeblack xfade
-        filterParts.push(
-          `[${prevVideoLabel}][v${i}]xfade=transition=fadeblack:duration=${tDur}:offset=${offset}[${outVideoLabel}]`
-        );
-      } else if (transition === 'flash_to_white') {
-        // Quick white flash: use fadewhite xfade
-        filterParts.push(
-          `[${prevVideoLabel}][v${i}]xfade=transition=fadewhite:duration=${Math.min(tDur, 0.3)}:offset=${offset}[${outVideoLabel}]`
-        );
-      } else {
-        // Map our transition names to FFmpeg xfade transition names
-        const xfadeMap: Record<string, string> = {
-          crossfade: 'fade',
-          fade: 'fadeblack',
-          dissolve: 'fade',
-          wipe_left: 'wipeleft',
-          wipe_right: 'wiperight',
-          wipe_up: 'wipeup',
-          wipe_down: 'wipedown',
-          circle_open: 'circleopen',
-          circle_close: 'circleclose',
-          radial: 'radial',
-          slide_left: 'slideleft',
-          slide_right: 'slideright',
-        };
-        const ffmpegTransition = xfadeMap[transition] ?? 'fade';
-        filterParts.push(
-          `[${prevVideoLabel}][v${i}]xfade=transition=${ffmpegTransition}:duration=${tDur}:offset=${offset}[${outVideoLabel}]`
-        );
-      }
+      const ffmpegTransition = transition === 'cut' ? 'fade' : (xfadeMap[transition] ?? 'fade');
+      filterParts.push(
+        `[${prevVideoLabel}][v${i}]xfade=transition=${ffmpegTransition}:duration=${tDur}:offset=${offset}[${outVideoLabel}]`
+      );
 
       // Audio crossfade
       filterParts.push(
-        `[${prevAudioLabel}][a${i}]acrossfade=d=${transition === 'cut' ? 0.01 : tDur}:c1=tri:c2=tri[${outAudioLabel}]`
+        `[${prevAudioLabel}][a${i}]acrossfade=d=${tDur}:c1=tri:c2=tri[${outAudioLabel}]`
       );
+
+      // Update accumulated duration: previous output + new segment - overlap
+      accumulatedDuration = accumulatedDuration + seg.duration - tDur;
 
       prevVideoLabel = outVideoLabel;
       prevAudioLabel = outAudioLabel;

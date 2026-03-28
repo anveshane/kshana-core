@@ -300,6 +300,8 @@ const shotMotionDirectiveArtifact: ArtifactTypeDefinition = {
   dependencies: [
     { artifactTypeId: 'scene_video_prompt', required: true, usage: 'context', scope: 'matching' },
     { artifactTypeId: 'world_style', required: true, usage: 'context', scope: 'matching' },
+    { artifactTypeId: 'character', required: false, usage: 'context', scope: 'all' },
+    { artifactTypeId: 'setting', required: false, usage: 'context', scope: 'all' },
   ],
   metadataSchema: {},
 };

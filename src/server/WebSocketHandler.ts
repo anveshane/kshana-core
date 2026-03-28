@@ -592,10 +592,10 @@ export class WebSocketHandler {
         }));
       },
 
-      onToolResult: (sid, toolName, result, agentName) => {
+      onToolResult: (sid, toolName, result, agentName, toolCallId) => {
         this.sendMessage(socket, createServerMessage<ToolCallData>('tool_call', sid, {
           toolName,
-          toolCallId: '',
+          toolCallId: toolCallId || '',
           arguments: {},
           status: 'completed',
           result,
