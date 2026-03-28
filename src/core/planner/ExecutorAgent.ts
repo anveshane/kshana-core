@@ -10,7 +10,7 @@
  * writing, and progress tracking happens in deterministic code.
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync } from 'fs';
 import { join, dirname, relative } from 'path';
 import { TypedEventEmitter } from '../../events/EventEmitter.js';
 import { LLMClient } from '../llm/index.js';
@@ -137,12 +137,20 @@ Output ONLY the assembly instructions — no explanations, no tool calls, no met
  */
 export class ExecutorAgent extends TypedEventEmitter {
   private llm: LLMClient;
+  /**
+   * In-memory lock: tracks which project directories have an active executor.
+   * Prevents multiple ExecutorAgent instances in the same process from
+   * running concurrently on the same project (e.g. multiple WebSocket sessions).
+   */
+  private static activeProjects = new Map<string, { sessionId: string; startedAt: number }>();
+
   private executor: DependencyGraphExecutor;
   private config: ExecutorAgentConfig;
   private running = false;
   private stopped = false;
   private _initialized = false;
   private logPath: string;
+  private lockFilePath: string;
   private currentPhase = '';
   private retriedNodes = new Set<string>();
   /** Pending media generation promises (parallel mode) */
@@ -161,6 +169,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       mkdirSync(logsDir, { recursive: true });
     }
     this.logPath = join(logsDir, 'executor.log');
+    this.lockFilePath = join(config.projectDir, '.executor.lock');
     this.log('=== ExecutorAgent initialized ===');
     this.log(`Template: ${config.template.id}, Goal: ${config.goal.description}`);
     this.log(`Target artifacts: ${config.goal.targetArtifacts.join(', ')}`);
@@ -195,6 +204,73 @@ export class ExecutorAgent extends TypedEventEmitter {
       const plan = planner.buildPlan(config.goal, scanResult.registry);
       this.executor = DependencyGraphExecutor.fromPlan(plan, config.template);
     }
+  }
+
+  /**
+   * Acquire a project-level lock to prevent concurrent executor runs.
+   * Uses an in-memory static map (handles same-process concurrency from multiple
+   * WebSocket sessions) plus a lock file (handles cross-process concurrency).
+   */
+  private acquireProjectLock(): boolean {
+    const projectDir = this.config.projectDir;
+    const sessionId = this.config.name ?? 'unknown';
+
+    // 1. Check in-memory lock (same-process concurrency)
+    const existing = ExecutorAgent.activeProjects.get(projectDir);
+    if (existing) {
+      this.log(`LOCK BLOCKED (in-memory): project already has active executor from session=${existing.sessionId}, started=${new Date(existing.startedAt).toISOString()}`);
+      return false;
+    }
+
+    // 2. Check file-based lock (cross-process concurrency)
+    try {
+      if (existsSync(this.lockFilePath)) {
+        const lockContent = readFileSync(this.lockFilePath, 'utf-8');
+        const match = lockContent.match(/pid=(\d+)/);
+        if (match) {
+          const lockPid = parseInt(match[1]!, 10);
+          if (lockPid !== process.pid) {
+            try {
+              process.kill(lockPid, 0);
+              // Different process is still alive
+              this.log(`LOCK BLOCKED (file): another process is running (pid=${lockPid})`);
+              return false;
+            } catch {
+              // Process is dead — stale lock
+              this.log(`Removing stale lock file (pid=${lockPid} is dead)`);
+            }
+          }
+        }
+      }
+    } catch { /* ignore file errors */ }
+
+    // 3. Acquire both locks
+    ExecutorAgent.activeProjects.set(projectDir, { sessionId, startedAt: Date.now() });
+    try {
+      writeFileSync(this.lockFilePath, `pid=${process.pid}\nsession=${sessionId}\nstarted=${new Date().toISOString()}\n`);
+    } catch { /* file lock is best-effort */ }
+
+    this.log(`Lock acquired (session=${sessionId}, pid=${process.pid})`);
+    return true;
+  }
+
+  /**
+   * Release the project-level lock.
+   */
+  private releaseProjectLock(): void {
+    const projectDir = this.config.projectDir;
+
+    // Release in-memory lock
+    ExecutorAgent.activeProjects.delete(projectDir);
+
+    // Release file lock
+    try {
+      if (existsSync(this.lockFilePath)) {
+        unlinkSync(this.lockFilePath);
+      }
+    } catch { /* ignore */ }
+
+    this.log(`Lock released (pid=${process.pid})`);
   }
 
   /**
@@ -365,6 +441,13 @@ export class ExecutorAgent extends TypedEventEmitter {
       this.log(`  Caller stack: ${new Error().stack?.split('\n').slice(1, 4).join(' <- ')}`);
       return { status: 'completed', output: 'Already running', todos: [] };
     }
+
+    // Acquire project-level lock to prevent concurrent executor instances
+    if (!this.acquireProjectLock()) {
+      this.log(`CONCURRENT INSTANCE BLOCKED — another executor is running on this project`);
+      return { status: 'completed', output: 'Another executor is already running on this project', todos: [] };
+    }
+
     this.running = true;
     this.stopped = false;
 
@@ -854,6 +937,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       };
     } finally {
       this.running = false;
+      this.releaseProjectLock();
     }
   }
 
