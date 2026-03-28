@@ -23,6 +23,10 @@ export interface ResolvedSegment {
   duration: number;
   filePath: string;
   mediaType: 'video' | 'image';
+  /** Transition from the previous segment (default: 'cut') */
+  transition?: string;
+  /** Transition duration in seconds (default: 0.5) */
+  transitionDuration?: number;
 }
 
 export interface ResolutionResult {
@@ -222,6 +226,8 @@ export function resolveSegmentFilePaths(
       duration: segment.duration,
       filePath: absolutePath,
       mediaType,
+      transition: segment.transition?.type,
+      transitionDuration: segment.transition ? segment.transition.durationMs / 1000 : undefined,
     });
   }
 
@@ -353,11 +359,80 @@ export async function assembleVideos(
     }
   }
 
-  // Concat all streams — interleave video+audio per segment as FFmpeg requires
-  const concatInputs = segments.map((_, i) => `[v${i}][a${i}]`).join('');
-  filterParts.push(
-    `${concatInputs}concat=n=${segments.length}:v=1:a=1[outv][outa]`
-  );
+  // Check if any segment has a non-cut transition
+  const hasTransitions = segments.some((s, i) => i > 0 && s.transition && s.transition !== 'cut');
+
+  if (hasTransitions) {
+    // Build xfade chain for video, acrossfade chain for audio
+    // xfade works pairwise: [v0][v1]xfade=...[vx0]; [vx0][v2]xfade=...[vx1]; ...
+    let prevVideoLabel = 'v0';
+    let prevAudioLabel = 'a0';
+
+    for (let i = 1; i < segments.length; i++) {
+      const seg = segments[i]!;
+      const transition = seg.transition ?? 'cut';
+      const tDur = seg.transitionDuration ?? 0.5;
+
+      // Calculate offset: point in the accumulated timeline where transition starts
+      // = duration of previous accumulated video minus transition duration
+      const prevDuration = segments[i - 1]!.duration;
+      const offset = Math.max(0, prevDuration - tDur);
+
+      const outVideoLabel = i < segments.length - 1 ? `vx${i}` : 'outv';
+      const outAudioLabel = i < segments.length - 1 ? `ax${i}` : 'outa';
+
+      if (transition === 'cut') {
+        // For cut transitions within an xfade chain, use xfade with offset at clip end (no overlap)
+        filterParts.push(
+          `[${prevVideoLabel}][v${i}]xfade=transition=fade:duration=0.01:offset=${prevDuration - 0.01}[${outVideoLabel}]`
+        );
+      } else if (transition === 'dip_to_black') {
+        // Fade out → black → fade in: use fadeblack xfade
+        filterParts.push(
+          `[${prevVideoLabel}][v${i}]xfade=transition=fadeblack:duration=${tDur}:offset=${offset}[${outVideoLabel}]`
+        );
+      } else if (transition === 'flash_to_white') {
+        // Quick white flash: use fadewhite xfade
+        filterParts.push(
+          `[${prevVideoLabel}][v${i}]xfade=transition=fadewhite:duration=${Math.min(tDur, 0.3)}:offset=${offset}[${outVideoLabel}]`
+        );
+      } else {
+        // Map our transition names to FFmpeg xfade transition names
+        const xfadeMap: Record<string, string> = {
+          crossfade: 'fade',
+          fade: 'fadeblack',
+          dissolve: 'fade',
+          wipe_left: 'wipeleft',
+          wipe_right: 'wiperight',
+          wipe_up: 'wipeup',
+          wipe_down: 'wipedown',
+          circle_open: 'circleopen',
+          circle_close: 'circleclose',
+          radial: 'radial',
+          slide_left: 'slideleft',
+          slide_right: 'slideright',
+        };
+        const ffmpegTransition = xfadeMap[transition] ?? 'fade';
+        filterParts.push(
+          `[${prevVideoLabel}][v${i}]xfade=transition=${ffmpegTransition}:duration=${tDur}:offset=${offset}[${outVideoLabel}]`
+        );
+      }
+
+      // Audio crossfade
+      filterParts.push(
+        `[${prevAudioLabel}][a${i}]acrossfade=d=${transition === 'cut' ? 0.01 : tDur}:c1=tri:c2=tri[${outAudioLabel}]`
+      );
+
+      prevVideoLabel = outVideoLabel;
+      prevAudioLabel = outAudioLabel;
+    }
+  } else {
+    // No transitions — simple concat (original behavior)
+    const concatInputs = segments.map((_, i) => `[v${i}][a${i}]`).join('');
+    filterParts.push(
+      `${concatInputs}concat=n=${segments.length}:v=1:a=1[outv][outa]`
+    );
+  }
 
   const filterComplex = filterParts.join('; ');
 

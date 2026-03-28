@@ -16,6 +16,7 @@ Each shot must have:
 - **generationStrategy**: how this shot will be generated (see below)
 - **cameraWork**: camera movement and angle
 - **soundCue**: what is heard
+- **transition**: how this shot transitions FROM the previous shot (see below)
 
 ## Generation Strategy
 
@@ -40,16 +41,46 @@ Classify each shot:
 
 **Cross-shot chaining**: Shot N's lastFrame should visually match Shot N+1's firstFrame for smooth transitions.
 
+## Transitions
+
+Each shot specifies how it transitions FROM the previous shot. The first shot of a scene uses `cut` (or `fade` if the scene opens from black).
+
+**Transition types:**
+- **`cut`** — hard cut, no effect. Default for most shot-to-shot cuts within a continuous action
+- **`crossfade`** — smooth dissolve between shots. Use for time passing, dreamlike moments, parallel action
+- **`fade`** — fade through black. Use for scene breaks, significant time jumps, finality
+- **`dip_to_black`** — fade out → brief black hold → fade in. The classic trailer "breather" beat. Use between scenes or to punctuate dramatic moments
+- **`flash_to_white`** — quick white flash. Use for impact moments, explosions, revelations, smash cuts
+- **`circle_close`** — contracting circle (blink/iris effect). Use for POV shots, focusing attention, dreamy or surreal moments
+- **`circle_open`** — expanding circle reveal. Use to open a new location or reveal a surprise
+- **`wipe_left`** / **`wipe_right`** — directional wipe. Use for location changes, parallel storylines, comic/graphic style
+- **`slide_left`** / **`slide_right`** — new shot slides in. Use for montage sequences, fast-paced editing
+- **`radial`** — radial wipe. Use sparingly for stylistic effect
+
+**Guidelines:**
+- Most cuts within a scene should be `cut` — transitions are seasoning, not the main course
+- Use `dip_to_black` between scenes or for trailer-style dramatic pauses
+- Match transition to emotional beat: `flash_to_white` for shock, `crossfade` for tenderness, `circle_close` for introspection
+- First shot of scene 1: `fade` (opening from black). Last shot's transition to the next scene: `dip_to_black` or `fade`
+
 ## Character & Setting IDs
 
 - Use ONLY the exact IDs provided — no variations, no full names
 - Any character visible (even hand/silhouette) or speaking off-screen → include their ID
 - Named location → must have setting ID
 
-## Descriptions
+## Descriptions (firstFrame / lastFrame)
 
-- What a camera physically sees in this frozen moment
-- Be specific: not "they interact" but "she extends a trembling hand toward the handle"
+Write each frame description as detailed, literal cinematographer prose — what the camera physically sees in this frozen moment. Think like a shot list:
+
+- **Start with the main subject and action** — "A woman with long brown hair and light skin stands at a rain-streaked window"
+- **Specific appearances** — name hair color, skin tone, clothing materials, distinguishing features
+- **Precise body language** — not "they interact" but "she extends a trembling hand toward the metal handle, fingers slightly curled"
+- **Environment details** — what surrounds the subject, background depth, objects in frame
+- **Lighting** — direction, quality, color temperature: "warm golden light from the setting sun casts long shadows across the floor"
+- **Camera framing** — implied by the level of detail (close-up describes pores, wide shot describes architecture)
+
+Aim for 2-3 sentences per frame description. Be literal — describe only what is visible, not what it means.
 
 ## Sound Cues
 

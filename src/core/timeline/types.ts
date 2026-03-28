@@ -13,8 +13,32 @@ export type CompositingMode = 'replace' | 'side_by_side' | 'pip' | 'overlay';
 
 /**
  * Visual transition type between segments.
+ *
+ * Basic:
+ *   cut         — hard cut, no transition
+ *   crossfade   — dissolve between clips (alias for dissolve)
+ *   fade        — fade through black
+ *   dissolve    — cross-dissolve
+ *
+ * Cinematic (FFmpeg xfade):
+ *   dip_to_black    — fade out → brief black → fade in (trailer-style breather)
+ *   flash_to_white  — quick white flash between cuts (impact/smash cut)
+ *   wipe_left       — directional wipe
+ *   wipe_right      — directional wipe
+ *   wipe_up         — directional wipe
+ *   wipe_down       — directional wipe
+ *   circle_open     — iris open (expanding circle reveal)
+ *   circle_close    — iris close (contracting circle, "blink" effect)
+ *   radial          — radial wipe
+ *   slide_left      — new shot slides in from right
+ *   slide_right     — new shot slides in from left
  */
-export type TransitionType = 'cut' | 'crossfade' | 'fade' | 'dissolve';
+export type TransitionType =
+  | 'cut' | 'crossfade' | 'fade' | 'dissolve'
+  | 'dip_to_black' | 'flash_to_white'
+  | 'wipe_left' | 'wipe_right' | 'wipe_up' | 'wipe_down'
+  | 'circle_open' | 'circle_close' | 'radial'
+  | 'slide_left' | 'slide_right';
 
 /**
  * Easing function for compositing transitions.

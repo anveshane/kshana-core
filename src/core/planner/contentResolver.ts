@@ -179,6 +179,14 @@ export function getOutputPath(
     filePath = `prompts/videos/scenes/${safeName}.json`;
   }
 
+  // shot_motion_directive: structured JSON alongside other prompts
+  if (node.typeId === 'shot_motion_directive') {
+    const safeName = node.itemId
+      ? node.itemId.toLowerCase().replace(/[^a-z0-9]+/g, '_')
+      : node.typeId;
+    filePath = `prompts/motion/${safeName}.json`;
+  }
+
   // Substitute placeholders
   filePath = filePath.replace('{{chapter}}', 'chapter_1');
 

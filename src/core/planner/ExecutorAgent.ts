@@ -1102,7 +1102,7 @@ Rules:
     }
 
     // Shot-level: inject this shot's duration based on scene allocation and shot count
-    if (node.typeId === 'shot_image_prompt' || node.typeId === 'scene_video' || node.typeId === 'scene_image') {
+    if (node.typeId === 'shot_image_prompt' || node.typeId === 'shot_motion_directive' || node.typeId === 'scene_video' || node.typeId === 'scene_image') {
       // Extract scene ID from itemId (e.g., "scene_1_shot_2" → "scene_1")
       const sceneMatch = node.itemId?.match(/(scene_\d+)/);
       const sceneId = sceneMatch?.[1];
@@ -2453,7 +2453,19 @@ Rules:
     if (motionDirectiveNode?.status === 'completed' && motionDirectiveNode.outputPath) {
       const mdPath = join(this.config.projectDir, motionDirectiveNode.outputPath);
       if (existsSync(mdPath)) {
-        motionPrompt = readFileSync(mdPath, 'utf-8').trim();
+        let rawContent = readFileSync(mdPath, 'utf-8').trim();
+        // Strip markdown code fences if present
+        if (rawContent.startsWith('```')) {
+          rawContent = rawContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+        }
+        // Parse JSON format ({"motionDirective": "..."}) or fall back to raw text
+        try {
+          const parsed = JSON.parse(rawContent);
+          motionPrompt = parsed.motionDirective || rawContent;
+        } catch {
+          // Legacy plain-text format — use as-is
+          motionPrompt = rawContent;
+        }
         this.log(`  Using motion directive: ${motionPrompt.substring(0, 80)}...`);
       }
     }

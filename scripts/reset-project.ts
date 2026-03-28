@@ -215,7 +215,7 @@ function main() {
       'character_image': ['character'],
       'setting_image': ['setting'],
       'shot_image_prompt': ['scene'],
-      'shot_motion_directive': ['scene'],
+      'shot_motion_directive': ['shot_image_prompt', 'scene'],
       'shot_image': ['shot_image_prompt', 'scene'],
       'shot_video': ['shot_image', 'shot_motion_directive', 'shot_image_prompt', 'scene'],
     };
