@@ -615,7 +615,7 @@ export class WebSocketHandler {
         }
 
         // Check if production completed (final video stitched) and send timer update
-        if (toolName === 'assemble_from_timeline') {
+        if (toolName === 'assemble_from_timeline' || toolName === 'assemble_final_video') {
           try {
             import('../tasks/video/workflow/ProjectManager.js').then(({ getElapsedMs, loadProject }) => {
               const project = loadProject();

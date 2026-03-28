@@ -2885,6 +2885,15 @@ Rules:
           toolName: 'assemble_final_video',
         });
 
+        // Emit tool_result so the UI can render the video in the timeline
+        this.emit({
+          type: 'tool_result',
+          toolCallId,
+          toolName: 'assemble_final_video',
+          result: { status: 'completed', file_path: relPath, duration: result.duration, fileSize: result.fileSize },
+          agentName,
+        });
+
         return relPath;
       } else {
         this.log(`  Assembly failed`);

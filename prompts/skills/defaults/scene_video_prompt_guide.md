@@ -15,7 +15,8 @@ Each shot must have:
 - **lastFrame** (optional): what the camera sees at the END — only include if the end state differs from the start
 - **generationStrategy**: how this shot will be generated (see below)
 - **cameraWork**: camera movement and angle
-- **soundCue**: what is heard
+- **soundCue**: what is heard (ambient, effects, explicit silence)
+- **dialogue**: spoken line for this shot, or `null` if none (see Dialogue section below)
 - **transition**: how this shot transitions FROM the previous shot (see below)
 
 ## Generation Strategy
@@ -82,6 +83,15 @@ Write each frame description as detailed, literal cinematographer prose — what
 
 Aim for 2-3 sentences per frame description. Be literal — describe only what is visible, not what it means.
 
+## Dialogue
+
+- If the scene description includes character dialogue (spoken lines, voiceover, V.O.), you MUST include it
+- Set the `dialogue` field to the character's spoken line for that shot, prefixed with the character name: `"JOHN: Don't worry, Glitch."`
+- For voiceover, prefix with V.O.: `"JOHN (V.O.): 42 years ago, I paid for everything..."`
+- Set `dialogue` to `null` if the shot has no spoken dialogue
+- Distribute dialogue across the correct shots — match which shot the line is spoken during
+- Do NOT skip or omit any dialogue from the scene description
+
 ## Sound Cues
 
 - Every shot MUST have a soundCue — ambient, effects, dialogue, or explicit silence
@@ -99,3 +109,5 @@ Aim for 2-3 sentences per frame description. Be literal — describe only what i
 4. Every shot has soundCue
 5. All character IDs match provided list
 6. generationStrategy matches character presence in firstFrame/lastFrame
+7. **All dialogue from the scene description is placed** — every spoken line, V.O., or voiceover has a matching `dialogue` field on the correct shot
+8. Every shot has a `transition` field

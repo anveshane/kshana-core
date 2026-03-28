@@ -61,6 +61,14 @@
     {
       "id": "FIRST_LAST_FRAME",
       "question": "Do shots that need visual anchoring (long shots 6s+, shots with significant visual change, shots that chain into the next) include a lastFrame description? And do all shots have a firstFrame? The lastFrame should be omitted for short static shots."
+    },
+    {
+      "id": "DIALOGUE_PLACED",
+      "question": "If the scene description contains spoken dialogue, voiceover (V.O.), or character lines: does every line appear in a 'dialogue' field on the correct shot? No spoken lines from the scene should be missing. If the scene has no dialogue at all, answer YES."
+    },
+    {
+      "id": "TRANSITIONS",
+      "question": "Does every shot have a 'transition' field specifying how it cuts from the previous shot? Valid values include 'cut', 'crossfade', 'fade', 'dip_to_black', 'flash_to_white', 'circle_close', 'circle_open', 'wipe_left', 'wipe_right', 'slide_left', 'slide_right', 'radial'. The first shot of a scene should use 'cut' or 'fade'. If no transition fields are present at all, answer NO."
     }
   ]
 }
