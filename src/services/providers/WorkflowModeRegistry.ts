@@ -9,24 +9,35 @@
  * capabilities are fixed.
  */
 
-import { readFileSync, readdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { WorkflowManifest, WorkflowManifestFile, WorkflowPipeline } from './types.js';
 
 /** Directories to scan for manifest files */
 const WORKFLOW_DIRS = ['workflows/built-in', 'workflows/user', 'workflows'];
 
+/** Valid pipeline values for manifest validation */
+const VALID_PIPELINES: Set<string> = new Set([
+  'image_generation', 'image_editing', 'image_processing', 'video_generation',
+]);
+
+/** Valid input source values */
+const VALID_SOURCES: Set<string> = new Set([
+  'shot_image', 'shot_motion_directive', 'image_processing', 'llm', 'user', 'system',
+]);
+
 /**
  * Hardcoded modes for API providers that don't use ComfyUI workflows.
  * These are static — API providers have fixed capabilities.
+ * IDs are prefixed with provider name to avoid collisions.
  */
 const API_PROVIDER_MODES: Record<string, WorkflowManifest[]> = {
   google: [
     {
-      id: 'api_i2v',
-      displayName: 'Image to Video (API)',
+      id: 'google_i2v',
+      displayName: 'Image to Video (Google API)',
       pipeline: 'video_generation',
-      llmDescription: 'Generates video from a single first-frame image using the cloud API. High quality but limited control.',
+      llmDescription: 'Generates video from a single first-frame image using the Google cloud API. High quality but limited control.',
       selectionCriteria: 'Use for any shot that has a character or setting reference image.',
       outputType: 'video',
       priority: 10,
@@ -43,10 +54,10 @@ const API_PROVIDER_MODES: Record<string, WorkflowManifest[]> = {
   ],
   xai: [
     {
-      id: 'api_i2v',
-      displayName: 'Image to Video (API)',
+      id: 'xai_i2v',
+      displayName: 'Image to Video (xAI API)',
       pipeline: 'video_generation',
-      llmDescription: 'Generates video from a single first-frame image using the cloud API.',
+      llmDescription: 'Generates video from a single first-frame image using the xAI cloud API.',
       selectionCriteria: 'Use for any shot that has a character or setting reference image.',
       outputType: 'video',
       priority: 10,
@@ -63,6 +74,43 @@ const API_PROVIDER_MODES: Record<string, WorkflowManifest[]> = {
   ],
 };
 
+/**
+ * Validate a manifest has all required fields with valid values.
+ * Returns null if valid, error message string if invalid.
+ */
+function validateManifest(m: WorkflowManifest, sourceFile: string): string | null {
+  if (!m.id || typeof m.id !== 'string') {
+    return `${sourceFile}: missing or invalid 'id'`;
+  }
+  if (!m.pipeline || !VALID_PIPELINES.has(m.pipeline)) {
+    return `${sourceFile}: invalid 'pipeline' value '${m.pipeline}' (must be one of: ${[...VALID_PIPELINES].join(', ')})`;
+  }
+  if (!m.displayName || typeof m.displayName !== 'string') {
+    return `${sourceFile}: missing 'displayName'`;
+  }
+  if (!m.outputType || (m.outputType !== 'image' && m.outputType !== 'video')) {
+    return `${sourceFile}: invalid 'outputType' (must be 'image' or 'video')`;
+  }
+  if (!Array.isArray(m.inputRequirements)) {
+    return `${sourceFile}: missing 'inputRequirements' array`;
+  }
+  for (const req of m.inputRequirements) {
+    if (!req.id || !req.type || !req.source) {
+      return `${sourceFile}: inputRequirement missing 'id', 'type', or 'source'`;
+    }
+    if (!VALID_SOURCES.has(req.source)) {
+      return `${sourceFile}: inputRequirement '${req.id}' has invalid source '${req.source}'`;
+    }
+  }
+  if (!Array.isArray(m.parameterMappings)) {
+    return `${sourceFile}: missing 'parameterMappings' array`;
+  }
+  return null;
+}
+
+/** Separate map for manifest directory paths — avoids (manifest as any) casts */
+const manifestDirMap = new Map<string, string>();
+
 export class WorkflowModeRegistry {
   private modes = new Map<string, WorkflowManifest>();
   private projectRoot: string;
@@ -73,10 +121,11 @@ export class WorkflowModeRegistry {
 
   /**
    * Scan workflow directories for *.manifest.json files and load all modes.
-   * Also loads hardcoded API provider modes.
+   * Validates each manifest before loading. Also loads hardcoded API provider modes.
    */
   refresh(): void {
     this.modes.clear();
+    manifestDirMap.clear();
 
     // Scan filesystem for ComfyUI workflow manifests
     for (const dir of WORKFLOW_DIRS) {
@@ -92,6 +141,13 @@ export class WorkflowModeRegistry {
             const manifests = Array.isArray(parsed) ? parsed : [parsed];
 
             for (const manifest of manifests) {
+              // Validate manifest schema
+              const validationError = validateManifest(manifest, file);
+              if (validationError) {
+                console.warn(`[WorkflowModeRegistry] INVALID MANIFEST: ${validationError}`);
+                continue;
+              }
+
               // Resolve workflow file path relative to manifest directory
               if (manifest.workflowFile && !manifest.workflowFile.startsWith('/')) {
                 const workflowAbsPath = join(absDir, manifest.workflowFile);
@@ -101,7 +157,7 @@ export class WorkflowModeRegistry {
                 }
               }
               // Store the directory for later workflow path resolution
-              (manifest as any)._manifestDir = absDir;
+              manifestDirMap.set(manifest.id, absDir);
               // Tag built-in vs user
               manifest.builtIn = dir.includes('built-in');
               manifest.active = manifest.active !== false; // default active
@@ -149,6 +205,14 @@ export class WorkflowModeRegistry {
   }
 
   /**
+   * Check if an ID belongs to a built-in workflow.
+   */
+  isBuiltInId(id: string): boolean {
+    const mode = this.modes.get(id);
+    return mode?.builtIn === true;
+  }
+
+  /**
    * Get the active workflow for a pipeline type.
    * If a user has set an override, returns that. Otherwise returns the built-in default.
    * Built-in defaults are always present and cannot be removed.
@@ -165,34 +229,51 @@ export class WorkflowModeRegistry {
   /**
    * Set a user-uploaded workflow as the active override for its pipeline.
    * Only user workflows can be overrides. Clears any previous override for the same pipeline.
+   * Persists isOverride to the manifest file on disk.
    */
   setOverride(modeId: string): boolean {
     const mode = this.modes.get(modeId);
     if (!mode || mode.builtIn) return false; // can't override with a built-in
     // Clear previous overrides in the same pipeline
     for (const m of this.modes.values()) {
-      if (m.pipeline === mode.pipeline && !m.builtIn) m.isOverride = false;
+      if (m.pipeline === mode.pipeline && !m.builtIn) {
+        if (m.isOverride) {
+          m.isOverride = false;
+          this.persistManifest(m);
+        }
+      }
     }
     mode.isOverride = true;
+    this.persistManifest(mode);
     return true;
   }
 
   /**
    * Clear override for a pipeline — reverts to built-in default.
+   * Persists change to disk.
    */
   clearOverride(pipeline: WorkflowPipeline): void {
     for (const m of this.modes.values()) {
-      if (m.pipeline === pipeline && !m.builtIn) m.isOverride = false;
+      if (m.pipeline === pipeline && !m.builtIn && m.isOverride) {
+        m.isOverride = false;
+        this.persistManifest(m);
+      }
     }
   }
 
   /**
    * Remove a user-uploaded workflow. Built-ins cannot be removed.
+   * Automatically clears override if the removed workflow was the active override.
    */
   removeMode(modeId: string): boolean {
     const mode = this.modes.get(modeId);
     if (!mode || mode.builtIn) return false;
+    // If this was the active override, clear it first
+    if (mode.isOverride) {
+      this.clearOverride(mode.pipeline);
+    }
     this.modes.delete(modeId);
+    manifestDirMap.delete(modeId);
     return true;
   }
 
@@ -202,14 +283,14 @@ export class WorkflowModeRegistry {
   getWorkflowPath(mode: WorkflowManifest): string | undefined {
     if (!mode.workflowFile) return undefined;
     // Use stored manifest directory if available
-    const manifestDir = (mode as any)._manifestDir;
-    if (manifestDir) {
-      const absPath = join(manifestDir, mode.workflowFile);
+    const dir = manifestDirMap.get(mode.id);
+    if (dir) {
+      const absPath = join(dir, mode.workflowFile);
       if (existsSync(absPath)) return absPath;
     }
     // Fallback: scan all directories
-    for (const dir of WORKFLOW_DIRS) {
-      const absPath = join(this.projectRoot, dir, mode.workflowFile);
+    for (const d of WORKFLOW_DIRS) {
+      const absPath = join(this.projectRoot, d, mode.workflowFile);
       if (existsSync(absPath)) return absPath;
     }
     return undefined;
@@ -295,6 +376,23 @@ export class WorkflowModeRegistry {
       if (a.pipeline !== b.pipeline) return a.pipeline.localeCompare(b.pipeline);
       return a.priority - b.priority;
     });
+  }
+
+  /**
+   * Persist a manifest's current state back to its JSON file on disk.
+   * Only works for user workflows (has a known manifest directory).
+   */
+  private persistManifest(manifest: WorkflowManifest): void {
+    const dir = manifestDirMap.get(manifest.id);
+    if (!dir) return;
+    try {
+      const filePath = join(dir, `${manifest.id}.manifest.json`);
+      if (existsSync(filePath)) {
+        writeFileSync(filePath, JSON.stringify(manifest, null, 2));
+      }
+    } catch {
+      console.warn(`[WorkflowModeRegistry] Failed to persist manifest for ${manifest.id}`);
+    }
   }
 }
 

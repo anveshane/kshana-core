@@ -249,6 +249,14 @@ export async function registerRoutes(
 
       const safeName = (body.filename || 'workflow').replace(/[^a-zA-Z0-9_-]/g, '_').replace(/\.json$/, '');
       const filePath = path.join(userDir, `${safeName}.json`);
+
+      // Check for duplicate filename — reject with clear error
+      if (fs.existsSync(filePath)) {
+        return reply.status(409).send({
+          error: `A workflow file named '${safeName}.json' already exists. Rename your file or delete the existing one first.`,
+        });
+      }
+
       fs.writeFileSync(filePath, body.content);
 
       // Run LLM analysis for intelligent suggestions
@@ -295,17 +303,25 @@ export async function registerRoutes(
       return reply.status(400).send({ error: 'Missing id or workflowFile' });
     }
 
+    const id = String(body['id']);
+
+    // Reject IDs that conflict with built-in workflows
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    if (registry.isBuiltInId(id)) {
+      return reply.status(409).send({ error: `ID '${id}' conflicts with a built-in workflow. Choose a different ID.` });
+    }
+
     const fs = await import('fs');
     const path = await import('path');
     const userDir = path.join(process.cwd(), 'workflows', 'user');
     if (!fs.existsSync(userDir)) fs.mkdirSync(userDir, { recursive: true });
 
-    const manifestPath = path.join(userDir, `${body['id']}.manifest.json`);
+    const manifestPath = path.join(userDir, `${id}.manifest.json`);
     fs.writeFileSync(manifestPath, JSON.stringify(body, null, 2));
 
     // Refresh registry
-    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
-    getWorkflowModeRegistry().refresh();
+    registry.refresh();
 
     return reply.send({ status: 'configured', manifestPath });
   });
