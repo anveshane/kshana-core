@@ -20,7 +20,6 @@ import { execSync } from 'child_process';
 import { LLMClient } from '../src/core/llm/index.js';
 
 const MAX_ITERATIONS = parseInt(process.argv[2] || '3', 10);
-const TARGET_DURATION = parseInt(process.argv[3] || '60', 10);
 const GUIDE_PATH = 'prompts/skills/defaults/screenplay_guide.md';
 const RUBRIC_PATH = 'tests/autoresearch/rubrics/screenplay-binary.json';
 const OUTPUT_DIR = 'test-output/autoresearch-screenplay';
@@ -29,28 +28,30 @@ if (!existsSync(OUTPUT_DIR)) mkdirSync(OUTPUT_DIR, { recursive: true });
 
 const rubric = JSON.parse(readFileSync(RUBRIC_PATH, 'utf-8'));
 
-// Find test plots
-const PROJECTS = [
-  'air_already_thick_promise',
-  'lazarus_drive',
-  'noir_detective_story_setup',
-  'sun_hadnt_yet_cleared',
-  'centuries_ago_continent_elarion',
-  'earth_dead_five_ships-2',
+// Test plots with varied durations to validate the guide scales
+const TEST_CASES: Array<{ project: string; duration: number }> = [
+  { project: 'noir_detective_story_setup', duration: 30 },   // Very short
+  { project: 'air_already_thick_promise', duration: 60 },    // Standard short
+  { project: 'lazarus_drive', duration: 120 },                // Medium
+  { project: 'sun_hadnt_yet_cleared', duration: 180 },        // Longer
+  { project: 'centuries_ago_continent_elarion', duration: 300 }, // Long
+  { project: 'earth_dead_five_ships-2', duration: 60 },       // Another 60s for variance
 ];
 
 interface PlotData {
   projectName: string;
   plot: string;
+  duration: number;
 }
 
 const plots: PlotData[] = [];
-for (const proj of PROJECTS) {
-  const plotPath = join(`${proj}.kshana`, 'chapters', 'chapter_1', 'plans', 'plot.md');
+for (const tc of TEST_CASES) {
+  const plotPath = join(`${tc.project}.kshana`, 'chapters', 'chapter_1', 'plans', 'plot.md');
   if (existsSync(plotPath)) {
     plots.push({
-      projectName: proj,
+      projectName: tc.project,
       plot: readFileSync(plotPath, 'utf-8'),
+      duration: tc.duration,
     });
   }
 }
@@ -83,16 +84,17 @@ function claudeP(prompt: string, jsonSchema?: Record<string, unknown>): string {
 }
 
 async function generateScreenplay(guide: string, plotData: PlotData): Promise<string> {
+  const dur = plotData.duration;
   const systemPrompt = `You are a screenwriter. Write a screenplay based on the provided plot treatment.
 
 <guide>
 ${guide}
 </guide>
 
-**Target video duration:** ${TARGET_DURATION} seconds (${Math.floor(TARGET_DURATION / 60)}m ${TARGET_DURATION % 60}s)
+**Target video duration:** ${dur} seconds (${Math.floor(dur / 60)}m ${dur % 60}s)
 **Visual style:** cinematic_realism
 
-Follow the guide's format and constraints precisely. The screenplay MUST fit within ${TARGET_DURATION} seconds of screen time.`;
+Follow the guide's format and constraints precisely. The screenplay MUST fit within ${dur} seconds of screen time.`;
 
   const response = await llm.generate({
     messages: [
@@ -104,12 +106,12 @@ Follow the guide's format and constraints precisely. The screenplay MUST fit wit
   return response.content || '';
 }
 
-function evaluateScreenplay(screenplay: string, plotData: PlotData): { score: number; total: number; failures: string[] } {
+function evaluateScreenplay(screenplay: string, plotData: PlotData, duration: number): { score: number; total: number; failures: string[] } {
   const questions = rubric.questions
     .map((q: { id: string; question: string }, i: number) => `${i + 1}. [${q.id}] ${q.question}`)
     .join('\n');
 
-  const prompt = `Be strict. Evaluate this screenplay for a ${TARGET_DURATION}-second AI-generated video.
+  const prompt = `Be strict. Evaluate this screenplay for a ${duration}-second AI-generated video.
 
 ## Plot Treatment (source material)
 ${plotData.plot}
@@ -118,7 +120,7 @@ ${plotData.plot}
 ${screenplay}
 
 ## Target Duration
-${TARGET_DURATION} seconds
+${duration} seconds
 
 ## Questions
 ${questions}
@@ -154,9 +156,9 @@ Answer each question YES or NO with a brief reason.`;
   return { score: parsed.score, total: parsed.total, failures };
 }
 
-function proposeImprovement(guide: string, evalResults: Array<{ project: string; score: number; total: number; failures: string[] }>): string {
+function proposeImprovement(guide: string, evalResults: Array<{ project: string; duration: number; score: number; total: number; failures: string[] }>): string {
   const summary = evalResults.map(r =>
-    `${r.project}: ${r.score}/${r.total} — Failed: ${r.failures.join(', ') || 'none'}`
+    `${r.project} (${r.duration}s): ${r.score}/${r.total} — Failed: ${r.failures.join(', ') || 'none'}`
   ).join('\n');
   const allFailures = [...new Set(evalResults.flatMap(r => r.failures))];
 
@@ -173,7 +175,7 @@ The guide teaches an LLM to write screenplays that will be automatically broken 
 ## Current Guide
 ${guide}
 
-## Evaluation Results (${TARGET_DURATION}s target duration)
+## Evaluation Results (varied durations: 30s, 60s, 120s, 180s, 300s)
 ${summary}
 
 ## Common Failures
@@ -200,7 +202,7 @@ Do NOT include any preamble, explanation of changes, commentary, or "Here's the 
 
 async function main() {
   console.log(`Autoresearch: Screenplay Guide`);
-  console.log(`Duration: ${TARGET_DURATION}s | Plots: ${plots.length} | Iterations: ${MAX_ITERATIONS}`);
+  console.log(`Durations: ${plots.map(p => p.duration + 's').join(', ')} | Plots: ${plots.length} | Iterations: ${MAX_ITERATIONS}`);
   console.log(`Projects: ${plots.map(p => p.projectName).join(', ')}\n`);
 
   if (plots.length === 0) {
@@ -215,14 +217,14 @@ async function main() {
     console.log(`ITERATION ${iter}/${MAX_ITERATIONS}`);
     console.log(`${'='.repeat(50)}`);
 
-    const evalResults: Array<{ project: string; score: number; total: number; failures: string[] }> = [];
+    const evalResults: Array<{ project: string; duration: number; score: number; total: number; failures: string[] }> = [];
     let totalScore = 0, totalQ = 0;
 
-    // Test against 3 plots per iteration (rotate through available plots)
-    const testPlots = plots.slice(0, 3);
+    // Test against 4 plots per iteration — varied durations (30s, 60s, 120s, 180s)
+    const testPlots = plots.slice(0, 4);
 
     for (const plotData of testPlots) {
-      console.log(`  Generating screenplay: ${plotData.projectName}...`);
+      console.log(`  Generating screenplay: ${plotData.projectName} (${plotData.duration}s)...`);
       const screenplay = await generateScreenplay(guide, plotData);
       writeFileSync(join(OUTPUT_DIR, `iter-${iter}-${plotData.projectName}.txt`), screenplay);
 
@@ -233,8 +235,8 @@ async function main() {
 
       console.log(`  Evaluating: ${plotData.projectName}...`);
       try {
-        const result = evaluateScreenplay(screenplay, plotData);
-        evalResults.push({ project: plotData.projectName, ...result });
+        const result = evaluateScreenplay(screenplay, plotData, plotData.duration);
+        evalResults.push({ project: plotData.projectName, duration: plotData.duration, ...result });
         totalScore += result.score;
         totalQ += result.total;
         console.log(`    Score: ${result.score}/${result.total}`);
@@ -248,7 +250,7 @@ async function main() {
     console.log(`\n  >> Iteration ${iter}: ${totalScore}/${totalQ} (${pct}%)`);
 
     writeFileSync(join(OUTPUT_DIR, `iter-${iter}-guide.md`), guide);
-    writeFileSync(join(OUTPUT_DIR, `iter-${iter}-results.json`), JSON.stringify({ totalScore, totalQ, pct, evalResults, targetDuration: TARGET_DURATION }, null, 2));
+    writeFileSync(join(OUTPUT_DIR, `iter-${iter}-results.json`), JSON.stringify({ totalScore, totalQ, pct, evalResults, durations: testPlots.map(p => p.duration) }, null, 2));
 
     if (totalScore === totalQ) { console.log(`  PERFECT — stopping.`); break; }
 
