@@ -49,7 +49,10 @@ export function App() {
   return (
     <AppStateContext.Provider value={state}>
       <AppDispatchContext.Provider value={dispatch}>
-        <div className="h-screen flex flex-col bg-background text-foreground overflow-hidden">
+        <div className="app-shell h-screen flex flex-col text-foreground overflow-hidden">
+          {/* Aurora ambient glow */}
+          <div className="aurora aurora--left" />
+          <div className="aurora aurora--right" />
           <Header
             onProviderSettings={() => setShowProviders(!showProviders)}
             onWorkflows={() => setShowWorkflows(!showWorkflows)}

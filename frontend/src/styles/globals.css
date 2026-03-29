@@ -9,24 +9,24 @@
 :root {
   /* ── Core palette ──────────────────────────────────────── */
   --background: #030508;
-  --foreground: #eef4fa;
-  --signal-cyan: #569ed6;
-  --kshana-green: #34d399;
+  --foreground: #f0f4f8;
+  --signal-cyan: #6bb3e8;
+  --kshana-green: #4ae8b0;
 
   /* ── Surfaces (glassmorphic) ───────────────────────────── */
   --panel: rgba(10, 13, 19, 0.72);
   --panel-strong: rgba(13, 17, 24, 0.92);
-  --surface-overlay: rgba(255, 255, 255, 0.04);
+  --surface-overlay: rgba(255, 255, 255, 0.05);
 
   /* ── Borders ───────────────────────────────────────────── */
-  --line-soft: rgba(255, 255, 255, 0.08);
-  --line-strong: rgba(255, 255, 255, 0.16);
+  --line-soft: rgba(255, 255, 255, 0.10);
+  --line-strong: rgba(255, 255, 255, 0.20);
 
-  /* ── Graphite neutral scale ────────────────────────────── */
-  --graphite-050: #b8c4d2;
-  --graphite-100: #8b949e;
-  --graphite-150: #6e7a87;
-  --graphite-200: #525c68;
+  /* ── Graphite neutral scale (boosted contrast) ─────────── */
+  --graphite-050: #cdd6e0;
+  --graphite-100: #9ca8b6;
+  --graphite-150: #7d8a98;
+  --graphite-200: #5e6b7a;
   --graphite-250: #3a4350;
   --graphite-300: #272e38;
   --graphite-350: #1c2230;
@@ -34,10 +34,10 @@
   --graphite-450: #0a0e16;
 
   /* ── Semantic colors ───────────────────────────────────── */
-  --success: #34d399;
-  --warning: #f0883e;
-  --error: #da3633;
-  --info: #569ed6;
+  --success: #4ae8b0;
+  --warning: #f5a255;
+  --error: #ef5350;
+  --info: #6bb3e8;
 
   /* ── Typography ────────────────────────────────────────── */
   --font-display: 'Cormorant Garamond', serif;
@@ -55,6 +55,15 @@
   --radius-lg: 1.25rem;
   --radius-xl: 1.8rem;
   --radius-pill: 999px;
+
+  /* ── Aurora / Gradient system ───────────────────────────── */
+  --shell-background:
+    radial-gradient(circle at 12% 10%, rgba(86, 158, 214, 0.14), transparent 28%),
+    radial-gradient(circle at 85% 14%, rgba(52, 211, 153, 0.09), transparent 24%),
+    linear-gradient(180deg, #020407 0%, #04070b 35%, #020406 100%);
+  --shell-aurora-left: rgba(86, 158, 214, 0.7);
+  --shell-aurora-right: rgba(52, 211, 153, 0.5);
+  --shell-grid-line: rgba(255, 255, 255, 0.06);
 }
 
 /* ── Tailwind theme mapping ──────────────────────────────── */
@@ -94,6 +103,59 @@ html {
 body {
   min-height: 100vh;
   margin: 0;
+}
+
+/* ── App shell with gradient background ──────────────────── */
+.app-shell {
+  background: var(--shell-background);
+  position: relative;
+}
+
+/* Subtle grid overlay */
+.app-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  background-image:
+    linear-gradient(var(--shell-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--shell-grid-line) 1px, transparent 1px);
+  background-size: 4rem 4rem;
+  mask-image: radial-gradient(circle at center, black, transparent 78%);
+}
+
+/* Aurora glow blobs */
+.aurora {
+  position: fixed;
+  width: 28rem;
+  height: 28rem;
+  border-radius: 999px;
+  filter: blur(90px);
+  opacity: 0.15;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.aurora--left {
+  left: -8rem;
+  top: 10rem;
+  background: var(--shell-aurora-left);
+  animation: drift 18s ease-in-out infinite;
+}
+
+.aurora--right {
+  right: -6rem;
+  top: 20rem;
+  background: var(--shell-aurora-right);
+  animation: drift 18s ease-in-out infinite;
+  animation-delay: -6s;
+}
+
+@keyframes drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(12px, -18px) scale(1.04); }
+  66% { transform: translate(-8px, 14px) scale(0.97); }
 }
 
 /* ── Scrollbar ───────────────────────────────────────────── */
