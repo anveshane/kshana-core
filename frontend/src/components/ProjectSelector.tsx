@@ -50,8 +50,40 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
   const handleSelect = (dirName: string) => {
     setOpen(false)
     dispatch({ type: 'SELECT_PROJECT', name: dirName })
-    onSendWs({ type: 'select_project', data: { projectDir: dirName } })
+    // Server expects projectName WITHOUT .kshana suffix — it adds it
+    const projectName = dirName.replace('.kshana', '')
+    onSendWs({ type: 'select_project', data: { projectName } })
     loadProjectAssets(dirName)
+    loadProjectState(dirName)
+  }
+
+  const loadProjectState = async (dirName: string) => {
+    try {
+      const name = dirName.replace('.kshana', '')
+      const res = await fetch(`/api/v1/projects/${name}`)
+      if (!res.ok) return
+      const data = await res.json()
+
+      // Set phase
+      if (data.currentPhase) {
+        dispatch({ type: 'SET_PHASE', phase: data.currentPhase })
+      }
+
+      // Extract todos from executor state
+      if (data.executorState?.nodes) {
+        const nodes = Object.values(data.executorState.nodes) as Array<{
+          id: string; displayName: string; status: string; typeId: string
+        }>
+        const todos = nodes
+          .filter(n => n.displayName && n.typeId !== 'final_video')
+          .map(n => ({
+            id: n.id,
+            text: n.displayName,
+            status: (n.status === 'completed' ? 'completed' : n.status === 'failed' ? 'failed' : n.status === 'in_progress' ? 'in_progress' : 'pending') as 'completed' | 'failed' | 'in_progress' | 'pending',
+          }))
+        dispatch({ type: 'SET_TODOS', todos })
+      }
+    } catch { /* */ }
   }
 
   const loadProjectAssets = async (name: string) => {

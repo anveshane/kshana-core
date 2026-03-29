@@ -128,7 +128,17 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, projects: action.projects }
 
     case 'SELECT_PROJECT':
-      return { ...state, selectedProject: action.name, phase: null, todos: [], assets: [] }
+      return {
+        ...state,
+        selectedProject: action.name,
+        phase: null,
+        todos: [],
+        assets: [],
+        chatMessages: [],
+        toolCalls: [],
+        streamingText: null,
+        agentStatus: 'idle',
+      }
 
     case 'SET_PHASE':
       return { ...state, phase: action.phase }
