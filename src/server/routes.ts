@@ -205,6 +205,128 @@ export async function registerRoutes(
     return reply.send({ status: 'ok', config: registry.getConfig() });
   });
 
+  // ── Workflow management endpoints ──────────────────────────────────────────
+
+  // List all workflows grouped by pipeline
+  app.get(`${apiPrefix}/workflows`, async (_request: FastifyRequest, reply: FastifyReply) => {
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    const all = registry.listAll();
+
+    const grouped: Record<string, typeof all> = {};
+    for (const mode of all) {
+      const key = mode.pipeline;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key]!.push(mode);
+    }
+
+    // Mark which is active per pipeline
+    const active: Record<string, string | null> = {};
+    for (const pipeline of ['image_generation', 'image_editing', 'image_processing', 'video_generation'] as const) {
+      const activeMode = registry.getActiveForPipeline(pipeline, 'comfyui');
+      active[pipeline] = activeMode?.id ?? null;
+    }
+
+    return reply.send({ workflows: grouped, active });
+  });
+
+  // Upload a workflow JSON — returns parsed nodes for the integration wizard
+  app.post(`${apiPrefix}/workflows/upload`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { parseWorkflow } = await import('../services/comfyui/WorkflowParser.js');
+    const body = request.body as { filename: string; content: string };
+    if (!body.content) {
+      return reply.status(400).send({ error: 'Missing workflow content' });
+    }
+
+    try {
+      const parsed = parseWorkflow(body.content);
+
+      // Save the workflow JSON to workflows/user/
+      const fs = await import('fs');
+      const path = await import('path');
+      const userDir = path.join(process.cwd(), 'workflows', 'user');
+      if (!fs.existsSync(userDir)) fs.mkdirSync(userDir, { recursive: true });
+
+      const safeName = (body.filename || 'workflow').replace(/[^a-zA-Z0-9_-]/g, '_').replace(/\.json$/, '');
+      const filePath = path.join(userDir, `${safeName}.json`);
+      fs.writeFileSync(filePath, body.content);
+
+      return reply.send({
+        status: 'uploaded',
+        filename: `${safeName}.json`,
+        parsed,
+      });
+    } catch (err) {
+      return reply.status(400).send({ error: `Failed to parse workflow: ${err}` });
+    }
+  });
+
+  // Save manifest (configure) for an uploaded workflow
+  app.post(`${apiPrefix}/workflows/configure`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as Record<string, unknown>;
+    if (!body['id'] || !body['workflowFile']) {
+      return reply.status(400).send({ error: 'Missing id or workflowFile' });
+    }
+
+    const fs = await import('fs');
+    const path = await import('path');
+    const userDir = path.join(process.cwd(), 'workflows', 'user');
+    if (!fs.existsSync(userDir)) fs.mkdirSync(userDir, { recursive: true });
+
+    const manifestPath = path.join(userDir, `${body['id']}.manifest.json`);
+    fs.writeFileSync(manifestPath, JSON.stringify(body, null, 2));
+
+    // Refresh registry
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    getWorkflowModeRegistry().refresh();
+
+    return reply.send({ status: 'configured', manifestPath });
+  });
+
+  // Set a workflow as the active override for its pipeline
+  app.put(`${apiPrefix}/workflows/:id/override`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    const success = registry.setOverride(id);
+    if (!success) return reply.status(404).send({ error: 'Workflow not found or is built-in' });
+    return reply.send({ status: 'ok', activeOverride: id });
+  });
+
+  // Clear override for a pipeline (revert to built-in)
+  app.delete(`${apiPrefix}/workflows/override/:pipeline`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { pipeline } = request.params as { pipeline: string };
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    getWorkflowModeRegistry().clearOverride(pipeline as any);
+    return reply.send({ status: 'ok', reverted: pipeline });
+  });
+
+  // Delete a user-uploaded workflow
+  app.delete(`${apiPrefix}/workflows/:id`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    const mode = registry.getMode(id);
+    if (!mode) return reply.status(404).send({ error: 'Workflow not found' });
+    if (mode.builtIn) return reply.status(403).send({ error: 'Cannot delete built-in workflows' });
+
+    // Remove files
+    const fs = await import('fs');
+    const path = await import('path');
+    const userDir = path.join(process.cwd(), 'workflows', 'user');
+    try {
+      const manifestPath = path.join(userDir, `${id}.manifest.json`);
+      if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath);
+      if (mode.workflowFile) {
+        const wfPath = path.join(userDir, mode.workflowFile);
+        if (fs.existsSync(wfPath)) fs.unlinkSync(wfPath);
+      }
+    } catch { /* best effort */ }
+
+    registry.removeMode(id);
+    return reply.send({ status: 'deleted', id });
+  });
+
   // Register web UI routes (SPA + project/asset endpoints)
   await registerWebUIRoutes(app);
 

@@ -33,6 +33,7 @@ ${getStyles()}
       </div>
       <button id="parallel-media-btn" title="Toggle parallel media generation (for remote ComfyUI)" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:13px;">&#9655; Serial</button>
       <button id="provider-settings-btn" title="Provider Settings" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:13px;">&#9881; Providers</button>
+      <button id="workflows-btn" title="Manage Workflows" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:13px;">&#9881; Workflows</button>
       <span id="conn-status" class="conn-dot disconnected" title="Disconnected"></span>
     </div>
   </header>
@@ -61,6 +62,27 @@ ${getStyles()}
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button id="prov-cancel" style="padding:6px 16px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;cursor:pointer;">Cancel</button>
         <button id="prov-save" style="padding:6px 16px;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;">Save</button>
+      </div>
+    </div>
+  </div>
+  <!-- Workflow Management Modal -->
+  <div id="workflow-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;overflow-y:auto;">
+    <div style="background:#1e1e2e;border:1px solid #444;border-radius:8px;padding:24px;min-width:500px;max-width:700px;margin:40px auto;max-height:90vh;overflow-y:auto;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="margin:0;color:#e0e0e0;">Workflow Management</h3>
+        <div style="display:flex;gap:8px;">
+          <label id="wf-upload-label" style="padding:6px 16px;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;">
+            Upload Workflow
+            <input type="file" id="wf-upload-input" accept=".json" style="display:none;">
+          </label>
+          <button id="wf-close" style="padding:6px 16px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;cursor:pointer;">Close</button>
+        </div>
+      </div>
+      <div id="wf-list" style="color:#ccc;font-size:13px;"></div>
+      <!-- Integration wizard (hidden until upload) -->
+      <div id="wf-wizard" style="display:none;margin-top:16px;border-top:1px solid #444;padding-top:16px;">
+        <h4 style="margin:0 0 12px;color:#e0e0e0;" id="wf-wizard-title">Configure Workflow</h4>
+        <div id="wf-wizard-content"></div>
       </div>
     </div>
   </div>
@@ -2435,6 +2457,303 @@ provSave.addEventListener('click', async () => {
     console.error('Failed to save provider config:', e);
   }
 });
+
+// ===== Workflow Management =====
+var wfModal = document.getElementById('workflow-modal');
+var wfBtn = document.getElementById('workflows-btn');
+var wfClose = document.getElementById('wf-close');
+var wfList = document.getElementById('wf-list');
+var wfWizard = document.getElementById('wf-wizard');
+var wfWizardContent = document.getElementById('wf-wizard-content');
+var wfUploadInput = document.getElementById('wf-upload-input');
+
+var PIPELINE_LABELS = {
+  image_generation: 'Image Generation',
+  image_editing: 'Image Editing',
+  image_processing: 'Image Processing',
+  video_generation: 'Video Generation',
+};
+
+async function loadWorkflows() {
+  try {
+    var res = await fetch('/api/v1/workflows');
+    var data = await res.json();
+    renderWorkflowList(data.workflows, data.active);
+  } catch (e) {
+    wfList.innerHTML = '<div style="color:#f87171;">Failed to load workflows</div>';
+  }
+}
+
+function renderWorkflowList(grouped, active) {
+  var html = '';
+  var pipelines = ['image_generation', 'image_editing', 'video_generation', 'image_processing'];
+  for (var p of pipelines) {
+    var label = PIPELINE_LABELS[p] || p;
+    var items = grouped[p] || [];
+    var activeId = active[p];
+    html += '<div style="margin-bottom:16px;">';
+    html += '<div style="font-weight:600;color:#8b9dc3;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">' + escHtml(label) + '</div>';
+    if (items.length === 0) {
+      html += '<div style="color:#666;font-size:12px;padding:4px 0;">No workflows installed</div>';
+    } else {
+      for (var wf of items) {
+        var isActive = wf.id === activeId;
+        var isBuiltIn = wf.builtIn;
+        var borderColor = isActive ? '#3b82f6' : '#333';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;margin-bottom:4px;border:1px solid ' + borderColor + ';border-radius:6px;background:#252538;">';
+        html += '<div>';
+        if (isActive) html += '<span style="color:#3b82f6;margin-right:6px;" title="Active">★</span>';
+        html += '<span style="color:#e0e0e0;">' + escHtml(wf.displayName) + '</span>';
+        if (isBuiltIn) html += ' <span style="color:#666;font-size:11px;">(built-in)</span>';
+        else html += ' <span style="color:#86efac;font-size:11px;">(user)</span>';
+        html += '<div style="color:#777;font-size:11px;margin-top:2px;">' + escHtml(wf.llmDescription || '').substring(0, 100) + '</div>';
+        html += '</div>';
+        html += '<div style="display:flex;gap:6px;flex-shrink:0;">';
+        if (!isBuiltIn && !isActive) {
+          html += '<button onclick="setWorkflowOverride(\'' + wf.id + '\')" style="padding:3px 10px;background:#2563eb;color:white;border:none;border-radius:3px;cursor:pointer;font-size:11px;">Set Active</button>';
+        }
+        if (!isBuiltIn && isActive) {
+          html += '<button onclick="clearWorkflowOverride(\'' + p + '\')" style="padding:3px 10px;background:#444;color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:11px;">Revert</button>';
+        }
+        if (!isBuiltIn) {
+          html += '<button onclick="deleteWorkflow(\'' + wf.id + '\')" style="padding:3px 10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:3px;cursor:pointer;font-size:11px;">Delete</button>';
+        }
+        html += '</div></div>';
+      }
+    }
+    html += '</div>';
+  }
+  wfList.innerHTML = html;
+}
+
+window.setWorkflowOverride = async function(id) {
+  await fetch('/api/v1/workflows/' + id + '/override', { method: 'PUT' });
+  loadWorkflows();
+  showToast('Workflow set as active override', 'info');
+};
+
+window.clearWorkflowOverride = async function(pipeline) {
+  await fetch('/api/v1/workflows/override/' + pipeline, { method: 'DELETE' });
+  loadWorkflows();
+  showToast('Reverted to built-in default', 'info');
+};
+
+window.deleteWorkflow = async function(id) {
+  if (!confirm('Delete this workflow? This cannot be undone.')) return;
+  await fetch('/api/v1/workflows/' + id, { method: 'DELETE' });
+  loadWorkflows();
+  showToast('Workflow deleted', 'info');
+};
+
+wfBtn.addEventListener('click', function() {
+  wfModal.style.display = 'flex';
+  wfWizard.style.display = 'none';
+  loadWorkflows();
+});
+wfClose.addEventListener('click', function() { wfModal.style.display = 'none'; });
+wfModal.addEventListener('click', function(e) { if (e.target === wfModal) wfModal.style.display = 'none'; });
+
+// Upload handler
+wfUploadInput.addEventListener('change', async function(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+  var content = await file.text();
+  try {
+    var res = await fetch('/api/v1/workflows/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, content: content }),
+    });
+    var data = await res.json();
+    if (data.error) { showToast('Upload failed: ' + data.error, 'error'); return; }
+    showWizard(data.filename, data.parsed, content);
+  } catch (err) {
+    showToast('Upload failed: ' + err, 'error');
+  }
+  wfUploadInput.value = '';
+});
+
+function showWizard(filename, parsed, rawContent) {
+  wfWizard.style.display = 'block';
+  var safeName = filename.replace(/\.json$/, '');
+
+  var STANDARD_INPUTS = {
+    image_generation: ['prompt', 'negative_prompt', 'seed', 'width', 'height', 'filenamePrefix'],
+    image_editing: ['base_image', 'prompt', 'negative_prompt', 'reference_image_1', 'reference_image_2', 'seed', 'filenamePrefix'],
+    video_generation: ['first_frame', 'last_frame', 'mid_frame', 'prompt', 'seed', 'durationSeconds', 'width', 'height', 'filenamePrefix'],
+    image_processing: ['base_image', 'edit_prompt', 'mask', 'seed', 'filenamePrefix'],
+  };
+
+  var html = '';
+  // Step 1: Name & Type
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Workflow ID</label>';
+  html += '<input id="wiz-id" value="' + escHtml(safeName) + '" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;">';
+  html += '</div>';
+
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Display Name</label>';
+  html += '<input id="wiz-name" value="' + escHtml(safeName.replace(/_/g, ' ')) + '" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;">';
+  html += '</div>';
+
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Pipeline Type</label>';
+  html += '<select id="wiz-pipeline" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;" onchange="updateWizardMappings()">';
+  var pipelines = ['image_generation', 'image_editing', 'video_generation', 'image_processing'];
+  for (var p of pipelines) {
+    var sel = p === parsed.detectedPipeline ? ' selected' : '';
+    html += '<option value="' + p + '"' + sel + '>' + (PIPELINE_LABELS[p] || p) + '</option>';
+  }
+  html += '</select>';
+  if (parsed.detectedPipeline !== 'unknown') {
+    html += '<div style="color:#86efac;font-size:11px;margin-top:4px;">Auto-detected: ' + (PIPELINE_LABELS[parsed.detectedPipeline] || parsed.detectedPipeline) + '</div>';
+  }
+  html += '</div>';
+
+  // Step 2: Map inputs
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:8px;">Map Input Nodes (' + parsed.inputNodes.length + ' found)</label>';
+  html += '<div id="wiz-mappings">';
+  for (var i = 0; i < parsed.inputNodes.length; i++) {
+    var node = parsed.inputNodes[i];
+    html += renderMappingRow(node, i, parsed.detectedPipeline, STANDARD_INPUTS);
+  }
+  html += '</div></div>';
+
+  // Step 3: LLM Description
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Description (for LLM — what does this workflow do?)</label>';
+  html += '<textarea id="wiz-desc" rows="3" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;resize:vertical;" placeholder="Generates video by interpolating between first and last frame..."></textarea>';
+  html += '</div>';
+
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Selection Criteria (when should LLM pick this?)</label>';
+  html += '<textarea id="wiz-criteria" rows="2" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;resize:vertical;" placeholder="Shot has clear visual start and end difference..."></textarea>';
+  html += '</div>';
+
+  // Save button
+  html += '<div style="display:flex;gap:8px;justify-content:flex-end;">';
+  html += '<button onclick="cancelWizard()" style="padding:6px 16px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;cursor:pointer;">Cancel</button>';
+  html += '<button onclick="saveWizard(\'' + escHtml(filename) + '\')" style="padding:6px 16px;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;">Save Workflow</button>';
+  html += '</div>';
+
+  wfWizardContent.innerHTML = html;
+
+  // Store parsed data for later
+  window._wizParsed = parsed;
+  window._wizFilename = filename;
+}
+
+function renderMappingRow(node, idx, pipeline, standardInputs) {
+  var options = standardInputs[pipeline] || [];
+  var html = '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px;background:#1a1a2e;border-radius:4px;">';
+  html += '<span style="color:#666;font-size:11px;min-width:40px;">Node ' + node.nodeId + '</span>';
+  html += '<span style="color:#8b9dc3;font-size:12px;min-width:140px;">' + escHtml(node.title || node.classType) + '</span>';
+  html += '<span style="color:#555;font-size:11px;">→</span>';
+  html += '<select id="wiz-map-' + idx + '" data-node-id="' + node.nodeId + '" data-class="' + node.classType + '" style="flex:1;padding:4px 6px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:3px;font-size:12px;">';
+  html += '<option value="">(leave as default)</option>';
+  for (var opt of options) {
+    var sel = node.suggestedInput === opt ? ' selected' : '';
+    html += '<option value="' + opt + '"' + sel + '>' + opt + '</option>';
+  }
+  html += '</select></div>';
+  return html;
+}
+
+window.updateWizardMappings = function() {
+  // Re-render mapping dropdowns when pipeline type changes — for now, just reload
+  var pipeline = document.getElementById('wiz-pipeline').value;
+  var STANDARD_INPUTS = {
+    image_generation: ['prompt', 'negative_prompt', 'seed', 'width', 'height', 'filenamePrefix'],
+    image_editing: ['base_image', 'prompt', 'negative_prompt', 'reference_image_1', 'reference_image_2', 'seed', 'filenamePrefix'],
+    video_generation: ['first_frame', 'last_frame', 'mid_frame', 'prompt', 'seed', 'durationSeconds', 'width', 'height', 'filenamePrefix'],
+    image_processing: ['base_image', 'edit_prompt', 'mask', 'seed', 'filenamePrefix'],
+  };
+  var mappingsEl = document.getElementById('wiz-mappings');
+  var html = '';
+  for (var i = 0; i < window._wizParsed.inputNodes.length; i++) {
+    html += renderMappingRow(window._wizParsed.inputNodes[i], i, pipeline, STANDARD_INPUTS);
+  }
+  mappingsEl.innerHTML = html;
+};
+
+window.cancelWizard = function() {
+  wfWizard.style.display = 'none';
+};
+
+window.saveWizard = async function(filename) {
+  var id = document.getElementById('wiz-id').value.trim();
+  var displayName = document.getElementById('wiz-name').value.trim();
+  var pipeline = document.getElementById('wiz-pipeline').value;
+  var llmDescription = document.getElementById('wiz-desc').value.trim();
+  var selectionCriteria = document.getElementById('wiz-criteria').value.trim();
+
+  if (!id || !displayName) { showToast('ID and display name are required', 'error'); return; }
+
+  // Collect parameter mappings
+  var mappings = [];
+  var inputReqs = [];
+  var parsed = window._wizParsed;
+  for (var i = 0; i < parsed.inputNodes.length; i++) {
+    var sel = document.getElementById('wiz-map-' + i);
+    if (sel && sel.value) {
+      mappings.push({ input: sel.value, nodeId: sel.dataset.nodeId, field: getFieldForClass(sel.dataset.class) });
+      // Build input requirement
+      var isImage = sel.dataset.class === 'LoadImage';
+      var source = isImage ? 'shot_image' : (sel.value === 'prompt' || sel.value === 'edit_prompt' ? 'shot_motion_directive' : 'system');
+      inputReqs.push({ id: sel.value, type: isImage ? 'image' : 'text', source: source, description: sel.value, required: true });
+    }
+  }
+
+  var outputType = pipeline === 'video_generation' ? 'video' : 'image';
+
+  var manifest = {
+    id: id,
+    displayName: displayName,
+    pipeline: pipeline,
+    llmDescription: llmDescription,
+    selectionCriteria: selectionCriteria,
+    outputType: outputType,
+    priority: 10,
+    inputRequirements: inputReqs,
+    workflowFile: filename,
+    format: 'litegraph',
+    parameterMappings: mappings,
+    builtIn: false,
+    active: true,
+  };
+
+  try {
+    var res = await fetch('/api/v1/workflows/configure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(manifest),
+    });
+    var data = await res.json();
+    if (data.error) { showToast('Save failed: ' + data.error, 'error'); return; }
+    showToast('Workflow configured: ' + displayName, 'info');
+    wfWizard.style.display = 'none';
+    loadWorkflows();
+  } catch (err) {
+    showToast('Save failed: ' + err, 'error');
+  }
+};
+
+function getFieldForClass(classType) {
+  var map = {
+    'LoadImage': 'image',
+    'CLIPTextEncode': 'text',
+    'TextEncodeQwenImageEditPlus': 'text',
+    'INTConstant': 'value',
+    'KSampler': 'seed',
+    'RandomNoise': 'noise_seed',
+    'EmptySD3LatentImage': 'width',
+    'EmptyLatentImage': 'width',
+    'SaveImage': 'filename_prefix',
+    'VHS_VideoCombine': 'filename_prefix',
+  };
+  return map[classType] || 'value';
+}
 
 // ===== Init =====
 loadProjects();
