@@ -85,7 +85,7 @@ export interface ImageEditInput {
  * Input for video generation from an image.
  */
 export interface VideoGenerationInput {
-  /** Absolute path to the source image */
+  /** Absolute path to the source image (backward compat — first frame) */
   sourceImagePath: string;
   /** Motion/animation prompt */
   prompt: string;
@@ -98,7 +98,94 @@ export interface VideoGenerationInput {
   outputDir: string;
   /** Optional filename prefix */
   filenamePrefix?: string;
+  /** Additional frame images keyed by input requirement ID (e.g., { last_frame: "/path/to/last.png" }) */
+  frameImages?: Record<string, string>;
+  /** Workflow mode ID for routing to the correct workflow */
+  modeId?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Workflow Mode types — capability-based routing
+// ---------------------------------------------------------------------------
+
+/** Which pipeline stage a workflow belongs to */
+export type WorkflowPipeline = 'video_generation' | 'image_processing';
+
+/** Where an input comes from at runtime */
+export type InputSource =
+  | 'shot_image'            // from generated shot image(s)
+  | 'shot_motion_directive' // from motion directive text
+  | 'image_processing'      // from stage 4 output (chaining)
+  | 'llm'                   // LLM generates at runtime
+  | 'user'                  // user provides at project setup
+  | 'system';               // system params (seed, width, height, duration, prefix)
+
+/** A single input that a workflow requires */
+export interface InputRequirement {
+  /** Identifier matching parameterMappings (e.g., 'first_frame', 'prompt') */
+  id: string;
+  /** Data type */
+  type: 'image' | 'text' | 'number' | 'mask' | 'depth_map';
+  /** Where the executor should resolve this input from */
+  source: InputSource;
+  /** Human-readable description (shown in wizard + used by LLM) */
+  description: string;
+  /** Whether this input is required or optional */
+  required: boolean;
+}
+
+/** Maps an input requirement to a specific ComfyUI node */
+export interface ParameterMapping {
+  /** Input requirement ID (must match an inputRequirement.id or a system param) */
+  input: string;
+  /** ComfyUI node ID in the workflow */
+  nodeId: string;
+  /** Field name on the node's inputs/widgets */
+  field: string;
+}
+
+/**
+ * Unified workflow manifest — describes what a workflow does,
+ * what it needs, and how to parameterize it.
+ * Lives as a `*.manifest.json` sidecar next to the workflow JSON.
+ */
+export interface WorkflowManifest {
+  /** Unique mode ID (e.g., 'i2v', 'flfv', 'sam_inpaint') */
+  id: string;
+  /** Human-readable name */
+  displayName: string;
+  /** Which pipeline stage: video_generation or image_processing */
+  pipeline: WorkflowPipeline;
+  /** 2-3 sentence description for the LLM to understand what this mode does */
+  llmDescription: string;
+  /** When the LLM should choose this mode (selection guidance) */
+  selectionCriteria: string;
+  /** What the workflow produces */
+  outputType: 'video' | 'image';
+  /** Priority for tie-breaking (lower = preferred) */
+  priority: number;
+
+  /** What inputs the workflow needs */
+  inputRequirements: InputRequirement[];
+
+  /** ComfyUI workflow filename (relative to same directory) */
+  workflowFile: string;
+  /** Workflow format: 'litegraph' (node editor) or 'api' (API format) */
+  format: 'litegraph' | 'api';
+  /** Maps inputs to ComfyUI node IDs */
+  parameterMappings: ParameterMapping[];
+
+  /** Whether this is a built-in or user-uploaded workflow */
+  builtIn?: boolean;
+  /** Whether this mode is currently active */
+  active?: boolean;
+}
+
+/**
+ * A manifest file can contain a single mode or an array of modes
+ * (when one workflow supports multiple generation strategies).
+ */
+export type WorkflowManifestFile = WorkflowManifest | WorkflowManifest[];
 
 /**
  * Progress callback type.
