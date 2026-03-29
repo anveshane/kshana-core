@@ -65,10 +65,18 @@ export function NewProjectInline({ onSubmit, onCancel }: NewProjectInlineProps) 
                       setStep('duration')
                     }
                   }}
-                  className="text-left px-4 py-3 rounded-lg border border-line-soft hover:border-cyan/30 hover:bg-cyan/5 transition-colors cursor-pointer"
+                  className="text-left rounded-lg border border-line-soft hover:border-cyan/30 hover:bg-cyan/5 transition-colors cursor-pointer overflow-hidden flex"
                 >
-                  <div className="text-sm font-medium text-foreground">{t.displayName}</div>
-                  {t.description && <div className="text-xs text-graphite-100 mt-0.5">{t.description}</div>}
+                  <img
+                    src={`/previews/template_${t.id}.png`}
+                    alt=""
+                    className="w-28 h-20 object-cover flex-shrink-0 bg-graphite-400"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                  />
+                  <div className="px-4 py-3">
+                    <div className="text-sm font-medium text-foreground">{t.displayName}</div>
+                    {t.description && <div className="text-xs text-graphite-100 mt-0.5">{t.description}</div>}
+                  </div>
                 </button>
               ))}
             </div>
@@ -85,16 +93,26 @@ export function NewProjectInline({ onSubmit, onCancel }: NewProjectInlineProps) 
               Choose a style for <span className="text-cyan">{selectedTemplate.displayName}</span>:
             </div>
             <div className="grid gap-2">
-              {selectedTemplate.styles.map(s => (
-                <button
-                  key={s.id}
-                  onClick={() => { setStyle(s.id); setStep('duration') }}
-                  className="text-left px-4 py-3 rounded-lg border border-line-soft hover:border-cyan/30 hover:bg-cyan/5 transition-colors cursor-pointer"
-                >
-                  <div className="text-sm font-medium text-foreground">{s.displayName}</div>
-                  {s.description && <div className="text-xs text-graphite-100 mt-0.5">{s.description}</div>}
-                </button>
-              ))}
+              <div className="grid grid-cols-2 gap-2">
+                {selectedTemplate.styles.map(s => (
+                  <button
+                    key={s.id}
+                    onClick={() => { setStyle(s.id); setStep('duration') }}
+                    className="text-left rounded-lg border border-line-soft hover:border-cyan/30 hover:bg-cyan/5 transition-colors cursor-pointer overflow-hidden"
+                  >
+                    <img
+                      src={`/previews/style_${s.id}.png`}
+                      alt=""
+                      className="w-full h-24 object-cover bg-graphite-400"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                    />
+                    <div className="px-3 py-2">
+                      <div className="text-sm font-medium text-foreground">{s.displayName}</div>
+                      {s.description && <div className="text-xs text-graphite-100 mt-0.5 line-clamp-2">{s.description}</div>}
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
             <button onClick={() => setStep('template')} className="mt-3 text-xs text-graphite-200 hover:text-foreground cursor-pointer">
               ← Back

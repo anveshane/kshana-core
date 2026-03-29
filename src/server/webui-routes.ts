@@ -90,6 +90,25 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
       );
     }
 
+    // Serve previews and other static directories from dist/
+    const previewsDir = join(reactDistDir, 'previews');
+    if (existsSync(previewsDir)) {
+      app.get<{ Params: { '*': string } }>(
+        '/previews/*',
+        async (request: FastifyRequest<{ Params: { '*': string } }>, reply: FastifyReply) => {
+          const filePath = request.params['*'];
+          if (filePath.includes('..')) return reply.status(400).send({ error: 'Invalid path' });
+          const fullPath = join(previewsDir, filePath);
+          if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
+            return reply.status(404).send({ error: 'Not found' });
+          }
+          const ext = extname(fullPath).toLowerCase();
+          const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
+          return reply.type(contentType).send(readFileSync(fullPath));
+        },
+      );
+    }
+
     // Serve favicon and other root-level static files
     app.get('/favicon.svg', async (_request: FastifyRequest, reply: FastifyReply) => {
       const faviconPath = join(reactDistDir, 'favicon.svg');
