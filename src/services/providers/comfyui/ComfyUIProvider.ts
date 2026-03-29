@@ -234,25 +234,30 @@ export class ComfyUIProvider implements GenerationProvider {
 
     const registry = getRegistry();
 
-    // Determine workflow: check for modeId override, then registry, then built-in default
+    // Determine workflow: check for modeId in WorkflowModeRegistry, fall back to built-in 'ltx23'
     let workflowName = 'ltx23';
+    let modeManifest = null as any;
     try {
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
       if (input.modeId) {
-        const mode = modeRegistry.getMode(input.modeId);
-        if (mode) {
-          workflowName = mode.id;
-          debugLog(`Using video workflow from modeId: ${mode.displayName} (${mode.id})`);
-        }
-      } else {
-        const activeMode = modeRegistry.getActiveForPipeline('video_generation', 'comfyui');
-        if (activeMode) {
-          workflowName = activeMode.id;
-          debugLog(`Using active video workflow: ${activeMode.displayName} (${activeMode.id})`);
-        }
+        modeManifest = modeRegistry.getMode(input.modeId);
+      }
+      if (!modeManifest) {
+        modeManifest = modeRegistry.getActiveForPipeline('video_generation', 'comfyui');
+      }
+      if (modeManifest) {
+        debugLog(`Using video mode: ${modeManifest.displayName} (${modeManifest.id})`);
       }
     } catch { /* registry not available, use default */ }
+
+    // Resolve workflow name: built-in modes (i2v, t2v, i2v_late_entry) all use the 'ltx23' workflow.
+    // User-uploaded modes use their own workflow via the generic parameterizer.
+    if (modeManifest && !modeManifest.builtIn) {
+      // User workflow — look up by mode ID in the old registry, or use generic path
+      workflowName = modeManifest.id;
+    }
+    // For built-in modes, keep workflowName = 'ltx23' (they all share the same workflow)
 
     const workflowMetadata = registry.get(workflowName);
     if (!workflowMetadata) {
