@@ -2136,7 +2136,103 @@ Rules:
     }
 
     const jsonContent = readFileSync(jsonPath, 'utf-8');
-    return this.executeShotImageGeneration(node, jsonContent, toolCallId);
+
+    // Generate first frame image (standard flow)
+    const firstFramePath = await this.executeShotImageGeneration(node, jsonContent, toolCallId);
+    if (!firstFramePath) return null;
+
+    // Check if the video generation mode requires additional frame images
+    const strategy = this.getGenerationStrategy(node);
+    try {
+      const modeRegistry = getWorkflowModeRegistry();
+      const mode = modeRegistry.getMode(strategy);
+      if (mode) {
+        const frameInputs = mode.inputRequirements.filter(
+          r => r.type === 'image' && r.source === 'shot_image' && r.id !== 'first_frame'
+        );
+
+        if (frameInputs.length > 0) {
+          // Initialize outputPaths with first frame
+          node.outputPaths = { first_frame: firstFramePath };
+
+          // Generate additional frame images (last_frame, mid_frame, etc.)
+          for (const frameReq of frameInputs) {
+            const frameDesc = this.getFrameDescription(node, frameReq.id);
+            if (frameDesc) {
+              this.log(`  Generating additional frame: ${frameReq.id}`);
+              // Build a modified prompt JSON using the frame description
+              const modifiedJson = this.buildFramePromptJson(jsonContent, frameDesc, frameReq.id);
+              const framePath = await this.executeShotImageGeneration(node, modifiedJson, toolCallId);
+              if (framePath) {
+                node.outputPaths[frameReq.id] = framePath;
+                this.log(`  ${frameReq.id} generated: ${framePath}`);
+              }
+            }
+          }
+          this.log(`  Multi-frame: ${Object.keys(node.outputPaths).length} frames generated`);
+        }
+      }
+    } catch {
+      // Mode registry not available or mode not found — single frame is fine
+    }
+
+    return firstFramePath;
+  }
+
+  /**
+   * Get frame description (firstFrame/lastFrame/midFrame) from scene_video_prompt JSON.
+   */
+  private getFrameDescription(node: ExecutionNode, frameId: string): string | null {
+    const sceneMatch = node.itemId?.match(/scene_(\d+)/);
+    const shotMatch = node.itemId?.match(/shot_(\d+)/);
+    if (!sceneMatch) return null;
+    const sceneNum = parseInt(sceneMatch[1]!, 10);
+    const shotNum = shotMatch?.[1] ? parseInt(shotMatch[1], 10) : 1;
+
+    const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
+    if (!svpNode?.outputPath) return null;
+
+    try {
+      const svpPath = join(this.config.projectDir, svpNode.outputPath);
+      let content = readFileSync(svpPath, 'utf-8').trim();
+      if (content.startsWith('```')) content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      const parsed = JSON.parse(content);
+      const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
+      if (!shot) return null;
+
+      // Map frameId to the SVP field
+      const frameMap: Record<string, string> = {
+        last_frame: 'lastFrame',
+        mid_frame: 'midFrame',
+        first_frame: 'firstFrame',
+      };
+      const fieldName = frameMap[frameId];
+      if (!fieldName) return null;
+
+      const frame = shot[fieldName];
+      return frame?.description || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Build a modified shot_image_prompt JSON for a specific frame,
+   * replacing the image prompt with the frame's description.
+   */
+  private buildFramePromptJson(originalJson: string, frameDescription: string, frameId: string): string {
+    try {
+      let cleaned = originalJson.trim();
+      if (cleaned.startsWith('```')) {
+        cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      }
+      const parsed = JSON.parse(cleaned);
+      // Replace the image prompt with the frame description
+      parsed.imagePrompt = `${frameDescription} — ${frameId.replace('_', ' ')} of the shot`;
+      return JSON.stringify(parsed);
+    } catch {
+      return originalJson;
+    }
   }
 
   /**
@@ -2612,6 +2708,16 @@ Rules:
       const videoWidth = this.config.project.resolutionWidth ?? 848;
       const videoHeight = this.config.project.resolutionHeight ?? 480;
 
+      // Collect additional frame images from the shot_image node's outputPaths
+      const frameImages: Record<string, string> = {};
+      if (matchingImageNode?.outputPaths) {
+        for (const [frameId, framePath] of Object.entries(matchingImageNode.outputPaths)) {
+          if (frameId !== 'first_frame') {
+            frameImages[frameId] = join(this.config.projectDir, framePath);
+          }
+        }
+      }
+
       const result = await provider.generateVideo(
         {
           sourceImagePath: isT2V ? '' : join(this.config.projectDir, shotImagePath),
@@ -2621,6 +2727,8 @@ Rules:
           height: videoHeight,
           outputDir: assetsDir,
           filenamePrefix: `scene_${sceneNum}_shot_${shotNum}`,
+          modeId: generationStrategy,
+          frameImages: Object.keys(frameImages).length > 0 ? frameImages : undefined,
         },
         (info) => {
           this.emit({

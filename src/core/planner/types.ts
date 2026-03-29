@@ -309,6 +309,9 @@ export interface ExecutionNode {
   /** Path where output was written */
   outputPath?: string;
 
+  /** Multiple output paths keyed by frame requirement ID (for multi-frame modes) */
+  outputPaths?: Record<string, string>;
+
   /** Artifact instance ID after creation */
   artifactId?: string;
 }
