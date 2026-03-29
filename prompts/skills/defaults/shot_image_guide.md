@@ -144,3 +144,7 @@ image_text_to_image
 ```
 
 If NO reference images are available (documentary/non-narrative), use `text_to_image` mode with no "from imageN" references.
+
+---
+
+{{FRAME_GENERATION_GUIDE}}

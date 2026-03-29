@@ -56,7 +56,7 @@
     },
     {
       "id": "GENERATION_STRATEGY",
-      "question": "Does each shot have a sensible generationStrategy? Shots with characters visible from the start should be 'i2v'. Shots where characters enter mid-shot should be 'i2v_late_entry'. Character-free shots that need a setting reference image (e.g. close-ups of objects in a specific location, establishing shots of a named setting) can be 'i2v' to leverage the setting image. Only truly generic atmosphere shots with no setting reference needed should be 't2v'. Is there at least one shot that is NOT plain 'i2v' (either 't2v' or 'i2v_late_entry'), OR do all shots genuinely require character/setting reference images?"
+      "question": "Does each shot have a sensible videoGenerationMode (or generationStrategy for backward compat)? Shots with characters visible from the start should use an image-based mode (e.g., 'i2v'). Character-free atmosphere shots should use a text-only mode (e.g., 't2v'). If a shot has distinct start and end visuals and a multi-frame mode is available (e.g., 'flfv'), it should use that. The mode chosen must be one of the available modes listed in the prompt. Answer YES if the modes are sensible for the shot content."
     },
     {
       "id": "FIRST_LAST_FRAME",

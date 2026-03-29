@@ -49,6 +49,7 @@ import {
 } from '../timeline/TimelineManager.js';
 import { assembleVideos, resolveSegmentFilePaths } from '../timeline/FFmpegAssembler.js';
 import { getProviderRegistry } from '../../services/providers/index.js';
+import { getWorkflowModeRegistry } from '../../services/providers/WorkflowModeRegistry.js';
 import { addAsset } from '../../tasks/video/workflow/index.js';
 
 /**
@@ -1253,10 +1254,45 @@ Rules:
       }
     }
 
+    // Substitute dynamic placeholders in loaded content
+    let combined = parts.length > 0 ? parts.join('\n\n') : null;
+    if (combined) {
+      combined = this.substituteDynamicPlaceholders(combined);
+    }
+
     return {
-      content: parts.length > 0 ? parts.join('\n\n') : null,
+      content: combined,
       files: loadedFiles,
     };
+  }
+
+  /**
+   * Replace {{PLACEHOLDER}} tokens in guide/skill content with dynamic values
+   * from the WorkflowModeRegistry. This ensures the LLM only sees modes
+   * available for the currently active provider.
+   */
+  private substituteDynamicPlaceholders(content: string): string {
+    if (!content.includes('{{')) return content;
+
+    try {
+      const modeRegistry = getWorkflowModeRegistry();
+
+      // Determine the active video provider
+      let providerId = 'comfyui';
+      try {
+        const config = getProviderRegistry().getConfig();
+        providerId = config.videoGeneration || 'comfyui';
+      } catch { /* default to comfyui */ }
+
+      content = content.replace('{{AVAILABLE_VIDEO_MODES}}', modeRegistry.generateVideoModesSection(providerId));
+      content = content.replace('{{AVAILABLE_PROCESSING_MODES}}', modeRegistry.generateProcessingModesSection(providerId));
+      content = content.replace('{{FRAME_GENERATION_GUIDE}}', modeRegistry.generateFrameGuideSection(providerId));
+    } catch (err) {
+      // Registry not available — leave placeholders as-is (they'll be visible but harmless)
+      this.log(`  Warning: could not substitute dynamic placeholders: ${err}`);
+    }
+
+    return content;
   }
 
   // ===========================================================================
@@ -1442,13 +1478,17 @@ Rules:
           if (shot.firstFrame && !shot.firstFrame.description) {
             return { valid: false, error: `Shot ${shot.shotNumber} firstFrame missing "description"` };
           }
-          if (!shot.generationStrategy) {
+          if (!shot.videoGenerationMode && !shot.generationStrategy) {
             // Auto-classify if missing
             const hasCharsFirst = shot.firstFrame?.characters?.length > 0;
             const hasCharsLast = shot.lastFrame?.characters?.length > 0;
-            if (!hasCharsFirst && !hasCharsLast) shot.generationStrategy = 't2v';
-            else if (hasCharsFirst) shot.generationStrategy = 'i2v';
-            else shot.generationStrategy = 'i2v_late_entry';
+            if (!hasCharsFirst && !hasCharsLast) shot.videoGenerationMode = 't2v';
+            else if (hasCharsFirst) shot.videoGenerationMode = 'i2v';
+            else shot.videoGenerationMode = 'i2v_late_entry';
+          }
+          // Normalize: copy videoGenerationMode to generationStrategy for backward compat
+          if (shot.videoGenerationMode && !shot.generationStrategy) {
+            shot.generationStrategy = shot.videoGenerationMode;
           }
         }
       }
@@ -2060,7 +2100,7 @@ Rules:
       }
       const parsed = JSON.parse(content);
       const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
-      return shot?.generationStrategy || 'i2v';
+      return shot?.videoGenerationMode || shot?.generationStrategy || 'i2v';
     } catch {
       return 'i2v';
     }
@@ -2492,7 +2532,7 @@ Rules:
           const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
           if (shot) {
             shotDuration = shot.duration || 5;
-            generationStrategy = shot.generationStrategy || 'i2v';
+            generationStrategy = shot.videoGenerationMode || shot.generationStrategy || 'i2v';
 
             // Fallback: if no motion directive, use description + cameraWork
             if (!motionPrompt) {

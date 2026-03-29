@@ -13,18 +13,16 @@
 Each shot must have:
 - **firstFrame**: what the camera sees at the START of the shot (description, characters, setting)
 - **lastFrame** (optional): what the camera sees at the END — only include if the end state differs from the start
-- **generationStrategy**: how this shot will be generated (see below)
+- **videoGenerationMode**: which video generation mode to use (see available modes below)
+- **imageProcessingMode**: optional image processing before video gen, or `null` (see available modes below)
 - **cameraWork**: camera movement and angle
 - **soundCue**: what is heard (ambient, effects, explicit silence)
 - **dialogue**: spoken line for this shot, or `null` if none (see Dialogue section below)
 - **transition**: how this shot transitions FROM the previous shot (see below)
 
-## Generation Strategy
+{{AVAILABLE_VIDEO_MODES}}
 
-Classify each shot:
-- **`i2v`** — Characters visible in firstFrame. Generates first-frame image (with character/setting refs), then image-to-video. Use for most character shots.
-- **`t2v`** — No characters in firstFrame AND no lastFrame with characters. Text-to-video only, no image generated. Use for establishing shots, atmospheric inserts, environment-only.
-- **`i2v_late_entry`** — firstFrame has NO characters but lastFrame HAS characters. Generates setting-only first frame, character enters mid-shot. Use when a character walks into frame.
+{{AVAILABLE_PROCESSING_MODES}}
 
 ## First + Last Frame
 
@@ -108,6 +106,6 @@ Aim for 2-3 sentences per frame description. Be literal — describe only what i
 3. At least one t2v or character-free shot
 4. Every shot has soundCue
 5. All character IDs match provided list
-6. generationStrategy matches character presence in firstFrame/lastFrame
+6. videoGenerationMode is valid and matches character presence in firstFrame/lastFrame
 7. **All dialogue from the scene description is placed** — every spoken line, V.O., or voiceover has a matching `dialogue` field on the correct shot
 8. Every shot has a `transition` field
