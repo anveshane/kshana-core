@@ -21,10 +21,11 @@ export async function extractCollectionItems(
   node: ExecutionNode,
   content: string,
   llm: LLMClient,
+  durationSeconds?: number,
 ): Promise<CollectionItems | null> {
   switch (node.typeId) {
     case 'story':
-      return extractFromStory(content, llm);
+      return extractFromStory(content, llm, durationSeconds);
     case 'outline':
       return extractFromOutline(content, llm);
     case 'scene_video_prompt':
@@ -41,7 +42,14 @@ export async function extractCollectionItems(
 async function extractFromStory(
   storyContent: string,
   llm: LLMClient,
+  durationSeconds?: number,
 ): Promise<CollectionItems> {
+  // Duration-based limits to keep generation manageable
+  const dur = durationSeconds || 60;
+  const maxChars = dur <= 30 ? 2 : dur <= 60 ? 3 : dur <= 120 ? 5 : dur <= 180 ? 6 : dur <= 300 ? 8 : 10;
+  const maxSettings = dur <= 30 ? 1 : dur <= 60 ? 2 : dur <= 120 ? 3 : dur <= 180 ? 4 : dur <= 300 ? 5 : 7;
+  const maxScenes = dur <= 30 ? 2 : dur <= 60 ? 4 : dur <= 120 ? 6 : dur <= 180 ? 8 : dur <= 300 ? 10 : 12;
+
   const response = await llm.generate({
     messages: [
       {
@@ -49,14 +57,18 @@ async function extractFromStory(
         content: `You are a precise extraction tool. Extract structured data from the provided story content.
 
 Return a JSON object with exactly these fields:
-- "characters": array of unique character names (main and supporting characters only, not background/unnamed)
-- "settings": array of unique location/setting names (distinct places where scenes occur)
-- "scenes": array of objects with { "sceneNumber": number, "title": string, "summary": string }
+- "characters": array of unique character names (MAXIMUM ${maxChars} — only characters the camera SEES on screen)
+- "settings": array of unique location/setting names (MAXIMUM ${maxSettings} — consolidate similar locations)
+- "scenes": array of objects with { "sceneNumber": number, "title": string, "summary": string } (MAXIMUM ${maxScenes})
+
+This is for a ${dur}-second video. Every character and setting requires image generation, so fewer = faster and higher quality.
 
 Rules:
 - Character names should be proper names as they appear in the story
-- Settings should be distinct locations, not variations of the same place
+- Only include characters who physically appear on screen — not mentioned-only characters
+- Settings should be distinct locations, not variations of the same place (e.g. "hallway" and "room" in same building = one setting)
 - Scenes should be logical narrative units (shifts in location, time, or action)
+- If the story has more than the maximum, select only the most important ones
 - Keep summaries under 50 words each
 - Return ONLY valid JSON, no other text`,
       },
@@ -71,10 +83,11 @@ Rules:
 
   try {
     const parsed = JSON.parse(response.content ?? '{}') as CollectionItems;
+    // Enforce hard caps — truncate if LLM exceeded limits
     return {
-      characters: parsed.characters ?? [],
-      settings: parsed.settings ?? [],
-      scenes: parsed.scenes ?? [],
+      characters: (parsed.characters ?? []).slice(0, maxChars),
+      settings: (parsed.settings ?? []).slice(0, maxSettings),
+      scenes: (parsed.scenes ?? []).slice(0, maxScenes),
     };
   } catch {
     // If parsing fails, return empty collections

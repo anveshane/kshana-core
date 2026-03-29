@@ -1072,7 +1072,7 @@ Rules:
 
     // Inject guides/skills for relevant categories
     const loadedSkills: string[] = [];
-    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'scene_video_prompt' || node.typeId === 'world_style' || node.typeId === 'shot_motion_directive';
+    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'story' || node.typeId === 'scene_video_prompt' || node.typeId === 'world_style' || node.typeId === 'shot_motion_directive';
     if (needsSkills) {
       const skills = this.loadSkillsForNode(node);
       if (skills.content) {
@@ -1179,6 +1179,7 @@ Rules:
 
     // Map node types to guide names and content types for skill resolution
     const guideMap: Record<string, string> = {
+      story: 'story_guide',
       character_image: 'character_image_guide',
       setting_image: 'setting_image_guide',
       shot_image_prompt: 'shot_image_guide',
@@ -1424,7 +1425,7 @@ Rules:
         if (!existsSync(fullPath)) continue;
 
         const content = readFileSync(fullPath, 'utf-8');
-        const items = await extractCollectionItems(dep, content, this.llm);
+        const items = await extractCollectionItems(dep, content, this.llm, this.config.goal.preferences.duration as number | undefined);
         if (!items?.shots?.length) continue;
 
         const sceneId = dep.itemId;
@@ -1868,7 +1869,7 @@ Rules:
       toolName: 'extract_collections',
     });
 
-    const items = await extractCollectionItems(node, content, this.llm);
+    const items = await extractCollectionItems(node, content, this.llm, this.config.goal.preferences.duration as number | undefined);
 
     if (!items) {
       this.log(`  No collection items extracted from ${node.id}`);
