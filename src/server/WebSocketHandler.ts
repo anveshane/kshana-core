@@ -582,10 +582,10 @@ export class WebSocketHandler {
         }));
       },
 
-      onToolCall: (sid, toolName, args, agentName) => {
+      onToolCall: (sid, toolName, args, agentName, toolCallId) => {
         this.sendMessage(socket, createServerMessage<ToolCallData>('tool_call', sid, {
           toolName,
-          toolCallId: '',
+          toolCallId: toolCallId || '',
           arguments: args,
           status: 'started',
           agentName,

@@ -30,7 +30,7 @@ export interface ConversationManagerConfig {
 
 export interface ConversationEvents {
   onProgress?: (sessionId: string, percentage: number, message: string) => void;
-  onToolCall?: (sessionId: string, toolName: string, args: Record<string, unknown>, agentName?: string) => void;
+  onToolCall?: (sessionId: string, toolName: string, args: Record<string, unknown>, agentName?: string, toolCallId?: string) => void;
   onToolResult?: (sessionId: string, toolName: string, result: unknown, agentName?: string, toolCallId?: string) => void;
   onTodoUpdate?: (sessionId: string, todos: ExpandableTodoItem[]) => void;
   onAgentText?: (sessionId: string, text: string, isFinal: boolean) => void;
@@ -408,7 +408,7 @@ export class ConversationManager {
 
     if (events.onToolCall) {
       agent.on('tool_call', (data) => {
-        events.onToolCall!(sessionId, data.toolName, data.arguments, data.agentName);
+        events.onToolCall!(sessionId, data.toolName, data.arguments, data.agentName, data.toolCallId);
       });
     }
 
