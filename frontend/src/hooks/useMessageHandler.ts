@@ -104,7 +104,8 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
 
       case 'todo_update': {
         const todos = (data.todos as Array<{
-          text: string
+          content?: string
+          text?: string
           status: string
           id?: string
           category?: string
@@ -113,8 +114,8 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
           type: 'SET_TODOS',
           todos: todos.map((t, i) => ({
             id: t.id || `todo_${i}`,
-            text: t.text,
-            status: t.status as 'pending' | 'in_progress' | 'completed' | 'failed',
+            text: t.content || t.text || '',
+            status: (t.status === 'cancelled' ? 'failed' : t.status) as 'pending' | 'in_progress' | 'completed' | 'failed',
             category: t.category,
           })),
         })
