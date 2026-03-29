@@ -51,6 +51,12 @@ const MIME_TYPES: Record<string, string> = {
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.json': 'application/json',
+  '.js': 'application/javascript',
+  '.css': 'text/css',
+  '.html': 'text/html',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
 };
 
 /**
@@ -78,7 +84,7 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
             return reply.status(404).send({ error: 'Not found' });
           }
           const ext = extname(fullPath).toLowerCase();
-          const contentType = MIME_TYPES[ext] ?? (ext === '.js' ? 'application/javascript' : 'application/octet-stream');
+          const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
           return reply.type(contentType).send(readFileSync(fullPath));
         },
       );
