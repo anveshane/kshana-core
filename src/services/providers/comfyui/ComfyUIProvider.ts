@@ -67,11 +67,22 @@ export class ComfyUIProvider implements GenerationProvider {
     const registry = getRegistry();
     const client = new ComfyUIClient({ outputDir });
 
-    // Determine workflow based on reference images
+    // Determine workflow: check registry for user override, fall back to built-in defaults
     const useQwenEdit = referenceImages.length > 0;
-    const workflowName = useQwenEdit ? 'qwen_edit' : 'zimage';
-    const workflowMetadata = registry.get(workflowName);
+    let workflowName = useQwenEdit ? 'qwen_edit' : 'zimage';
 
+    try {
+      const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
+      const modeRegistry = getWorkflowModeRegistry();
+      const pipeline = useQwenEdit ? 'image_editing' as const : 'image_generation' as const;
+      const activeMode = modeRegistry.getActiveForPipeline(pipeline, 'comfyui');
+      if (activeMode) {
+        workflowName = activeMode.id;
+        debugLog(`Using ${pipeline} workflow: ${activeMode.displayName} (${activeMode.id})`);
+      }
+    } catch { /* registry not available, use defaults */ }
+
+    const workflowMetadata = registry.get(workflowName);
     if (!workflowMetadata) {
       throw new Error(`Workflow '${workflowName}' not found`);
     }
@@ -222,7 +233,27 @@ export class ComfyUIProvider implements GenerationProvider {
     }
 
     const registry = getRegistry();
-    const workflowName = 'ltx23';
+
+    // Determine workflow: check for modeId override, then registry, then built-in default
+    let workflowName = 'ltx23';
+    try {
+      const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
+      const modeRegistry = getWorkflowModeRegistry();
+      if (input.modeId) {
+        const mode = modeRegistry.getMode(input.modeId);
+        if (mode) {
+          workflowName = mode.id;
+          debugLog(`Using video workflow from modeId: ${mode.displayName} (${mode.id})`);
+        }
+      } else {
+        const activeMode = modeRegistry.getActiveForPipeline('video_generation', 'comfyui');
+        if (activeMode) {
+          workflowName = activeMode.id;
+          debugLog(`Using active video workflow: ${activeMode.displayName} (${activeMode.id})`);
+        }
+      }
+    } catch { /* registry not available, use default */ }
+
     const workflowMetadata = registry.get(workflowName);
     if (!workflowMetadata) {
       throw new Error(`Workflow '${workflowName}' not found`);

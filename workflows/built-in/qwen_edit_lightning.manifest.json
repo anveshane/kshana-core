@@ -1,0 +1,31 @@
+{
+  "id": "qwen_edit",
+  "displayName": "Qwen Edit Lightning",
+  "pipeline": "image_editing",
+  "llmDescription": "Fast image editing with reference images. Supports up to 3 input images (base + 2 references). Used for shot image generation with character/setting references.",
+  "selectionCriteria": "Image editing with character or setting reference images. Shot frame generation with visual consistency.",
+  "outputType": "image",
+  "priority": 10,
+  
+  "inputRequirements": [
+    { "id": "base_image", "type": "image", "source": "shot_image", "description": "Primary input image", "required": true },
+    { "id": "prompt", "type": "text", "source": "llm", "description": "Edit/generation prompt", "required": true },
+    { "id": "negative_prompt", "type": "text", "source": "llm", "description": "Negative prompt", "required": false },
+    { "id": "reference_image_1", "type": "image", "source": "user", "description": "First reference image", "required": false },
+    { "id": "reference_image_2", "type": "image", "source": "user", "description": "Second reference image", "required": false }
+  ],
+
+  "workflowFile": "../qwen_edit-lightning.json",
+  "format": "litegraph",
+  "parameterMappings": [
+    { "input": "base_image", "nodeId": "4", "field": "image" },
+    { "input": "reference_image_1", "nodeId": "5", "field": "image" },
+    { "input": "reference_image_2", "nodeId": "6", "field": "image" },
+    { "input": "prompt", "nodeId": "11", "field": "text" },
+    { "input": "negative_prompt", "nodeId": "12", "field": "text" },
+    { "input": "seed", "nodeId": "13", "field": "seed" },
+    { "input": "filenamePrefix", "nodeId": "15", "field": "filename_prefix" }
+  ],
+  "builtIn": true,
+  "active": true
+}

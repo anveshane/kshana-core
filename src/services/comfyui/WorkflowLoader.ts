@@ -630,8 +630,57 @@ export function parameterizeWorkflowByName(
     });
   }
 
-  // Default: return template as-is
+  // Fallback: try generic manifest-driven parameterization
+  try {
+    const { getWorkflowModeRegistry } = require('../providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    const mode = registry.getMode(workflowName);
+    if (mode && mode.parameterMappings.length > 0) {
+      return parameterizeGeneric(template, mode, params);
+    }
+  } catch { /* registry not available */ }
+
+  // Last resort: return template as-is
   return template;
+}
+
+/**
+ * Generic parameterizer: applies declarative parameter mappings from a manifest
+ * to a workflow template. Works with both LiteGraph and API format workflows.
+ *
+ * Used for user-uploaded workflows that have no hardcoded parameterize function.
+ */
+export function parameterizeGeneric(
+  template: WorkflowTemplate,
+  manifest: { parameterMappings: Array<{ input: string; nodeId: string; field: string }> },
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  // Deep copy
+  const workflow: WorkflowTemplate = JSON.parse(JSON.stringify(template));
+
+  // First try API format (flat node map)
+  const apiWorkflow = workflowToPrompt(workflow);
+
+  for (const mapping of manifest.parameterMappings) {
+    const value = params[mapping.input];
+    if (value === undefined) continue;
+
+    const node = apiWorkflow[mapping.nodeId] as { inputs?: Record<string, unknown> } | undefined;
+    if (node) {
+      node.inputs = node.inputs || {};
+      node.inputs[mapping.field] = value;
+    }
+  }
+
+  // Remove non-essential nodes
+  for (const [nodeId, node] of Object.entries(apiWorkflow)) {
+    const nodeData = node as { class_type?: string };
+    if (nodeData.class_type === 'Note' || nodeData.class_type === 'MarkdownNote') {
+      delete apiWorkflow[nodeId];
+    }
+  }
+
+  return apiWorkflow;
 }
 
 /**

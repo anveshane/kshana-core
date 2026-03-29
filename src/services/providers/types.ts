@@ -109,7 +109,7 @@ export interface VideoGenerationInput {
 // ---------------------------------------------------------------------------
 
 /** Which pipeline stage a workflow belongs to */
-export type WorkflowPipeline = 'video_generation' | 'image_processing';
+export type WorkflowPipeline = 'image_generation' | 'image_editing' | 'image_processing' | 'video_generation';
 
 /** Where an input comes from at runtime */
 export type InputSource =
@@ -175,10 +175,12 @@ export interface WorkflowManifest {
   /** Maps inputs to ComfyUI node IDs */
   parameterMappings: ParameterMapping[];
 
-  /** Whether this is a built-in or user-uploaded workflow */
+  /** Whether this is a built-in workflow (immutable, always present, cannot be removed) */
   builtIn?: boolean;
-  /** Whether this mode is currently active */
+  /** Whether this mode is currently active (built-ins are always active) */
   active?: boolean;
+  /** Whether this is a user-selected override for its pipeline (overrides the built-in default) */
+  isOverride?: boolean;
 }
 
 /**

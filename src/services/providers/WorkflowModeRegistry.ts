@@ -149,6 +149,54 @@ export class WorkflowModeRegistry {
   }
 
   /**
+   * Get the active workflow for a pipeline type.
+   * If a user has set an override, returns that. Otherwise returns the built-in default.
+   * Built-in defaults are always present and cannot be removed.
+   */
+  getActiveForPipeline(pipeline: WorkflowPipeline, providerId?: string): WorkflowManifest | undefined {
+    const modes = this.getAvailableModes(pipeline, providerId);
+    // User override takes precedence
+    const override = modes.find(m => m.isOverride && !m.builtIn);
+    if (override) return override;
+    // Fall back to built-in default (highest priority = lowest number)
+    return modes.find(m => m.builtIn) || modes[0];
+  }
+
+  /**
+   * Set a user-uploaded workflow as the active override for its pipeline.
+   * Only user workflows can be overrides. Clears any previous override for the same pipeline.
+   */
+  setOverride(modeId: string): boolean {
+    const mode = this.modes.get(modeId);
+    if (!mode || mode.builtIn) return false; // can't override with a built-in
+    // Clear previous overrides in the same pipeline
+    for (const m of this.modes.values()) {
+      if (m.pipeline === mode.pipeline && !m.builtIn) m.isOverride = false;
+    }
+    mode.isOverride = true;
+    return true;
+  }
+
+  /**
+   * Clear override for a pipeline — reverts to built-in default.
+   */
+  clearOverride(pipeline: WorkflowPipeline): void {
+    for (const m of this.modes.values()) {
+      if (m.pipeline === pipeline && !m.builtIn) m.isOverride = false;
+    }
+  }
+
+  /**
+   * Remove a user-uploaded workflow. Built-ins cannot be removed.
+   */
+  removeMode(modeId: string): boolean {
+    const mode = this.modes.get(modeId);
+    if (!mode || mode.builtIn) return false;
+    this.modes.delete(modeId);
+    return true;
+  }
+
+  /**
    * Get the absolute path to a mode's workflow file.
    */
   getWorkflowPath(mode: WorkflowManifest): string | undefined {
