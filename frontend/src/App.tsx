@@ -6,6 +6,7 @@ import { Header } from './components/Header'
 import { Sidebar } from './components/Sidebar'
 import { ChatTimeline } from './components/ChatTimeline'
 import { TaskInput } from './components/TaskInput'
+import { WorkflowManager } from './components/WorkflowManager'
 
 export function App() {
   const [state, dispatch] = useReducer(appReducer, initialState)
@@ -57,6 +58,8 @@ export function App() {
               <TaskInput onSend={handleSendTask} />
             </main>
           </div>
+          {/* Modals */}
+          <WorkflowManager open={showWorkflows} onClose={() => setShowWorkflows(false)} />
         </div>
       </AppDispatchContext.Provider>
     </AppStateContext.Provider>
