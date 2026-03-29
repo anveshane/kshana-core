@@ -3,6 +3,7 @@ import { useAppState } from '../lib/store'
 
 interface TaskInputProps {
   onSend: (task: string) => void
+  placeholder?: string
 }
 
 const COMMANDS = [
@@ -17,7 +18,7 @@ const COMMANDS = [
   { name: '/serial', description: 'Switch to serial media gen' },
 ]
 
-export function TaskInput({ onSend }: TaskInputProps) {
+export function TaskInput({ onSend, placeholder: customPlaceholder }: TaskInputProps) {
   const { agentStatus, connectionStatus } = useAppState()
   const [value, setValue] = useState('')
   const [showSuggestions, setShowSuggestions] = useState(false)
@@ -112,7 +113,7 @@ export function TaskInput({ onSend }: TaskInputProps) {
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={isDisabled ? 'Waiting...' : 'Type a task or / for commands...'}
+          placeholder={isDisabled ? 'Waiting...' : (customPlaceholder || 'Type a task or / for commands...')}
           disabled={isDisabled}
           className="flex-1 bg-graphite-300 border border-line-soft rounded-lg px-4 py-2.5 text-sm text-foreground placeholder:text-graphite-200 focus:outline-none focus:border-cyan/40 transition-colors disabled:opacity-50"
         />

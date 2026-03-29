@@ -10,7 +10,7 @@ import { WorkflowManager } from './components/WorkflowManager'
 import { ProviderSettings } from './components/ProviderSettings'
 import { ProjectSelector } from './components/ProjectSelector'
 import { ErrorBoundary } from './components/ErrorBoundary'
-import { NewProjectInline } from './components/NewProjectInline'
+import { NewProjectInline, type NewProjectState } from './components/NewProjectInline'
 import { tryExecuteCommand } from './lib/commands'
 
 export function App() {
@@ -19,15 +19,17 @@ export function App() {
   const [showWorkflows, setShowWorkflows] = useState(false)
   const [showNewProject, setShowNewProject] = useState(false)
 
-  // Stable refs for WebSocket callbacks to prevent reconnect loops
+  // When wizard completes (template/style/duration selected),
+  // store the config and wait for user to type description in chat input
+  const [pendingProject, setPendingProject] = useState<NewProjectState | null>(null)
+
+  // Stable refs for WebSocket callbacks
   const dispatchRef = useRef(dispatch)
   dispatchRef.current = dispatch
-
   const handleMessage = useMessageHandler(dispatch)
   const handleMessageRef = useRef(handleMessage)
   handleMessageRef.current = handleMessage
 
-  // Stable callbacks that don't change reference
   const stableOnMessage = useCallback((msg: any) => handleMessageRef.current(msg), [])
   const stableOnConnect = useCallback((sessionId: string) => {
     dispatchRef.current({ type: 'SET_CONNECTION', status: 'connected', sessionId })
@@ -45,7 +47,53 @@ export function App() {
   const handleSendTask = useCallback((task: string) => {
     if (!task.trim()) return
 
-    // Try command first
+    // If we have a pending project config, this message is the project description
+    if (pendingProject) {
+      const config = pendingProject
+      setPendingProject(null)
+
+      // Show as user message
+      dispatch({
+        type: 'ADD_CHAT_MESSAGE',
+        message: { id: `user_${Date.now()}`, type: 'user', content: task, timestamp: Date.now() },
+      })
+
+      // Show config summary
+      dispatch({
+        type: 'ADD_CHAT_MESSAGE',
+        message: {
+          id: `proj_${Date.now()}`,
+          type: 'system',
+          content: `Creating project: **${config.templateId}** · ${config.style} · ${config.duration}s`,
+          timestamp: Date.now(),
+        },
+      })
+
+      // Send create_project to server
+      send({
+        type: 'create_project',
+        data: {
+          templateId: config.templateId,
+          style: config.style,
+          duration: config.duration,
+          content: task,
+          title: task.substring(0, 60),
+          resolution: '480p',
+          resolutionWidth: 848,
+          resolutionHeight: 480,
+          autonomousMode: true,
+        },
+      })
+
+      // Auto-start execution after project creation
+      setTimeout(() => {
+        send({ type: 'start_task', data: { task: 'Create a video project' } })
+        dispatch({ type: 'SET_AGENT_STATUS', status: 'thinking' })
+      }, 2000)
+      return
+    }
+
+    // Try command
     const handled = tryExecuteCommand(task, {
       dispatch,
       send,
@@ -62,14 +110,18 @@ export function App() {
     })
     send({ type: 'start_task', data: { task } })
     dispatch({ type: 'SET_AGENT_STATUS', status: 'thinking' })
-  }, [send, dispatch])
+  }, [send, dispatch, pendingProject])
+
+  // Chat input placeholder changes when waiting for project description
+  const inputPlaceholder = pendingProject
+    ? 'Describe your video project...'
+    : undefined
 
   return (
     <AppStateContext.Provider value={state}>
       <AppDispatchContext.Provider value={dispatch}>
         <ErrorBoundary>
           <div className="app-shell h-screen flex flex-col text-foreground overflow-hidden">
-            {/* Aurora ambient glow */}
             <div className="aurora aurora--left" />
             <div className="aurora aurora--right" />
 
@@ -85,36 +137,38 @@ export function App() {
                 <ChatTimeline />
                 {showNewProject && (
                   <NewProjectInline
-                    onSubmit={(data) => {
+                    onReady={(config) => {
                       setShowNewProject(false)
-                      send({
-                        type: 'create_project',
-                        data: {
-                          ...data,
-                          resolution: '480p',
-                          resolutionWidth: 848,
-                          resolutionHeight: 480,
-                          autonomousMode: true,
-                        },
-                      })
+                      setPendingProject(config)
+                      // Prompt appears in chat input placeholder
                       dispatch({
                         type: 'ADD_CHAT_MESSAGE',
                         message: {
-                          id: `proj_${Date.now()}`,
+                          id: `wiz_${Date.now()}`,
                           type: 'system',
-                          content: `Creating project: **${data.templateId}** · ${data.style} · ${data.duration}s`,
+                          content: 'Now describe your video project in the chat below ↓',
                           timestamp: Date.now(),
                         },
                       })
                     }}
                     onCancel={() => setShowNewProject(false)}
+                    onStepChange={(step, value) => {
+                      dispatch({
+                        type: 'ADD_CHAT_MESSAGE',
+                        message: {
+                          id: `wiz_${Date.now()}`,
+                          type: 'system',
+                          content: `Selected ${step}: **${value}**`,
+                          timestamp: Date.now(),
+                        },
+                      })
+                    }}
                   />
                 )}
-                <TaskInput onSend={handleSendTask} />
+                <TaskInput onSend={handleSendTask} placeholder={inputPlaceholder} />
               </main>
             </div>
 
-            {/* Modals */}
             <WorkflowManager open={showWorkflows} onClose={() => setShowWorkflows(false)} />
             <ProviderSettings open={showProviders} onClose={() => setShowProviders(false)} />
           </div>

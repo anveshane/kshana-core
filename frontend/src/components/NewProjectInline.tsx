@@ -7,30 +7,29 @@ interface Template {
   styles: Array<{ id: string; displayName: string; description?: string }>
 }
 
-interface NewProjectInlineProps {
-  onSubmit: (data: {
-    templateId: string
-    style: string
-    duration: number
-    content: string
-  }) => void
-  onCancel: () => void
+export interface NewProjectState {
+  templateId: string
+  style: string
+  duration: number
 }
 
-export function NewProjectInline({ onSubmit, onCancel }: NewProjectInlineProps) {
+interface NewProjectInlineProps {
+  /** Called when template/style/duration are all selected — waiting for user to type description in chat */
+  onReady: (state: NewProjectState) => void
+  onCancel: () => void
+  onStepChange: (step: string, value: string) => void
+}
+
+export function NewProjectInline({ onReady, onCancel, onStepChange }: NewProjectInlineProps) {
   const [templates, setTemplates] = useState<Template[]>([])
-  const [step, setStep] = useState<'template' | 'style' | 'duration' | 'content'>('template')
+  const [step, setStep] = useState<'template' | 'style' | 'duration'>('template')
   const [templateId, setTemplateId] = useState('')
   const [style, setStyle] = useState('')
-  const [duration, setDuration] = useState(60)
-  const [content, setContent] = useState('')
 
   useEffect(() => {
     fetch('/api/v1/templates')
       .then(r => r.json())
-      .then(data => {
-        setTemplates(data.templates || [])
-      })
+      .then(data => setTemplates(data.templates || []))
       .catch(() => {})
   }, [])
 
@@ -59,6 +58,7 @@ export function NewProjectInline({ onSubmit, onCancel }: NewProjectInlineProps) 
                   key={t.id}
                   onClick={() => {
                     setTemplateId(t.id)
+                    onStepChange('template', t.displayName)
                     if (t.styles?.length > 0) {
                       setStep('style')
                     } else {
@@ -92,27 +92,29 @@ export function NewProjectInline({ onSubmit, onCancel }: NewProjectInlineProps) 
             <div className="text-sm text-foreground mb-3">
               Choose a style for <span className="text-cyan">{selectedTemplate.displayName}</span>:
             </div>
-            <div className="grid gap-2">
-              <div className="grid grid-cols-2 gap-2">
-                {selectedTemplate.styles.map(s => (
-                  <button
-                    key={s.id}
-                    onClick={() => { setStyle(s.id); setStep('duration') }}
-                    className="text-left rounded-lg border border-line-soft hover:border-cyan/30 hover:bg-cyan/5 transition-colors cursor-pointer overflow-hidden"
-                  >
-                    <img
-                      src={`/previews/style_${s.id}.png`}
-                      alt=""
-                      className="w-full h-24 object-cover bg-graphite-400"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-                    />
-                    <div className="px-3 py-2">
-                      <div className="text-sm font-medium text-foreground">{s.displayName}</div>
-                      {s.description && <div className="text-xs text-graphite-100 mt-0.5 line-clamp-2">{s.description}</div>}
-                    </div>
-                  </button>
-                ))}
-              </div>
+            <div className="grid grid-cols-2 gap-2">
+              {selectedTemplate.styles.map(s => (
+                <button
+                  key={s.id}
+                  onClick={() => {
+                    setStyle(s.id)
+                    onStepChange('style', s.displayName)
+                    setStep('duration')
+                  }}
+                  className="text-left rounded-lg border border-line-soft hover:border-cyan/30 hover:bg-cyan/5 transition-colors cursor-pointer overflow-hidden"
+                >
+                  <img
+                    src={`/previews/style_${s.id}.png`}
+                    alt=""
+                    className="w-full h-24 object-cover bg-graphite-400"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                  />
+                  <div className="px-3 py-2">
+                    <div className="text-sm font-medium text-foreground">{s.displayName}</div>
+                    {s.description && <div className="text-xs text-graphite-100 mt-0.5 line-clamp-2">{s.description}</div>}
+                  </div>
+                </button>
+              ))}
             </div>
             <button onClick={() => setStep('template')} className="mt-3 text-xs text-graphite-200 hover:text-foreground cursor-pointer">
               ← Back
@@ -128,7 +130,11 @@ export function NewProjectInline({ onSubmit, onCancel }: NewProjectInlineProps) 
               {DURATIONS.map(d => (
                 <button
                   key={d.value}
-                  onClick={() => { setDuration(d.value); setStep('content') }}
+                  onClick={() => {
+                    onStepChange('duration', d.label)
+                    // All selections done — signal ready, waiting for user to type description
+                    onReady({ templateId, style: style || 'cinematic_realism', duration: d.value })
+                  }}
                   className="text-center px-3 py-2.5 rounded-lg border border-line-soft hover:border-cyan/30 hover:bg-cyan/5 transition-colors cursor-pointer"
                 >
                   <div className="text-sm text-foreground">{d.label}</div>
@@ -138,40 +144,6 @@ export function NewProjectInline({ onSubmit, onCancel }: NewProjectInlineProps) 
             <button onClick={() => setStep(selectedTemplate?.styles?.length ? 'style' : 'template')} className="mt-3 text-xs text-graphite-200 hover:text-foreground cursor-pointer">
               ← Back
             </button>
-          </div>
-        )}
-
-        {/* Step 4: Description */}
-        {step === 'content' && (
-          <div>
-            <div className="text-sm text-foreground mb-1">Describe your project:</div>
-            <div className="text-xs text-graphite-100 mb-3">
-              {templateId} · {style || 'default'} · {duration}s
-            </div>
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              rows={4}
-              autoFocus
-              placeholder="A noir detective story set in a rain-soaked cyberpunk city..."
-              className="w-full px-3 py-2 rounded-md bg-graphite-300 border border-line-soft text-sm text-foreground resize-y focus:outline-none focus:border-cyan/40 placeholder:text-graphite-200"
-            />
-            <div className="flex justify-between items-center mt-3">
-              <button onClick={() => setStep('duration')} className="text-xs text-graphite-200 hover:text-foreground cursor-pointer">
-                ← Back
-              </button>
-              <button
-                onClick={() => {
-                  if (content.trim()) {
-                    onSubmit({ templateId, style: style || 'cinematic_realism', duration, content })
-                  }
-                }}
-                disabled={!content.trim()}
-                className="px-4 py-2 rounded-md bg-cyan text-background font-mono text-xs font-semibold hover:bg-cyan/90 transition-colors disabled:opacity-40 cursor-pointer"
-              >
-                Create Project
-              </button>
-            </div>
           </div>
         )}
       </div>
