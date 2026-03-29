@@ -409,6 +409,10 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 
 function getScript(): string {
   return `
+// ===== Regex patterns (injected from TypeScript to avoid template literal escaping issues) =====
+var _comfyProgressRe = ${'/^(?:Step\\s+(\\d+)\\/(\\d+)\\s+)?\\(?(\\d+)%\\)?$/'};
+var _pctStatusRe = ${'/(\\d+)%/'};
+
 // ===== State =====
 let ws = null;
 let sessionId = null;
@@ -1168,9 +1172,9 @@ function handleToolStreaming(entry, data) {
   if (!streamEl) return;
 
   // Detect ComfyUI progress pattern: "Step N/M (P%)" or just "P%"
-  var progressMatch = data.content && data.content.match(/^(?:Step\\s+(\\d+)\\/(\\d+)\\s+)?\\(?(\\d+)%\\)?$/);
+  var progressMatch = data.content && data.content.match(_comfyProgressRe);
   // Also detect status messages: "Processing node X (0%)", "Loading workflow...", etc.
-  var pctFromStatus = !progressMatch && data.content && data.content.match(/(\\d+)%/);
+  var pctFromStatus = !progressMatch && data.content && data.content.match(_pctStatusRe);
 
   if (data.reset && (progressMatch || pctFromStatus || data.content)) {
     // Ensure progress wrapper exists
