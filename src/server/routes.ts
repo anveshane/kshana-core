@@ -230,9 +230,9 @@ export async function registerRoutes(
     return reply.send({ workflows: grouped, active });
   });
 
-  // Upload a workflow JSON — returns parsed nodes for the integration wizard
+  // Upload a workflow JSON — returns parsed nodes + LLM analysis for the integration wizard
   app.post(`${apiPrefix}/workflows/upload`, async (request: FastifyRequest, reply: FastifyReply) => {
-    const { parseWorkflow } = await import('../services/comfyui/WorkflowParser.js');
+    const { parseWorkflow, analyzeWorkflowWithLLM } = await import('../services/comfyui/WorkflowParser.js');
     const body = request.body as { filename: string; content: string };
     if (!body.content) {
       return reply.status(400).send({ error: 'Missing workflow content' });
@@ -251,10 +251,37 @@ export async function registerRoutes(
       const filePath = path.join(userDir, `${safeName}.json`);
       fs.writeFileSync(filePath, body.content);
 
+      // Run LLM analysis for intelligent suggestions
+      let analysis = null;
+      try {
+        const { LLMClient } = await import('../core/llm/index.js');
+        const llmClient = new LLMClient(llmConfig);
+        analysis = await analyzeWorkflowWithLLM(body.content, parsed, llmClient);
+
+        // Merge LLM suggestions into parsed nodes
+        if (analysis.suggestedMappings) {
+          for (const suggestion of analysis.suggestedMappings) {
+            const node = parsed.inputNodes.find(n => n.nodeId === suggestion.nodeId);
+            if (node) {
+              node.suggestedInput = suggestion.suggestedInput;
+            }
+          }
+        }
+
+        // Override pipeline detection if LLM is more confident
+        if (analysis.pipeline && parsed.detectedPipeline === 'unknown') {
+          parsed.detectedPipeline = analysis.pipeline as any;
+        }
+      } catch (llmErr) {
+        // LLM analysis failed — non-fatal, wizard still works with heuristic suggestions
+        console.warn('[WorkflowUpload] LLM analysis failed:', llmErr);
+      }
+
       return reply.send({
         status: 'uploaded',
         filename: `${safeName}.json`,
         parsed,
+        analysis,
       });
     } catch (err) {
       return reply.status(400).send({ error: `Failed to parse workflow: ${err}` });

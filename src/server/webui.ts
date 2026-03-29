@@ -2559,6 +2559,7 @@ wfUploadInput.addEventListener('change', async function(e) {
   if (!file) return;
   var content = await file.text();
   try {
+    showToast('Uploading and analyzing workflow...', 'info');
     var res = await fetch('/api/v1/workflows/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -2566,16 +2567,22 @@ wfUploadInput.addEventListener('change', async function(e) {
     });
     var data = await res.json();
     if (data.error) { showToast('Upload failed: ' + data.error, 'error'); return; }
-    showWizard(data.filename, data.parsed, content);
+    showWizard(data.filename, data.parsed, content, data.analysis);
   } catch (err) {
     showToast('Upload failed: ' + err, 'error');
   }
   wfUploadInput.value = '';
 });
 
-function showWizard(filename, parsed, rawContent) {
+function showWizard(filename, parsed, rawContent, analysis) {
   wfWizard.style.display = 'block';
   var safeName = filename.replace(/\.json$/, '');
+  // Use LLM analysis to pre-fill fields if available
+  var llmName = analysis ? analysis.displayName : safeName.replace(/_/g, ' ');
+  var llmPipeline = analysis ? analysis.pipeline : parsed.detectedPipeline;
+  var llmDesc = analysis ? analysis.llmDescription : '';
+  var llmCriteria = analysis ? analysis.selectionCriteria : '';
+  var llmExplanation = analysis ? analysis.explanation : '';
 
   var STANDARD_INPUTS = {
     image_generation: ['prompt', 'negative_prompt', 'seed', 'width', 'height', 'filenamePrefix'],
@@ -2585,6 +2592,15 @@ function showWizard(filename, parsed, rawContent) {
   };
 
   var html = '';
+
+  // LLM analysis summary (if available)
+  if (llmExplanation) {
+    html += '<div style="margin-bottom:16px;padding:12px;background:#1a2332;border:1px solid #2563eb33;border-radius:6px;">';
+    html += '<div style="color:#3b82f6;font-size:11px;font-weight:600;margin-bottom:4px;">AI Analysis</div>';
+    html += '<div style="color:#94a3b8;font-size:12px;">' + escHtml(llmExplanation) + '</div>';
+    html += '</div>';
+  }
+
   // Step 1: Name & Type
   html += '<div style="margin-bottom:16px;">';
   html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Workflow ID</label>';
@@ -2593,7 +2609,7 @@ function showWizard(filename, parsed, rawContent) {
 
   html += '<div style="margin-bottom:16px;">';
   html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Display Name</label>';
-  html += '<input id="wiz-name" value="' + escHtml(safeName.replace(/_/g, ' ')) + '" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;">';
+  html += '<input id="wiz-name" value="' + escHtml(llmName) + '" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;">';
   html += '</div>';
 
   html += '<div style="margin-bottom:16px;">';
@@ -2601,7 +2617,7 @@ function showWizard(filename, parsed, rawContent) {
   html += '<select id="wiz-pipeline" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;" onchange="updateWizardMappings()">';
   var pipelines = ['image_generation', 'image_editing', 'video_generation', 'image_processing'];
   for (var p of pipelines) {
-    var sel = p === parsed.detectedPipeline ? ' selected' : '';
+    var sel = p === llmPipeline ? ' selected' : '';
     html += '<option value="' + p + '"' + sel + '>' + (PIPELINE_LABELS[p] || p) + '</option>';
   }
   html += '</select>';
@@ -2623,12 +2639,12 @@ function showWizard(filename, parsed, rawContent) {
   // Step 3: LLM Description
   html += '<div style="margin-bottom:16px;">';
   html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Description (for LLM — what does this workflow do?)</label>';
-  html += '<textarea id="wiz-desc" rows="3" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;resize:vertical;" placeholder="Generates video by interpolating between first and last frame..."></textarea>';
+  html += '<textarea id="wiz-desc" rows="3" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;resize:vertical;" placeholder="Generates video by interpolating between first and last frame...">' + escHtml(llmDesc) + '</textarea>';
   html += '</div>';
 
   html += '<div style="margin-bottom:16px;">';
   html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Selection Criteria (when should LLM pick this?)</label>';
-  html += '<textarea id="wiz-criteria" rows="2" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;resize:vertical;" placeholder="Shot has clear visual start and end difference..."></textarea>';
+  html += '<textarea id="wiz-criteria" rows="2" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;resize:vertical;" placeholder="Shot has clear visual start and end difference...">' + escHtml(llmCriteria) + '</textarea>';
   html += '</div>';
 
   // Save button
