@@ -10,12 +10,14 @@ import { WorkflowManager } from './components/WorkflowManager'
 import { ProviderSettings } from './components/ProviderSettings'
 import { ProjectSelector } from './components/ProjectSelector'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { NewProjectInline } from './components/NewProjectInline'
 import { tryExecuteCommand } from './lib/commands'
 
 export function App() {
   const [state, dispatch] = useReducer(appReducer, initialState)
   const [showProviders, setShowProviders] = useState(false)
   const [showWorkflows, setShowWorkflows] = useState(false)
+  const [showNewProject, setShowNewProject] = useState(false)
 
   // Stable refs for WebSocket callbacks to prevent reconnect loops
   const dispatchRef = useRef(dispatch)
@@ -49,6 +51,7 @@ export function App() {
       send,
       setShowWorkflows,
       setShowProviders,
+      setShowNewProject,
     })
     if (handled) return
 
@@ -80,6 +83,33 @@ export function App() {
               <Sidebar />
               <main className="flex-1 flex flex-col overflow-hidden">
                 <ChatTimeline />
+                {showNewProject && (
+                  <NewProjectInline
+                    onSubmit={(data) => {
+                      setShowNewProject(false)
+                      send({
+                        type: 'create_project',
+                        data: {
+                          ...data,
+                          resolution: '480p',
+                          resolutionWidth: 848,
+                          resolutionHeight: 480,
+                          autonomousMode: true,
+                        },
+                      })
+                      dispatch({
+                        type: 'ADD_CHAT_MESSAGE',
+                        message: {
+                          id: `proj_${Date.now()}`,
+                          type: 'system',
+                          content: `Creating project: **${data.templateId}** · ${data.style} · ${data.duration}s`,
+                          timestamp: Date.now(),
+                        },
+                      })
+                    }}
+                    onCancel={() => setShowNewProject(false)}
+                  />
+                )}
                 <TaskInput onSend={handleSendTask} />
               </main>
             </div>

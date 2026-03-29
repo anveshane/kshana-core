@@ -11,6 +11,7 @@ export interface CommandContext {
   send: (msg: Record<string, unknown>) => void
   setShowWorkflows: (v: boolean) => void
   setShowProviders: (v: boolean) => void
+  setShowNewProject: (v: boolean) => void
 }
 
 interface CommandDef {
@@ -43,16 +44,7 @@ const COMMANDS: Record<string, CommandDef> = {
     description: 'Create a new project',
     usage: '/new',
     handler: (_args, ctx) => {
-      ctx.send({ type: 'create_project', data: {} })
-      ctx.dispatch({
-        type: 'ADD_CHAT_MESSAGE',
-        message: {
-          id: `cmd_${Date.now()}`,
-          type: 'system',
-          content: 'Starting new project wizard...',
-          timestamp: Date.now(),
-        },
-      })
+      ctx.setShowNewProject(true)
     },
   },
 
@@ -105,16 +97,17 @@ const COMMANDS: Record<string, CommandDef> = {
 
   select: {
     description: 'Select a project',
-    usage: '/select <project-name>',
+    usage: '/select [project-name]',
     handler: (args, ctx) => {
       const name = args.trim()
       if (!name) {
+        // No name given — show a hint to use the dropdown
         ctx.dispatch({
           type: 'ADD_CHAT_MESSAGE',
           message: {
             id: `cmd_${Date.now()}`,
             type: 'system',
-            content: 'Usage: `/select <project-name>`',
+            content: 'Use the project dropdown in the header to select a project, or type `/select <project-name>` with the exact directory name.',
             timestamp: Date.now(),
           },
         })
