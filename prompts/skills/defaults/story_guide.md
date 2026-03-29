@@ -1,87 +1,90 @@
-**PURPOSE**: Write a condensed screenplay-format story optimized for AI video generation. The output must be producible within the target duration — every character needs an image generated, every setting needs a reference, every scene needs shots. Fewer elements = higher quality per element.
+**PURPOSE**: Write a screenplay for AI video production. The screenplay IS the production document — every character named will get a reference image generated, every location will get a setting image, every scene will get shot breakdowns and video clips. Write ONLY what fits the target duration.
 
 ---
 
-## Duration-Based Constraints
-
-These are HARD LIMITS. Exceeding them wastes generation time and budget.
-
-| Duration | Characters | Settings | Scenes | Word Limit |
-|----------|-----------|----------|--------|------------|
-| 15-30s   | 1-2       | 1        | 1-2    | 300        |
-| 31-60s   | 2-3       | 1-2      | 2-4    | 600        |
-| 61-120s  | 3-5       | 2-3      | 4-6    | 1200       |
-| 121-180s | 4-6       | 3-4      | 5-8    | 1800       |
-| 181-300s | 5-8       | 4-5      | 7-10   | 2500       |
-| 300s+    | 6-10      | 5-7      | 8-12   | 3500       |
-
-**Use the target duration provided in the project constraints to determine your limits.**
-
-## Why These Limits Matter
-
-Every character you name will need:
-- A written profile (~30s LLM time)
-- A reference image generated (~15s ComfyUI time)
-- Appearance in shot images (more characters = more complex prompts = worse results)
-
-Every setting you name will need:
-- A written profile (~30s LLM time)
-- A reference image generated (~15s ComfyUI time)
-
-Every scene will need:
-- A detailed scene description (~45s LLM time)
-- Shot breakdown into 3-5 individual shots
-- Each shot needs: image prompt, reference image, motion directive, video generation
-
-**A 1-minute video with 11 characters and 13 settings = 149 generation steps = 2+ hours of compute. The same story with 3 characters and 2 settings = ~40 steps = 30 minutes.**
-
-## Screenplay Format
-
-Write in condensed screenplay format:
+## Format: Standard Screenplay
 
 ```
-## [SCENE TITLE]
+FADE IN:
 
-**[INT/EXT. LOCATION - TIME]**
+INT. LOCATION NAME - TIME
 
-[Action description. Keep it visual — what the camera sees, not internal thoughts.]
+Action lines describe what the camera sees. Present tense. Visual only.
 
-**CHARACTER:** "Dialogue line." *(delivery note)*
+            CHARACTER NAME
+      Dialogue line here.
 
-[More action. Describe physical movements, lighting changes, key visual moments.]
+More action. Specific physical movements.
+
+                                          CUT TO:
+
+EXT. NEXT LOCATION - TIME
+
+...
+
+FADE OUT.
 ```
 
-## Rules
+## Duration = Page Count
 
-1. **Name only characters the camera SEES** — if someone is mentioned but never on screen, don't name them
-2. **Consolidate locations** — "the bar" and "outside the bar" can be one setting
-3. **Every scene must advance the story** — no establishing-only scenes unless the video is 2+ minutes
-4. **Dialogue is optional** — visual storytelling is more powerful for short videos
-5. **End with a clear visual punctuation** — a final image, a fade to black moment, a reveal
-6. **Include a CAST LIST at the end** — list only the characters that appear on screen with a one-line visual description
-7. **Include a LOCATIONS LIST at the end** — list only distinct locations with a one-line visual description
+The iron rule of screenwriting: **1 page ≈ 1 minute of screen time.**
 
-## Cast & Locations Lists
+| Target Duration | Max Pages | Max Characters | Max Locations | Max Scenes |
+|----------------|-----------|---------------|---------------|------------|
+| 15-30s         | ½ page    | 1-2           | 1             | 1          |
+| 31-60s         | 1 page    | 2-3           | 1-2           | 2-3        |
+| 61-120s        | 2 pages   | 3-4           | 2-3           | 3-5        |
+| 121-180s       | 3 pages   | 4-5           | 3-4           | 4-6        |
+| 181-300s       | 5 pages   | 5-7           | 4-5           | 6-8        |
 
-These lists at the end of the story are what the system uses to create character/setting profiles and reference images. Be precise:
+**Use the target duration from the project constraints.**
+
+## Screenplay Rules
+
+1. **Character names in CAPS on first appearance** — include a brief visual description in parentheses:
+   `DETECTIVE CHEN (40s, weathered face, grey trench coat) stands at the window.`
+
+2. **Scene headings (sluglines)** — `INT.` or `EXT.` + location + time of day:
+   `INT. NOODLE BAR - NIGHT`
+
+3. **Action lines** — present tense, what the camera sees. No internal thoughts. No "he feels sad" — instead "his jaw clenches, he turns away."
+
+4. **Dialogue** — character name centered, dialogue below. Parenthetical delivery notes in (parentheses):
+   ```
+               CHEN
+         (under his breath)
+   Not again.
+   ```
+
+5. **Transitions** — `CUT TO:`, `FADE TO BLACK.`, `SMASH CUT:` right-aligned between scenes
+
+## What the Screenplay Must NOT Have
+
+- **Narrator voice explaining things** — show, don't tell
+- **Characters who never appear on screen** — if they're only mentioned, don't name them
+- **Multiple locations that could be one** — "kitchen" and "dining room" in the same apartment = `INT. CHEN'S APARTMENT`
+- **More characters/locations than the duration allows** — this is a hard limit, not a suggestion
+- **Camera directions** — no "we see" or "the camera pans" — that's for the shot planner
+- **Page count exceeding duration** — a 1-minute video gets 1 page, period
+
+## End Matter
+
+After `FADE OUT.`, include:
 
 ```
 ---
-## CAST
-- **Detective Chen**: Late 40s, Chinese-American, weathered face, grey trench coat, always has a cigarette
-- **Luna**: Early 20s, platinum blonde pixie cut, neon-green jacket, cybernetic left eye
+## CAST (in order of appearance)
+- **DETECTIVE CHEN**: 40s, Chinese-American, weathered angular face, short grey-streaked hair, worn grey trench coat over dark shirt, always has an unlit cigarette behind his ear
+- **LUNA**: Early 20s, platinum blonde pixie cut, oversized neon-green bomber jacket, cybernetic replacement left eye with blue iris glow
 
 ## LOCATIONS
-- **The Noodle Bar**: Cramped Chinatown joint, steam from kitchen, red paper lanterns, rain-streaked window
-- **The Alley**: Narrow, wet cobblestones, fire escape ladders, single flickering neon sign
+- **NOODLE BAR**: Cramped Chinatown joint, steaming kitchen visible through pass-through window, red paper lanterns, rain-streaked front window, worn Formica counter with chrome stools
+- **THE ALLEY**: Narrow passage between brick buildings, wet cobblestones, rusted fire escape, single flickering pink neon sign reading "PSYCHIC"
 ```
 
-## What NOT to Do
+These lists are extracted by the system to create character profiles and reference images. Be specific about:
+- **Age, ethnicity, build** — the image generator needs this
+- **Clothing and distinguishing features** — what makes them visually unique
+- **For locations**: materials, lighting, key objects, atmosphere
 
-- Don't write a novel — this is a screenplay, not a book
-- Don't name characters who appear for one line of background dialogue
-- Don't create separate locations for "hallway" and "room" in the same building — it's one setting
-- Don't write internal monologue — the camera can't see thoughts
-- Don't exceed the word limit for your duration tier
-
-Output ONLY the screenplay content with cast and locations lists.
+Output ONLY the screenplay with cast and locations lists.

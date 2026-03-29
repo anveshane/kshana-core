@@ -1072,7 +1072,7 @@ Rules:
 
     // Inject guides/skills for relevant categories
     const loadedSkills: string[] = [];
-    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'story' || node.typeId === 'scene_video_prompt' || node.typeId === 'world_style' || node.typeId === 'shot_motion_directive';
+    const needsSkills = effectiveCategory === 'visual_ref' || effectiveCategory === 'clip' || effectiveCategory === 'segment' || node.typeId === 'plot' || node.typeId === 'story' || node.typeId === 'scene_video_prompt' || node.typeId === 'world_style' || node.typeId === 'shot_motion_directive';
     if (needsSkills) {
       const skills = this.loadSkillsForNode(node);
       if (skills.content) {
@@ -1179,6 +1179,7 @@ Rules:
 
     // Map node types to guide names and content types for skill resolution
     const guideMap: Record<string, string> = {
+      plot: 'plot_guide',
       story: 'story_guide',
       character_image: 'character_image_guide',
       setting_image: 'setting_image_guide',

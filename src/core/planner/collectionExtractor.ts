@@ -83,11 +83,10 @@ Rules:
 
   try {
     const parsed = JSON.parse(response.content ?? '{}') as CollectionItems;
-    // Enforce hard caps — truncate if LLM exceeded limits
     return {
-      characters: (parsed.characters ?? []).slice(0, maxChars),
-      settings: (parsed.settings ?? []).slice(0, maxSettings),
-      scenes: (parsed.scenes ?? []).slice(0, maxScenes),
+      characters: parsed.characters ?? [],
+      settings: parsed.settings ?? [],
+      scenes: parsed.scenes ?? [],
     };
   } catch {
     // If parsing fails, return empty collections
