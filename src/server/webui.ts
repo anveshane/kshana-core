@@ -409,9 +409,17 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 
 function getScript(): string {
   return `
-// ===== Regex patterns (injected from TypeScript to avoid template literal escaping issues) =====
+// ===== Regex patterns (injected from TypeScript to avoid template literal escaping) =====
 var _comfyProgressRe = ${'/^(?:Step\\s+(\\d+)\\/(\\d+)\\s+)?\\(?(\\d+)%\\)?$/'};
 var _pctStatusRe = ${'/(\\d+)%/'};
+var _mediaPatternRe = ${'/([\\w\\/\\-_.]+\\.(png|jpg|jpeg|webp|gif|mp4|webm|mov))/gi'};
+var _looksLikeMdRe = ${'/^#{1,3} |\\n#{1,3} |\\*\\*[^*]+\\*\\*|^- /'};
+var _resultPrefixRe = ${'/^Result\\s*/'};
+var _codeBlockRe = ${'/```(\\w*?)\\n([\\s\\S]*?)```/g'};
+var _olListRe = ${'/^\\d+\\. (.+)$/gm'};
+var _ulWrapRe = ${'/((?:<li>.*?<\\/li>\\s*)+)/g'};
+var _doubleNewlineRe = ${'/\\n\\n/g'};
+var _singleNewlineRe = ${'/\\n/g'};
 
 // ===== State =====
 let ws = null;
@@ -1102,7 +1110,7 @@ function renderToolResult(container, toolName, result) {
   var resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
 
   // Check if result is markdown-like (from read_file on .md files, or has markdown headers)
-  var looksLikeMd = /^#{1,3} |\\n#{1,3} |\\*\\*[^*]+\\*\\*|^- /.test(resultStr);
+  var looksLikeMd = _looksLikeMdRe.test(resultStr);
   // Check if result is JSON
   var looksLikeJson = resultStr.trimStart().startsWith('{') || resultStr.trimStart().startsWith('[');
   // Check if result is very long
@@ -1252,7 +1260,7 @@ function copyCardText(btn, event) {
   var resultEl = card.querySelector('.tool-result-section');
   if (resultEl && resultEl.style.display !== 'none') {
     var resultText = resultEl.textContent || '';
-    resultText = resultText.replace(/^Result\\s*/, '').trim();
+    resultText = resultText.replace(_resultPrefixRe, '').trim();
     if (resultText) parts.push('Result:\\n' + resultText);
   }
   // Think card body (md content)
@@ -1286,7 +1294,7 @@ function copyCardText(btn, event) {
 
 // ===== Media in Results =====
 function renderImagesInResult(container, text) {
-  const mediaPattern = /([\\w\\/\\-_.]+\\.(png|jpg|jpeg|webp|gif|mp4|webm|mov))/gi;
+  const mediaPattern = _mediaPatternRe;
   const matches = text.match(mediaPattern);
   if (!matches || !selectedProject) return;
 
@@ -2033,7 +2041,7 @@ function renderMarkdown(text) {
   let html = escHtml(text);
 
   // Code blocks
-  html = html.replace(/\`\`\`(\\w*?)\\n([\\s\\S]*?)\`\`\`/g, function(m, lang, code) {
+  html = html.replace(_codeBlockRe, function(m, lang, code) {
     return '<pre><code>' + code + '</code></pre>';
   });
 
@@ -2056,10 +2064,10 @@ function renderMarkdown(text) {
   // Unordered lists
   html = html.replace(/^[\\-\\*] (.+)$/gm, '<li>$1</li>');
   // Wrap consecutive li in ul
-  html = html.replace(/((?:<li>.*?<\\/li>\\s*)+)/g, '<ul>$1</ul>');
+  html = html.replace(_ulWrapRe, '<ul>$1</ul>');
 
   // Ordered lists
-  html = html.replace(/^\\d+\\. (.+)$/gm, '<li>$1</li>');
+  html = html.replace(_olListRe, '<li>$1</li>');
 
   // Links
   html = html.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
@@ -2068,8 +2076,8 @@ function renderMarkdown(text) {
   html = html.replace(/!\\[([^\\]]*?)\\]\\(([^)]+)\\)/g, '<img src="$2" alt="$1">');
 
   // Paragraphs
-  html = html.replace(/\\n\\n/g, '</p><p>');
-  html = html.replace(/\\n/g, '<br>');
+  html = html.replace(_doubleNewlineRe, '</p><p>');
+  html = html.replace(_singleNewlineRe, '<br>');
   html = '<p>' + html + '</p>';
 
   // Clean up
