@@ -1,0 +1,135 @@
+@import "tailwindcss";
+
+/*
+ * Kshana-Ink Design Tokens
+ * Derived from kshana-website design system.
+ * Dark-first, cyan + green accents, glassmorphic depth.
+ */
+
+:root {
+  /* ── Core palette ──────────────────────────────────────── */
+  --background: #030508;
+  --foreground: #eef4fa;
+  --signal-cyan: #569ed6;
+  --kshana-green: #34d399;
+
+  /* ── Surfaces (glassmorphic) ───────────────────────────── */
+  --panel: rgba(10, 13, 19, 0.72);
+  --panel-strong: rgba(13, 17, 24, 0.92);
+  --surface-overlay: rgba(255, 255, 255, 0.04);
+
+  /* ── Borders ───────────────────────────────────────────── */
+  --line-soft: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.16);
+
+  /* ── Graphite neutral scale ────────────────────────────── */
+  --graphite-050: #b8c4d2;
+  --graphite-100: #8b949e;
+  --graphite-150: #6e7a87;
+  --graphite-200: #525c68;
+  --graphite-250: #3a4350;
+  --graphite-300: #272e38;
+  --graphite-350: #1c2230;
+  --graphite-400: #131924;
+  --graphite-450: #0a0e16;
+
+  /* ── Semantic colors ───────────────────────────────────── */
+  --success: #34d399;
+  --warning: #f0883e;
+  --error: #da3633;
+  --info: #569ed6;
+
+  /* ── Typography ────────────────────────────────────────── */
+  --font-display: 'Cormorant Garamond', serif;
+  --font-body: 'Manrope', sans-serif;
+  --font-code: 'JetBrains Mono', monospace;
+
+  /* ── Shadows ───────────────────────────────────────────── */
+  --surface-shadow: 0 30px 80px rgba(0, 0, 0, 0.36);
+  --button-shadow: 0 20px 38px rgba(0, 0, 0, 0.28);
+  --card-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+
+  /* ── Radii ─────────────────────────────────────────────── */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.8rem;
+  --radius-pill: 999px;
+}
+
+/* ── Tailwind theme mapping ──────────────────────────────── */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-cyan: var(--signal-cyan);
+  --color-green: var(--kshana-green);
+  --color-panel: var(--panel);
+  --color-panel-strong: var(--panel-strong);
+  --color-line-soft: var(--line-soft);
+  --color-line-strong: var(--line-strong);
+  --color-surface: var(--surface-overlay);
+  --color-graphite-50: var(--graphite-050);
+  --color-graphite-100: var(--graphite-100);
+  --color-graphite-200: var(--graphite-200);
+  --color-graphite-300: var(--graphite-300);
+  --color-graphite-400: var(--graphite-400);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --color-info: var(--info);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-code);
+  --font-display: var(--font-display);
+}
+
+/* ── Base styles ─────────────────────────────────────────── */
+html {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--graphite-250);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--graphite-200);
+}
+
+/* ── Selection ───────────────────────────────────────────── */
+::selection {
+  background: rgba(86, 158, 214, 0.28);
+}
+
+/* ── Glassmorphic panel utility ──────────────────────────── */
+.glass-panel {
+  background: var(--panel);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+}
+
+.glass-panel-strong {
+  background: var(--panel-strong);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+}
