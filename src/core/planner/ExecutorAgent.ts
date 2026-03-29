@@ -1180,7 +1180,7 @@ Rules:
     // Map node types to guide names and content types for skill resolution
     const guideMap: Record<string, string> = {
       plot: 'plot_guide',
-      story: 'story_guide',
+      story: 'screenplay_guide',
       character_image: 'character_image_guide',
       setting_image: 'setting_image_guide',
       shot_image_prompt: 'shot_image_guide',

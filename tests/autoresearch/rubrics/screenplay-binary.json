@@ -1,0 +1,66 @@
+{
+  "name": "Screenplay Binary",
+  "description": "Binary yes/no evaluation of screenplay quality — checks that the screenplay is producible within the target duration with manageable generation cost. The screenplay drives ALL downstream generation: characters, settings, scenes, images, videos.",
+  "format": "binary",
+  "phase": "story",
+  "promptType": "story",
+  "context": ["plot", "duration"],
+  "questions": [
+    {
+      "id": "SCREENPLAY_FORMAT",
+      "question": "Is the output in proper screenplay format? Must have: scene headings (INT./EXT. LOCATION - TIME), character names in CAPS on first appearance, dialogue formatted with centered character names, action lines in present tense. NOT prose fiction, NOT a novel, NOT bullet points."
+    },
+    {
+      "id": "CHARACTER_COUNT",
+      "question": "Is the number of named characters within the duration budget? For a 60s video: max 3 characters. For 120s: max 5. For 180s: max 6. For 300s: max 8. Count every character whose name appears in CAPS. Answer NO if there are more named characters than the budget allows."
+    },
+    {
+      "id": "LOCATION_COUNT",
+      "question": "Is the number of distinct locations within the duration budget? For a 60s video: max 2 locations. For 120s: max 3. For 180s: max 4. For 300s: max 5. Count every unique INT./EXT. slugline location (ignore time-of-day variations of the same place). Answer NO if there are more locations than the budget allows."
+    },
+    {
+      "id": "SCENE_COUNT",
+      "question": "Is the number of scenes within the duration budget? For a 60s video: max 4 scenes. For 120s: max 6. For 180s: max 8. For 300s: max 10. Count every scene heading (INT./EXT. line). Answer NO if there are more scenes than the budget allows."
+    },
+    {
+      "id": "PAGE_LENGTH",
+      "question": "Is the screenplay approximately the right length for the duration? 1 page ≈ 1 minute of screen time. A 60s screenplay should be roughly half a page to one page (~300-600 words). A 120s screenplay should be 1-2 pages (~600-1200 words). Answer NO if the screenplay is significantly longer than what the duration warrants (e.g., 2000 words for a 60s video)."
+    },
+    {
+      "id": "CAST_LIST",
+      "question": "Does the screenplay end with a CAST section listing every named character with a visual description? Each entry must include: approximate age, physical appearance details (hair, build, skin tone), clothing, and at least one distinguishing visual feature. Answer NO if the cast list is missing, incomplete, or descriptions are too vague for an image generator."
+    },
+    {
+      "id": "LOCATIONS_LIST",
+      "question": "Does the screenplay end with a LOCATIONS section listing every distinct location with a visual description? Each entry must include: interior/exterior, lighting, key objects, materials/textures, and atmosphere. Answer NO if the locations list is missing, incomplete, or descriptions are too vague for an image generator."
+    },
+    {
+      "id": "VISUAL_ACTIONS",
+      "question": "Are the action lines visual and filmable? They should describe what the camera SEES — physical movements, facial expressions, objects, lighting changes. NOT internal thoughts ('he wondered'), NOT abstract emotions ('a sense of dread filled the room'), NOT narration ('little did she know'). Answer NO if more than 2 action lines describe unfilmable content."
+    },
+    {
+      "id": "CHARACTER_INTRODUCTIONS",
+      "question": "When each character first appears, is their name in CAPS followed by a brief visual description in parentheses or the action line? Example: 'DETECTIVE CHEN (40s, weathered face, grey trench coat) enters.' The AI needs this to generate a consistent character image. Answer NO if any character appears without a visual introduction."
+    },
+    {
+      "id": "STORY_FAITHFUL",
+      "question": "Does the screenplay faithfully adapt the plot treatment? The core story beats, characters, and setting from the plot should be present. The screenplay should not invent major new elements or contradict the plot. Minor expansions (adding dialogue, detailing actions) are fine."
+    },
+    {
+      "id": "COMPLETE_ARC",
+      "question": "Does the screenplay have a complete narrative arc within the duration? There should be a clear beginning (setup), middle (conflict/action), and end (resolution/punchline/twist). A 60s screenplay can have a minimal arc (setup → single event → reaction). Answer NO if the story feels incomplete or just stops without resolution."
+    },
+    {
+      "id": "DIALOGUE_ECONOMY",
+      "question": "Is dialogue used economically? For a 60s video, dialogue should be minimal (0-4 lines total). For 120s, up to 8-10 lines. Dialogue slows pacing and requires audio generation. Visual storytelling is preferred for short durations. Answer NO if the amount of dialogue is excessive for the target duration."
+    },
+    {
+      "id": "NO_CAMERA_DIRECTIONS",
+      "question": "Is the screenplay free of camera directions? The screenplay should NOT contain 'we see', 'the camera pans', 'close-up on', 'wide shot of', 'cut to reveal'. Camera work is decided by the shot planner, not the screenwriter. Transitions (CUT TO:, FADE OUT.) are acceptable. Answer NO if camera directions are present in action lines."
+    },
+    {
+      "id": "PRODUCIBILITY",
+      "question": "Overall: could this screenplay be produced as an AI-generated video within the stated duration? Consider: Are there impossible-to-generate scenes (crowds of 50 people, complex action sequences with many actors)? Are the visual demands reasonable for current AI image/video generation? Answer NO if any scene would be extremely difficult for AI to render convincingly."
+    }
+  ]
+}
