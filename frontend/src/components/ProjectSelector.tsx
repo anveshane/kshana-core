@@ -55,6 +55,17 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
     onSendWs({ type: 'select_project', data: { projectName } })
     loadProjectAssets(dirName)
     loadProjectState(dirName)
+
+    // Show selection confirmation in chat
+    dispatch({
+      type: 'ADD_CHAT_MESSAGE',
+      message: {
+        id: `sel_${Date.now()}`,
+        type: 'system',
+        content: `Project **${projectName}** loaded. Type a task to continue, or send "Create a video project" to start/resume execution.`,
+        timestamp: Date.now(),
+      },
+    })
   }
 
   const loadProjectState = async (dirName: string) => {
