@@ -20,6 +20,12 @@
 
 9. **UNIQUE FEATURES** — Scars, markings, missing limbs, glowing elements, accessories, tattoos, non-human anatomy (e.g., "small scar above left eyebrow, single chain necklace with locket", "missing left forearm sealed with hardened biological material, cracked torso skin emitting bioluminescent glow from within").
 
+10. **HISTORICAL / WORLD CONTEXT** — If the character profile or world style bible indicates a specific time period, culture, or setting era, you MUST include this in the prompt. The image generator has no other way to know the period. Examples:
+    - Ancient India: "ancient Mauryan Empire era (300 BC), traditional Indian garments of the period"
+    - Medieval Europe: "14th century European, Gothic period clothing and accessories"
+    - Cyberpunk future: "near-future cyberpunk aesthetic, neon-lit urban tech"
+    - If no specific period: omit this element (modern/contemporary is the default)
+
 **REQUIRED ELEMENTS — include these in every prompt regardless of character type:**
 - Shot type: "full-body portrait" unless the profile specifies otherwise
 - Background: plain neutral studio background — never a location, room, landscape, or environment from the story

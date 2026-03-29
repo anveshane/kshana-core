@@ -177,6 +177,12 @@ const characterImageArtifact: ArtifactTypeDefinition = {
       usage: 'context',
       scope: 'matching',
     },
+    {
+      artifactTypeId: 'world_style',
+      required: false,
+      usage: 'context',
+      scope: 'all',
+    },
   ],
   metadataSchema: {
     characterId: { type: 'string', required: true, description: 'ID of the source character' },
@@ -204,6 +210,12 @@ const settingImageArtifact: ArtifactTypeDefinition = {
       required: true,
       usage: 'context',
       scope: 'matching',
+    },
+    {
+      artifactTypeId: 'world_style',
+      required: false,
+      usage: 'context',
+      scope: 'all',
     },
   ],
   metadataSchema: {

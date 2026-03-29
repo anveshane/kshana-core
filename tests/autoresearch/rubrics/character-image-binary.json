@@ -52,6 +52,14 @@
     {
       "id": "UNIQUENESS",
       "question": "Based on the description, would this character be visually distinguishable from a generic stock photo person?"
+    },
+    {
+      "id": "PERIOD_CONTEXT",
+      "question": "If the character profile or world style indicates a specific historical period, culture, or era (e.g., ancient India, medieval Europe, cyberpunk future, 1920s America), does the image prompt include this context? The image generator defaults to modern/contemporary without explicit period cues. Clothing, accessories, hairstyle, and materials should all be period-appropriate. Answer YES if period context is included or if the story is set in modern times. Answer NO if the character is from a historical or fantasy setting but the prompt reads as contemporary."
+    },
+    {
+      "id": "WORLD_STYLE_CONSISTENCY",
+      "question": "If a world style bible is provided as context, does the image prompt reflect its visual direction — color palette, material choices, lighting mood, and aesthetic? For example, if the world style specifies 'warm amber and charcoal tones' the character shouldn't be described in bright neon colors. Answer YES if consistent or if no world style is provided."
     }
   ]
 }
