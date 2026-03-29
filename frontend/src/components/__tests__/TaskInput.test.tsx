@@ -9,7 +9,7 @@ describe('TaskInput', () => {
     renderWithState(<TaskInput onSend={vi.fn()} />, {
       state: { connectionStatus: 'connected', agentStatus: 'idle' },
     })
-    expect(screen.getByPlaceholderText('Type a task...')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Type a task or / for commands...')).toBeInTheDocument()
     expect(screen.getByText('Send')).toBeInTheDocument()
   })
 
@@ -32,7 +32,7 @@ describe('TaskInput', () => {
     renderWithState(<TaskInput onSend={onSend} />, {
       state: { connectionStatus: 'connected', agentStatus: 'idle' },
     })
-    const input = screen.getByPlaceholderText('Type a task...')
+    const input = screen.getByPlaceholderText('Type a task or / for commands...')
     await userEvent.type(input, 'Generate a video{Enter}')
     expect(onSend).toHaveBeenCalledWith('Generate a video')
   })
@@ -42,7 +42,7 @@ describe('TaskInput', () => {
     renderWithState(<TaskInput onSend={onSend} />, {
       state: { connectionStatus: 'connected', agentStatus: 'idle' },
     })
-    const input = screen.getByPlaceholderText('Type a task...')
+    const input = screen.getByPlaceholderText('Type a task or / for commands...')
     await userEvent.type(input, 'Create a scene')
     await userEvent.click(screen.getByText('Send'))
     expect(onSend).toHaveBeenCalledWith('Create a scene')
@@ -52,7 +52,7 @@ describe('TaskInput', () => {
     renderWithState(<TaskInput onSend={vi.fn()} />, {
       state: { connectionStatus: 'connected', agentStatus: 'idle' },
     })
-    const input = screen.getByPlaceholderText('Type a task...')
+    const input = screen.getByPlaceholderText('Type a task or / for commands...')
     await userEvent.type(input, 'Test task{Enter}')
     expect(input).toHaveValue('')
   })

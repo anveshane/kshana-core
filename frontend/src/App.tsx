@@ -10,6 +10,7 @@ import { WorkflowManager } from './components/WorkflowManager'
 import { ProviderSettings } from './components/ProviderSettings'
 import { ProjectSelector } from './components/ProjectSelector'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { tryExecuteCommand } from './lib/commands'
 
 export function App() {
   const [state, dispatch] = useReducer(appReducer, initialState)
@@ -41,13 +42,24 @@ export function App() {
 
   const handleSendTask = useCallback((task: string) => {
     if (!task.trim()) return
+
+    // Try command first
+    const handled = tryExecuteCommand(task, {
+      dispatch,
+      send,
+      setShowWorkflows,
+      setShowProviders,
+    })
+    if (handled) return
+
+    // Regular task
     dispatch({
       type: 'ADD_CHAT_MESSAGE',
       message: { id: `user_${Date.now()}`, type: 'user', content: task, timestamp: Date.now() },
     })
     send({ type: 'start_task', data: { task } })
     dispatch({ type: 'SET_AGENT_STATUS', status: 'thinking' })
-  }, [send])
+  }, [send, dispatch])
 
   return (
     <AppStateContext.Provider value={state}>

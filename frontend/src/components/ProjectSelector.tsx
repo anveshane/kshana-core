@@ -136,17 +136,16 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
               <button
                 onClick={() => {
                   setOpen(false)
-                  // Trigger project creation through the chat flow
+                  onSendWs({ type: 'create_project', data: {} })
                   dispatch({
                     type: 'ADD_CHAT_MESSAGE',
                     message: {
                       id: `sys_${Date.now()}`,
                       type: 'system',
-                      content: 'Starting new project creation...',
+                      content: 'Starting new project wizard...',
                       timestamp: Date.now(),
                     },
                   })
-                  onSendWs({ type: 'start_task', data: { task: '/new' } })
                 }}
                 className="w-full text-left px-3 py-2.5 flex items-center gap-2 hover:bg-surface transition-colors cursor-pointer text-cyan"
               >
