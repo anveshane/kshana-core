@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppState, useAppDispatch } from '../lib/store'
-import { Dropdown } from './Dropdown'
 
 interface ProjectInfo {
   dirName: string
@@ -18,7 +17,6 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
   const dispatch = useAppDispatch()
   const [projects, setProjects] = useState<ProjectInfo[]>([])
   const [open, setOpen] = useState(false)
-  const [showCreate, setShowCreate] = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   const loadProjects = useCallback(async () => {
@@ -136,7 +134,20 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
             {/* Divider + New Project */}
             <div className="border-t border-line-soft mt-1 pt-1">
               <button
-                onClick={() => { setOpen(false); setShowCreate(true) }}
+                onClick={() => {
+                  setOpen(false)
+                  // Trigger project creation through the chat flow
+                  dispatch({
+                    type: 'ADD_CHAT_MESSAGE',
+                    message: {
+                      id: `sys_${Date.now()}`,
+                      type: 'system',
+                      content: 'Starting new project creation...',
+                      timestamp: Date.now(),
+                    },
+                  })
+                  onSendWs({ type: 'start_task', data: { task: '/new' } })
+                }}
                 className="w-full text-left px-3 py-2.5 flex items-center gap-2 hover:bg-surface transition-colors cursor-pointer text-cyan"
               >
                 <span className="text-sm">+</span>
@@ -147,159 +158,6 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
         )}
       </div>
 
-      {showCreate && (
-        <CreateProjectModal
-          onClose={() => setShowCreate(false)}
-          onCreated={(name) => {
-            setShowCreate(false)
-            loadProjects()
-            handleSelect(name)
-          }}
-          onSendWs={onSendWs}
-        />
-      )}
     </>
-  )
-}
-
-// ── Create Project Modal ──────────────────────────────────
-
-interface Template {
-  id: string
-  name: string
-  styles: Array<{ id: string; name: string }>
-}
-
-interface CreateProjectModalProps {
-  onClose: () => void
-  onCreated: (name: string) => void
-  onSendWs: (msg: Record<string, unknown>) => void
-}
-
-function CreateProjectModal({ onClose, onCreated, onSendWs }: CreateProjectModalProps) {
-  const [templates, setTemplates] = useState<Template[]>([])
-  const [templateId, setTemplateId] = useState('narrative')
-  const [style, setStyle] = useState('cinematic_realism')
-  const [duration, setDuration] = useState(60)
-  const [content, setContent] = useState('')
-  const [creating, setCreating] = useState(false)
-
-  useEffect(() => {
-    fetch('/api/v1/templates')
-      .then(r => r.json())
-      .then(data => {
-        setTemplates(data.templates || [])
-        if (data.templates?.length > 0) {
-          setTemplateId(data.templates[0].id)
-          if (data.templates[0].styles?.length > 0) {
-            setStyle(data.templates[0].styles[0].id)
-          }
-        }
-      })
-      .catch(() => {})
-  }, [])
-
-  const selectedTemplate = templates.find(t => t.id === templateId)
-
-  const handleCreate = async () => {
-    if (!content.trim()) return
-    setCreating(true)
-    onSendWs({
-      type: 'create_project',
-      data: {
-        templateId,
-        style,
-        duration,
-        content,
-        resolution: '480p',
-        resolutionWidth: 848,
-        resolutionHeight: 480,
-        autonomousMode: true,
-      },
-    })
-    setTimeout(() => {
-      setCreating(false)
-      onCreated(content.substring(0, 30).replace(/\s+/g, '_'))
-    }, 2000)
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
-    >
-      <div className="glass-panel-strong w-full max-w-lg mx-4 p-6">
-        <h2 className="font-[family-name:var(--font-display)] text-xl font-semibold mb-5">
-          New Project
-        </h2>
-
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs text-graphite-100 mb-1">Template</label>
-            <Dropdown
-              options={templates.map(t => ({ value: t.id, label: t.name }))}
-              value={templateId}
-              onChange={(v) => {
-                setTemplateId(v)
-                const t = templates.find(t => t.id === v)
-                if (t?.styles?.[0]) setStyle(t.styles[0].id)
-              }}
-              placeholder="Select template..."
-            />
-          </div>
-
-          {selectedTemplate?.styles && selectedTemplate.styles.length > 0 && (
-            <div>
-              <label className="block text-xs text-graphite-100 mb-1">Style</label>
-              <Dropdown
-                options={selectedTemplate.styles.map(s => ({ value: s.id, label: s.name }))}
-                value={style}
-                onChange={setStyle}
-                placeholder="Select style..."
-              />
-            </div>
-          )}
-
-          <div>
-            <label className="block text-xs text-graphite-100 mb-1">Duration (seconds)</label>
-            <input
-              type="number"
-              value={duration}
-              onChange={(e) => setDuration(parseInt(e.target.value) || 60)}
-              min={15}
-              max={600}
-              className="w-full px-3 py-2 rounded-md bg-graphite-300 border border-line-soft text-sm text-foreground"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs text-graphite-100 mb-1">Project Description</label>
-            <textarea
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              rows={4}
-              placeholder="Describe your video project..."
-              className="w-full px-3 py-2 rounded-md bg-graphite-300 border border-line-soft text-sm text-foreground resize-y focus:outline-none focus:border-cyan/40"
-            />
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-2 mt-6">
-          <button
-            onClick={onClose}
-            className="px-4 py-2 rounded-md border border-line-soft text-graphite-100 hover:text-foreground transition-colors font-mono text-xs cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={handleCreate}
-            disabled={creating || !content.trim()}
-            className="px-4 py-2 rounded-md bg-cyan text-background font-mono text-xs font-semibold hover:bg-cyan/90 transition-colors disabled:opacity-50 cursor-pointer"
-          >
-            {creating ? 'Creating...' : 'Create Project'}
-          </button>
-        </div>
-      </div>
-    </div>
   )
 }
