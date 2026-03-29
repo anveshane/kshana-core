@@ -13,7 +13,7 @@ export function renderWithState(
 ) {
   const { state: stateOverrides, dispatch, ...renderOptions } = options
   const mockState = { ...initialState, ...stateOverrides }
-  const mockDispatch = dispatch || vi.fn()
+  const mockDispatch = dispatch || (() => {})
 
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (

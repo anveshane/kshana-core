@@ -44,7 +44,7 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
             toolCall: {
               id,
               toolName,
-              args,
+              args: args as Record<string, string> | undefined,
               status: 'executing',
               startTime: Date.now(),
               agentName,

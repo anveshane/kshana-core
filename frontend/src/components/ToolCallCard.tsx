@@ -5,7 +5,6 @@ interface ToolCallCardProps {
   toolCall: ToolCall
 }
 
-/** Friendly tool display names */
 const TOOL_NAMES: Record<string, string> = {
   generate_content: 'Generating content',
   generate_image: 'Generating image',
@@ -14,6 +13,44 @@ const TOOL_NAMES: Record<string, string> = {
   generate_shot_video: 'Generating shot video',
   assemble_final_video: 'Assembling final video',
   think: 'Thinking',
+}
+
+function ArgsSection({ args, selectedProject }: { args: Record<string, string>; selectedProject: string | null }) {
+  if (!args || Object.keys(args).length === 0) return null
+
+  return (
+    <div className="px-3 py-2 border-b border-line-soft">
+      <div className="flex flex-wrap gap-2 text-xs">
+        {Object.entries(args).map(([key, value]) => {
+          const val = String(value)
+          if (val.match(/\.(png|jpg|jpeg|webp)$/i) && selectedProject) {
+            return (
+              <div key={key} className="flex flex-col items-center gap-1">
+                <img
+                  src={`/api/v1/assets/${selectedProject}/${val}`}
+                  alt={key}
+                  className="w-16 h-16 rounded object-cover border border-line-soft"
+                />
+                <span className="text-graphite-100 text-[10px]">{key.replace(/^ref_\d+_/, '')}</span>
+              </div>
+            )
+          }
+          if (key === 'prompt') {
+            return (
+              <div key={key} className="w-full text-graphite-050 text-xs mt-1 line-clamp-2">
+                {val}
+              </div>
+            )
+          }
+          return (
+            <span key={key} className="text-graphite-100">
+              <span className="font-semibold">{key}:</span> {val.substring(0, 50)}
+            </span>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export function ToolCallCard({ toolCall }: ToolCallCardProps) {
@@ -26,7 +63,6 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
   const statusColor = status === 'completed' ? 'text-green' : status === 'error' ? 'text-error' : 'text-cyan'
   const borderColor = status === 'completed' ? 'border-green/20' : status === 'error' ? 'border-error/20' : 'border-cyan/20'
 
-  // Check if result has a file_path for media preview
   const resultObj = typeof result === 'object' && result !== null ? result as Record<string, unknown> : null
   const filePath = resultObj?.file_path as string | undefined
   const isVideo = filePath?.match(/\.(mp4|webm|mov)$/i)
@@ -50,41 +86,8 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
         </span>
       </div>
 
-      {/* Args summary */}
-      {args && Object.keys(args).length > 0 && (
-        <div className="px-3 py-2 border-b border-line-soft">
-          <div className="flex flex-wrap gap-2 text-xs">
-            {Object.entries(args).map(([key, value]) => {
-              const val = String(value)
-              // Check if it's an image path
-              if (val.match(/\.(png|jpg|jpeg|webp)$/i) && selectedProject) {
-                return (
-                  <div key={key} className="flex flex-col items-center gap-1">
-                    <img
-                      src={`/api/v1/assets/${selectedProject}/${val}`}
-                      alt={key}
-                      className="w-16 h-16 rounded object-cover border border-line-soft"
-                    />
-                    <span className="text-graphite-100 text-[10px]">{key.replace(/^ref_\d+_/, '')}</span>
-                  </div>
-                )
-              }
-              if (key === 'prompt') {
-                return (
-                  <div key={key} className="w-full text-graphite-050 text-xs mt-1 line-clamp-2">
-                    {val}
-                  </div>
-                )
-              }
-              return (
-                <span key={key} className="text-graphite-100">
-                  <span className="font-semibold">{key}:</span> {val.substring(0, 50)}
-                </span>
-              )
-            })}
-          </div>
-        </div>
-      )}
+      {/* Args */}
+      <ArgsSection args={args ?? {}} selectedProject={selectedProject} />
 
       {/* Streaming content */}
       {streamingContent && (

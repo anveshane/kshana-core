@@ -24,7 +24,7 @@ export interface TodoItem {
 export interface ToolCall {
   id: string
   toolName: string
-  args?: Record<string, unknown>
+  args?: Record<string, string>
   status: 'executing' | 'completed' | 'error'
   result?: unknown
   streamingContent?: string

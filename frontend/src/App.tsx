@@ -1,4 +1,4 @@
-import { useReducer, useState, useCallback } from 'react'
+import { useReducer, useState, useCallback, useRef } from 'react'
 import { AppStateContext, AppDispatchContext, appReducer, initialState } from './lib/store'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useMessageHandler } from './hooks/useMessageHandler'
@@ -13,22 +13,28 @@ export function App() {
   const [showProviders, setShowProviders] = useState(false)
   const [showWorkflows, setShowWorkflows] = useState(false)
 
+  // Stable refs for WebSocket callbacks to prevent reconnect loops
+  const dispatchRef = useRef(dispatch)
+  dispatchRef.current = dispatch
+
   const handleMessage = useMessageHandler(dispatch)
+  const handleMessageRef = useRef(handleMessage)
+  handleMessageRef.current = handleMessage
 
-  const { send, status } = useWebSocket({
-    onMessage: handleMessage,
-    onConnect: (sessionId) => {
-      dispatch({ type: 'SET_CONNECTION', status: 'connected', sessionId })
-    },
-    onDisconnect: () => {
-      dispatch({ type: 'SET_CONNECTION', status: 'disconnected' })
-    },
+  // Stable callbacks that don't change reference
+  const stableOnMessage = useCallback((msg: any) => handleMessageRef.current(msg), [])
+  const stableOnConnect = useCallback((sessionId: string) => {
+    dispatchRef.current({ type: 'SET_CONNECTION', status: 'connected', sessionId })
+  }, [])
+  const stableOnDisconnect = useCallback(() => {
+    dispatchRef.current({ type: 'SET_CONNECTION', status: 'disconnected' })
+  }, [])
+
+  const { send } = useWebSocket({
+    onMessage: stableOnMessage,
+    onConnect: stableOnConnect,
+    onDisconnect: stableOnDisconnect,
   })
-
-  // Update connection status
-  if (status !== state.connectionStatus) {
-    dispatch({ type: 'SET_CONNECTION', status })
-  }
 
   const handleSendTask = useCallback((task: string) => {
     if (!task.trim()) return
