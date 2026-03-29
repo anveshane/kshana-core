@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Dropdown } from './Dropdown'
 
 interface WorkflowMode {
   id: string
@@ -387,15 +388,12 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
                 {/* Pipeline type */}
                 <div>
                   <label className="block text-xs text-graphite-100 mb-1">Pipeline Type</label>
-                  <select
+                  <Dropdown
+                    options={PIPELINES.map(p => ({ value: p, label: PIPELINE_LABELS[p] || p }))}
                     value={wizPipeline}
-                    onChange={(e) => setWizPipeline(e.target.value)}
-                    className="w-full px-3 py-2 rounded-md bg-graphite-300 border border-line-soft text-sm text-foreground focus:outline-none focus:border-cyan/40"
-                  >
-                    {PIPELINES.map((p) => (
-                      <option key={p} value={p}>{PIPELINE_LABELS[p]}</option>
-                    ))}
-                  </select>
+                    onChange={setWizPipeline}
+                    placeholder="Select pipeline..."
+                  />
                 </div>
 
                 {/* Step 2: Input mappings */}
@@ -414,16 +412,15 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
                             <span className="font-mono text-[10px] text-graphite-200 w-10">#{node.nodeId}</span>
                             <span className="text-xs text-graphite-050 w-32 truncate">{node.title}</span>
                             <span className="text-graphite-300">→</span>
-                            <select
+                            <Dropdown
+                              options={[
+                                { value: '', label: '(leave as default)' },
+                                ...(STANDARD_INPUTS[wizPipeline] || []).map(opt => ({ value: opt, label: opt })),
+                              ]}
                               value={wizMappings[node.nodeId] || ''}
-                              onChange={(e) => setWizMappings({ ...wizMappings, [node.nodeId]: e.target.value })}
-                              className="flex-1 px-2 py-1 rounded bg-graphite-300 border border-line-soft text-xs text-foreground"
-                            >
-                              <option value="">(leave as default)</option>
-                              {(STANDARD_INPUTS[wizPipeline] || []).map((opt) => (
-                                <option key={opt} value={opt}>{opt}</option>
-                              ))}
-                            </select>
+                              onChange={(v) => setWizMappings({ ...wizMappings, [node.nodeId]: v })}
+                              className="flex-1"
+                            />
                             {suggestion?.reason && (
                               <span className="text-[10px] text-graphite-200 max-w-32 truncate" title={suggestion.reason}>
                                 💡 {suggestion.reason}

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAppState, useAppDispatch } from '../lib/store'
+import { Dropdown } from './Dropdown'
 
 interface ProjectInfo {
   dirName: string
@@ -235,33 +236,27 @@ function CreateProjectModal({ onClose, onCreated, onSendWs }: CreateProjectModal
         <div className="space-y-4">
           <div>
             <label className="block text-xs text-graphite-100 mb-1">Template</label>
-            <select
+            <Dropdown
+              options={templates.map(t => ({ value: t.id, label: t.name }))}
               value={templateId}
-              onChange={(e) => {
-                setTemplateId(e.target.value)
-                const t = templates.find(t => t.id === e.target.value)
+              onChange={(v) => {
+                setTemplateId(v)
+                const t = templates.find(t => t.id === v)
                 if (t?.styles?.[0]) setStyle(t.styles[0].id)
               }}
-              className="w-full px-3 py-2 rounded-md bg-graphite-300 border border-line-soft text-sm text-foreground"
-            >
-              {templates.map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
+              placeholder="Select template..."
+            />
           </div>
 
           {selectedTemplate?.styles && selectedTemplate.styles.length > 0 && (
             <div>
               <label className="block text-xs text-graphite-100 mb-1">Style</label>
-              <select
+              <Dropdown
+                options={selectedTemplate.styles.map(s => ({ value: s.id, label: s.name }))}
                 value={style}
-                onChange={(e) => setStyle(e.target.value)}
-                className="w-full px-3 py-2 rounded-md bg-graphite-300 border border-line-soft text-sm text-foreground"
-              >
-                {selectedTemplate.styles.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
+                onChange={setStyle}
+                placeholder="Select style..."
+              />
             </div>
           )}
 

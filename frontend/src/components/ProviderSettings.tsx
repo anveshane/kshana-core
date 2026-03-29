@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Dropdown } from './Dropdown'
 
 interface ProviderOption {
   id: string
@@ -39,9 +40,7 @@ export function ProviderSettings({ open, onClose }: ProviderSettingsProps) {
       setImageGen(d.currentConfig.imageGeneration)
       setImageEdit(d.currentConfig.imageEditing)
       setVideoGen(d.currentConfig.videoGeneration)
-    } catch {
-      // Failed to load
-    }
+    } catch { /* */ }
   }, [])
 
   useEffect(() => {
@@ -61,13 +60,14 @@ export function ProviderSettings({ open, onClose }: ProviderSettingsProps) {
         }),
       })
       onClose()
-    } catch {
-      // Save failed
-    }
+    } catch { /* */ }
     setSaving(false)
   }
 
   if (!open) return null
+
+  const toOptions = (providers: ProviderOption[]) =>
+    providers.filter(p => p.available).map(p => ({ value: p.id, label: p.name }))
 
   return (
     <div
@@ -81,24 +81,18 @@ export function ProviderSettings({ open, onClose }: ProviderSettingsProps) {
 
         {data ? (
           <div className="space-y-4">
-            <SelectField
-              label="Image Generation"
-              options={data.providers.imageGeneration}
-              value={imageGen}
-              onChange={setImageGen}
-            />
-            <SelectField
-              label="Image Editing"
-              options={data.providers.imageEditing}
-              value={imageEdit}
-              onChange={setImageEdit}
-            />
-            <SelectField
-              label="Video Generation"
-              options={data.providers.videoGeneration}
-              value={videoGen}
-              onChange={setVideoGen}
-            />
+            <div>
+              <label className="block text-xs text-graphite-100 mb-1">Image Generation</label>
+              <Dropdown options={toOptions(data.providers.imageGeneration)} value={imageGen} onChange={setImageGen} />
+            </div>
+            <div>
+              <label className="block text-xs text-graphite-100 mb-1">Image Editing</label>
+              <Dropdown options={toOptions(data.providers.imageEditing)} value={imageEdit} onChange={setImageEdit} />
+            </div>
+            <div>
+              <label className="block text-xs text-graphite-100 mb-1">Video Generation</label>
+              <Dropdown options={toOptions(data.providers.videoGeneration)} value={videoGen} onChange={setVideoGen} />
+            </div>
           </div>
         ) : (
           <div className="text-center text-graphite-100 py-4">Loading providers...</div>
@@ -120,33 +114,6 @@ export function ProviderSettings({ open, onClose }: ProviderSettingsProps) {
           </button>
         </div>
       </div>
-    </div>
-  )
-}
-
-function SelectField({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string
-  options: ProviderOption[]
-  value: string
-  onChange: (v: string) => void
-}) {
-  return (
-    <div>
-      <label className="block text-xs text-graphite-100 mb-1">{label}</label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-3 py-2 rounded-md bg-graphite-300 border border-line-soft text-sm text-foreground focus:outline-none focus:border-cyan/40"
-      >
-        {options.filter(p => p.available).map((p) => (
-          <option key={p.id} value={p.id}>{p.name}</option>
-        ))}
-      </select>
     </div>
   )
 }
