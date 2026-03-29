@@ -61,6 +61,34 @@
     {
       "id": "PRODUCIBILITY",
       "question": "Overall: could this screenplay be produced as an AI-generated video within the stated duration? Consider: Are there impossible-to-generate scenes (crowds of 50 people, complex action sequences with many actors)? Are the visual demands reasonable for current AI image/video generation? Answer NO if any scene would be extremely difficult for AI to render convincingly."
+    },
+    {
+      "id": "STORY_COHERENCE",
+      "question": "Does the story make logical sense from beginning to end? Do character actions have clear motivations? Do events follow causally from what came before? Are there plot holes, contradictions, or unmotivated character behavior? A character who suddenly knows something they shouldn't, or an event that happens without setup, breaks coherence. Answer NO if any story logic is broken."
+    },
+    {
+      "id": "EMOTIONAL_ENGAGEMENT",
+      "question": "Does the screenplay create emotional engagement? There should be at least one moment of tension, surprise, empathy, humor, dread, wonder, or curiosity. A 60s screenplay needs just one emotional beat. A longer one needs escalation. Answer NO if reading the screenplay produces no emotional response — if it's just a sequence of events with no stakes or feeling."
+    },
+    {
+      "id": "CHARACTER_DISTINCTION",
+      "question": "Are the characters visually and behaviorally distinct from each other? Each character should have a unique look (described in their introduction) AND a distinct voice or behavior pattern. Two characters who look similar, talk the same way, and could be swapped without changing the story are not distinct. Answer NO if any two characters are interchangeable."
+    },
+    {
+      "id": "OPENING_HOOK",
+      "question": "Does the first scene grab attention within the first few lines? For a short video, the opening seconds are critical. The screenplay should start with a striking image, an intriguing action, or a compelling situation — not with slow establishing description. Answer NO if the opening is generic or fails to create immediate interest."
+    },
+    {
+      "id": "ENDING_IMPACT",
+      "question": "Does the ending land with impact? The final moment should be memorable — a reveal, a twist, a powerful image, an emotional beat, a satisfying resolution, or a deliberate ambiguity that makes the viewer think. Answer NO if the ending just fizzles out, stops abruptly without purpose, or is predictable and unsatisfying."
+    },
+    {
+      "id": "SHOW_DONT_TELL",
+      "question": "Does the screenplay show rather than tell? Information should be conveyed through action, visual details, and behavior — not through characters explaining things to each other (exposition dumps) or narration. A character's fear should be shown through trembling hands, not stated in dialogue ('I'm so scared'). Answer NO if there are exposition dumps or characters stating emotions they should be showing."
+    },
+    {
+      "id": "THEME_PRESENT",
+      "question": "Does the screenplay have a discernible theme or point? Even a 60-second video should be ABOUT something beyond the surface plot — loneliness, obsession, hope, betrayal, discovery, loss. The theme doesn't need to be stated, but it should be felt. Answer NO if the screenplay is purely mechanical plot with no underlying meaning."
     }
   ]
 }
