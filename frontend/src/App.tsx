@@ -7,6 +7,9 @@ import { Sidebar } from './components/Sidebar'
 import { ChatTimeline } from './components/ChatTimeline'
 import { TaskInput } from './components/TaskInput'
 import { WorkflowManager } from './components/WorkflowManager'
+import { ProviderSettings } from './components/ProviderSettings'
+import { ProjectSelector } from './components/ProjectSelector'
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 export function App() {
   const [state, dispatch] = useReducer(appReducer, initialState)
@@ -49,27 +52,31 @@ export function App() {
   return (
     <AppStateContext.Provider value={state}>
       <AppDispatchContext.Provider value={dispatch}>
-        <div className="app-shell h-screen flex flex-col text-foreground overflow-hidden">
-          {/* Aurora ambient glow */}
-          <div className="aurora aurora--left" />
-          <div className="aurora aurora--right" />
-          <Header
-            onProviderSettings={() => setShowProviders(!showProviders)}
-            onWorkflows={() => setShowWorkflows(!showWorkflows)}
-          />
+        <ErrorBoundary>
+          <div className="app-shell h-screen flex flex-col text-foreground overflow-hidden">
+            {/* Aurora ambient glow */}
+            <div className="aurora aurora--left" />
+            <div className="aurora aurora--right" />
 
-          <div className="flex flex-1 overflow-hidden">
-            <Sidebar />
+            <Header
+              onProviderSettings={() => setShowProviders(true)}
+              onWorkflows={() => setShowWorkflows(true)}
+              projectSelector={<ProjectSelector onSendWs={send} />}
+            />
 
-            {/* Main content area */}
-            <main className="flex-1 flex flex-col overflow-hidden">
-              <ChatTimeline />
-              <TaskInput onSend={handleSendTask} />
-            </main>
+            <div className="flex flex-1 overflow-hidden relative z-10">
+              <Sidebar />
+              <main className="flex-1 flex flex-col overflow-hidden">
+                <ChatTimeline />
+                <TaskInput onSend={handleSendTask} />
+              </main>
+            </div>
+
+            {/* Modals */}
+            <WorkflowManager open={showWorkflows} onClose={() => setShowWorkflows(false)} />
+            <ProviderSettings open={showProviders} onClose={() => setShowProviders(false)} />
           </div>
-          {/* Modals */}
-          <WorkflowManager open={showWorkflows} onClose={() => setShowWorkflows(false)} />
-        </div>
+        </ErrorBoundary>
       </AppDispatchContext.Provider>
     </AppStateContext.Provider>
   )

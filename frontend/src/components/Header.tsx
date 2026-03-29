@@ -3,9 +3,10 @@ import { useAppState } from '../lib/store'
 interface HeaderProps {
   onProviderSettings: () => void
   onWorkflows: () => void
+  projectSelector?: React.ReactNode
 }
 
-export function Header({ onProviderSettings, onWorkflows }: HeaderProps) {
+export function Header({ onProviderSettings, onWorkflows, projectSelector }: HeaderProps) {
   const { connectionStatus, selectedProject, phase, contextUsage, autonomousMode, parallelMedia } = useAppState()
 
   const statusColor = connectionStatus === 'connected'
@@ -20,9 +21,11 @@ export function Header({ onProviderSettings, onWorkflows }: HeaderProps) {
           <span className="font-[family-name:var(--font-display)] text-xl font-bold text-cyan">
             Kshana
           </span>
-          <span className="text-graphite-100 text-sm">
-            {selectedProject || 'No project selected'}
-          </span>
+          {projectSelector || (
+            <span className="text-graphite-100 text-sm">
+              {selectedProject || 'No project selected'}
+            </span>
+          )}
         </div>
 
         {/* Center: Phase */}

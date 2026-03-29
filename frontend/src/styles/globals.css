@@ -181,7 +181,9 @@ body {
 
 /* ── Glassmorphic panel utility ──────────────────────────── */
 .glass-panel {
-  background: var(--panel);
+  background:
+    radial-gradient(circle at 20% 10%, rgba(86, 158, 214, 0.06), transparent 35%),
+    var(--panel);
   backdrop-filter: blur(22px);
   -webkit-backdrop-filter: blur(22px);
   border: 1px solid var(--line-soft);
@@ -189,9 +191,13 @@ body {
 }
 
 .glass-panel-strong {
-  background: var(--panel-strong);
+  background:
+    radial-gradient(circle at 15% 5%, rgba(86, 158, 214, 0.08), transparent 40%),
+    radial-gradient(circle at 90% 90%, rgba(52, 211, 153, 0.05), transparent 35%),
+    var(--panel-strong);
   backdrop-filter: blur(22px);
   -webkit-backdrop-filter: blur(22px);
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
+  box-shadow: var(--surface-shadow);
 }
