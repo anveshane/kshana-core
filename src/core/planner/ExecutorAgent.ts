@@ -558,6 +558,22 @@ export class ExecutorAgent extends TypedEventEmitter {
           break;
         }
 
+        // In serial mode: prioritize LLM/content nodes over media generation nodes.
+        // This ensures all prompts are generated before any ComfyUI calls,
+        // reducing wasted time if an image generation fails.
+        if (!this.config.parallelMediaGeneration) {
+          const isMediaNode = (n: ExecutionNode) => {
+            const typeDef = this.config.template.artifactTypes[n.typeId];
+            const cat = typeDef?.category;
+            return cat === 'visual_ref' || cat === 'clip' || cat === 'final';
+          };
+          const contentNodes = readyNodes.filter(n => !isMediaNode(n));
+          const mediaNodes = readyNodes.filter(n => isMediaNode(n));
+          // Only process media nodes if no content nodes are available
+          readyNodes.length = 0;
+          readyNodes.push(...(contentNodes.length > 0 ? contentNodes : mediaNodes));
+        }
+
         this.log(`Ready nodes: ${readyNodes.map(n => n.id).join(', ')}`);
 
         for (const node of readyNodes) {
