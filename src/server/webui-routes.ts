@@ -55,10 +55,50 @@ const MIME_TYPES: Record<string, string> = {
 
 /**
  * Register web UI routes on the Fastify instance.
+ * Serves the React frontend build from frontend/dist/ if available,
+ * otherwise falls back to the inline SPA from webui.ts.
  */
 export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
-  // Serve the SPA at both / and /web
+  // Check for React frontend build
+  const reactDistDir = join(process.cwd(), 'frontend', 'dist');
+  const reactIndexPath = join(reactDistDir, 'index.html');
+  const hasReactBuild = existsSync(reactIndexPath);
+
+  if (hasReactBuild) {
+    // Serve React frontend static assets (JS, CSS, etc.)
+    const assetsDir = join(reactDistDir, 'assets');
+    if (existsSync(assetsDir)) {
+      app.get<{ Params: { '*': string } }>(
+        '/assets/*',
+        async (request: FastifyRequest<{ Params: { '*': string } }>, reply: FastifyReply) => {
+          const filePath = request.params['*'];
+          if (filePath.includes('..')) return reply.status(400).send({ error: 'Invalid path' });
+          const fullPath = join(assetsDir, filePath);
+          if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
+            return reply.status(404).send({ error: 'Not found' });
+          }
+          const ext = extname(fullPath).toLowerCase();
+          const contentType = MIME_TYPES[ext] ?? (ext === '.js' ? 'application/javascript' : 'application/octet-stream');
+          return reply.type(contentType).send(readFileSync(fullPath));
+        },
+      );
+    }
+
+    // Serve favicon and other root-level static files
+    app.get('/favicon.svg', async (_request: FastifyRequest, reply: FastifyReply) => {
+      const faviconPath = join(reactDistDir, 'favicon.svg');
+      if (existsSync(faviconPath)) {
+        return reply.type('image/svg+xml').send(readFileSync(faviconPath));
+      }
+      return reply.status(404).send();
+    });
+  }
+
+  // SPA fallback: serve React index.html or inline SPA
   const serveSPA = async (_request: FastifyRequest, reply: FastifyReply) => {
+    if (hasReactBuild) {
+      return reply.type('text/html').send(readFileSync(reactIndexPath, 'utf-8'));
+    }
     return reply.type('text/html').send(getWebUIHtml());
   };
   app.get('/', serveSPA);

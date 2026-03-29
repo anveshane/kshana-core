@@ -18,7 +18,7 @@ export interface UseWebSocketOptions {
 
 export function useWebSocket(options: UseWebSocketOptions = {}) {
   const {
-    url = `ws://${window.location.host}/api/v1/ws/chat`,
+    url = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/ws/chat`,
     onMessage,
     onConnect,
     onDisconnect,

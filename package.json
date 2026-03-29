@@ -19,6 +19,8 @@
     "test:client": "tsx src/server/testClient.ts",
     "reset": "tsx scripts/reset-project.ts",
     "build": "tsup",
+    "build:frontend": "cd frontend && npm run build",
+    "test:frontend": "cd frontend && npm test",
     "test": "vitest run tests/unit/",
     "test:ci": "vitest run tests/unit/",
     "test:e2e": "vitest run tests/e2e/",
