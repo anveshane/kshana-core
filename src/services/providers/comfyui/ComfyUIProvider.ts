@@ -251,13 +251,13 @@ export class ComfyUIProvider implements GenerationProvider {
       }
     } catch { /* registry not available, use default */ }
 
-    // Resolve workflow name: built-in modes (i2v, t2v, i2v_late_entry) all use the 'ltx23' workflow.
-    // User-uploaded modes use their own workflow via the generic parameterizer.
-    if (modeManifest && !modeManifest.builtIn) {
-      // User workflow — look up by mode ID in the old registry, or use generic path
+    // Resolve workflow name: built-in modes (i2v, t2v, i2v_late_entry) all use 'ltx23'.
+    // User-uploaded modes would use their own workflow via the generic parameterizer.
+    const BUILTIN_VIDEO_MODES = new Set(['i2v', 't2v', 'i2v_late_entry']);
+    if (modeManifest && !BUILTIN_VIDEO_MODES.has(modeManifest.id) && !modeManifest.builtIn) {
       workflowName = modeManifest.id;
     }
-    // For built-in modes, keep workflowName = 'ltx23' (they all share the same workflow)
+    // For built-in modes, workflowName stays 'ltx23'
 
     const workflowMetadata = registry.get(workflowName);
     if (!workflowMetadata) {

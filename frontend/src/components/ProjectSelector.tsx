@@ -101,14 +101,15 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
     } catch { /* */ }
   }
 
-  const loadProjectAssets = async (name: string) => {
+  const loadProjectAssets = async (dirName: string) => {
     try {
+      const name = dirName.replace('.kshana', '')
       const res = await fetch(`/api/v1/projects/${name}/assets`)
       if (!res.ok) return
       const data = await res.json()
       const assets = (data.assets || []).map((a: { id: string; path: string; type: string }) => ({
         ...a,
-        url: `/api/v1/assets/${name}/${a.path}`,
+        url: `/api/v1/assets/${dirName}/${a.path}`,
       }))
       dispatch({ type: 'SET_ASSETS', assets })
     } catch { /* */ }
