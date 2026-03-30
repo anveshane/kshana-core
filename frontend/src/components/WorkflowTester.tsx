@@ -91,11 +91,11 @@ export function WorkflowTester({ workflow, onClose }: WorkflowTesterProps) {
       for (const inp of inputs) {
         if (inp.type === 'image' && inp.file) {
           setProgressMessage(`Uploading ${inp.id}...`)
-          const formData = new FormData()
-          formData.append('file', inp.file)
+          const arrayBuffer = await inp.file.arrayBuffer()
           const res = await fetch(`/api/v1/upload?filename=${encodeURIComponent(inp.file.name)}`, {
             method: 'POST',
-            body: inp.file,
+            headers: { 'Content-Type': 'application/octet-stream' },
+            body: arrayBuffer,
           })
           if (!res.ok) throw new Error(`Upload failed for ${inp.id}`)
           const data = await res.json()
