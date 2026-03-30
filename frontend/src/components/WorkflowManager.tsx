@@ -246,6 +246,9 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
     }
   }
 
+  // Determine view: list, wizard, or test
+  const view = testingWorkflow ? 'test' : wizardOpen ? 'wizard' : 'list'
+
   if (!open) return null
 
   return (
@@ -255,35 +258,66 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
       data-testid="workflow-modal"
     >
       <div className="glass-panel-strong w-full max-w-2xl mx-4">
-        {/* Header */}
+        {/* Header — changes based on view */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-line-soft">
-          <h2 className="font-[family-name:var(--font-display)] text-xl font-semibold">
-            Workflow Management
-          </h2>
-          <div className="flex gap-2">
-            <label className="px-4 py-2 rounded-md bg-cyan text-background font-mono text-xs font-semibold cursor-pointer hover:bg-cyan/90 transition-colors">
-              Upload Workflow
-              <input
-                type="file"
-                accept=".json"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0]
-                  if (file) handleUpload(file)
-                  e.target.value = ''
-                }}
-              />
-            </label>
-            <button
-              onClick={onClose}
-              className="px-4 py-2 rounded-md border border-line-soft text-graphite-100 hover:text-foreground transition-colors font-mono text-xs cursor-pointer"
-            >
-              Close
-            </button>
-          </div>
+          {view === 'list' && (
+            <>
+              <h2 className="font-[family-name:var(--font-display)] text-xl font-semibold">
+                Workflow Management
+              </h2>
+              <div className="flex gap-2">
+                <label className="px-4 py-2 rounded-md bg-cyan text-background font-mono text-xs font-semibold cursor-pointer hover:bg-cyan/90 transition-colors">
+                  Upload Workflow
+                  <input
+                    type="file"
+                    accept=".json"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (file) handleUpload(file)
+                      e.target.value = ''
+                    }}
+                  />
+                </label>
+                <button
+                  onClick={onClose}
+                  className="px-4 py-2 rounded-md border border-line-soft text-graphite-100 hover:text-foreground transition-colors font-mono text-xs cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
+            </>
+          )}
+          {view === 'wizard' && (
+            <>
+              <h2 className="font-[family-name:var(--font-display)] text-xl font-semibold">
+                Configure Workflow
+              </h2>
+              <button
+                onClick={() => setWizardOpen(false)}
+                className="px-4 py-2 rounded-md border border-line-soft text-graphite-100 hover:text-foreground transition-colors font-mono text-xs cursor-pointer"
+              >
+                ← Back to list
+              </button>
+            </>
+          )}
+          {view === 'test' && (
+            <>
+              <h2 className="font-[family-name:var(--font-display)] text-xl font-semibold">
+                Test: {testingWorkflow?.displayName}
+              </h2>
+              <button
+                onClick={() => setTestingWorkflow(null)}
+                className="px-4 py-2 rounded-md border border-line-soft text-graphite-100 hover:text-foreground transition-colors font-mono text-xs cursor-pointer"
+              >
+                ← Back to list
+              </button>
+            </>
+          )}
         </div>
 
-        {/* Workflow list */}
+        {/* === LIST VIEW === */}
+        {view === 'list' && (
         <div className="px-6 py-4 space-y-5">
           {loading ? (
             <div className="text-center text-graphite-100 py-8">Loading workflows...</div>
@@ -368,13 +402,11 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
             })
           )}
         </div>
+        )}
 
-        {/* Integration Wizard */}
-        {wizardOpen && (
-          <div className="px-6 py-4 border-t border-line-soft">
-            <h3 className="font-[family-name:var(--font-display)] text-lg font-semibold mb-4">
-              Configure Workflow
-            </h3>
+        {/* === WIZARD VIEW === */}
+        {view === 'wizard' && (
+          <div className="px-6 py-4">
 
             {wizardAnalyzing ? (
               <div className="text-center text-graphite-100 py-8">
@@ -547,9 +579,9 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
           </div>
         )}
 
-        {/* Workflow Tester */}
-        {testingWorkflow && (
-          <div className="px-6 py-4 border-t border-line-soft">
+        {/* === TEST VIEW === */}
+        {view === 'test' && testingWorkflow && (
+          <div className="px-6 py-4">
             <WorkflowTester
               workflow={testingWorkflow}
               onClose={() => setTestingWorkflow(null)}
