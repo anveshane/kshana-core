@@ -652,7 +652,10 @@ export function parameterizeWorkflowByName(
  */
 export function parameterizeGeneric(
   template: WorkflowTemplate | Record<string, unknown>,
-  manifest: { parameterMappings: Array<{ input: string; nodeId: string; field: string }> },
+  manifest: {
+    parameterMappings: Array<{ input: string; nodeId: string; field: string }>;
+    promptKeywords?: { prepend?: string; append?: string; negativeAppend?: string };
+  },
   params: Record<string, unknown>,
 ): Record<string, unknown> {
   // Deep copy
@@ -672,6 +675,29 @@ export function parameterizeGeneric(
     if (node) {
       node.inputs = node.inputs || {};
       node.inputs[mapping.field] = value;
+    }
+  }
+
+  // Inject LoRA trigger keywords into prompt nodes if configured
+  if (manifest.promptKeywords) {
+    const kw = manifest.promptKeywords;
+    for (const mapping of manifest.parameterMappings) {
+      if (mapping.input === 'prompt' || mapping.input === 'edit_prompt') {
+        const node = apiWorkflow[mapping.nodeId] as { inputs?: Record<string, unknown> } | undefined;
+        if (node?.inputs?.[mapping.field] && typeof node.inputs[mapping.field] === 'string') {
+          const original = node.inputs[mapping.field] as string;
+          node.inputs[mapping.field] =
+            (kw.prepend ? kw.prepend + ', ' : '') +
+            original +
+            (kw.append ? ', ' + kw.append : '');
+        }
+      }
+      if (mapping.input === 'negative_prompt' && kw.negativeAppend) {
+        const node = apiWorkflow[mapping.nodeId] as { inputs?: Record<string, unknown> } | undefined;
+        if (node?.inputs?.[mapping.field] && typeof node.inputs[mapping.field] === 'string') {
+          node.inputs[mapping.field] = (node.inputs[mapping.field] as string) + ', ' + kw.negativeAppend;
+        }
+      }
     }
   }
 

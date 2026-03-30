@@ -75,7 +75,7 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
   const [wizardOpen, setWizardOpen] = useState(false)
   const [testingWorkflow, setTestingWorkflow] = useState<WorkflowMode | null>(null)
   const [wizardFilename, setWizardFilename] = useState('')
-  const [wizardParsed, setWizardParsed] = useState<{ inputNodes: ParsedNode[]; detectedPipeline: string } | null>(null)
+  const [wizardParsed, setWizardParsed] = useState<{ inputNodes: ParsedNode[]; detectedPipeline: string; loraNodes?: Array<{ nodeId: string; loraName?: string }> } | null>(null)
   const [wizardAnalysis, setWizardAnalysis] = useState<WorkflowAnalysis | null>(null)
   const [wizardAnalyzing, setWizardAnalyzing] = useState(false)
 
@@ -86,6 +86,9 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
   const [wizDesc, setWizDesc] = useState('')
   const [wizCriteria, setWizCriteria] = useState('')
   const [wizMappings, setWizMappings] = useState<Record<string, string>>({})
+  const [wizKeywordsPrepend, setWizKeywordsPrepend] = useState('')
+  const [wizKeywordsAppend, setWizKeywordsAppend] = useState('')
+  const [wizKeywordsNegative, setWizKeywordsNegative] = useState('')
 
   const loadWorkflows = useCallback(async () => {
     setLoading(true)
@@ -159,6 +162,14 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
         mappings[node.nodeId] = suggestion?.suggestedInput || node.suggestedInput || ''
       }
       setWizMappings(mappings)
+
+      // Pre-fill LoRA keywords from analysis
+      const kw = data.analysis?.suggestedKeywords
+      if (kw) {
+        setWizKeywordsPrepend(kw.prepend || '')
+        setWizKeywordsAppend(kw.append || '')
+        setWizKeywordsNegative(kw.negativeAppend || '')
+      }
     } catch (err) {
       alert('Upload failed: ' + err)
       setWizardOpen(false)
@@ -193,6 +204,13 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
       }
     }
 
+    // Build prompt keywords if any are set
+    const promptKeywords = (wizKeywordsPrepend || wizKeywordsAppend || wizKeywordsNegative) ? {
+      ...(wizKeywordsPrepend ? { prepend: wizKeywordsPrepend } : {}),
+      ...(wizKeywordsAppend ? { append: wizKeywordsAppend } : {}),
+      ...(wizKeywordsNegative ? { negativeAppend: wizKeywordsNegative } : {}),
+    } : undefined
+
     const manifest = {
       id: wizId,
       displayName: wizName,
@@ -205,6 +223,7 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
       workflowFile: wizardFilename,
       format: 'litegraph',
       parameterMappings,
+      promptKeywords,
       builtIn: false,
       active: true,
     }
@@ -466,6 +485,47 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
                     className="w-full px-3 py-2 rounded-md bg-graphite-300 border border-line-soft text-sm text-foreground resize-y focus:outline-none focus:border-cyan/40"
                   />
                 </div>
+
+                {/* LoRA Keywords (optional) */}
+                {wizardParsed?.loraNodes && wizardParsed.loraNodes.length > 0 && (
+                  <div className="rounded-lg border border-line-soft p-3">
+                    <div className="text-xs text-graphite-100 mb-2">
+                      LoRA Trigger Keywords <span className="text-graphite-300">(optional — only if the LoRA needs activation words)</span>
+                    </div>
+                    <div className="text-[10px] text-graphite-200 mb-2">
+                      Detected LoRAs: {wizardParsed.loraNodes.map(l => l.loraName || 'unknown').join(', ')}
+                    </div>
+                    <div className="space-y-2">
+                      <div>
+                        <label className="block text-[10px] text-graphite-200 mb-0.5">Prepend to prompt</label>
+                        <input
+                          value={wizKeywordsPrepend}
+                          onChange={(e) => setWizKeywordsPrepend(e.target.value)}
+                          placeholder="e.g., GHIBSKY style"
+                          className="w-full px-2 py-1.5 rounded bg-graphite-300 border border-line-soft text-xs text-foreground placeholder:text-graphite-300"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-graphite-200 mb-0.5">Append to prompt</label>
+                        <input
+                          value={wizKeywordsAppend}
+                          onChange={(e) => setWizKeywordsAppend(e.target.value)}
+                          placeholder="e.g., in the style of ohwx"
+                          className="w-full px-2 py-1.5 rounded bg-graphite-300 border border-line-soft text-xs text-foreground placeholder:text-graphite-300"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-graphite-200 mb-0.5">Append to negative prompt</label>
+                        <input
+                          value={wizKeywordsNegative}
+                          onChange={(e) => setWizKeywordsNegative(e.target.value)}
+                          placeholder="e.g., realistic, photograph"
+                          className="w-full px-2 py-1.5 rounded bg-graphite-300 border border-line-soft text-xs text-foreground placeholder:text-graphite-300"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Actions */}
                 <div className="flex justify-end gap-2 pt-2">

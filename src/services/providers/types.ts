@@ -175,6 +175,16 @@ export interface WorkflowManifest {
   /** Maps inputs to ComfyUI node IDs */
   parameterMappings: ParameterMapping[];
 
+  /** Keywords to inject into prompts for LoRA activation or style triggers */
+  promptKeywords?: {
+    /** Keywords prepended to the prompt (e.g., "GHIBSKY style, ") */
+    prepend?: string;
+    /** Keywords appended to the prompt (e.g., ", in the style of ohwx") */
+    append?: string;
+    /** Keywords added to negative prompt */
+    negativeAppend?: string;
+  };
+
   /** Whether this is a built-in workflow (immutable, always present, cannot be removed) */
   builtIn?: boolean;
   /** Whether this mode is currently active (built-ins are always active) */

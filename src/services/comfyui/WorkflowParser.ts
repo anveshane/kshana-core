@@ -19,6 +19,12 @@ export interface ParsedNode {
   inputType: 'image' | 'text' | 'number' | 'other';
 }
 
+export interface LoraInfo {
+  nodeId: string;
+  classType: string;
+  loraName?: string;
+}
+
 export interface ParsedWorkflow {
   /** Auto-detected pipeline type */
   detectedPipeline: 'image_generation' | 'image_editing' | 'video_generation' | 'unknown';
@@ -28,7 +34,18 @@ export interface ParsedWorkflow {
   totalNodes: number;
   /** Output node types found */
   outputTypes: string[];
+  /** LoRA loader nodes found in the workflow */
+  loraNodes: LoraInfo[];
 }
+
+/** LoRA loader node types */
+const LORA_NODE_TYPES = new Set([
+  'LoraLoaderModelOnly',
+  'LoRAStacker',
+  'Power Lora Loader (rgthree)',
+  'LoraLoader',
+  'LoraLoaderModelAndCLIP',
+]);
 
 /** Node types that represent user-configurable inputs */
 const INPUT_NODE_TYPES: Record<string, { inputType: ParsedNode['inputType']; suggestedInput?: string }> = {
@@ -65,6 +82,7 @@ export function parseWorkflow(workflowJson: string): ParsedWorkflow {
 
   const inputNodes: ParsedNode[] = [];
   const outputTypes: string[] = [];
+  const loraNodes: LoraInfo[] = [];
   let totalNodes = 0;
 
   if (isLiteGraph) {
@@ -78,6 +96,14 @@ export function parseWorkflow(workflowJson: string): ParsedWorkflow {
       // Check if this is an output node
       if (OUTPUT_INDICATORS[classType]) {
         outputTypes.push(OUTPUT_INDICATORS[classType]);
+      }
+
+      // Check if this is a LoRA loader node
+      if (LORA_NODE_TYPES.has(classType)) {
+        const loraName = node.widgets_values?.find((v: unknown) =>
+          typeof v === 'string' && v.endsWith('.safetensors')
+        ) as string | undefined;
+        loraNodes.push({ nodeId, classType, loraName: loraName?.replace('.safetensors', '') });
       }
 
       // Check if this is a configurable input node
@@ -100,12 +126,22 @@ export function parseWorkflow(workflowJson: string): ParsedWorkflow {
     const nodeEntries = Object.entries(data);
     totalNodes = nodeEntries.length;
     for (const [nodeId, nodeData] of nodeEntries) {
-      const node = nodeData as { class_type?: string; _meta?: { title?: string } };
+      const node = nodeData as { class_type?: string; _meta?: { title?: string }; inputs?: Record<string, unknown> };
       const classType = node.class_type || '';
       const title = node._meta?.title || classType;
 
       if (OUTPUT_INDICATORS[classType]) {
         outputTypes.push(OUTPUT_INDICATORS[classType]);
+      }
+
+      // Detect LoRA nodes
+      if (LORA_NODE_TYPES.has(classType)) {
+        const loraName = node.inputs?.['lora_name'] as string | undefined;
+        loraNodes.push({
+          nodeId,
+          classType,
+          loraName: loraName?.replace('.safetensors', ''),
+        });
       }
 
       const inputInfo = INPUT_NODE_TYPES[classType];
@@ -131,7 +167,7 @@ export function parseWorkflow(workflowJson: string): ParsedWorkflow {
     detectedPipeline = hasImageInputs ? 'image_editing' : 'image_generation';
   }
 
-  return { detectedPipeline, inputNodes, totalNodes, outputTypes };
+  return { detectedPipeline, inputNodes, totalNodes, outputTypes, loraNodes };
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +187,12 @@ export interface WorkflowAnalysis {
   suggestedMappings: Array<{ nodeId: string; classType: string; suggestedInput: string; reason: string }>;
   /** Brief explanation of how the workflow works */
   explanation: string;
+  /** Suggested LoRA trigger keywords to inject into prompts */
+  suggestedKeywords?: {
+    prepend?: string;
+    append?: string;
+    negativeAppend?: string;
+  };
 }
 
 /**
@@ -163,6 +205,11 @@ export async function analyzeWorkflowWithLLM(
   parsed: ParsedWorkflow,
   llm: LLMClient,
 ): Promise<WorkflowAnalysis> {
+  // Build LoRA info for the LLM
+  const loraInfo = parsed.loraNodes.length > 0
+    ? `\nLoRA models detected:\n${parsed.loraNodes.map(l => `  - Node ${l.nodeId}: ${l.classType}, lora_name="${l.loraName || 'unknown'}"`).join('\n')}`
+    : '\nNo LoRA models detected.';
+
   // Build a compact summary of the node graph for the LLM
   const data = JSON.parse(workflowJson);
   const isLiteGraph = Array.isArray(data.nodes);
@@ -226,6 +273,7 @@ ${nodeSummary}
 
 Input nodes detected:
 ${inputNodeSummary}
+${loraInfo}
 
 Output types detected: ${parsed.outputTypes.join(', ') || 'none detected'}
 Heuristic pipeline guess: ${parsed.detectedPipeline}
@@ -239,8 +287,19 @@ Respond with this JSON structure:
   "suggestedMappings": [
     { "nodeId": "123", "classType": "LoadImage", "suggestedInput": "first_frame", "reason": "This is the primary image input feeding into the video sampler" }
   ],
-  "explanation": "Brief technical explanation of how this workflow works"
-}`;
+  "explanation": "Brief technical explanation of how this workflow works",
+  "suggestedKeywords": {
+    "prepend": "trigger words to prepend to every prompt for LoRA activation, or null if no LoRA",
+    "append": "trigger words to append to every prompt, or null",
+    "negativeAppend": "keywords to add to negative prompt, or null"
+  }
+}
+
+IMPORTANT: If the workflow contains LoRA models, you MUST suggest trigger keywords. Common patterns:
+- LoRA named "ghibsky_style" → prepend: "GHIBSKY style"
+- LoRA named "pixel-art" → prepend: "pixel art style"
+- DreamBooth LoRAs often use "ohwx" or "sks" as trigger words
+- If you can't determine the trigger word from the LoRA name, suggest the LoRA filename as-is`;
 
   const response = await llm.generate({
     messages: [
