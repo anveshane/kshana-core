@@ -675,15 +675,98 @@ export function parameterizeGeneric(
     }
   }
 
-  // Remove non-essential nodes
+  // Resolve "Anything Everywhere" implicit connections.
+  // These extension nodes broadcast an output to all nodes that need a matching input type.
+  // In the API format, these connections are implicit — we must make them explicit.
+  resolveAnythingEverywhere(apiWorkflow);
+
+  // Remove non-essential nodes (notes, "Anything Everywhere" after resolution)
   for (const [nodeId, node] of Object.entries(apiWorkflow)) {
     const nodeData = node as { class_type?: string };
-    if (nodeData.class_type === 'Note' || nodeData.class_type === 'MarkdownNote') {
+    if (nodeData.class_type === 'Note' || nodeData.class_type === 'MarkdownNote' ||
+        nodeData.class_type === 'Anything Everywhere' || nodeData.class_type === 'Anything Everywhere3') {
       delete apiWorkflow[nodeId];
     }
   }
 
   return apiWorkflow;
+}
+
+/**
+ * Resolve "Anything Everywhere" implicit connections in API-format workflows.
+ *
+ * The "Anything Everywhere" ComfyUI extension broadcasts a node's output to
+ * all nodes that have a matching unconnected input type. In the UI this works
+ * automatically, but in API format the connections must be explicit.
+ *
+ * Strategy: for each "Anything Everywhere" node, find which output it broadcasts.
+ * Then find all nodes with unconnected inputs that match that output type and
+ * wire them up.
+ */
+function resolveAnythingEverywhere(workflow: Record<string, unknown>): void {
+  // Known input type → class_type mappings for auto-connection
+  const INPUT_TYPE_MAP: Record<string, string[]> = {
+    'CLIPTextEncode': ['clip'],
+    'CLIPTextEncodeFlux': ['clip'],
+    'TextEncodeQwenImageEditPlus': ['clip'],
+    'KSampler': ['model'],
+    'SamplerCustomAdvanced': ['model'],
+    'VAEDecode': ['vae'],
+    'VAEDecodeTiled': ['vae'],
+    'VAEEncode': ['vae'],
+    'LTXVImgToVideoInplace': ['vae'],
+  };
+
+  // Find all "Anything Everywhere" nodes and what they broadcast
+  const broadcasts: Array<{ sourceNodeId: string; outputIndex: number }> = [];
+  for (const [nodeId, nodeData] of Object.entries(workflow)) {
+    const node = nodeData as { class_type?: string; inputs?: Record<string, unknown> };
+    if (!node.class_type?.includes('Anything Everywhere')) continue;
+
+    const inputs = node.inputs || {};
+    for (const [, value] of Object.entries(inputs)) {
+      if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string') {
+        broadcasts.push({ sourceNodeId: value[0], outputIndex: value[1] as number });
+      }
+    }
+  }
+
+  if (broadcasts.length === 0) return;
+
+  // For each broadcast, find unconnected matching inputs and wire them
+  for (const broadcast of broadcasts) {
+    const sourceNode = workflow[broadcast.sourceNodeId] as { class_type?: string } | undefined;
+    if (!sourceNode) continue;
+
+    // Determine what type this node outputs based on class_type
+    const sourceClass = sourceNode.class_type || '';
+
+    for (const [nodeId, nodeData] of Object.entries(workflow)) {
+      const node = nodeData as { class_type?: string; inputs?: Record<string, unknown> };
+      if (!node.class_type || !node.inputs) continue;
+
+      const requiredInputs = INPUT_TYPE_MAP[node.class_type];
+      if (!requiredInputs) continue;
+
+      for (const inputName of requiredInputs) {
+        // Only connect if the input is not already connected
+        const currentValue = node.inputs[inputName];
+        if (currentValue !== undefined) continue; // already has a value or connection
+
+        // Check if this broadcast source could provide this input type
+        // CLIP loaders → clip inputs, model loaders → model inputs, VAE loaders → vae inputs
+        const isClipSource = sourceClass.includes('CLIP') || sourceClass.includes('Clip');
+        const isModelSource = sourceClass.includes('Model') || sourceClass.includes('UNET') || sourceClass.includes('Unet');
+        const isVaeSource = sourceClass.includes('VAE') || sourceClass.includes('Vae');
+
+        if ((inputName === 'clip' && isClipSource) ||
+            (inputName === 'model' && isModelSource) ||
+            (inputName === 'vae' && isVaeSource)) {
+          node.inputs[inputName] = [broadcast.sourceNodeId, broadcast.outputIndex];
+        }
+      }
+    }
+  }
 }
 
 /**
