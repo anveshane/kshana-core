@@ -651,15 +651,18 @@ export function parameterizeWorkflowByName(
  * Used for user-uploaded workflows that have no hardcoded parameterize function.
  */
 export function parameterizeGeneric(
-  template: WorkflowTemplate,
+  template: WorkflowTemplate | Record<string, unknown>,
   manifest: { parameterMappings: Array<{ input: string; nodeId: string; field: string }> },
   params: Record<string, unknown>,
 ): Record<string, unknown> {
   // Deep copy
-  const workflow: WorkflowTemplate = JSON.parse(JSON.stringify(template));
+  const raw = JSON.parse(JSON.stringify(template));
 
-  // First try API format (flat node map)
-  const apiWorkflow = workflowToPrompt(workflow);
+  // Detect format: LiteGraph has 'nodes' array, API format is a flat node map
+  const isLiteGraph = Array.isArray(raw.nodes);
+  const apiWorkflow: Record<string, unknown> = isLiteGraph
+    ? workflowToPrompt(raw as WorkflowTemplate)
+    : raw;
 
   for (const mapping of manifest.parameterMappings) {
     const value = params[mapping.input];
