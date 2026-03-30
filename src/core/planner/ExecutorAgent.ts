@@ -869,12 +869,8 @@ export class ExecutorAgent extends TypedEventEmitter {
               finalOutputPath = outputPath;
             }
 
-            // 5. Emit human-readable summary
-            this.emit({
-              type: 'agent_text',
-              text: `**${node.displayName}** generated → \`${finalOutputPath}\``,
-              isFinal: false,
-            });
+            // 5. Log completion (visible in executor log, NOT in chat UI)
+            this.log(`  ✓ ${node.displayName} → ${finalOutputPath}`);
 
             // 6. Extract collection items if this node produces them
             // (only for LLM-generated content nodes, not final assembly)
