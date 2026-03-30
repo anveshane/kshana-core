@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Dropdown } from './Dropdown'
+import { WorkflowTester } from './WorkflowTester'
 
 interface WorkflowMode {
   id: string
@@ -9,6 +10,9 @@ interface WorkflowMode {
   builtIn: boolean
   active: boolean
   isOverride?: boolean
+  outputType: string
+  inputRequirements: Array<{ id: string; type: string; source: string; description: string; required: boolean }>
+  parameterMappings: Array<{ input: string; nodeId: string; field: string }>
 }
 
 interface ParsedNode {
@@ -69,6 +73,7 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
 
   // Wizard state
   const [wizardOpen, setWizardOpen] = useState(false)
+  const [testingWorkflow, setTestingWorkflow] = useState<WorkflowMode | null>(null)
   const [wizardFilename, setWizardFilename] = useState('')
   const [wizardParsed, setWizardParsed] = useState<{ inputNodes: ParsedNode[]; detectedPipeline: string } | null>(null)
   const [wizardAnalysis, setWizardAnalysis] = useState<WorkflowAnalysis | null>(null)
@@ -319,6 +324,12 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
                                   Revert
                                 </button>
                               )}
+                              <button
+                                onClick={() => setTestingWorkflow(wf)}
+                                className="px-2.5 py-1 rounded text-[11px] font-mono border border-cyan/20 text-cyan hover:bg-cyan/10 transition-colors cursor-pointer"
+                              >
+                                Test
+                              </button>
                               {!wf.builtIn && (
                                 <button
                                   onClick={() => handleDelete(wf.id)}
@@ -473,6 +484,16 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Workflow Tester */}
+        {testingWorkflow && (
+          <div className="px-6 py-4 border-t border-line-soft">
+            <WorkflowTester
+              workflow={testingWorkflow}
+              onClose={() => setTestingWorkflow(null)}
+            />
           </div>
         )}
       </div>

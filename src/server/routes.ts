@@ -371,6 +371,140 @@ export async function registerRoutes(
     return reply.send({ status: 'deleted', id });
   });
 
+  // ── Workflow test endpoint ────────────────────────────────────────────────
+
+  // Track running tests: promptId → { status, outputPath, error }
+  const testResults = new Map<string, { status: string; outputPath?: string; outputUrl?: string; error?: string; message?: string; percentage?: number }>();
+
+  app.post(`${apiPrefix}/workflows/test`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as { workflowId: string; params: Record<string, string> };
+    if (!body.workflowId || !body.params) {
+      return reply.status(400).send({ error: 'Missing workflowId or params' });
+    }
+
+    try {
+      const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+      const registry = getWorkflowModeRegistry();
+      const mode = registry.getMode(body.workflowId);
+      if (!mode) {
+        return reply.status(404).send({ error: `Workflow '${body.workflowId}' not found` });
+      }
+
+      const workflowPath = registry.getWorkflowPath(mode);
+      if (!workflowPath) {
+        return reply.status(404).send({ error: `Workflow file not found for '${body.workflowId}'` });
+      }
+
+      // Load and parameterize workflow
+      const { loadWorkflowTemplate, parameterizeGeneric } = await import('../services/comfyui/WorkflowLoader.js');
+      const { ComfyUIClient } = await import('../services/comfyui/ComfyUIClient.js');
+      const fs = await import('fs');
+      const path = await import('path');
+
+      const outputDir = path.join(process.cwd(), 'test-output', 'workflow-tests');
+      if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
+      // Upload image files to ComfyUI if needed
+      const client = new ComfyUIClient({ outputDir });
+      const resolvedParams: Record<string, unknown> = { ...body.params };
+
+      for (const req of mode.inputRequirements) {
+        if (req.type === 'image' && body.params[req.id]) {
+          const imgPath = body.params[req.id]!;
+          if (fs.existsSync(imgPath)) {
+            const uploaded = await client.uploadImage(imgPath);
+            resolvedParams[req.id] = uploaded.name;
+          }
+        }
+      }
+
+      // Randomize seed if not provided or default
+      if (!resolvedParams['seed'] || resolvedParams['seed'] === '0') {
+        resolvedParams['seed'] = Math.floor(Math.random() * 999999);
+      }
+
+      const template = loadWorkflowTemplate(path.basename(workflowPath));
+      const workflow = parameterizeGeneric(template, mode, resolvedParams);
+
+      // Queue workflow
+      const result = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
+      const promptId = result.promptId;
+
+      // Track this test
+      testResults.set(promptId, { status: 'running', message: 'Queued...', percentage: 5 });
+
+      // Wait for completion in background
+      (async () => {
+        try {
+          await client.waitForCompletionWS(promptId, result.clientId, (info) => {
+            testResults.set(promptId, {
+              status: 'running',
+              message: info.message,
+              percentage: info.percentage,
+            });
+          });
+
+          const outputs = await client.getOutputImages(promptId);
+          if (outputs.length === 0) {
+            testResults.set(promptId, { status: 'error', error: 'No output files from ComfyUI' });
+            return;
+          }
+
+          const savedPath = await client.downloadImage(
+            outputs[0]!.filename,
+            outputs[0]!.subfolder,
+            outputs[0]!.type,
+            `test_${Date.now()}_${outputs[0]!.filename}`,
+          );
+
+          // Make it accessible via URL
+          const relPath = path.relative(process.cwd(), savedPath);
+          testResults.set(promptId, {
+            status: 'completed',
+            outputPath: savedPath,
+            outputUrl: `/api/v1/test-output/${path.basename(savedPath)}`,
+            percentage: 100,
+          });
+        } catch (err) {
+          testResults.set(promptId, { status: 'error', error: String(err) });
+        }
+      })();
+
+      return reply.send({ status: 'queued', promptId });
+    } catch (err) {
+      return reply.status(500).send({ error: `Test failed: ${err}` });
+    }
+  });
+
+  // Poll test status
+  app.get<{ Params: { promptId: string } }>(
+    `${apiPrefix}/workflows/test/:promptId/status`,
+    async (request: FastifyRequest<{ Params: { promptId: string } }>, reply: FastifyReply) => {
+      const { promptId } = request.params;
+      const result = testResults.get(promptId);
+      if (!result) return reply.status(404).send({ error: 'Test not found' });
+      return reply.send(result);
+    },
+  );
+
+  // Serve test output files
+  app.get<{ Params: { '*': string } }>(
+    `${apiPrefix}/test-output/*`,
+    async (request: FastifyRequest<{ Params: { '*': string } }>, reply: FastifyReply) => {
+      const filePath = request.params['*'];
+      if (filePath.includes('..')) return reply.status(400).send({ error: 'Invalid path' });
+      const { join, extname } = await import('path');
+      const { existsSync, readFileSync, statSync } = await import('fs');
+      const fullPath = join(process.cwd(), 'test-output', 'workflow-tests', filePath);
+      if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
+        return reply.status(404).send({ error: 'Not found' });
+      }
+      const ext = extname(fullPath).toLowerCase();
+      const MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.webm': 'video/webm' };
+      return reply.type(MIME[ext] || 'application/octet-stream').send(readFileSync(fullPath));
+    },
+  );
+
   // Register web UI routes (SPA + project/asset endpoints)
   await registerWebUIRoutes(app);
 
