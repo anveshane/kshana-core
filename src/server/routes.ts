@@ -396,7 +396,7 @@ export async function registerRoutes(
       }
 
       // Load and parameterize workflow
-      const { loadWorkflowTemplate, parameterizeGeneric } = await import('../services/comfyui/WorkflowLoader.js');
+      const { parameterizeGeneric } = await import('../services/comfyui/WorkflowLoader.js');
       const { ComfyUIClient } = await import('../services/comfyui/ComfyUIClient.js');
       const fs = await import('fs');
       const path = await import('path');
@@ -423,7 +423,9 @@ export async function registerRoutes(
         resolvedParams['seed'] = Math.floor(Math.random() * 999999);
       }
 
-      const template = loadWorkflowTemplate(path.basename(workflowPath));
+      // Load workflow directly from the resolved path (works for both built-in and user workflows)
+      const templateContent = fs.readFileSync(workflowPath, 'utf-8');
+      const template = JSON.parse(templateContent);
       const workflow = parameterizeGeneric(template, mode, resolvedParams);
 
       // Queue workflow
