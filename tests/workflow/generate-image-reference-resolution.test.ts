@@ -47,6 +47,7 @@ vi.mock('../../src/services/providers/index.js', async () => {
 import { generateImageTool } from '../../src/tasks/video/tools.js';
 import {
   createProject,
+  getAssets,
   loadProject,
   saveProject,
 } from '../../src/tasks/video/workflow/ProjectManager.js';
@@ -412,5 +413,121 @@ describe('generate_image prompt and reference resolution', () => {
       };
       expect(manifest.assets ?? []).toEqual([]);
     }
+  });
+
+  it('auto-links generated shot images to the matching timeline segment and persists placement metadata', async () => {
+    fs.writeFileSync(
+      join(projectRoot, 'timeline.json'),
+      JSON.stringify(
+        {
+          version: '1.0',
+          totalDuration: 4,
+          defaultCompositingMode: 'replace',
+          segments: [
+            {
+              id: 'segment_0_shot_1',
+              label: 'Shot 1: wide',
+              startTime: 0,
+              endTime: 4,
+              duration: 4,
+              compositingMode: 'replace',
+              fillStatus: 'planned',
+              layers: [],
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const result = await generateImageTool.handler?.({
+      scene_number: 1,
+      shot_number: 1,
+      image_type: 'scene',
+      prompt: 'Leo pauses in the rain.',
+    }) as Record<string, unknown>;
+
+    expect(result['status']).toBe('completed');
+    expect(result['segment_id']).toBe('segment_0_shot_1');
+    expect(result['timeline_updated']).toBe(true);
+
+    const timeline = JSON.parse(
+      fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8'),
+    ) as {
+      segments: Array<{
+        id: string;
+        fillStatus: string;
+        layers: Array<{ artifactId?: string; filePath?: string }>;
+      }>;
+    };
+    const segment = timeline.segments.find((entry) => entry.id === 'segment_0_shot_1');
+    expect(segment?.fillStatus).toBe('filled');
+    expect(segment?.layers[0]?.artifactId).toBe(result['artifact_id']);
+    expect(segment?.layers[0]?.filePath).toBe(result['file_path']);
+
+    const asset = getAssets(tempRoot).find((entry) => entry.id === result['artifact_id']);
+    expect(asset).toMatchObject({
+      scene_number: 1,
+      metadata: expect.objectContaining({
+        placementNumber: 1,
+        shot_number: 1,
+      }),
+    });
+  });
+
+  it('regenerates the same shot on the same timeline segment with version history', async () => {
+    fs.writeFileSync(
+      join(projectRoot, 'timeline.json'),
+      JSON.stringify(
+        {
+          version: '1.0',
+          totalDuration: 4,
+          defaultCompositingMode: 'replace',
+          segments: [
+            {
+              id: 'segment_0_shot_1',
+              label: 'Shot 1: wide',
+              startTime: 0,
+              endTime: 4,
+              duration: 4,
+              compositingMode: 'replace',
+              fillStatus: 'planned',
+              layers: [],
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+
+    const first = await generateImageTool.handler?.({
+      scene_number: 1,
+      shot_number: 1,
+      image_type: 'scene',
+      prompt: 'First pass.',
+    }) as Record<string, unknown>;
+    const second = await generateImageTool.handler?.({
+      scene_number: 1,
+      shot_number: 1,
+      image_type: 'scene',
+      prompt: 'Second pass.',
+    }) as Record<string, unknown>;
+
+    const timeline = JSON.parse(
+      fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8'),
+    ) as {
+      segments: Array<{
+        id: string;
+        layers: Array<{ artifactId?: string }>;
+        versionInfo?: { activeVersion: number; totalVersions: number };
+        layerHistory?: Array<{ version: number; layers: Array<{ artifactId?: string }> }>;
+      }>;
+    };
+    const segment = timeline.segments.find((entry) => entry.id === 'segment_0_shot_1');
+    expect(segment?.layers[0]?.artifactId).toBe(second['artifact_id']);
+    expect(segment?.versionInfo).toEqual({ activeVersion: 2, totalVersions: 2 });
+    expect(segment?.layerHistory?.[0]?.layers[0]?.artifactId).toBe(first['artifact_id']);
   });
 });

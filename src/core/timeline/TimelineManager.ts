@@ -34,6 +34,17 @@ const DEFAULT_CONSTRAINTS: DurationConstraints = {
 
 const TIMELINE_FILENAME = 'timeline.json';
 
+export function buildShotSegmentId(sceneNumber: number, shotNumber: number): string {
+  if (!Number.isFinite(sceneNumber) || sceneNumber < 1) {
+    throw new Error(`Invalid scene number for shot segment: ${sceneNumber}`);
+  }
+  if (!Number.isFinite(shotNumber) || shotNumber < 1) {
+    throw new Error(`Invalid shot number for shot segment: ${shotNumber}`);
+  }
+
+  return `segment_${sceneNumber - 1}_shot_${shotNumber}`;
+}
+
 function roundTimelineTime(value: number): number {
   return Math.round(value * 100) / 100;
 }

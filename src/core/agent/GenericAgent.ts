@@ -599,6 +599,9 @@ export class GenericAgent extends TypedEventEmitter {
   private thinkTagBuffer: string = '';
   private insideThinkTag: boolean = false;
 
+  // Tool-call XML streaming filter state (suppresses <tool_call>...</tool_call> from visible output)
+  private insideToolCallTag: boolean = false;
+
   // Analytics session ID (stable per agent instance)
   private analyticsSessionId: string;
 
@@ -929,7 +932,7 @@ export class GenericAgent extends TypedEventEmitter {
       }
     }
 
-    return { output, thinking };
+    return { output: this.stripToolCallBlocks(output), thinking };
   }
 
   /**
@@ -938,6 +941,41 @@ export class GenericAgent extends TypedEventEmitter {
   private resetThinkTagFilter(): void {
     this.thinkTagBuffer = '';
     this.insideThinkTag = false;
+    this.insideToolCallTag = false;
+  }
+
+  /**
+   * Strip <tool_call>...</tool_call> blocks from a text chunk, maintaining
+   * state across chunks so blocks that span multiple chunks are handled correctly.
+   */
+  private stripToolCallBlocks(text: string): string {
+    let result = '';
+    let remaining = text;
+
+    while (remaining.length > 0) {
+      if (this.insideToolCallTag) {
+        const closeIdx = remaining.indexOf('</tool_call>');
+        if (closeIdx !== -1) {
+          remaining = remaining.slice(closeIdx + '</tool_call>'.length);
+          this.insideToolCallTag = false;
+        } else {
+          // Still inside a tool_call block — discard everything remaining
+          break;
+        }
+      } else {
+        const openIdx = remaining.indexOf('<tool_call>');
+        if (openIdx !== -1) {
+          result += remaining.slice(0, openIdx);
+          remaining = remaining.slice(openIdx + '<tool_call>'.length);
+          this.insideToolCallTag = true;
+        } else {
+          result += remaining;
+          break;
+        }
+      }
+    }
+
+    return result;
   }
 
   /**
@@ -1115,12 +1153,15 @@ export class GenericAgent extends TypedEventEmitter {
           }
         }
 
-        // Clean content (remove <think> tags including orphaned ones)
+        // Clean content (remove <think> and <tool_call> tags including orphaned ones)
         const cleanedContent = content
           ? content
               .replace(/<think>.*?<\/think>/gs, '') // Complete think blocks
               .replace(/<think>.*$/gs, '') // Orphan opening tag
               .replace(/<\/think>/g, '') // Orphan closing tag
+              .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '') // Complete tool_call blocks
+              .replace(/<tool_call>[\s\S]*$/g, '') // Orphan opening tag
+              .replace(/<\/tool_call>/g, '') // Orphan closing tag
               .trim()
           : null;
 
@@ -3134,11 +3175,21 @@ Respond in JSON format:
         maxTokens: 200,
       });
 
-      return JSON.parse(response.content ?? '{}');
+      const raw = response.content ?? '';
+      // Strip markdown code fences if present
+      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+      const parsed = JSON.parse(cleaned);
+      const name = typeof parsed.name === 'string' && parsed.name.trim()
+        ? parsed.name.trim()
+        : `${contentType} — ${task.slice(0, 30)}`;
+      const summary = typeof parsed.summary === 'string' && parsed.summary.trim()
+        ? parsed.summary.trim()
+        : `${contentType} content`;
+      return { name, summary };
     } catch {
       return {
-        name: `${contentType}: ${task.slice(0, 30)}`,
-        summary: `${contentType} content for: ${task.slice(0, 100)}`,
+        name: `${contentType} — ${task.slice(0, 30)}`,
+        summary: `${contentType} content`,
       };
     }
   }
@@ -3275,8 +3326,43 @@ Respond in JSON format:
         instruction: task,
         outputFile,
       });
-      // Extract the generated content from the sub-agent's output
-      const generatedContent = result.output || '';
+
+      // Extract generated content from the sub-agent's output.
+      // Guard against saving tool-chatter prose (e.g. "read_project()", "<tool_call>...")
+      // that can appear when the model reasons about context gathering out loud.
+      const rawOutput = result.output || '';
+      const looksLikeToolChatter = (text: string): boolean => {
+        const t = text.trim();
+        if (!t) return true;
+        // Single-line outputs that are just tool syntax or boilerplate
+        if (t.split('\n').length <= 3) {
+          if (
+            /read_project\s*\(/.test(t) ||
+            /<tool_call>/.test(t) ||
+            /list_project_files/.test(t) ||
+            /read_file\s*\(/.test(t) ||
+            /TodoWrite\s*\(/.test(t) ||
+            /^I'll (help|start|check|write|create|generate|begin|now)\b/i.test(t)
+          ) {
+            return true;
+          }
+        }
+        return false;
+      };
+      const generatedContent = looksLikeToolChatter(rawOutput) ? '' : rawOutput;
+
+      if (!generatedContent) {
+        debugLog(
+          `[GenericAgent] generate_content result looks like tool-chatter, not real content. Raw: "${rawOutput.slice(0, 120)}"`
+        );
+        return {
+          error: `Content generation did not produce usable output for ${contentType}. The agent may have failed to complete the generation phase. Please retry.`,
+          task,
+          content_type: contentType,
+          output_file: effectiveOutputFile,
+        };
+      }
+
       const validatedContent = generatedContent
         ? validateApprovedContent(contentType, generatedContent, effectiveOutputFile)
         : null;
@@ -3473,14 +3559,9 @@ Respond in JSON format:
               continue;
             }
 
-            // Emit any text the content creator produced while deciding on tool calls
-            if (response.content && response.content.trim()) {
-              this.emit({
-                type: 'agent_text',
-                text: response.content.trim(),
-                isFinal: false,
-              });
-            }
+            // Do NOT emit context-gathering reasoning as agent_text — it contains
+            // raw tool syntax like "read_project()" / "<tool_call>..." which pollutes
+            // the chat transcript and can be saved as file content.
 
             // Add assistant message with tool calls
             this.contentState.messages.push({
@@ -3526,14 +3607,9 @@ Respond in JSON format:
             continue;
           }
 
-          // No tool calls during gathering - emit any text and switch to content generation
-          if (response.content && response.content.trim()) {
-            this.emit({
-              type: 'agent_text',
-              text: response.content.trim(),
-              isFinal: false,
-            });
-          }
+          // No tool calls during gathering — switch straight to content generation.
+          // Don't emit this reasoning prose as agent_text; it's internal context-building,
+          // not user-visible content.
           this.contentState.gatheringContext = false;
         }
 
@@ -3582,12 +3658,15 @@ Respond in JSON format:
           }
         }
 
-        // Clean content (remove <think> tags including orphaned ones)
+        // Clean content (remove <think> and <tool_call> tags including orphaned ones)
         let cleanedContent = content
           ? content
               .replace(/<think>.*?<\/think>/gs, '') // Complete think blocks
               .replace(/<think>.*$/gs, '') // Orphan opening tag
               .replace(/<\/think>/g, '') // Orphan closing tag
+              .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '') // Complete tool_call blocks
+              .replace(/<tool_call>[\s\S]*$/g, '') // Orphan opening tag
+              .replace(/<\/tool_call>/g, '') // Orphan closing tag
               .trim()
           : '';
 
@@ -3725,21 +3804,21 @@ Respond in JSON format:
         throw new Error(persistResult.error);
       }
 
+      // Do NOT include `task` (the full generation instruction) in the result — if the
+      // orchestrator sees it in the tool result message, it will re-generate the content
+      // as streaming text before proceeding to the next todo step (causing duplicates).
       const result = {
         status: 'approved',
-        name,
-        summary,
         content_ref: variableName,
         content_type: this.contentState.contentType,
-        task: this.contentState.task,
         output_file: this.contentState.outputFile,
         file_saved: fileSaved,
         registry_updated: persistResult.persisted,
         registry_action: persistResult.action,
         iterations: this.contentState.iterations,
         message: fileSaved
-          ? `${this.contentState.contentType} content "${name}" approved and saved to ${this.contentState.outputFile}. Summary: ${summary}`
-          : `${this.contentState.contentType} content "${name}" approved. Summary: ${summary}`,
+          ? `${this.contentState.contentType} content saved to ${this.contentState.outputFile}`
+          : `${this.contentState.contentType} content approved`,
         next_steps: contentApprovalNextSteps(this.contentState.contentType, persistResult),
       };
 
@@ -3748,7 +3827,7 @@ Respond in JSON format:
           {
             status: result.status,
             contentType: result.content_type,
-            name: result.name,
+            outputFile: result.output_file,
             fileSaved: result.file_saved,
           },
           null,

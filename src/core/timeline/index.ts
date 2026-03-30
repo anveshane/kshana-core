@@ -28,6 +28,7 @@ export type {
 
 // Manager functions
 export {
+  buildShotSegmentId,
   createTimelineSkeleton,
   updateSegmentLayers,
   setSegmentCompositing,

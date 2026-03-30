@@ -18,6 +18,12 @@ import {
 import type { GenerationJob } from './tools.js';
 import { getProjectDir, addAsset } from './workflow/index.js';
 import { readProjectText } from './workflow/projectFileIO.js';
+import {
+  buildShotSegmentId,
+  loadTimeline,
+  saveTimeline,
+  updateSegmentLayers,
+} from '../../core/timeline/index.js';
 
 // ─── Placeholder image generation ────────────────────────────────────────────
 
@@ -31,6 +37,17 @@ const ASPECT_DIMENSIONS: Record<string, [number, number]> = {
 
 // Uniform dark background for all fake images
 const FAKE_BG_COLOR = '#1a1a2e';
+
+function buildPlacementMetadata(
+  sceneNumber: number | undefined,
+  shotNumber: number | undefined,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const metadata: Record<string, unknown> = { ...extra };
+  if (sceneNumber !== undefined) metadata['placementNumber'] = sceneNumber;
+  if (shotNumber !== undefined) metadata['shot_number'] = shotNumber;
+  return metadata;
+}
 
 function readPromptSourceFile(filePath: string): string | null {
   if (path.isAbsolute(filePath)) {
@@ -160,6 +177,11 @@ async function fakeGenerateImageHandler(
   const characterName = args['character_name'] as string | undefined;
   const settingName = args['setting_name'] as string | undefined;
   const generationMode = (args['generation_mode'] as string) || 'text_to_image';
+  const shotNumber = args['shot_number'] as number | undefined;
+  const segmentId = (args['segment_id'] as string | undefined) ??
+    (imageType === 'scene' && shotNumber !== undefined
+      ? buildShotSegmentId(sceneNumber, shotNumber)
+      : undefined);
   const referenceImages = args['reference_images'] as Array<{
     image_id: string;
     type: string;
@@ -255,11 +277,43 @@ async function fakeGenerateImageHandler(
       id: artifactId,
       type: assetType,
       path: relativePath,
+      scene_number: assetType === 'scene_image' ? sceneNumber : undefined,
+      version: 1,
       createdAt: Date.now(),
-      metadata: { jobId, fake: true },
+      metadata: buildPlacementMetadata(
+        assetType === 'scene_image' ? sceneNumber : undefined,
+        assetType === 'scene_image' ? shotNumber : undefined,
+        { jobId, fake: true },
+      ),
     });
   } catch {
     // Project may not exist yet
+  }
+
+  if (assetType === 'scene_image' && segmentId) {
+    try {
+      const timeline = loadTimeline(projectDir);
+      if (timeline) {
+        const updated = updateSegmentLayers(
+          timeline,
+          segmentId,
+          [
+            {
+              type: 'visual',
+              artifactId,
+              filePath: relativePath,
+              label: `Scene ${sceneNumber} Shot ${shotNumber} image`,
+              source: 'generated',
+            },
+          ],
+          undefined,
+          promptText,
+        );
+        saveTimeline(projectDir, updated);
+      }
+    } catch {
+      // Ignore timeline update failures in fake mode
+    }
   }
 
   return {
@@ -269,6 +323,7 @@ async function fakeGenerateImageHandler(
     message: `[FAKE] Image generation job completed instantly. Use wait_for_job("${jobId}") to get result.`,
     params: {
       scene_number: sceneNumber,
+      shot_number: shotNumber,
       image_type: imageType,
       prompt: promptText,
       prompt_file: promptFile || undefined,
@@ -276,6 +331,8 @@ async function fakeGenerateImageHandler(
       reference_count: referenceImages?.length ?? 0,
       references: referenceImages?.map(r => `${r.type}:${r.name}`) ?? [],
     },
+    segment_id: segmentId,
+    timeline_updated: Boolean(segmentId && assetType === 'scene_image'),
   };
 }
 
@@ -289,6 +346,7 @@ async function fakeGenerateVideoHandler(
   const motionPromptFile = (args['motion_prompt_file'] as string) || '';
   const seed = args['seed'] as number | undefined;
   const duration = (args['duration'] as number) || 10;
+  const segmentId = (args['segment_id'] as string | undefined) ?? buildShotSegmentId(sceneNumber, shotNumber);
   const videoWidth = (args['width'] as number) || 1280;
   const videoHeight = (args['height'] as number) || 720;
 
@@ -367,11 +425,37 @@ async function fakeGenerateVideoHandler(
       id: artifactId,
       type: 'scene_video',
       path: relativePath,
+      scene_number: sceneNumber,
+      version: 1,
       createdAt: Date.now(),
-      metadata: { jobId, fake: true },
+      metadata: buildPlacementMetadata(sceneNumber, shotNumber, { jobId, fake: true }),
     });
   } catch {
     // Project may not exist yet
+  }
+
+  try {
+    const timeline = loadTimeline(projectDir);
+    if (timeline) {
+      const updated = updateSegmentLayers(
+        timeline,
+        segmentId,
+        [
+          {
+            type: 'visual',
+            artifactId,
+            filePath: relativePath,
+            label: `Scene ${sceneNumber} Shot ${shotNumber} video`,
+            source: 'generated',
+          },
+        ],
+        undefined,
+        motionPromptText,
+      );
+      saveTimeline(projectDir, updated);
+    }
+  } catch {
+    // Ignore timeline update failures in fake mode
   }
 
   return {
@@ -386,6 +470,8 @@ async function fakeGenerateVideoHandler(
       motion_prompt: motionPromptText,
       motion_prompt_file: motionPromptFile || undefined,
     },
+    segment_id: segmentId,
+    timeline_updated: true,
   };
 }
 
