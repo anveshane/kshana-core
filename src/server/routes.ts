@@ -211,7 +211,8 @@ export async function registerRoutes(
   app.get(`${apiPrefix}/workflows`, async (_request: FastifyRequest, reply: FastifyReply) => {
     const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
     const registry = getWorkflowModeRegistry();
-    const all = registry.listAll();
+    // Only show ComfyUI workflows — API provider modes belong in Provider Settings
+    const all = registry.listAll().filter(m => m.format !== 'api');
 
     const grouped: Record<string, typeof all> = {};
     for (const mode of all) {
