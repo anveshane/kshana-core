@@ -49,9 +49,9 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
 
   const handleSelect = (dirName: string) => {
     setOpen(false)
-    dispatch({ type: 'SELECT_PROJECT', name: dirName })
-    // Server expects projectName WITHOUT .kshana suffix — it adds it
     const projectName = dirName.replace('.kshana', '')
+    // Store project name WITHOUT .kshana — asset URLs use this directly
+    dispatch({ type: 'SELECT_PROJECT', name: projectName })
     onSendWs({ type: 'select_project', data: { projectName } })
     loadProjectAssets(dirName)
     loadProjectState(dirName)
@@ -109,13 +109,13 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
       const data = await res.json()
       const assets = (data.assets || []).map((a: { id: string; path: string; type: string }) => ({
         ...a,
-        url: `/api/v1/assets/${dirName}/${a.path}`,
+        url: `/api/v1/assets/${name}/${a.path}`,
       }))
       dispatch({ type: 'SET_ASSETS', assets })
     } catch { /* */ }
   }
 
-  const selectedTitle = projects.find(p => p.dirName === selectedProject)?.title
+  const selectedTitle = projects.find(p => p.dirName.replace('.kshana', '') === selectedProject)?.title
 
   return (
     <>
@@ -126,7 +126,7 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-line-soft bg-graphite-400/50 hover:border-line-strong transition-colors cursor-pointer min-w-40 max-w-56"
         >
           <span className="text-sm truncate text-foreground">
-            {selectedTitle || selectedProject?.replace('.kshana', '') || 'Select Project...'}
+            {selectedTitle || selectedProject || 'Select Project...'}
           </span>
           <svg
             className={`w-3.5 h-3.5 text-graphite-100 transition-transform flex-shrink-0 ${open ? 'rotate-180' : ''}`}
@@ -149,7 +149,7 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
               </div>
             ) : (
               projects.map((p) => {
-                const isSelected = p.dirName === selectedProject
+                const isSelected = p.dirName.replace('.kshana', '') === selectedProject
                 return (
                   <button
                     key={p.dirName}
