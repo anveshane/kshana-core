@@ -6,7 +6,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
-import { createAgentForProject } from '../tasks/video/index.js';
+import { createAgentForProject, updateProjectConfiguration } from '../tasks/video/index.js';
 import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -238,6 +238,24 @@ export class ConversationManager {
     if (!session) return;
     session.state.autonomousMode = enabled;
     session.agent?.setAutonomousMode(enabled);
+  }
+
+  persistProjectConfiguration(
+    sessionId: string,
+    config: { templateId: string; style: string; duration: number },
+  ): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session?.sessionContext) {
+      return false;
+    }
+
+    return runInSession(session.sessionContext, () => {
+      return updateProjectConfiguration({
+        templateId: config.templateId,
+        style: config.style,
+        duration: config.duration,
+      });
+    });
   }
 
   /**

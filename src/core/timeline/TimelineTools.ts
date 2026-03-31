@@ -25,6 +25,8 @@ import type {
 } from './types.js';
 import {
   createTimelineSkeleton,
+  getNextPendingTimelineSegment,
+  getPendingTimelineSegments,
   updateSegmentLayers,
   setSegmentCompositing,
   setSegmentTransition,
@@ -476,6 +478,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
             success: true,
             exists: true,
             timeline,
+            nextPendingSegment: getNextPendingTimelineSegment(timeline),
+            pendingSegments: getPendingTimelineSegments(timeline),
           };
         }
 

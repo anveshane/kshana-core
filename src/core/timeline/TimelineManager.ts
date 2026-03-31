@@ -34,6 +34,25 @@ const DEFAULT_CONSTRAINTS: DurationConstraints = {
 
 const TIMELINE_FILENAME = 'timeline.json';
 
+export interface ParsedShotSegmentId {
+  sceneIndex: number;
+  sceneNumber: number;
+  shotNumber: number;
+}
+
+export interface PendingTimelineSegment {
+  segmentId: string;
+  label: string;
+  fillStatus: SegmentFillStatus;
+  sceneNumber?: number;
+  shotNumber?: number;
+}
+
+export interface UpsertSceneShotsResult {
+  timeline: Timeline;
+  preservedExistingShots: boolean;
+}
+
 export function buildShotSegmentId(sceneNumber: number, shotNumber: number): string {
   if (!Number.isFinite(sceneNumber) || sceneNumber < 1) {
     throw new Error(`Invalid scene number for shot segment: ${sceneNumber}`);
@@ -43,6 +62,25 @@ export function buildShotSegmentId(sceneNumber: number, shotNumber: number): str
   }
 
   return `segment_${sceneNumber - 1}_shot_${shotNumber}`;
+}
+
+export function parseShotSegmentId(segmentId: string): ParsedShotSegmentId | null {
+  const match = /^segment_(\d+)_shot_(\d+)$/.exec(segmentId);
+  if (!match?.[1] || !match?.[2]) {
+    return null;
+  }
+
+  const sceneIndex = Number(match[1]);
+  const shotNumber = Number(match[2]);
+  if (!Number.isFinite(sceneIndex) || !Number.isFinite(shotNumber)) {
+    return null;
+  }
+
+  return {
+    sceneIndex,
+    sceneNumber: sceneIndex + 1,
+    shotNumber,
+  };
 }
 
 function roundTimelineTime(value: number): number {
@@ -496,6 +534,58 @@ export function splitSegmentIntoShots(
   };
   updated.validation = validateTimeline(updated);
   return updated;
+}
+
+export function getSceneShotSegments(
+  timeline: Timeline,
+  sceneSegmentId: string
+): TimelineSegment[] {
+  return timeline.segments.filter(segment => segment.id.startsWith(`${sceneSegmentId}_shot_`));
+}
+
+export function upsertSceneShots(
+  timeline: Timeline,
+  sceneSegmentId: string,
+  shots: Array<{ label: string; duration: number; metadata?: Record<string, unknown> }>
+): UpsertSceneShotsResult {
+  const existingShotSegments = getSceneShotSegments(timeline, sceneSegmentId);
+  const hasFilledShots = existingShotSegments.some(segment => segment.fillStatus === 'filled');
+  if (existingShotSegments.length > 0 && hasFilledShots) {
+    return {
+      timeline,
+      preservedExistingShots: true,
+    };
+  }
+
+  return {
+    timeline: splitSegmentIntoShots(timeline, sceneSegmentId, shots),
+    preservedExistingShots: false,
+  };
+}
+
+export function getPendingTimelineSegments(timeline: Timeline): PendingTimelineSegment[] {
+  return timeline.segments
+    .filter(segment => segment.fillStatus !== 'filled')
+    .map(segment => {
+      const parsed = parseShotSegmentId(segment.id);
+      return {
+        segmentId: segment.id,
+        label: segment.label,
+        fillStatus: segment.fillStatus,
+        ...(parsed
+          ? {
+              sceneNumber: parsed.sceneNumber,
+              shotNumber: parsed.shotNumber,
+            }
+          : {}),
+      };
+    });
+}
+
+export function getNextPendingTimelineSegment(
+  timeline: Timeline
+): PendingTimelineSegment | null {
+  return getPendingTimelineSegments(timeline)[0] ?? null;
 }
 
 /**

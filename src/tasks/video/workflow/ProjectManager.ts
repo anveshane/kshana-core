@@ -1392,6 +1392,39 @@ export function saveProject(project: ProjectFile, basePath: string = process.cwd
   writeProjectText(PROJECT_FILE, JSON.stringify(project, null, 2), basePath);
 }
 
+export function updateProjectConfiguration(
+  config: {
+    templateId: string;
+    style: ProjectStyle;
+    duration: number;
+  },
+  basePath: string = process.cwd(),
+): boolean {
+  const project = loadProject(basePath);
+  if (!project) {
+    return false;
+  }
+
+  project.templateId = config.templateId;
+  project.style = config.style;
+  project.targetDuration = config.duration;
+  project.goal = {
+    targetArtifacts: project.goal?.targetArtifacts ?? ['final_short'],
+    description: project.goal?.description ?? '',
+    preferences: {
+      ...project.goal?.preferences,
+      style: config.style,
+      duration: config.duration,
+    },
+    setAt: project.goal?.setAt ?? Date.now(),
+    status: project.goal?.status ?? 'active',
+    ...(project.goal?.achievedAt ? { achievedAt: project.goal.achievedAt } : {}),
+  };
+
+  saveProject(project, basePath);
+  return true;
+}
+
 // ============================================================================
 // ACTIVE TIMER TRACKING
 // ============================================================================

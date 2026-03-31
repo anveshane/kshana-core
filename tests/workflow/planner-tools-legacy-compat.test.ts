@@ -257,4 +257,63 @@ describe('Planner tools legacy compatibility', () => {
     expect(afterProject['productionCompletedAt']).toBeUndefined();
     expect((afterProject['goal'] as Record<string, unknown>)['description']).toBe('Finish the video');
   });
+
+  it('scan_assets does not report timeline missing when root timeline.json exists', async () => {
+    createProject('A boy playing football', 'cinematic_realism', tempRoot);
+
+    fs.writeFileSync(
+      join(projectRoot, 'timeline.json'),
+      JSON.stringify(
+        {
+          version: '1.0',
+          totalDuration: 6,
+          defaultCompositingMode: 'replace',
+          segments: [
+            {
+              id: 'segment_0_shot_1',
+              label: 'Shot 1',
+              startTime: 0,
+              endTime: 3,
+              duration: 3,
+              compositingMode: 'replace',
+              fillStatus: 'filled',
+              layers: [],
+            },
+            {
+              id: 'segment_0_shot_2',
+              label: 'Shot 2',
+              startTime: 3,
+              endTime: 6,
+              duration: 3,
+              compositingMode: 'replace',
+              fillStatus: 'planned',
+              layers: [],
+            },
+          ],
+          globalLayers: [],
+          validation: {
+            isComplete: false,
+            filledDuration: 3,
+            gaps: [],
+            warnings: [],
+          },
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+
+    const registry = createGoalDrivenToolRegistry('narrative', tempRoot);
+    const tool = registry.get('scan_assets');
+    const result = await tool?.handler?.({});
+
+    expect(tool).toBeDefined();
+    expect(result).toMatchObject({ success: true });
+    expect(
+      (result as { issues: Array<{ message?: string }> }).issues.some(issue =>
+        issue.message?.includes('timeline.json is missing'),
+      ),
+    ).toBe(false);
+  });
 });

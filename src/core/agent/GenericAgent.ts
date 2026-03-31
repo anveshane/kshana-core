@@ -86,7 +86,7 @@ import {
   createTimelineSkeleton,
   loadTimeline,
   saveTimeline,
-  splitSegmentIntoShots,
+  upsertSceneShots,
 } from '../timeline/TimelineManager.js';
 import type { SegmentDescriptor } from '../timeline/types.js';
 
@@ -237,6 +237,7 @@ function syncTimelineForMotionPrompt(
     return { persisted: false, error: `Scene ${sceneNumber} is not registered in project.scenes` };
   }
 
+  const sceneSegmentId = `segment_${sceneIndex}`;
   const validShots =
     motionPrompt.shots
       ?.map((shot, index) => {
@@ -259,6 +260,11 @@ function syncTimelineForMotionPrompt(
             ...(shot.prompt ? { prompt: shot.prompt } : {}),
             ...(shot.cameraWork ? { cameraWork: shot.cameraWork } : {}),
             ...(shot.dialogue ? { dialogue: shot.dialogue } : {}),
+            ...(shot.continuity_anchor ? { continuity_anchor: shot.continuity_anchor } : {}),
+            ...(shot.wardrobe_lock ? { wardrobe_lock: shot.wardrobe_lock } : {}),
+            ...(shot.setting_lock ? { setting_lock: shot.setting_lock } : {}),
+            ...(shot.scene_palette ? { scene_palette: shot.scene_palette } : {}),
+            ...(shot.do_not_change ? { do_not_change: shot.do_not_change } : {}),
           },
         };
       })
@@ -268,8 +274,15 @@ function syncTimelineForMotionPrompt(
     return { persisted: false, error: `scene_video_prompt for Scene ${sceneNumber} does not contain valid shots` };
   }
 
-  const updatedTimeline = splitSegmentIntoShots(timeline, `segment_${sceneIndex}`, validShots);
-  saveTimeline(projectDir, updatedTimeline);
+  const upsertResult = upsertSceneShots(timeline, sceneSegmentId, validShots);
+  if (upsertResult.preservedExistingShots) {
+    return {
+      persisted: true,
+      timelineAction: `timeline_scene_preserved_existing_shots_${sceneNumber}`,
+    };
+  }
+
+  saveTimeline(projectDir, upsertResult.timeline);
   return { persisted: true, timelineAction: `timeline_split_scene_${sceneNumber}` };
 }
 
@@ -279,7 +292,7 @@ function contentApprovalNextSteps(contentType: string, persistResult: PersistRes
   }
 
   if (contentType === 'scene_video_prompt') {
-    return 'IMPORTANT: 1) Motion prompt was persisted and the matching timeline scene was split into shots automatically. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.';
+    return 'IMPORTANT: 1) Motion prompt was persisted and the timeline was updated non-destructively. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.';
   }
 
   if (persistResult.timelineAction === 'timeline_created') {

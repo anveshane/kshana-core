@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { splitSegmentIntoShots } from '../../src/core/timeline/TimelineManager.js';
+import {
+  getNextPendingTimelineSegment,
+  getPendingTimelineSegments,
+  parseShotSegmentId,
+  splitSegmentIntoShots,
+  upsertSceneShots,
+} from '../../src/core/timeline/TimelineManager.js';
 import type { Timeline } from '../../src/core/timeline/types.js';
 
 function createTimeline(): Timeline {
@@ -136,5 +142,83 @@ describe('splitSegmentIntoShots', () => {
       { id: 'segment_2', startTime: 8, endTime: 12, duration: 4 },
     ]);
     expect(result.validation.gaps).toEqual([]);
+  });
+
+  it('returns pending segments in timeline order and exposes the first unfilled shot', () => {
+    const initial = splitSegmentIntoShots(createTimeline(), 'segment_1', [
+      { label: 'Shot 1', duration: 2 },
+      { label: 'Shot 2', duration: 3 },
+    ]);
+
+    initial.segments[1] = {
+      ...initial.segments[1]!,
+      fillStatus: 'filled',
+      layers: [
+        {
+          type: 'visual',
+          label: 'Shot 1 video',
+          source: 'generated',
+          filePath: 'assets/videos/scene-2-shot-1.mp4',
+        },
+      ],
+    };
+
+    const pendingSegments = getPendingTimelineSegments(initial);
+
+    expect(pendingSegments).toEqual([
+      {
+        segmentId: 'segment_1_shot_2',
+        label: 'Shot 2',
+        fillStatus: 'planned',
+        sceneNumber: 2,
+        shotNumber: 2,
+      },
+      {
+        segmentId: 'segment_2',
+        label: 'Outro',
+        fillStatus: 'empty',
+      },
+    ]);
+    expect(getNextPendingTimelineSegment(initial)).toEqual(pendingSegments[0]);
+  });
+
+  it('parses shot segment ids into scene and shot numbers', () => {
+    expect(parseShotSegmentId('segment_2_shot_4')).toEqual({
+      sceneIndex: 2,
+      sceneNumber: 3,
+      shotNumber: 4,
+    });
+    expect(parseShotSegmentId('segment_2')).toBeNull();
+  });
+
+  it('preserves an already split scene when any shot is filled', () => {
+    const initial = splitSegmentIntoShots(createTimeline(), 'segment_1', [
+      { label: 'Shot 1', duration: 2, metadata: { shotType: 'close_up' } },
+      { label: 'Shot 2', duration: 3, metadata: { shotType: 'wide' } },
+    ]);
+
+    initial.segments[1] = {
+      ...initial.segments[1]!,
+      fillStatus: 'filled',
+      metadata: { shotType: 'close_up' },
+      layers: [
+        {
+          type: 'visual',
+          label: 'Shot 1 video',
+          source: 'generated',
+          filePath: 'assets/videos/scene-2-shot-1.mp4',
+          metadata: { prompt: 'Existing shot one' },
+        },
+      ],
+    };
+
+    const result = upsertSceneShots(initial, 'segment_1', [
+      { label: 'Replacement 1', duration: 1 },
+      { label: 'Replacement 2', duration: 1 },
+      { label: 'Replacement 3', duration: 2 },
+    ]);
+
+    expect(result.preservedExistingShots).toBe(true);
+    expect(result.timeline).toEqual(initial);
   });
 });

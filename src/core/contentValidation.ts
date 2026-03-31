@@ -6,6 +6,11 @@ export interface ParsedSceneMotionShot {
   prompt?: string;
   dialogue?: string | null;
   cameraWork?: string;
+  continuity_anchor?: string;
+  wardrobe_lock?: string;
+  setting_lock?: string;
+  scene_palette?: string;
+  do_not_change?: string;
 }
 
 export interface ParsedSceneMotionPrompt {

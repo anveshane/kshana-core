@@ -242,7 +242,7 @@ export class WebSocketHandler {
     }
 
     if (isConfigureProjectMessage(message)) {
-      this.handleConfigureProject(sessionId, socket, message.data);
+      await this.handleConfigureProject(sessionId, socket, message.data);
       return;
     }
 
@@ -286,11 +286,11 @@ export class WebSocketHandler {
   /**
    * Handle configure_project message.
    */
-  private handleConfigureProject(
+  private async handleConfigureProject(
     sessionId: string,
     socket: WebSocket,
     data: ConfigureProjectData,
-  ): void {
+  ): Promise<void> {
     this.conversationManager.configureSessionForProject(
       sessionId,
       data.templateId,
@@ -298,6 +298,11 @@ export class WebSocketHandler {
       data.duration,
       data.projectDir,
     );
+    this.conversationManager.persistProjectConfiguration(sessionId, {
+      templateId: data.templateId,
+      style: data.style,
+      duration: data.duration,
+    });
 
     const toolNames = this.conversationManager.getSessionToolNames(sessionId);
     this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
