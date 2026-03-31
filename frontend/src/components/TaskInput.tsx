@@ -18,6 +18,20 @@ const COMMANDS = [
   { name: '/serial', description: 'Switch to serial media gen' },
 ]
 
+const RESET_STAGES = [
+  { name: 'plot', description: 'Reset everything, start from scratch' },
+  { name: 'story', description: 'Keep plot, redo story onwards' },
+  { name: 'characters', description: 'Keep plot+story, redo characters/settings/scenes onwards' },
+  { name: 'world_style', description: 'Redo visual style guide and all images onwards' },
+  { name: 'character_image', description: 'Keep writing, redo all image generation onwards' },
+  { name: 'scene_video_prompt', description: 'Redo shot planning, images, and videos' },
+  { name: 'shot_image_prompt', description: 'Redo shot image prompts, images, and videos' },
+  { name: 'shot_motion_directive', description: 'Redo motion directives and videos' },
+  { name: 'shot_image', description: 'Redo shot images and videos' },
+  { name: 'shot_video', description: 'Keep images, redo video generation + assembly' },
+  { name: 'final_video', description: 'Redo final assembly only' },
+]
+
 export function TaskInput({ onSend, placeholder: customPlaceholder }: TaskInputProps) {
   const { agentStatus, connectionStatus } = useAppState()
   const [value, setValue] = useState('')
@@ -28,16 +42,28 @@ export function TaskInput({ onSend, placeholder: customPlaceholder }: TaskInputP
 
   const isDisabled = connectionStatus !== 'connected' || agentStatus === 'thinking'
 
-  // Filter commands based on input
-  const suggestions = value.startsWith('/')
-    ? COMMANDS.filter(c => c.name.startsWith(value.toLowerCase()))
-    : []
+  // Filter commands or stage suggestions based on input
+  const resetMatch = value.match(/^\/reset\s+(\S*)$/i)
+  const isResetStageMode = !!resetMatch
+  const stageFilter = resetMatch?.[1]?.toLowerCase() ?? ''
+
+  const suggestions = isResetStageMode
+    ? RESET_STAGES
+        .filter(s => s.name.startsWith(stageFilter))
+        .map(s => ({ name: s.name, description: s.description }))
+    : value.startsWith('/')
+      ? COMMANDS.filter(c => c.name.startsWith(value.toLowerCase()))
+      : []
 
   // Show/hide suggestions
   useEffect(() => {
-    setShowSuggestions(value.startsWith('/') && suggestions.length > 0 && value !== suggestions[0]?.name)
+    if (isResetStageMode) {
+      setShowSuggestions(suggestions.length > 0)
+    } else {
+      setShowSuggestions(value.startsWith('/') && suggestions.length > 0 && value !== suggestions[0]?.name)
+    }
     setSelectedIndex(0)
-  }, [value, suggestions.length])
+  }, [value, suggestions.length, isResetStageMode])
 
   const handleSubmit = useCallback(() => {
     if (!value.trim() || isDisabled) return
@@ -48,10 +74,18 @@ export function TaskInput({ onSend, placeholder: customPlaceholder }: TaskInputP
   }, [value, isDisabled, onSend])
 
   const applySuggestion = useCallback((cmd: string) => {
-    setValue(cmd + ' ')
-    setShowSuggestions(false)
-    inputRef.current?.focus()
-  }, [])
+    if (isResetStageMode) {
+      // Replace the stage part: "/reset <partial>" → "/reset <stage>"
+      setValue(`/reset ${cmd}`)
+      setShowSuggestions(false)
+      // Auto-submit since the command is complete
+      setTimeout(() => inputRef.current?.focus(), 0)
+    } else {
+      setValue(cmd + ' ')
+      setShowSuggestions(false)
+      inputRef.current?.focus()
+    }
+  }, [isResetStageMode])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (showSuggestions) {
