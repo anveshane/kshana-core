@@ -280,6 +280,21 @@ export class ComfyUIProvider implements GenerationProvider {
       onProgress?.({ percentage: 0, message: 'Text-to-video mode...', done: false });
     }
 
+    // Upload additional frame images (last_frame, mid_frame, etc.) for FLFV workflows
+    const uploadedFrames: Record<string, string> = {};
+    if (input.frameImages) {
+      for (const [frameId, framePath] of Object.entries(input.frameImages)) {
+        if (fs.existsSync(framePath)) {
+          onProgress?.({ percentage: 0, message: `Uploading ${frameId}...`, done: false });
+          const frameUpload = await client.uploadImage(framePath, 'input', true);
+          uploadedFrames[frameId] = frameUpload.name;
+          debugLog(`Uploaded ${frameId}: ${framePath} → ${frameUpload.name}`);
+        } else {
+          debugLog(`Frame image not found, skipping: ${frameId} → ${framePath}`);
+        }
+      }
+    }
+
     // Load and parameterize workflow
     onProgress?.({ percentage: 0, message: `Loading workflow: ${modeManifest?.displayName ?? 'ltx23'}...`, done: false });
 
@@ -293,10 +308,8 @@ export class ComfyUIProvider implements GenerationProvider {
 
       let workflowPath: string;
       if (manifestDir) {
-        // Resolve workflow file relative to manifest directory
         workflowPath = path.join(manifestDir, modeManifest.workflowFile);
       } else {
-        // Fall back: try workflows/user/ directory
         workflowPath = path.join(process.cwd(), 'workflows', 'user', modeManifest.workflowFile);
       }
 
@@ -304,7 +317,7 @@ export class ComfyUIProvider implements GenerationProvider {
         throw new Error(`User workflow file not found: ${workflowPath}`);
       }
 
-      debugLog(`Loading user workflow from: ${workflowPath} (isT2V=${isT2V})`);
+      debugLog(`Loading user workflow from: ${workflowPath} (isT2V=${isT2V}, frames=${Object.keys(uploadedFrames).join(',') || 'none'})`);
       const template = JSON.parse(fs.readFileSync(workflowPath, 'utf-8'));
       const genericParams: Record<string, unknown> = {
         prompt,
@@ -314,22 +327,27 @@ export class ComfyUIProvider implements GenerationProvider {
         width,
         height,
       };
+      // Set first_frame (uploaded source image)
       if (!isT2V && uploadResult?.name) {
         genericParams['first_frame'] = uploadResult.name;
       }
+      // Set additional frame images (last_frame, mid_frame, etc.)
+      for (const [frameId, uploadedName] of Object.entries(uploadedFrames)) {
+        genericParams[frameId] = uploadedName;
+      }
+
       workflow = parameterizeGeneric(template, modeManifest, genericParams) as Record<string, unknown>;
 
-      // For i2v: ensure boolean toggle nodes for first_frame are set to true
-      // For t2v: ensure they are set to false (workflow default)
-      // This handles workflows that use a PrimitiveBoolean to switch between i2v/t2v modes
+      // Handle boolean toggle nodes for image inputs (i2v/t2v switch)
+      // For each image input mapping, if the target is a PrimitiveBoolean, set true/false
+      // based on whether that image was provided
       for (const mapping of modeManifest.parameterMappings) {
-        if (mapping.input === 'first_frame') {
-          const node = (workflow as Record<string, { class_type?: string; inputs?: Record<string, unknown> }>)[mapping.nodeId];
-          if (node?.class_type === 'PrimitiveBoolean') {
-            node.inputs = node.inputs || {};
-            node.inputs[mapping.field] = !isT2V;
-            debugLog(`Set boolean node ${mapping.nodeId}.${mapping.field} = ${!isT2V} (${isT2V ? 't2v' : 'i2v'} mode)`);
-          }
+        const node = (workflow as Record<string, { class_type?: string; inputs?: Record<string, unknown> }>)[mapping.nodeId];
+        if (node?.class_type === 'PrimitiveBoolean') {
+          const hasValue = mapping.input in genericParams && genericParams[mapping.input];
+          node.inputs = node.inputs || {};
+          node.inputs[mapping.field] = !!hasValue;
+          debugLog(`Set boolean ${mapping.nodeId}.${mapping.field} = ${!!hasValue} (input: ${mapping.input})`);
         }
       }
     } else {
