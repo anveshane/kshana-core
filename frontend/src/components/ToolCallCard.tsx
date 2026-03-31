@@ -89,6 +89,101 @@ function ItemTitle({ item }: { item: string }) {
   )
 }
 
+/** Parse markdown sections from structured content (## Heading → body) */
+function parseSections(text: string): Array<{ heading: string; body: string }> {
+  const sections: Array<{ heading: string; body: string }> = []
+  const lines = text.split('\n')
+  let currentHeading = ''
+  let currentBody: string[] = []
+
+  for (const line of lines) {
+    const h2 = line.match(/^##\s+(.+)/)
+    const h3 = line.match(/^###\s+(.+)/)
+    if (h2 || h3) {
+      if (currentHeading || currentBody.length > 0) {
+        sections.push({ heading: currentHeading, body: currentBody.join('\n').trim() })
+      }
+      currentHeading = (h2 || h3)![1]!
+      currentBody = []
+    } else {
+      currentBody.push(line)
+    }
+  }
+  if (currentHeading || currentBody.length > 0) {
+    sections.push({ heading: currentHeading, body: currentBody.join('\n').trim() })
+  }
+  return sections.filter(s => s.heading || s.body)
+}
+
+/** Structured character/setting card with collapsible sections */
+function StructuredContentCard({ content }: { content: string }) {
+  const [expanded, setExpanded] = useState<Set<number>>(new Set([0]))
+  const sections = parseSections(content)
+
+  // Extract key fields from the first section (Name, Age, etc.)
+  const firstSection = sections[0]
+  const keyFields: Array<{ label: string; value: string }> = []
+  if (firstSection?.body) {
+    const fieldRegex = /\*\*(.+?):\*\*\s*(.+)/g
+    let match
+    while ((match = fieldRegex.exec(firstSection.body)) !== null) {
+      keyFields.push({ label: match[1]!, value: match[2]! })
+    }
+  }
+
+  const toggle = (i: number) => {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return next
+    })
+  }
+
+  return (
+    <div className="space-y-0">
+      {/* Key fields as a compact header row */}
+      {keyFields.length > 0 && (
+        <div className="px-3 py-2 flex flex-wrap gap-x-4 gap-y-0.5 border-b border-line-soft">
+          {keyFields.slice(0, 5).map(f => (
+            <span key={f.label} className="text-[11px]">
+              <span className="text-graphite-200">{f.label}:</span>{' '}
+              <span className="text-foreground">{f.value}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Collapsible sections */}
+      {sections.map((section, i) => {
+        // Skip the first section if we already showed key fields from it
+        if (i === 0 && keyFields.length > 0 && !section.heading.match(/description|personality|motivation|background/i)) return null
+        const isOpen = expanded.has(i)
+        return (
+          <div key={i} className="border-b border-line-soft last:border-0">
+            {section.heading && (
+              <button
+                onClick={() => toggle(i)}
+                className="w-full text-left px-3 py-1.5 flex items-center gap-2 hover:bg-surface/50 transition-colors cursor-pointer"
+              >
+                <span className="text-[10px] text-graphite-200 transition-transform" style={{ transform: isOpen ? 'rotate(90deg)' : 'none' }}>
+                  ▸
+                </span>
+                <span className="text-[11px] font-semibold text-foreground uppercase tracking-wider">{section.heading}</span>
+              </button>
+            )}
+            {(isOpen || !section.heading) && section.body && (
+              <div className="px-3 pb-2">
+                <Md className="text-[11px]">{section.body}</Md>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 /** Content generation body — LLM writing (story, character, scene, etc.) */
 function ContentBody({ args, streamingContent }: { args: Record<string, string>; streamingContent?: string }) {
   const [showPrompt, setShowPrompt] = useState(false)
@@ -96,31 +191,43 @@ function ContentBody({ args, streamingContent }: { args: Record<string, string>;
   const prompt = args['prompt']
   const skills = args['skills']
 
+  // Detect character/setting content by item name or content structure
+  const isStructured = item && (
+    item.toLowerCase().includes('character') ||
+    item.toLowerCase().includes('setting') ||
+    item.toLowerCase().includes('world style')
+  )
+  const hasContent = streamingContent && streamingContent.length > 50
+
   return (
-    <div className="px-3 py-2 space-y-1.5">
-      {item && <ItemTitle item={item} />}
-      {skills && (
-        <div className="flex flex-wrap gap-1">
-          {skills.split(',').map(s => (
-            <span key={s.trim()} className="px-1 py-0.5 text-[9px] rounded bg-graphite-300 text-graphite-100">{s.trim()}</span>
-          ))}
-        </div>
-      )}
-      {prompt && (
-        <button onClick={() => setShowPrompt(!showPrompt)} className="text-[10px] text-graphite-200 hover:text-graphite-100 cursor-pointer">
-          {showPrompt ? 'Hide prompt' : 'Show prompt'}
-        </button>
-      )}
+    <div className="space-y-1.5">
+      <div className="px-3 pt-2 flex items-center gap-2 flex-wrap">
+        {item && <ItemTitle item={item} />}
+        {skills && (
+          <div className="flex flex-wrap gap-1">
+            {skills.split(',').map(s => (
+              <span key={s.trim()} className="px-1 py-0.5 text-[9px] rounded bg-graphite-300 text-graphite-100">{s.trim()}</span>
+            ))}
+          </div>
+        )}
+        {prompt && (
+          <button onClick={() => setShowPrompt(!showPrompt)} className="text-[10px] text-graphite-200 hover:text-graphite-100 cursor-pointer">
+            {showPrompt ? 'Hide prompt' : 'Show prompt'}
+          </button>
+        )}
+      </div>
       {showPrompt && prompt && (
-        <div className="p-2 rounded bg-graphite-300/50 border border-line-soft text-[11px] text-graphite-050 max-h-40 overflow-y-auto whitespace-pre-wrap">
+        <div className="mx-3 p-2 rounded bg-graphite-300/50 border border-line-soft text-[11px] text-graphite-050 max-h-40 overflow-y-auto whitespace-pre-wrap">
           {prompt}
         </div>
       )}
-      {streamingContent && (
-        <div className="max-h-48 overflow-y-auto">
+      {hasContent && isStructured ? (
+        <StructuredContentCard content={streamingContent!} />
+      ) : streamingContent ? (
+        <div className="px-3 pb-2 max-h-48 overflow-y-auto">
           <Md className="text-xs">{streamingContent}</Md>
         </div>
-      )}
+      ) : null}
     </div>
   )
 }
