@@ -290,8 +290,8 @@ Respond with this JSON structure:
 {
   "pipeline": "image_generation|image_editing|image_processing|video_generation",
   "displayName": "Human-readable name for this workflow",
-  "llmDescription": "2-3 sentences describing what this workflow does, written for an AI that needs to decide whether to use it",
-  "selectionCriteria": "When should this workflow be chosen over alternatives",
+  "llmDescription": "1 sentence describing the visual output quality/style this workflow produces (NOT the technical architecture). Example: 'Produces smooth, high-quality video with synchronized audio and enhanced spatial detail from a dual-pass upscale.'",
+  "selectionCriteria": "1 sentence describing WHEN to use this per shot in a video project. Focus on the VISUAL characteristics of the shot, not the workflow architecture. Example: 'Best for shots where both the opening and closing frames are known and the video should smoothly transition between them.' or 'Use for shots with clear character action from start to finish.'",
   "suggestedMappings": [
     { "nodeId": "123", "classType": "LoadImage", "suggestedInput": "first_frame", "reason": "This is the primary image input feeding into the video sampler" }
   ],
