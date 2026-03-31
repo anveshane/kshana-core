@@ -56,16 +56,14 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
     loadProjectAssets(dirName)
     loadProjectState(dirName)
 
-    // Auto-start execution after server configures the session
+    // Load project without auto-starting execution
     setTimeout(() => {
-      onSendWs({ type: 'start_task', data: { task: 'Create a video project' } })
-      dispatch({ type: 'SET_AGENT_STATUS', status: 'thinking' })
       dispatch({
         type: 'ADD_CHAT_MESSAGE',
         message: {
           id: `sel_${Date.now()}`,
           type: 'system',
-          content: `Project **${projectName}** loaded. Starting execution...`,
+          content: `Project **${projectName}** loaded. Type a task to start, or use \`/reset <stage>\` to reset to a specific point.`,
           timestamp: Date.now(),
         },
       })
