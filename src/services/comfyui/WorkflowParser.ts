@@ -58,16 +58,24 @@ const INPUT_NODE_TYPES: Record<string, { inputType: ParsedNode['inputType']; sug
   'EmptySD3LatentImage': { inputType: 'number', suggestedInput: 'width' },
   'EmptyLatentImage': { inputType: 'number', suggestedInput: 'width' },
   'SaveImage': { inputType: 'text', suggestedInput: 'filenamePrefix' },
+  'SaveVideo': { inputType: 'text', suggestedInput: 'filenamePrefix' },
   'VHS_VideoCombine': { inputType: 'text', suggestedInput: 'filenamePrefix' },
   'TextEncodeQwenImageEditPlus': { inputType: 'text', suggestedInput: 'prompt' },
+  'SamplerCustomAdvanced': { inputType: 'number', suggestedInput: 'seed' },
 };
 
 /** Node types that indicate output — used to auto-detect pipeline type */
 const OUTPUT_INDICATORS: Record<string, string> = {
   'VHS_VideoCombine': 'video_generation',
+  'SaveVideo': 'video_generation',
   'SaveAnimatedWEBP': 'video_generation',
+  'SaveAnimatedPNG': 'video_generation',
   'SaveImage': 'image_generation',
+  'PreviewImage': 'image_generation',
   'LTXVImgToVideoInplace': 'video_generation',
+  'LTXVTextToVideoInplace': 'video_generation',
+  'CogVideoXSampler': 'video_generation',
+  'WanVideoSampler': 'video_generation',
 };
 
 /**
