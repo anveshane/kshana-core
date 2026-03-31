@@ -7,12 +7,15 @@ interface WorkflowMode {
   displayName: string
   pipeline: string
   llmDescription: string
+  selectionCriteria?: string
   builtIn: boolean
   active: boolean
   isOverride?: boolean
   outputType: string
+  workflowFile?: string
   inputRequirements: Array<{ id: string; type: string; source: string; description: string; required: boolean }>
-  parameterMappings: Array<{ input: string; nodeId: string; field: string }>
+  parameterMappings: Array<{ input: string; nodeId: string; field: string; defaultValue?: unknown }>
+  promptKeywords?: { prepend?: string; append?: string; negativeAppend?: string }
 }
 
 interface ParsedNode {
@@ -177,6 +180,76 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
       setWizardOpen(false)
     }
     setWizardAnalyzing(false)
+  }
+
+  const handleEditWorkflow = async (wf: any) => {
+    // Re-parse the workflow JSON from the server to get input nodes
+    setWizardOpen(true)
+    setWizardAnalyzing(true)
+    try {
+      // Fetch the workflow file to re-parse it
+      const res = await fetch(`/api/v1/workflows/reparse`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workflowFile: wf.workflowFile }),
+      })
+      const data = await res.json()
+
+      if (data.parsed) {
+        setWizardParsed(data.parsed)
+        setWizardFilename(wf.workflowFile as string)
+      }
+    } catch {
+      // If re-parse fails, create synthetic input nodes from parameterMappings
+      const mappings = (wf.parameterMappings || []) as Array<{ input: string; nodeId: string; field: string; defaultValue?: unknown }>
+      const syntheticNodes = mappings.map(m => ({
+        nodeId: m.nodeId,
+        classType: m.field === 'image' ? 'LoadImage' : 'CLIPTextEncode',
+        title: `Node #${m.nodeId}`,
+        inputType: m.field === 'image' ? 'image' : 'text',
+        suggestedInput: m.input,
+      }))
+      // Deduplicate by nodeId
+      const unique = syntheticNodes.filter((n, i, arr) => arr.findIndex(x => x.nodeId === n.nodeId) === i)
+      setWizardParsed({
+        detectedPipeline: wf.pipeline as string,
+        inputNodes: unique as any,
+        loraNodes: [],
+      })
+      setWizardFilename(wf.workflowFile as string)
+    }
+    setWizardAnalyzing(false)
+
+    // Populate wizard fields from existing manifest
+    setWizId(wf.id as string)
+    setWizName(wf.displayName as string)
+    setWizPipeline(wf.pipeline as string)
+    setWizDesc(wf.llmDescription as string || '')
+    setWizCriteria(wf.selectionCriteria as string || '')
+
+    // Restore mappings, defaults, and descriptions from parameterMappings + inputRequirements
+    const mappings = (wf.parameterMappings || []) as Array<{ input: string; nodeId: string; field: string; defaultValue?: unknown }>
+    const requirements = (wf.inputRequirements || []) as Array<{ id: string; description?: string }>
+    const reqMap = new Map(requirements.map(r => [r.id, r]))
+
+    const wizMap: Record<string, string> = {}
+    const wizDef: Record<string, string> = {}
+    const wizDescMap: Record<string, string> = {}
+    for (const m of mappings) {
+      wizMap[m.nodeId] = m.input
+      if (m.defaultValue !== undefined) wizDef[m.nodeId] = String(m.defaultValue)
+      const req = reqMap.get(m.input)
+      if (req?.description && req.description !== m.input) wizDescMap[m.nodeId] = req.description
+    }
+    setWizMappings(wizMap)
+    setWizDefaults(wizDef)
+    setWizDescriptions(wizDescMap)
+
+    // Restore keywords
+    const kw = wf.promptKeywords as { prepend?: string; append?: string; negativeAppend?: string } | undefined
+    setWizKeywordsPrepend(kw?.prepend || '')
+    setWizKeywordsAppend(kw?.append || '')
+    setWizKeywordsNegative(kw?.negativeAppend || '')
   }
 
   const handleSaveWizard = async () => {
@@ -390,6 +463,14 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
                                   className="px-2.5 py-1 rounded text-[11px] font-mono border border-line-soft text-graphite-100 hover:text-foreground transition-colors cursor-pointer"
                                 >
                                   Revert
+                                </button>
+                              )}
+                              {!wf.builtIn && (
+                                <button
+                                  onClick={() => handleEditWorkflow(wf)}
+                                  className="px-2.5 py-1 rounded text-[11px] font-mono border border-line-soft text-graphite-100 hover:text-foreground hover:border-line-strong transition-colors cursor-pointer"
+                                >
+                                  Edit
                                 </button>
                               )}
                               <button

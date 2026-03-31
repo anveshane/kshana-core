@@ -295,6 +295,40 @@ export async function registerRoutes(
     }
   });
 
+  // Re-parse an existing workflow file (for editing an already-configured workflow)
+  app.post(`${apiPrefix}/workflows/reparse`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as { workflowFile?: string };
+    if (!body.workflowFile) {
+      return reply.status(400).send({ error: 'Missing workflowFile' });
+    }
+
+    const fs = await import('fs');
+    const path = await import('path');
+
+    // Search for the workflow file in user and built-in directories
+    const searchDirs = ['workflows/user', 'workflows/built-in', 'workflows'];
+    let content: string | null = null;
+    for (const dir of searchDirs) {
+      const filePath = path.join(process.cwd(), dir, body.workflowFile);
+      if (fs.existsSync(filePath)) {
+        content = fs.readFileSync(filePath, 'utf-8');
+        break;
+      }
+    }
+
+    if (!content) {
+      return reply.status(404).send({ error: `Workflow file not found: ${body.workflowFile}` });
+    }
+
+    try {
+      const { parseWorkflow: parse } = await import('../services/comfyui/WorkflowParser.js');
+      const parsed = parse(content);
+      return reply.send({ parsed });
+    } catch (err) {
+      return reply.status(400).send({ error: `Failed to parse workflow: ${err}` });
+    }
+  });
+
   // Save manifest (configure) for an uploaded workflow
   app.post(`${apiPrefix}/workflows/configure`, async (request: FastifyRequest, reply: FastifyReply) => {
     const body = request.body as Record<string, unknown>;
