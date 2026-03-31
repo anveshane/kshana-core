@@ -244,7 +244,7 @@ function ContentBody({ args, streamingContent }: { args: Record<string, string>;
       {hasContent && isStructured ? (
         <StructuredContentCard content={streamingContent!} />
       ) : streamingContent ? (
-        <div className="px-3 pb-2 max-h-48 overflow-y-auto">
+        <div className="px-3 pb-2 max-h-72 overflow-y-auto">
           <Md className="text-xs">{streamingContent}</Md>
         </div>
       ) : null}
