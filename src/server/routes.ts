@@ -248,10 +248,14 @@ export async function registerRoutes(
       const userDir = path.join(process.cwd(), 'workflows', 'user');
       if (!fs.existsSync(userDir)) fs.mkdirSync(userDir, { recursive: true });
 
-      const safeName = (body.filename || 'workflow').replace(/[^a-zA-Z0-9_-]/g, '_').replace(/\.json$/, '');
-      const filePath = path.join(userDir, `${safeName}.json`);
-
-      // Overwrite if file already exists (user is re-uploading an updated version)
+      const baseName = (body.filename || 'workflow').replace(/[^a-zA-Z0-9_-]/g, '_').replace(/\.json$/, '');
+      // Append short timestamp to avoid collisions between different workflows with same filename
+      let safeName = baseName;
+      let filePath = path.join(userDir, `${safeName}.json`);
+      if (fs.existsSync(filePath)) {
+        safeName = `${baseName}_${Date.now().toString(36)}`;
+        filePath = path.join(userDir, `${safeName}.json`);
+      }
       fs.writeFileSync(filePath, body.content);
 
       // Run LLM analysis for intelligent suggestions
