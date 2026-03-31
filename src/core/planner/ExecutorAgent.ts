@@ -920,29 +920,46 @@ export class ExecutorAgent extends TypedEventEmitter {
               if (jsonValidatedTypes.includes(node.typeId)) {
                 const validation = this.validateJsonOutput(content, node);
                 if (!validation.valid) {
-                  this.log(`  JSON validation failed: ${validation.error} — retrying...`);
+                  this.log(`  JSON validation failed: ${validation.error} — asking LLM to fix...`);
                   this.emit({
                     type: 'notification',
                     level: 'warning',
-                    message: `Invalid JSON from LLM for ${node.displayName} — retrying`,
+                    message: `Invalid JSON from LLM for ${node.displayName} — attempting repair`,
                   });
-                  // Retry once with correction prompt
-                  const retryContent = await this.generateForNode(
+
+                  // Step 1: Ask the LLM to fix the broken JSON (cheap — just a repair, not full regen)
+                  const fixPrompt = `The following JSON output has an error. Fix it and return ONLY the corrected valid JSON — no explanation, no markdown fences, no extra text.\n\nError: ${validation.error}\n\nBroken JSON:\n${content.substring(0, 8000)}`;
+                  const fixedContent = await this.generateForNode(
                     node,
-                    system + '\n\nCRITICAL: Your output MUST be valid JSON. Do not include markdown, backticks, or any text outside the JSON object.',
-                    user,
+                    'You are a JSON repair tool. Return ONLY valid JSON. No markdown, no explanation.',
+                    fixPrompt,
                     toolCallId,
                     toolName,
                   );
-                  const retryValidation = this.validateJsonOutput(retryContent, node);
-                  if (retryValidation.valid) {
-                    content = retryContent;
-                    this.log(`  Retry succeeded — valid JSON`);
+                  const fixValidation = this.validateJsonOutput(fixedContent, node);
+                  if (fixValidation.valid) {
+                    content = fixedContent;
+                    this.log(`  LLM JSON repair succeeded`);
                   } else {
-                    this.log(`  Retry also failed: ${retryValidation.error}`);
-                    this.executor.markFailed(node.id, `Invalid JSON output after retry: ${retryValidation.error}`);
-                    this.emitTodoUpdate();
-                    continue;
+                    this.log(`  LLM repair failed: ${fixValidation.error} — full retry...`);
+                    // Step 2: Fall back to full regeneration
+                    const retryContent = await this.generateForNode(
+                      node,
+                      system + '\n\nCRITICAL: Your output MUST be valid JSON. Do not include markdown, backticks, or any text outside the JSON object.',
+                      user,
+                      toolCallId,
+                      toolName,
+                    );
+                    const retryValidation = this.validateJsonOutput(retryContent, node);
+                    if (retryValidation.valid) {
+                      content = retryContent;
+                      this.log(`  Full retry succeeded — valid JSON`);
+                    } else {
+                      this.log(`  Full retry also failed: ${retryValidation.error}`);
+                      this.executor.markFailed(node.id, `Invalid JSON output after retry: ${retryValidation.error}`);
+                      this.emitTodoUpdate();
+                      continue;
+                    }
                   }
                 }
               }
@@ -1624,12 +1641,59 @@ Rules:
   /**
    * Validate that LLM output is valid JSON with required fields.
    */
+  /**
+   * Attempt to repair common JSON issues from LLM output:
+   * - Two arrays/objects concatenated (] [ or } {) → take the last one
+   * - Trailing commas before ] or }
+   * - Truncated JSON → close open brackets/braces
+   */
+  private repairJson(text: string): string {
+    let s = text.trim();
+
+    // Two JSON arrays concatenated: ] [ or ]\n[
+    // Take the last complete array
+    const arrayConcat = s.match(/\]\s*\[/g);
+    if (arrayConcat) {
+      const lastArrayStart = s.lastIndexOf('[');
+      if (lastArrayStart > 0) {
+        const candidate = s.substring(lastArrayStart);
+        try {
+          JSON.parse(candidate);
+          this.log(`  JSON repair: found concatenated arrays, using last array (${candidate.length} chars)`);
+          return candidate;
+        } catch { /* last array isn't valid either, try other repairs */ }
+      }
+    }
+
+    // Two JSON objects concatenated: } {
+    const objConcat = s.match(/\}\s*\{/g);
+    if (objConcat) {
+      const lastObjStart = s.lastIndexOf('{');
+      if (lastObjStart > 0) {
+        const candidate = s.substring(lastObjStart);
+        try {
+          JSON.parse(candidate);
+          this.log(`  JSON repair: found concatenated objects, using last object (${candidate.length} chars)`);
+          return candidate;
+        } catch { /* try other repairs */ }
+      }
+    }
+
+    // Trailing commas: ,] or ,}
+    s = s.replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}');
+
+    return s;
+  }
+
   private validateJsonOutput(content: string, node: ExecutionNode): { valid: boolean; error?: string } {
     // Strip markdown code fences if the LLM wrapped the JSON
     let cleaned = content.trim();
     if (cleaned.startsWith('```')) {
       cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
     }
+
+    // Attempt JSON repair before parsing
+    cleaned = this.repairJson(cleaned);
 
     try {
       const parsed = JSON.parse(cleaned);
