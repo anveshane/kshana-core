@@ -9,6 +9,14 @@ interface ToolCallCardProps {
 
 const TOOL_NAMES: Record<string, string> = {
   generate_content: 'Writing',
+  generate_plot: 'Plot',
+  generate_story: 'Story',
+  generate_character: 'Character',
+  generate_setting: 'Setting',
+  generate_scene: 'Scene',
+  generate_world_style: 'World Style',
+  generate_scene_video_prompt: 'Scene Breakdown',
+  generate_shot_motion_directive: 'Motion Directive',
   generate_image: 'Image Generation',
   generate_shot_image: 'Shot Image',
   generate_video: 'Video Generation',
@@ -18,14 +26,26 @@ const TOOL_NAMES: Record<string, string> = {
   extract_collections: 'Extraction',
 }
 
+const CONTENT_COLOR = { border: 'border-cyan/20', statusActive: 'text-cyan', statusDone: 'text-green' }
+const IMAGE_COLOR = { border: 'border-violet-400/25', statusActive: 'text-violet-400', statusDone: 'text-green' }
+const VIDEO_COLOR = { border: 'border-amber-400/25', statusActive: 'text-amber-400', statusDone: 'text-green' }
+
 const TOOL_COLORS: Record<string, { border: string; statusActive: string; statusDone: string }> = {
-  generate_content:     { border: 'border-cyan/20',         statusActive: 'text-cyan',       statusDone: 'text-green' },
-  extract_collections:  { border: 'border-cyan/20',         statusActive: 'text-cyan',       statusDone: 'text-green' },
-  generate_image:       { border: 'border-violet-400/25',   statusActive: 'text-violet-400', statusDone: 'text-green' },
-  generate_shot_image:  { border: 'border-violet-400/25',   statusActive: 'text-violet-400', statusDone: 'text-green' },
-  generate_shot_video:  { border: 'border-amber-400/25',    statusActive: 'text-amber-400',  statusDone: 'text-green' },
-  generate_video:       { border: 'border-amber-400/25',    statusActive: 'text-amber-400',  statusDone: 'text-green' },
-  assemble_final_video: { border: 'border-green/25',        statusActive: 'text-green',      statusDone: 'text-green' },
+  generate_content:              CONTENT_COLOR,
+  generate_plot:                 CONTENT_COLOR,
+  generate_story:                CONTENT_COLOR,
+  generate_character:            CONTENT_COLOR,
+  generate_setting:              CONTENT_COLOR,
+  generate_scene:                CONTENT_COLOR,
+  generate_world_style:          CONTENT_COLOR,
+  generate_scene_video_prompt:   CONTENT_COLOR,
+  generate_shot_motion_directive: CONTENT_COLOR,
+  extract_collections:           CONTENT_COLOR,
+  generate_image:                IMAGE_COLOR,
+  generate_shot_image:           IMAGE_COLOR,
+  generate_shot_video:           VIDEO_COLOR,
+  generate_video:                VIDEO_COLOR,
+  assemble_final_video:          { border: 'border-green/25', statusActive: 'text-green', statusDone: 'text-green' },
 }
 
 const DEFAULT_COLORS = { border: 'border-line-soft', statusActive: 'text-cyan', statusDone: 'text-green' }
@@ -454,11 +474,16 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
     .join('\n')
     .trim()
 
+  // Classify tool type for rendering
+  const isContentGen = toolName.startsWith('generate_') &&
+    !['generate_image', 'generate_shot_image', 'generate_shot_video', 'generate_video'].includes(toolName)
+
   // Per-type body renderer
   const renderBody = () => {
+    if (isContentGen) {
+      return <ContentBody args={args ?? {}} streamingContent={meaningfulContent} />
+    }
     switch (toolName) {
-      case 'generate_content':
-        return <ContentBody args={args ?? {}} streamingContent={meaningfulContent} />
       case 'generate_image':
         return <ImageGenBody args={args ?? {}} />
       case 'generate_shot_image':
@@ -475,8 +500,8 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
     }
   }
 
-  // For content and assembly, streaming is handled in the body
-  const showSeparateStreaming = toolName !== 'generate_content' && toolName !== 'assemble_final_video' && toolName !== 'extract_collections'
+  // For content gen and assembly, streaming is handled in the body
+  const showSeparateStreaming = !isContentGen && toolName !== 'assemble_final_video' && toolName !== 'extract_collections'
 
   return (
     <div className={`rounded-lg border ${borderColor} bg-graphite-400/50 overflow-hidden`}>

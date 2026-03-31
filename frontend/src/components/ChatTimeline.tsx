@@ -62,8 +62,9 @@ export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
           const msg = item.data
 
           // Reset messages get a distinct visual divider
-          if (msg.type === 'system' && msg.content.match(/resetting|reset to stage/i)) {
-            const stageMatch = msg.content.match(/stage\s+\*?\*?(\w+)\*?\*?/i)
+          // Only show the initial "Resetting..." message as divider, skip "complete/resuming" duplicates
+          if (msg.type === 'system' && msg.content.match(/^resetting\s/i)) {
+            const stageMatch = msg.content.match(/stage\s+\*?\*?"?(\w+)"?\*?\*?/i)
             const stage = stageMatch?.[1] || 'unknown'
             return (
               <div key={msg.id} className="flex items-center gap-3 my-4">
@@ -74,6 +75,10 @@ export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
                 <div className="flex-1 h-px bg-amber-500/30" />
               </div>
             )
+          }
+          // Hide the "Reset complete. Resuming..." duplicate notification
+          if (msg.type === 'system' && msg.content.match(/reset.*complete.*resum/i)) {
+            return <span key={msg.id} />
           }
 
           return (
