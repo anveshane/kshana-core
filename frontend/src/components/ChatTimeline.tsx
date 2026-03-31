@@ -42,6 +42,22 @@ export function ChatTimeline() {
       {timeline.map((item) => {
         if (item.kind === 'message') {
           const msg = item.data
+
+          // Reset messages get a distinct visual divider
+          if (msg.type === 'system' && msg.content.match(/resetting|reset to stage/i)) {
+            const stageMatch = msg.content.match(/stage\s+\*?\*?(\w+)\*?\*?/i)
+            const stage = stageMatch?.[1] || 'unknown'
+            return (
+              <div key={msg.id} className="flex items-center gap-3 my-4">
+                <div className="flex-1 h-px bg-amber-500/30" />
+                <span className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-400 text-[11px] font-mono whitespace-nowrap">
+                  <span className="text-sm">↺</span> Reset to {stage}
+                </span>
+                <div className="flex-1 h-px bg-amber-500/30" />
+              </div>
+            )
+          }
+
           return (
             <div key={msg.id} className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div

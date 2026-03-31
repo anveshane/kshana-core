@@ -2502,6 +2502,15 @@ Rules:
       const hasRefs = resolvedRefs.length > 0;
       const generationMode = hasRefs ? 'image_text_to_image' : 'text_to_image';
 
+      // Resolve active workflow name for display
+      let shotImgWorkflowName = hasRefs ? 'FLUX 2 Klein Edit (built-in)' : 'Z-Image (built-in)';
+      try {
+        const modeRegistry = getWorkflowModeRegistry();
+        const pipeline = hasRefs ? 'image_editing' as const : 'image_generation' as const;
+        const mode = modeRegistry.getActiveForPipeline(pipeline, 'comfyui');
+        if (mode) shotImgWorkflowName = mode.displayName;
+      } catch { /* ignore */ }
+
       // Emit tool_call for the image generation
       const genCallId = `shotimg_${node.id}_${Date.now()}`;
       const toolName = 'generate_shot_image';
@@ -2511,6 +2520,7 @@ Rules:
         toolName,
         arguments: {
           item: node.displayName,
+          workflow: shotImgWorkflowName,
           mode: generationMode,
           prompt: shotJson.imagePrompt,
           ...Object.fromEntries(resolvedRefs.map((r, i) => [
@@ -2617,6 +2627,14 @@ Rules:
   ): Promise<string | null> {
     this.log(`  Generating image from prompt: ${promptFilePath}`);
 
+    // Resolve active workflow name for display
+    let imgWorkflowName = 'Z-Image (built-in)';
+    try {
+      const modeRegistry = getWorkflowModeRegistry();
+      const mode = modeRegistry.getActiveForPipeline('image_generation', 'comfyui');
+      if (mode) imgWorkflowName = mode.displayName;
+    } catch { /* ignore */ }
+
     // Emit a tool_call for the actual image generation
     const genCallId = `img_${node.id}_${Date.now()}`;
     const toolName = `generate_image`;
@@ -2624,7 +2642,7 @@ Rules:
       type: 'tool_call',
       toolCallId: genCallId,
       toolName,
-      arguments: { item: node.displayName },
+      arguments: { item: node.displayName, workflow: imgWorkflowName },
       agentName,
     });
 
