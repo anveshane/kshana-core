@@ -222,14 +222,7 @@ export async function registerRoutes(
       grouped[key]!.push(mode);
     }
 
-    // Mark which is active per pipeline
-    const active: Record<string, string | null> = {};
-    for (const pipeline of ['image_generation', 'image_editing', 'image_processing', 'video_generation'] as const) {
-      const activeMode = registry.getActiveForPipeline(pipeline, 'comfyui');
-      active[pipeline] = activeMode?.id ?? null;
-    }
-
-    return reply.send({ workflows: grouped, active });
+    return reply.send({ workflows: grouped });
   });
 
   // Upload a workflow JSON — returns parsed nodes + LLM analysis for the integration wizard

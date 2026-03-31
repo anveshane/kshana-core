@@ -71,7 +71,7 @@ const FIELD_FOR_CLASS: Record<string, string> = {
 
 export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
   const [workflows, setWorkflows] = useState<Record<string, WorkflowMode[]>>({})
-  const [active, setActive] = useState<Record<string, string | null>>({})
+  const [active, setActive] = useState<Record<string, string | null>>({}) // legacy, unused
   const [loading, setLoading] = useState(false)
 
   // Wizard state
@@ -412,7 +412,7 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
           ) : (
             PIPELINES.map((pipeline) => {
               const items = workflows[pipeline] || []
-              const activeId = active[pipeline]
+              const _activeId = active[pipeline] // legacy
 
               return (
                 <div key={pipeline}>
@@ -425,7 +425,7 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
                   ) : (
                     <div className="space-y-1.5">
                       {items.map((wf) => {
-                        const isActive = wf.id === activeId
+                        const isActive = !!(wf.isOverride && !wf.builtIn)
                         return (
                           <div
                             key={wf.id}
