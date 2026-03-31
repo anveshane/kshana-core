@@ -235,6 +235,96 @@ export class WorkflowModeRegistry {
   }
 
   /**
+   * Infer which generation strategies a workflow supports from its inputRequirements.
+   * Returns the explicit `strategies` array if set, otherwise infers from inputs.
+   */
+  getStrategies(mode: WorkflowManifest): string[] {
+    if (mode.strategies && mode.strategies.length > 0) return mode.strategies;
+
+    const imageInputs = mode.inputRequirements.filter(
+      r => r.type === 'image' && r.source === 'shot_image'
+    );
+    const imageIds = new Set(imageInputs.map(r => r.id));
+    const strategies: string[] = [];
+
+    if (imageIds.has('first_frame') && imageIds.has('last_frame') && imageIds.has('mid_frame')) {
+      strategies.push('fmlfv');
+    }
+    if (imageIds.has('first_frame') && imageIds.has('last_frame')) {
+      strategies.push('flfv');
+    }
+    if (imageIds.has('first_frame')) {
+      strategies.push('i2v');
+    }
+    // If no image inputs required, supports t2v
+    if (imageInputs.length === 0 || imageInputs.every(r => !r.required)) {
+      strategies.push('t2v');
+    }
+
+    return strategies.length > 0 ? strategies : ['i2v']; // default fallback
+  }
+
+  /**
+   * Find the best workflow for a specific generation strategy.
+   *
+   * Priority: user override (if it supports the strategy) > built-in mode matching the strategy.
+   * Falls back to the override anyway if no built-in matches (the override may handle it via toggle).
+   */
+  getWorkflowForStrategy(strategy: string, providerId?: string): WorkflowManifest | undefined {
+    const modes = this.getAvailableModes('video_generation', providerId);
+
+    // 1. Check user override — does it support this strategy?
+    const override = modes.find(m => m.isOverride && !m.builtIn);
+    if (override && this.getStrategies(override).includes(strategy)) {
+      return override;
+    }
+
+    // 2. Find a built-in mode whose ID matches the strategy directly (e.g., 'i2v', 't2v')
+    const builtIn = modes.find(m => m.builtIn && m.id === strategy);
+    if (builtIn) return builtIn;
+
+    // 3. Find any mode that supports this strategy
+    const anyMatch = modes.find(m => this.getStrategies(m).includes(strategy));
+    if (anyMatch) return anyMatch;
+
+    // 4. Fall back to override if it exists (it may handle unknown strategies via toggles)
+    if (override) return override;
+
+    // 5. Fall back to default
+    return this.getActiveForPipeline('video_generation', providerId);
+  }
+
+  /**
+   * Get all unique strategies available across all active video generation modes.
+   * Used to tell the LLM which strategies it can choose from.
+   */
+  getAvailableStrategies(providerId?: string): Array<{ strategy: string; description: string; frameInputs: string[] }> {
+    const modes = this.getAvailableModes('video_generation', providerId);
+    const seen = new Map<string, { description: string; frameInputs: string[] }>();
+
+    // Collect strategies from all modes, preferring user override descriptions
+    for (const mode of modes) {
+      const strategies = this.getStrategies(mode);
+      for (const strategy of strategies) {
+        if (!seen.has(strategy) || (mode.isOverride && !mode.builtIn)) {
+          const frameInputs = mode.inputRequirements
+            .filter(r => r.type === 'image' && r.source === 'shot_image')
+            .map(r => r.id);
+          seen.set(strategy, {
+            description: mode.selectionCriteria,
+            frameInputs,
+          });
+        }
+      }
+    }
+
+    return Array.from(seen.entries()).map(([strategy, info]) => ({
+      strategy,
+      ...info,
+    }));
+  }
+
+  /**
    * Set a user-uploaded workflow as the active override for its pipeline.
    * Only user workflows can be overrides. Clears any previous override for the same pipeline.
    * Persists isOverride to the manifest file on disk.
@@ -305,29 +395,40 @@ export class WorkflowModeRegistry {
   }
 
   /**
-   * Generate a markdown section describing available video generation modes.
-   * Injected into LLM prompts via {{AVAILABLE_VIDEO_MODES}} placeholder.
+   * Generate a markdown section describing available video generation strategies.
+   * Presents clean strategy IDs (i2v, t2v, flfv, fmlfv) for LLM selection,
+   * not raw workflow IDs. Injected via {{AVAILABLE_VIDEO_MODES}} placeholder.
    */
   generateVideoModesSection(providerId?: string): string {
-    const modes = this.getAvailableModes('video_generation', providerId);
-    if (modes.length === 0) {
+    const strategies = this.getAvailableStrategies(providerId);
+    if (strategies.length === 0) {
       return '## Video Generation Mode\n\nNo video generation modes are currently available. Use `"videoGenerationMode": null`.';
     }
 
-    const lines = ['## Video Generation Mode', '', 'Choose a `videoGenerationMode` for each shot:', ''];
-    for (const mode of modes) {
-      const frameInputs = mode.inputRequirements
-        .filter(r => r.type === 'image' && r.source === 'shot_image')
-        .map(r => `${r.id} (${r.required ? 'required' : 'optional'})`)
-        .join(', ');
+    const STRATEGY_NAMES: Record<string, string> = {
+      'i2v': 'Image to Video',
+      't2v': 'Text to Video',
+      'flfv': 'First + Last Frame Video',
+      'fmlfv': 'First + Mid + Last Frame Video',
+      'i2v_late_entry': 'Image to Video (Late Character Entry)',
+    };
 
-      lines.push(`- **\`${mode.id}\`** (${mode.displayName}) — ${mode.llmDescription}`);
-      lines.push(`  *Use when:* ${mode.selectionCriteria}`);
-      if (frameInputs) {
-        lines.push(`  *Required frame images:* ${frameInputs}`);
-      } else {
-        lines.push(`  *Required frame images:* none`);
-      }
+    const STRATEGY_DESCRIPTIONS: Record<string, string> = {
+      'i2v': 'Animates a single first-frame image into video. Best for character shots where visual consistency matters.',
+      't2v': 'Generates video purely from text prompt with no source image. The model has full creative freedom.',
+      'flfv': 'Uses both a first frame and a last frame image, generating video that transitions between them. Best for shots with a clear visual start and end state.',
+      'fmlfv': 'Uses first, middle, and last frame images for maximum control. Best for complex shots with specific visual beats.',
+      'i2v_late_entry': 'First frame shows only setting/environment — no characters. A character enters the frame mid-shot.',
+    };
+
+    const lines = ['## Video Generation Mode', '', 'Choose a `videoGenerationMode` for each shot:', ''];
+    for (const { strategy, description, frameInputs } of strategies) {
+      const name = STRATEGY_NAMES[strategy] ?? strategy;
+      const desc = STRATEGY_DESCRIPTIONS[strategy] ?? description;
+      const frames = frameInputs.length > 0 ? frameInputs.join(', ') : 'none';
+      lines.push(`- **\`${strategy}\`** (${name}) — ${desc}`);
+      lines.push(`  *Use when:* ${description}`);
+      lines.push(`  *Frame images needed:* ${frames}`);
       lines.push('');
     }
     return lines.join('\n');
@@ -354,22 +455,20 @@ export class WorkflowModeRegistry {
 
   /**
    * Generate frame generation guide for the shot_image_prompt LLM.
-   * Tells it how many frame images to generate per video generation mode.
+   * Tells it how many frame images to generate per video generation strategy.
    */
   generateFrameGuideSection(providerId?: string): string {
-    const modes = this.getAvailableModes('video_generation', providerId);
+    const strategies = this.getAvailableStrategies(providerId);
     const lines = ['## Frame Images Per Mode', '', 'Generate the required frame images based on the shot\'s `videoGenerationMode`:', ''];
 
-    for (const mode of modes) {
-      const frameInputs = mode.inputRequirements
-        .filter(r => r.type === 'image' && r.source === 'shot_image');
+    for (const { strategy, frameInputs } of strategies) {
       if (frameInputs.length === 0) {
-        lines.push(`- **\`${mode.id}\`**: No frame images needed (text-only generation)`);
+        lines.push(`- **\`${strategy}\`**: No frame images needed (text-only generation)`);
       } else if (frameInputs.length === 1) {
-        lines.push(`- **\`${mode.id}\`**: Generate 1 image — ${frameInputs[0]!.description} (\`${frameInputs[0]!.id}\`)`);
+        lines.push(`- **\`${strategy}\`**: Generate 1 image — \`${frameInputs[0]}\``);
       } else {
-        const imgs = frameInputs.map(f => `${f.description} (\`${f.id}\`)`).join(', ');
-        lines.push(`- **\`${mode.id}\`**: Generate ${frameInputs.length} images — ${imgs}`);
+        const imgs = frameInputs.map(f => `\`${f}\``).join(', ');
+        lines.push(`- **\`${strategy}\`**: Generate ${frameInputs.length} images — ${imgs}`);
       }
     }
     lines.push('');

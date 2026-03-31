@@ -2355,7 +2355,8 @@ Rules:
     const strategy = this.getGenerationStrategy(node);
     try {
       const modeRegistry = getWorkflowModeRegistry();
-      const mode = modeRegistry.getMode(strategy);
+      // Use strategy-aware routing to find the actual workflow that will run
+      const mode = modeRegistry.getWorkflowForStrategy(strategy, 'comfyui');
       if (mode) {
         const frameInputs = mode.inputRequirements.filter(
           r => r.type === 'image' && r.source === 'shot_image' && r.id !== 'first_frame'

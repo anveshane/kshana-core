@@ -235,34 +235,26 @@ export class ComfyUIProvider implements GenerationProvider {
 
     const registry = getRegistry();
 
-    // Determine workflow: check for user override first, then modeId, fall back to built-in 'ltx23'
+    // Strategy-aware workflow routing:
+    // 1. The executor passes modeId = generation strategy (i2v, t2v, flfv, fmlfv)
+    // 2. Find the best workflow that supports this strategy (user override > built-in)
+    // 3. If no strategy specified, fall back to pipeline default
     let workflowName = 'ltx23';
     let modeManifest = null as any;
+    const strategy = input.modeId || 'i2v';
     try {
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
 
-      // Check for user override first — this takes priority over built-in modes
-      const override = modeRegistry.getActiveForPipeline('video_generation', 'comfyui');
-      if (override && override.isOverride && !override.builtIn) {
-        modeManifest = override;
-        debugLog(`Using user override workflow: ${override.displayName} (${override.id})`);
-      } else {
-        // No user override — use modeId from generation strategy, or fall back to active built-in
-        if (input.modeId) {
-          modeManifest = modeRegistry.getMode(input.modeId);
-        }
-        if (!modeManifest) {
-          modeManifest = override; // active built-in
-        }
-        if (modeManifest) {
-          debugLog(`Using video mode: ${modeManifest.displayName} (${modeManifest.id})`);
-        }
+      modeManifest = modeRegistry.getWorkflowForStrategy(strategy, 'comfyui');
+      if (modeManifest) {
+        const isOverride = modeManifest.isOverride && !modeManifest.builtIn;
+        debugLog(`Strategy "${strategy}" → workflow: ${modeManifest.displayName} (${modeManifest.id})${isOverride ? ' [user override]' : ' [built-in]'}`);
       }
     } catch { /* registry not available, use default */ }
 
     // Determine if this is a user-uploaded workflow or a built-in
-    const isUserWorkflow = modeManifest && !modeManifest.builtIn && modeManifest.isOverride;
+    const isUserWorkflow = modeManifest && !modeManifest.builtIn;
 
     // Ensure output dir exists
     if (!fs.existsSync(outputDir)) {

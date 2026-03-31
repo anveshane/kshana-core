@@ -185,6 +185,19 @@ export interface WorkflowManifest {
     negativeAppend?: string;
   };
 
+  /**
+   * Generation strategies this workflow supports (e.g., ['i2v', 't2v', 'flfv']).
+   * Used for routing: when the LLM picks a strategy per shot, the system finds
+   * the best workflow that supports that strategy.
+   *
+   * Inferred from inputRequirements if not explicitly set:
+   * - Has shot_image inputs → supports 'i2v'
+   * - Has no shot_image inputs → supports 't2v'
+   * - Has 'last_frame' input → also supports 'flfv'
+   * - Has 'mid_frame' input → also supports 'fmlfv'
+   */
+  strategies?: string[];
+
   /** Whether this is a built-in workflow (immutable, always present, cannot be removed) */
   builtIn?: boolean;
   /** Whether this mode is currently active (built-ins are always active) */
