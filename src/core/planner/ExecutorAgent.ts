@@ -427,6 +427,10 @@ export class ExecutorAgent extends TypedEventEmitter {
    */
   stop(): void {
     this.stopped = true;
+    // Interrupt any in-progress ComfyUI generation immediately
+    import('../../services/comfyui/ComfyUIClient.js')
+      .then(({ ComfyUIClient }) => new ComfyUIClient({}).interrupt())
+      .catch(() => {});
   }
 
   /**

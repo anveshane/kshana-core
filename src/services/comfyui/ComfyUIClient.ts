@@ -83,6 +83,18 @@ export class ComfyUIClient {
   }
 
   /**
+   * Interrupt the currently running ComfyUI generation.
+   * Calls POST /interrupt to stop the active prompt immediately.
+   */
+  async interrupt(): Promise<void> {
+    try {
+      await fetch(`${this.baseUrl}/interrupt`, { method: 'POST' });
+    } catch {
+      // Best effort — ComfyUI may not be reachable
+    }
+  }
+
+  /**
    * Upload an image to ComfyUI input directory.
    */
   async uploadImage(
