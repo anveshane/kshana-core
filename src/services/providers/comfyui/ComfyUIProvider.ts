@@ -195,10 +195,22 @@ export class ComfyUIProvider implements GenerationProvider {
     } = input;
 
     const registry = getRegistry();
-    const workflowMetadata = registry.get('qwen_edit');
-    if (!workflowMetadata) {
-      throw new Error("Workflow 'qwen_edit' not found");
-    }
+
+    // Check for user override for image_editing
+    let workflowName = 'qwen_edit';
+    let modeManifest: any = null;
+    try {
+      const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
+      const modeRegistry = getWorkflowModeRegistry();
+      const activeMode = modeRegistry.getActiveForPipeline('image_editing', 'comfyui');
+      if (activeMode) {
+        modeManifest = activeMode;
+        workflowName = activeMode.id;
+        debugLog(`Using image_editing workflow: ${activeMode.displayName} (${activeMode.id})${activeMode.isOverride ? ' [user override]' : ''}`);
+      }
+    } catch { /* registry not available */ }
+
+    const isUserWorkflow = modeManifest && !modeManifest.builtIn;
 
     if (!fs.existsSync(baseImagePath)) {
       throw new Error(`Base image not found: ${baseImagePath}`);
@@ -222,18 +234,51 @@ export class ComfyUIProvider implements GenerationProvider {
     }
 
     // Load and parameterize workflow
-    onProgress?.({ percentage: 0, message: 'Loading workflow...', done: false });
-    const template = loadWorkflowTemplate(workflowMetadata.filename);
-    const workflow = parameterizeWorkflowByName('qwen_edit', template, {
-      sceneNumber: 0,
-      prompt: editPrompt,
-      negativePrompt,
-      aspectRatio,
-      seed,
-      inputImageFilename: uploadResult.name,
-      referenceImageFilenames: referenceImageFilenames.length > 0 ? referenceImageFilenames : undefined,
-      filenamePrefix,
-    });
+    onProgress?.({ percentage: 0, message: `Loading workflow: ${modeManifest?.displayName ?? workflowName}...`, done: false });
+
+    let workflow: Record<string, unknown>;
+
+    if (isUserWorkflow && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0) {
+      const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
+      const modeRegistry = getWorkflowModeRegistry();
+      const manifestDir = modeRegistry.getManifestDir(modeManifest.id);
+      const workflowPath = manifestDir
+        ? path.join(manifestDir, modeManifest.workflowFile)
+        : path.join(process.cwd(), 'workflows', 'user', modeManifest.workflowFile);
+
+      if (!fs.existsSync(workflowPath)) {
+        throw new Error(`User workflow file not found: ${workflowPath}`);
+      }
+
+      debugLog(`Loading user edit workflow from: ${workflowPath}`);
+      const template = JSON.parse(fs.readFileSync(workflowPath, 'utf-8'));
+      workflow = parameterizeGeneric(template, modeManifest, {
+        prompt: editPrompt,
+        edit_prompt: editPrompt,
+        negative_prompt: negativePrompt ?? '',
+        base_image: uploadResult.name,
+        reference_image_1: referenceImageFilenames[0] ?? '',
+        reference_image_2: referenceImageFilenames[1] ?? '',
+        seed,
+        filenamePrefix,
+      }) as Record<string, unknown>;
+    } else {
+      const workflowMetadata = registry.get(workflowName);
+      if (!workflowMetadata) {
+        throw new Error(`Workflow '${workflowName}' not found`);
+      }
+      const template = loadWorkflowTemplate(workflowMetadata.filename);
+      workflow = parameterizeWorkflowByName(workflowName, template, {
+        sceneNumber: 0,
+        prompt: editPrompt,
+        negativePrompt,
+        aspectRatio,
+        seed,
+        inputImageFilename: uploadResult.name,
+        referenceImageFilenames: referenceImageFilenames.length > 0 ? referenceImageFilenames : undefined,
+        filenamePrefix,
+      }) as Record<string, unknown>;
+    }
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
