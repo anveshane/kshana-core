@@ -24,7 +24,12 @@
 ## Video Generation
 
 - **Multiple AI Providers** — Generate images and videos using your local ComfyUI setup, Google's cloud APIs, or xAI's Grok — choose per task type. _Supports ComfyUI, Google Imagen/Veo, and xAI API with per-capability provider selection._
-- **Smart Video Mode Selection** — The system automatically picks the best generation approach per shot: create video from an image, from text only, or with specific start/end frames. _I2V, T2V, and late-entry frame routing per shot based on generation strategy._
+- **Strategy-Aware Workflow Routing** — The AI picks the best video generation approach per shot (image-to-video, text-to-video, first+last frame, first+mid+last frame), and the system routes to the right workflow — preferring your uploaded workflow if it supports that strategy. _getWorkflowForStrategy() maps semantic strategies to workflows with user override priority._
+- **First + Last Frame Video (FLFV)** — Upload a workflow that takes both a first and last frame image, and the system automatically generates both frames and wires them through. The AI decides per shot whether FLFV is needed based on whether the shot has a clear visual start and end state. _Multi-frame generation from inputRequirements, uploaded and parameterized via manifest mappings._
+- **First + Mid + Last Frame Video (FMLFV)** — For maximum control, upload a workflow that uses three keyframe images. The AI generates first, middle, and last frame images for shots with specific visual beats. _Extends FLFV with mid_frame support._
+- **Stop Button** — Stop the AI mid-execution from the header. It finishes the current step and pauses — select the project again to resume from where it left off. _Sends cancel WebSocket message, executor breaks at next node boundary._
+- **Progress Bars in Tool Cards** — Video generation progress shows as a visual bar instead of raw text, with step counts and percentages. _Parses "Step 2/3 (67%)" from streaming text into visual progress bar._
+- **Workflow Name in Tool Cards** — See which workflow is being used for each shot directly in the chat — shown as a cyan badge above the prompt. _Workflow name injected into tool_call arguments and result metadata._
 - **Automatic Final Assembly** — All your shot videos are stitched together into one final video with proper sequencing, audio handling, and resolution matching. _FFmpeg concat filter with interleaved video+audio pairs and resolution scaling._
 - **Cinematic Transitions** — Shots blend together with professional transitions — crossfades, dips to black, flash cuts, wipes, and more — chosen by the AI to match the mood. _FFmpeg xfade chain with LLM-selected transition types per shot._
 
