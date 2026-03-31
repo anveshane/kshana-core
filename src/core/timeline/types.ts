@@ -254,4 +254,6 @@ export interface SegmentDescriptor {
   suggestedDuration?: number;
   /** Compositing mode override for this segment */
   compositingMode?: CompositingMode;
+  /** Custom segment ID (defaults to segment_N if omitted) */
+  id?: string;
 }

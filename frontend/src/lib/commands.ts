@@ -12,6 +12,7 @@ export interface CommandContext {
   setShowWorkflows: (v: boolean) => void
   setShowProviders: (v: boolean) => void
   setShowNewProject: (v: boolean) => void
+  selectedProject?: string | null
 }
 
 interface CommandDef {
@@ -66,32 +67,69 @@ const COMMANDS: Record<string, CommandDef> = {
 
   reset: {
     description: 'Reset a project to a specific stage',
-    usage: '/reset <project> <stage>',
+    usage: '/reset [project] <stage>',
     handler: (args, ctx) => {
-      const parts = args.trim().split(/\s+/)
-      if (parts.length < 2 || !parts[0] || !parts[1]) {
+      const parts = args.trim().split(/\s+/).filter(Boolean)
+      const stages = ['plot', 'story', 'characters', 'world_style', 'character_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video', 'final_video']
+
+      if (parts.length === 0) {
         ctx.dispatch({
           type: 'ADD_CHAT_MESSAGE',
           message: {
             id: `cmd_${Date.now()}`,
             type: 'system',
-            content: 'Usage: `/reset <project> <stage>`\n\nStages: plot, story, characters, world_style, character_image, scene_video_prompt, shot_image_prompt, shot_motion_directive, shot_image, shot_video, final_video',
+            content: `Usage: \`/reset [project] <stage>\`\n\nStages: ${stages.join(', ')}${ctx.selectedProject ? `\n\nCurrent project: **${ctx.selectedProject}** (will be used if project name omitted)` : ''}`,
             timestamp: Date.now(),
           },
         })
         return
       }
+
+      // If only one arg and it looks like a stage, use the selected project
+      let projectName: string
+      let stage: string
+      if (parts.length === 1 && stages.includes(parts[0]!)) {
+        if (!ctx.selectedProject) {
+          ctx.dispatch({
+            type: 'ADD_CHAT_MESSAGE',
+            message: {
+              id: `cmd_${Date.now()}`,
+              type: 'system',
+              content: 'No project selected. Use `/reset <project> <stage>` or select a project first.',
+              timestamp: Date.now(),
+            },
+          })
+          return
+        }
+        projectName = ctx.selectedProject
+        stage = parts[0]!
+      } else if (parts.length >= 2) {
+        projectName = parts[0]!
+        stage = parts[1]!
+      } else {
+        ctx.dispatch({
+          type: 'ADD_CHAT_MESSAGE',
+          message: {
+            id: `cmd_${Date.now()}`,
+            type: 'system',
+            content: `Unknown stage: **${parts[0]}**\n\nValid stages: ${stages.join(', ')}`,
+            timestamp: Date.now(),
+          },
+        })
+        return
+      }
+
       ctx.dispatch({
         type: 'ADD_CHAT_MESSAGE',
         message: {
           id: `cmd_${Date.now()}`,
           type: 'system',
-          content: `Resetting **${parts[0]}** to stage **${parts[1]}**...`,
+          content: `Resetting **${projectName}** to stage **${stage}**...`,
           timestamp: Date.now(),
         },
       })
       // Send as a task — the server's executor can handle reset
-      ctx.send({ type: 'start_task', data: { task: `/reset ${args}` } })
+      ctx.send({ type: 'start_task', data: { task: `/reset ${projectName} ${stage}` } })
     },
   },
 

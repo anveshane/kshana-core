@@ -5,6 +5,7 @@ import { useMessageHandler } from './hooks/useMessageHandler'
 import { Header } from './components/Header'
 import { Sidebar } from './components/Sidebar'
 import { ChatTimeline } from './components/ChatTimeline'
+import { TimelineView } from './components/TimelineView'
 import { TaskInput } from './components/TaskInput'
 import { WorkflowManager } from './components/WorkflowManager'
 import { ProviderSettings } from './components/ProviderSettings'
@@ -100,6 +101,7 @@ export function App() {
       setShowWorkflows,
       setShowProviders,
       setShowNewProject,
+      selectedProject: state.selectedProject,
     })
     if (handled) return
 
@@ -110,7 +112,7 @@ export function App() {
     })
     send({ type: 'start_task', data: { task } })
     dispatch({ type: 'SET_AGENT_STATUS', status: 'thinking' })
-  }, [send, dispatch, pendingProject])
+  }, [send, dispatch, pendingProject, state.selectedProject])
 
   // Chat input placeholder changes when waiting for project description
   const inputPlaceholder = pendingProject
@@ -128,13 +130,42 @@ export function App() {
             <Header
               onProviderSettings={() => setShowProviders(true)}
               onWorkflows={() => setShowWorkflows(true)}
+              onStop={() => send({ type: 'cancel' })}
               projectSelector={<ProjectSelector onSendWs={send} />}
             />
 
             <div className="flex flex-1 overflow-hidden relative z-10">
-              <Sidebar />
+              <Sidebar onRedoNode={(nodeId: string) => send({ type: 'redo_node', data: { nodeId } })} />
               <main className="flex-1 flex flex-col overflow-hidden">
-                <ChatTimeline />
+                {/* Tab bar */}
+                <div className="flex border-b border-line-soft flex-shrink-0">
+                  <button
+                    onClick={() => dispatch({ type: 'SET_ACTIVE_VIEW', view: 'chat' })}
+                    className={`px-4 py-2 text-xs font-medium transition-colors ${
+                      state.activeView === 'chat'
+                        ? 'text-cyan border-b-2 border-cyan'
+                        : 'text-graphite-100 hover:text-foreground'
+                    }`}
+                  >
+                    Chat
+                  </button>
+                  <button
+                    onClick={() => dispatch({ type: 'SET_ACTIVE_VIEW', view: 'timeline' })}
+                    className={`px-4 py-2 text-xs font-medium transition-colors ${
+                      state.activeView === 'timeline'
+                        ? 'text-cyan border-b-2 border-cyan'
+                        : 'text-graphite-100 hover:text-foreground'
+                    }`}
+                  >
+                    Timeline
+                    {state.timeline && (
+                      <span className="ml-1.5 text-[9px] text-graphite-200">
+                        ({state.timeline.segments.filter(s => s.fillStatus === 'filled').length}/{state.timeline.segments.length})
+                      </span>
+                    )}
+                  </button>
+                </div>
+                {state.activeView === 'chat' ? <ChatTimeline /> : <TimelineView />}
                 {showNewProject && (
                   <NewProjectInline
                     onReady={(config) => {

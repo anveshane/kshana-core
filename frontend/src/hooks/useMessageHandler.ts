@@ -158,6 +158,11 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
         dispatch({ type: 'SET_AGENT_STATUS', status: 'idle' })
         break
       }
+
+      case 'timeline_update': {
+        dispatch({ type: 'SET_TIMELINE', timeline: data.timeline as import('../lib/timeline-types').Timeline })
+        break
+      }
     }
   }, [dispatch])
 }

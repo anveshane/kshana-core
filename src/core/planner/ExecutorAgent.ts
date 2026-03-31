@@ -45,9 +45,12 @@ import {
   saveTimeline,
   createTimelineSkeleton,
   updateSegmentLayers,
+  splitSegmentIntoShots,
+  setSegmentTransition,
   validateTimeline,
 } from '../timeline/TimelineManager.js';
 import { assembleVideos, resolveSegmentFilePaths } from '../timeline/FFmpegAssembler.js';
+import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timeline/types.js';
 import { getProviderRegistry } from '../../services/providers/index.js';
 import { getWorkflowModeRegistry } from '../../services/providers/WorkflowModeRegistry.js';
 import { addAsset } from '../../tasks/video/workflow/index.js';
@@ -156,6 +159,8 @@ export class ExecutorAgent extends TypedEventEmitter {
   private retriedNodes = new Set<string>();
   /** Pending media generation promises (parallel mode) */
   private pendingMedia = new Map<string, Promise<string | null>>();
+  /** Timeline state — populated during execution, saved to timeline.json */
+  private timeline: Timeline | null = null;
 
   constructor(llm: LLMClient, config: ExecutorAgentConfig) {
     super();
@@ -454,6 +459,89 @@ export class ExecutorAgent extends TypedEventEmitter {
   }
 
   /**
+   * Invalidate a node and all its dependents for re-execution.
+   * Returns the list of invalidated nodes (for cascade preview).
+   * After calling this, call run('') to resume execution of the invalidated nodes.
+   */
+  redoNode(nodeId: string): ExecutionNode[] {
+    const invalidated = this.executor.invalidateNode(nodeId);
+    if (invalidated.length === 0) {
+      this.log(`Redo: node '${nodeId}' not found or already pending`);
+      return [];
+    }
+
+    this.log(`Redo: invalidated ${invalidated.length} node(s): ${invalidated.map(n => n.id).join(', ')}`);
+    this.persistState();
+    this.emitTodoUpdate();
+
+    // Notify UI about the cascade
+    const names = invalidated.map(n => n.displayName);
+    this.emit({
+      type: 'notification',
+      level: 'info',
+      message: `Redoing ${names[0]}${invalidated.length > 1 ? ` (+${invalidated.length - 1} dependent${invalidated.length > 2 ? 's' : ''})` : ''}`,
+    });
+
+    return invalidated;
+  }
+
+  // ===========================================================================
+  // Timeline helpers
+  // ===========================================================================
+
+  /** Send full timeline state to the frontend via WebSocket. */
+  private emitTimelineUpdate(): void {
+    if (!this.timeline) return;
+    this.emit({
+      type: 'timeline_update',
+      timeline: this.timeline,
+    });
+  }
+
+  /** Create timeline skeleton from all scene nodes in the dependency graph. */
+  private initializeTimelineFromScenes(): void {
+    const sceneNodes = this.executor.getAllNodes()
+      .filter(n => n.typeId === 'scene' && n.status !== 'skipped')
+      .sort((a, b) => (a.itemId ?? '').localeCompare(b.itemId ?? ''));
+
+    if (sceneNodes.length === 0) return;
+
+    const totalDuration = (this.config.goal.preferences.duration as number | undefined) ?? 30;
+    const descriptors: SegmentDescriptor[] = sceneNodes.map(n => ({
+      id: n.itemId ?? n.id,
+      label: n.displayName,
+    }));
+
+    this.timeline = createTimelineSkeleton(totalDuration, descriptors);
+    saveTimeline(this.config.projectDir, this.timeline);
+    this.log(`Timeline: created skeleton with ${descriptors.length} scene segments (${totalDuration}s)`);
+  }
+
+  /** Update timeline segment after a shot_video node completes. */
+  private updateTimelineForShotVideo(node: ExecutionNode, outputPath: string): void {
+    if (!this.timeline || !node.itemId) return;
+
+    const segmentId = node.itemId; // e.g., "scene_1_shot_2"
+    const segment = this.timeline.segments.find(s => s.id === segmentId);
+    if (!segment) {
+      this.log(`Timeline: no segment found for ${segmentId}`);
+      return;
+    }
+
+    const layer: TimelineLayerEntry = {
+      type: 'visual',
+      filePath: outputPath,
+      label: node.displayName,
+      source: 'generated',
+    };
+
+    this.timeline = updateSegmentLayers(this.timeline, segmentId, [layer], 'filled');
+    saveTimeline(this.config.projectDir, this.timeline);
+    this.emitTimelineUpdate();
+    this.log(`Timeline: updated segment ${segmentId} → filled`);
+  }
+
+  /**
    * Run the dependency graph execution loop.
    *
    * This is the main entry point, matching GenericAgent.run() signature.
@@ -461,6 +549,49 @@ export class ExecutorAgent extends TypedEventEmitter {
    * actual execution is driven by the graph.
    */
   async run(_task: string, _userResponse?: string): Promise<GenericAgentResult> {
+    // Handle /reset command: run the reset script, reload state, then continue execution
+    const resetMatch = _task.match(/^\/reset\s+(\S+)\s+(\S+)/);
+    if (resetMatch) {
+      const [, projectName, stage] = resetMatch;
+      this.log(`Handling /reset: project=${projectName}, stage=${stage}`);
+      try {
+        const { execSync } = await import('child_process');
+        const projectRoot = dirname(this.config.projectDir); // parent of .kshana dir
+        const scriptPath = join(projectRoot, 'scripts', 'reset-project.ts');
+        const cmd = `npx tsx "${scriptPath}" "${projectName}" "${stage}"`;
+        this.log(`Running: ${cmd} (cwd: ${projectRoot})`);
+        const output = execSync(cmd, { cwd: projectRoot, encoding: 'utf-8', timeout: 30000 });
+        this.log(`Reset output:\n${output}`);
+
+        // Reload project.json and executor state
+        const projectPath = join(this.config.projectDir, 'project.json');
+        if (existsSync(projectPath)) {
+          const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
+          this.config.project = project;
+          if (project.executorState) {
+            this.executor = DependencyGraphExecutor.fromState(project.executorState, this.config.template);
+          }
+        }
+        // Reload timeline
+        this.timeline = loadTimeline(this.config.projectDir);
+
+        this.emit({
+          type: 'notification',
+          level: 'info',
+          message: `Reset to stage "${stage}" complete. Resuming execution...`,
+        });
+        // Fall through to normal execution with the reset state
+      } catch (error) {
+        this.log(`Reset failed: ${String(error)}`);
+        this.emit({
+          type: 'notification',
+          level: 'error',
+          message: `Reset failed: ${String(error)}`,
+        });
+        return { status: 'error', output: `Reset failed: ${String(error)}`, todos: [] };
+      }
+    }
+
     if (this.running) {
       this.log(`CONCURRENT RUN BLOCKED — run() called while already running`);
       this.log(`  Caller stack: ${new Error().stack?.split('\n').slice(1, 4).join(' <- ')}`);
@@ -475,6 +606,14 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     this.running = true;
     this.stopped = false;
+
+    // Load existing timeline from disk (survives session resume / server restart)
+    if (!this.timeline) {
+      this.timeline = loadTimeline(this.config.projectDir);
+      if (this.timeline) {
+        this.emitTimelineUpdate();
+      }
+    }
 
     const agentName = this.config.name ?? 'kshana-executor';
 
@@ -649,6 +788,8 @@ export class ExecutorAgent extends TypedEventEmitter {
                 continue;
               }
               finalOutputPath = videoResult;
+              // Update timeline segment with the generated video
+              this.updateTimelineForShotVideo(node, finalOutputPath);
             } else if (node.typeId === 'shot_video' && this.config.skipMediaGeneration) {
               // Test mode: skip shot video — mark completed so downstream nodes aren't blocked
               this.log(`  Skipping shot_video (skipMediaGeneration=true)`);
@@ -1977,6 +2118,46 @@ Rules:
         }
       }
       this.emitTodoUpdate();
+
+      // Timeline: create skeleton on first scene, then split this scene into shots
+      if (!this.timeline) {
+        this.initializeTimelineFromScenes();
+      }
+      if (this.timeline && items.shots?.length) {
+        const shotDescriptors = items.shots.map(s => ({
+          label: `Shot ${s.shotNumber}: ${s.shotType}`,
+          duration: s.duration || 5,
+        }));
+        this.timeline = splitSegmentIntoShots(this.timeline, sceneId, shotDescriptors);
+
+        // Propagate transitions from scene_video_prompt JSON (if available)
+        try {
+          if (node.outputPath) {
+            const svpPath = join(this.config.projectDir, node.outputPath);
+            if (existsSync(svpPath)) {
+              let svpContent = readFileSync(svpPath, 'utf-8').trim();
+              if (svpContent.startsWith('```')) svpContent = svpContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+              const parsed = JSON.parse(svpContent);
+              if (parsed.shots) {
+                for (const shot of parsed.shots as Array<{ shotNumber: number; transition?: string }>) {
+                  if (shot.transition && shot.transition !== 'cut') {
+                    const segId = `${sceneId}_shot_${shot.shotNumber}`;
+                    this.timeline = setSegmentTransition(this.timeline, segId, {
+                      type: shot.transition as import('../timeline/types.js').TransitionType,
+                      durationMs: shot.transition === 'flash_to_white' ? 200
+                        : shot.transition === 'dip_to_black' ? 800 : 500,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        } catch { /* transitions are non-critical */ }
+
+        saveTimeline(this.config.projectDir, this.timeline);
+        this.emitTimelineUpdate();
+      }
+
       return;
     }
 
@@ -2686,18 +2867,31 @@ Rules:
       return null;
     }
 
-    // 3. Emit tool_call
+    // 3. Resolve active workflow name for display
+    let activeWorkflowName = 'LTX-2.3 (built-in)';
+    try {
+      const { getWorkflowModeRegistry } = await import('../../services/providers/WorkflowModeRegistry.js');
+      const modeRegistry = getWorkflowModeRegistry();
+      const override = modeRegistry.getActiveForPipeline('video_generation', 'comfyui');
+      if (override?.isOverride && !override.builtIn) {
+        activeWorkflowName = override.displayName;
+      } else if (override) {
+        activeWorkflowName = override.displayName;
+      }
+    } catch { /* ignore */ }
+
+    // 4. Emit tool_call
     const genCallId = `shotvid_${node.id}_${Date.now()}`;
     const toolName = 'generate_shot_video';
     this.emit({
       type: 'tool_call',
       toolCallId: genCallId,
       toolName,
-      arguments: { item: node.displayName, source_image: isT2V ? '(text-to-video)' : shotImagePath, duration: shotDuration, prompt: motionPrompt },
+      arguments: { item: node.displayName, workflow: activeWorkflowName, source_image: isT2V ? '(text-to-video)' : shotImagePath, duration: shotDuration, prompt: motionPrompt },
       agentName,
     });
 
-    // 4. Subscribe to progress
+    // 5. Subscribe to progress
     let progressHandler: ComfyProgressHandler | null = null;
     progressHandler = (event) => {
       this.emit({
@@ -2775,7 +2969,8 @@ Rules:
       if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
 
       const relPath = relative(this.config.projectDir, result.filePath);
-      this.log(`  Shot video generated: ${relPath} (${shotDuration}s)`);
+      const workflowUsed = (result.metadata as Record<string, unknown>)?.['workflowName'] as string | undefined;
+      this.log(`  Shot video generated: ${relPath} (${shotDuration}s) [workflow: ${workflowUsed ?? 'unknown'}]`);
 
       try {
         addAsset({
@@ -2970,87 +3165,110 @@ Rules:
     });
 
     try {
-      // Collect all completed shot videos in order (scene_1_shot_1, scene_1_shot_2, ..., scene_2_shot_1, ...)
-      const shotVideoNodes = this.executor.getAllNodes()
-        .filter(n => n.typeId === 'shot_video' && n.status === 'completed' && n.outputPath)
-        .sort((a, b) => (a.itemId ?? '').localeCompare(b.itemId ?? ''));
+      let resolvedSegments: import('../timeline/FFmpegAssembler.js').ResolvedSegment[];
 
-      if (shotVideoNodes.length === 0) {
-        this.log(`  No completed shot videos found — cannot assemble`);
-        return null;
-      }
+      // Use timeline if available — it has proper durations, transitions, and segment data
+      if (this.timeline) {
+        const validation = validateTimeline(this.timeline);
+        this.log(`  Timeline: ${validation.filledDuration}/${this.timeline.totalDuration}s filled, ${validation.warnings.length} warnings`);
 
-      this.log(`  Found ${shotVideoNodes.length} shot videos for assembly`);
-      this.emit({
-        type: 'tool_streaming',
-        toolCallId,
-        chunk: `Found ${shotVideoNodes.length} shot videos. Assembling...\n`,
-        done: false,
-        agentName,
-        toolName: 'assemble_final_video',
-      });
+        const { resolved, errors } = resolveSegmentFilePaths(this.timeline, projectDir);
+        if (errors.length > 0) {
+          this.log(`  Timeline resolution errors: ${errors.join('; ')}`);
+        }
+        if (resolved.length === 0) {
+          this.log(`  No resolved segments from timeline — cannot assemble`);
+          return null;
+        }
+        resolvedSegments = resolved;
 
-      // Build resolved segments directly from shot video nodes (skip timeline system)
-      let currentTime = 0;
-      const resolvedSegments = shotVideoNodes.map(vn => {
-        const filePath = join(projectDir, vn.outputPath!);
-        // Estimate duration from scene_video_prompt JSON or default to 5s
-        const sceneMatch = vn.itemId?.match(/scene_(\d+)/);
-        const shotMatch = vn.itemId?.match(/shot_(\d+)/);
-        const sceneNum = sceneMatch?.[1] ? parseInt(sceneMatch[1], 10) : 1;
-        const shotNum = shotMatch?.[1] ? parseInt(shotMatch[1], 10) : 1;
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId,
+          chunk: `Timeline: ${resolved.length} segments resolved (${Math.round(validation.filledDuration)}s filled)\n`,
+          done: false,
+          agentName,
+          toolName: 'assemble_final_video',
+        });
+      } else {
+        // Fallback: build from shot_video nodes directly (no timeline.json)
+        const shotVideoNodes = this.executor.getAllNodes()
+          .filter(n => n.typeId === 'shot_video' && n.status === 'completed' && n.outputPath)
+          .sort((a, b) => (a.itemId ?? '').localeCompare(b.itemId ?? ''));
 
-        let duration = 5;
-        let transition: string | undefined;
-        let transitionDuration: number | undefined;
-        // Try to get actual duration and transition from scene_video_prompt JSON
-        const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
-        if (svpNode?.outputPath) {
-          try {
-            const svpPath = join(projectDir, svpNode.outputPath);
-            if (existsSync(svpPath)) {
-              let content = readFileSync(svpPath, 'utf-8').trim();
-              if (content.startsWith('```')) content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-              const parsed = JSON.parse(content);
-              const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
-              if (shot?.duration) duration = shot.duration;
-              if (shot?.transition) {
-                transition = shot.transition;
-                // Default transition durations by type
-                transitionDuration = transition === 'cut' ? undefined
-                  : transition === 'flash_to_white' ? 0.2
-                  : transition === 'dip_to_black' ? 0.8
-                  : 0.5;
-              }
-            }
-          } catch { /* use default */ }
+        if (shotVideoNodes.length === 0) {
+          this.log(`  No completed shot videos found — cannot assemble`);
+          return null;
         }
 
-        const segment = {
-          segmentId: vn.id,
-          label: vn.displayName,
-          startTime: currentTime,
-          endTime: currentTime + duration,
-          duration,
-          filePath,
-          mediaType: 'video' as const,
-          transition,
-          transitionDuration,
-        };
-        currentTime += duration;
-        return segment;
-      });
+        let currentTime = 0;
+        resolvedSegments = shotVideoNodes.map(vn => {
+          const filePath = join(projectDir, vn.outputPath!);
+          const sceneMatch = vn.itemId?.match(/scene_(\d+)/);
+          const shotMatch = vn.itemId?.match(/shot_(\d+)/);
+          const sceneNum = sceneMatch?.[1] ? parseInt(sceneMatch[1], 10) : 1;
+          const shotNum = shotMatch?.[1] ? parseInt(shotMatch[1], 10) : 1;
+
+          let duration = 5;
+          let transition: string | undefined;
+          let transitionDuration: number | undefined;
+          const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
+          if (svpNode?.outputPath) {
+            try {
+              const svpPath = join(projectDir, svpNode.outputPath);
+              if (existsSync(svpPath)) {
+                let content = readFileSync(svpPath, 'utf-8').trim();
+                if (content.startsWith('```')) content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+                const parsed = JSON.parse(content);
+                const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
+                if (shot?.duration) duration = shot.duration;
+                if (shot?.transition) {
+                  transition = shot.transition;
+                  transitionDuration = transition === 'cut' ? undefined
+                    : transition === 'flash_to_white' ? 0.2
+                    : transition === 'dip_to_black' ? 0.8
+                    : 0.5;
+                }
+              }
+            } catch { /* use default */ }
+          }
+
+          const segment = {
+            segmentId: vn.id,
+            label: vn.displayName,
+            startTime: currentTime,
+            endTime: currentTime + duration,
+            duration,
+            filePath,
+            mediaType: 'video' as const,
+            transition,
+            transitionDuration,
+          };
+          currentTime += duration;
+          return segment;
+        });
+
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId,
+          chunk: `Fallback mode: ${resolvedSegments.length} shot videos found\n`,
+          done: false,
+          agentName,
+          toolName: 'assemble_final_video',
+        });
+      }
 
       // Log transition data for debugging
       const transitionSummary = resolvedSegments
         .filter(s => s.transition && s.transition !== 'cut')
         .map(s => `${s.segmentId}:${s.transition}(${s.transitionDuration}s)`);
       this.log(`  Transitions: ${transitionSummary.length > 0 ? transitionSummary.join(', ') : 'none (all cuts)'}`);
+      const totalDuration = resolvedSegments.reduce((sum, s) => sum + s.duration, 0);
 
       this.emit({
         type: 'tool_streaming',
         toolCallId,
-        chunk: `Total duration: ${currentTime}s from ${resolvedSegments.length} shots (${transitionSummary.length} transitions)\n`,
+        chunk: `Total duration: ${Math.round(totalDuration)}s from ${resolvedSegments.length} shots (${transitionSummary.length} transitions)\n`,
         done: false,
         agentName,
         toolName: 'assemble_final_video',

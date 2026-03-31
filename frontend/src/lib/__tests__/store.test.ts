@@ -119,4 +119,40 @@ describe('appReducer', () => {
     const state = appReducer(initialState, { type: 'SET_PARALLEL_MEDIA', enabled: true })
     expect(state.parallelMedia).toBe(true)
   })
+
+  it('sets timeline', () => {
+    const mockTimeline = {
+      version: '1.0' as const,
+      totalDuration: 30,
+      defaultCompositingMode: 'replace' as const,
+      segments: [],
+      globalLayers: [],
+      validation: { isComplete: false, filledDuration: 0, gaps: [], warnings: [] },
+    }
+    const state = appReducer(initialState, { type: 'SET_TIMELINE', timeline: mockTimeline })
+    expect(state.timeline).toBe(mockTimeline)
+  })
+
+  it('sets active view', () => {
+    const state = appReducer(initialState, { type: 'SET_ACTIVE_VIEW', view: 'timeline' })
+    expect(state.activeView).toBe('timeline')
+  })
+
+  it('resets timeline on project change', () => {
+    const withTimeline = {
+      ...initialState,
+      timeline: {
+        version: '1.0' as const,
+        totalDuration: 30,
+        defaultCompositingMode: 'replace' as const,
+        segments: [],
+        globalLayers: [],
+        validation: { isComplete: false, filledDuration: 0, gaps: [], warnings: [] },
+      },
+      activeView: 'timeline' as const,
+    }
+    const state = appReducer(withTimeline, { type: 'SELECT_PROJECT', name: 'new-project' })
+    expect(state.timeline).toBeNull()
+    expect(state.activeView).toBe('chat')
+  })
 })

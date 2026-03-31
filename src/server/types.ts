@@ -55,7 +55,8 @@ export type ClientMessageType =
   | 'file_buffer_response'    // Client sends binary file content
   | 'set_autonomous'          // Toggle autonomous mode at runtime
   | 'set_parallel_media'      // Toggle parallel media generation at runtime
-  | 'project_state_sync';     // Client sends full project snapshot
+  | 'project_state_sync'      // Client sends full project snapshot
+  | 'redo_node';              // Redo a specific node (invalidate + re-execute)
 
 /**
  * Base message structure for server messages.
@@ -331,6 +332,14 @@ export interface StartTaskData {
 }
 
 /**
+ * Redo node client message data.
+ */
+export interface RedoNodeData {
+  /** The node ID to invalidate and re-execute (e.g., "character:alice", "shot_video:scene_1_shot_2") */
+  nodeId: string;
+}
+
+/**
  * User response client message data.
  */
 export interface UserResponseData {
@@ -382,6 +391,10 @@ export function isConfigureProjectMessage(
 
 export function isCreateProjectMessage(msg: ClientMessage): msg is ClientMessage<CreateProjectData> {
   return msg.type === 'create_project';
+}
+
+export function isRedoNodeMessage(msg: ClientMessage): msg is ClientMessage<RedoNodeData> {
+  return msg.type === 'redo_node';
 }
 
 /**

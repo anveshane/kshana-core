@@ -497,6 +497,42 @@ export class ConversationManager {
   }
 
   /**
+   * Redo a specific node: invalidate it + dependents, then resume execution.
+   */
+  async redoNode(
+    sessionId: string,
+    nodeId: string,
+    events?: ConversationEvents
+  ): Promise<GenericAgentResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    if (!session.agent) {
+      throw new Error('Session agent not configured. Select a project first.');
+    }
+    if (session.state.status === 'running') {
+      throw new Error('Session already has a running task — cannot redo while executing');
+    }
+    if (!session.sessionContext) {
+      throw new Error('Session context not initialized. Configure project first.');
+    }
+
+    // Call redoNode on the agent (invalidates + persists + emits todo update)
+    if ('redoNode' in session.agent) {
+      const invalidated = (session.agent as { redoNode(id: string): unknown[] }).redoNode(nodeId);
+      if (invalidated.length === 0) {
+        throw new Error(`Node '${nodeId}' not found in execution graph`);
+      }
+    } else {
+      throw new Error('Agent does not support redo');
+    }
+
+    // Resume execution — reuse runTask flow with empty task (executor picks up invalidated nodes)
+    return this.runTask(sessionId, '', events);
+  }
+
+  /**
    * Delete a session.
    */
   deleteSession(sessionId: string): boolean {

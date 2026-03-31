@@ -5,6 +5,7 @@
  */
 
 import { createContext, useContext } from 'react'
+import type { Timeline } from './timeline-types'
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -71,6 +72,10 @@ export interface AppState {
   // Assets
   assets: Array<{ id: string; path: string; url: string; type: string }>
 
+  // Timeline
+  timeline: Timeline | null
+  activeView: 'chat' | 'timeline'
+
   // Settings
   autonomousMode: boolean
   parallelMedia: boolean
@@ -89,6 +94,8 @@ export const initialState: AppState = {
   agentStatus: 'idle',
   contextUsage: null,
   assets: [],
+  timeline: null,
+  activeView: 'chat' as const,
   autonomousMode: false,
   parallelMedia: false,
 }
@@ -112,6 +119,8 @@ export type AppAction =
   | { type: 'SET_ASSETS'; assets: AppState['assets'] }
   | { type: 'SET_AUTONOMOUS'; enabled: boolean }
   | { type: 'SET_PARALLEL_MEDIA'; enabled: boolean }
+  | { type: 'SET_TIMELINE'; timeline: Timeline | null }
+  | { type: 'SET_ACTIVE_VIEW'; view: 'chat' | 'timeline' }
 
 // ── Reducer ────────────────────────────────────────────────
 
@@ -138,6 +147,8 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         toolCalls: [],
         streamingText: null,
         agentStatus: 'idle',
+        timeline: null,
+        activeView: 'chat',
       }
 
     case 'SET_PHASE':
@@ -191,6 +202,12 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'SET_PARALLEL_MEDIA':
       return { ...state, parallelMedia: action.enabled }
+
+    case 'SET_TIMELINE':
+      return { ...state, timeline: action.timeline }
+
+    case 'SET_ACTIVE_VIEW':
+      return { ...state, activeView: action.view }
 
     default:
       return state

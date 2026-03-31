@@ -13,6 +13,7 @@ import {
   parameterizeWorkflowByName,
   getRegistry,
 } from '../../comfyui/index.js';
+import { parameterizeGeneric } from '../../comfyui/WorkflowLoader.js';
 import type {
   GenerationProvider,
   GenerationCapability,
@@ -234,35 +235,34 @@ export class ComfyUIProvider implements GenerationProvider {
 
     const registry = getRegistry();
 
-    // Determine workflow: check for modeId in WorkflowModeRegistry, fall back to built-in 'ltx23'
+    // Determine workflow: check for user override first, then modeId, fall back to built-in 'ltx23'
     let workflowName = 'ltx23';
     let modeManifest = null as any;
     try {
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
-      if (input.modeId) {
-        modeManifest = modeRegistry.getMode(input.modeId);
-      }
-      if (!modeManifest) {
-        modeManifest = modeRegistry.getActiveForPipeline('video_generation', 'comfyui');
-      }
-      if (modeManifest) {
-        debugLog(`Using video mode: ${modeManifest.displayName} (${modeManifest.id})`);
+
+      // Check for user override first — this takes priority over built-in modes
+      const override = modeRegistry.getActiveForPipeline('video_generation', 'comfyui');
+      if (override && override.isOverride && !override.builtIn) {
+        modeManifest = override;
+        debugLog(`Using user override workflow: ${override.displayName} (${override.id})`);
+      } else {
+        // No user override — use modeId from generation strategy, or fall back to active built-in
+        if (input.modeId) {
+          modeManifest = modeRegistry.getMode(input.modeId);
+        }
+        if (!modeManifest) {
+          modeManifest = override; // active built-in
+        }
+        if (modeManifest) {
+          debugLog(`Using video mode: ${modeManifest.displayName} (${modeManifest.id})`);
+        }
       }
     } catch { /* registry not available, use default */ }
 
-    // Resolve workflow name: built-in modes (i2v, t2v, i2v_late_entry) all use 'ltx23'.
-    // User-uploaded modes would use their own workflow via the generic parameterizer.
-    const BUILTIN_VIDEO_MODES = new Set(['i2v', 't2v', 'i2v_late_entry']);
-    if (modeManifest && !BUILTIN_VIDEO_MODES.has(modeManifest.id) && !modeManifest.builtIn) {
-      workflowName = modeManifest.id;
-    }
-    // For built-in modes, workflowName stays 'ltx23'
-
-    const workflowMetadata = registry.get(workflowName);
-    if (!workflowMetadata) {
-      throw new Error(`Workflow '${workflowName}' not found`);
-    }
+    // Determine if this is a user-uploaded workflow or a built-in
+    const isUserWorkflow = modeManifest && !modeManifest.builtIn && modeManifest.isOverride;
 
     // Ensure output dir exists
     if (!fs.existsSync(outputDir)) {
@@ -281,18 +281,75 @@ export class ComfyUIProvider implements GenerationProvider {
     }
 
     // Load and parameterize workflow
-    onProgress?.({ percentage: 0, message: 'Loading workflow...', done: false });
-    const template = loadWorkflowTemplate(workflowMetadata.filename);
-    const workflow = parameterizeWorkflowByName(workflowName, template, {
-      sceneNumber: 0,
-      prompt,
-      seed,
-      inputImageFilename: uploadResult?.name,
-      filenamePrefix,
-      durationSeconds,
-      width,
-      height,
-    } as Parameters<typeof parameterizeWorkflowByName>[2]);
+    onProgress?.({ percentage: 0, message: `Loading workflow: ${modeManifest?.displayName ?? 'ltx23'}...`, done: false });
+
+    let workflow: Record<string, unknown>;
+
+    if (isUserWorkflow && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0) {
+      // User-uploaded workflow: load from manifest path, use generic parameterizer
+      const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
+      const modeRegistry = getWorkflowModeRegistry();
+      const manifestDir = modeRegistry.getManifestDir(modeManifest.id);
+
+      let workflowPath: string;
+      if (manifestDir) {
+        // Resolve workflow file relative to manifest directory
+        workflowPath = path.join(manifestDir, modeManifest.workflowFile);
+      } else {
+        // Fall back: try workflows/user/ directory
+        workflowPath = path.join(process.cwd(), 'workflows', 'user', modeManifest.workflowFile);
+      }
+
+      if (!fs.existsSync(workflowPath)) {
+        throw new Error(`User workflow file not found: ${workflowPath}`);
+      }
+
+      debugLog(`Loading user workflow from: ${workflowPath} (isT2V=${isT2V})`);
+      const template = JSON.parse(fs.readFileSync(workflowPath, 'utf-8'));
+      const genericParams: Record<string, unknown> = {
+        prompt,
+        negative_prompt: '',
+        seed,
+        filenamePrefix,
+        width,
+        height,
+      };
+      if (!isT2V && uploadResult?.name) {
+        genericParams['first_frame'] = uploadResult.name;
+      }
+      workflow = parameterizeGeneric(template, modeManifest, genericParams) as Record<string, unknown>;
+
+      // For i2v: ensure boolean toggle nodes for first_frame are set to true
+      // For t2v: ensure they are set to false (workflow default)
+      // This handles workflows that use a PrimitiveBoolean to switch between i2v/t2v modes
+      for (const mapping of modeManifest.parameterMappings) {
+        if (mapping.input === 'first_frame') {
+          const node = (workflow as Record<string, { class_type?: string; inputs?: Record<string, unknown> }>)[mapping.nodeId];
+          if (node?.class_type === 'PrimitiveBoolean') {
+            node.inputs = node.inputs || {};
+            node.inputs[mapping.field] = !isT2V;
+            debugLog(`Set boolean node ${mapping.nodeId}.${mapping.field} = ${!isT2V} (${isT2V ? 't2v' : 'i2v'} mode)`);
+          }
+        }
+      }
+    } else {
+      // Built-in workflow: use the old registry + named parameterizer
+      const workflowMetadata = registry.get(workflowName);
+      if (!workflowMetadata) {
+        throw new Error(`Workflow '${workflowName}' not found`);
+      }
+      const template = loadWorkflowTemplate(workflowMetadata.filename);
+      workflow = parameterizeWorkflowByName(workflowName, template, {
+        sceneNumber: 0,
+        prompt,
+        seed,
+        inputImageFilename: uploadResult?.name,
+        filenamePrefix,
+        durationSeconds,
+        width,
+        height,
+      } as Parameters<typeof parameterizeWorkflowByName>[2]) as Record<string, unknown>;
+    }
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
@@ -303,7 +360,11 @@ export class ComfyUIProvider implements GenerationProvider {
 
     await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
 
-    return this.downloadFirstOutput(client, queueResult.promptId, outputDir, 'video/mp4');
+    const result = await this.downloadFirstOutput(client, queueResult.promptId, outputDir, 'video/mp4');
+    // Inject workflow name into metadata for upstream logging
+    const workflowDisplayName = modeManifest?.displayName ?? 'LTX-2.3 (built-in)';
+    result.metadata = { ...result.metadata, workflowName: workflowDisplayName, workflowId: modeManifest?.id ?? 'ltx23' };
+    return result;
   }
 
   // ── Shared helpers ──────────────────────────────────────────────────────────

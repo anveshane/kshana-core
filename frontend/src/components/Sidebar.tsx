@@ -1,7 +1,12 @@
 import { useAppState } from '../lib/store'
 
-export function Sidebar() {
-  const { phase, todos, assets, selectedProject } = useAppState()
+interface SidebarProps {
+  onRedoNode?: (nodeId: string) => void
+}
+
+export function Sidebar({ onRedoNode }: SidebarProps) {
+  const { phase, todos, assets, selectedProject, agentStatus } = useAppState()
+  const isBusy = agentStatus === 'thinking'
 
   return (
     <aside className="w-60 flex-shrink-0 flex flex-col gap-4 p-3 overflow-y-auto border-r border-line-soft">
@@ -25,7 +30,7 @@ export function Sidebar() {
             <span className="text-xs text-graphite-200">No tasks</span>
           )}
           {todos.map((todo) => (
-            <div key={todo.id} className="flex items-start gap-2 text-xs">
+            <div key={todo.id} className="group flex items-start gap-2 text-xs">
               <span className="mt-0.5 flex-shrink-0">
                 {todo.status === 'completed' ? (
                   <span className="text-green">✓</span>
@@ -37,9 +42,19 @@ export function Sidebar() {
                   <span className="text-graphite-200">○</span>
                 )}
               </span>
-              <span className={todo.status === 'completed' ? 'text-graphite-100' : 'text-foreground'}>
+              <span className={`flex-1 ${todo.status === 'completed' ? 'text-graphite-100' : 'text-foreground'}`}>
                 {todo.text}
               </span>
+              {/* Redo button — shown on hover for completed/failed todos when not busy */}
+              {(todo.status === 'completed' || todo.status === 'failed') && onRedoNode && !isBusy && (
+                <button
+                  onClick={() => onRedoNode(todo.id)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0 mt-0.5 text-graphite-100 hover:text-cyan"
+                  title={`Redo ${todo.text}`}
+                >
+                  ↻
+                </button>
+              )}
             </div>
           ))}
         </div>

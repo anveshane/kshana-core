@@ -3,11 +3,12 @@ import { useAppState } from '../lib/store'
 interface HeaderProps {
   onProviderSettings: () => void
   onWorkflows: () => void
+  onStop?: () => void
   projectSelector?: React.ReactNode
 }
 
-export function Header({ onProviderSettings, onWorkflows, projectSelector }: HeaderProps) {
-  const { connectionStatus, selectedProject, phase, contextUsage, autonomousMode, parallelMedia } = useAppState()
+export function Header({ onProviderSettings, onWorkflows, onStop, projectSelector }: HeaderProps) {
+  const { connectionStatus, selectedProject, phase, contextUsage, autonomousMode, parallelMedia, agentStatus } = useAppState()
 
   const statusColor = connectionStatus === 'connected'
     ? 'bg-green' : connectionStatus === 'connecting'
@@ -63,6 +64,16 @@ export function Header({ onProviderSettings, onWorkflows, projectSelector }: Hea
           <span className="font-mono text-[10px] px-2 py-0.5 rounded-full border border-line-soft text-graphite-100">
             {parallelMedia ? '⇉ Parallel' : '▷ Serial'}
           </span>
+
+          {/* Stop button — visible when agent is running */}
+          {agentStatus === 'thinking' && onStop && (
+            <button
+              onClick={onStop}
+              className="font-mono text-xs px-3 py-1.5 rounded-md border border-error/50 text-error hover:bg-error/10 hover:border-error transition-colors cursor-pointer"
+            >
+              Stop
+            </button>
+          )}
 
           {/* Action buttons */}
           <button

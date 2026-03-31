@@ -27,6 +27,7 @@ import {
   type ErrorData,
   type StartTaskData,
   type UserResponseData,
+  type RedoNodeData,
   createServerMessage,
   isStartTaskMessage,
   isUserResponseMessage,
@@ -35,6 +36,7 @@ import {
   isConfigureProjectMessage,
   isSelectProjectMessage,
   isCreateProjectMessage,
+  isRedoNodeMessage,
   type ConfigureProjectData,
   type CreateProjectData,
 } from './types.js';
@@ -240,6 +242,11 @@ export class WebSocketHandler {
       return;
     }
 
+    if (isRedoNodeMessage(message)) {
+      await this.handleRedoNode(sessionId, socket, message.data);
+      return;
+    }
+
     // Handle autonomous mode toggle
     if (message.type === 'set_autonomous') {
       const enabled = (message.data as { enabled: boolean }).enabled;
@@ -406,6 +413,53 @@ export class WebSocketHandler {
       }));
     } else {
       this.sendError(socket, sessionId, 'cancel_failed', 'No running task to cancel');
+    }
+  }
+
+  /**
+   * Handle redo_node message — invalidate a node and resume execution.
+   */
+  private async handleRedoNode(
+    sessionId: string,
+    socket: WebSocket,
+    data: RedoNodeData
+  ): Promise<void> {
+    // Send busy status
+    this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+      status: 'busy',
+      message: `Redoing node: ${data.nodeId}`,
+    }));
+
+    // Create event handlers
+    const events = this.createEventHandlers(sessionId, socket);
+
+    // Notify UI that timer is running
+    this.sendTimerUpdate(socket, sessionId, true);
+
+    try {
+      const result = await this.conversationManager.redoNode(sessionId, data.nodeId, events);
+
+      // Notify UI that timer stopped
+      this.sendTimerUpdate(socket, sessionId, false);
+
+      // Send final response
+      this.sendMessage(socket, createServerMessage<AgentResponseData>('agent_response', sessionId, {
+        output: result.output,
+        status: mapAgentStatus(result.status),
+      }));
+
+      // Send completed status if not awaiting input
+      if (result.status !== 'waiting_for_user') {
+        this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+          status: 'completed',
+          message: 'Redo completed',
+        }));
+      }
+    } catch (error) {
+      // Notify UI that timer stopped on error
+      this.sendTimerUpdate(socket, sessionId, false);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.sendError(socket, sessionId, 'redo_error', errorMessage);
     }
   }
 

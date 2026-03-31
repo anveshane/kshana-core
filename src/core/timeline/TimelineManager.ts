@@ -99,7 +99,7 @@ export function createTimelineSkeleton(
   const segments: TimelineSegment[] = descriptors.map((desc, index) => {
     const duration = durations[index] ?? 0;
     const segment: TimelineSegment = {
-      id: `segment_${index}`,
+      id: desc.id ?? `segment_${index}`,
       label: desc.label,
       startTime: Math.round(currentTime * 100) / 100,
       endTime: Math.round((currentTime + duration) * 100) / 100,

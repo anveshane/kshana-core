@@ -183,6 +183,14 @@ export interface PhaseTransitionEvent {
 }
 
 /**
+ * Timeline update event — sends full timeline state to frontend.
+ */
+export interface TimelineUpdateEvent {
+  type: 'timeline_update';
+  timeline: unknown; // Timeline type from timeline/types.ts — kept as unknown to avoid circular deps
+}
+
+/**
  * Union of all agent events.
  */
 export type AgentEvent =
@@ -199,7 +207,8 @@ export type AgentEvent =
   | QuestionEvent
   | AgentStatusEvent
   | UserInputInjectedEvent
-  | PhaseTransitionEvent;
+  | PhaseTransitionEvent
+  | TimelineUpdateEvent;
 
 /**
  * Event type names for type-safe event handling.

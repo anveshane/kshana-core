@@ -205,6 +205,14 @@ export class WorkflowModeRegistry {
   }
 
   /**
+   * Get the absolute directory path where a mode's manifest file lives.
+   * Used to resolve the workflow JSON file path relative to the manifest.
+   */
+  getManifestDir(modeId: string): string | undefined {
+    return manifestDirMap.get(modeId);
+  }
+
+  /**
    * Check if an ID belongs to a built-in workflow.
    */
   isBuiltInId(id: string): boolean {
