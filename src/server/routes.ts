@@ -251,13 +251,7 @@ export async function registerRoutes(
       const safeName = (body.filename || 'workflow').replace(/[^a-zA-Z0-9_-]/g, '_').replace(/\.json$/, '');
       const filePath = path.join(userDir, `${safeName}.json`);
 
-      // Check for duplicate filename — reject with clear error
-      if (fs.existsSync(filePath)) {
-        return reply.status(409).send({
-          error: `A workflow file named '${safeName}.json' already exists. Rename your file or delete the existing one first.`,
-        });
-      }
-
+      // Overwrite if file already exists (user is re-uploading an updated version)
       fs.writeFileSync(filePath, body.content);
 
       // Run LLM analysis for intelligent suggestions
