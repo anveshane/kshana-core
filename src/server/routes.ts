@@ -212,7 +212,8 @@ export async function registerRoutes(
     const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
     const registry = getWorkflowModeRegistry();
     // Only show ComfyUI workflows — API provider modes belong in Provider Settings
-    const all = registry.listAll().filter(m => m.format !== 'api');
+    // Filter out API provider modes (Google, xAI) but keep API-format ComfyUI workflows
+    const all = registry.listAll().filter(m => m.workflowFile);
 
     const grouped: Record<string, typeof all> = {};
     for (const mode of all) {
@@ -369,7 +370,18 @@ export async function registerRoutes(
     return reply.send({ status: 'ok', activeOverride: id });
   });
 
-  // Clear override for a pipeline (revert to built-in)
+  // Deactivate a specific user workflow
+  app.put(`${apiPrefix}/workflows/:id/deactivate`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    const mode = registry.getMode(id);
+    if (!mode) return reply.status(404).send({ error: 'Workflow not found' });
+    registry.clearOverride(mode.pipeline, id);
+    return reply.send({ status: 'ok', deactivated: id });
+  });
+
+  // Clear override for a pipeline (revert to built-in) — legacy endpoint
   app.delete(`${apiPrefix}/workflows/override/:pipeline`, async (request: FastifyRequest, reply: FastifyReply) => {
     const { pipeline } = request.params as { pipeline: string };
     const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');

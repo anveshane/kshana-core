@@ -117,8 +117,8 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
     loadWorkflows()
   }
 
-  const handleClearOverride = async (pipeline: string) => {
-    await fetch(`/api/v1/workflows/override/${pipeline}`, { method: 'DELETE' })
+  const handleClearOverride = async (id: string) => {
+    await fetch(`/api/v1/workflows/${id}/deactivate`, { method: 'PUT' })
     loadWorkflows()
   }
 
@@ -459,7 +459,7 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
                               )}
                               {!wf.builtIn && isActive && (
                                 <button
-                                  onClick={() => handleClearOverride(pipeline)}
+                                  onClick={() => handleClearOverride(wf.id)}
                                   className="px-2.5 py-1 rounded text-[11px] font-mono border border-line-soft text-graphite-100 hover:text-foreground transition-colors cursor-pointer"
                                 >
                                   Revert

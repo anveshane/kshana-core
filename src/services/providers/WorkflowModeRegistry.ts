@@ -267,30 +267,30 @@ export class WorkflowModeRegistry {
   /**
    * Find the best workflow for a specific generation strategy.
    *
-   * Priority: user override (if it supports the strategy) > built-in mode matching the strategy.
-   * Falls back to the override anyway if no built-in matches (the override may handle it via toggle).
+   * Priority: active user workflow (if it supports the strategy) > built-in mode.
+   * Multiple user workflows can coexist — each covers different strategies.
+   * User workflows are preferred over built-ins (sorted by priority).
    */
   getWorkflowForStrategy(strategy: string, providerId?: string): WorkflowManifest | undefined {
     const modes = this.getAvailableModes('video_generation', providerId);
 
-    // 1. Check user override — does it support this strategy?
-    const override = modes.find(m => m.isOverride && !m.builtIn);
-    if (override && this.getStrategies(override).includes(strategy)) {
-      return override;
-    }
+    // 1. Check active user workflows that support this strategy (best priority first)
+    const userMatch = modes
+      .filter(m => !m.builtIn && m.active && this.getStrategies(m).includes(strategy))
+      .sort((a, b) => a.priority - b.priority)[0];
+    if (userMatch) return userMatch;
 
     // 2. Find a built-in mode whose ID matches the strategy directly (e.g., 'i2v', 't2v')
     const builtIn = modes.find(m => m.builtIn && m.id === strategy);
     if (builtIn) return builtIn;
 
     // 3. Find any mode that supports this strategy
-    const anyMatch = modes.find(m => this.getStrategies(m).includes(strategy));
+    const anyMatch = modes
+      .filter(m => this.getStrategies(m).includes(strategy))
+      .sort((a, b) => a.priority - b.priority)[0];
     if (anyMatch) return anyMatch;
 
-    // 4. Fall back to override if it exists (it may handle unknown strategies via toggles)
-    if (override) return override;
-
-    // 5. Fall back to default
+    // 4. Fall back to pipeline default
     return this.getActiveForPipeline('video_generation', providerId);
   }
 
@@ -325,34 +325,28 @@ export class WorkflowModeRegistry {
   }
 
   /**
-   * Set a user-uploaded workflow as the active override for its pipeline.
-   * Only user workflows can be overrides. Clears any previous override for the same pipeline.
-   * Persists isOverride to the manifest file on disk.
+   * Activate a user workflow — makes it available for strategy-based routing.
+   * Multiple user workflows can be active simultaneously (each covers different strategies).
+   * Persists to disk.
    */
   setOverride(modeId: string): boolean {
     const mode = this.modes.get(modeId);
-    if (!mode || mode.builtIn) return false; // can't override with a built-in
-    // Clear previous overrides in the same pipeline
-    for (const m of this.modes.values()) {
-      if (m.pipeline === mode.pipeline && !m.builtIn) {
-        if (m.isOverride) {
-          m.isOverride = false;
-          this.persistManifest(m);
-        }
-      }
-    }
+    if (!mode || mode.builtIn) return false;
     mode.isOverride = true;
+    mode.active = true;
     this.persistManifest(mode);
     return true;
   }
 
   /**
-   * Clear override for a pipeline — reverts to built-in default.
+   * Deactivate a user workflow — removes it from strategy routing.
+   * Falls back to built-in for strategies this workflow covered.
    * Persists change to disk.
    */
-  clearOverride(pipeline: WorkflowPipeline): void {
+  clearOverride(pipeline: WorkflowPipeline, modeId?: string): void {
     for (const m of this.modes.values()) {
       if (m.pipeline === pipeline && !m.builtIn && m.isOverride) {
+        if (modeId && m.id !== modeId) continue; // only deactivate the specified one
         m.isOverride = false;
         this.persistManifest(m);
       }
