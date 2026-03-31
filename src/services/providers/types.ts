@@ -142,6 +142,8 @@ export interface ParameterMapping {
   nodeId: string;
   /** Field name on the node's inputs/widgets */
   field: string;
+  /** Default value to use when the input is not provided at runtime */
+  defaultValue?: unknown;
 }
 
 /**

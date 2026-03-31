@@ -653,7 +653,7 @@ export function parameterizeWorkflowByName(
 export function parameterizeGeneric(
   template: WorkflowTemplate | Record<string, unknown>,
   manifest: {
-    parameterMappings: Array<{ input: string; nodeId: string; field: string }>;
+    parameterMappings: Array<{ input: string; nodeId: string; field: string; defaultValue?: unknown }>;
     promptKeywords?: { prepend?: string; append?: string; negativeAppend?: string };
   },
   params: Record<string, unknown>,
@@ -668,7 +668,8 @@ export function parameterizeGeneric(
     : raw;
 
   for (const mapping of manifest.parameterMappings) {
-    const value = params[mapping.input];
+    // Use runtime value if provided, otherwise use default from manifest
+    const value = params[mapping.input] ?? (mapping as { defaultValue?: unknown }).defaultValue;
     if (value === undefined) continue;
 
     const node = apiWorkflow[mapping.nodeId] as { inputs?: Record<string, unknown> } | undefined;

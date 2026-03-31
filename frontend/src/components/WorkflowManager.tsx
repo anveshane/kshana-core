@@ -49,7 +49,7 @@ const PIPELINES = ['image_generation', 'image_editing', 'video_generation', 'ima
 const STANDARD_INPUTS: Record<string, string[]> = {
   image_generation: ['prompt', 'negative_prompt', 'seed', 'width', 'height', 'filenamePrefix'],
   image_editing: ['base_image', 'prompt', 'negative_prompt', 'reference_image_1', 'reference_image_2', 'seed', 'filenamePrefix'],
-  video_generation: ['first_frame', 'last_frame', 'mid_frame', 'prompt', 'seed', 'durationSeconds', 'width', 'height', 'filenamePrefix'],
+  video_generation: ['first_frame', 'last_frame', 'mid_frame', 'prompt', 'negative_prompt', 'seed', 'durationSeconds', 'width', 'height', 'filenamePrefix'],
   image_processing: ['base_image', 'edit_prompt', 'mask', 'seed', 'filenamePrefix'],
 }
 
@@ -86,6 +86,8 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
   const [wizDesc, setWizDesc] = useState('')
   const [wizCriteria, setWizCriteria] = useState('')
   const [wizMappings, setWizMappings] = useState<Record<string, string>>({})
+  const [wizDefaults, setWizDefaults] = useState<Record<string, string>>({})
+  const [wizDescriptions, setWizDescriptions] = useState<Record<string, string>>({})
   const [wizKeywordsPrepend, setWizKeywordsPrepend] = useState('')
   const [wizKeywordsAppend, setWizKeywordsAppend] = useState('')
   const [wizKeywordsNegative, setWizKeywordsNegative] = useState('')
@@ -183,24 +185,37 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
       return
     }
 
-    const parameterMappings = []
-    const inputRequirements = []
+    const parameterMappings: Array<{ input: string; nodeId: string; field: string; defaultValue?: unknown }> = []
+    const inputRequirements: Array<{ id: string; type: string; source: string; description: string; required: boolean }> = []
+    const seenInputIds = new Set<string>()
     for (const node of wizardParsed?.inputNodes || []) {
       const mapped = wizMappings[node.nodeId]
       if (mapped) {
+        // Parse default value: "true"/"false" → boolean, numbers → number, else string
+        let defaultValue: unknown = wizDefaults[node.nodeId] || undefined
+        if (defaultValue === 'true') defaultValue = true
+        else if (defaultValue === 'false') defaultValue = false
+        else if (defaultValue && !isNaN(Number(defaultValue))) defaultValue = Number(defaultValue)
+
         parameterMappings.push({
           input: mapped,
           nodeId: node.nodeId,
           field: FIELD_FOR_CLASS[node.classType] || 'value',
+          ...(defaultValue !== undefined ? { defaultValue } : {}),
         })
-        const isImage = node.classType === 'LoadImage'
-        inputRequirements.push({
-          id: mapped,
-          type: isImage ? 'image' : 'text',
-          source: isImage ? 'shot_image' : (mapped === 'prompt' || mapped === 'edit_prompt' ? 'shot_motion_directive' : 'system'),
-          description: mapped,
-          required: true,
-        })
+        // Only add one inputRequirement per unique input ID
+        if (!seenInputIds.has(mapped)) {
+          seenInputIds.add(mapped)
+          const isImage = node.classType === 'LoadImage'
+          const desc = wizDescriptions[node.nodeId] || mapped
+          inputRequirements.push({
+            id: mapped,
+            type: isImage ? 'image' : 'text',
+            source: isImage ? 'shot_image' : (mapped === 'prompt' || mapped === 'edit_prompt' ? 'shot_motion_directive' : 'system'),
+            description: desc,
+            required: defaultValue === undefined, // not required if default is set
+          })
+        }
       }
     }
 
@@ -464,29 +479,52 @@ export function WorkflowManager({ open, onClose }: WorkflowManagerProps) {
                     <label className="block text-xs text-graphite-100 mb-2">
                       Map Input Nodes ({wizardParsed.inputNodes.length} found)
                     </label>
-                    <div className="space-y-1.5">
+                    <div className="space-y-2">
                       {wizardParsed.inputNodes.map((node) => {
                         const suggestion = wizardAnalysis?.suggestedMappings?.find(
                           (s) => s.nodeId === node.nodeId,
                         )
+                        const mapped = wizMappings[node.nodeId] || ''
                         return (
-                          <div key={node.nodeId} className="flex items-center gap-2 px-3 py-2 rounded bg-graphite-400/50">
-                            <span className="font-mono text-[10px] text-graphite-200 w-10">#{node.nodeId}</span>
-                            <span className="text-xs text-graphite-050 w-32 truncate">{node.title}</span>
-                            <span className="text-graphite-300">→</span>
-                            <Dropdown
-                              options={[
-                                { value: '', label: '(leave as default)' },
-                                ...(STANDARD_INPUTS[wizPipeline] || []).map(opt => ({ value: opt, label: opt })),
-                              ]}
-                              value={wizMappings[node.nodeId] || ''}
-                              onChange={(v) => setWizMappings({ ...wizMappings, [node.nodeId]: v })}
-                              className="flex-1"
-                            />
-                            {suggestion?.reason && (
-                              <span className="text-[10px] text-graphite-200 max-w-32 truncate" title={suggestion.reason}>
-                                💡 {suggestion.reason}
-                              </span>
+                          <div key={node.nodeId} className="px-3 py-2 rounded bg-graphite-400/50 space-y-1.5">
+                            {/* Row 1: Node info + mapping dropdown */}
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-[10px] text-graphite-200 w-10">#{node.nodeId}</span>
+                              <span className="text-xs text-graphite-050 w-32 truncate" title={node.title}>{node.title}</span>
+                              <span className="text-graphite-300">→</span>
+                              <Dropdown
+                                options={[
+                                  { value: '', label: '(leave as default)' },
+                                  ...(STANDARD_INPUTS[wizPipeline] || []).map(opt => ({ value: opt, label: opt })),
+                                ]}
+                                value={mapped}
+                                onChange={(v) => setWizMappings({ ...wizMappings, [node.nodeId]: v })}
+                                className="flex-1"
+                              />
+                              {suggestion?.reason && (
+                                <span className="text-[10px] text-graphite-200 max-w-32 truncate" title={suggestion.reason}>
+                                  {suggestion.reason}
+                                </span>
+                              )}
+                            </div>
+                            {/* Row 2: Description + Default value (shown when mapped) */}
+                            {mapped && (
+                              <div className="flex items-center gap-2 ml-12">
+                                <input
+                                  type="text"
+                                  placeholder="Description (e.g., Toggle between t2v/i2v)"
+                                  value={wizDescriptions[node.nodeId] || ''}
+                                  onChange={(e) => setWizDescriptions({ ...wizDescriptions, [node.nodeId]: e.target.value })}
+                                  className="flex-1 px-2 py-1 text-[11px] rounded bg-graphite-300 border border-line-soft text-foreground placeholder:text-graphite-200 focus:outline-none focus:border-cyan/40"
+                                />
+                                <input
+                                  type="text"
+                                  placeholder="Default value"
+                                  value={wizDefaults[node.nodeId] || ''}
+                                  onChange={(e) => setWizDefaults({ ...wizDefaults, [node.nodeId]: e.target.value })}
+                                  className="w-28 px-2 py-1 text-[11px] rounded bg-graphite-300 border border-line-soft text-foreground placeholder:text-graphite-200 focus:outline-none focus:border-cyan/40"
+                                />
+                              </div>
                             )}
                           </div>
                         )
