@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import ReactMarkdown from 'react-markdown'
 import type { ToolCall } from '../lib/store'
 import { useAppState } from '../lib/store'
 
@@ -28,6 +29,21 @@ const TOOL_COLORS: Record<string, { border: string; statusActive: string; status
 }
 
 const DEFAULT_COLORS = { border: 'border-line-soft', statusActive: 'text-cyan', statusDone: 'text-green' }
+
+/** Markdown wrapper with prose styling */
+function Md({ children, className }: { children: string; className?: string }) {
+  return (
+    <div className={`prose prose-invert prose-sm max-w-none
+      prose-headings:text-foreground prose-headings:font-semibold prose-headings:mt-2 prose-headings:mb-1
+      prose-p:text-graphite-050 prose-p:my-1 prose-p:leading-relaxed
+      prose-strong:text-foreground prose-em:text-graphite-050
+      prose-li:text-graphite-050 prose-li:my-0
+      prose-hr:border-line-soft prose-hr:my-2
+      ${className ?? ''}`}>
+      <ReactMarkdown>{children}</ReactMarkdown>
+    </div>
+  )
+}
 
 /** Parse progress from streaming text like "Step 2/3 (67%)" */
 function parseProgress(text: string): { step: number; total: number; percent: number } | null {
@@ -74,7 +90,7 @@ function ItemTitle({ item }: { item: string }) {
 }
 
 /** Content generation body — LLM writing (story, character, scene, etc.) */
-function ContentBody({ args, streamingContent, status }: { args: Record<string, string>; streamingContent?: string; status: string }) {
+function ContentBody({ args, streamingContent }: { args: Record<string, string>; streamingContent?: string }) {
   const [showPrompt, setShowPrompt] = useState(false)
   const item = args['item']
   const prompt = args['prompt']
@@ -100,9 +116,9 @@ function ContentBody({ args, streamingContent, status }: { args: Record<string, 
           {prompt}
         </div>
       )}
-      {status === 'executing' && streamingContent && (
-        <div className="text-xs text-graphite-050 whitespace-pre-wrap max-h-32 overflow-y-auto">
-          {streamingContent}
+      {streamingContent && (
+        <div className="max-h-48 overflow-y-auto">
+          <Md className="text-xs">{streamingContent}</Md>
         </div>
       )}
     </div>
@@ -335,7 +351,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
   const renderBody = () => {
     switch (toolName) {
       case 'generate_content':
-        return <ContentBody args={args ?? {}} streamingContent={meaningfulContent} status={status} />
+        return <ContentBody args={args ?? {}} streamingContent={meaningfulContent} />
       case 'generate_image':
         return <ImageGenBody args={args ?? {}} />
       case 'generate_shot_image':
