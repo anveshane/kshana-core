@@ -165,7 +165,7 @@ export function App() {
                     )}
                   </button>
                 </div>
-                {state.activeView === 'chat' ? <ChatTimeline /> : <TimelineView />}
+                {state.activeView === 'chat' ? <ChatTimeline onSendWs={send} /> : <TimelineView />}
                 {showNewProject && (
                   <NewProjectInline
                     onReady={(config) => {

@@ -1,9 +1,14 @@
 import { useRef, useEffect } from 'react'
-import { useAppState } from '../lib/store'
+import { useAppState, useAppDispatch } from '../lib/store'
 import { ToolCallCard } from './ToolCallCard'
 
-export function ChatTimeline() {
+interface ChatTimelineProps {
+  onSendWs?: (msg: Record<string, unknown>) => void
+}
+
+export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
   const { chatMessages, toolCalls, streamingText, agentStatus, selectedProject } = useAppState()
+  const dispatch = useAppDispatch()
   const bottomRef = useRef<HTMLDivElement>(null)
 
   // Auto-scroll on new content
@@ -33,8 +38,21 @@ export function ChatTimeline() {
     <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
       {/* Project info banner */}
       {selectedProject && (
-        <div className="glass-panel px-4 py-3 text-sm text-graphite-100">
-          Project: <span className="text-foreground font-medium">{selectedProject}</span>
+        <div className="glass-panel px-4 py-3 text-sm text-graphite-100 flex items-center justify-between">
+          <span>
+            Project: <span className="text-foreground font-medium">{selectedProject}</span>
+          </span>
+          {agentStatus !== 'thinking' && onSendWs && (
+            <button
+              onClick={() => {
+                onSendWs({ type: 'start_task', data: { task: 'continue' } })
+                dispatch({ type: 'SET_AGENT_STATUS', status: 'thinking' })
+              }}
+              className="px-3 py-1.5 rounded-md text-xs font-mono bg-cyan/20 text-cyan hover:bg-cyan/30 border border-cyan/20 transition-colors cursor-pointer"
+            >
+              Run
+            </button>
+          )}
         </div>
       )}
 
