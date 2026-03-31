@@ -204,9 +204,16 @@ function StructuredContentCard({ content }: { content: string }) {
   )
 }
 
+/** Try to extract a shot count from streaming JSON array content */
+function countJsonShots(text: string): number {
+  const matches = text.match(/"shotNumber"\s*:/g)
+  return matches?.length ?? 0
+}
+
 /** Content generation body — LLM writing (story, character, scene, etc.) */
-function ContentBody({ args, streamingContent }: { args: Record<string, string>; streamingContent?: string }) {
+function ContentBody({ args, streamingContent, toolName }: { args: Record<string, string>; streamingContent?: string; toolName: string }) {
   const [showPrompt, setShowPrompt] = useState(false)
+  const [showRaw, setShowRaw] = useState(false)
   const item = args['item']
   const prompt = args['prompt']
   const skills = args['skills']
@@ -218,6 +225,11 @@ function ContentBody({ args, streamingContent }: { args: Record<string, string>;
     item.toLowerCase().includes('world style')
   )
   const hasContent = streamingContent && streamingContent.length > 50
+
+  // Detect JSON content (shot_image_prompt, scene_video_prompt output)
+  const trimmedContent = streamingContent?.trim() ?? ''
+  const isJsonContent = trimmedContent.startsWith('[') || trimmedContent.startsWith('{')
+  const isJsonTool = toolName.includes('shot_image_prompt') || toolName.includes('scene_video_prompt')
 
   return (
     <div className="space-y-1.5">
@@ -241,7 +253,24 @@ function ContentBody({ args, streamingContent }: { args: Record<string, string>;
           {prompt}
         </div>
       )}
-      {hasContent && isStructured ? (
+      {hasContent && isJsonContent && isJsonTool ? (
+        <div className="px-3 pb-2 space-y-1">
+          <div className="text-xs text-graphite-050">
+            Generating structured JSON...
+            {countJsonShots(trimmedContent) > 0 && (
+              <span className="ml-2 text-cyan">{countJsonShots(trimmedContent)} shots written</span>
+            )}
+          </div>
+          <button onClick={() => setShowRaw(!showRaw)} className="text-[10px] text-graphite-200 hover:text-graphite-100 cursor-pointer">
+            {showRaw ? 'Hide raw output' : 'Show raw output'}
+          </button>
+          {showRaw && (
+            <pre className="p-2 rounded bg-graphite-300/50 border border-line-soft text-[10px] text-graphite-050 max-h-48 overflow-auto font-mono">
+              {trimmedContent}
+            </pre>
+          )}
+        </div>
+      ) : hasContent && isStructured ? (
         <StructuredContentCard content={streamingContent!} />
       ) : streamingContent ? (
         <div className="px-3 pb-2 max-h-72 overflow-y-auto">
@@ -481,7 +510,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
   // Per-type body renderer
   const renderBody = () => {
     if (isContentGen) {
-      return <ContentBody args={args ?? {}} streamingContent={meaningfulContent} />
+      return <ContentBody args={args ?? {}} streamingContent={meaningfulContent} toolName={toolName} />
     }
     switch (toolName) {
       case 'generate_image':
