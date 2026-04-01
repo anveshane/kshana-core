@@ -2378,8 +2378,12 @@ Rules:
       }
       this.emitTodoUpdate();
 
-      // Timeline: create skeleton on first scene, then split this scene into shots
-      if (!this.timeline) {
+      // Timeline: create/recreate skeleton on first scene expansion, then split into shots.
+      // Always recreate if the timeline has per-shot segments from a previous run
+      // (stale after reset — scene_1 segments don't exist, only scene_1_shot_N).
+      const needsReinit = !this.timeline ||
+        !this.timeline.segments.some(s => s.id === sceneId);
+      if (needsReinit) {
         this.initializeTimelineFromScenes();
       }
       if (this.timeline && items.shots?.length) {
