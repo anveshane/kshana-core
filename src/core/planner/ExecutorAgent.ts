@@ -1727,6 +1727,61 @@ Rules:
 
         if (didExpand) continue;
 
+        // Strategy C: For collections that depend on 'story' (scene, character, setting),
+        // run extractCollectionItems on the story output to determine items.
+        // This handles post-reset state where story is completed but per-item nodes don't exist.
+        if (!didExpand) {
+          const storyNode = allNodes.find(n => n.typeId === 'story' && n.status === 'completed' && n.outputPath);
+          if (storyNode?.outputPath && typeDef.dependencies.some(d => d.artifactTypeId === 'story')) {
+            const storyPath = join(this.config.projectDir, storyNode.outputPath);
+            if (existsSync(storyPath)) {
+              try {
+                const storyContent = readFileSync(storyPath, 'utf-8');
+                const extracted = await extractCollectionItems(
+                  storyNode, storyContent, this.llm,
+                  this.config.goal.preferences.duration as number | undefined,
+                );
+                let itemList: Array<{ itemId: string; name: string }> = [];
+
+                if (node.typeId === 'scene' && extracted?.scenes?.length) {
+                  itemList = extracted.scenes.map((s: any) => ({
+                    itemId: `scene_${s.sceneNumber}`,
+                    name: s.title || `Scene ${s.sceneNumber}`,
+                  }));
+                } else if (node.typeId === 'character' && extracted?.characters?.length) {
+                  itemList = extracted.characters.map((c: string) => ({
+                    itemId: c.toLowerCase().replace(/\s+/g, '_'),
+                    name: c,
+                  }));
+                } else if (node.typeId === 'setting' && extracted?.settings?.length) {
+                  itemList = extracted.settings.map((s: string) => ({
+                    itemId: s.toLowerCase().replace(/\s+/g, '_'),
+                    name: s,
+                  }));
+                }
+
+                if (itemList.length > 0) {
+                  this.log(`  Strategy C: Expanding ${node.id} → ${itemList.length} items from story extraction`);
+                  this.executor.expandCollection(node.id, itemList);
+                  this.emit({
+                    type: 'notification',
+                    level: 'info',
+                    message: `Expanded ${node.displayName}: ${itemList.map(i => i.name).join(', ')}`,
+                  });
+                  didExpand = true;
+                  expanded = true;
+                } else {
+                  this.log(`  Strategy C: no ${node.typeId} items found in story`);
+                }
+              } catch (err) {
+                this.log(`  Strategy C failed: ${err}`);
+              }
+            }
+          }
+        }
+
+        if (didExpand) continue;
+
         // Strategy 2: For per-scene shot nodes, read scene_video_prompt output to extract shots
         for (const depId of node.dependencies) {
           const dep = this.executor.getNode(depId);

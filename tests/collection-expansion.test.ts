@@ -70,7 +70,13 @@ function createExecutor(nodes: Record<string, Partial<ExecutionNode>>): Dependen
     } as ExecutionNode;
   }
   return DependencyGraphExecutor.fromState(
-    { nodes: fullNodes, completedCount: 0, failedCount: 0, totalCount: Object.keys(fullNodes).length },
+    {
+      nodes: fullNodes,
+      targetArtifacts: [],
+      goalDescription: 'test',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    },
     minimalTemplate,
   );
 }
