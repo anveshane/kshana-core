@@ -59,16 +59,17 @@ function computeResetTypes(startType: string): string[] {
   return Array.from(result);
 }
 
-// Stage aliases for user convenience (map friendly names to type IDs)
-const STAGE_ALIASES: Record<string, string> = {
+// Stage aliases for user convenience
+// Values can be a single type or multiple (for sibling resets)
+const STAGE_ALIASES: Record<string, string | string[]> = {
   plot: 'plot',
   story: 'story',
-  characters: 'character',  // "characters" resets both character + setting
+  characters: ['character', 'setting'],     // resets both character + setting (siblings)
   character: 'character',
   setting: 'setting',
   scene: 'scene',
   world_style: 'world_style',
-  character_image: 'character_image',
+  character_image: ['character_image', 'setting_image'],  // resets both image types (siblings)
   setting_image: 'setting_image',
   scene_video_prompt: 'scene_video_prompt',
   shot_image_prompt: 'shot_image_prompt',
@@ -134,24 +135,18 @@ function main() {
   }
 
   const [projectName, stage] = args;
-  const startType = STAGE_ALIASES[stage!];
-  if (!startType) {
+  const aliasValue = STAGE_ALIASES[stage!];
+  if (!aliasValue) {
     console.error(`Unknown stage: ${stage}`);
     console.error('Valid stages:', Object.keys(STAGE_ALIASES).join(', '));
     process.exit(1);
   }
 
-  // "characters" is special — reset both character and setting (they're siblings)
-  let resetTypes: string[];
-  if (stage === 'characters') {
-    const charTypes = computeResetTypes('character');
-    const settingTypes = computeResetTypes('setting');
-    resetTypes = [...new Set([...charTypes, ...settingTypes])];
-  } else {
-    resetTypes = computeResetTypes(startType);
-  }
+  // Resolve alias — can be a single type or array of sibling types
+  const startTypes = Array.isArray(aliasValue) ? aliasValue : [aliasValue];
+  const resetTypes = [...new Set(startTypes.flatMap(t => computeResetTypes(t)))];
 
-  console.log(`Reset types (from ${stage} → ${startType}): ${resetTypes.join(', ')}`);
+  console.log(`Reset types (from ${stage} → ${startTypes.join(', ')}): ${resetTypes.join(', ')}`);
 
   const projectDir = join(process.cwd(), `${projectName}.kshana`);
   const projectPath = join(projectDir, 'project.json');
