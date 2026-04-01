@@ -30,19 +30,52 @@
 import { readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync } from 'fs';
 import { join } from 'path';
 
-// Pipeline stages in order — each stage includes the types that get reset
-const STAGES: Record<string, string[]> = {
-  plot: ['plot', 'story', 'character', 'setting', 'scene', 'world_style', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
-  story: ['story', 'character', 'setting', 'scene', 'world_style', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
-  characters: ['character', 'setting', 'scene', 'world_style', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
-  world_style: ['world_style', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
-  character_image: ['character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
-  scene_video_prompt: ['scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video', 'final_video'],
-  shot_image_prompt: ['shot_image_prompt', 'shot_image', 'shot_video', 'final_video'],
-  shot_motion_directive: ['shot_motion_directive', 'shot_video', 'final_video'],
-  shot_image: ['shot_image', 'shot_video', 'final_video'],
-  shot_video: ['shot_video', 'final_video'],
-  final_video: ['final_video'],
+/**
+ * Compute the full set of types to reset by traversing the dependency graph downstream.
+ * Given a starting type, finds all types that directly or transitively depend on it.
+ */
+function computeResetTypes(startType: string): string[] {
+  // Build inverse graph: type → types that depend on it (dependents)
+  const dependents: Record<string, string[]> = {};
+  for (const [type, deps] of Object.entries(TEMPLATE_DEPS)) {
+    for (const dep of deps) {
+      if (!dependents[dep]) dependents[dep] = [];
+      dependents[dep]!.push(type);
+    }
+  }
+
+  // BFS from startType to find all downstream types
+  const result = new Set<string>([startType]);
+  const queue = [startType];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const dependent of dependents[current] ?? []) {
+      if (!result.has(dependent)) {
+        result.add(dependent);
+        queue.push(dependent);
+      }
+    }
+  }
+  return Array.from(result);
+}
+
+// Stage aliases for user convenience (map friendly names to type IDs)
+const STAGE_ALIASES: Record<string, string> = {
+  plot: 'plot',
+  story: 'story',
+  characters: 'character',  // "characters" resets both character + setting
+  character: 'character',
+  setting: 'setting',
+  scene: 'scene',
+  world_style: 'world_style',
+  character_image: 'character_image',
+  setting_image: 'setting_image',
+  scene_video_prompt: 'scene_video_prompt',
+  shot_image_prompt: 'shot_image_prompt',
+  shot_motion_directive: 'shot_motion_directive',
+  shot_image: 'shot_image',
+  shot_video: 'shot_video',
+  final_video: 'final_video',
 };
 
 // Template dependency map: typeId → required dependency typeIds
@@ -88,22 +121,37 @@ interface ExecutionNode {
   artifactId?: string;
 }
 
+// Export for testing
+export { computeResetTypes, TEMPLATE_DEPS, STAGE_ALIASES };
+
 function main() {
   const args = process.argv.slice(2);
   if (args.length < 2) {
     console.error('Usage: pnpm tsx scripts/reset-project.ts <project-name> <stage>');
     console.error('');
-    console.error('Stages:', Object.keys(STAGES).join(', '));
+    console.error('Stages:', Object.keys(STAGE_ALIASES).join(', '));
     process.exit(1);
   }
 
   const [projectName, stage] = args;
-  const resetTypes = STAGES[stage!];
-  if (!resetTypes) {
+  const startType = STAGE_ALIASES[stage!];
+  if (!startType) {
     console.error(`Unknown stage: ${stage}`);
-    console.error('Valid stages:', Object.keys(STAGES).join(', '));
+    console.error('Valid stages:', Object.keys(STAGE_ALIASES).join(', '));
     process.exit(1);
   }
+
+  // "characters" is special — reset both character and setting (they're siblings)
+  let resetTypes: string[];
+  if (stage === 'characters') {
+    const charTypes = computeResetTypes('character');
+    const settingTypes = computeResetTypes('setting');
+    resetTypes = [...new Set([...charTypes, ...settingTypes])];
+  } else {
+    resetTypes = computeResetTypes(startType);
+  }
+
+  console.log(`Reset types (from ${stage} → ${startType}): ${resetTypes.join(', ')}`);
 
   const projectDir = join(process.cwd(), `${projectName}.kshana`);
   const projectPath = join(projectDir, 'project.json');
@@ -383,4 +431,8 @@ function main() {
   console.log(`  Final state: ${completed} completed, ${pending} pending, ${remaining.length} total`);
 }
 
-main();
+// Only run when executed directly (not when imported for testing)
+const isDirectExecution = process.argv[1]?.endsWith('reset-project.ts');
+if (isDirectExecution) {
+  main();
+}
