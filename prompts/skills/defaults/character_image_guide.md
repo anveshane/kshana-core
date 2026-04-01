@@ -20,11 +20,22 @@
 
 9. **UNIQUE FEATURES** — Scars, markings, missing limbs, glowing elements, accessories, tattoos, non-human anatomy (e.g., "small scar above left eyebrow, single chain necklace with locket", "missing left forearm sealed with hardened biological material, cracked torso skin emitting bioluminescent glow from within").
 
-10. **HISTORICAL / WORLD CONTEXT** — If the character profile or world style bible indicates a specific time period, culture, or setting era, you MUST include this in the prompt. The image generator has no other way to know the period. Examples:
-    - Ancient India: "ancient Mauryan Empire era (300 BC), traditional Indian garments of the period"
-    - Medieval Europe: "14th century European, Gothic period clothing and accessories"
+10. **HISTORICAL / WORLD CONTEXT** — If the character profile or world style bible indicates a specific time period, culture, or setting era, you MUST include this in the prompt. The image generator has no other way to know the period, and will default to modern interpretations if you use generic terms.
+
+    **CRITICAL: Use period-specific terms, NOT modern equivalents.** The image model maps generic words to modern objects. Examples of what to do:
+    - Footwear: "flat wooden paduka sandals" NOT "leather sandals" (which produces modern chappals)
+    - Upper garment: "draped uttariya cloth" NOT "shawl" (which produces modern fabric)
+    - Lower garment: "antariya dhoti wrapped at the waist" NOT "pants" or "trousers"
+    - Weapons: "iron katar punch-dagger at belt" NOT "knife"
+    - Jewelry: "hammered copper armband" NOT "bracelet"
+
+    Period examples:
+    - Ancient India (300 BC): "ancient Mauryan Empire era, draped unstitched cotton garments (uttariya and antariya), flat wooden paduka sandals, no stitched clothing"
+    - Medieval Europe: "14th century European, Gothic period wool tunic with leather belt, pointed poulaine shoes"
     - Cyberpunk future: "near-future cyberpunk aesthetic, neon-lit urban tech"
     - If no specific period: omit this element (modern/contemporary is the default)
+
+11. **WORLD STYLE "AVOID" LIST** — If the world style bible contains an "Avoid" section, incorporate those constraints into the negative prompt. For example, if the world style says "Avoid: bright saturated colors, modern neons, clean whites", add those to the negative prompt.
 
 **REQUIRED ELEMENTS — include these in every prompt regardless of character type:**
 - Shot type: "full-body portrait" unless the profile specifies otherwise
@@ -39,7 +50,7 @@
 [One paragraph, 80–250 words, flowing prose. All 9 fields above embedded naturally in sentences. Must include shot type, plain neutral studio background, soft even studio lighting, one subject only.]
 
 **Negative Prompt:**
-background scene, environment, landscape, buildings, furniture, multiple people, busy background, motion blur, cropped face, text, watermarks
+background scene, environment, landscape, buildings, furniture, multiple people, busy background, motion blur, cropped face, text, watermarks, [add any "Avoid" items from the world style bible here, e.g., modern clothing, bright saturated colors, contemporary accessories]
 
 **Aspect Ratio:**
 1:1

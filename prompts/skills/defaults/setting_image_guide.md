@@ -164,6 +164,23 @@ For fantastical settings, describe them as **practical film sets built from real
 
 ---
 
+## World Style Integration
+
+If a **world style bible** is provided in the context:
+
+1. **Color Palette** — Use the world style's dominant and accent colors instead of inventing your own. If the style says "deep charcoal black, warm amber/gold, wet stone grey" then those are your dominant colors.
+
+2. **Lighting** — Match the world style's lighting description. If it says "overhead brass oil lamps creating pools of amber glow, harsh downward fall-off, no fill" then use that, not generic studio lighting.
+
+3. **Materials** — Use materials consistent with the period and style. If the world style describes "fired clay, mud-brick, iron brackets, carved stone eaves" then use those specific materials.
+
+4. **"Avoid" list** — If the world style has an "Avoid" section, add those items to the negative prompt. For example: "Avoid: bright saturated colors, modern neons, clean whites" → add to negative prompt.
+
+5. **Period accuracy** — Use period-specific terms for all objects. Do not use modern equivalents that the image model will interpret as contemporary items:
+   - "iron torch bracket" not "wall light"
+   - "carved stone eave" not "overhang"
+   - "brass oil lamp on iron chain" not "pendant light"
+
 ## Quality Checklist
 
 Before finalizing, verify:
