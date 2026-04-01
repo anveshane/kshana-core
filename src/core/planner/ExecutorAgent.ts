@@ -1624,12 +1624,17 @@ Rules:
         // Strategy 1: Find upstream per-item nodes to determine item set
         // Look at the template to find which dependency has 'matching' scope
         const typeDef = this.config.template.artifactTypes[node.typeId];
-        if (!typeDef) continue;
+        if (!typeDef) {
+          this.log(`  expandPendingCollections: no typeDef for ${node.typeId}`);
+          continue;
+        }
 
         let didExpand = false;
+        this.log(`  expandPendingCollections: checking ${node.id} (${typeDef.dependencies.length} deps)`);
 
         for (const dep of typeDef.dependencies) {
           if (dep.scope !== 'matching') continue;
+          this.log(`    dep ${dep.artifactTypeId} scope=matching`);
 
           // Strategy A: Find completed per-item nodes of this dependency type
           const upstreamItems = allNodes
@@ -1651,7 +1656,7 @@ Rules:
           }
 
           // Strategy B: No per-item nodes exist (post-reset collapsed state).
-          // Read the type-level upstream node's output to extract items.
+          // Scan the output content for item patterns (SCENE 1, SCENE 2, etc.)
           const upstreamTypeLevel = allNodes.find(
             n => n.typeId === dep.artifactTypeId && !n.itemId && n.status === 'completed' && n.outputPath
           );
@@ -1660,30 +1665,45 @@ Rules:
             if (existsSync(fullPath)) {
               try {
                 const content = readFileSync(fullPath, 'utf-8');
-                const extracted = await extractCollectionItems(
-                  upstreamTypeLevel, content, this.llm,
-                  this.config.goal.preferences.duration as number | undefined,
-                );
-                // Determine items based on what was extracted
                 let itemList: Array<{ itemId: string; name: string }> = [];
-                if (extracted?.scenes?.length) {
-                  itemList = extracted.scenes.map((s: any) => ({
-                    itemId: `scene_${s.sceneNumber}`,
-                    name: s.title || `Scene ${s.sceneNumber}`,
-                  }));
-                } else if (extracted?.characters?.length) {
-                  itemList = extracted.characters.map((c: string) => ({
-                    itemId: c.toLowerCase().replace(/\s+/g, '_'),
-                    name: c,
-                  }));
-                } else if (extracted?.settings?.length) {
-                  itemList = extracted.settings.map((s: string) => ({
-                    itemId: s.toLowerCase().replace(/\s+/g, '_'),
-                    name: s,
-                  }));
+
+                // Parse scene numbers from content patterns like "SCENE 1:", "## Scene 2", etc.
+                if (dep.artifactTypeId === 'scene' || dep.artifactTypeId === 'story') {
+                  const sceneMatches = content.matchAll(/\bSCENE\s+(\d+)[:\s—–-]+([^\n*]+)/gi);
+                  const seen = new Set<number>();
+                  for (const m of sceneMatches) {
+                    const num = parseInt(m[1]!, 10);
+                    if (!seen.has(num)) {
+                      seen.add(num);
+                      itemList.push({ itemId: `scene_${num}`, name: m[2]!.trim().substring(0, 60) });
+                    }
+                  }
                 }
+
+                // Parse character names from content
+                if (dep.artifactTypeId === 'character' && itemList.length === 0) {
+                  const charMatches = content.matchAll(/^##\s+(.+)/gm);
+                  for (const m of charMatches) {
+                    const name = m[1]!.trim();
+                    if (name.length > 2 && !name.startsWith('#')) {
+                      itemList.push({ itemId: name.toLowerCase().replace(/\s+/g, '_'), name });
+                    }
+                  }
+                }
+
+                // Parse setting names from content
+                if (dep.artifactTypeId === 'setting' && itemList.length === 0) {
+                  const settingMatches = content.matchAll(/^#\s+(.+)/gm);
+                  for (const m of settingMatches) {
+                    const name = m[1]!.trim();
+                    if (name.length > 2) {
+                      itemList.push({ itemId: name.toLowerCase().replace(/\s+/g, '_'), name });
+                    }
+                  }
+                }
+
                 if (itemList.length > 0) {
-                  this.log(`  Expanding type-level ${node.id} → ${itemList.length} items from ${dep.artifactTypeId} output content`);
+                  this.log(`  Expanding type-level ${node.id} → ${itemList.length} items from ${dep.artifactTypeId} output: ${itemList.map(i => i.itemId).join(', ')}`);
                   this.executor.expandCollection(node.id, itemList);
                   this.emit({
                     type: 'notification',
@@ -1693,11 +1713,15 @@ Rules:
                   didExpand = true;
                   expanded = true;
                   break;
+                } else {
+                  this.log(`  Strategy B: no items found in ${dep.artifactTypeId} output (${content.length} chars)`);
                 }
               } catch (err) {
-                this.log(`  Failed to extract items from ${upstreamTypeLevel.outputPath}: ${err}`);
+                this.log(`  Failed to parse items from ${upstreamTypeLevel.outputPath}: ${err}`);
               }
             }
+          } else {
+            this.log(`    No type-level ${dep.artifactTypeId} node with output found`);
           }
         }
 
