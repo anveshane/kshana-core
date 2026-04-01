@@ -145,6 +145,11 @@ export class DependencyGraphExecutor {
     for (const node of this.nodes.values()) {
       if (node.status !== 'pending') continue;
 
+      // Type-level collection nodes (isCollection=true, no itemId) must be expanded
+      // into per-item nodes before execution — never generate directly.
+      // This prevents monolithic LLM calls for all scenes/shots at once.
+      if (node.isCollection && !node.itemId) continue;
+
       const allDepsSatisfied = node.dependencies.every(depId => {
         const dep = this.nodes.get(depId);
         return dep && (dep.status === 'completed' || dep.status === 'skipped');

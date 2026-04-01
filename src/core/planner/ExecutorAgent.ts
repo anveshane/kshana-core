@@ -639,6 +639,8 @@ export class ExecutorAgent extends TypedEventEmitter {
       const MAX_SELF_REPAIRS = 3;
 
       while (!this.executor.isComplete() && !this.stopped) {
+        // Expand any type-level collections before checking for ready nodes
+        await this.expandPendingCollections();
         const readyNodes = this.executor.getNextReady();
 
         if (readyNodes.length === 0) {
@@ -1595,48 +1597,92 @@ Rules:
    * This handles session resume where e.g. scene_video_prompt completed in a prior
    * run but shot_image_prompt wasn't expanded into per-shot nodes.
    */
+  /**
+   * Expand pending type-level collection nodes into per-item nodes.
+   *
+   * This handles two cases:
+   * 1. Scene-level expansion: type-level `scene_video_prompt` → per-scene nodes
+   *    (by finding completed per-item nodes of the matching-scope dependency type)
+   * 2. Shot-level expansion: per-scene `shot_image_prompt:scene_N` → per-shot nodes
+   *    (by reading the scene_video_prompt output to extract shots)
+   *
+   * Called at startup and during the execution loop to handle post-reset state
+   * where type-level collections exist but haven't been expanded yet.
+   */
   private async expandPendingCollections(): Promise<void> {
     const allNodes = this.executor.getAllNodes();
+    let expanded = true;
 
-    for (const node of allNodes) {
-      if (!node.isCollection || node.status !== 'pending') continue;
+    // Keep expanding until no more expansions happen (handles cascading: scene → SVP → shot)
+    while (expanded) {
+      expanded = false;
 
-      // Check if all dependencies are completed
-      const allDepsComplete = node.dependencies.every(depId => {
-        const dep = this.executor.getNode(depId);
-        return dep && (dep.status === 'completed' || dep.status === 'skipped');
-      });
-      if (!allDepsComplete) continue;
+      for (const node of this.executor.getAllNodes()) {
+        if (!node.isCollection || node.status !== 'pending') continue;
+        if (node.itemId) continue; // Already a per-item node — skip (only expand type-level)
 
-      // This collection node is ready but not expanded.
-      // Find the dependency that produces collection items and extract from it.
-      for (const depId of node.dependencies) {
-        const dep = this.executor.getNode(depId);
-        if (!dep?.outputPath || dep.typeId !== 'scene_video_prompt') continue;
+        // Strategy 1: Find upstream per-item nodes to determine item set
+        // Look at the template to find which dependency has 'matching' scope
+        const typeDef = this.config.template.artifactTypes[node.typeId];
+        if (!typeDef) continue;
 
-        const fullPath = join(this.config.projectDir, dep.outputPath);
-        if (!existsSync(fullPath)) continue;
+        let didExpand = false;
 
-        const content = readFileSync(fullPath, 'utf-8');
-        const items = await extractCollectionItems(dep, content, this.llm, this.config.goal.preferences.duration as number | undefined);
-        if (!items?.shots?.length) continue;
+        for (const dep of typeDef.dependencies) {
+          if (dep.scope !== 'matching') continue;
 
-        const sceneId = dep.itemId;
-        if (!sceneId) continue;
+          // Find completed per-item nodes of this dependency type
+          const upstreamItems = allNodes
+            .filter(n => n.typeId === dep.artifactTypeId && n.itemId &&
+              (n.status === 'completed' || n.status === 'pending'))
+            .map(n => ({ itemId: n.itemId!, name: n.displayName.split(': ').pop() ?? n.itemId! }));
 
-        const shotItems = items.shots.map(s => ({
-          itemId: `${sceneId}_shot_${s.shotNumber}`,
-          name: `Shot ${s.shotNumber}: ${s.shotType}`,
-        }));
+          if (upstreamItems.length > 0) {
+            this.log(`  Expanding type-level ${node.id} → ${upstreamItems.length} items from ${dep.artifactTypeId}`);
+            this.executor.expandCollection(node.id, upstreamItems);
+            this.emit({
+              type: 'notification',
+              level: 'info',
+              message: `Expanded ${node.displayName}: ${upstreamItems.map(i => i.name).join(', ')}`,
+            });
+            didExpand = true;
+            expanded = true;
+            break;
+          }
+        }
 
-        this.log(`  Startup expansion: ${node.id} → ${shotItems.map(i => i.name).join(', ')}`);
-        this.executor.expandCollection(node.id, shotItems);
-        this.emit({
-          type: 'notification',
-          level: 'info',
-          message: `Expanded ${node.displayName}: ${shotItems.map(i => i.name).join(', ')}`,
-        });
-        break; // Only need one dependency to trigger expansion
+        if (didExpand) continue;
+
+        // Strategy 2: For per-scene shot nodes, read scene_video_prompt output to extract shots
+        for (const depId of node.dependencies) {
+          const dep = this.executor.getNode(depId);
+          if (!dep?.outputPath || dep.typeId !== 'scene_video_prompt') continue;
+
+          const fullPath = join(this.config.projectDir, dep.outputPath);
+          if (!existsSync(fullPath)) continue;
+
+          const content = readFileSync(fullPath, 'utf-8');
+          const items = await extractCollectionItems(dep, content, this.llm, this.config.goal.preferences.duration as number | undefined);
+          if (!items?.shots?.length) continue;
+
+          const sceneId = dep.itemId;
+          if (!sceneId) continue;
+
+          const shotItems = items.shots.map(s => ({
+            itemId: `${sceneId}_shot_${s.shotNumber}`,
+            name: `Shot ${s.shotNumber}: ${s.shotType}`,
+          }));
+
+          this.log(`  Startup expansion: ${node.id} → ${shotItems.map(i => i.name).join(', ')}`);
+          this.executor.expandCollection(node.id, shotItems);
+          this.emit({
+            type: 'notification',
+            level: 'info',
+            message: `Expanded ${node.displayName}: ${shotItems.map(i => i.name).join(', ')}`,
+          });
+          expanded = true;
+          break;
+        }
       }
     }
   }
