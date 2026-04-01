@@ -3249,16 +3249,13 @@ Rules:
       return null;
     }
 
-    // 3. Resolve active workflow name for display
+    // 3. Resolve active workflow name for display — use strategy-aware routing
     let activeWorkflowName = 'LTX-2.3 (built-in)';
     try {
-      const { getWorkflowModeRegistry } = await import('../../services/providers/WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
-      const override = modeRegistry.getActiveForPipeline('video_generation', 'comfyui');
-      if (override?.isOverride && !override.builtIn) {
-        activeWorkflowName = override.displayName;
-      } else if (override) {
-        activeWorkflowName = override.displayName;
+      const resolved = modeRegistry.getWorkflowForStrategy(generationStrategy, 'comfyui');
+      if (resolved) {
+        activeWorkflowName = resolved.displayName;
       }
     } catch { /* ignore */ }
 
