@@ -381,13 +381,39 @@ function main() {
     }
   }
 
-  // Phase 6: Clean up output directories for shot-related files
+  // Phase 6: Clean up output directories and intermediate files for reset types
+  // Maps artifact types to directories that should be cleaned
+  const TYPE_DIRS: Record<string, Array<{ dir: string; extensions: string[] }>> = {
+    character_image: [
+      { dir: join(projectDir, 'prompts', 'images', 'characters'), extensions: ['.json'] },
+    ],
+    setting_image: [
+      { dir: join(projectDir, 'prompts', 'images', 'settings'), extensions: ['.json'] },
+    ],
+    scene_video_prompt: [
+      { dir: join(projectDir, 'prompts', 'videos', 'scenes'), extensions: ['.json'] },
+    ],
+    shot_image_prompt: [
+      { dir: join(projectDir, 'prompts', 'images', 'shots'), extensions: ['.json'] },
+    ],
+    shot_motion_directive: [
+      { dir: join(projectDir, 'prompts', 'motion'), extensions: ['.txt', '.md'] },
+    ],
+    shot_image: [
+      { dir: join(projectDir, 'assets', 'images'), extensions: ['.png', '.jpg', '.jpeg', '.webp'] },
+    ],
+    shot_video: [
+      { dir: join(projectDir, 'assets', 'videos', 'shots'), extensions: ['.mp4', '.webm'] },
+    ],
+    final_video: [
+      { dir: join(projectDir, 'assets', 'videos', 'final'), extensions: ['.mp4', '.webm'] },
+    ],
+  };
+
   const cleanDirs: Array<{ dir: string; extensions: string[] }> = [];
-  if (resetTypeSet.has('scene_video_prompt')) {
-    cleanDirs.push({ dir: join(projectDir, 'prompts', 'videos', 'scenes'), extensions: ['.json'] });
-  }
-  if (resetTypeSet.has('shot_image_prompt')) {
-    cleanDirs.push({ dir: join(projectDir, 'prompts', 'images', 'shots'), extensions: ['.json'] });
+  for (const resetType of resetTypes) {
+    const dirs = TYPE_DIRS[resetType];
+    if (dirs) cleanDirs.push(...dirs);
   }
 
   for (const { dir, extensions } of cleanDirs) {
