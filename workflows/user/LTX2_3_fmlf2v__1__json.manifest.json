@@ -1,0 +1,120 @@
+{
+  "id": "LTX2_3_fmlf2v__1__json",
+  "displayName": "LTX2.3 FMLF2V",
+  "pipeline": "video_generation",
+  "llmDescription": "This workflow generates video with synchronized audio using the LTXV (Lightricks) model. It accepts up to three input frames (first, mid, last) for guided generation, performs a two-pass sampling pipeline (base generation followed by latent spatial upscaling), and outputs a combined video+audio file via VHS_VideoCombine.",
+  "selectionCriteria": "Use this workflow when the user wants to generate video from from one or more reference images with audio, especially when multi-frame conditioning (first/mid/last frame). Choose over simpler video workflows when audio generation or image-to-video with multiple reference frames is needed. ",
+  "outputType": "video",
+  "priority": 10,
+  "inputRequirements": [
+    {
+      "id": "seed",
+      "type": "text",
+      "source": "system",
+      "description": "seed",
+      "required": true
+    },
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "shot_motion_directive",
+      "description": "prompt",
+      "required": true
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "description": "filenamePrefix",
+      "required": true
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "system",
+      "description": "negative_prompt",
+      "required": true
+    },
+    {
+      "id": "first_frame",
+      "type": "image",
+      "source": "shot_image",
+      "description": "first_frame",
+      "required": true
+    },
+    {
+      "id": "reference_image_1",
+      "type": "image",
+      "source": "shot_image",
+      "description": "reference_image_1",
+      "required": true
+    },
+    {
+      "id": "reference_image_2",
+      "type": "image",
+      "source": "shot_image",
+      "description": "reference_image_2",
+      "required": true
+    }
+  ],
+  "workflowFile": "LTX2_3_fmlf2v__1__json.json",
+  "format": "litegraph",
+  "parameterMappings": [
+    {
+      "input": "seed",
+      "nodeId": "283",
+      "field": "value"
+    },
+    {
+      "input": "seed",
+      "nodeId": "393",
+      "field": "value"
+    },
+    {
+      "input": "seed",
+      "nodeId": "275",
+      "field": "noise_seed"
+    },
+    {
+      "input": "seed",
+      "nodeId": "386",
+      "field": "noise_seed"
+    },
+    {
+      "input": "prompt",
+      "nodeId": "304",
+      "field": "text"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "377",
+      "field": "filename_prefix"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "315",
+      "field": "text"
+    },
+    {
+      "input": "first_frame",
+      "nodeId": "269",
+      "field": "image"
+    },
+    {
+      "input": "reference_image_1",
+      "nodeId": "430",
+      "field": "image"
+    },
+    {
+      "input": "reference_image_2",
+      "nodeId": "431",
+      "field": "image"
+    }
+  ],
+  "builtIn": false,
+  "active": true,
+  "isOverride": true,
+  "strategies": [
+    "fmlfv"
+  ]
+}

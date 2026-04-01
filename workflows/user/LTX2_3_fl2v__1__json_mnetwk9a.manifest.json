@@ -1,0 +1,117 @@
+{
+  "id": "LTX2_3_fl2v__1__json_mnetwk9a",
+  "displayName": "LTX-Video 2.3 FLF2V",
+  "pipeline": "video_generation",
+  "llmDescription": "Produces high-quality, temporally coherent video with synchronized audio generation through a two-pass spatial upscaling pipeline, featuring enhanced motion dynamics and support for mage-to-video generation with first/last frame conditioning.",
+  "selectionCriteria": "Use for shots requiring high visual fidelity and smooth motion where key frame images (start/end) are available. Fully control the frames that the Video generation controls.",
+  "outputType": "video",
+  "priority": 10,
+  "inputRequirements": [
+    {
+      "id": "seed",
+      "type": "text",
+      "source": "system",
+      "description": "seed",
+      "required": true
+    },
+    {
+      "id": "first_frame",
+      "type": "text",
+      "source": "system",
+      "description": "first_frame",
+      "required": true
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "description": "filenamePrefix",
+      "required": true
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "system",
+      "description": "negative_prompt",
+      "required": true
+    },
+    {
+      "id": "last_frame",
+      "type": "image",
+      "source": "shot_image",
+      "description": "last_frame",
+      "required": true
+    },
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "shot_motion_directive",
+      "description": "prompt",
+      "required": true
+    }
+  ],
+  "workflowFile": "LTX2_3_fl2v__1__json_mnetwk9a.json",
+  "format": "litegraph",
+  "parameterMappings": [
+    {
+      "input": "seed",
+      "nodeId": "283",
+      "field": "value"
+    },
+    {
+      "input": "seed",
+      "nodeId": "393",
+      "field": "value"
+    },
+    {
+      "input": "seed",
+      "nodeId": "275",
+      "field": "noise_seed"
+    },
+    {
+      "input": "seed",
+      "nodeId": "386",
+      "field": "noise_seed"
+    },
+    {
+      "input": "first_frame",
+      "nodeId": "302",
+      "field": "value"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "377",
+      "field": "filename_prefix"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "315",
+      "field": "text"
+    },
+    {
+      "input": "first_frame",
+      "nodeId": "269",
+      "field": "image"
+    },
+    {
+      "input": "last_frame",
+      "nodeId": "431",
+      "field": "image"
+    },
+    {
+      "input": "prompt",
+      "nodeId": "304",
+      "field": "text"
+    }
+  ],
+  "promptKeywords": {
+    "prepend": "ltx-2.3-22b-distilled-lora-dynamic_fro09_avg_rank_105_bf16, dynamic motion, high quality",
+    "negativeAppend": "static, blurry, low quality, distorted"
+  },
+  "builtIn": false,
+  "active": true,
+  "isOverride": true,
+  "strategies": [
+    "flfv"
+  ]
+}
