@@ -615,9 +615,21 @@ export class ExecutorAgent extends TypedEventEmitter {
     try {
       this.emit({ type: 'agent_status', status: 'thinking', agentName });
 
+      // Validate completed nodes — reset any whose output files are missing
+      // (happens when a reset deletes files but doesn't cascade to all nodes)
+      for (const node of this.executor.getAllNodes()) {
+        if (node.status === 'completed' && node.outputPath) {
+          const fullPath = join(this.config.projectDir, node.outputPath);
+          if (!existsSync(fullPath)) {
+            this.log(`  Output file missing for completed node ${node.id}: ${node.outputPath} — resetting to pending`);
+            node.status = 'pending';
+            node.outputPath = undefined;
+            node.completedAt = undefined;
+          }
+        }
+      }
+
       // Expand any collection nodes whose dependencies are already completed
-      // (handles session resume where scene_video_prompt completed in a prior run
-      // but shot_image_prompt wasn't expanded into per-shot nodes)
       await this.expandPendingCollections();
 
       this.emitTodoUpdate();
