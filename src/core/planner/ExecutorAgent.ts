@@ -365,26 +365,14 @@ export class ExecutorAgent extends TypedEventEmitter {
   private emitTodoUpdate(): void {
     const nodes = this.executor.getAllNodes();
 
-    // Sort in serial execution order: all LLM/content nodes first, then media nodes.
-    // Within each group, sort by topological order then by itemId.
-    // This order is stable regardless of parallel/serial mode.
+    // Sort by dependency/execution order — the order things will actually run.
+    // Uses topological order from the template, then itemId for per-item nodes.
     const creationOrder = this.executor.getGraph().getCreationOrder();
     const typeOrder = new Map<string, number>();
     creationOrder.forEach((typeId, idx) => typeOrder.set(typeId, idx));
 
-    const mediaCategories = new Set(['visual_ref', 'clip', 'final']);
-    const isMediaType = (typeId: string) => {
-      const typeDef = this.config.template.artifactTypes[typeId];
-      return typeDef ? mediaCategories.has(typeDef.category) : false;
-    };
-
     const sorted = [...nodes].sort((a, b) => {
-      // Content nodes before media nodes
-      const aMedia = isMediaType(a.typeId) ? 1 : 0;
-      const bMedia = isMediaType(b.typeId) ? 1 : 0;
-      if (aMedia !== bMedia) return aMedia - bMedia;
-
-      // Within same group, sort by topological order
+      // Sort by topological type order (dependency order)
       const aOrder = typeOrder.get(a.typeId) ?? 999;
       const bOrder = typeOrder.get(b.typeId) ?? 999;
       if (aOrder !== bOrder) return aOrder - bOrder;
