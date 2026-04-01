@@ -59,11 +59,13 @@ export class ComfyUIProvider implements GenerationProvider {
       aspectRatio = '16:9',
       width: overrideWidth,
       height: overrideHeight,
-      seed,
+      seed: inputSeed,
       outputDir,
       filenamePrefix = 'image',
       referenceImages = [],
     } = input;
+    // Randomize seed if not provided — prevents user workflows from reusing the template's fixed seed
+    const seed = inputSeed ?? Math.floor(Math.random() * 2 ** 32);
 
     const registry = getRegistry();
     const client = new ComfyUIClient({ outputDir });
@@ -189,10 +191,11 @@ export class ComfyUIProvider implements GenerationProvider {
       referenceImages = [],
       negativePrompt,
       aspectRatio,
-      seed,
+      seed: inputSeed,
       outputDir,
       filenamePrefix = 'edit',
     } = input;
+    const seed = inputSeed ?? Math.floor(Math.random() * 2 ** 32);
 
     const registry = getRegistry();
 
@@ -302,10 +305,11 @@ export class ComfyUIProvider implements GenerationProvider {
       durationSeconds,
       width,
       height,
-      seed,
+      seed: inputSeed,
       outputDir,
       filenamePrefix = 'video',
     } = input;
+    const seed = inputSeed ?? Math.floor(Math.random() * 2 ** 32);
 
     const isT2V = !sourceImagePath || !fs.existsSync(sourceImagePath);
 
