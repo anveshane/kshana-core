@@ -429,7 +429,27 @@ function main() {
     node.dependents = Array.from(new Set(node.dependents.filter(d => nodeIds.has(d))));
   }
 
-  // Phase 8: Clear completedAt and reset phase
+  // Phase 8: Clean asset manifest — remove entries for deleted files
+  const manifestPath = join(projectDir, 'assets', 'manifest.json');
+  if (existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+      if (manifest.assets && Array.isArray(manifest.assets)) {
+        const before = manifest.assets.length;
+        manifest.assets = manifest.assets.filter((a: { path: string }) => {
+          const assetPath = a.path.startsWith('/') ? a.path : join(projectDir, a.path);
+          return existsSync(assetPath);
+        });
+        const removed = before - manifest.assets.length;
+        if (removed > 0) {
+          writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+          console.log(`  Cleaned manifest: removed ${removed} stale entries (${manifest.assets.length} remaining)`);
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
+
+  // Phase 9: Clear completedAt and reset phase
   if (project.executorState) {
     project.executorState.completedAt = undefined;
     project.executorState.updatedAt = Date.now();

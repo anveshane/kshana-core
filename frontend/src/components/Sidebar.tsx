@@ -79,7 +79,11 @@ export function Sidebar({ onRedoNode }: SidebarProps) {
                   alt={asset.id}
                   className="w-full h-full object-cover"
                   loading="lazy"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                  onError={(e) => {
+                    // Hide entire container, not just the image
+                    const container = (e.target as HTMLImageElement).parentElement;
+                    if (container) container.style.display = 'none';
+                  }}
                 />
               </div>
             ))}
