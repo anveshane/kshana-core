@@ -863,10 +863,13 @@ export class ExecutorAgent extends TypedEventEmitter {
               }
 
               // Check if prompt/output file already exists on disk (from a previous run)
+              // BUT: if any dependency was re-completed more recently than the prompt file,
+              // the prompt is stale and must be regenerated (e.g., after a reset)
               const isMediaNode = nodeCategory === 'visual_ref' || nodeCategory === 'clip';
               if (isMediaNode) {
                 const existingPromptPath = this.findExistingPromptFile(node);
-                if (existingPromptPath) {
+                const promptIsStale = existingPromptPath ? this.isPromptStale(node, existingPromptPath) : false;
+                if (existingPromptPath && !promptIsStale) {
                   this.log(`  Prompt file already exists: ${existingPromptPath} — skipping LLM`);
 
                   if (isMediaNode) {
@@ -1647,6 +1650,29 @@ Rules:
    * - Trailing commas before ] or }
    * - Truncated JSON → close open brackets/braces
    */
+  /**
+   * Check if a cached prompt file is stale — i.e., any dependency node was
+   * completed more recently than the prompt file was written.
+   * This detects prompts from before a reset that need regeneration.
+   */
+  private isPromptStale(node: ExecutionNode, promptPath: string): boolean {
+    try {
+      const { statSync } = require('fs') as typeof import('fs');
+      const promptMtime = statSync(promptPath).mtimeMs;
+
+      for (const depId of node.dependencies) {
+        const depNode = this.executor.getNode(depId);
+        if (depNode?.completedAt && depNode.completedAt > promptMtime) {
+          this.log(`  Prompt file is stale: ${depId} completed at ${new Date(depNode.completedAt).toISOString()} > prompt mtime ${new Date(promptMtime).toISOString()}`);
+          return true;
+        }
+      }
+      return false;
+    } catch {
+      return false; // if we can't stat, assume not stale
+    }
+  }
+
   private repairJson(text: string): string {
     let s = text.trim();
 
