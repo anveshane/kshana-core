@@ -179,7 +179,7 @@ const characterImageArtifact: ArtifactTypeDefinition = {
     },
     {
       artifactTypeId: 'world_style',
-      required: false,
+      required: true,
       usage: 'context',
       scope: 'all',
     },
@@ -213,7 +213,7 @@ const settingImageArtifact: ArtifactTypeDefinition = {
     },
     {
       artifactTypeId: 'world_style',
-      required: false,
+      required: true,
       usage: 'context',
       scope: 'all',
     },
