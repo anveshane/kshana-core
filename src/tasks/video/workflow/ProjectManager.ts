@@ -1397,6 +1397,7 @@ export function updateProjectConfiguration(
     templateId: string;
     style: ProjectStyle;
     duration: number;
+    autonomousMode?: boolean;
   },
   basePath: string = process.cwd(),
 ): boolean {
@@ -1408,6 +1409,10 @@ export function updateProjectConfiguration(
   project.templateId = config.templateId;
   project.style = config.style;
   project.targetDuration = config.duration;
+  project.duration = config.duration;
+  if (typeof config.autonomousMode === 'boolean') {
+    project.autonomousMode = config.autonomousMode;
+  }
   project.goal = {
     targetArtifacts: project.goal?.targetArtifacts ?? ['final_short'],
     description: project.goal?.description ?? '',
@@ -1421,6 +1426,20 @@ export function updateProjectConfiguration(
     ...(project.goal?.achievedAt ? { achievedAt: project.goal.achievedAt } : {}),
   };
 
+  saveProject(project, basePath);
+  return true;
+}
+
+export function updateProjectAutonomousMode(
+  autonomousMode: boolean,
+  basePath: string = process.cwd(),
+): boolean {
+  const project = loadProject(basePath);
+  if (!project) {
+    return false;
+  }
+
+  project.autonomousMode = autonomousMode;
   saveProject(project, basePath);
   return true;
 }

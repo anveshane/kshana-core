@@ -302,6 +302,7 @@ export class WebSocketHandler {
       templateId: data.templateId,
       style: data.style,
       duration: data.duration,
+      autonomousMode: data.autonomousMode,
     });
 
     const toolNames = this.conversationManager.getSessionToolNames(sessionId);
@@ -449,7 +450,10 @@ export class WebSocketHandler {
         projectData = JSON.parse(content);
         templateId = projectData.templateId || templateId;
         style = projectData.style || style;
-        duration = projectData.duration || duration;
+        duration =
+          typeof projectData.targetDuration === 'number'
+            ? projectData.targetDuration
+            : projectData.duration || duration;
       } catch {
         // Use defaults if project.json is unreadable
       }
@@ -538,6 +542,13 @@ export class WebSocketHandler {
         (data as { providerConfig?: Record<string, string> }).providerConfig,
         data.autonomousMode,
       );
+
+      this.conversationManager.persistProjectConfiguration(sessionId, {
+        templateId: data.templateId,
+        style: data.style,
+        duration: data.duration,
+        autonomousMode: data.autonomousMode,
+      });
 
       const toolNames = this.conversationManager.getSessionToolNames(sessionId);
       const projectName = projectDirName.replace('.kshana', '');

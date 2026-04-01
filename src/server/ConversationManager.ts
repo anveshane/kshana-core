@@ -17,7 +17,12 @@ import {
   createLocalSession,
   createRemoteSession,
 } from '../core/fs/index.js';
-import { startTimer, stopTimer, checkpointTimer } from '../tasks/video/workflow/ProjectManager.js';
+import {
+  startTimer,
+  stopTimer,
+  checkpointTimer,
+  updateProjectAutonomousMode,
+} from '../tasks/video/workflow/ProjectManager.js';
 import {
   captureSessionEnded,
   captureSessionStarted,
@@ -238,11 +243,16 @@ export class ConversationManager {
     if (!session) return;
     session.state.autonomousMode = enabled;
     session.agent?.setAutonomousMode(enabled);
+    if (session.sessionContext) {
+      runInSession(session.sessionContext, () => {
+        updateProjectAutonomousMode(enabled);
+      });
+    }
   }
 
   persistProjectConfiguration(
     sessionId: string,
-    config: { templateId: string; style: string; duration: number },
+    config: { templateId: string; style: string; duration: number; autonomousMode?: boolean },
   ): boolean {
     const session = this.sessions.get(sessionId);
     if (!session?.sessionContext) {
@@ -254,6 +264,7 @@ export class ConversationManager {
         templateId: config.templateId,
         style: config.style,
         duration: config.duration,
+        autonomousMode: config.autonomousMode,
       });
     });
   }
