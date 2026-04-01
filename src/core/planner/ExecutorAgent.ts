@@ -1631,14 +1631,14 @@ Rules:
         for (const dep of typeDef.dependencies) {
           if (dep.scope !== 'matching') continue;
 
-          // Find completed per-item nodes of this dependency type
+          // Strategy A: Find completed per-item nodes of this dependency type
           const upstreamItems = allNodes
             .filter(n => n.typeId === dep.artifactTypeId && n.itemId &&
               (n.status === 'completed' || n.status === 'pending'))
             .map(n => ({ itemId: n.itemId!, name: n.displayName.split(': ').pop() ?? n.itemId! }));
 
           if (upstreamItems.length > 0) {
-            this.log(`  Expanding type-level ${node.id} → ${upstreamItems.length} items from ${dep.artifactTypeId}`);
+            this.log(`  Expanding type-level ${node.id} → ${upstreamItems.length} items from ${dep.artifactTypeId} per-item nodes`);
             this.executor.expandCollection(node.id, upstreamItems);
             this.emit({
               type: 'notification',
@@ -1648,6 +1648,56 @@ Rules:
             didExpand = true;
             expanded = true;
             break;
+          }
+
+          // Strategy B: No per-item nodes exist (post-reset collapsed state).
+          // Read the type-level upstream node's output to extract items.
+          const upstreamTypeLevel = allNodes.find(
+            n => n.typeId === dep.artifactTypeId && !n.itemId && n.status === 'completed' && n.outputPath
+          );
+          if (upstreamTypeLevel?.outputPath) {
+            const fullPath = join(this.config.projectDir, upstreamTypeLevel.outputPath);
+            if (existsSync(fullPath)) {
+              try {
+                const content = readFileSync(fullPath, 'utf-8');
+                const extracted = await extractCollectionItems(
+                  upstreamTypeLevel, content, this.llm,
+                  this.config.goal.preferences.duration as number | undefined,
+                );
+                // Determine items based on what was extracted
+                let itemList: Array<{ itemId: string; name: string }> = [];
+                if (extracted?.scenes?.length) {
+                  itemList = extracted.scenes.map((s: any) => ({
+                    itemId: `scene_${s.sceneNumber}`,
+                    name: s.title || `Scene ${s.sceneNumber}`,
+                  }));
+                } else if (extracted?.characters?.length) {
+                  itemList = extracted.characters.map((c: string) => ({
+                    itemId: c.toLowerCase().replace(/\s+/g, '_'),
+                    name: c,
+                  }));
+                } else if (extracted?.settings?.length) {
+                  itemList = extracted.settings.map((s: string) => ({
+                    itemId: s.toLowerCase().replace(/\s+/g, '_'),
+                    name: s,
+                  }));
+                }
+                if (itemList.length > 0) {
+                  this.log(`  Expanding type-level ${node.id} → ${itemList.length} items from ${dep.artifactTypeId} output content`);
+                  this.executor.expandCollection(node.id, itemList);
+                  this.emit({
+                    type: 'notification',
+                    level: 'info',
+                    message: `Expanded ${node.displayName}: ${itemList.map(i => i.name).join(', ')}`,
+                  });
+                  didExpand = true;
+                  expanded = true;
+                  break;
+                }
+              } catch (err) {
+                this.log(`  Failed to extract items from ${upstreamTypeLevel.outputPath}: ${err}`);
+              }
+            }
           }
         }
 
