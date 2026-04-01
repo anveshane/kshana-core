@@ -2183,11 +2183,28 @@ Rules:
         name: `Shot ${s.shotNumber}: ${s.shotType}`,
       }));
 
-      // Find the shot_image_prompt and shot_motion_directive nodes for this scene and expand them
-      const shotPromptNodeId = `shot_image_prompt:${sceneId}`;
-      const shotPromptNode = this.executor.getNode(shotPromptNodeId);
-      const motionDirectiveNodeId = `shot_motion_directive:${sceneId}`;
-      const motionDirectiveNode = this.executor.getNode(motionDirectiveNodeId);
+      // Find the shot_image_prompt and shot_motion_directive nodes for this scene and expand them.
+      // If per-scene nodes don't exist (e.g., after reset), create them from the type-level collection.
+      let shotPromptNode = this.executor.getNode(`shot_image_prompt:${sceneId}`);
+      let motionDirectiveNode = this.executor.getNode(`shot_motion_directive:${sceneId}`);
+
+      // If per-scene nodes don't exist, expand the type-level collection into per-scene first
+      if (!shotPromptNode) {
+        const typeLevelPrompt = this.executor.getNode('shot_image_prompt');
+        if (typeLevelPrompt && typeLevelPrompt.isCollection) {
+          this.log(`  Creating per-scene node shot_image_prompt:${sceneId} from type-level collection`);
+          this.executor.expandCollection('shot_image_prompt', [{ itemId: sceneId, name: `Scene ${sceneId.replace('scene_', '')}` }]);
+          shotPromptNode = this.executor.getNode(`shot_image_prompt:${sceneId}`);
+        }
+      }
+      if (!motionDirectiveNode) {
+        const typeLevelMotion = this.executor.getNode('shot_motion_directive');
+        if (typeLevelMotion && typeLevelMotion.isCollection) {
+          this.log(`  Creating per-scene node shot_motion_directive:${sceneId} from type-level collection`);
+          this.executor.expandCollection('shot_motion_directive', [{ itemId: sceneId, name: `Scene ${sceneId.replace('scene_', '')}` }]);
+          motionDirectiveNode = this.executor.getNode(`shot_motion_directive:${sceneId}`);
+        }
+      }
 
       if (shotPromptNode || motionDirectiveNode) {
         this.log(`  Expanding shots for ${sceneId}: ${shotItems.map(i => i.name).join(', ')}`);
@@ -2204,12 +2221,6 @@ Rules:
         });
       } else {
         this.log(`  No shot_image_prompt or shot_motion_directive node found for ${sceneId}`);
-        for (const shot of shotItems) {
-          const shotNodeId = `shot_image_prompt:${shot.itemId}`;
-          if (!this.executor.getNode(shotNodeId)) {
-            this.log(`  WARNING: Cannot create shot node ${shotNodeId} — no parent collection node to expand`);
-          }
-        }
       }
       this.emitTodoUpdate();
 
