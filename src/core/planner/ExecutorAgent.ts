@@ -2615,7 +2615,106 @@ Rules:
 
     const jsonContent = readFileSync(jsonPath, 'utf-8');
 
-    // Generate first frame image (standard flow)
+    // Check for per-frame format (new FLFV/FMLFV style with "frames" field)
+    let parsedJson: any;
+    try {
+      let cleaned = jsonContent.trim();
+      if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      parsedJson = JSON.parse(cleaned);
+    } catch {
+      parsedJson = null;
+    }
+
+    const hasFrames = parsedJson?.frames && typeof parsedJson.frames === 'object';
+
+    if (hasFrames) {
+      // New per-frame format: each frame has its own prompt and generation mode
+      this.log(`  Per-frame format detected: ${Object.keys(parsedJson.frames).join(', ')}`);
+
+      // Generate first_frame
+      const firstFrameData = parsedJson.frames['first_frame'];
+      if (!firstFrameData) {
+        this.log(`  No first_frame in frames object`);
+        return null;
+      }
+      const firstFrameJson = JSON.stringify({
+        imagePrompt: firstFrameData.imagePrompt,
+        negativePrompt: parsedJson.negativePrompt || '',
+        aspectRatio: parsedJson.aspectRatio || '16:9',
+        generationMode: firstFrameData.generationMode || 'image_text_to_image',
+        references: firstFrameData.references || [],
+      });
+      const firstFramePath = await this.executeShotImageGeneration(node, firstFrameJson, toolCallId);
+      if (!firstFramePath) return null;
+
+      // Generate additional frames
+      const additionalFrames = Object.keys(parsedJson.frames).filter(k => k !== 'first_frame');
+      if (additionalFrames.length > 0) {
+        node.outputPaths = { first_frame: firstFramePath };
+
+        for (const frameId of additionalFrames) {
+          const frameData = parsedJson.frames[frameId];
+          if (!frameData?.imagePrompt) continue;
+
+          const mode = frameData.generationMode || 'edit_first_frame';
+          this.log(`  Generating ${frameId} (mode: ${mode})`);
+
+          if (mode === 'edit_first_frame') {
+            // Use the first frame as base image and edit it
+            const firstFrameAbsPath = join(this.config.projectDir, firstFramePath);
+            const provider = getProviderRegistry().getImageEditor();
+            if (provider?.editImage) {
+              const assetsDir = join(this.config.projectDir, 'assets', 'images');
+              if (!existsSync(assetsDir)) mkdirSync(assetsDir, { recursive: true });
+
+              const editResult = await provider.editImage({
+                editPrompt: frameData.imagePrompt,
+                baseImagePath: firstFrameAbsPath,
+                referenceImages: [],
+                outputDir: assetsDir,
+                filenamePrefix: `${node.itemId}_${frameId}`,
+              });
+              const relPath = relative(this.config.projectDir, editResult.filePath);
+              node.outputPaths[frameId] = relPath;
+              this.log(`  ${frameId} (edit_first_frame): ${relPath}`);
+            } else {
+              this.log(`  No image editor available — falling back to independent generation for ${frameId}`);
+              const frameJson = JSON.stringify({
+                imagePrompt: frameData.imagePrompt,
+                negativePrompt: parsedJson.negativePrompt || '',
+                aspectRatio: parsedJson.aspectRatio || '16:9',
+                generationMode: 'image_text_to_image',
+                references: frameData.references || firstFrameData.references || [],
+              });
+              const framePath = await this.executeShotImageGeneration(node, frameJson, toolCallId);
+              if (framePath) {
+                node.outputPaths[frameId] = framePath;
+                this.log(`  ${frameId} (fallback): ${framePath}`);
+              }
+            }
+          } else {
+            // Independent generation (image_text_to_image or text_to_image)
+            const frameJson = JSON.stringify({
+              imagePrompt: frameData.imagePrompt,
+              negativePrompt: parsedJson.negativePrompt || '',
+              aspectRatio: parsedJson.aspectRatio || '16:9',
+              generationMode: mode,
+              references: frameData.references || [],
+            });
+            const framePath = await this.executeShotImageGeneration(node, frameJson, toolCallId);
+            if (framePath) {
+              node.outputPaths[frameId] = framePath;
+              this.log(`  ${frameId} (${mode}): ${framePath}`);
+            }
+          }
+        }
+        this.log(`  Multi-frame: ${Object.keys(node.outputPaths).length} frames generated`);
+      }
+
+      return firstFramePath;
+    }
+
+    // Legacy single-prompt format (i2v, t2v, or old-style shots)
     const firstFramePath = await this.executeShotImageGeneration(node, jsonContent, toolCallId);
     if (!firstFramePath) return null;
 
@@ -2623,7 +2722,6 @@ Rules:
     const strategy = this.getGenerationStrategy(node);
     try {
       const modeRegistry = getWorkflowModeRegistry();
-      // Use strategy-aware routing to find the actual workflow that will run
       const mode = modeRegistry.getWorkflowForStrategy(strategy, 'comfyui');
       if (mode) {
         const frameInputs = mode.inputRequirements.filter(
@@ -2631,15 +2729,12 @@ Rules:
         );
 
         if (frameInputs.length > 0) {
-          // Initialize outputPaths with first frame
           node.outputPaths = { first_frame: firstFramePath };
 
-          // Generate additional frame images (last_frame, mid_frame, etc.)
           for (const frameReq of frameInputs) {
             const frameDesc = this.getFrameDescription(node, frameReq.id);
             if (frameDesc) {
-              this.log(`  Generating additional frame: ${frameReq.id}`);
-              // Build a modified prompt JSON using the frame description
+              this.log(`  Generating additional frame (legacy): ${frameReq.id}`);
               const modifiedJson = this.buildFramePromptJson(jsonContent, frameDesc, frameReq.id);
               const framePath = await this.executeShotImageGeneration(node, modifiedJson, toolCallId);
               if (framePath) {

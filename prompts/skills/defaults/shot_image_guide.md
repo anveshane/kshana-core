@@ -148,3 +148,68 @@ If NO reference images are available (documentary/non-narrative), use `text_to_i
 ---
 
 {{FRAME_GENERATION_GUIDE}}
+
+---
+
+## Multi-Frame Output (FLFV/FMLFV shots only)
+
+When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MULTIPLE frame prompts in a single JSON object using a `frames` field.
+
+### JSON Structure for Multi-Frame Shots
+
+```json
+{
+  "shotNumber": 2,
+  "frames": {
+    "first_frame": {
+      "imagePrompt": "Full scene description for the opening frame...",
+      "generationMode": "image_text_to_image",
+      "references": [
+        { "imageNumber": 1, "type": "character", "refId": "investigator" },
+        { "imageNumber": 2, "type": "setting", "refId": "pataliputra_alleys" }
+      ]
+    },
+    "last_frame": {
+      "imagePrompt": "Description of what changed — character moved deeper into passage, torchlight dimmer...",
+      "generationMode": "edit_first_frame",
+      "references": []
+    }
+  },
+  "negativePrompt": "...",
+  "aspectRatio": "16:9"
+}
+```
+
+### Frame Generation Modes — Choose Per Frame
+
+- **`image_text_to_image`** — Generate independently using character/setting reference images. Use this for the **first frame** (always) and for other frames when the composition is very different from the first frame.
+
+- **`edit_first_frame`** (RECOMMENDED for last_frame/mid_frame) — Generate by **editing the first frame image**. The image prompt should describe ONLY what changed, not the full scene. This produces maximum visual consistency — same composition, lighting, colors, with only the described changes. Use when:
+  - Camera angle and framing stay similar
+  - Characters moved position, changed expression, or left the frame
+  - Objects appeared/disappeared
+  - Lighting shifted (e.g., torch extinguished)
+
+- **`text_to_image`** — Generate from text only, no references. Use for frames with NO characters visible (e.g., empty room, landscape).
+
+### Rules
+
+1. **first_frame** ALWAYS uses `image_text_to_image` with full character/setting references
+2. **last_frame** and **mid_frame** PREFER `edit_first_frame` — it keeps visual consistency
+3. Only use `image_text_to_image` for non-first frames if the camera angle changed dramatically
+4. The `edit_first_frame` prompt should describe the DELTA (what changed), not the full scene
+5. For `edit_first_frame`, the `references` array should be empty (the first frame IS the reference)
+
+### Single-Frame Shots (i2v, t2v)
+
+For `i2v` and `t2v` shots, do NOT use the `frames` field. Use the standard flat format:
+
+```json
+{
+  "imagePrompt": "...",
+  "negativePrompt": "...",
+  "aspectRatio": "16:9",
+  "generationMode": "image_text_to_image",
+  "references": [...]
+}
+```
