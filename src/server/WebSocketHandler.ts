@@ -297,7 +297,10 @@ export class WebSocketHandler {
       data.style,
       data.duration,
       data.projectDir,
+      undefined,
+      data.autonomousMode,
     );
+    await this.conversationManager.ensureRemoteProjectJsonCached(sessionId);
     this.conversationManager.persistProjectConfiguration(sessionId, {
       templateId: data.templateId,
       style: data.style,

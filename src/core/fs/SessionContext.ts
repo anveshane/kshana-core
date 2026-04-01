@@ -108,6 +108,17 @@ export function runInSession<T>(context: SessionContext, fn: () => T): T {
 }
 
 /**
+ * Run an async function inside a session context.
+ * Node keeps AsyncLocalStorage bound to the returned Promise until it settles.
+ */
+export function runInSessionAsync<T>(
+  context: SessionContext,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return sessionStorage.run(context, fn);
+}
+
+/**
  * Create a default local session context.
  * Used for CLI mode or when no explicit session is configured.
  */

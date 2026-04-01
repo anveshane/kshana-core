@@ -14,8 +14,10 @@ import {
   type SessionContext,
   type IFileSystem,
   runInSession,
+  runInSessionAsync,
   createLocalSession,
   createRemoteSession,
+  requireSession,
 } from '../core/fs/index.js';
 import {
   startTimer,
@@ -248,6 +250,25 @@ export class ConversationManager {
         updateProjectAutonomousMode(enabled);
       });
     }
+  }
+
+  /**
+   * Ensure project.json is present in the remote project cache so sync
+   * helpers like loadProject() can read it. No-op for local sessions.
+   */
+  async ensureRemoteProjectJsonCached(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session?.sessionContext || session.sessionContext.mode !== 'remote') {
+      return;
+    }
+
+    await runInSessionAsync(session.sessionContext, async () => {
+      try {
+        await requireSession().fs.readFile('project.json');
+      } catch {
+        // Missing or unreadable; persist may still no-op until a project exists on disk.
+      }
+    });
   }
 
   persistProjectConfiguration(

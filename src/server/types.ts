@@ -217,6 +217,7 @@ export interface ConfigureProjectData {
   templateId: string;
   style: string;
   duration: number;
+  autonomousMode?: boolean;
 }
 
 // ==========================================================================
