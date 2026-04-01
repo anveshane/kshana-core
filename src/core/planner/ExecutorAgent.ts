@@ -161,6 +161,8 @@ export class ExecutorAgent extends TypedEventEmitter {
   private pendingMedia = new Map<string, Promise<string | null>>();
   /** Timeline state — populated during execution, saved to timeline.json */
   private timeline: Timeline | null = null;
+  /** Tracks how many times a dependency was regenerated for a given parent node (loop protection) */
+  private depRegenCounts = new Map<string, number>();
 
   constructor(llm: LLMClient, config: ExecutorAgentConfig) {
     super();
@@ -751,6 +753,34 @@ export class ExecutorAgent extends TypedEventEmitter {
             }
           }
 
+          // Self-healing: validate dependency output files exist before executing
+          const missingDeps = this.validateDependencyOutputs(node);
+          if (missingDeps.length > 0) {
+            // Track regeneration attempts to prevent infinite loops
+            for (const depId of missingDeps) {
+              const key = `${node.id}→${depId}`;
+              const count = (this.depRegenCounts.get(key) ?? 0) + 1;
+              this.depRegenCounts.set(key, count);
+
+              if (count > 2) {
+                this.log(`  LOOP PROTECTION: ${depId} regenerated ${count} times for ${node.id} — marking failed`);
+                this.executor.markFailed(node.id, `Dependency ${depId} output keeps disappearing after ${count} regeneration attempts`);
+                break;
+              }
+
+              this.log(`  Dependency output missing: ${depId} — resetting to pending for regeneration (attempt ${count}/2)`);
+              this.executor.invalidateNode(depId);
+              this.emit({
+                type: 'notification',
+                level: 'warning',
+                message: `Auto-regenerating: ${depId} (output file missing)`,
+              });
+            }
+            this.persistState();
+            this.emitTodoUpdate();
+            continue; // Skip this node — deps need to regenerate first
+          }
+
           this.executor.markStarted(node.id);
           this.emitPhaseIfChanged(node);
           this.emitTodoUpdate();
@@ -1052,8 +1082,12 @@ export class ExecutorAgent extends TypedEventEmitter {
             this.emitTodoUpdate();
             this.log(`  COMPLETED: ${node.id}`);
 
-            // Reset self-repair counter on successful completion
+            // Reset self-repair counter and dep regen tracking on successful completion
             selfRepairCount = 0;
+            // Clear regen counts for this node's deps (they succeeded)
+            for (const key of this.depRegenCounts.keys()) {
+              if (key.startsWith(`${node.id}→`)) this.depRegenCounts.delete(key);
+            }
 
             // Check if we should stop after this node type (test mode)
             if (this.config.stopAfterNodeType && node.typeId === this.config.stopAfterNodeType) {
@@ -1821,6 +1855,24 @@ Rules:
    * completed more recently than the prompt file was written.
    * This detects prompts from before a reset that need regeneration.
    */
+  /**
+   * Check if any completed dependency has a missing output file.
+   * Returns the list of dependency IDs whose output files don't exist.
+   */
+  private validateDependencyOutputs(node: ExecutionNode): string[] {
+    const missing: string[] = [];
+    for (const depId of node.dependencies) {
+      const dep = this.executor.getNode(depId);
+      if (!dep || dep.status !== 'completed') continue;
+      if (!dep.outputPath) continue;
+      const fullPath = join(this.config.projectDir, dep.outputPath);
+      if (!existsSync(fullPath)) {
+        missing.push(depId);
+      }
+    }
+    return missing;
+  }
+
   private isPromptStale(node: ExecutionNode, promptPath: string): boolean {
     try {
       const { statSync } = require('fs') as typeof import('fs');
