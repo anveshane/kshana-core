@@ -44,6 +44,14 @@
     {
       "id": "STORY_MATCH",
       "question": "Does the setting match the narrative context it was created for (correct location, correct era/tech level)?"
+    },
+    {
+      "id": "PERIOD_CONTEXT",
+      "question": "If the setting is from a specific historical period or culture (e.g., ancient India, medieval Europe), does the prompt use period-specific terms for materials, objects, and architectural elements? Generic terms like 'wall light' instead of 'iron torch bracket' or 'overhang' instead of 'carved stone eave' cause the image model to generate modern-looking environments. Answer YES if period terms are used or if the setting is modern/contemporary."
+    },
+    {
+      "id": "WORLD_STYLE_CONSISTENCY",
+      "question": "If a world style bible is provided as context, does the image prompt reflect its visual direction — color palette, lighting sources, material choices, and 'Avoid' list? For example, if the world style specifies 'amber oil lamps, wet stone, monsoon rain' the setting shouldn't be described with modern fluorescent lighting. Answer YES if consistent or if no world style is provided."
     }
   ]
 }
