@@ -394,7 +394,9 @@ export class WorkflowModeRegistry {
    * not raw workflow IDs. Injected via {{AVAILABLE_VIDEO_MODES}} placeholder.
    */
   generateVideoModesSection(providerId?: string): string {
-    const strategies = this.getAvailableStrategies(providerId);
+    // Filter out t2v — every shot should use a first frame image for visual consistency
+    const strategies = this.getAvailableStrategies(providerId)
+      .filter(s => s.strategy !== 't2v');
     if (strategies.length === 0) {
       return '## Video Generation Mode\n\nNo video generation modes are currently available. Use `"videoGenerationMode": null`.';
     }
@@ -452,7 +454,8 @@ export class WorkflowModeRegistry {
    * Tells it how many frame images to generate per video generation strategy.
    */
   generateFrameGuideSection(providerId?: string): string {
-    const strategies = this.getAvailableStrategies(providerId);
+    const strategies = this.getAvailableStrategies(providerId)
+      .filter(s => s.strategy !== 't2v');
     const lines = ['## Frame Images Per Mode', '', 'Generate the required frame images based on the shot\'s `videoGenerationMode`:', ''];
 
     for (const { strategy, frameInputs } of strategies) {

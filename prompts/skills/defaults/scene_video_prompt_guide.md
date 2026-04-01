@@ -103,7 +103,7 @@ Aim for 2-3 sentences per frame description. Be literal — describe only what i
 
 1. Every scene beat has a shot
 2. Duration sum = totalDuration exactly
-3. At least one t2v or character-free shot
+3. Every shot uses i2v, flfv, or fmlfv — NEVER t2v (every shot needs a first frame image for visual consistency with the setting)
 4. Every shot has soundCue
 5. All character IDs match provided list
 6. videoGenerationMode is valid and matches character presence in firstFrame/lastFrame

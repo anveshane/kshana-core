@@ -792,15 +792,6 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.emitTodoUpdate();
               continue;
             } else if (node.typeId === 'shot_image' && !this.config.skipMediaGeneration) {
-              // Check generation strategy — t2v shots skip image gen
-              const shotStrategy = this.getGenerationStrategy(node);
-              if (shotStrategy === 't2v') {
-                this.log(`  Skipping shot_image (t2v strategy — text-to-video, no image needed)`);
-                this.executor.markCompleted(node.id, 'skipped-t2v');
-                this.persistState();
-                this.emitTodoUpdate();
-                continue;
-              }
               // Shot image — deterministic: read prompt JSON, resolve refs, call ComfyUI
               const shotImageResult = await this.executeShotImage(node, toolCallId);
               if (!shotImageResult) {
@@ -3240,11 +3231,10 @@ Rules:
       motionPrompt = `Cinematic shot with subtle camera movement, scene ${sceneNum} shot ${shotNum}`;
     }
 
-    // For t2v strategy, we don't need a source image
-    const isT2V = generationStrategy === 't2v';
-    if (isT2V) {
-      this.log(`  t2v strategy — no source image needed`);
-    } else if (!shotImagePath) {
+    // t2v is no longer a valid strategy — every shot uses a first frame image
+    // If t2v slips through from old data, treat as i2v
+    const isT2V = false;
+    if (!shotImagePath) {
       this.log(`  No shot image found for ${node.id}`);
       return null;
     }
