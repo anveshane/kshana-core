@@ -391,8 +391,8 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     const todos: ExpandableTodoItem[] = sorted
       .filter(node => {
-        // Hide type-level collection nodes that have per-item children
-        if (node.isCollection && !node.itemId && expandedTypes.has(node.typeId)) {
+        // Hide type-level nodes that have per-item children (expanded into per-scene/per-shot)
+        if (!node.itemId && expandedTypes.has(node.typeId)) {
           return false;
         }
         return true;
@@ -2486,9 +2486,10 @@ For multi-frame shots (flfv/fmlfv):
     // Handle shot-level expansion: scene_video_prompt:scene_N → shot_image_prompt per shot
     if (isShotExtraction && items.shots?.length && node.itemId) {
       const sceneId = node.itemId; // e.g., "scene_1"
+      const sceneLabel = sceneId.replace('scene_', 'S');
       const shotItems = items.shots.map(s => ({
         itemId: `${sceneId}_shot_${s.shotNumber}`,
-        name: `Shot ${s.shotNumber}: ${s.shotType}`,
+        name: `${sceneLabel} Shot ${s.shotNumber}: ${s.shotType}`,
       }));
 
       // Find the shot_image_prompt and shot_motion_directive nodes for this scene and expand them.
