@@ -10,9 +10,10 @@ interface ProjectInfo {
 
 interface ProjectSelectorProps {
   onSendWs: (msg: Record<string, unknown>) => void
+  onNewProject?: () => void
 }
 
-export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
+export function ProjectSelector({ onSendWs, onNewProject }: ProjectSelectorProps) {
   const { selectedProject } = useAppState()
   const dispatch = useAppDispatch()
   const [projects, setProjects] = useState<ProjectInfo[]>([])
@@ -182,16 +183,9 @@ export function ProjectSelector({ onSendWs }: ProjectSelectorProps) {
               <button
                 onClick={() => {
                   setOpen(false)
-                  onSendWs({ type: 'create_project', data: {} })
-                  dispatch({
-                    type: 'ADD_CHAT_MESSAGE',
-                    message: {
-                      id: `sys_${Date.now()}`,
-                      type: 'system',
-                      content: 'Starting new project wizard...',
-                      timestamp: Date.now(),
-                    },
-                  })
+                  if (onNewProject) {
+                    onNewProject()
+                  }
                 }}
                 className="w-full text-left px-3 py-2.5 flex items-center gap-2 hover:bg-surface transition-colors cursor-pointer text-cyan"
               >

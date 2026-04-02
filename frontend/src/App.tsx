@@ -131,7 +131,7 @@ export function App() {
               onProviderSettings={() => setShowProviders(true)}
               onWorkflows={() => setShowWorkflows(true)}
               onStop={() => send({ type: 'cancel' })}
-              projectSelector={<ProjectSelector onSendWs={send} />}
+              projectSelector={<ProjectSelector onSendWs={send} onNewProject={() => setShowNewProject(true)} />}
             />
 
             <div className="flex flex-1 overflow-hidden relative z-10">
