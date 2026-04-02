@@ -70,7 +70,15 @@ Rules:
 - Scenes should be logical narrative units (shifts in location, time, or action)
 - If the story has more than the maximum, select only the most important ones
 - Keep summaries under 50 words each
-- Return ONLY valid JSON, no other text`,
+- Return ONLY valid JSON, no markdown fences, no commentary
+
+<json_schema>
+{
+  "characters": ["Character Name"],
+  "settings": ["Location Name"],
+  "scenes": [{ "sceneNumber": 1, "title": "Scene Title", "summary": "Brief summary under 50 words" }]
+}
+</json_schema>`,
       },
       {
         role: 'user',
@@ -201,7 +209,15 @@ Rules:
 - Names should be as they appear in the outline
 - Each segment is a distinct chapter/section of the documentary
 - Keep summaries under 50 words each
-- Return ONLY valid JSON, no other text`,
+- Return ONLY valid JSON, no markdown fences, no commentary
+
+<json_schema>
+{
+  "characters": ["Person Name"],
+  "settings": ["Location Name"],
+  "scenes": [{ "sceneNumber": 1, "title": "Segment Title", "summary": "Brief summary under 50 words" }]
+}
+</json_schema>`,
       },
       {
         role: 'user',

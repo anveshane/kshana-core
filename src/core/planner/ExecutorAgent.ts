@@ -2204,8 +2204,84 @@ Rules:
 
     // Force JSON output for all structured/image prompt nodes
     const jsonNodeTypes = ['scene_video_prompt', 'shot_image_prompt', 'character_image', 'setting_image'];
-    if (jsonNodeTypes.includes(node.typeId) || typeDef?.outputFormat === 'json') {
+    const isJsonNode = jsonNodeTypes.includes(node.typeId) || typeDef?.outputFormat === 'json';
+    if (isJsonNode) {
       options.responseFormat = { type: 'json_object' };
+    }
+
+    // Inject JSON schema into the system prompt so the LLM sees the exact expected structure.
+    // This is more reliable than response_format alone — works across all LLM providers.
+    if (isJsonNode) {
+      const JSON_SCHEMAS: Record<string, string> = {
+        scene_video_prompt: `<json_schema>
+{
+  "sceneNumber": number,
+  "sceneTitle": "string",
+  "totalDuration": number,
+  "shots": [
+    {
+      "shotNumber": number,
+      "shotType": "string (establishing, tracking, medium, close_up, wide, extreme_close_up)",
+      "duration": number,
+      "generationStrategy": "i2v | flfv | fmlfv | i2v_late_entry",
+      "firstFrame": {
+        "description": "string (detailed cinematographer prose)",
+        "characters": ["character_id"],
+        "setting": "setting_id"
+      },
+      "lastFrame": {
+        "description": "string (optional — only when end state differs from start)",
+        "characters": ["character_id"],
+        "setting": "setting_id"
+      },
+      "cameraWork": "string",
+      "soundCue": "string",
+      "transition": "cut | crossfade | dip_to_black | fade"
+    }
+  ]
+}
+</json_schema>`,
+        shot_image_prompt: `<json_schema>
+For single-frame shots (i2v):
+{
+  "imagePrompt": "string (80-250 words, flowing prose)",
+  "negativePrompt": "string",
+  "aspectRatio": "16:9",
+  "generationMode": "image_text_to_image | text_to_image",
+  "references": [{ "imageNumber": number, "type": "character | setting", "refId": "string" }]
+}
+
+For multi-frame shots (flfv/fmlfv):
+{
+  "shotNumber": number,
+  "frames": {
+    "first_frame": { "imagePrompt": "string", "generationMode": "image_text_to_image", "references": [...] },
+    "last_frame": { "imagePrompt": "string (delta only)", "generationMode": "edit_first_frame", "references": [] }
+  },
+  "negativePrompt": "string",
+  "aspectRatio": "16:9"
+}
+</json_schema>`,
+        character_image: `<json_schema>
+{
+  "imagePrompt": "string (80-250 words, flowing prose, full character description)",
+  "negativePrompt": "string",
+  "aspectRatio": "1:1"
+}
+</json_schema>`,
+        setting_image: `<json_schema>
+{
+  "imagePrompt": "string (flowing prose, full environment description with 3 spatial layers)",
+  "negativePrompt": "string",
+  "aspectRatio": "1:1"
+}
+</json_schema>`,
+      };
+
+      const schema = JSON_SCHEMAS[node.typeId];
+      if (schema) {
+        messages[0]!.content += `\n\nCRITICAL: Your response MUST be a single valid JSON object. No markdown fences, no backticks, no commentary before or after the JSON. Output ONLY the JSON.\n\n${schema}`;
+      }
     }
 
     const agentName = this.config.name ?? 'kshana-executor';
