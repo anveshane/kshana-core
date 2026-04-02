@@ -28,6 +28,7 @@ import {
   getNextPendingTimelineSegment,
   getPendingTimelineSegments,
   updateSegmentLayers,
+  repairTimelineAssetReferences,
   setSegmentCompositing,
   setSegmentTransition,
   addGlobalLayer,
@@ -63,6 +64,44 @@ export interface TimelineToolContext {
  * Single tool with action parameter for all timeline operations.
  */
 export function createManageTimelineTool(context: TimelineToolContext): ToolDefinition {
+  const loadTimelineWithRepair = () => {
+    const projectDir = context.getProjectDir();
+    const timeline = loadTimeline(projectDir);
+    if (!timeline) {
+      return null;
+    }
+
+    const repairResult = repairTimelineAssetReferences(timeline);
+    if (repairResult.repairedSegmentIds.length > 0) {
+      console.info(
+        `[manage_timeline] Auto-repaired asset refs for segments: ${repairResult.repairedSegmentIds.join(', ')}`
+      );
+      saveTimeline(projectDir, repairResult.timeline);
+    }
+    if (repairResult.unrepairedSegmentIds.length > 0) {
+      console.warn(
+        `[manage_timeline] Filled segments still missing refs after repair: ${repairResult.unrepairedSegmentIds.join(', ')}`
+      );
+    }
+
+    return repairResult;
+  };
+
+  const buildRepairPayload = (
+    repairResult: ReturnType<typeof loadTimelineWithRepair>
+  ) => {
+    if (!repairResult) {
+      return undefined;
+    }
+
+    return repairResult.repairedSegmentIds.length > 0 || repairResult.unrepairedSegmentIds.length > 0
+      ? {
+          repairedSegmentIds: repairResult.repairedSegmentIds,
+          unrepairedSegmentIds: repairResult.unrepairedSegmentIds,
+        }
+      : undefined;
+  };
+
   return {
     name: 'manage_timeline',
     description: `Manage the video timeline — the single source of truth for what content goes where, for how long, and how layers composite.
@@ -270,7 +309,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'layers array is required and must not be empty' };
           }
 
-          let timeline = loadTimeline(context.getProjectDir());
+          const repairResult = loadTimelineWithRepair();
+          let timeline = repairResult?.timeline;
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -304,6 +344,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
               hasAlternatives: (segment.versionInfo?.totalVersions ?? 1) > 1,
             },
             validation: timeline.validation,
+            repair: buildRepairPayload(repairResult),
             message: `Segment "${segment.label}" updated with ${layers.length} layer(s), status: ${segment.fillStatus}` +
               (segment.versionInfo && segment.versionInfo.totalVersions > 1
                 ? ` (version ${segment.versionInfo.activeVersion} of ${segment.versionInfo.totalVersions})`
@@ -324,7 +365,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'global_layer is required' };
           }
 
-          let timeline = loadTimeline(context.getProjectDir());
+          const repairResult = loadTimelineWithRepair();
+          let timeline = repairResult?.timeline;
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -359,7 +401,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'compositing_mode is required' };
           }
 
-          let timeline = loadTimeline(context.getProjectDir());
+          const repairResult = loadTimelineWithRepair();
+          let timeline = repairResult?.timeline;
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -430,7 +473,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
         }
 
         case 'validate': {
-          const timeline = loadTimeline(context.getProjectDir());
+          const repairResult = loadTimelineWithRepair();
+          const timeline = repairResult?.timeline;
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -461,11 +505,13 @@ The timeline is saved to timeline.json in the project directory and persists acr
               imageCount,
               errors: resolution.errors,
             },
+            repair: buildRepairPayload(repairResult),
           };
         }
 
         case 'get': {
-          const timeline = loadTimeline(context.getProjectDir());
+          const repairResult = loadTimelineWithRepair();
+          const timeline = repairResult?.timeline;
           if (!timeline) {
             return {
               success: true,
@@ -480,6 +526,7 @@ The timeline is saved to timeline.json in the project directory and persists acr
             timeline,
             nextPendingSegment: getNextPendingTimelineSegment(timeline),
             pendingSegments: getPendingTimelineSegments(timeline),
+            repair: buildRepairPayload(repairResult),
           };
         }
 
@@ -498,7 +545,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'shots array is required and must not be empty' };
           }
 
-          let timeline = loadTimeline(context.getProjectDir());
+          const repairResult = loadTimelineWithRepair();
+          let timeline = repairResult?.timeline;
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -545,6 +593,29 @@ The timeline is saved to timeline.json in the project directory and persists acr
  * This replaces the manual artifact ID listing in stitch_videos.
  */
 export function createAssembleFromTimelineTool(context: TimelineToolContext): ToolDefinition {
+  const loadTimelineWithRepair = () => {
+    const projectDir = context.getProjectDir();
+    const timeline = loadTimeline(projectDir);
+    if (!timeline) {
+      return null;
+    }
+
+    const repairResult = repairTimelineAssetReferences(timeline);
+    if (repairResult.repairedSegmentIds.length > 0) {
+      console.info(
+        `[assemble_from_timeline] Auto-repaired asset refs for segments: ${repairResult.repairedSegmentIds.join(', ')}`
+      );
+      saveTimeline(projectDir, repairResult.timeline);
+    }
+    if (repairResult.unrepairedSegmentIds.length > 0) {
+      console.warn(
+        `[assemble_from_timeline] Filled segments still missing refs after repair: ${repairResult.unrepairedSegmentIds.join(', ')}`
+      );
+    }
+
+    return repairResult;
+  };
+
   return {
     name: 'assemble_from_timeline',
     description: `Assemble the final video from the timeline.
@@ -577,7 +648,8 @@ The timeline must be fully validated (all segments filled) before assembly.`,
       const projectDir = context.getProjectDir();
 
       // 1. Load and validate timeline
-      const timeline = loadTimeline(projectDir);
+      const repairResult = loadTimelineWithRepair();
+      const timeline = repairResult?.timeline;
       if (!timeline) {
         return { success: false, error: 'No timeline exists. Create and populate a timeline first.' };
       }
@@ -688,6 +760,29 @@ The timeline must be fully validated (all segments filled) before assembly.`,
  * showing the segment label, time range, and prompt text.
  */
 export function createPreviewFromTimelineTool(context: TimelineToolContext): ToolDefinition {
+  const loadTimelineWithRepair = () => {
+    const projectDir = context.getProjectDir();
+    const timeline = loadTimeline(projectDir);
+    if (!timeline) {
+      return null;
+    }
+
+    const repairResult = repairTimelineAssetReferences(timeline);
+    if (repairResult.repairedSegmentIds.length > 0) {
+      console.info(
+        `[preview_from_timeline] Auto-repaired asset refs for segments: ${repairResult.repairedSegmentIds.join(', ')}`
+      );
+      saveTimeline(projectDir, repairResult.timeline);
+    }
+    if (repairResult.unrepairedSegmentIds.length > 0) {
+      console.warn(
+        `[preview_from_timeline] Filled segments still missing refs after repair: ${repairResult.unrepairedSegmentIds.join(', ')}`
+      );
+    }
+
+    return repairResult;
+  };
+
   return {
     name: 'preview_from_timeline',
     description: `Generate a preview from the current timeline state.
@@ -716,7 +811,8 @@ Returns a preview manifest with segment details, and optionally an FFmpeg comman
       const resolution = (params['resolution'] as string) ?? '1280x720';
       const [width, height] = resolution.split('x').map(Number);
 
-      const timeline = loadTimeline(context.getProjectDir());
+      const repairResult = loadTimelineWithRepair();
+      const timeline = repairResult?.timeline;
       if (!timeline) {
         return { success: false, error: 'No timeline exists. Create and populate a timeline first.' };
       }
