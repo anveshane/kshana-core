@@ -2432,6 +2432,27 @@ Rules:
         if (motionDirectiveNode) {
           this.executor.expandCollection(`shot_motion_directive:${sceneId}`, shotItems);
         }
+
+        // Also expand shot_image and shot_video for this scene's shots
+        // These downstream types need per-shot nodes too
+        for (const downstreamType of ['shot_image', 'shot_video']) {
+          let perSceneNode = this.executor.getNode(`${downstreamType}:${sceneId}`);
+          if (!perSceneNode) {
+            const typeLevel = this.executor.getNode(downstreamType);
+            if (typeLevel && typeLevel.isCollection) {
+              this.log(`  Creating per-scene node ${downstreamType}:${sceneId} from type-level collection`);
+              this.executor.expandCollection(downstreamType, [{ itemId: sceneId, name: `Scene ${sceneId.replace('scene_', '')}` }]);
+              perSceneNode = this.executor.getNode(`${downstreamType}:${sceneId}`);
+            }
+          }
+          if (perSceneNode) {
+            // Mark as collection so it can expand into per-shot nodes
+            perSceneNode.isCollection = true;
+            this.executor.expandCollection(`${downstreamType}:${sceneId}`, shotItems);
+            this.log(`  Expanded ${downstreamType} for ${sceneId}: ${shotItems.length} shots`);
+          }
+        }
+
         this.emit({
           type: 'notification',
           level: 'info',
