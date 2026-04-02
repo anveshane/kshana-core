@@ -67,6 +67,8 @@ export interface ToolDefinition {
  */
 export interface StreamChunk {
   content?: string;
+  /** Reasoning/thinking content from models with reasoning_content (llama.cpp extension) */
+  thinking?: string;
   toolCallDelta?: {
     index: number;
     id?: string;

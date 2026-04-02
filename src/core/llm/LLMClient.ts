@@ -292,6 +292,16 @@ export class LLMClient {
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
+      // Cast to access llama.cpp extension fields not in OpenAI types
+      const deltaExt = delta as typeof delta & { reasoning_content?: string };
+
+      // Separate reasoning_content (llama.cpp extension) from regular content.
+      // Without this, reasoning tokens leak into delta.content for models like Nemotron.
+      if (deltaExt?.reasoning_content) {
+        // Emit as thinking content, not regular content
+        yield { thinking: deltaExt.reasoning_content, done: false };
+        continue; // Don't process as regular content
+      }
 
       if (delta?.content) {
         fullContent += delta.content;

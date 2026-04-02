@@ -2322,6 +2322,16 @@ For multi-frame shots (flfv/fmlfv):
     let insideThink = false;
 
     for await (const chunk of this.llm.generateStream(options)) {
+      // Handle reasoning_content from llama.cpp (separate field, not in-band)
+      if (chunk.thinking && toolCallId) {
+        this.emit({
+          type: 'tool_streaming',
+          toolCallId, chunk: `<thinking>${chunk.thinking}</thinking>`, done: false,
+          agentName, toolName: effectiveToolName,
+        });
+        continue; // Don't process as regular content
+      }
+
       if (!chunk.content) continue;
 
       buffer += chunk.content;
