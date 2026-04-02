@@ -51,16 +51,30 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
             },
           })
         } else if (status === 'completed' || status === 'error') {
-          // Find matching tool call by toolName (most recent)
           dispatch({
             type: 'UPDATE_TOOL_CALL',
             id: toolCallId || toolName,
             updates: {
               status: status === 'error' ? 'error' : 'completed',
               result,
-              duration: Date.now(), // Will be calculated from startTime in component
+              duration: Date.now(),
             },
           })
+          // Auto-add completed image assets to sidebar
+          if (status === 'completed' && result && typeof result === 'object') {
+            const filePath = (result as Record<string, unknown>)['file_path'] as string | undefined
+            if (filePath?.match(/\.(png|jpg|jpeg|webp)$/i)) {
+              dispatch({
+                type: 'ADD_ASSET',
+                asset: {
+                  id: `asset_${Date.now()}`,
+                  path: filePath,
+                  url: filePath,
+                  type: 'image',
+                },
+              })
+            }
+          }
         }
         break
       }

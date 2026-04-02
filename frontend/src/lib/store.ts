@@ -117,6 +117,7 @@ export type AppAction =
   | { type: 'SET_AGENT_STATUS'; status: AppState['agentStatus'] }
   | { type: 'SET_CONTEXT_USAGE'; usage: AppState['contextUsage'] }
   | { type: 'SET_ASSETS'; assets: AppState['assets'] }
+  | { type: 'ADD_ASSET'; asset: AppState['assets'][0] }
   | { type: 'SET_AUTONOMOUS'; enabled: boolean }
   | { type: 'SET_PARALLEL_MEDIA'; enabled: boolean }
   | { type: 'SET_TIMELINE'; timeline: Timeline | null }
@@ -196,6 +197,11 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'SET_ASSETS':
       return { ...state, assets: action.assets }
+
+    case 'ADD_ASSET':
+      // Avoid duplicates by path
+      if (state.assets.some(a => a.path === action.asset.path)) return state
+      return { ...state, assets: [...state.assets, action.asset] }
 
     case 'SET_AUTONOMOUS':
       return { ...state, autonomousMode: action.enabled }
