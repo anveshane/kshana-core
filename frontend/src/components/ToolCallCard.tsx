@@ -223,21 +223,33 @@ function separateThinking(text: string): { thinking: string; content: string } {
 }
 
 /** Collapsible thinking block */
-function ThinkingBlock({ text }: { text: string }) {
+/** Thinking block — shows LLM reasoning with visual distinction from main content */
+function ThinkingBlock({ text, isActive }: { text: string; isActive: boolean }) {
   const [expanded, setExpanded] = useState(false)
   if (!text) return null
 
   return (
-    <div className="px-3 py-1.5">
+    <div className="mx-3 my-1.5 rounded-md border border-violet-500/15 bg-violet-500/5 overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 text-[10px] text-graphite-200 hover:text-graphite-100 cursor-pointer"
+        className="w-full flex items-center gap-2 px-3 py-1.5 text-[10px] text-violet-300 hover:text-violet-200 cursor-pointer"
       >
-        <span style={{ transform: expanded ? 'rotate(90deg)' : 'none' }} className="transition-transform">▸</span>
-        <span className="italic">Thinking... ({text.length} chars)</span>
+        <span style={{ transform: expanded ? 'rotate(90deg)' : 'none' }} className="transition-transform text-[8px]">▸</span>
+        {isActive ? (
+          <span className="flex items-center gap-1.5">
+            <span className="flex gap-0.5">
+              <span className="w-1 h-1 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+              <span className="w-1 h-1 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+              <span className="w-1 h-1 rounded-full bg-violet-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+            </span>
+            <span className="italic">Thinking ({text.length} chars)</span>
+          </span>
+        ) : (
+          <span className="italic">Thought for {text.length} chars</span>
+        )}
       </button>
       {expanded && (
-        <div className="mt-1 p-2 rounded bg-graphite-300/30 border border-line-soft text-[10px] text-graphite-200 max-h-32 overflow-y-auto whitespace-pre-wrap italic">
+        <div className="px-3 pb-2 text-[10px] text-violet-300/70 max-h-40 overflow-y-auto whitespace-pre-wrap italic leading-relaxed">
           {text}
         </div>
       )}
@@ -590,7 +602,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
       </div>
 
       {/* Thinking block — collapsible, shown when LLM has <think> output */}
-      {thinkingText && <ThinkingBlock text={thinkingText} />}
+      {thinkingText && <ThinkingBlock text={thinkingText} isActive={status === 'executing' && !meaningfulContent} />}
 
       {/* Per-type body */}
       {renderBody()}
