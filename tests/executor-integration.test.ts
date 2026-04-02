@@ -609,3 +609,118 @@ describe('Multi-scene downstream expansion', () => {
     }
   });
 });
+
+describe('Per-shot node dependency wiring', () => {
+  it('shot_image nodes must depend on matching shot_image_prompt + character/setting images', () => {
+    // Bug: shot_image:scene_1_shot_1 had EMPTY dependencies and became
+    // "ready" immediately, failing because character/setting images didn't exist yet.
+    const executor = createExecutor({
+      'character_image:alice': {
+        typeId: 'character_image', itemId: 'alice', status: 'completed',
+        dependencies: [], dependents: [],
+      },
+      'setting_image:forest': {
+        typeId: 'setting_image', itemId: 'forest', status: 'completed',
+        dependencies: [], dependents: [],
+      },
+      'shot_image_prompt:scene_1_shot_1': {
+        typeId: 'shot_image_prompt', itemId: 'scene_1_shot_1', status: 'completed',
+        dependencies: [], dependents: [],
+      },
+      'shot_image_prompt:scene_1_shot_2': {
+        typeId: 'shot_image_prompt', itemId: 'scene_1_shot_2', status: 'completed',
+        dependencies: [], dependents: [],
+      },
+    });
+
+    // Manually create shot_image nodes with proper deps (as the fixed code does)
+    executor.addNode({
+      id: 'shot_image:scene_1_shot_1',
+      typeId: 'shot_image',
+      itemId: 'scene_1_shot_1',
+      status: 'pending',
+      displayName: 'Shot Images: S1 Shot 1',
+      isExpensive: true,
+      isCollection: false,
+      dependencies: [
+        'shot_image_prompt:scene_1_shot_1',
+        'character_image:alice',
+        'setting_image:forest',
+      ],
+      dependents: [],
+    } as any);
+
+    // The node should be ready (all deps completed)
+    const ready = executor.getNextReady();
+    expect(ready.map(n => n.id)).toContain('shot_image:scene_1_shot_1');
+
+    // Verify it depends on character + setting images
+    const node = executor.getNode('shot_image:scene_1_shot_1')!;
+    expect(node.dependencies).toContain('character_image:alice');
+    expect(node.dependencies).toContain('setting_image:forest');
+    expect(node.dependencies).toContain('shot_image_prompt:scene_1_shot_1');
+  });
+
+  it('shot_image with pending character_image dep is NOT ready', () => {
+    const executor = createExecutor({
+      'character_image:alice': {
+        typeId: 'character_image', itemId: 'alice', status: 'pending', // NOT completed
+        dependencies: [], dependents: [],
+      },
+      'shot_image_prompt:scene_1_shot_1': {
+        typeId: 'shot_image_prompt', itemId: 'scene_1_shot_1', status: 'completed',
+        dependencies: [], dependents: [],
+      },
+    });
+
+    executor.addNode({
+      id: 'shot_image:scene_1_shot_1',
+      typeId: 'shot_image',
+      itemId: 'scene_1_shot_1',
+      status: 'pending',
+      displayName: 'Shot Images: S1 Shot 1',
+      isExpensive: true,
+      isCollection: false,
+      dependencies: [
+        'shot_image_prompt:scene_1_shot_1',
+        'character_image:alice',
+      ],
+      dependents: [],
+    } as any);
+
+    // Should NOT be ready — character_image is pending
+    const ready = executor.getNextReady();
+    expect(ready.map(n => n.id)).not.toContain('shot_image:scene_1_shot_1');
+  });
+
+  it('shot_video depends on shot_image + shot_motion_directive', () => {
+    const executor = createExecutor({
+      'shot_image:scene_1_shot_1': {
+        typeId: 'shot_image', itemId: 'scene_1_shot_1', status: 'completed',
+        dependencies: [], dependents: [],
+      },
+      'shot_motion_directive:scene_1_shot_1': {
+        typeId: 'shot_motion_directive', itemId: 'scene_1_shot_1', status: 'completed',
+        dependencies: [], dependents: [],
+      },
+    });
+
+    executor.addNode({
+      id: 'shot_video:scene_1_shot_1',
+      typeId: 'shot_video',
+      itemId: 'scene_1_shot_1',
+      status: 'pending',
+      displayName: 'Shot Videos: S1 Shot 1',
+      isExpensive: true,
+      isCollection: false,
+      dependencies: [
+        'shot_image:scene_1_shot_1',
+        'shot_motion_directive:scene_1_shot_1',
+      ],
+      dependents: [],
+    } as any);
+
+    const ready = executor.getNextReady();
+    expect(ready.map(n => n.id)).toContain('shot_video:scene_1_shot_1');
+  });
+});

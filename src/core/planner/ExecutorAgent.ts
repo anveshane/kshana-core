@@ -2524,25 +2524,74 @@ For multi-frame shots (flfv/fmlfv):
           this.executor.expandCollection(`shot_motion_directive:${sceneId}`, shotItems);
         }
 
-        // Also expand shot_image and shot_video for this scene's shots
-        // These downstream types need per-shot nodes too
-        for (const downstreamType of ['shot_image', 'shot_video']) {
-          let perSceneNode = this.executor.getNode(`${downstreamType}:${sceneId}`);
-          if (!perSceneNode) {
-            const typeLevel = this.executor.getNode(downstreamType);
-            if (typeLevel && typeLevel.isCollection) {
-              this.log(`  Creating per-scene node ${downstreamType}:${sceneId} from type-level collection`);
-              this.executor.expandCollection(downstreamType, [{ itemId: sceneId, name: `Scene ${sceneId.replace('scene_', '')}` }]);
-              perSceneNode = this.executor.getNode(`${downstreamType}:${sceneId}`);
+        // Also create shot_image and shot_video per-shot nodes with proper dependencies.
+        // These can't rely on expandCollection's dependency inheritance because the
+        // type-level node's deps don't include per-item refs.
+        const allCharImages = this.executor.getAllNodes()
+          .filter(n => n.typeId === 'character_image' && n.itemId)
+          .map(n => n.id);
+        const allSettingImages = this.executor.getAllNodes()
+          .filter(n => n.typeId === 'setting_image' && n.itemId)
+          .map(n => n.id);
+
+        for (const shot of shotItems) {
+          const shotPromptId = `shot_image_prompt:${shot.itemId}`;
+          const motionId = `shot_motion_directive:${shot.itemId}`;
+          const shotImageId = `shot_image:${shot.itemId}`;
+          const shotVideoId = `shot_video:${shot.itemId}`;
+
+          // Create shot_image node if it doesn't exist
+          if (!this.executor.getNode(shotImageId)) {
+            const shotImageDeps = [shotPromptId, ...allCharImages, ...allSettingImages];
+            this.executor.addNode({
+              id: shotImageId,
+              typeId: 'shot_image',
+              itemId: shot.itemId,
+              status: 'pending',
+              displayName: `Shot Images: ${shot.name}`,
+              isExpensive: true,
+              isCollection: false,
+              dependencies: shotImageDeps,
+              dependents: [shotVideoId],
+            });
+            // Wire dependents on upstream nodes
+            for (const depId of shotImageDeps) {
+              const depNode = this.executor.getNode(depId);
+              if (depNode && !depNode.dependents.includes(shotImageId)) {
+                depNode.dependents.push(shotImageId);
+              }
             }
           }
-          if (perSceneNode) {
-            // Mark as collection so it can expand into per-shot nodes
-            perSceneNode.isCollection = true;
-            this.executor.expandCollection(`${downstreamType}:${sceneId}`, shotItems);
-            this.log(`  Expanded ${downstreamType} for ${sceneId}: ${shotItems.length} shots`);
+
+          // Create shot_video node if it doesn't exist
+          if (!this.executor.getNode(shotVideoId)) {
+            const shotVideoDeps = [shotImageId, motionId];
+            this.executor.addNode({
+              id: shotVideoId,
+              typeId: 'shot_video',
+              itemId: shot.itemId,
+              status: 'pending',
+              displayName: `Shot Videos: ${shot.name}`,
+              isExpensive: true,
+              isCollection: false,
+              dependencies: shotVideoDeps,
+              dependents: [],
+            });
+            // Wire dependents
+            for (const depId of shotVideoDeps) {
+              const depNode = this.executor.getNode(depId);
+              if (depNode && !depNode.dependents.includes(shotVideoId)) {
+                depNode.dependents.push(shotVideoId);
+              }
+            }
+            // Wire final_video to depend on this shot_video
+            const finalNode = this.executor.getNode('final_video');
+            if (finalNode && !finalNode.dependencies.includes(shotVideoId)) {
+              finalNode.dependencies.push(shotVideoId);
+            }
           }
         }
+        this.log(`  Created ${shotItems.length} shot_image + shot_video nodes for ${sceneId} with proper deps`);
 
         this.emit({
           type: 'notification',
