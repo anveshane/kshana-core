@@ -1908,36 +1908,64 @@ Rules:
   private repairJson(text: string): string {
     let s = text.trim();
 
-    // Two JSON arrays concatenated: ] [ or ]\n[
-    // Take the last complete array
-    const arrayConcat = s.match(/\]\s*\[/g);
-    if (arrayConcat) {
-      const lastArrayStart = s.lastIndexOf('[');
-      if (lastArrayStart > 0) {
-        const candidate = s.substring(lastArrayStart);
-        try {
-          JSON.parse(candidate);
-          this.log(`  JSON repair: found concatenated arrays, using last array (${candidate.length} chars)`);
-          return candidate;
-        } catch { /* last array isn't valid either, try other repairs */ }
+    // Strategy 1: Extract first valid JSON object/array from the text.
+    // Handles thinking preamble before JSON (common with Nemotron, local models).
+    // Scans for { or [ and tries to parse from that position.
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === '{' || s[i] === '[') {
+        // Find the matching closing bracket by trying progressively longer substrings
+        const openChar = s[i]!;
+        const closeChar = openChar === '{' ? '}' : ']';
+        let depth = 0;
+        let inString = false;
+        let escape = false;
+
+        for (let j = i; j < s.length; j++) {
+          const ch = s[j]!;
+          if (escape) { escape = false; continue; }
+          if (ch === '\\' && inString) { escape = true; continue; }
+          if (ch === '"' && !escape) { inString = !inString; continue; }
+          if (inString) continue;
+          if (ch === openChar) depth++;
+          if (ch === closeChar) depth--;
+          if (depth === 0) {
+            const candidate = s.substring(i, j + 1);
+            try {
+              JSON.parse(candidate);
+              if (i > 0) {
+                this.log(`  JSON repair: extracted JSON from position ${i} (skipped ${i} chars of preamble)`);
+              }
+              return candidate;
+            } catch {
+              break; // This bracket pair didn't produce valid JSON, try next
+            }
+          }
+        }
       }
     }
 
-    // Two JSON objects concatenated: } {
-    const objConcat = s.match(/\}\s*\{/g);
-    if (objConcat) {
-      const lastObjStart = s.lastIndexOf('{');
-      if (lastObjStart > 0) {
-        const candidate = s.substring(lastObjStart);
-        try {
-          JSON.parse(candidate);
-          this.log(`  JSON repair: found concatenated objects, using last object (${candidate.length} chars)`);
-          return candidate;
-        } catch { /* try other repairs */ }
-      }
+    // Strategy 2: Take the last complete JSON object (for concatenated outputs)
+    const lastObjStart = s.lastIndexOf('{');
+    if (lastObjStart > 0) {
+      const candidate = s.substring(lastObjStart);
+      try {
+        JSON.parse(candidate);
+        this.log(`  JSON repair: using last object from position ${lastObjStart}`);
+        return candidate;
+      } catch { /* try other repairs */ }
     }
 
-    // Trailing commas: ,] or ,}
+    const lastArrayStart = s.lastIndexOf('[');
+    if (lastArrayStart > 0) {
+      const candidate = s.substring(lastArrayStart);
+      try {
+        JSON.parse(candidate);
+        this.log(`  JSON repair: using last array from position ${lastArrayStart}`);
+        return candidate;
+      } catch { /* try other repairs */ }
+    }
+
+    // Strategy 3: Trailing commas
     s = s.replace(/,\s*\]/g, ']').replace(/,\s*\}/g, '}');
 
     return s;
