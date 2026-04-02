@@ -41,8 +41,8 @@ function buildTodoList(nodes: ExecutionNode[]): Array<{ id: string; displayName:
 
   return nodes
     .filter(node => {
-      // Hide type-level collection nodes that have per-item children
-      if (node.isCollection && !node.itemId && expandedTypes.has(node.typeId)) {
+      // Hide type-level nodes that have per-item children (expanded into per-scene/per-shot)
+      if (!node.itemId && expandedTypes.has(node.typeId)) {
         return false;
       }
       return true;
@@ -149,5 +149,85 @@ describe('Todo list filtering', () => {
 
     expect(ids).not.toContain('character_image'); // type-level hidden
     expect(ids).toContain('character_image:alice'); // per-item visible even with isCollection=true
+  });
+
+  it('hides FAILED type-level node when per-item children exist', () => {
+    // Bug: type-level SVP node failed (405 error) but per-scene children
+    // were created by expandPendingCollections. The failed type-level node
+    // should still be hidden — its children handle execution.
+    const state = makeNodes({
+      'scene_video_prompt': {
+        typeId: 'scene_video_prompt', isCollection: false, status: 'failed',
+        displayName: 'Multi-Shot Motion Prompts',
+      },
+      'scene_video_prompt:scene_1': {
+        typeId: 'scene_video_prompt', itemId: 'scene_1', status: 'completed',
+        displayName: 'Multi-Shot Motion Prompts: The Dark Alleys',
+      },
+      'scene_video_prompt:scene_2': {
+        typeId: 'scene_video_prompt', itemId: 'scene_2', status: 'pending',
+        displayName: 'Multi-Shot Motion Prompts: The Murder Site',
+      },
+    });
+
+    const todos = buildTodoList(Object.values(state.nodes));
+    const ids = todos.map(t => t.id);
+
+    expect(ids).not.toContain('scene_video_prompt'); // failed type-level hidden
+    expect(ids).toContain('scene_video_prompt:scene_1');
+    expect(ids).toContain('scene_video_prompt:scene_2');
+  });
+
+  it('hides type-level node even when isCollection is false (consumed by expansion)', () => {
+    // After expandCollection, type-level node may be recreated by retry
+    // with isCollection=false. Should still be hidden if children exist.
+    const state = makeNodes({
+      'shot_image': {
+        typeId: 'shot_image', isCollection: false, status: 'pending',
+        displayName: 'Shot Images',
+      },
+      'shot_image:scene_1_shot_1': {
+        typeId: 'shot_image', itemId: 'scene_1_shot_1', status: 'completed',
+        displayName: 'Shot Images: S1 Shot 1: wide',
+      },
+    });
+
+    const todos = buildTodoList(Object.values(state.nodes));
+    const ids = todos.map(t => t.id);
+
+    expect(ids).not.toContain('shot_image');
+    expect(ids).toContain('shot_image:scene_1_shot_1');
+  });
+});
+
+describe('Shot display names', () => {
+  it('per-shot nodes across scenes have unique display names', () => {
+    // Bug: "Shot 1: wide" appeared 3 times (once per scene) with no
+    // scene identifier. Now should show "S1 Shot 1: wide", "S2 Shot 1: wide".
+    const state = makeNodes({
+      'shot_image_prompt:scene_1_shot_1': {
+        typeId: 'shot_image_prompt', itemId: 'scene_1_shot_1', status: 'pending',
+        displayName: 'Shot Image Prompts: S1 Shot 1: wide',
+      },
+      'shot_image_prompt:scene_2_shot_1': {
+        typeId: 'shot_image_prompt', itemId: 'scene_2_shot_1', status: 'pending',
+        displayName: 'Shot Image Prompts: S2 Shot 1: wide',
+      },
+      'shot_image_prompt:scene_3_shot_1': {
+        typeId: 'shot_image_prompt', itemId: 'scene_3_shot_1', status: 'pending',
+        displayName: 'Shot Image Prompts: S3 Shot 1: wide',
+      },
+    });
+
+    const todos = buildTodoList(Object.values(state.nodes));
+    const names = todos.map(t => t.displayName);
+
+    // All names should be unique
+    expect(new Set(names).size).toBe(names.length);
+
+    // Each should contain its scene identifier
+    expect(names[0]).toContain('S1');
+    expect(names[1]).toContain('S2');
+    expect(names[2]).toContain('S3');
   });
 });
