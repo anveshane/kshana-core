@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { ToolCall } from '../lib/store'
 import { useAppState } from '../lib/store'
@@ -521,6 +521,14 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
   const { selectedProject } = useAppState()
   const { toolName, status, streamingContent, result, args, startTime } = toolCall
   const displayName = TOOL_NAMES[toolName] || toolName.replace(/_/g, ' ')
+  // Force re-render every second while executing to update elapsed timer
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (status !== 'executing') return
+    const interval = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(interval)
+  }, [status])
+
   const elapsed = status === 'executing' ? Math.round((Date.now() - startTime) / 1000) : undefined
   const duration = toolCall.duration ? Math.round((toolCall.duration - startTime) / 1000) : undefined
 
