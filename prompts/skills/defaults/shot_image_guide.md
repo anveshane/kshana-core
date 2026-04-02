@@ -157,6 +157,7 @@ When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MU
 
 ### JSON Structure for Multi-Frame Shots
 
+**FLFV example (first + last frame):**
 ```json
 {
   "shotNumber": 2,
@@ -171,6 +172,35 @@ When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MU
     },
     "last_frame": {
       "imagePrompt": "Description of what changed — character moved deeper into passage, torchlight dimmer...",
+      "generationMode": "edit_first_frame",
+      "references": []
+    }
+  },
+  "negativePrompt": "...",
+  "aspectRatio": "16:9"
+}
+```
+
+**FMLFV example (first + mid + last frame):**
+```json
+{
+  "shotNumber": 4,
+  "frames": {
+    "first_frame": {
+      "imagePrompt": "Full scene description for the opening frame...",
+      "generationMode": "image_text_to_image",
+      "references": [
+        { "imageNumber": 1, "type": "character", "refId": "kai" },
+        { "imageNumber": 2, "type": "setting", "refId": "alley" }
+      ]
+    },
+    "mid_frame": {
+      "imagePrompt": "Description of mid-point — character now halfway across the space, expression shifted...",
+      "generationMode": "edit_first_frame",
+      "references": []
+    },
+    "last_frame": {
+      "imagePrompt": "Description of end state — character reached the far side, lighting changed...",
       "generationMode": "edit_first_frame",
       "references": []
     }

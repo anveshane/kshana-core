@@ -2279,12 +2279,22 @@ For single-frame shots (i2v):
   "references": [{ "imageNumber": number, "type": "character | setting", "refId": "string" }]
 }
 
-For multi-frame shots (flfv/fmlfv):
+For multi-frame shots (flfv — first + last):
 {
   "shotNumber": number,
   "frames": {
     "first_frame": { "imagePrompt": "string", "generationMode": "image_text_to_image", "references": [...] },
     "last_frame": { "imagePrompt": "string (delta only)", "generationMode": "edit_first_frame", "references": [] }
+  }, ...
+}
+
+For multi-frame shots (fmlfv — first + mid + last):
+{
+  "shotNumber": number,
+  "frames": {
+    "first_frame": { "imagePrompt": "string", "generationMode": "image_text_to_image", "references": [...] },
+    "mid_frame": { "imagePrompt": "string (delta from first)", "generationMode": "edit_first_frame", "references": [] },
+    "last_frame": { "imagePrompt": "string (delta from first)", "generationMode": "edit_first_frame", "references": [] }
   },
   "negativePrompt": "string",
   "aspectRatio": "16:9"
