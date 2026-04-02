@@ -204,6 +204,47 @@ function StructuredContentCard({ content }: { content: string }) {
   )
 }
 
+/** Separate thinking content from main content in streaming text */
+function separateThinking(text: string): { thinking: string; content: string } {
+  let thinking = ''
+  let content = text
+
+  // Extract all <thinking>...</thinking> blocks
+  const thinkRegex = /<thinking>([\s\S]*?)<\/thinking>/g
+  let match
+  while ((match = thinkRegex.exec(text)) !== null) {
+    thinking += match[1]!
+  }
+
+  // Remove thinking blocks from content
+  content = text.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim()
+
+  return { thinking: thinking.trim(), content }
+}
+
+/** Collapsible thinking block */
+function ThinkingBlock({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false)
+  if (!text) return null
+
+  return (
+    <div className="px-3 py-1.5">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1.5 text-[10px] text-graphite-200 hover:text-graphite-100 cursor-pointer"
+      >
+        <span style={{ transform: expanded ? 'rotate(90deg)' : 'none' }} className="transition-transform">▸</span>
+        <span className="italic">Thinking... ({text.length} chars)</span>
+      </button>
+      {expanded && (
+        <div className="mt-1 p-2 rounded bg-graphite-300/30 border border-line-soft text-[10px] text-graphite-200 max-h-32 overflow-y-auto whitespace-pre-wrap italic">
+          {text}
+        </div>
+      )}
+    </div>
+  )
+}
+
 /** Try to extract a shot count from streaming JSON array content */
 function countJsonShots(text: string): number {
   const matches = text.match(/"shotNumber"\s*:/g)
@@ -484,9 +525,10 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
   const lastLine = streamingContent?.trim().split('\n').pop()?.trim() ?? ''
   const hasProgress = !!parseProgress(lastLine)
 
-  // Filter redundant streaming lines
-  const meaningfulContent = streamingContent
-    ?.split('\n')
+  // Separate thinking from content, then filter redundant lines
+  const { thinking: thinkingText, content: rawContent } = separateThinking(streamingContent ?? '')
+  const meaningfulContent = rawContent
+    .split('\n')
     .filter(line => {
       const trimmed = line.trim()
       if (!trimmed) return false
@@ -546,6 +588,9 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
           {elapsed !== undefined ? `${elapsed}s...` : duration !== undefined ? `${duration}s` : ''}
         </span>
       </div>
+
+      {/* Thinking block — collapsible, shown when LLM has <think> output */}
+      {thinkingText && <ThinkingBlock text={thinkingText} />}
 
       {/* Per-type body */}
       {renderBody()}

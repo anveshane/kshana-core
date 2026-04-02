@@ -2286,34 +2286,8 @@ For multi-frame shots (flfv/fmlfv):
 
     const agentName = this.config.name ?? 'kshana-executor';
     const effectiveToolName = toolDisplayName ?? `generate_${node.typeId}`;
-    const hasThinking = this.llm.hasImplicitThinking;
-
-    // Simple streaming path (no think tags) — avoids memory-heavy buffer accumulation
-    if (!hasThinking) {
-      const chunks: string[] = [];
-      for await (const chunk of this.llm.generateStream(options)) {
-        if (chunk.content) {
-          chunks.push(chunk.content);
-          if (toolCallId) {
-            this.emit({
-              type: 'tool_streaming',
-              toolCallId, chunk: chunk.content, done: false,
-              agentName, toolName: effectiveToolName,
-            });
-          }
-        }
-      }
-      if (toolCallId) {
-        this.emit({
-          type: 'tool_streaming',
-          toolCallId, chunk: '', done: true,
-          agentName, toolName: effectiveToolName,
-        });
-      }
-      return chunks.join('');
-    }
-
-    // Think-tag parsing path — separates <think> blocks from content
+    // Think-tag parsing path — always active.
+    // Separates <think> blocks from content and emits them separately.
     // Uses incremental flush to avoid unbounded buffer growth
     const contentChunks: string[] = [];
     let buffer = '';
@@ -2330,16 +2304,27 @@ For multi-frame shots (flfv/fmlfv):
           const closeIdx = buffer.indexOf('</think>');
           if (closeIdx !== -1) {
             const thinkContent = buffer.slice(0, closeIdx);
-            if (thinkContent) {
-              this.emit({ type: 'streaming_think', chunk: thinkContent, done: false });
+            if (thinkContent && toolCallId) {
+              // Send thinking content to the tool card with a marker prefix
+              this.emit({
+                type: 'tool_streaming',
+                toolCallId, chunk: `\n<thinking>${thinkContent}</thinking>\n`, done: false,
+                agentName, toolName: effectiveToolName,
+              });
             }
             buffer = buffer.slice(closeIdx + '</think>'.length);
             insideThink = false;
-            this.emit({ type: 'streaming_think', chunk: '', done: true });
           } else {
             // Flush all but the last 8 chars (potential partial </think>)
             if (buffer.length > 8) {
-              this.emit({ type: 'streaming_think', chunk: buffer.slice(0, -8), done: false });
+              const flushContent = buffer.slice(0, -8);
+              if (toolCallId) {
+                this.emit({
+                  type: 'tool_streaming',
+                  toolCallId, chunk: `<thinking>${flushContent}</thinking>`, done: false,
+                  agentName, toolName: effectiveToolName,
+                });
+              }
               buffer = buffer.slice(-8);
             }
             break;
