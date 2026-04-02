@@ -383,24 +383,38 @@ export class ExecutorAgent extends TypedEventEmitter {
       return (a.itemId ?? '').localeCompare(b.itemId ?? '');
     });
 
-    const todos: ExpandableTodoItem[] = sorted.map(node => {
-      let status: ExpandableTodoItem['status'];
-      switch (node.status) {
-        case 'completed': status = 'completed'; break;
-        case 'in_progress': case 'ready': status = 'in_progress'; break;
-        case 'failed': status = 'cancelled'; break;
-        case 'skipped': status = 'completed'; break;
-        default: status = 'pending'; break;
-      }
+    // Determine which type-level nodes have been expanded into per-item children
+    const expandedTypes = new Set<string>();
+    for (const node of sorted) {
+      if (node.itemId) expandedTypes.add(node.typeId);
+    }
 
-      return {
-        id: node.id,
-        content: node.displayName,
-        status,
-        visible: true,
-        depth: 0,
-      };
-    });
+    const todos: ExpandableTodoItem[] = sorted
+      .filter(node => {
+        // Hide type-level collection nodes that have per-item children
+        if (node.isCollection && !node.itemId && expandedTypes.has(node.typeId)) {
+          return false;
+        }
+        return true;
+      })
+      .map(node => {
+        let status: ExpandableTodoItem['status'];
+        switch (node.status) {
+          case 'completed': status = 'completed'; break;
+          case 'in_progress': case 'ready': status = 'in_progress'; break;
+          case 'failed': status = 'cancelled'; break;
+          case 'skipped': status = 'completed'; break;
+          default: status = 'pending'; break;
+        }
+
+        return {
+          id: node.id,
+          content: node.displayName,
+          status,
+          visible: true,
+          depth: 0,
+        };
+      });
 
     this.emit({ type: 'todo_update', todos });
   }
