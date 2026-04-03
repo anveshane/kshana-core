@@ -74,7 +74,10 @@ jobs:
           for name in LLM_PROVIDER LLM_CONTEXT_TOKENS OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL COMFYUI_BASE_URL COMFYUI_TIMEOUT POSTHOG_API_KEY POSTHOG_HOST ANALYTICS_SALT; do
             append_multiline_env "${name}"
           done
-          for name in DEV_LLM_PROVIDER DEV_LLM_CONTEXT_TOKENS DEV_OPENAI_API_KEY DEV_OPENAI_BASE_URL DEV_OPENAI_MODEL DEV_COMFYUI_BASE_URL DEV_COMFYUI_TIMEOUT DEV_POSTHOG_API_KEY DEV_POSTHOG_HOST DEV_ANALYTICS_SALT; do
+          for name in COMFY_CLOUD_API_KEY; do
+            append_optional_multiline_env "${name}"
+          done
+          for name in DEV_LLM_PROVIDER DEV_LLM_CONTEXT_TOKENS DEV_OPENAI_API_KEY DEV_OPENAI_BASE_URL DEV_OPENAI_MODEL DEV_COMFYUI_BASE_URL DEV_COMFYUI_TIMEOUT DEV_POSTHOG_API_KEY DEV_POSTHOG_HOST DEV_ANALYTICS_SALT DEV_COMFY_CLOUD_API_KEY; do
             append_optional_multiline_env "${name}"
           done
 
@@ -138,6 +141,7 @@ jobs:
           OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
           COMFYUI_BASE_URL: ${{ env.COMFYUI_BASE_URL }}
           COMFYUI_TIMEOUT: ${{ env.COMFYUI_TIMEOUT }}
+          COMFY_CLOUD_API_KEY: ${{ env.COMFY_CLOUD_API_KEY }}
           POSTHOG_API_KEY: ${{ env.POSTHOG_API_KEY }}
           POSTHOG_HOST: ${{ env.POSTHOG_HOST }}
           ANALYTICS_SALT: ${{ env.ANALYTICS_SALT }}
@@ -148,6 +152,7 @@ jobs:
           DEV_OPENAI_MODEL: ${{ env.DEV_OPENAI_MODEL }}
           DEV_COMFYUI_BASE_URL: ${{ env.DEV_COMFYUI_BASE_URL }}
           DEV_COMFYUI_TIMEOUT: ${{ env.DEV_COMFYUI_TIMEOUT }}
+          DEV_COMFY_CLOUD_API_KEY: ${{ env.DEV_COMFY_CLOUD_API_KEY }}
           DEV_POSTHOG_API_KEY: ${{ env.DEV_POSTHOG_API_KEY }}
           DEV_POSTHOG_HOST: ${{ env.DEV_POSTHOG_HOST }}
           DEV_ANALYTICS_SALT: ${{ env.DEV_ANALYTICS_SALT }}
@@ -155,7 +160,7 @@ jobs:
           host: ${{ env.GCE_HOST }}
           username: ${{ env.GCE_USER }}
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
-          envs: IMAGE_URI,TARGET_SERVICE,TARGET_ENV_FILE,REGISTRY_HOST,GCP_SA_KEY,LLM_PROVIDER,LLM_CONTEXT_TOKENS,OPENAI_API_KEY,OPENAI_BASE_URL,OPENAI_MODEL,COMFYUI_BASE_URL,COMFYUI_TIMEOUT,POSTHOG_API_KEY,POSTHOG_HOST,ANALYTICS_SALT,DEV_LLM_PROVIDER,DEV_LLM_CONTEXT_TOKENS,DEV_OPENAI_API_KEY,DEV_OPENAI_BASE_URL,DEV_OPENAI_MODEL,DEV_COMFYUI_BASE_URL,DEV_COMFYUI_TIMEOUT,DEV_POSTHOG_API_KEY,DEV_POSTHOG_HOST,DEV_ANALYTICS_SALT
+          envs: IMAGE_URI,TARGET_SERVICE,TARGET_ENV_FILE,REGISTRY_HOST,GCP_SA_KEY,LLM_PROVIDER,LLM_CONTEXT_TOKENS,OPENAI_API_KEY,OPENAI_BASE_URL,OPENAI_MODEL,COMFYUI_BASE_URL,COMFYUI_TIMEOUT,COMFY_CLOUD_API_KEY,POSTHOG_API_KEY,POSTHOG_HOST,ANALYTICS_SALT,DEV_LLM_PROVIDER,DEV_LLM_CONTEXT_TOKENS,DEV_OPENAI_API_KEY,DEV_OPENAI_BASE_URL,DEV_OPENAI_MODEL,DEV_COMFYUI_BASE_URL,DEV_COMFYUI_TIMEOUT,DEV_COMFY_CLOUD_API_KEY,DEV_POSTHOG_API_KEY,DEV_POSTHOG_HOST,DEV_ANALYTICS_SALT
           script: |
             set -euo pipefail
             mkdir -p ~/kshana-ink
@@ -185,6 +190,7 @@ jobs:
                     OPENAI_MODEL) dev_or_prod "${DEV_OPENAI_MODEL:-}" "${OPENAI_MODEL:-}" ;;
                     COMFYUI_BASE_URL) dev_or_prod "${DEV_COMFYUI_BASE_URL:-}" "${COMFYUI_BASE_URL:-}" ;;
                     COMFYUI_TIMEOUT) dev_or_prod "${DEV_COMFYUI_TIMEOUT:-}" "${COMFYUI_TIMEOUT:-}" ;;
+                    COMFY_CLOUD_API_KEY) dev_or_prod "${DEV_COMFY_CLOUD_API_KEY:-}" "${COMFY_CLOUD_API_KEY:-}" ;;
                     POSTHOG_API_KEY) dev_or_prod "${DEV_POSTHOG_API_KEY:-}" "${POSTHOG_API_KEY:-}" ;;
                     POSTHOG_HOST) dev_or_prod "${DEV_POSTHOG_HOST:-}" "${POSTHOG_HOST:-}" ;;
                     ANALYTICS_SALT) dev_or_prod "${DEV_ANALYTICS_SALT:-}" "${ANALYTICS_SALT:-}" ;;
@@ -198,6 +204,7 @@ jobs:
                     OPENAI_MODEL) echo "${OPENAI_MODEL:-}" ;;
                     COMFYUI_BASE_URL) echo "${COMFYUI_BASE_URL:-}" ;;
                     COMFYUI_TIMEOUT) echo "${COMFYUI_TIMEOUT:-}" ;;
+                    COMFY_CLOUD_API_KEY) echo "${COMFY_CLOUD_API_KEY:-}" ;;
                     POSTHOG_API_KEY) echo "${POSTHOG_API_KEY:-}" ;;
                     POSTHOG_HOST) echo "${POSTHOG_HOST:-}" ;;
                     ANALYTICS_SALT) echo "${ANALYTICS_SALT:-}" ;;
@@ -212,6 +219,7 @@ jobs:
                 printf "OPENAI_MODEL=%s\n" "$(select_secret OPENAI_MODEL)"
                 printf "COMFYUI_BASE_URL=%s\n" "$(select_secret COMFYUI_BASE_URL)"
                 printf "COMFYUI_TIMEOUT=%s\n" "$(select_secret COMFYUI_TIMEOUT)"
+                printf "COMFY_CLOUD_API_KEY=%s\n" "$(select_secret COMFY_CLOUD_API_KEY)"
                 printf "POSTHOG_API_KEY=%s\n" "$(select_secret POSTHOG_API_KEY)"
                 printf "POSTHOG_HOST=%s\n" "$(select_secret POSTHOG_HOST)"
                 printf "ANALYTICS_SALT=%s\n" "$(select_secret ANALYTICS_SALT)"
