@@ -43,8 +43,21 @@ export interface ConversationManagerConfig {
 
 export interface ConversationEvents {
   onProgress?: (sessionId: string, percentage: number, message: string) => void;
-  onToolCall?: (sessionId: string, toolName: string, args: Record<string, unknown>, agentName?: string) => void;
-  onToolResult?: (sessionId: string, toolName: string, result: unknown, agentName?: string) => void;
+  onToolCall?: (
+    sessionId: string,
+    toolCallId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    agentName?: string,
+  ) => void;
+  onToolResult?: (
+    sessionId: string,
+    toolCallId: string,
+    toolName: string,
+    result: unknown,
+    isError?: boolean,
+    agentName?: string,
+  ) => void;
   onTodoUpdate?: (sessionId: string, todos: ExpandableTodoItem[]) => void;
   onAgentText?: (sessionId: string, text: string, isFinal: boolean) => void;
   onQuestion?: (sessionId: string, question: string, isConfirmation: boolean, options?: Array<{ label: string; description?: string }>, autoApproveTimeoutMs?: number) => void;
@@ -234,6 +247,22 @@ export class ConversationManager {
     }
 
     session.remoteFs = remoteFs;
+    if (session.mode === 'remote') {
+      if (session.sessionContext) {
+        (
+          session.sessionContext as SessionContext & {
+            fs: IFileSystem;
+            mode: 'remote';
+          }
+        ).fs = remoteFs;
+      } else {
+        session.sessionContext = createRemoteSession(
+          sessionId,
+          'default.kshana',
+          remoteFs,
+        );
+      }
+    }
     session.state.lastActivity = Date.now();
   }
 
@@ -488,13 +517,26 @@ export class ConversationManager {
 
     if (events.onToolCall) {
       agent.on('tool_call', (data) => {
-        events.onToolCall!(sessionId, data.toolName, data.arguments, data.agentName);
+        events.onToolCall!(
+          sessionId,
+          data.toolCallId,
+          data.toolName,
+          data.arguments,
+          data.agentName,
+        );
       });
     }
 
     if (events.onToolResult) {
       agent.on('tool_result', (data) => {
-        events.onToolResult!(sessionId, data.toolName, data.result, data.agentName);
+        events.onToolResult!(
+          sessionId,
+          data.toolCallId,
+          data.toolName,
+          data.result,
+          data.isError,
+          data.agentName,
+        );
       });
     }
 

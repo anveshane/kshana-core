@@ -3395,6 +3395,9 @@ Respond in JSON format:
     const validContentTypes = [
       // Narrative types
       'plot', 'story', 'character', 'setting', 'scene', 'narration',
+      // Prompt-generation types
+      'character_image_prompt', 'setting_image_prompt', 'scene_image_prompt',
+      'scene_video_prompt', 'shot_image_prompt',
       // Documentary/generic types
       'outline', 'segment', 'thesis', 'research', 'script',
     ];

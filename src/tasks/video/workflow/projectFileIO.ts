@@ -110,7 +110,23 @@ function sendRemoteProjectCommand(type: string, data: Record<string, unknown>): 
   const remoteFs = getRemoteProjectFs();
   const socket = remoteFs?.socket;
   if (!socket || socket.readyState !== 1) {
-    throw new Error(`Remote project filesystem is not connected for ${type}`);
+    const session = getCurrentSession();
+    const projectRoot = session ? getProjectRoot() : null;
+    const details = {
+      sessionId: session?.sessionId ?? null,
+      mode: session?.mode ?? 'none',
+      projectDir: session?.projectDir ?? null,
+      projectRoot,
+      socketReadyState: socket?.readyState ?? null,
+      commandType: type,
+    };
+    console.error(
+      '[projectFileIO] Remote project filesystem is not connected',
+      details,
+    );
+    throw new Error(
+      `Remote project filesystem is not connected for ${type} (mode=${details.mode}, projectDir=${details.projectDir ?? 'unknown'}, readyState=${details.socketReadyState ?? 'missing'})`,
+    );
   }
 
   socket.send(JSON.stringify({ type, data }));
