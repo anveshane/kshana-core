@@ -6,7 +6,10 @@
   "selectionCriteria": "Choose this workflow when you need high-quality LTX-Video generation with audio, particularly when a dual-pass upscaled output is desired. It supports both text-to-video and image-to-video modes, making it versatile for various video generation tasks.",
   "outputType": "video",
   "priority": 10,
-  "strategies": ["i2v", "t2v"],
+  "strategies": [
+    "i2v",
+    "t2v"
+  ],
   "inputRequirements": [
     {
       "id": "first_frame",
@@ -70,12 +73,6 @@
       "input": "seed",
       "nodeId": "275",
       "field": "noise_seed"
-    },
-    {
-      "input": "first_frame",
-      "nodeId": "302",
-      "field": "value",
-      "defaultValue": false
     },
     {
       "input": "prompt",

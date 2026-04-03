@@ -414,18 +414,11 @@ export class ComfyUIProvider implements GenerationProvider {
 
       workflow = parameterizeGeneric(template, modeManifest, genericParams) as Record<string, unknown>;
 
-      // Handle boolean toggle nodes for image inputs (i2v/t2v switch)
-      // For each image input mapping, if the target is a PrimitiveBoolean, set true/false
-      // based on whether that image was provided
-      for (const mapping of modeManifest.parameterMappings) {
-        const node = (workflow as Record<string, { class_type?: string; inputs?: Record<string, unknown> }>)[mapping.nodeId];
-        if (node?.class_type === 'PrimitiveBoolean') {
-          const hasValue = mapping.input in genericParams && genericParams[mapping.input];
-          node.inputs = node.inputs || {};
-          node.inputs[mapping.field] = !!hasValue;
-          debugLog(`Set boolean ${mapping.nodeId}.${mapping.field} = ${!!hasValue} (input: ${mapping.input})`);
-        }
-      }
+      // Boolean toggle nodes (PrimitiveBoolean) for i2v/t2v switching:
+      // These are handled by parameterizeGeneric via defaultValue from the manifest.
+      // The manifest's defaultValue defines the correct state (e.g., false = i2v mode).
+      // When no image is provided (t2v), the default kicks in via parameterizeGeneric.
+      // We do NOT override booleans here — the manifest defines the semantics.
     } else {
       // Built-in workflow: use the old registry + named parameterizer
       const workflowMetadata = registry.get(workflowName);
