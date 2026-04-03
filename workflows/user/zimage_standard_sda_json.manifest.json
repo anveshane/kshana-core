@@ -70,6 +70,11 @@
       "input": "prompt",
       "nodeId": "6",
       "field": "text"
+    },
+    {
+      "input": "height",
+      "nodeId": "13",
+      "field": "height"
     }
   ],
   "builtIn": false,
