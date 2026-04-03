@@ -83,7 +83,7 @@ export class LLMClient {
     this.client = new OpenAI({
       baseURL: this.baseUrl,
       apiKey,
-      timeout: 5 * 60 * 1000, // 5 minutes for thinking/reasoning models
+      timeout: 200 * 1000, // 200 seconds — prevent stuck reasoning loops
       organization,
       defaultHeaders: Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined,
     });
