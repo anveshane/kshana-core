@@ -2025,66 +2025,16 @@ Rules:
     try {
       const parsed = JSON.parse(cleaned);
 
+      // Validate against Zod schema
+      const { validateWithSchema, normalizeSceneVideoPrompt } = require('./schemas.js');
+      const result = validateWithSchema(node.typeId, parsed);
+      if (!result.valid) {
+        return { valid: false, error: result.error };
+      }
+
+      // Auto-normalize scene_video_prompt fields
       if (node.typeId === 'scene_video_prompt') {
-        if (!parsed.shots || !Array.isArray(parsed.shots)) {
-          return { valid: false, error: 'Missing "shots" array' };
-        }
-        if (parsed.shots.length === 0) {
-          return { valid: false, error: '"shots" array is empty' };
-        }
-        for (const shot of parsed.shots) {
-          if (typeof shot.shotNumber !== 'number') {
-            return { valid: false, error: 'Shot missing "shotNumber"' };
-          }
-          // Support both old format (description) and new format (firstFrame)
-          if (!shot.firstFrame && !shot.description) {
-            return { valid: false, error: `Shot ${shot.shotNumber} missing "firstFrame" or "description"` };
-          }
-          if (shot.firstFrame && !shot.firstFrame.description) {
-            return { valid: false, error: `Shot ${shot.shotNumber} firstFrame missing "description"` };
-          }
-          if (!shot.videoGenerationMode && !shot.generationStrategy) {
-            // Auto-classify if missing
-            const hasCharsFirst = shot.firstFrame?.characters?.length > 0;
-            const hasCharsLast = shot.lastFrame?.characters?.length > 0;
-            if (!hasCharsFirst && !hasCharsLast) shot.videoGenerationMode = 't2v';
-            else if (hasCharsFirst) shot.videoGenerationMode = 'i2v';
-            else shot.videoGenerationMode = 'i2v_late_entry';
-          }
-          // Normalize: copy videoGenerationMode to generationStrategy for backward compat
-          if (shot.videoGenerationMode && !shot.generationStrategy) {
-            shot.generationStrategy = shot.videoGenerationMode;
-          }
-        }
-      }
-
-      if (node.typeId === 'shot_image_prompt') {
-        // Accept both single-frame format (imagePrompt at top level)
-        // and multi-frame format (frames.first_frame.imagePrompt)
-        const hasTopLevelPrompt = parsed.imagePrompt && typeof parsed.imagePrompt === 'string';
-        const hasFrames = parsed.frames && typeof parsed.frames === 'object' &&
-          parsed.frames.first_frame?.imagePrompt;
-        if (!hasTopLevelPrompt && !hasFrames) {
-          return { valid: false, error: 'Missing "imagePrompt" string or "frames.first_frame.imagePrompt"' };
-        }
-        if (!hasFrames && !parsed.generationMode) {
-          return { valid: false, error: 'Missing "generationMode"' };
-        }
-        if (!Array.isArray(parsed.references)) {
-          return { valid: false, error: 'Missing "references" array' };
-        }
-      }
-
-      if (node.typeId === 'character_image' || node.typeId === 'setting_image') {
-        if (!parsed.imagePrompt || typeof parsed.imagePrompt !== 'string') {
-          return { valid: false, error: 'Missing "imagePrompt" string' };
-        }
-        if (typeof parsed.negativePrompt !== 'string') {
-          return { valid: false, error: 'Missing "negativePrompt" string' };
-        }
-        if (typeof parsed.aspectRatio !== 'string') {
-          return { valid: false, error: 'Missing "aspectRatio" string' };
-        }
+        normalizeSceneVideoPrompt(parsed);
       }
 
       return { valid: true };
@@ -2284,85 +2234,10 @@ Rules:
     }
 
     // Inject JSON schema into the system prompt so the LLM sees the exact expected structure.
-    // This is more reliable than response_format alone — works across all LLM providers.
+    // Schema text is generated from the same source (schemas.ts) that validates the output.
     if (isJsonNode) {
-      const JSON_SCHEMAS: Record<string, string> = {
-        scene_video_prompt: `<json_schema>
-{
-  "sceneNumber": number,
-  "sceneTitle": "string",
-  "totalDuration": number,
-  "shots": [
-    {
-      "shotNumber": number,
-      "shotType": "string (establishing, tracking, medium, close_up, wide, extreme_close_up)",
-      "duration": number,
-      "generationStrategy": "i2v | flfv | fmlfv | i2v_late_entry",
-      "firstFrame": {
-        "description": "string (detailed cinematographer prose)",
-        "characters": ["character_id"],
-        "setting": "setting_id"
-      },
-      "lastFrame": {
-        "description": "string (optional — only when end state differs from start)",
-        "characters": ["character_id"],
-        "setting": "setting_id"
-      },
-      "cameraWork": "string",
-      "soundCue": "string",
-      "transition": "cut | crossfade | dip_to_black | fade"
-    }
-  ]
-}
-</json_schema>`,
-        shot_image_prompt: `<json_schema>
-For single-frame shots (i2v):
-{
-  "imagePrompt": "string (80-250 words, flowing prose)",
-  "negativePrompt": "string",
-  "aspectRatio": "16:9",
-  "generationMode": "image_text_to_image | text_to_image",
-  "references": [{ "imageNumber": number, "type": "character | setting", "refId": "string" }]
-}
-
-For multi-frame shots (flfv — first + last):
-{
-  "shotNumber": number,
-  "frames": {
-    "first_frame": { "imagePrompt": "string", "generationMode": "image_text_to_image", "references": [...] },
-    "last_frame": { "imagePrompt": "string (delta only)", "generationMode": "edit_first_frame", "references": [] }
-  }, ...
-}
-
-For multi-frame shots (fmlfv — first + mid + last):
-{
-  "shotNumber": number,
-  "frames": {
-    "first_frame": { "imagePrompt": "string", "generationMode": "image_text_to_image", "references": [...] },
-    "mid_frame": { "imagePrompt": "string (delta from first)", "generationMode": "edit_first_frame", "references": [] },
-    "last_frame": { "imagePrompt": "string (delta from first)", "generationMode": "edit_first_frame", "references": [] }
-  },
-  "negativePrompt": "string",
-  "aspectRatio": "16:9"
-}
-</json_schema>`,
-        character_image: `<json_schema>
-{
-  "imagePrompt": "string (80-250 words, flowing prose, full character description)",
-  "negativePrompt": "string",
-  "aspectRatio": "1:1"
-}
-</json_schema>`,
-        setting_image: `<json_schema>
-{
-  "imagePrompt": "string (flowing prose, full environment description with 3 spatial layers)",
-  "negativePrompt": "string",
-  "aspectRatio": "1:1"
-}
-</json_schema>`,
-      };
-
-      const schema = JSON_SCHEMAS[node.typeId];
+      const { getPromptSchema } = require('./schemas.js');
+      const schema = getPromptSchema(node.typeId);
       if (schema) {
         messages[0]!.content += `\n\nCRITICAL: Your response MUST be a single valid JSON object. No markdown fences, no backticks, no commentary before or after the JSON. Output ONLY the JSON.\n\n${schema}`;
       }
