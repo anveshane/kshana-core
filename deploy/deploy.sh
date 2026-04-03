@@ -33,8 +33,10 @@ else
 fi
 
 # Pull and restart only the target app service to avoid forcing the sibling branch service.
+# --force-recreate: env_file (.env.dev / .env.prod) is only applied on container create; without this,
+# redeploys that reuse the same image tag (e.g. re-run workflow, same SHA) would leave stale env.
 docker compose -f docker-compose.yml pull "${SERVICE_NAME}"
-docker compose -f docker-compose.yml up -d --no-deps "${SERVICE_NAME}"
+docker compose -f docker-compose.yml up -d --no-deps --force-recreate "${SERVICE_NAME}"
 
 # Ensure reverse proxy is running even on first boot.
 docker compose -f docker-compose.yml up -d nginx

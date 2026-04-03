@@ -198,11 +198,19 @@ const currentProvider = getLLMProvider();
 const maskedApiKey = llmConfig.apiKey
   ? `${llmConfig.apiKey.slice(0, 4)}...${llmConfig.apiKey.slice(-4)}`
   : '(not set)';
+const comfyBaseUrl = process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
+const comfyCloudRaw = process.env['COMFY_CLOUD_API_KEY']?.trim();
+const comfyCloudKeyMasked = comfyCloudRaw
+  ? `${comfyCloudRaw.slice(0, 4)}...${comfyCloudRaw.slice(-4)}`
+  : '(not set)';
 console.log(`Provider: ${currentProvider}`);
 console.log(`Model: ${llmConfig.model}`);
 console.log(`Base URL: ${llmConfig.baseUrl}`);
 console.log(`API Key: ${maskedApiKey}`);
 console.log(`Task type: ${taskType}`);
+console.log('');
+console.log(`ComfyUI base URL: ${comfyBaseUrl}`);
+console.log(`COMFY_CLOUD_API_KEY: ${comfyCloudKeyMasked}`);
 console.log('');
 
 // Start analytics dashboard (non-blocking, fire-and-forget)
