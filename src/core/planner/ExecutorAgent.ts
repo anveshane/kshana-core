@@ -2059,10 +2059,15 @@ Rules:
       }
 
       if (node.typeId === 'shot_image_prompt') {
-        if (!parsed.imagePrompt || typeof parsed.imagePrompt !== 'string') {
-          return { valid: false, error: 'Missing "imagePrompt" string' };
+        // Accept both single-frame format (imagePrompt at top level)
+        // and multi-frame format (frames.first_frame.imagePrompt)
+        const hasTopLevelPrompt = parsed.imagePrompt && typeof parsed.imagePrompt === 'string';
+        const hasFrames = parsed.frames && typeof parsed.frames === 'object' &&
+          parsed.frames.first_frame?.imagePrompt;
+        if (!hasTopLevelPrompt && !hasFrames) {
+          return { valid: false, error: 'Missing "imagePrompt" string or "frames.first_frame.imagePrompt"' };
         }
-        if (!parsed.generationMode) {
+        if (!hasFrames && !parsed.generationMode) {
           return { valid: false, error: 'Missing "generationMode"' };
         }
         if (!Array.isArray(parsed.references)) {
