@@ -118,7 +118,7 @@ export class ComfyUIClient {
     return url.toString();
   }
 
-  private buildHeaders(headers?: HeadersInit): Headers {
+  private buildHeaders(headers?: RequestInit['headers']): Headers {
     const built = new Headers(headers);
     if (this.isCloud && this.cloudApiKey) {
       built.set('X-API-Key', this.cloudApiKey);
@@ -271,14 +271,31 @@ export class ComfyUIClient {
 
           const status = await this.getCloudJobStatus(promptId);
           debugLog(`[waitForCompletion] Cloud status for ${promptId}: ${status ?? 'unknown'}`);
-          if (status === 'completed') {
+          if (status === 'completed' || status === 'done' || status === 'success') {
             if (progressCallback) {
               await this.callProgressCallback(progressCallback, 100, 'Complete!');
             }
             return { status: 'completed', prompt_id: promptId };
           }
-          if (status === 'failed' || status === 'cancelled') {
+          if (status === 'failed' || status === 'cancelled' || status === 'error') {
             return { status: 'error', prompt_id: promptId };
+          }
+
+          // Fallback: check history_v2 status flags (covers VHS_VideoCombine and other
+          // nodes that don't populate history.outputs)
+          const cloudHistory = await this.getHistory(promptId);
+          if (cloudHistory?.status?.completed || cloudHistory?.status?.status_str === 'success') {
+            debugLog(
+              `[waitForCompletion] Cloud completed via history_v2 status flag. completed=${cloudHistory.status?.completed}, status_str=${cloudHistory.status?.status_str}`
+            );
+            if (progressCallback) {
+              await this.callProgressCallback(progressCallback, 100, 'Complete!');
+            }
+            // Cache any outputs found so getOutputImages can use them
+            if (cloudHistory.outputs) {
+              this.cloudOutputs.set(promptId, cloudHistory.outputs as Record<string, unknown>);
+            }
+            return { status: 'completed', prompt_id: promptId };
           }
         } else {
           const history = await this.getHistory(promptId);
@@ -667,11 +684,9 @@ export class ComfyUIClient {
     if (!response.ok) {
       return null;
     }
-    const history = (await response.json()) as Record<string, HistoryEntry> | HistoryEntry;
-    if (this.isCloud) {
-      return history as HistoryEntry;
-    }
-    return (history as Record<string, HistoryEntry>)[promptId] || null;
+    const history = (await response.json()) as Record<string, HistoryEntry>;
+    // Both local /history/{id} and cloud /history_v2/{id} wrap the entry under the prompt_id key
+    return history[promptId] || null;
   }
 
   private async getCloudJobStatus(promptId: string): Promise<string | null> {

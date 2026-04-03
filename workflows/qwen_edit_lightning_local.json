@@ -15,7 +15,7 @@
         {"name": "MODEL", "type": "MODEL", "links": [21]}
       ],
       "properties": {},
-      "widgets_values": ["qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_comfyui.safetensors", "fp8_e4m3fn"]
+      "widgets_values": ["Qwen-Image-Edit-2511-FP8_e4m3fn.safetensors", "fp8_e4m3fn"]
     },
     {
       "id": 16,
@@ -32,7 +32,7 @@
         {"name": "MODEL", "type": "MODEL", "links": [1]}
       ],
       "properties": {},
-      "widgets_values": ["Qwen-Image-2512-Lightning-4steps-V1.0-fp32.safetensors", 1],
+      "widgets_values": ["Qwen-Image-Edit-2511-Lightning-4steps-V1.0-fp32.safetensors", 1],
       "title": "Lightning LoRA"
     },
     {
