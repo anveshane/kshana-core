@@ -285,12 +285,22 @@ export class LLMClient {
 
     const stream = await this.client.chat.completions.create(request);
 
+    // Total wall-clock timeout for the entire streaming call (including thinking)
+    const STREAM_TIMEOUT_MS = 200_000; // 200 seconds
+    const streamStartTime = Date.now();
+
     // Accumulate for final logging
     let fullContent = '';
     const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> =
       new Map();
 
     for await (const chunk of stream) {
+      // Check total elapsed time — abort if stuck in reasoning loop
+      if (Date.now() - streamStartTime > STREAM_TIMEOUT_MS) {
+        console.error(`[LLMClient] Stream timeout after ${STREAM_TIMEOUT_MS / 1000}s (likely stuck in reasoning loop)`);
+        stream.controller.abort();
+        throw new Error(`LLM call exceeded ${STREAM_TIMEOUT_MS / 1000}s total time limit`);
+      }
       const delta = chunk.choices[0]?.delta;
       // Cast to access llama.cpp extension fields not in OpenAI types
       const deltaExt = delta as typeof delta & { reasoning_content?: string };
