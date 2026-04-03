@@ -2522,10 +2522,10 @@ function renderWorkflowList(grouped, active) {
         html += '</div>';
         html += '<div style="display:flex;gap:6px;flex-shrink:0;">';
         if (!isBuiltIn && !isActive) {
-          html += '<button onclick="setWorkflowOverride(\'' + wf.id + '\')" style="padding:3px 10px;background:#2563eb;color:white;border:none;border-radius:3px;cursor:pointer;font-size:11px;">Set Active</button>';
+          html += '<button data-wf-action="override" data-wf-id="' + wf.id + '" style="padding:3px 10px;background:#2563eb;color:white;border:none;border-radius:3px;cursor:pointer;font-size:11px;">Set Active</button>';
         }
         if (!isBuiltIn && isActive) {
-          html += '<button onclick="clearWorkflowOverride(\'' + p + '\')" style="padding:3px 10px;background:#444;color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:11px;">Revert</button>';
+          html += '<button data-wf-action="revert" data-wf-pipeline="' + p + '" style="padding:3px 10px;background:#444;color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:11px;">Revert</button>';
         }
         if (!isBuiltIn) {
           html += '<button onclick="deleteWorkflow(\'' + wf.id + '\')" style="padding:3px 10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:3px;cursor:pointer;font-size:11px;">Delete</button>';

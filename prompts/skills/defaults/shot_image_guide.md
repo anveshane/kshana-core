@@ -220,15 +220,22 @@ When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MU
   - Objects appeared/disappeared
   - Lighting shifted (e.g., torch extinguished)
 
+- **`edit_previous_shot`** (RECOMMENDED for first_frame of continuation shots) — Generate by **editing the previous shot's last frame**. This maintains visual continuity between consecutive shots in the same scene. The image prompt should describe ONLY what changed from the previous shot's end state. Use when:
+  - The camera angle is similar or slightly shifted from the previous shot
+  - The scene and characters are the same (continuation of action)
+  - You want smooth visual flow between shots (same lighting, colors, composition)
+  - Do NOT use for: establishing shots of new locations, dramatic camera angle changes, or the first shot of a scene
+
 - **`text_to_image`** — Generate from text only, no references. Use for frames with NO characters visible (e.g., empty room, landscape).
 
 ### Rules
 
-1. **first_frame** ALWAYS uses `image_text_to_image` with full character/setting references
-2. **last_frame** and **mid_frame** PREFER `edit_first_frame` — it keeps visual consistency
-3. Only use `image_text_to_image` for non-first frames if the camera angle changed dramatically
-4. The `edit_first_frame` prompt should describe the DELTA (what changed), not the full scene
-5. For `edit_first_frame`, the `references` array should be empty (the first frame IS the reference)
+1. **first_frame of shot 1** (first shot in scene) ALWAYS uses `image_text_to_image` with full character/setting references
+2. **first_frame of shot 2+** (continuation shots) PREFER `edit_previous_shot` for visual continuity — unless the camera angle or location changes dramatically
+3. **last_frame** and **mid_frame** PREFER `edit_first_frame` — it keeps visual consistency within the shot
+4. Only use `image_text_to_image` for continuation shots if the camera angle changed dramatically or it's a new location
+5. The `edit_first_frame` and `edit_previous_shot` prompts should describe the DELTA (what changed), not the full scene
+6. For `edit_first_frame` and `edit_previous_shot`, the `references` array should be empty (the base image IS the reference)
 
 ### Single-Frame Shots (i2v, t2v)
 

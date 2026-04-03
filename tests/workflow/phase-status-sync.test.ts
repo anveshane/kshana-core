@@ -6,26 +6,21 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  loadProject,
   updatePlannerStage,
   updatePhaseStatus,
-  saveProject,
   createProject,
 } from '../../src/tasks/video/workflow/ProjectManager.js';
-import { PROJECT_DIR } from '../../src/tasks/video/workflow/GenericProjectManager.js';
+import { PlannerStage } from '../../src/tasks/video/workflow/types.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-const TEST_BASE_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'kshana-test-'));
+let TEST_BASE_PATH: string;
 
 describe('Phase Status and PlannerStage Synchronization', () => {
   beforeEach(() => {
-    // Clean up test directory
-    const projectDir = path.join(TEST_BASE_PATH, PROJECT_DIR);
-    if (fs.existsSync(projectDir)) {
-      fs.rmSync(projectDir, { recursive: true, force: true });
-    }
+    // Create a fresh temp directory for each test
+    TEST_BASE_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'kshana-test-'));
   });
 
   it('should set status to in_progress when plannerStage becomes complete for per-item phases', () => {
@@ -41,7 +36,7 @@ describe('Phase Status and PlannerStage Synchronization', () => {
     const updated = updatePlannerStage(
       project,
       'characters_settings',
-      'complete' as const,
+      PlannerStage.COMPLETE,
       TEST_BASE_PATH
     );
 
@@ -61,7 +56,7 @@ describe('Phase Status and PlannerStage Synchronization', () => {
     const updated = updatePlannerStage(
       project,
       'plot',
-      'complete' as const,
+      PlannerStage.COMPLETE,
       TEST_BASE_PATH
     );
 
@@ -78,7 +73,7 @@ describe('Phase Status and PlannerStage Synchronization', () => {
     let updated = updatePlannerStage(
       project,
       'characters_settings',
-      'complete' as const,
+      PlannerStage.COMPLETE,
       TEST_BASE_PATH
     );
 
@@ -122,7 +117,7 @@ describe('Phase Status and PlannerStage Synchronization', () => {
     const originalStartedAt = updated.phases.characters_settings.startedAt;
 
     // When planner stage is set to COMPLETE
-    updated = updatePlannerStage(updated, 'characters_settings', 'complete' as const, TEST_BASE_PATH);
+    updated = updatePlannerStage(updated, 'characters_settings', PlannerStage.COMPLETE, TEST_BASE_PATH);
 
     // Status should remain in_progress (not change to completed)
     expect(updated.phases.characters_settings.status).toBe('in_progress');

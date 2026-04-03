@@ -240,13 +240,10 @@ export function validateWithSchema(
  */
 export function normalizeSceneVideoPrompt(parsed: z.infer<typeof sceneVideoPromptSchema>): void {
   for (const shot of parsed.shots) {
-    // Auto-classify if both are missing
+    // Auto-classify if both are missing — default to flfv for all shots
+    // Every shot should have both first and last frame for maximum video consistency
     if (!shot.videoGenerationMode && !shot.generationStrategy) {
-      const hasCharsFirst = (shot.firstFrame?.characters?.length ?? 0) > 0;
-      const hasCharsLast = (shot.lastFrame?.characters?.length ?? 0) > 0;
-      if (!hasCharsFirst && !hasCharsLast) shot.generationStrategy = 'i2v'; // was t2v, now always i2v
-      else if (hasCharsFirst) shot.generationStrategy = 'i2v';
-      else shot.generationStrategy = 'i2v_late_entry';
+      shot.generationStrategy = 'flfv';
     }
     // Normalize: copy videoGenerationMode → generationStrategy
     if (shot.videoGenerationMode && !shot.generationStrategy) {

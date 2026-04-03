@@ -102,7 +102,7 @@ describe('Full Narrative Pipeline', () => {
   });
 
   describe('transition: story → collections (character, setting, scene)', () => {
-    it('character, setting, scene become ready after story completes', () => {
+    it('collection-level nodes are never returned by getNextReady (must be expanded first)', () => {
       const executor = buildExecutor(template);
       executor.markStarted('plot');
       executor.markCompleted('plot');
@@ -112,11 +112,11 @@ describe('Full Narrative Pipeline', () => {
       const ready = executor.getNextReady();
       const readyTypes = ready.map(n => n.typeId);
 
-      // character depends on story only
-      expect(readyTypes).toContain('character');
-      // setting depends on story only
-      expect(readyTypes).toContain('setting');
-      // scene depends on story + character (all scope) — NOT ready until chars expanded and completed
+      // character, setting, scene are all collection nodes (isCollection=true, no itemId)
+      // so they are skipped by getNextReady — they must be expanded into per-item nodes first
+      expect(readyTypes).not.toContain('character');
+      expect(readyTypes).not.toContain('setting');
+      expect(readyTypes).not.toContain('scene');
     });
   });
 

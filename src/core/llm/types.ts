@@ -91,6 +91,8 @@ export interface GenerateOptions {
   tools?: ToolDefinition[];
   temperature?: number;
   maxTokens?: number;
+  /** Penalize repeated tokens (0.0 = no penalty, 2.0 = strong). Prevents repetition loops. */
+  frequencyPenalty?: number;
   stream?: boolean;
   responseFormat?:
     | { type: 'json_object' }

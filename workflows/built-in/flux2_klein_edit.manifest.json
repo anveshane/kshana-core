@@ -58,7 +58,9 @@
     { "input": "reference_image_1", "nodeId": "81", "field": "image" },
     { "input": "reference_image_2", "nodeId": "82", "field": "image" },
     { "input": "seed", "nodeId": "114", "field": "seed" },
-    { "input": "filenamePrefix", "nodeId": "94", "field": "filename_prefix" }
+    { "input": "filenamePrefix", "nodeId": "94", "field": "filename_prefix" },
+    { "input": "width", "nodeId": "76", "field": "width" },
+    { "input": "height", "nodeId": "76", "field": "height" }
   ],
   "builtIn": true,
   "active": true

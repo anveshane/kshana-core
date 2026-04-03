@@ -1,0 +1,30 @@
+{
+  "version": "1.0",
+  "description": "Infrastructure test",
+  "messages": [
+    {
+      "role": "user",
+      "content": "test"
+    }
+  ],
+  "projectState": {
+    "version": "3.0",
+    "id": "test",
+    "title": "Test",
+    "templateId": "narrative",
+    "templateVersion": "1.0",
+    "style": "default",
+    "inputType": "text",
+    "createdAt": 1773426956465,
+    "updatedAt": 1773426956465,
+    "artifacts": {},
+    "currentPhase": "test",
+    "phaseHistory": []
+  },
+  "projectFiles": {},
+  "todos": [],
+  "template": "narrative",
+  "phase": "test",
+  "tags": [],
+  "createdAt": "2026-03-13T18:35:56.465Z"
+}

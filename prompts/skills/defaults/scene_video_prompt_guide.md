@@ -22,6 +22,13 @@ Each shot must have:
 
 {{AVAILABLE_VIDEO_MODES}}
 
+### When to Use FMLFV vs FLFV
+
+- **flfv** (first + last frame): Default for most shots. Simple motion, character actions, camera moves, dialogue shots. The model interpolates between start and end.
+- **fmlfv** (first + mid + last frame): Use for **complex transformations** where the mid-point state is important — disintegration effects, morphing, object reveals, major scene changes, any shot where the halfway point looks very different from a simple blend of start and end.
+
+If a shot involves VFX, magical effects, physical transformation, or any action where the intermediate state matters, use `fmlfv`.
+
 {{AVAILABLE_PROCESSING_MODES}}
 
 ## First + Last Frame
@@ -33,12 +40,9 @@ Each shot must have:
 - The shot needs to chain smoothly into the next shot
 - Long shots (6s+) that may drift without end-frame anchoring
 
-**lastFrame** — omit when:
-- Short shots (3-4s) that stay visually consistent
-- Static shots (close-up held on a face, ambient establishing)
-- Free motion desired (let the video model interpret)
+**lastFrame** — REQUIRED for every shot. The video model needs both start and end anchors for consistent generation. Even for static shots, describe the end state (which may be identical to the start). For short shots (3-4s), the lastFrame can be very similar to firstFrame with minor changes.
 
-**Cross-shot chaining**: Shot N's lastFrame should visually match Shot N+1's firstFrame for smooth transitions.
+**Cross-shot chaining**: Shot N's lastFrame should visually match Shot N+1's firstFrame for smooth transitions. When consecutive shots share the same scene and similar camera angles, the next shot's first frame will be generated as an edit of the previous shot's last frame — so describe the lastFrame with enough detail for the next shot to chain from it.
 
 ## Transitions
 

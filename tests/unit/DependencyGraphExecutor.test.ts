@@ -219,7 +219,7 @@ describe('DependencyGraphExecutor', () => {
       expect(ready[0].typeId).toBe('story');
     });
 
-    it('returns character and scene after story completes (both depend on story)', () => {
+    it('collection nodes are not returned by getNextReady (must be expanded first)', () => {
       const executor = buildExecutor(template);
       executor.markStarted('plot');
       executor.markCompleted('plot', 'plot.md');
@@ -228,9 +228,9 @@ describe('DependencyGraphExecutor', () => {
 
       const ready = executor.getNextReady();
       const typeIds = ready.map(n => n.typeId).sort();
-      // character depends on story only
-      // scene depends on story AND character (all scope) — so scene is NOT ready yet
-      expect(typeIds).toEqual(['character']);
+      // character and scene are collection nodes (isCollection=true, no itemId)
+      // so they are skipped by getNextReady — they must be expanded into per-item nodes first
+      expect(typeIds).toEqual([]);
     });
 
     it('returns no nodes when all are completed', () => {

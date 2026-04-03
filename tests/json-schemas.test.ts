@@ -77,8 +77,8 @@ describe('scene_video_prompt normalization', () => {
       ],
     });
     normalizeSceneVideoPrompt(data);
-    expect(data.shots[0]!.generationStrategy).toBe('i2v');
-    expect(data.shots[1]!.generationStrategy).toBe('i2v'); // was t2v, now always i2v
+    expect(data.shots[0]!.generationStrategy).toBe('flfv');
+    expect(data.shots[1]!.generationStrategy).toBe('flfv'); // default is now flfv for all shots
   });
 
   it('copies videoGenerationMode to generationStrategy', () => {

@@ -2487,6 +2487,7 @@ Rules:
           .filter(n => n.typeId === 'setting_image' && n.itemId)
           .map(n => n.id);
 
+        let prevShotImageId: string | null = null;
         for (const shot of shotItems) {
           const shotPromptId = `shot_image_prompt:${shot.itemId}`;
           const motionId = `shot_motion_directive:${shot.itemId}`;
@@ -2496,6 +2497,11 @@ Rules:
           // Create shot_image node if it doesn't exist
           if (!this.executor.getNode(shotImageId)) {
             const shotImageDeps = [shotPromptId, ...allCharImages, ...allSettingImages];
+            // Cross-shot chaining: each shot depends on the previous shot in the scene
+            // so the executor processes them sequentially and edit_previous_shot can access the last frame
+            if (prevShotImageId) {
+              shotImageDeps.push(prevShotImageId);
+            }
             this.executor.addNode({
               id: shotImageId,
               typeId: 'shot_image',
@@ -2543,8 +2549,9 @@ Rules:
               finalNode.dependencies.push(shotVideoId);
             }
           }
+          prevShotImageId = shotImageId;
         }
-        this.log(`  Created ${shotItems.length} shot_image + shot_video nodes for ${sceneId} with proper deps`);
+        this.log(`  Created ${shotItems.length} shot_image + shot_video nodes for ${sceneId} with proper deps (sequential chaining)`);
 
         this.emit({
           type: 'notification',
@@ -2810,15 +2817,53 @@ Rules:
         this.log(`  No first_frame in frames object`);
         return null;
       }
-      const firstFrameJson = JSON.stringify({
-        imagePrompt: firstFrameData.imagePrompt,
-        negativePrompt: parsedJson.negativePrompt || '',
-        aspectRatio: parsedJson.aspectRatio || '16:9',
-        generationMode: firstFrameData.generationMode || 'image_text_to_image',
-        references: firstFrameData.references || [],
-      });
-      const firstFramePath = await this.executeShotImageGeneration(node, firstFrameJson, toolCallId);
-      if (!firstFramePath) return null;
+
+      let firstFramePath: string | null = null;
+      const firstFrameMode = firstFrameData.generationMode || 'image_text_to_image';
+
+      if (firstFrameMode === 'edit_previous_shot') {
+        // Cross-shot chaining: edit the previous shot's last frame
+        const { getPreviousShotId, getLastFramePath } = await import('./crossShotChaining.js');
+        const prevShotItemId = node.itemId ? getPreviousShotId(node.itemId) : null;
+        const prevShotNode = prevShotItemId ? this.executor.getNode(`shot_image:${prevShotItemId}`) : null;
+        const prevLastFrame = prevShotNode ? getLastFramePath(prevShotNode) : null;
+
+        if (prevLastFrame) {
+          const prevLastFrameAbs = join(this.config.projectDir, prevLastFrame);
+          this.log(`  Cross-shot chaining: editing previous shot's last frame (${prevLastFrame})`);
+          const provider = getProviderRegistry().getImageEditor();
+          if (provider?.editImage) {
+            const assetsDir = join(this.config.projectDir, 'assets', 'images');
+            if (!existsSync(assetsDir)) mkdirSync(assetsDir, { recursive: true });
+            const editResult = await provider.editImage({
+              editPrompt: firstFrameData.imagePrompt,
+              baseImagePath: prevLastFrameAbs,
+              referenceImages: [],
+              outputDir: assetsDir,
+              filenamePrefix: `${node.itemId}_first_frame`,
+            });
+            firstFramePath = relative(this.config.projectDir, editResult.filePath);
+            this.log(`  first_frame (edit_previous_shot): ${firstFramePath}`);
+          } else {
+            this.log(`  No image editor — falling back to image_text_to_image`);
+          }
+        } else {
+          this.log(`  No previous shot last frame found — falling back to image_text_to_image`);
+        }
+      }
+
+      // Fallback: generate from refs if edit_previous_shot didn't produce a result
+      if (!firstFramePath) {
+        const firstFrameJson = JSON.stringify({
+          imagePrompt: firstFrameData.imagePrompt,
+          negativePrompt: parsedJson.negativePrompt || '',
+          aspectRatio: parsedJson.aspectRatio || '16:9',
+          generationMode: firstFrameMode === 'edit_previous_shot' ? 'image_text_to_image' : firstFrameMode,
+          references: firstFrameData.references || [],
+        });
+        firstFramePath = await this.executeShotImageGeneration(node, firstFrameJson, toolCallId);
+        if (!firstFramePath) return null;
+      }
 
       // Generate additional frames
       const additionalFrames = Object.keys(parsedJson.frames).filter(k => k !== 'first_frame');

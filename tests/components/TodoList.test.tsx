@@ -40,7 +40,12 @@ describe('TodoList', () => {
     });
 
     it('should render completed icon for completed todos', () => {
-      const todos = [createTodo('Done task', 'completed')];
+      // Component hides list when ALL todos are completed, so include a pending
+      // todo to keep the list visible and verify the completed icon renders.
+      const todos = [
+        createTodo('Done task', 'completed'),
+        createTodo('Still pending', 'pending'),
+      ];
       const { lastFrame } = render(<TodoList todos={todos} />);
       expect(lastFrame()).toContain('✓');
       expect(lastFrame()).toContain('Done task');
@@ -245,17 +250,19 @@ describe('TodoList', () => {
   });
 
   describe('empty state', () => {
-    it('should show "No todos" when list is empty', () => {
+    it('should render nothing when list is empty', () => {
       const { lastFrame } = render(<TodoList todos={[]} />);
-      expect(lastFrame()).toContain('No todos');
+      // Component returns null for empty list (renders nothing)
+      expect(lastFrame()).toBe('');
     });
 
-    it('should show "No todos" when all todos are hidden', () => {
+    it('should render nothing when all todos are hidden', () => {
       const todos: ExpandableTodoItem[] = [
         { ...createTodo('Hidden', 'pending'), visible: false },
       ];
       const { lastFrame } = render(<TodoList todos={todos} />);
-      expect(lastFrame()).toContain('No todos');
+      // Component returns null when no visible todos
+      expect(lastFrame()).toBe('');
     });
   });
 

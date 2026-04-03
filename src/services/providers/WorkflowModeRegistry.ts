@@ -394,9 +394,10 @@ export class WorkflowModeRegistry {
    * not raw workflow IDs. Injected via {{AVAILABLE_VIDEO_MODES}} placeholder.
    */
   generateVideoModesSection(providerId?: string): string {
-    // Filter out t2v — every shot should use a first frame image for visual consistency
+    // Filter out t2v and i2v — every shot should use flfv (first + last frame) for video consistency
+    // flfv anchors both start and end of the shot; fmlfv for complex shots
     const strategies = this.getAvailableStrategies(providerId)
-      .filter(s => s.strategy !== 't2v');
+      .filter(s => s.strategy !== 't2v' && s.strategy !== 'i2v');
     if (strategies.length === 0) {
       return '## Video Generation Mode\n\nNo video generation modes are currently available. Use `"videoGenerationMode": null`.';
     }
@@ -455,7 +456,7 @@ export class WorkflowModeRegistry {
    */
   generateFrameGuideSection(providerId?: string): string {
     const strategies = this.getAvailableStrategies(providerId)
-      .filter(s => s.strategy !== 't2v');
+      .filter(s => s.strategy !== 't2v' && s.strategy !== 'i2v');
     const lines = ['## Frame Images Per Mode', '', 'Generate the required frame images based on the shot\'s `videoGenerationMode`:', ''];
 
     for (const { strategy, frameInputs } of strategies) {
