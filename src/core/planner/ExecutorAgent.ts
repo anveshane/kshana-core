@@ -3158,6 +3158,23 @@ Rules:
 
       if (result.status === 'completed' && filePath) {
         this.log(`  Shot image generated: ${filePath}`);
+
+        // Image quality gate: validate the generated image
+        try {
+          const { validateGeneratedImage } = await import('./imageValidator.js');
+          const absPath = filePath.startsWith('/') ? filePath : join(this.config.projectDir, filePath);
+          const expectedDims = (shotWidth && shotHeight) ? { width: shotWidth, height: shotHeight } : undefined;
+          const validation = await validateGeneratedImage(absPath, shotJson.imagePrompt, expectedDims);
+          if (!validation.valid) {
+            this.log(`  Image validation warning: ${validation.error}`);
+            // Log but don't block — basic validation failures are warnings, not hard stops
+          } else {
+            this.log(`  Image validation passed`);
+          }
+        } catch (valErr) {
+          this.log(`  Image validation skipped: ${(valErr as Error).message}`);
+        }
+
         this.emit({
           type: 'tool_streaming',
           toolCallId: genCallId,
