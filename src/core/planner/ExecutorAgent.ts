@@ -51,6 +51,7 @@ import {
 } from '../timeline/TimelineManager.js';
 import { assembleVideos, resolveSegmentFilePaths } from '../timeline/FFmpegAssembler.js';
 import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timeline/types.js';
+import { validateWithSchema, normalizeSceneVideoPrompt, getPromptSchema } from './schemas.js';
 import { getProviderRegistry } from '../../services/providers/index.js';
 import { getWorkflowModeRegistry } from '../../services/providers/WorkflowModeRegistry.js';
 import { addAsset } from '../../tasks/video/workflow/index.js';
@@ -2026,7 +2027,6 @@ Rules:
       const parsed = JSON.parse(cleaned);
 
       // Validate against Zod schema
-      const { validateWithSchema, normalizeSceneVideoPrompt } = require('./schemas.js');
       const result = validateWithSchema(node.typeId, parsed);
       if (!result.valid) {
         return { valid: false, error: result.error };
@@ -2236,7 +2236,6 @@ Rules:
     // Inject JSON schema into the system prompt so the LLM sees the exact expected structure.
     // Schema text is generated from the same source (schemas.ts) that validates the output.
     if (isJsonNode) {
-      const { getPromptSchema } = require('./schemas.js');
       const schema = getPromptSchema(node.typeId);
       if (schema) {
         messages[0]!.content += `\n\nCRITICAL: Your response MUST be a single valid JSON object. No markdown fences, no backticks, no commentary before or after the JSON. Output ONLY the JSON.\n\n${schema}`;
