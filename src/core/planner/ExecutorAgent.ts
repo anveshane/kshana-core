@@ -3186,6 +3186,27 @@ Rules:
             // Log but don't block — basic validation failures are warnings, not hard stops
           } else {
             this.log(`  Image validation passed`);
+
+            // VLM review — send image to vision model for quality check
+            try {
+              const { reviewImageWithVLM } = await import('./imageValidator.js');
+              const vlmResult = await reviewImageWithVLM(absPath, shotJson.imagePrompt, this.llm);
+              if (!vlmResult.pass) {
+                this.log(`  VLM review FAILED: ${vlmResult.issues.join('; ')}`);
+                this.emit({
+                  type: 'tool_streaming',
+                  toolCallId: genCallId,
+                  chunk: `⚠ VLM review: ${vlmResult.issues.join('; ')}`,
+                  done: false,
+                  agentName,
+                  toolName,
+                });
+              } else {
+                this.log(`  VLM review passed`);
+              }
+            } catch (vlmErr) {
+              this.log(`  VLM review skipped: ${(vlmErr as Error).message}`);
+            }
           }
         } catch (valErr) {
           this.log(`  Image validation skipped: ${(valErr as Error).message}`);

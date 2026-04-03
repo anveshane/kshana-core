@@ -260,6 +260,59 @@ export class LLMClient {
   }
 
   /**
+   * Review an image using the VLM (vision) capability.
+   * Sends the image + a text prompt and returns the LLM's assessment.
+   */
+  async reviewImage(imagePath: string, reviewPrompt: string): Promise<{ pass: boolean; issues: string[] }> {
+    const fs = await import('fs');
+    const imageBuffer = fs.readFileSync(imagePath);
+    const base64 = imageBuffer.toString('base64');
+    const ext = imagePath.endsWith('.jpg') || imagePath.endsWith('.jpeg') ? 'jpeg' : 'png';
+    const dataUrl = `data:image/${ext};base64,${base64}`;
+
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an image quality reviewer. Examine the image and compare it to the intended prompt. Respond with ONLY a JSON object: {"pass": true/false, "issues": ["issue1", "issue2"]}. Pass if the image reasonably matches the prompt. Fail if there are major problems like wrong subject, corrupted rendering, missing key elements, or completely wrong scene.',
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: `Intended prompt: ${reviewPrompt}\n\nDoes this image match the prompt?` },
+            { type: 'image_url', image_url: { url: dataUrl } },
+          ],
+        },
+      ],
+      temperature: 0.1,
+      max_tokens: 200,
+    });
+
+    const text = response.choices[0]?.message?.content ?? '';
+    try {
+      // Try to parse JSON from the response
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        return {
+          pass: Boolean(parsed.pass),
+          issues: Array.isArray(parsed.issues) ? parsed.issues : [],
+        };
+      }
+    } catch {
+      // If JSON parsing fails, check for pass/fail keywords
+    }
+
+    // Fallback: check if response indicates pass or fail
+    const lower = text.toLowerCase();
+    if (lower.includes('"pass": true') || lower.includes('pass')) {
+      return { pass: true, issues: [] };
+    }
+    return { pass: false, issues: [text.substring(0, 200)] };
+  }
+
+  /**
    * Generate a streaming response from the LLM.
    */
   async *generateStream(
