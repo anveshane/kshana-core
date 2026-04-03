@@ -11,6 +11,7 @@ export {
   type ImageInfo,
   type DownloadedOutput,
   type WSProgressInfo,
+  isComfyCloudUrl,
 } from './ComfyUIClient.js';
 
 export {
