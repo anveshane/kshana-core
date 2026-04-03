@@ -50,6 +50,7 @@ jobs:
       - name: Load app config from Secret Manager
         run: |
           set -euo pipefail
+          echo "DEBUG: Secret Manager PROJECT_ID=${PROJECT_ID}"
           sm_get() {
             gcloud secrets versions access latest --secret="$1" --project="${PROJECT_ID}"
           }
@@ -57,6 +58,10 @@ jobs:
             local name="$1"
             local val
             val="$(sm_get "${name}")"
+            if [ "${name}" = "COMFY_CLOUD_API_KEY" ]; then
+              # Do not print secret value; just print byte length.
+              echo "DEBUG: ${name} loaded (bytes=$(printf '%s' "${val}" | wc -c | tr -d ' '))"
+            fi
             local delim="SM_${name}_$(openssl rand -hex 16)"
             {
               echo "${name}<<${delim}"
@@ -67,8 +72,20 @@ jobs:
           }
           append_optional_multiline_env() {
             local name="$1"
-            if gcloud secrets describe "${name}" --project="${PROJECT_ID}" >/dev/null 2>&1; then
-              append_multiline_env "${name}"
+            local val
+            if val="$(sm_get "${name}" 2>/dev/null)"; then
+              if [ "${name}" = "COMFY_CLOUD_API_KEY" ]; then
+                echo "DEBUG: ${name} loaded (bytes=$(printf '%s' "${val}" | wc -c | tr -d ' '))"
+              fi
+              local delim="SM_${name}_$(openssl rand -hex 16)"
+              {
+                echo "${name}<<${delim}"
+                echo "${val}"
+                echo "${delim}"
+              } >> "${GITHUB_ENV}"
+              echo "::add-mask::${val}"
+            else
+              echo "DEBUG: ${name} not accessible in ${PROJECT_ID} (versions access failed)" >&2
             fi
           }
           for name in LLM_PROVIDER LLM_CONTEXT_TOKENS OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL COMFYUI_BASE_URL COMFYUI_TIMEOUT POSTHOG_API_KEY POSTHOG_HOST ANALYTICS_SALT; do
@@ -225,6 +242,12 @@ jobs:
                 printf "ANALYTICS_SALT=%s\n" "$(select_secret ANALYTICS_SALT)"
               } > "${target_file}"
             }
+
+            {
+              echo "DEBUG(ssh): COMFYUI_BASE_URL=${COMFYUI_BASE_URL:-}"
+              _ck="${COMFY_CLOUD_API_KEY:-}"
+              echo "DEBUG(ssh): COMFY_CLOUD_API_KEY len=${#_ck}"
+            } >&2
 
             write_env ".env.prod" ""
             write_env ".env.dev" "DEV_"
