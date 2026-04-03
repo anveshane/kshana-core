@@ -55,6 +55,20 @@
       "source": "shot_image",
       "description": "reference_image_2",
       "required": true
+    },
+    {
+      "id": "width",
+      "type": "number",
+      "source": "system",
+      "description": "Video width",
+      "required": false
+    },
+    {
+      "id": "height",
+      "type": "number",
+      "source": "system",
+      "description": "Video height",
+      "required": false
     }
   ],
   "workflowFile": "LTX2_3_fmlf2v__1__json.json",
@@ -109,6 +123,16 @@
       "input": "reference_image_2",
       "nodeId": "431",
       "field": "image"
+    },
+    {
+      "input": "width",
+      "nodeId": "314",
+      "field": "value"
+    },
+    {
+      "input": "height",
+      "nodeId": "299",
+      "field": "value"
     }
   ],
   "builtIn": false,

@@ -59,6 +59,20 @@
       "source": "system",
       "description": "seed",
       "required": true
+    },
+    {
+      "id": "width",
+      "type": "number",
+      "source": "system",
+      "description": "Video width",
+      "required": false
+    },
+    {
+      "id": "height",
+      "type": "number",
+      "source": "system",
+      "description": "Video height",
+      "required": false
     }
   ],
   "workflowFile": "LTX2_3_single_imageit2v__1__json.json",
@@ -93,6 +107,16 @@
       "input": "seed",
       "nodeId": "386",
       "field": "noise_seed"
+    },
+    {
+      "input": "width",
+      "nodeId": "314",
+      "field": "value"
+    },
+    {
+      "input": "height",
+      "nodeId": "299",
+      "field": "value"
     }
   ],
   "builtIn": false,

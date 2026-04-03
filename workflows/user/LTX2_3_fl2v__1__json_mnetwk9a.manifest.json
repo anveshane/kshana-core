@@ -48,6 +48,20 @@
       "source": "shot_motion_directive",
       "description": "prompt",
       "required": true
+    },
+    {
+      "id": "width",
+      "type": "number",
+      "source": "system",
+      "description": "Video width",
+      "required": false
+    },
+    {
+      "id": "height",
+      "type": "number",
+      "source": "system",
+      "description": "Video height",
+      "required": false
     }
   ],
   "workflowFile": "LTX2_3_fl2v__1__json_mnetwk9a.json",
@@ -102,6 +116,16 @@
       "input": "prompt",
       "nodeId": "304",
       "field": "text"
+    },
+    {
+      "input": "width",
+      "nodeId": "314",
+      "field": "value"
+    },
+    {
+      "input": "height",
+      "nodeId": "299",
+      "field": "value"
     }
   ],
   "promptKeywords": {
