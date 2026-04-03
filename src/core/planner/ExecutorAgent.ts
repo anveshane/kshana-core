@@ -1268,32 +1268,33 @@ The JSON must follow this exact structure:
       "shotNumber": <number>,
       "shotType": "<establishing|wide|medium|close_up|extreme_close_up|over_shoulder|pov|tracking|reaction>",
       "duration": <seconds>,
-      "generationStrategy": "<i2v|t2v|i2v_late_entry>",
+      "generationStrategy": "<flfv|fmlfv>",
       "firstFrame": {
         "description": "<what the camera sees at the START of this shot>",
         "characters": ["<character_item_id>", ...],
         "setting": "<setting_item_id or null>"
       },
       "lastFrame": {
-        "description": "<what the camera sees at the END of this shot — omit this field entirely if the end state is the same as the start>",
+        "description": "<what the camera sees at the END of this shot>",
         "characters": ["<character_item_id>", ...],
         "setting": "<setting_item_id or null>"
       },
       "cameraWork": "<camera movement and angle>",
-      "soundCue": "<what is heard — ambient, effects, dialogue, or explicit silence>"
+      "soundCue": "<what is heard — ambient, effects, dialogue, or explicit silence>",
+      "transition": "<cut|crossfade|dip_to_black|fade>"
     }
   ]
 }
 
 generationStrategy rules:
-- "i2v": first frame has characters visible → generate first-frame image (+ optional last-frame), then image-to-video
-- "t2v": no characters in first frame AND no lastFrame → text-to-video only, skip image generation
-- "i2v_late_entry": first frame has NO characters but lastFrame HAS characters → character enters mid-shot
+- "flfv" (DEFAULT): first + last frame images generated, video interpolates between them. Use for most shots.
+- "fmlfv": first + mid + last frame images generated. Use for complex VFX, transformations, or shots where the midpoint looks very different from a simple blend.
+- NEVER use "i2v" or "t2v" — every shot needs both first and last frame anchors.
 
 lastFrame rules:
-- OMIT lastFrame entirely for short shots (3-4s), static shots, or when the end looks the same as the start
-- INCLUDE lastFrame when: the shot has a clear visual endpoint different from the start, the shot needs to chain into the next shot, or it's a long shot (6s+) that may drift
-- Shot N's lastFrame should visually match Shot N+1's firstFrame for smooth transitions
+- lastFrame is REQUIRED for every shot. The video model needs both start and end anchors.
+- Even for static shots, describe the end state (which may be very similar to firstFrame with minor changes).
+- Shot N's lastFrame should visually match Shot N+1's firstFrame for smooth cross-shot transitions.
 
 General rules:
 - Shot durations must sum to totalDuration exactly
@@ -1301,7 +1302,8 @@ General rules:
 - characters arrays MUST use ONLY the exact item IDs listed below
 - setting MUST use ONLY the exact item IDs listed below or null
 - Vary shot types for cinematic interest
-- Every shot must have a soundCue — even if it's "dead silence"`;
+- Every shot must have a soundCue — even if it's "dead silence"
+- Every shot must have a transition field`;
 
       // Inject the actual available character and setting IDs
       const charIds = this.executor.getAllNodes()
@@ -1318,29 +1320,43 @@ General rules:
         systemPrompt += `\n\nAvailable setting IDs (use EXACTLY one of these in the "setting" field):\n${settingIds.map(id => `- "${id}"`).join('\n')}`;
       }
     } else if (node.typeId === 'shot_image_prompt') {
-      systemPrompt = `You are an expert image prompt engineer for FLUX Klein image editing.
+      systemPrompt = `You are an expert image prompt engineer.
 Output ONLY valid JSON — no markdown, no explanation, no thinking. Respond with the JSON object directly.
 
-The JSON must follow this exact structure:
+For FLFV/FMLFV shots (most shots), use multi-frame format:
 {
-  "imagePrompt": "<flowing prose describing the composition — reference characters/settings as 'from image N'>",
+  "shotNumber": <number>,
+  "frames": {
+    "first_frame": {
+      "imagePrompt": "<flowing prose — reference characters/settings/objects as 'from image N'>",
+      "generationMode": "image_text_to_image" or "edit_previous_shot",
+      "references": [{ "imageNumber": 1, "type": "character", "refId": "<ref_id>" }, ...]
+    },
+    "last_frame": {
+      "imagePrompt": "<describe ONLY what changed from first_frame>",
+      "generationMode": "edit_first_frame",
+      "references": []
+    }
+  },
   "negativePrompt": "<what to avoid>",
-  "aspectRatio": "16:9",
-  "generationMode": "image_text_to_image" or "text_to_image",
-  "references": [
-    { "imageNumber": 1, "type": "character", "refId": "<the ref_id from the available references>" },
-    { "imageNumber": 2, "type": "setting", "refId": "<the ref_id from the available references>" }
-  ]
+  "aspectRatio": "16:9"
 }
 
+For FMLFV shots, add "mid_frame" with generationMode "edit_first_frame".
+
+generationMode per frame:
+- "image_text_to_image": Generate fresh from character/setting/object references. Use for first_frame of shot 1 in a scene.
+- "edit_previous_shot": Edit the previous shot's last frame for visual continuity. Use for first_frame of shots 2+ when the camera angle is similar.
+- "edit_first_frame": Edit this shot's first frame. Use for last_frame and mid_frame always.
+- "text_to_image": No references. Use only for frames with NO characters/objects visible.
+
 Rules:
-- imagePrompt: write flowing prose, NOT keywords. Describe composition, poses, spatial arrangement, lighting.
-- Reference characters as "the [description] from image N" where N matches the imageNumber
-- Reference settings as "the [location] from image N"
-- Only reference images listed in the available references — do NOT fabricate image numbers
-- If no references are available, set generationMode to "text_to_image" and references to []
-- The references array MUST match exactly which image N you used in the imagePrompt
-- Describe one frozen instant — no motion verbs, no narrative commentary`;
+- Reference images as "the [description] from image N" where N matches imageNumber
+- references can be type "character", "setting", or "object"
+- Only reference images listed in available references — do NOT fabricate image numbers
+- edit_first_frame and edit_previous_shot prompts describe the DELTA (what changed), not the full scene
+- For edit modes, references array should be empty
+- Describe one frozen instant — no motion verbs`;
     } else {
       systemPrompt = CATEGORY_PROMPTS[effectiveCategory] ?? CATEGORY_PROMPTS.concept;
     }
