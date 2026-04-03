@@ -12,6 +12,7 @@ import type { FileStat, IFileSystem } from '../../src/core/fs/index.js';
 const providerState = vi.hoisted(() => ({
   calls: [] as Array<Record<string, unknown>>,
   failure: null as Error | null,
+  referenceSnapshots: [] as Array<Array<{ type: string; name: string; exists: boolean; content?: string }>>,
 }));
 
 vi.mock('../../src/services/providers/index.js', async () => {
@@ -27,6 +28,21 @@ vi.mock('../../src/services/providers/index.js', async () => {
         isAvailable: () => true,
         generateImage: async (input: Record<string, unknown>) => {
           providerState.calls.push(input);
+          const referenceImages = (input['referenceImages'] as Array<{
+            filePath: string;
+            type: string;
+            name: string;
+          }> | undefined) ?? [];
+          providerState.referenceSnapshots.push(
+            referenceImages.map(ref => ({
+              type: ref.type,
+              name: ref.name,
+              exists: fsModule.existsSync(ref.filePath),
+              content: fsModule.existsSync(ref.filePath)
+                ? fsModule.readFileSync(ref.filePath, 'utf-8')
+                : undefined,
+            })),
+          );
           if (providerState.failure) {
             throw providerState.failure;
           }
@@ -56,6 +72,7 @@ import { setActiveProjectDir } from '../../src/tasks/video/workflow/activeProjec
 class FakeRemoteFs implements IFileSystem {
   readonly cache = new ProjectStateCache();
   readonly messages: Array<{ type: string; data: Record<string, unknown> }> = [];
+  readonly projectRoot: string;
   readonly socket = {
     readyState: 1,
     send: (payload: string) => {
@@ -65,6 +82,7 @@ class FakeRemoteFs implements IFileSystem {
   };
 
   constructor(projectRoot: string) {
+    this.projectRoot = projectRoot;
     this.cache.loadSnapshot({
       files: {},
       directories: [],
@@ -85,7 +103,9 @@ class FakeRemoteFs implements IFileSystem {
   }
 
   async exists(): Promise<boolean> {
-    throw new Error('Not implemented in fake remote fs');
+    const targetPath = arguments[0] as string;
+    const normalized = this.normalizePath(targetPath);
+    return this.cache.getFile(normalized) != null;
   }
 
   async mkdir(): Promise<void> {
@@ -113,7 +133,13 @@ class FakeRemoteFs implements IFileSystem {
   }
 
   async readFileBuffer(): Promise<Buffer> {
-    throw new Error('Not implemented in fake remote fs');
+    const targetPath = arguments[0] as string;
+    const normalized = this.normalizePath(targetPath);
+    const content = this.cache.getFile(normalized);
+    if (content == null) {
+      throw new Error(`File not found in fake remote fs: ${targetPath}`);
+    }
+    return Buffer.from(content);
   }
 
   async writeFileBuffer(): Promise<void> {
@@ -122,6 +148,13 @@ class FakeRemoteFs implements IFileSystem {
 
   async writeBatch(): Promise<void> {
     throw new Error('Not implemented in fake remote fs');
+  }
+
+  private normalizePath(targetPath: string): string {
+    if (targetPath.startsWith(this.projectRoot)) {
+      return targetPath.slice(this.projectRoot.length + 1).replace(/\\/g, '/');
+    }
+    return targetPath.replace(/\\/g, '/').replace(/^\.\/+/, '');
   }
 }
 
@@ -142,6 +175,7 @@ describe('generate_image prompt and reference resolution', () => {
   beforeEach(() => {
     providerState.calls.length = 0;
     providerState.failure = null;
+    providerState.referenceSnapshots.length = 0;
     tempRoot = fs.mkdtempSync(join(os.tmpdir(), 'kshana-generate-image-'));
     projectRoot = join(tempRoot, 'legacy-shot-test.kshana');
     setActiveProjectDir(projectRoot);
@@ -384,6 +418,109 @@ describe('generate_image prompt and reference resolution', () => {
           filePath: join(projectRoot, 'assets', 'images', 'pitch-ref.png'),
           type: 'setting',
           name: "Kai's Pitch",
+        },
+      ]);
+    });
+  });
+
+  it('materializes remote-only reference images before provider upload', async () => {
+    await withRemoteProjectSession(projectRoot, async remoteFs => {
+      createProject('A boy playing football', 'cinematic_realism', tempRoot);
+
+      remoteFs.cache.markDirectory('prompts');
+      remoteFs.cache.markDirectory('prompts/images');
+      remoteFs.cache.markDirectory('prompts/images/shots');
+      remoteFs.cache.markDirectory('assets');
+      remoteFs.cache.markDirectory('assets/images');
+      remoteFs.cache.setFile(
+        'prompts/images/shots/scene-1-shot-2.prompt.md',
+        [
+          '**Image Prompt:**',
+          'Kai takes a deep breath before the strike.',
+          '',
+          '**Generation Mode:**',
+          'image_text_to_image',
+        ].join('\n'),
+      );
+      remoteFs.cache.setFile('assets/images/kai-ref.png', 'remote-character-image');
+      remoteFs.cache.setFile('assets/images/pitch-ref.png', 'remote-setting-image');
+
+      const project = loadProject(tempRoot)!;
+      project.characters = [
+        {
+          name: 'Kai',
+          description: '',
+          visualDescription: '',
+          approvalStatus: 'approved',
+          regenerationCount: 0,
+          referenceImageId: 'img_char_kai',
+          referenceImagePath: 'assets/images/kai-ref.png',
+        },
+      ];
+      project.settings = [
+        {
+          name: "Kai's Pitch",
+          description: '',
+          visualDescription: '',
+          approvalStatus: 'approved',
+          regenerationCount: 0,
+          referenceImageId: 'img_setting_pitch',
+          referenceImagePath: 'assets/images/pitch-ref.png',
+        },
+      ];
+      project.content.images = {
+        status: 'partial',
+        items: ['img_char_kai', 'img_setting_pitch'],
+        itemFiles: {
+          img_char_kai: 'assets/images/kai-ref.png',
+          img_setting_pitch: 'assets/images/pitch-ref.png',
+        },
+      };
+      saveProject(project, tempRoot);
+
+      const result = await generateImageTool.handler?.({
+        scene_number: 1,
+        shot_number: 2,
+        image_type: 'scene',
+        generation_mode: 'image_text_to_image',
+        prompt_file: 'prompts/images/shots/scene-1-shot-2.prompt.md',
+        reference_images: [
+          { image_id: 'img_char_kai', type: 'character', name: 'Kai' },
+          { image_id: 'img_setting_pitch', type: 'setting', name: "Kai's Pitch" },
+        ],
+      });
+
+      expect(result).toMatchObject({
+        status: 'completed',
+        generation_mode: 'image_text_to_image',
+      });
+      expect(providerState.calls).toHaveLength(1);
+
+      const providerCall = providerState.calls[0]!;
+      const referenceImages = providerCall['referenceImages'] as Array<{
+        filePath: string;
+        type: string;
+        name: string;
+      }>;
+      const referenceSnapshot = providerState.referenceSnapshots[0]!;
+
+      expect(referenceImages).toHaveLength(2);
+      expect(referenceImages.map(ref => ({ type: ref.type, name: ref.name }))).toEqual([
+        { type: 'character', name: 'Kai' },
+        { type: 'setting', name: "Kai's Pitch" },
+      ]);
+      expect(referenceSnapshot).toEqual([
+        {
+          type: 'character',
+          name: 'Kai',
+          exists: true,
+          content: 'remote-character-image',
+        },
+        {
+          type: 'setting',
+          name: "Kai's Pitch",
+          exists: true,
+          content: 'remote-setting-image',
         },
       ]);
     });

@@ -29,6 +29,22 @@ import {
   setPrimaryNarration,
 } from '../../../tasks/video/workflow/ProjectManager.js';
 import * as fs from 'fs';
+import {
+  projectExists,
+  projectRelativePath,
+} from '../../../tasks/video/workflow/projectFileIO.js';
+
+function referencePathExists(targetPath: string): boolean {
+  if (fs.existsSync(targetPath)) {
+    return true;
+  }
+
+  try {
+    return projectExists(projectRelativePath(targetPath));
+  } catch {
+    return projectExists(targetPath);
+  }
+}
 
 /**
  * Add a new input to the project.
@@ -470,7 +486,7 @@ Returns the appropriate artifact path based on the reference type:
         };
       }
 
-      if (!referencePath || !fs.existsSync(referencePath)) {
+      if (!referencePath || !referencePathExists(referencePath)) {
         return {
           status: 'error',
           error: 'Reference file not found. Processing may have failed.',
