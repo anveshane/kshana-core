@@ -151,20 +151,14 @@ describe('Change 5: Image quality gate', () => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe('Change 6: Isolated pipeline test scripts', () => {
-  it('test-shot-video.ts script exists', () => {
-    expect(existsSync(join(process.cwd(), 'scripts/test-shot-video.ts'))).toBe(true);
+  it('test-stage.ts script exists', () => {
+    expect(existsSync(join(process.cwd(), 'scripts/test-stage.ts'))).toBe(true);
   });
 
-  it('test-shot-image.ts script exists', () => {
-    expect(existsSync(join(process.cwd(), 'scripts/test-shot-image.ts'))).toBe(true);
-  });
-
-  it('test-motion-directive.ts script exists', () => {
-    expect(existsSync(join(process.cwd(), 'scripts/test-motion-directive.ts'))).toBe(true);
-  });
-
-  it('test-shot-pipeline.ts script exists', () => {
-    expect(existsSync(join(process.cwd(), 'scripts/test-shot-pipeline.ts'))).toBe(true);
+  it('test-stage.ts imports from production code', () => {
+    const content = readFileSync(join(process.cwd(), 'scripts/test-stage.ts'), 'utf-8');
+    expect(content).toContain('ExecutorAgent');
+    expect(content).toContain('stopAfterNodeType');
   });
 });
 
