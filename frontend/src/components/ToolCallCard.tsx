@@ -24,6 +24,7 @@ const TOOL_NAMES: Record<string, string> = {
   assemble_final_video: 'Final Assembly',
   think: 'Thinking',
   extract_collections: 'Extraction',
+  json_repair: 'JSON Repair',
 }
 
 const CONTENT_COLOR = { border: 'border-cyan/20', statusActive: 'text-cyan', statusDone: 'text-green' }

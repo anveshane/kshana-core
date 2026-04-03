@@ -967,27 +967,68 @@ export class ExecutorAgent extends TypedEventEmitter {
                     message: `Invalid JSON from LLM for ${node.displayName} — attempting repair`,
                   });
 
-                  // Step 1: Ask the LLM to fix the broken JSON (cheap — just a repair, not full regen)
+                  // Close the original tool card as error
+                  this.emit({
+                    type: 'tool_result',
+                    toolCallId,
+                    toolName,
+                    result: { status: 'error', error: `Invalid JSON: ${validation.error}` },
+                    agentName,
+                    isError: true,
+                  });
+
+                  // Step 1: Ask the LLM to fix the broken JSON — new card
+                  const repairCallId = `repair_${node.id}_${Date.now()}`;
+                  this.emit({
+                    type: 'tool_call',
+                    toolCallId: repairCallId,
+                    toolName: 'json_repair',
+                    arguments: { item: node.displayName, error: validation.error },
+                    agentName,
+                  });
                   const fixPrompt = `The following JSON output has an error. Fix it and return ONLY the corrected valid JSON — no explanation, no markdown fences, no extra text.\n\nError: ${validation.error}\n\nBroken JSON:\n${content.substring(0, 8000)}`;
                   const fixedContent = await this.generateForNode(
                     node,
                     'You are a JSON repair tool. Return ONLY valid JSON. No markdown, no explanation.',
                     fixPrompt,
-                    toolCallId,
-                    toolName,
+                    repairCallId,
+                    'json_repair',
                   );
                   const fixValidation = this.validateJsonOutput(fixedContent, node);
                   if (fixValidation.valid) {
                     content = fixedContent;
                     this.log(`  LLM JSON repair succeeded`);
+                    this.emit({
+                      type: 'tool_result',
+                      toolCallId: repairCallId,
+                      toolName: 'json_repair',
+                      result: { status: 'completed' },
+                      agentName,
+                    });
                   } else {
                     this.log(`  LLM repair failed: ${fixValidation.error} — full retry...`);
-                    // Step 2: Fall back to full regeneration
+                    this.emit({
+                      type: 'tool_result',
+                      toolCallId: repairCallId,
+                      toolName: 'json_repair',
+                      result: { status: 'error', error: fixValidation.error },
+                      agentName,
+                      isError: true,
+                    });
+                    // Step 2: Fall back to full regeneration — new card
+                    const retryCallId = `retry_${node.id}_${Date.now()}`;
+                    this.emit({
+                      type: 'tool_call',
+                      toolCallId: retryCallId,
+                      toolName,
+                      arguments: { item: node.displayName, retry: true },
+                      agentName,
+                    });
                     const retryContent = await this.generateForNode(
                       node,
                       system + '\n\nCRITICAL: Your output MUST be valid JSON. Do not include markdown, backticks, or any text outside the JSON object.',
                       user,
-                      toolCallId,
+                      retryCallId,
                       toolName,
                     );
                     const retryValidation = this.validateJsonOutput(retryContent, node);
