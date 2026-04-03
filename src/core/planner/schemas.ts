@@ -51,7 +51,7 @@ export const sceneVideoPromptSchema = z.object({
 
 const referenceSchema = z.object({
   imageNumber: z.number(),
-  type: z.enum(['character', 'setting']),
+  type: z.enum(['character', 'setting', 'object']),
   refId: z.string(),
 });
 
@@ -101,6 +101,7 @@ export const imagePromptSchema = z.object({
 export const collectionExtractionSchema = z.object({
   characters: z.array(z.string()).optional().default([]),
   settings: z.array(z.string()).optional().default([]),
+  objects: z.array(z.string()).optional().default([]),
   scenes: z.array(z.object({
     sceneNumber: z.number(),
     title: z.string(),

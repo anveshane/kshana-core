@@ -17,7 +17,8 @@ Before writing a single word of the prompt, extract and write down:
 
 **You may only reference images explicitly listed as available for THIS specific shot.**
 
-- Reference each available image using "from image N" phrasing (e.g., "the character from image 1", "the environment from image 2").
+- Reference each available image using "from image N" phrasing (e.g., "the character from image 1", "the environment from image 2", "the hover-car from image 3").
+- Reference images can be characters, settings, or **objects/props** (vehicles, weapons, artifacts, distinctive items).
 - Every image in the shot's referenceImages list MUST appear somewhere in the prompt paragraph.
 - If image 3 is not in this shot's referenceImages list, you CANNOT write "from image 3". Not even if you saw that image referenced elsewhere. Not even if the setting seems to match.
 - If a character image is available but that character does not appear in this specific shot, do not reference that image.

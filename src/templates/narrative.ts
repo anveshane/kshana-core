@@ -115,6 +115,64 @@ const settingArtifact: ArtifactTypeDefinition = {
   },
 };
 
+const objectArtifact: ArtifactTypeDefinition = {
+  id: 'object',
+  displayName: 'Objects/Props',
+  category: 'entity',
+  description: 'Distinctive objects, props, vehicles, or items that need visual consistency across shots',
+  scope: 'project',
+  isCollection: true,
+  itemName: 'object',
+  maxItems: 10,
+  outputFormat: 'markdown',
+  filePattern: 'objects/{{name}}.md',
+  agentType: 'content',
+  promptFile: 'narrative/object.md',
+  isExpensive: false,
+  requiresPerItemApproval: true,
+  dependencies: [
+    {
+      artifactTypeId: 'story',
+      required: true,
+      usage: 'context',
+    },
+  ],
+  metadataSchema: {
+    objectType: { type: 'string', required: false, description: 'Type of object (vehicle, weapon, artifact, prop)' },
+  },
+};
+
+const objectImageArtifact: ArtifactTypeDefinition = {
+  id: 'object_image',
+  displayName: 'Object Reference Images',
+  category: 'visual_ref',
+  description: 'Reference images for distinctive objects/props for visual consistency',
+  scope: 'project',
+  isCollection: true,
+  itemName: 'object_image',
+  maxItems: 10,
+  outputFormat: 'image',
+  filePattern: 'assets/images/objects/{{name}}.png',
+  agentType: 'image',
+  promptFile: 'narrative/object_image.md',
+  isExpensive: true,
+  requiresPerItemApproval: true,
+  dependencies: [
+    {
+      artifactTypeId: 'object',
+      required: true,
+      usage: 'input',
+      scope: 'matching',
+    },
+    {
+      artifactTypeId: 'world_style',
+      required: true,
+      usage: 'context',
+      scope: 'all',
+    },
+  ],
+};
+
 const sceneArtifact: ArtifactTypeDefinition = {
   id: 'scene',
   displayName: 'Scenes',
@@ -340,6 +398,7 @@ const shotImageArtifact: ArtifactTypeDefinition = {
     // Actual .png files needed for FLUX Klein image-to-image compositing
     { artifactTypeId: 'character_image', required: true, usage: 'reference', scope: 'all' },
     { artifactTypeId: 'setting_image', required: true, usage: 'reference', scope: 'all' },
+    { artifactTypeId: 'object_image', required: false, usage: 'reference', scope: 'all' },
   ],
   metadataSchema: {
     shotNumber: { type: 'number', required: true, description: 'Shot number within the scene' },
@@ -520,7 +579,7 @@ const phases: PhaseDefinition[] = [
     displayName: 'Story Breakdown',
     description: 'Break down the story into characters, settings, and scenes',
     order: 3,
-    artifactTypes: ['character', 'setting', 'scene'],
+    artifactTypes: ['character', 'setting', 'object', 'scene'],
     requiresConfirmation: false,
     promptFile: 'narrative/phases/breakdown.md',
   },
@@ -538,7 +597,7 @@ const phases: PhaseDefinition[] = [
     displayName: 'Reference Image Generation',
     description: 'Generate reference images for characters and settings',
     order: 4,
-    artifactTypes: ['character_image', 'setting_image'],
+    artifactTypes: ['character_image', 'setting_image', 'object_image'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/reference-images.md',
   },
@@ -708,10 +767,12 @@ export const narrativeTemplate: VideoTemplate = {
     story: storyArtifact,
     character: characterArtifact,
     setting: settingArtifact,
+    object: objectArtifact,
     scene: sceneArtifact,
     world_style: worldStyleArtifact,
     character_image: characterImageArtifact,
     setting_image: settingImageArtifact,
+    object_image: objectImageArtifact,
     scene_video_prompt: sceneVideoPromptArtifact,
     shot_image_prompt: shotImagePromptArtifact,
     shot_motion_directive: shotMotionDirectiveArtifact,
