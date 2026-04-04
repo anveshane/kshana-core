@@ -177,14 +177,56 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
           try {
             const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
             const nodes = project.executorState?.nodes ?? {};
-            // Build path→nodeId lookup
+
+            // Build TWO lookups:
+            // 1. Exact path match (fast, handles most cases)
             const pathToNode = new Map<string, string>();
+            // 2. Type+itemId based match (handles re-generated images with new paths)
+            const typeItemToNode = new Map<string, string>();
             for (const [nodeId, node] of Object.entries(nodes)) {
-              const n = node as { outputPath?: string };
+              const n = node as { outputPath?: string; typeId?: string; itemId?: string };
               if (n.outputPath) pathToNode.set(n.outputPath, nodeId);
+              if (n.typeId && n.itemId) typeItemToNode.set(`${n.typeId}:${n.itemId}`, nodeId);
             }
+
+            // Asset type → node typeId mapping
+            const assetTypeToNodeType: Record<string, string> = {
+              'character_ref': 'character_image',
+              'setting_ref': 'setting_image',
+              'object_ref': 'object_image',
+              'scene_image': 'shot_image',
+              'scene_video': 'shot_video',
+            };
+
             for (const asset of assets) {
-              const nodeId = pathToNode.get(asset.path);
+              // Try exact path match first
+              let nodeId = pathToNode.get(asset.path);
+
+              // Fallback: derive from asset type + name in path
+              if (!nodeId) {
+                const nodeType = assetTypeToNodeType[asset.type];
+                if (nodeType) {
+                  // Extract item name from path patterns like CharRef_kai, SettingRef_bridge, scene_1_shot_2
+                  const path = asset.path;
+                  let itemId: string | null = null;
+
+                  if (nodeType === 'character_image') {
+                    const m = path.match(/CharRef_(\w+?)_\d+_\./i) || path.match(/CharRef_(\w+)/i);
+                    if (m) itemId = m[1].toLowerCase();
+                  } else if (nodeType === 'setting_image') {
+                    const m = path.match(/SettingRef_(\w+?)_\d+_\./i) || path.match(/SettingRef_(\w+)/i);
+                    if (m) itemId = m[1].toLowerCase();
+                  } else if (nodeType === 'shot_image' || nodeType === 'shot_video') {
+                    const m = path.match(/(scene_\d+_shot_\d+)/);
+                    if (m) itemId = m[1];
+                  }
+
+                  if (itemId) {
+                    nodeId = typeItemToNode.get(`${nodeType}:${itemId}`);
+                  }
+                }
+              }
+
               if (nodeId) asset.nodeId = nodeId;
             }
           } catch { /* non-fatal */ }
