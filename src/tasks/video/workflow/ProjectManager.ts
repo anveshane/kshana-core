@@ -345,15 +345,23 @@ export function createProject(
     initialPhase = WorkflowPhase.PLOT;
   }
 
-  // Default to 'idea' input type - agent will analyze and update if it's a full story
-  // Simplified structure: only track phase status, no file references for non-existent files
+  // Detect input type from content — full stories skip plot/story generation
+  let detectedInputType: string = 'idea';
+  try {
+    const effTemplateId = templateId || 'narrative';
+    const template = TemplateRegistry.getInstance().get(effTemplateId);
+    if (template) {
+      detectedInputType = TemplateRegistry.getInstance().detectInputType(template, cleanInput) || 'idea';
+    }
+  } catch { /* detection failed — default to idea */ }
+
   const project: ProjectFile = {
     version: '2.0',
     id: projectId,
     title: generateProjectTitle(cleanInput),
     originalInputFile: inputFilePath,
     style,
-    inputType: 'idea',
+    inputType: detectedInputType as any,
     ...(targetDuration != null ? { targetDuration } : {}),
     ...(templateId ? { templateId } : {}),
     createdAt: now,
