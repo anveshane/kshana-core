@@ -227,7 +227,13 @@ When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MU
 
 ### Frame Generation Modes — Choose Per Frame
 
-- **`image_text_to_image`** — Generate independently using character/setting reference images. Use this for the **first frame** (always) and for other frames when the composition is very different from the first frame.
+- **`image_text_to_image`** — Generate using character/setting reference images. Use for first frames that show **recognizable characters or settings at normal framing** (wide, medium, close-up showing a person or place).
+
+- **`text_to_image`** — Generate from text description ONLY, no reference images. Use when:
+  - The shot is an **extreme close-up on a detail** (dust particles, hands, objects, textures) where a setting reference would pull in the full room/scene instead of the detail
+  - The shot shows **only abstract visuals** (light rays, shadows, water ripples) with no recognizable character or setting
+  - The shot is a **cutaway/insert** focusing on a small object or body part
+  - **Rule of thumb:** if the reference image would dominate the composition and override the close-up framing, use `text_to_image` instead
 
 - **`edit_first_frame`** (RECOMMENDED for last_frame/mid_frame) — Generate by **editing the first frame image**. The image prompt should describe ONLY what changed, not the full scene. This produces maximum visual consistency — same composition, lighting, colors, with only the described changes. Use when:
   - Camera angle and framing stay similar
