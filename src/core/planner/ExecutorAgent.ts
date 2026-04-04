@@ -3159,6 +3159,38 @@ Rules:
 
       this.log(`  Shot image: ${resolvedRefs.length}/${shotJson.references.length} refs resolved`);
 
+      // Auto-repair: scan prompt for "from image N" refs that weren't in the references array
+      // and inject them from the scene's character/setting metadata
+      const imageRefPattern = /from image (\d+)/gi;
+      const promptImageNums = new Set<number>();
+      let match: RegExpExecArray | null;
+      while ((match = imageRefPattern.exec(shotJson.imagePrompt)) !== null) {
+        promptImageNums.add(parseInt(match[1], 10));
+      }
+
+      if (promptImageNums.size > resolvedRefs.length) {
+        this.log(`  Prompt references ${promptImageNums.size} images but only ${resolvedRefs.length} resolved — auto-injecting missing refs`);
+
+        // Find all available character/setting/object image nodes
+        const allRefNodes = this.executor.getAllNodes().filter(
+          n => ['character_image', 'setting_image', 'object_image'].includes(n.typeId)
+            && n.status === 'completed' && n.outputPath?.endsWith('.png'),
+        );
+
+        // Inject any that aren't already in resolvedRefs
+        for (const refNode of allRefNodes) {
+          const alreadyIncluded = resolvedRefs.some(r => r.name === (refNode.itemId ?? ''));
+          if (!alreadyIncluded && resolvedRefs.length < promptImageNums.size) {
+            resolvedRefs.push({
+              image_id: join(this.config.projectDir, refNode.outputPath ?? ''),
+              type: refNode.typeId.replace('_image', '') as 'character' | 'setting',
+              name: refNode.itemId ?? refNode.id.split(':')[1] ?? refNode.id,
+            });
+            this.log(`  Auto-injected ref: ${refNode.id} (${refNode.outputPath})`);
+          }
+        }
+      }
+
       // Determine generation mode based on resolved references
       const hasRefs = resolvedRefs.length > 0;
       const generationMode = hasRefs ? 'image_text_to_image' : 'text_to_image';

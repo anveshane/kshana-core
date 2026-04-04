@@ -205,13 +205,18 @@ export class ComfyUIProvider implements GenerationProvider {
     try {
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
+      modeRegistry.refresh(); // Ensure manifests are loaded
       const activeMode = modeRegistry.getActiveForPipeline('image_editing', 'comfyui');
       if (activeMode) {
         modeManifest = activeMode;
         workflowName = activeMode.id;
         debugLog(`Using image_editing workflow: ${activeMode.displayName} (${activeMode.id})${activeMode.isOverride ? ' [user override]' : ''}`);
+      } else {
+        debugLog(`No active image_editing workflow found — using default: ${workflowName}`);
       }
-    } catch { /* registry not available */ }
+    } catch (err) {
+      debugLog(`WorkflowModeRegistry error: ${(err as Error).message} — using default: ${workflowName}`);
+    }
 
     const hasManifestWorkflow = modeManifest && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0;
 
