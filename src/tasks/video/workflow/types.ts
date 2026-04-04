@@ -456,6 +456,8 @@ export interface AssetInfo {
   path: string;
   createdAt: number;
   metadata?: Record<string, unknown>;
+  /** Executor node ID for redo support (e.g., "character_image:kai") */
+  nodeId?: string;
 }
 
 /**

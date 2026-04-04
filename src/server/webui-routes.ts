@@ -178,10 +178,8 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
             const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
             const nodes = project.executorState?.nodes ?? {};
 
-            // Build TWO lookups:
-            // 1. Exact path match (fast, handles most cases)
+            // Strategy: use nodeId from manifest if present, then exact path, then type+itemId
             const pathToNode = new Map<string, string>();
-            // 2. Type+itemId based match (handles re-generated images with new paths)
             const typeItemToNode = new Map<string, string>();
             for (const [nodeId, node] of Object.entries(nodes)) {
               const n = node as { outputPath?: string; typeId?: string; itemId?: string };
@@ -189,7 +187,6 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
               if (n.typeId && n.itemId) typeItemToNode.set(`${n.typeId}:${n.itemId}`, nodeId);
             }
 
-            // Asset type → node typeId mapping
             const assetTypeToNodeType: Record<string, string> = {
               'character_ref': 'character_image',
               'setting_ref': 'setting_image',
@@ -199,14 +196,16 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
             };
 
             for (const asset of assets) {
-              // Try exact path match first
+              // 1. Already has nodeId from manifest
+              if (asset.nodeId) continue;
+
+              // 2. Exact path match
               let nodeId = pathToNode.get(asset.path);
 
-              // Fallback: derive from asset type + name in path
+              // 3. Fallback: asset type + name extracted from path
               if (!nodeId) {
                 const nodeType = assetTypeToNodeType[asset.type];
                 if (nodeType) {
-                  // Extract item name from path patterns like CharRef_kai, SettingRef_bridge, scene_1_shot_2
                   const path = asset.path;
                   let itemId: string | null = null;
 
@@ -221,9 +220,17 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
                     if (m) itemId = m[1];
                   }
 
-                  if (itemId) {
-                    nodeId = typeItemToNode.get(`${nodeType}:${itemId}`);
-                  }
+                  if (itemId) nodeId = typeItemToNode.get(`${nodeType}:${itemId}`);
+                }
+              }
+
+              // 4. Last resort for scene_image: match by metadata sceneNumber+shotNumber
+              if (!nodeId && asset.type === 'scene_image' && asset.metadata) {
+                const meta = asset.metadata as Record<string, unknown>;
+                const sn = meta.sceneNumber ?? meta.scene_number;
+                const sh = meta.shotNumber ?? meta.shot_number;
+                if (sn && sh) {
+                  nodeId = typeItemToNode.get(`shot_image:scene_${sn}_shot_${sh}`);
                 }
               }
 

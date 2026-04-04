@@ -3669,6 +3669,7 @@ Rules:
           path: relPath,
           createdAt: Date.now(),
           metadata: { sceneNumber: sceneNum, shotNumber: shotNum, duration: shotDuration },
+          nodeId: node.id,
         });
       } catch { /* non-fatal */ }
 
@@ -3801,6 +3802,7 @@ Rules:
           type: 'scene_video',
           path: relPath,
           createdAt: Date.now(),
+          nodeId: node.id,
         });
       } catch { /* non-fatal */ }
 
@@ -3992,6 +3994,7 @@ Rules:
             path: relPath,
             createdAt: Date.now(),
             metadata: { duration: result.duration, fileSize: result.fileSize },
+            nodeId: node.id,
           });
         } catch { /* non-fatal */ }
 
