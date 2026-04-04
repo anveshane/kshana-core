@@ -134,17 +134,30 @@ export class ComfyUIProvider implements GenerationProvider {
 
       debugLog(`Loading user image workflow from: ${workflowPath}`);
       const template = JSON.parse(fs.readFileSync(workflowPath, 'utf-8'));
-      workflow = parameterizeGeneric(template, modeManifest, {
+      const genParams: Record<string, unknown> = {
         prompt,
         negative_prompt: negativePrompt,
         seed,
         base_image: inputImageFilename ?? '',
-        reference_image_1: referenceImageFilenames[0] ?? '',
-        reference_image_2: referenceImageFilenames[1] ?? '',
         filenamePrefix,
         width: overrideWidth,
         height: overrideHeight,
-      }) as Record<string, unknown>;
+      };
+      // Fill all reference slots — unused ones get the base image
+      for (let i = 0; i < 4; i++) {
+        genParams[`reference_image_${i + 1}`] = referenceImageFilenames[i] ?? inputImageFilename ?? '';
+      }
+      workflow = parameterizeGeneric(template, modeManifest, genParams) as Record<string, unknown>;
+
+      // Safety: replace any remaining LoadImage placeholders
+      for (const [, wfNode] of Object.entries(workflow)) {
+        const n = wfNode as { class_type?: string; inputs?: Record<string, unknown> };
+        if (n.class_type === 'LoadImage' && typeof n.inputs?.['image'] === 'string') {
+          if ((n.inputs['image'] as string).startsWith('ref_image_')) {
+            n.inputs['image'] = inputImageFilename ?? '';
+          }
+        }
+      }
     } else {
       // Built-in workflow: use old registry + named parameterizer
       const workflowMetadata = registry.get(workflowName);
@@ -278,15 +291,20 @@ export class ComfyUIProvider implements GenerationProvider {
       workflow = parameterizeGeneric(template, modeManifest, editParams) as Record<string, unknown>;
 
       // Safety: set any remaining LoadImage nodes that still have placeholder filenames
-      for (const [, node] of Object.entries(workflow)) {
+      let placeholderCount = 0;
+      for (const [nid, node] of Object.entries(workflow)) {
         const n = node as { class_type?: string; inputs?: Record<string, unknown> };
         if (n.class_type === 'LoadImage' && typeof n.inputs?.image === 'string') {
           if (n.inputs.image.startsWith('ref_image_')) {
+            console.log(`[FLUX Klein] Replacing placeholder on node ${nid}: ${n.inputs.image} → ${uploadResult.name}`);
             n.inputs.image = uploadResult.name;
+            placeholderCount++;
           }
         }
       }
+      console.log(`[FLUX Klein] hasManifestWorkflow=true, refs=${referenceImageFilenames.length}, placeholders_fixed=${placeholderCount}, nodes=${Object.keys(workflow).length}`);
     } else {
+      console.log(`[FLUX Klein] hasManifestWorkflow=FALSE, falling back to old registry: ${workflowName}`);
       const workflowMetadata = registry.get(workflowName);
       if (!workflowMetadata) {
         throw new Error(`Workflow '${workflowName}' not found`);
