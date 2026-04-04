@@ -189,9 +189,9 @@ export class WorkflowModeRegistry {
     for (const mode of this.modes.values()) {
       if (mode.pipeline !== pipeline) continue;
       if (mode.active === false) continue;
-      // Filter by provider: ComfyUI modes have workflowFile, API modes have format='api'
-      if (providerId && providerId !== 'comfyui' && mode.format !== 'api') continue;
-      if (providerId && providerId === 'comfyui' && mode.format === 'api') continue;
+      // Filter by provider: non-ComfyUI providers only see API-only modes (no workflowFile)
+      // ComfyUI sees ALL modes (both litegraph and api format have workflowFile)
+      if (providerId && providerId !== 'comfyui' && mode.workflowFile) continue;
       results.push(mode);
     }
     return results.sort((a, b) => a.priority - b.priority);
