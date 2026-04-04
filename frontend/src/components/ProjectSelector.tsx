@@ -106,7 +106,7 @@ export function ProjectSelector({ onSendWs, onNewProject }: ProjectSelectorProps
       const res = await fetch(`/api/v1/projects/${name}/assets`)
       if (!res.ok) return
       const data = await res.json()
-      const assets = (data.assets || []).map((a: { id: string; path: string; type: string }) => ({
+      const assets = (data.assets || []).map((a: { id: string; path: string; type: string; nodeId?: string }) => ({
         ...a,
         url: `/api/v1/assets/${name}/${a.path}`,
       }))
