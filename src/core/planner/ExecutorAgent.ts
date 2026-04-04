@@ -3169,7 +3169,7 @@ Rules:
       if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
 
       const job = mediaJobs.get(result.jobId);
-      const filePath = job?.result?.path;
+      let filePath = job?.result?.path;
       const artifactId = job?.result?.artifactId;
 
       if (result.status === 'completed' && filePath) {
@@ -3188,19 +3188,59 @@ Rules:
             this.log(`  Image validation passed`);
 
             // VLM review — send image to vision model for quality check
+            // On failure: retry image generation ONCE, then accept with warning
             try {
               const { reviewImageWithVLM } = await import('./imageValidator.js');
               const vlmResult = await reviewImageWithVLM(absPath, shotJson.imagePrompt, this.llm);
               if (!vlmResult.pass) {
-                this.log(`  VLM review FAILED: ${vlmResult.issues.join('; ')}`);
+                this.log(`  VLM review FAILED (attempt 1): ${vlmResult.issues.join('; ')}`);
                 this.emit({
                   type: 'tool_streaming',
                   toolCallId: genCallId,
-                  chunk: `⚠ VLM review: ${vlmResult.issues.join('; ')}`,
+                  chunk: `⚠ VLM rejected image: ${vlmResult.issues.join('; ')} — regenerating...`,
                   done: false,
                   agentName,
                   toolName,
                 });
+
+                // Retry: regenerate the image once
+                const retryResult = await submitImageGeneration({
+                  scene_number: sceneNumber,
+                  prompt: shotJson.imagePrompt,
+                  negative_prompt: shotJson.negativePrompt,
+                  aspect_ratio: shotJson.aspectRatio ?? '16:9',
+                  width: shotWidth,
+                  height: shotHeight,
+                  image_type: 'scene',
+                  generation_mode: generationMode,
+                  reference_images: hasRefs ? resolvedRefs : undefined,
+                });
+
+                const retryJob = mediaJobs.get(retryResult.jobId);
+                const retryPath = retryJob?.result?.path;
+
+                if (retryResult.status === 'completed' && retryPath) {
+                  this.log(`  Retry image generated: ${retryPath}`);
+                  const retryAbsPath = retryPath.startsWith('/') ? retryPath : join(this.config.projectDir, retryPath);
+
+                  // VLM review the retry
+                  const retryVlm = await reviewImageWithVLM(retryAbsPath, shotJson.imagePrompt, this.llm);
+                  if (retryVlm.pass) {
+                    this.log(`  VLM review passed on retry`);
+                    // Use the retry image instead
+                    filePath = retryPath;
+                  } else {
+                    this.log(`  VLM review FAILED again: ${retryVlm.issues.join('; ')} — accepting with warning`);
+                    this.emit({
+                      type: 'tool_streaming',
+                      toolCallId: genCallId,
+                      chunk: `⚠ VLM rejected retry too: ${retryVlm.issues.join('; ')} — proceeding anyway`,
+                      done: false,
+                      agentName,
+                      toolName,
+                    });
+                  }
+                }
               } else {
                 this.log(`  VLM review passed`);
               }
