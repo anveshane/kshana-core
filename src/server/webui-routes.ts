@@ -197,6 +197,65 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  // Load prompt data for a node (for Edit & Redo modal)
+  app.get<{ Params: { name: string; nodeId: string } }>(
+    '/api/v1/projects/:name/node-prompt/:nodeId',
+    async (request: FastifyRequest<{ Params: { name: string; nodeId: string } }>, reply: FastifyReply) => {
+      const { name, nodeId } = request.params;
+      const projectPath = join(process.cwd(), `${name}.kshana`, 'project.json');
+
+      if (!existsSync(projectPath)) {
+        return reply.status(404).send({ error: 'Project not found' });
+      }
+
+      try {
+        const { resolveNodePromptPath, getAvailableReferences } = await import('./editAndRedo.js');
+        const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
+        const nodes = project.executorState?.nodes ?? {};
+        const node = nodes[nodeId];
+
+        if (!node) {
+          return reply.status(404).send({ error: `Node not found: ${nodeId}` });
+        }
+
+        const promptPath = resolveNodePromptPath(nodeId, nodes);
+        let prompt: Record<string, unknown> = {};
+
+        if (promptPath) {
+          const absPath = join(process.cwd(), `${name}.kshana`, promptPath);
+          if (existsSync(absPath)) {
+            try {
+              prompt = JSON.parse(readFileSync(absPath, 'utf-8'));
+            } catch { /* empty */ }
+          }
+        }
+
+        const response: Record<string, unknown> = {
+          nodeId,
+          nodeType: node.typeId,
+          prompt,
+        };
+
+        // For shot images: include available references
+        if (node.typeId === 'shot_image') {
+          response.availableReferences = getAvailableReferences(nodes, name);
+        }
+
+        // For shot videos: include first frame URL for preview
+        if (node.typeId === 'shot_video') {
+          const shotImageNode = nodes[`shot_image:${node.itemId}`];
+          if (shotImageNode?.outputPath) {
+            response.firstFrameUrl = `/api/v1/assets/${name}/${shotImageNode.outputPath}`;
+          }
+        }
+
+        return reply.send(response);
+      } catch (err) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    }
+  );
+
   // Serve static asset files from project directories
   app.get<{ Params: { project: string; '*': string } }>(
     '/api/v1/assets/:project/*',

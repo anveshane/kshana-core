@@ -337,6 +337,8 @@ export interface StartTaskData {
 export interface RedoNodeData {
   /** The node ID to invalidate and re-execute (e.g., "character:alice", "shot_video:scene_1_shot_2") */
   nodeId: string;
+  /** Optional edited prompt — if provided, saved to disk before redo */
+  editedPrompt?: Record<string, unknown>;
 }
 
 /**

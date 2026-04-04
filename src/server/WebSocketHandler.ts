@@ -437,7 +437,7 @@ export class WebSocketHandler {
     this.sendTimerUpdate(socket, sessionId, true);
 
     try {
-      const result = await this.conversationManager.redoNode(sessionId, data.nodeId, events);
+      const result = await this.conversationManager.redoNode(sessionId, data.nodeId, events, data.editedPrompt);
 
       // Notify UI that timer stopped
       this.sendTimerUpdate(socket, sessionId, false);

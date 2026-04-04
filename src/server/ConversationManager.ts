@@ -502,7 +502,8 @@ export class ConversationManager {
   async redoNode(
     sessionId: string,
     nodeId: string,
-    events?: ConversationEvents
+    events?: ConversationEvents,
+    editedPrompt?: Record<string, unknown>,
   ): Promise<GenericAgentResult> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -516,6 +517,13 @@ export class ConversationManager {
     }
     if (!session.sessionContext) {
       throw new Error('Session context not initialized. Configure project first.');
+    }
+
+    // If user edited the prompt, save it to disk BEFORE invalidation
+    if (editedPrompt && Object.keys(editedPrompt).length > 0) {
+      const { saveEditedPrompt } = await import('./editAndRedo.js');
+      const projectDir = session.sessionContext.projectDir;
+      await saveEditedPrompt(projectDir, nodeId, editedPrompt);
     }
 
     // Call redoNode on the agent (invalidates + persists + emits todo update)
