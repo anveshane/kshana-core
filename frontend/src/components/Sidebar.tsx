@@ -8,29 +8,6 @@ interface SidebarProps {
 }
 
 
-/** Fallback: derive nodeId from asset type and path when server doesn't provide it */
-function deriveNodeId(asset: { type: string; path: string }): string | null {
-  const path = asset.path
-  // character_ref → character_image:name
-  const charMatch = path.match(/CharRef_(\w+)/)
-  if (charMatch || asset.type === 'character_ref') {
-    const name = charMatch?.[1] || path.split('/').pop()?.replace(/\.\w+$/, '') || ''
-    return `character_image:${name.toLowerCase()}`
-  }
-  // setting_ref → setting_image:name
-  const setMatch = path.match(/SettingRef_(\w+)/)
-  if (setMatch || asset.type === 'setting_ref') {
-    const name = setMatch?.[1] || path.split('/').pop()?.replace(/\.\w+$/, '') || ''
-    return `setting_image:${name.toLowerCase()}`
-  }
-  // scene_video → shot_video:scene_N_shot_M
-  const vidMatch = path.match(/(scene_\d+_shot_\d+)/)
-  if (vidMatch) return `shot_video:${vidMatch[1]}`
-  // scene image → shot_image:scene_N_shot_M
-  const imgMatch = path.match(/Scene(\d+)_/)
-  if (imgMatch) return `shot_image:scene_${imgMatch[1]}_shot_1`
-  return null
-}
 
 /** Extract a short label from asset path */
 function assetLabel(path: string): string {
@@ -49,9 +26,7 @@ export function Sidebar({ onRedoNode, onRedoNodeWithPrompt }: SidebarProps) {
   const imageAssets = assets.filter(
     a => a.type === 'image' || a.url.match(/\.(png|jpg|jpeg|webp)$/i)
   )
-  const videoAssets = assets.filter(
-    a => a.type === 'scene_video' || a.url.match(/\.(mp4|webm)$/i)
-  )
+
 
   function getImageUrl(asset: typeof assets[0]): string {
     return selectedProject ? `/api/v1/assets/${selectedProject}/${asset.path}` : asset.url
@@ -130,7 +105,7 @@ export function Sidebar({ onRedoNode, onRedoNodeWithPrompt }: SidebarProps) {
           ) : (
             <div className="grid grid-cols-2 gap-1.5">
               {imageAssets.map((asset) => {
-                const nodeId = asset.nodeId ?? deriveNodeId(asset)
+                const nodeId = asset.nodeId ?? null
                 const url = getImageUrl(asset)
                 return (
                   <div
