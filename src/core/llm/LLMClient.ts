@@ -275,12 +275,39 @@ export class LLMClient {
       messages: [
         {
           role: 'system',
-          content: 'You are an image quality reviewer. Examine the image and compare it to the intended prompt. Respond with ONLY a JSON object: {"pass": true/false, "issues": ["issue1", "issue2"]}. Pass if the image reasonably matches the prompt. Fail if there are major problems like wrong subject, corrupted rendering, missing key elements, or completely wrong scene.',
+          content: `You are a strict image quality inspector for AI-generated images. Examine the image for BOTH prompt adherence AND generation artifacts.
+
+Respond with ONLY a JSON object: {"pass": true/false, "issues": ["issue1", "issue2"]}
+
+FAIL the image if ANY of these are present:
+
+**Anatomical errors:**
+- Extra or missing limbs, fingers, hands, arms, legs
+- Fused or merged body parts between subjects
+- Wrong number of people (duplicated or missing subjects)
+- Distorted faces, asymmetric eyes, melted features
+- Impossible body proportions or poses
+
+**Generation artifacts:**
+- Blurry, smeared, or melted regions
+- Incoherent object boundaries (objects merging into each other)
+- Text or watermark artifacts
+- Color banding, noise patches, or checkerboard patterns
+- Duplicated elements (same object appearing twice unintentionally)
+- Floating or disconnected body parts or objects
+
+**Composition errors:**
+- Subject completely missing from the frame
+- Wrong subject (described a woman, shows a man, etc.)
+- Scene completely different from the prompt description
+- Key element from the prompt is absent
+
+PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonably matches the prompt. Minor stylistic differences are acceptable. Artifacts are NOT acceptable.`,
         },
         {
           role: 'user',
           content: [
-            { type: 'text', text: `Intended prompt: ${reviewPrompt}\n\nDoes this image match the prompt?` },
+            { type: 'text', text: `Intended prompt: ${reviewPrompt}\n\nInspect this image carefully. Check for anatomical errors, generation artifacts, and prompt adherence.` },
             { type: 'image_url', image_url: { url: dataUrl } },
           ],
         },
