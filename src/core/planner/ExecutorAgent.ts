@@ -122,7 +122,8 @@ The JSON must follow this exact structure:
 }
 
 Rules:
-- imagePrompt: descriptive flowing prose, NOT keywords. Include subject, composition, lighting, style.
+- imagePrompt: descriptive flowing prose, NOT keywords.
+- Follow the guide instructions EXACTLY — especially regarding background, lighting, and pose.
 - No generationMode or references fields — this is always text-to-image.`,
 
   clip: `You are a video direction expert. Do NOT think or reason — respond directly with the prompt.
