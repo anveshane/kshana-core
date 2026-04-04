@@ -135,7 +135,12 @@ export function App() {
             />
 
             <div className="flex flex-1 overflow-hidden relative z-10">
-              <Sidebar onRedoNode={(nodeId: string) => send({ type: 'redo_node', data: { nodeId } })} />
+              <Sidebar
+                onRedoNode={(nodeId: string) => send({ type: 'redo_node', data: { nodeId } })}
+                onRedoNodeWithPrompt={(nodeId: string, editedPrompt: Record<string, unknown>) =>
+                  send({ type: 'redo_node', data: { nodeId, editedPrompt } })
+                }
+              />
               <main className="flex-1 flex flex-col overflow-hidden">
                 {/* Tab bar */}
                 <div className="flex border-b border-line-soft flex-shrink-0">

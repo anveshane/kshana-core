@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { useAppState } from '../lib/store'
+import { PromptEditModal } from './PromptEditModal'
 
 interface SidebarProps {
   onRedoNode?: (nodeId: string) => void
+  onRedoNodeWithPrompt?: (nodeId: string, editedPrompt: Record<string, unknown>) => void
 }
 
 
@@ -13,14 +15,18 @@ function assetLabel(path: string): string {
   return filename.replace(/\.\w+$/, '').replace(/_/g, ' ')
 }
 
-export function Sidebar({ onRedoNode }: SidebarProps) {
+export function Sidebar({ onRedoNode, onRedoNodeWithPrompt }: SidebarProps) {
   const { phase, todos, assets, selectedProject, agentStatus } = useAppState()
   const isBusy = agentStatus === 'thinking'
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
-  const [confirmRedo, setConfirmRedo] = useState<string | null>(null) // nodeId pending confirmation
+  const [confirmRedo, setConfirmRedo] = useState<string | null>(null)
+  const [editNodeId, setEditNodeId] = useState<string | null>(null)
 
   const imageAssets = assets.filter(
     a => a.type === 'image' || a.url.match(/\.(png|jpg|jpeg|webp)$/i)
+  )
+  const videoAssets = assets.filter(
+    a => a.type === 'scene_video' || a.url.match(/\.(mp4|webm)$/i)
   )
 
   function getImageUrl(asset: typeof assets[0]): string {
@@ -130,14 +136,27 @@ export function Sidebar({ onRedoNode }: SidebarProps) {
                       >
                         🔍
                       </button>
-                      {nodeId && onRedoNode && !isBusy && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); handleRedoClick(nodeId) }}
-                          className="p-1.5 rounded bg-black/70 text-white hover:bg-error/80 text-sm"
-                          title={`Redo ${nodeId}`}
-                        >
-                          ↻
-                        </button>
+                      {nodeId && !isBusy && (
+                        <>
+                          {onRedoNodeWithPrompt && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setEditNodeId(nodeId) }}
+                              className="p-1.5 rounded bg-black/70 text-white hover:bg-cyan/80 text-sm"
+                              title="Edit prompt & redo"
+                            >
+                              ✏
+                            </button>
+                          )}
+                          {onRedoNode && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleRedoClick(nodeId) }}
+                              className="p-1.5 rounded bg-black/70 text-white hover:bg-error/80 text-sm"
+                              title={`Redo ${nodeId}`}
+                            >
+                              ↻
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   </div>
@@ -167,6 +186,19 @@ export function Sidebar({ onRedoNode }: SidebarProps) {
             ✕
           </button>
         </div>
+      )}
+
+      {/* Prompt Edit modal */}
+      {editNodeId && selectedProject && onRedoNodeWithPrompt && (
+        <PromptEditModal
+          nodeId={editNodeId}
+          projectName={selectedProject}
+          onSubmit={(nid, edited) => {
+            onRedoNodeWithPrompt(nid, edited)
+            setEditNodeId(null)
+          }}
+          onCancel={() => setEditNodeId(null)}
+        />
       )}
 
       {/* Redo confirmation dialog */}
