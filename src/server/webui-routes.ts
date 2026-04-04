@@ -169,7 +169,28 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
 
       try {
         const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-        return reply.send({ assets: manifest.assets ?? [] });
+        const assets = manifest.assets ?? [];
+
+        // Enrich assets with nodeId from executor state for redo support
+        const projectPath = join(process.cwd(), `${name}.kshana`, 'project.json');
+        if (existsSync(projectPath)) {
+          try {
+            const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
+            const nodes = project.executorState?.nodes ?? {};
+            // Build path→nodeId lookup
+            const pathToNode = new Map<string, string>();
+            for (const [nodeId, node] of Object.entries(nodes)) {
+              const n = node as { outputPath?: string };
+              if (n.outputPath) pathToNode.set(n.outputPath, nodeId);
+            }
+            for (const asset of assets) {
+              const nodeId = pathToNode.get(asset.path);
+              if (nodeId) asset.nodeId = nodeId;
+            }
+          } catch { /* non-fatal */ }
+        }
+
+        return reply.send({ assets });
       } catch {
         return reply.send({ assets: [] });
       }

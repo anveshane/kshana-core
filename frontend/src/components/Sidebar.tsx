@@ -5,36 +5,6 @@ interface SidebarProps {
   onRedoNode?: (nodeId: string) => void
 }
 
-/**
- * Derive the executor node ID from an asset path.
- * e.g. "assets/images/characters/kai.png" → "character_image:kai"
- *      "assets/images/settings/village.png" → "setting_image:village"
- *      "assets/images/shots/scene_1_shot_2_first_frame.png" → "shot_image:scene_1_shot_2"
- *      "assets/videos/shots/scene_1_shot_1.mp4" → "shot_video:scene_1_shot_1"
- */
-function deriveNodeId(path: string): string | null {
-  // Character image
-  const charMatch = path.match(/images\/characters\/([^/]+)\.\w+$/)
-  if (charMatch) return `character_image:${charMatch[1]}`
-
-  // Setting image
-  const settingMatch = path.match(/images\/settings\/([^/]+)\.\w+$/)
-  if (settingMatch) return `setting_image:${settingMatch[1]}`
-
-  // Object image
-  const objectMatch = path.match(/images\/objects\/([^/]+)\.\w+$/)
-  if (objectMatch) return `object_image:${objectMatch[1]}`
-
-  // Shot image (may have _first_frame, _last_frame suffix)
-  const shotImgMatch = path.match(/images\/shots\/(scene_\d+_shot_\d+)/)
-  if (shotImgMatch) return `shot_image:${shotImgMatch[1]}`
-
-  // Shot video
-  const shotVidMatch = path.match(/videos\/shots\/(scene_\d+_shot_\d+)/)
-  if (shotVidMatch) return `shot_video:${shotVidMatch[1]}`
-
-  return null
-}
 
 /** Extract a short label from asset path */
 function assetLabel(path: string): string {
@@ -130,7 +100,7 @@ export function Sidebar({ onRedoNode }: SidebarProps) {
           ) : (
             <div className="grid grid-cols-2 gap-1.5">
               {imageAssets.map((asset) => {
-                const nodeId = deriveNodeId(asset.path)
+                const nodeId = asset.nodeId ?? null
                 const url = getImageUrl(asset)
                 return (
                   <div

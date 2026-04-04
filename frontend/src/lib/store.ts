@@ -70,7 +70,7 @@ export interface AppState {
   contextUsage: { percentage: number; promptTokens: number; maxTokens: number } | null
 
   // Assets
-  assets: Array<{ id: string; path: string; url: string; type: string }>
+  assets: Array<{ id: string; path: string; url: string; type: string; nodeId?: string }>
 
   // Timeline
   timeline: Timeline | null
