@@ -73,6 +73,7 @@ const framePromptSchema = z.object({
 
 const multiFrameImagePromptSchema = z.object({
   shotNumber: z.number().optional(),
+  generationStrategy: z.string().optional(),
   frames: z.object({
     first_frame: framePromptSchema,
     mid_frame: framePromptSchema.optional(),
@@ -136,20 +137,13 @@ export function getPromptSchema(nodeTypeId: string): string | null {
       "shotNumber": number,
       "shotType": "string (establishing, tracking, medium, close_up, wide, extreme_close_up)",
       "duration": number,
-      "generationStrategy": "i2v | flfv | fmlfv | i2v_late_entry",
-      "firstFrame": {
-        "description": "string (detailed cinematographer prose)",
-        "characters": ["character_id"],
-        "setting": "setting_id"
-      },
-      "lastFrame": {
-        "description": "string (optional — only when end state differs from start)",
-        "characters": ["character_id"],
-        "setting": "setting_id"
-      },
+      "description": "string (1-2 sentence brief of what happens in this shot)",
+      "characters": ["character_id"],
+      "setting": "setting_id or null",
       "cameraWork": "string",
       "soundCue": "string",
-      "transition": "cut | crossfade | dip_to_black | fade"
+      "transition": "cut | crossfade | dip_to_black | fade",
+      "dialogue": "CHARACTER: line" or null
     }
   ]
 }
@@ -241,14 +235,11 @@ export function validateWithSchema(
  */
 export function normalizeSceneVideoPrompt(parsed: z.infer<typeof sceneVideoPromptSchema>): void {
   for (const shot of parsed.shots) {
-    // Auto-classify if both are missing — default to flfv for all shots
-    // Every shot should have both first and last frame for maximum video consistency
-    if (!shot.videoGenerationMode && !shot.generationStrategy) {
-      shot.generationStrategy = 'flfv';
-    }
-    // Normalize: copy videoGenerationMode → generationStrategy
+    // Normalize: copy videoGenerationMode → generationStrategy for backward compat
     if (shot.videoGenerationMode && !shot.generationStrategy) {
       shot.generationStrategy = shot.videoGenerationMode;
     }
+    // Note: generationStrategy is now determined by shot_image_prompt, not scene_video_prompt.
+    // Don't default to flfv here — let the downstream reader check shot_image_prompt output.
   }
 }

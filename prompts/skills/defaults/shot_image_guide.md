@@ -148,6 +148,20 @@ If NO reference images are available (documentary/non-narrative), use `text_to_i
 
 ---
 
+## Choosing generationStrategy
+
+You must include a `generationStrategy` field in your output JSON. This determines how many keyframe images are generated for video interpolation.
+
+- **`flfv`** (first + last frame) — **DEFAULT for most shots.** Simple motion, character actions, camera moves, dialogue shots. The video model interpolates between start and end frames.
+- **`fmlfv`** (first + mid + last frame) — Use for **complex transformations** where the mid-point state is important: disintegration effects, morphing, object reveals, major scene changes, physical transformations, magical effects, or any shot where the halfway point looks very different from a simple blend of start and end.
+
+**Rules:**
+- Default to `flfv` unless the shot clearly requires a mid-frame anchor
+- If a shot involves VFX, magical effects, physical transformation, or any action where the intermediate state matters, use `fmlfv`
+- When using `fmlfv`, include a `mid_frame` in the `frames` object
+
+---
+
 {{FRAME_GENERATION_GUIDE}}
 
 ---

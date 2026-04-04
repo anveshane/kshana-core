@@ -1306,33 +1306,16 @@ The JSON must follow this exact structure:
       "shotNumber": <number>,
       "shotType": "<establishing|wide|medium|close_up|extreme_close_up|over_shoulder|pov|tracking|reaction>",
       "duration": <seconds>,
-      "generationStrategy": "<flfv|fmlfv>",
-      "firstFrame": {
-        "description": "<what the camera sees at the START of this shot>",
-        "characters": ["<character_item_id>", ...],
-        "setting": "<setting_item_id or null>"
-      },
-      "lastFrame": {
-        "description": "<what the camera sees at the END of this shot>",
-        "characters": ["<character_item_id>", ...],
-        "setting": "<setting_item_id or null>"
-      },
+      "description": "<1-2 sentence brief of what happens in this shot>",
+      "characters": ["<character_item_id>"],
+      "setting": "<setting_item_id or null>",
       "cameraWork": "<camera movement and angle>",
       "soundCue": "<what is heard — ambient, effects, dialogue, or explicit silence>",
-      "transition": "<cut|crossfade|dip_to_black|fade>"
+      "transition": "<cut|crossfade|dip_to_black|fade>",
+      "dialogue": "<CHARACTER: line>" or null
     }
   ]
 }
-
-generationStrategy rules:
-- "flfv" (DEFAULT): first + last frame images generated, video interpolates between them. Use for most shots.
-- "fmlfv": first + mid + last frame images generated. Use for complex VFX, transformations, or shots where the midpoint looks very different from a simple blend.
-- NEVER use "i2v" or "t2v" — every shot needs both first and last frame anchors.
-
-lastFrame rules:
-- lastFrame is REQUIRED for every shot. The video model needs both start and end anchors.
-- Even for static shots, describe the end state (which may be very similar to firstFrame with minor changes).
-- Shot N's lastFrame should visually match Shot N+1's firstFrame for smooth cross-shot transitions.
 
 General rules:
 - Shot durations must sum to totalDuration exactly
@@ -1341,7 +1324,8 @@ General rules:
 - setting MUST use ONLY the exact item IDs listed below or null
 - Vary shot types for cinematic interest
 - Every shot must have a soundCue — even if it's "dead silence"
-- Every shot must have a transition field`;
+- Every shot must have a transition field
+- description should be a brief 1-2 sentence summary of the shot's content — frame details are handled downstream`;
 
       // Inject the actual available character and setting IDs
       const charIds = this.executor.getAllNodes()
@@ -1364,6 +1348,7 @@ Output ONLY valid JSON. Respond with the JSON object directly.
 For FLFV/FMLFV shots (most shots), use multi-frame format:
 {
   "shotNumber": <number>,
+  "generationStrategy": "<flfv|fmlfv>",
   "frames": {
     "first_frame": {
       "imagePrompt": "<flowing prose — reference characters/settings/objects as 'from image N'>",
@@ -1381,6 +1366,10 @@ For FLFV/FMLFV shots (most shots), use multi-frame format:
 }
 
 For FMLFV shots, add "mid_frame" with generationMode "edit_first_frame".
+
+generationStrategy rules:
+- "flfv" (DEFAULT): first + last frame. Use for most shots — simple motion, character actions, camera moves, dialogue.
+- "fmlfv": first + mid + last frame. Use for complex VFX, transformations, morphing, or shots where the midpoint looks very different from a simple blend.
 
 generationMode per frame:
 - "image_text_to_image": Generate fresh from character/setting/object references. Use for first_frame of shot 1 in a scene.
@@ -2787,11 +2776,32 @@ Rules:
   }
 
   /**
-   * Read the generationStrategy for a shot node from the scene_video_prompt JSON.
+   * Read the generationStrategy for a shot node.
+   * Checks shot_image_prompt first (preferred — slim scene breakdown),
+   * then falls back to scene_video_prompt (legacy).
    */
   private getGenerationStrategy(node: ExecutionNode): string {
     if (!node.itemId) return 'i2v';
 
+    // 1. Check shot_image_prompt output (preferred source in slim scene breakdown)
+    const sipNode = this.executor.getNode(`shot_image_prompt:${node.itemId}`);
+    if (sipNode?.outputPath) {
+      const sipPath = join(this.config.projectDir, sipNode.outputPath);
+      if (existsSync(sipPath)) {
+        try {
+          let content = readFileSync(sipPath, 'utf-8').trim();
+          if (content.startsWith('```')) {
+            content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+          }
+          const parsed = JSON.parse(content);
+          if (parsed.generationStrategy) {
+            return parsed.generationStrategy;
+          }
+        } catch { /* fall through */ }
+      }
+    }
+
+    // 2. Fallback: check scene_video_prompt (legacy format with generationStrategy on shots)
     const sceneMatch = node.itemId.match(/scene_(\d+)/);
     const shotMatch = node.itemId.match(/shot_(\d+)/);
     if (!sceneMatch) return 'i2v';
@@ -3655,7 +3665,10 @@ Rules:
           const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
           if (shot) {
             shotDuration = shot.duration || 5;
-            generationStrategy = shot.videoGenerationMode || shot.generationStrategy || 'i2v';
+            // Legacy: read strategy from scene_video_prompt if present
+            if (shot.videoGenerationMode || shot.generationStrategy) {
+              generationStrategy = shot.videoGenerationMode || shot.generationStrategy || 'i2v';
+            }
 
             // Fallback: if no motion directive, use description + cameraWork
             if (!motionPrompt) {
@@ -3668,6 +3681,24 @@ Rules:
         } catch {
           this.log(`  Failed to parse scene_video_prompt JSON for motion`);
         }
+      }
+    }
+
+    // 3. Check shot_image_prompt for generationStrategy (preferred in slim scene breakdown)
+    const sipNode = this.executor.getNode(`shot_image_prompt:${node.itemId}`);
+    if (sipNode?.outputPath) {
+      const sipPath = join(this.config.projectDir, sipNode.outputPath);
+      if (existsSync(sipPath)) {
+        try {
+          let sipContent = readFileSync(sipPath, 'utf-8').trim();
+          if (sipContent.startsWith('```')) {
+            sipContent = sipContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+          }
+          const sipParsed = JSON.parse(sipContent);
+          if (sipParsed.generationStrategy) {
+            generationStrategy = sipParsed.generationStrategy;
+          }
+        } catch { /* ignore */ }
       }
     }
 

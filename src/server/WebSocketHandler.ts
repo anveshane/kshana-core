@@ -204,6 +204,8 @@ export class WebSocketHandler {
       return;
     }
 
+    console.log(`[WS] Received: type=${message.type} session=${sessionId.substring(0,8)}`);
+
     // Handle different message types
     if (isPingMessage(message)) {
       // Respond with pong (status message)

@@ -69,7 +69,7 @@ describe('scene_video_prompt schema', () => {
 });
 
 describe('scene_video_prompt normalization', () => {
-  it('auto-classifies strategy from character presence', () => {
+  it('does not auto-classify strategy — now determined by shot_image_prompt', () => {
     const data = sceneVideoPromptSchema.parse({
       shots: [
         { shotNumber: 1, firstFrame: { description: 'With chars', characters: ['kai'] } },
@@ -77,8 +77,9 @@ describe('scene_video_prompt normalization', () => {
       ],
     });
     normalizeSceneVideoPrompt(data);
-    expect(data.shots[0]!.generationStrategy).toBe('flfv');
-    expect(data.shots[1]!.generationStrategy).toBe('flfv'); // default is now flfv for all shots
+    // In slim scene breakdown, generationStrategy is determined by shot_image_prompt
+    expect(data.shots[0]!.generationStrategy).toBeUndefined();
+    expect(data.shots[1]!.generationStrategy).toBeUndefined();
   });
 
   it('copies videoGenerationMode to generationStrategy', () => {

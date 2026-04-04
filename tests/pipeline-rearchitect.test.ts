@@ -19,14 +19,15 @@ import {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe('Change 1+7: FLFV as default strategy', () => {
-  it('normalizeSceneVideoPrompt defaults to flfv, not i2v', () => {
+  it('normalizeSceneVideoPrompt does not default generationStrategy (now in shot_image_prompt)', () => {
     const data = sceneVideoPromptSchema.parse({
       shots: [
         { shotNumber: 1, firstFrame: { description: 'A character walks', characters: ['kai'] } },
       ],
     });
     normalizeSceneVideoPrompt(data);
-    expect(data.shots[0]!.generationStrategy).toBe('flfv');
+    // In slim scene breakdown, generationStrategy is determined by shot_image_prompt, not scene_video_prompt
+    expect(data.shots[0]!.generationStrategy).toBeUndefined();
   });
 
   it('i2v is not in available strategies for LLM', async () => {
@@ -43,11 +44,13 @@ describe('Change 1+7: FLFV as default strategy', () => {
     }
   });
 
-  it('scene_video_prompt_guide requires lastFrame on every shot', () => {
+  it('scene_video_prompt_guide uses slim description format (no firstFrame/lastFrame)', () => {
     const guidePath = join(process.cwd(), 'prompts/skills/defaults/scene_video_prompt_guide.md');
     const guide = readFileSync(guidePath, 'utf-8');
-    // The guide should state that lastFrame is required
-    expect(guide).toMatch(/lastFrame.*required|MUST.*lastFrame|every shot.*lastFrame/i);
+    // Slim scene breakdown: no firstFrame/lastFrame, uses description field instead
+    expect(guide).not.toContain('"firstFrame"');
+    expect(guide).not.toContain('"lastFrame"');
+    expect(guide).toMatch(/description/i);
   });
 });
 

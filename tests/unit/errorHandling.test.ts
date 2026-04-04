@@ -502,12 +502,12 @@ describe('Dependency graph error propagation', () => {
 // ============================================================================
 
 describe('Schema normalization edge cases', () => {
-  it('shot with neither videoGenerationMode nor generationStrategy defaults to flfv', () => {
+  it('shot with neither videoGenerationMode nor generationStrategy remains undefined (strategy now in shot_image_prompt)', () => {
     const data = sceneVideoPromptSchema.parse({
       shots: [{ shotNumber: 1, description: 'A landscape' }],
     });
     normalizeSceneVideoPrompt(data);
-    expect(data.shots[0].generationStrategy).toBe('flfv');
+    expect(data.shots[0].generationStrategy).toBeUndefined();
   });
 
   it('shot with videoGenerationMode but no generationStrategy copies value', () => {
@@ -558,7 +558,7 @@ describe('Schema normalization edge cases', () => {
     });
     normalizeSceneVideoPrompt(data);
 
-    expect(data.shots[0].generationStrategy).toBe('flfv');    // default
+    expect(data.shots[0].generationStrategy).toBeUndefined(); // no default — strategy now in shot_image_prompt
     expect(data.shots[1].generationStrategy).toBe('i2v');     // copied from videoGenerationMode
     expect(data.shots[2].generationStrategy).toBe('fmlfv');   // kept as-is
   });
