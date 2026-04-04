@@ -3213,19 +3213,39 @@ Rules:
             this.log(`  Image validation passed`);
 
             // VLM review — send image to vision model for quality check
-            // On failure: retry image generation ONCE, then accept with warning
+            // Shows as its own card in the UI
+            const vlmCallId = `vlm_${node.id}_${Date.now()}`;
+            const vlmToolName = 'vlm_image_review';
             try {
               const { reviewImageWithVLM } = await import('./imageValidator.js');
+
+              this.emit({
+                type: 'tool_call',
+                toolCallId: vlmCallId,
+                toolName: vlmToolName,
+                arguments: { image: filePath, prompt: shotJson.imagePrompt.substring(0, 100) + '...' },
+                agentName,
+              });
+              this.emit({
+                type: 'tool_streaming',
+                toolCallId: vlmCallId,
+                chunk: 'Reviewing generated image with vision model...',
+                done: false,
+                agentName,
+                toolName: vlmToolName,
+              });
+
               const vlmResult = await reviewImageWithVLM(absPath, shotJson.imagePrompt, this.llm);
+
               if (!vlmResult.pass) {
                 this.log(`  VLM review FAILED (attempt 1): ${vlmResult.issues.join('; ')}`);
                 this.emit({
                   type: 'tool_streaming',
-                  toolCallId: genCallId,
-                  chunk: `⚠ VLM rejected image: ${vlmResult.issues.join('; ')} — regenerating...`,
+                  toolCallId: vlmCallId,
+                  chunk: `REJECTED: ${vlmResult.issues.join('; ')}\nRegenerating image...`,
                   done: false,
                   agentName,
-                  toolName,
+                  toolName: vlmToolName,
                 });
 
                 // Retry: regenerate the image once
@@ -3248,29 +3268,74 @@ Rules:
                   this.log(`  Retry image generated: ${retryPath}`);
                   const retryAbsPath = retryPath.startsWith('/') ? retryPath : join(this.config.projectDir, retryPath);
 
-                  // VLM review the retry
                   const retryVlm = await reviewImageWithVLM(retryAbsPath, shotJson.imagePrompt, this.llm);
                   if (retryVlm.pass) {
                     this.log(`  VLM review passed on retry`);
-                    // Use the retry image instead
                     filePath = retryPath;
+                    this.emit({
+                      type: 'tool_streaming',
+                      toolCallId: vlmCallId,
+                      chunk: 'Retry image PASSED review',
+                      done: true,
+                      agentName,
+                      toolName: vlmToolName,
+                    });
                   } else {
                     this.log(`  VLM review FAILED again: ${retryVlm.issues.join('; ')} — accepting with warning`);
                     this.emit({
                       type: 'tool_streaming',
-                      toolCallId: genCallId,
-                      chunk: `⚠ VLM rejected retry too: ${retryVlm.issues.join('; ')} — proceeding anyway`,
-                      done: false,
+                      toolCallId: vlmCallId,
+                      chunk: `Retry also rejected: ${retryVlm.issues.join('; ')}\nProceeding anyway`,
+                      done: true,
                       agentName,
-                      toolName,
+                      toolName: vlmToolName,
                     });
                   }
+                } else {
+                  this.emit({
+                    type: 'tool_streaming',
+                    toolCallId: vlmCallId,
+                    chunk: 'Retry generation failed — proceeding with original',
+                    done: true,
+                    agentName,
+                    toolName: vlmToolName,
+                  });
                 }
+
+                this.emit({
+                  type: 'tool_result',
+                  toolCallId: vlmCallId,
+                  toolName: vlmToolName,
+                  result: { status: 'rejected_then_retried', issues: vlmResult.issues },
+                  agentName,
+                });
               } else {
                 this.log(`  VLM review passed`);
+                this.emit({
+                  type: 'tool_streaming',
+                  toolCallId: vlmCallId,
+                  chunk: 'PASSED — image matches prompt',
+                  done: true,
+                  agentName,
+                  toolName: vlmToolName,
+                });
+                this.emit({
+                  type: 'tool_result',
+                  toolCallId: vlmCallId,
+                  toolName: vlmToolName,
+                  result: { status: 'passed' },
+                  agentName,
+                });
               }
             } catch (vlmErr) {
               this.log(`  VLM review skipped: ${(vlmErr as Error).message}`);
+              this.emit({
+                type: 'tool_result',
+                toolCallId: vlmCallId,
+                toolName: vlmToolName,
+                result: { status: 'skipped', error: (vlmErr as Error).message },
+                agentName,
+              });
             }
           }
         } catch (valErr) {
