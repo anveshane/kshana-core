@@ -2808,17 +2808,37 @@ Rules:
 
     const jsonContent = readFileSync(jsonPath, 'utf-8');
 
-    // Check for per-frame format (new FLFV/FMLFV style with "frames" field)
+    // Validate the prompt JSON — if corrupt, invalidate the prompt node and return null
+    // so the executor regenerates it on next run
     let parsedJson: any;
     try {
       let cleaned = jsonContent.trim();
       if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
       parsedJson = JSON.parse(cleaned);
-    } catch {
-      parsedJson = null;
+    } catch (parseErr) {
+      this.log(`  Shot image prompt JSON is corrupt: ${(parseErr as Error).message}`);
+      this.log(`  Invalidating corrupt prompt → will regenerate on next run`);
+      this.executor.invalidateNode(promptDep.id);
+      this.persistState();
+      return null;
     }
 
+    // Validate structure: must have either frames.first_frame or imagePrompt
     const hasFrames = parsedJson?.frames && typeof parsedJson.frames === 'object';
+    const hasImagePrompt = typeof parsedJson?.imagePrompt === 'string';
+    if (!hasFrames && !hasImagePrompt) {
+      this.log(`  Shot image prompt has no frames or imagePrompt — invalidating`);
+      this.executor.invalidateNode(promptDep.id);
+      this.persistState();
+      return null;
+    }
+
+    if (hasFrames && !parsedJson.frames['first_frame']?.imagePrompt) {
+      this.log(`  Shot image prompt frames missing first_frame.imagePrompt — invalidating`);
+      this.executor.invalidateNode(promptDep.id);
+      this.persistState();
+      return null;
+    }
 
     if (hasFrames) {
       // New per-frame format: each frame has its own prompt and generation mode
