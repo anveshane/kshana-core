@@ -643,6 +643,39 @@ export class ExecutorAgent extends TypedEventEmitter {
         }
       }
 
+      // Handle input type — if user provided a full story, skip plot and story stages
+      // and use the original input directly as the story artifact
+      if (this.config.project.inputType === 'story') {
+        const inputConfig = this.config.template.inputTypes?.find(
+          (t: { id: string }) => t.id === 'story',
+        );
+        const skips = (inputConfig as any)?.skipsArtifacts ?? [];
+        for (const skipTypeId of skips) {
+          const node = this.executor.getNode(skipTypeId);
+          if (node && node.status === 'pending') {
+            // Copy original input to the story output path if this is the story node
+            if (skipTypeId === 'story') {
+              const inputFile = join(this.config.projectDir, 'original_input.md');
+              const storyDir = join(this.config.projectDir, 'chapters', 'chapter_1', 'plans');
+              if (existsSync(inputFile)) {
+                if (!existsSync(storyDir)) mkdirSync(storyDir, { recursive: true });
+                const storyPath = join(storyDir, 'story.md');
+                const { copyFileSync } = await import('fs');
+                copyFileSync(inputFile, storyPath);
+                const relPath = 'chapters/chapter_1/plans/story.md';
+                this.executor.markCompleted(node.id, relPath);
+                this.log(`  Input type 'story': copied original input → ${relPath}`);
+              }
+            } else {
+              // Skip plot — mark as completed with a placeholder
+              this.executor.markCompleted(node.id, 'skipped-input-is-story');
+              this.log(`  Input type 'story': skipping ${skipTypeId}`);
+            }
+          }
+        }
+        this.persistState();
+      }
+
       // Expand any collection nodes whose dependencies are already completed
       await this.expandPendingCollections();
 
