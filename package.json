@@ -9,7 +9,7 @@
     "kshana-ink-server": "./dist/server/cli.js"
   },
   "scripts": {
-    "start": "NODE_OPTIONS='--max-old-space-size=8192' tsx src/index.tsx",
+    "start": "cd frontend && npm run build && cd .. && NODE_OPTIONS='--max-old-space-size=8192' tsx src/index.tsx",
     "fake": "NODE_OPTIONS='--max-old-space-size=8192' KSHANA_FAKE_MODE=1 tsx src/index.tsx",
     "dev": "NODE_OPTIONS='--max-old-space-size=8192' tsx watch src/index.tsx",
     "server": "cd frontend && npm run build && cd .. && NODE_OPTIONS='--max-old-space-size=8192' tsx src/server/cli.ts",
