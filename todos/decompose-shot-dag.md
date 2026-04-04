@@ -62,32 +62,61 @@ scene_breakdown
     → wrap in {"motionDirective": "..."}
 ```
 
-### Shot Continuity — Deterministic Chain
+### Scene State Tracker — Character & Object Positions
 
-Currently shots are generated independently. Shot 1 shows an empty bed, Shot 2 shows Keerti lying down, Shot 4 shows her standing — no visual continuity.
+Currently shots are generated independently. Shot 1 shows an empty bed, Shot 2 shows Keerti lying down, Shot 4 shows her standing — no one tracks WHERE anyone is.
+
+The fix: a **scene-level state tracker** that maintains the position, pose, and visibility of every character and movable object across shots. This is the source of truth for continuity.
 
 ```
-[DETERMINISTIC] establish_shot_continuity (runs before write_frame_prompts)
-    → For shot N (N > 1), read shot N-1's data:
-      - Last frame description (what characters were visible, positions, state)
-      - Which characters were in frame
-      - What the end state looked like
-    → Inject continuity context into the LLM prompt:
-      "Previous shot ended with: [shot N-1 last frame description]"
-      "Characters carried forward: [list with last-known positions]"
-    → Decide generation mode deterministically:
-      - Same characters + similar camera angle → edit_previous_shot
-      - Different characters or new location → image_text_to_image
-      - Detail/insert shot → text_to_image
+[DETERMINISTIC] initialize_scene_state (once per scene)
+    → From scene breakdown, extract all characters + setting
+    → Initialize state: { characterId: { position: "unknown", pose: "unknown", inFrame: false } }
+
+[DETERMINISTIC] update_state_from_shot (after each shot is planned)
+    → Parse the shot's description for character positions:
+      - "Keerti lying in bed" → keerti: { position: "bed", pose: "lying", inFrame: true }
+      - "Mr. Patel enters from left" → mr_patel: { position: "left_of_frame", pose: "standing", inFrame: true }
+      - "empty room" → all characters: { inFrame: false }
+    → Track movable objects too:
+      - "duvet pulled back" → duvet: { state: "pulled_back" }
+      - "lamp turned on" → lamp: { state: "on" }
+    → Accumulate state across shots — each shot ONLY updates what changed
+
+[DETERMINISTIC] inject_continuity_context (before each shot's image prompt)
+    → From current state, build context block:
+      "SCENE STATE at start of shot 4:
+       - Keerti: lying in bed, facing right, eyes closed
+       - Mr. Patel: standing at bedside, left of frame, looking down
+       - Duvet: pulled up to Keerti's chin
+       - Lamp: off, room lit by window light only"
+    → Inject into LLM prompt for frame description
+    → The LLM MUST respect this state — it describes the shot within these constraints
+
+[DETERMINISTIC] validate_state_transition
+    → After LLM writes the shot description, check:
+      - Did any character teleport? (was "in bed" shot 3, now "standing at door" shot 4 without getting up)
+      - Did any object change state without description? (lamp was off, now on, but no one turned it on)
+    → Flag violations for review or auto-inject transition descriptions
 ```
 
-This ensures:
-- Shot 2's first frame is visually consistent with Shot 1's end
-- Character positions don't teleport between shots
-- The LLM prompt for each shot includes what came before
-- Generation mode is chosen based on continuity, not LLM guessing
+This gives us:
+- **Spatial continuity** — characters don't teleport
+- **Object persistence** — duvet stays where it is unless moved
+- **State-aware prompts** — the LLM knows exactly what the scene looks like before writing
+- **Validation** — catches impossible transitions before image generation
 
-The sequential dependency (shot N depends on shot N-1) already enforces execution order. This step adds **content continuity** on top of execution order.
+The state tracker is entirely deterministic — it parses descriptions and accumulates state. The LLM just writes within the constraints.
+
+```
+Example state flow for bedroom scene:
+
+Shot 1: { keerti: offscreen, mr_patel: offscreen, bed: empty, curtains: closed }
+Shot 2: { keerti: { pos: "in_bed", pose: "lying_down", eyes: "closed" } }
+Shot 3: { keerti: { eyes: "opening" }, mr_patel: { pos: "bedside", pose: "sitting" } }
+Shot 4: { keerti: { pose: "sitting_up" }, mr_patel: { pos: "bedside", gesture: "hand_on_shoulder" } }
+Shot 5: { mr_patel: { pos: "bedside", gaze: "downward" } }  ← close-up, only mr_patel visible
+```
 
 ## Key Benefits
 
