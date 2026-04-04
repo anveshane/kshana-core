@@ -2565,7 +2565,7 @@ Rules:
             }
           }
 
-          // Create shot_video node if it doesn't exist
+          // Create or fix shot_video node
           if (!this.executor.getNode(shotVideoId)) {
             const shotVideoDeps = [shotImageId, motionId];
             this.executor.addNode({
@@ -2584,6 +2584,20 @@ Rules:
               const depNode = this.executor.getNode(depId);
               if (depNode && !depNode.dependents.includes(shotVideoId)) {
                 depNode.dependents.push(shotVideoId);
+              }
+            }
+          } else {
+            // Node exists — fix stale type-level dependencies → per-item
+            const existing = this.executor.getNode(shotVideoId)!;
+            const fixDeps: Array<[string, string]> = [
+              ['shot_motion_directive', motionId],
+              ['shot_image', shotImageId],
+            ];
+            for (const [stale, correct] of fixDeps) {
+              const idx = existing.dependencies.indexOf(stale);
+              if (idx >= 0) {
+                existing.dependencies[idx] = correct;
+                this.log(`  Rewired ${shotVideoId}: ${stale} → ${correct}`);
               }
             }
             // Wire final_video to depend on this shot_video
