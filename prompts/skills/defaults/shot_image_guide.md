@@ -235,11 +235,16 @@ When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MU
   - The shot is a **cutaway/insert** focusing on a small object or body part
   - **Rule of thumb:** if the reference image would dominate the composition and override the close-up framing, use `text_to_image` instead
 
-- **`edit_first_frame`** (RECOMMENDED for last_frame/mid_frame) — Generate by **editing the first frame image**. The image prompt should describe ONLY what changed, not the full scene. This produces maximum visual consistency — same composition, lighting, colors, with only the described changes. Use when:
-  - Camera angle and framing stay similar
-  - Characters moved position, changed expression, or left the frame
-  - Objects appeared/disappeared
-  - Lighting shifted (e.g., torch extinguished)
+- **`edit_first_frame`** (for last_frame/mid_frame) — Generate by **editing the first frame image**. The image prompt should describe ONLY what changed, not the full scene. Use when the end state is **visibly different** from the start:
+  - Character moved to a clearly different position in frame
+  - A new object appeared or an existing one disappeared
+  - Lighting changed dramatically (day→night, lamp turned on/off)
+  - A transformation or VFX effect occurred
+
+  **IMPORTANT:** Do NOT use `edit_first_frame` for subtle changes like "turns head slightly", "eyes shift", "changes expression". The image editor cannot reliably render these — the result will look identical to the first frame. For subtle motion:
+  - Set the last_frame to the SAME image as the first frame (copy the first_frame prompt exactly)
+  - Let the **video model** handle the motion via the motion directive prompt
+  - Only use `edit_first_frame` when you need a **clearly different end-state image**
 
 - **`edit_previous_shot`** (RECOMMENDED for first_frame of continuation shots) — Generate by **editing the previous shot's last frame**. This maintains visual continuity between consecutive shots in the same scene. The image prompt should describe ONLY what changed from the previous shot's end state. Use when:
   - The camera angle is similar or slightly shifted from the previous shot
@@ -257,6 +262,8 @@ When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MU
 4. Only use `image_text_to_image` for continuation shots if the camera angle changed dramatically or it's a new location
 5. The `edit_first_frame` and `edit_previous_shot` prompts should describe the DELTA (what changed), not the full scene
 6. For `edit_first_frame` and `edit_previous_shot`, the `references` array should be empty (the base image IS the reference)
+7. **refId MUST exactly match the available reference IDs** — copy them from the available references list. Do NOT invent or guess refIds. If the character is "mr_patel", write `"character_image:mr_patel"`, NOT `"character_image:mr_pattern"` or any variation
+8. For shots with **only subtle motion** (head turn, eye shift, expression change), set last_frame to the same image as first_frame — let the video model handle the animation
 
 ### Single-Frame Shots (i2v, t2v)
 
