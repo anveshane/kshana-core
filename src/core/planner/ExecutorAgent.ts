@@ -1517,7 +1517,7 @@ Rules:
         character_image: 'zimage',
         setting_image: 'zimage',
         shot_image_prompt: 'flux2_klein_edit',
-        scene_video_prompt: 'ltx23',
+        // scene_video_prompt does NOT need a workflow-specific skill — it plans shots, not video
         shot_video: 'ltx23',
       };
 
