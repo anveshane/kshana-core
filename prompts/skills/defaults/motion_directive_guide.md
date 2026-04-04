@@ -19,7 +19,9 @@ A short motion prompt using this proven template:
 
 **`[Subject in position], [action or motion], [camera movement], [atmosphere], cinematic tone, emphasis on [key visual detail]`**
 
-Target **30–60 words**. The system automatically prepends "Make this image come alive with cinematic motion, smooth animation." — do NOT include this yourself.
+**If the shot has dialogue**, append it naturally: `[Subject] says "[dialogue line]"` — the video model generates synchronized audio from the text.
+
+Target **30–60 words** (excluding dialogue). The system automatically prepends "Make this image come alive with cinematic motion, smooth animation." — do NOT include this yourself.
 
 ## Prompt Template
 
@@ -33,6 +35,11 @@ Fill in these slots and connect them into a short flowing sentence:
 
 ### Simple Motion Template
 `[Subject], [gesture or action], [camera distance and movement], [lighting feel], cinematic tone, emphasis on [expression or body language]`
+
+### Dialogue Template
+`[Subject], [gesture or action while speaking], [camera], [atmosphere], cinematic tone. [Subject] says "[exact dialogue line]"`
+
+Example: `Keerti, tilting head with furrowed brow, static tight close-up, warm morning light, cinematic tone, emphasis on uncertainty. Keerti says "What kind of guidance?"`
 
 ### VFX/Transformation Template
 `[Subject], [describe the transformation step by step]. [Camera movement], [atmosphere], cinematic tone, emphasis on [effect name]`
