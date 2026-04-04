@@ -93,26 +93,26 @@ export interface ExecutorAgentConfig {
 const CATEGORY_PROMPTS: Record<ArtifactCategory, string> = {
   concept: `You are a creative writer. Generate a detailed plot outline or concept document.
 Write in clear prose. Include key themes, character motivations, and narrative arc.
-Output ONLY the content — no explanations, no tool calls, no meta-commentary.`,
+Output ONLY the content.`,
 
   structure: `You are a creative writer. Generate a detailed narrative or structural document.
 Write rich, engaging prose with dialogue, description, and pacing.
-Output ONLY the content — no explanations, no tool calls, no meta-commentary.`,
+Output ONLY the content.`,
 
   entity: `You are a creative writer specializing in character and entity profiles.
 Create a detailed profile including physical description, personality, motivations, and background.
-Output ONLY the profile content — no explanations, no tool calls, no meta-commentary.`,
+Output ONLY the profile content.`,
 
   environment: `You are a creative writer specializing in setting and environment descriptions.
 Create a vivid, detailed description of the location including atmosphere, key features, and sensory details.
-Output ONLY the description — no explanations, no tool calls, no meta-commentary.`,
+Output ONLY the description.`,
 
   segment: `You are a creative writer specializing in cinematic scene descriptions.
-Create a detailed, shootable scene description with shot-by-shot breakdown.
-Output ONLY the scene content — no explanations, no tool calls, no meta-commentary.`,
+Create a detailed, shootable scene description with visual direction.
+Output ONLY the scene content.`,
 
-  visual_ref: `You are an expert image prompt engineer. Do NOT think or reason — respond directly.
-Output ONLY valid JSON — no markdown, no explanation, no thinking.
+  visual_ref: `You are an expert reference image prompt engineer.
+Output ONLY valid JSON.
 
 The JSON must follow this exact structure:
 {
@@ -121,18 +121,14 @@ The JSON must follow this exact structure:
   "aspectRatio": "<ratio like 16:9, 1:1, etc.>"
 }
 
-Rules:
-- imagePrompt: descriptive flowing prose, NOT keywords.
-- Follow the guide instructions EXACTLY — especially regarding background, lighting, and pose.
-- No generationMode or references fields — this is always text-to-image.`,
+Follow the guide instructions EXACTLY — especially regarding background, lighting, and pose.`,
 
-  clip: `You are a video direction expert. Do NOT think or reason — respond directly with the prompt.
-Generate a detailed motion/animation prompt describing camera movement, character actions, and timing.
-Output ONLY the motion prompt. No thinking, no explanations, no preamble.`,
+  clip: `You are a video direction expert.
+Follow the guide instructions to produce the motion prompt.
+Output ONLY the JSON result.`,
 
   final: `You are a video assembly specialist.
-Generate assembly instructions for combining video clips into a final video.
-Output ONLY the assembly instructions — no explanations, no tool calls, no meta-commentary.`,
+Generate assembly instructions for combining video clips into a final video.`,
 };
 
 /**
@@ -1257,7 +1253,7 @@ export class ExecutorAgent extends TypedEventEmitter {
     let systemPrompt: string;
     if (node.typeId === 'scene_video_prompt') {
       systemPrompt = `You are a cinematic shot planner. Break a scene into individual shots.
-Output ONLY valid JSON — no markdown, no explanation, no thinking. Respond with the JSON object directly.
+Output ONLY valid JSON. Respond with the JSON object directly.
 
 The JSON must follow this exact structure:
 {
@@ -1322,7 +1318,7 @@ General rules:
       }
     } else if (node.typeId === 'shot_image_prompt') {
       systemPrompt = `You are an expert image prompt engineer.
-Output ONLY valid JSON — no markdown, no explanation, no thinking. Respond with the JSON object directly.
+Output ONLY valid JSON. Respond with the JSON object directly.
 
 For FLFV/FMLFV shots (most shots), use multi-frame format:
 {
