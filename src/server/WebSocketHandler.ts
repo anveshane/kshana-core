@@ -487,25 +487,34 @@ export class WebSocketHandler {
 
     try {
       const { execSync } = await import('child_process');
+      const { join } = await import('path');
+      const tsxPath = join(process.cwd(), 'node_modules', '.bin', 'tsx');
+      const scriptPath = join(process.cwd(), 'scripts', 'reset-project.ts');
+
+      console.log(`[Reset] Running: ${tsxPath} ${scriptPath} ${projectName} ${stage}`);
       const output = execSync(
-        `npx tsx scripts/reset-project.ts ${projectName} ${stage}`,
-        { cwd: process.cwd(), encoding: 'utf-8', timeout: 30000 }
+        `"${tsxPath}" "${scriptPath}" "${projectName}" "${stage}"`,
+        { cwd: process.cwd(), encoding: 'utf-8', timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'] }
       );
+      console.log(`[Reset] Output: ${output.trim().split('\n').slice(-2).join(' | ')}`);
 
       // Send the reset output as a notification
       this.sendMessage(socket, createServerMessage('notification', sessionId, {
         level: 'info',
-        message: output.trim().split('\n').slice(-3).join('\n'), // Last 3 lines as summary
+        message: output.trim().split('\n').slice(-3).join('\n'),
       }));
 
-      // Reload the project to refresh state in the session
-      // Re-select the project to reload executor state
+      // Auto-reselect the project to reload executor state
+      await this.handleSelectProject(sessionId, socket, projectName);
+
       this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
         status: 'completed',
-        message: `Reset to ${stage} complete. Reselect the project to see updated state.`,
+        message: `Reset to ${stage} complete`,
       }));
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Reset failed';
+      const err = error as { stderr?: string; message?: string };
+      const errorMessage = err.stderr?.trim() || err.message || 'Reset failed';
+      console.error(`[Reset] Error:`, errorMessage);
       this.sendError(socket, sessionId, 'reset_error', errorMessage);
       this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
         status: 'completed',
