@@ -643,6 +643,35 @@ export class ExecutorAgent extends TypedEventEmitter {
         }
       }
 
+      // Fix stale type-level dependencies on per-item nodes.
+      // After expansion, per-item nodes (e.g., shot_video:scene_1_shot_1) may still
+      // reference type-level nodes (e.g., shot_motion_directive) instead of per-item
+      // ones (shot_motion_directive:scene_1_shot_1). Rewire them.
+      for (const node of this.executor.getAllNodes()) {
+        if (!node.itemId || node.isCollection) continue;
+        const fixedDeps: string[] = [];
+        let rewired = false;
+        for (const depId of node.dependencies) {
+          const depNode = this.executor.getNode(depId);
+          // If dep is a type-level collection node, try to find the per-item match
+          if (depNode && depNode.isCollection && (!depNode.itemId || depNode.itemId === depNode.typeId)) {
+            const perItemId = `${depNode.typeId}:${node.itemId}`;
+            const perItemNode = this.executor.getNode(perItemId);
+            if (perItemNode) {
+              fixedDeps.push(perItemId);
+              this.log(`  Rewired dep: ${node.id}: ${depId} → ${perItemId}`);
+              rewired = true;
+              continue;
+            }
+          }
+          fixedDeps.push(depId);
+        }
+        if (rewired) {
+          node.dependencies = fixedDeps;
+        }
+      }
+      this.persistState();
+
       // Handle input type — if user provided a full story, skip plot and story stages
       // and use the original input directly as the story artifact
       if (this.config.project.inputType === 'story') {
