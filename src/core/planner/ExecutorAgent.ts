@@ -644,33 +644,32 @@ export class ExecutorAgent extends TypedEventEmitter {
       }
 
       // Fix stale type-level dependencies on per-item nodes.
-      // After expansion, per-item nodes (e.g., shot_video:scene_1_shot_1) may still
-      // reference type-level nodes (e.g., shot_motion_directive) instead of per-item
-      // ones (shot_motion_directive:scene_1_shot_1). Rewire them.
+      // expandCollection can create per-item nodes that inherit parent's deps
+      // (type-level shot_motion_directive instead of per-item shot_motion_directive:scene_1_shot_N).
+      let totalRewired = 0;
       for (const node of this.executor.getAllNodes()) {
-        if (!node.itemId || node.isCollection) continue;
+        if (!node.itemId) continue;
         const fixedDeps: string[] = [];
         let rewired = false;
         for (const depId of node.dependencies) {
-          const depNode = this.executor.getNode(depId);
-          // If dep is a type-level collection node, try to find the per-item match
-          if (depNode && depNode.isCollection && (!depNode.itemId || depNode.itemId === depNode.typeId)) {
-            const perItemId = `${depNode.typeId}:${node.itemId}`;
-            const perItemNode = this.executor.getNode(perItemId);
-            if (perItemNode) {
+          // If dep has no colon (type-level) and a per-item version exists, rewire
+          if (!depId.includes(':') && node.itemId) {
+            const perItemId = `${depId}:${node.itemId}`;
+            if (this.executor.getNode(perItemId)) {
               fixedDeps.push(perItemId);
-              this.log(`  Rewired dep: ${node.id}: ${depId} → ${perItemId}`);
+              totalRewired++;
               rewired = true;
               continue;
             }
           }
           fixedDeps.push(depId);
         }
-        if (rewired) {
-          node.dependencies = fixedDeps;
-        }
+        if (rewired) node.dependencies = fixedDeps;
       }
-      this.persistState();
+      if (totalRewired > 0) {
+        this.log(`  Rewired ${totalRewired} stale type-level deps → per-item`);
+        this.persistState();
+      }
 
       // Handle input type — if user provided a full story, skip plot and story stages
       // and use the original input directly as the story artifact
