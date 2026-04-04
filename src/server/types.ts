@@ -56,7 +56,8 @@ export type ClientMessageType =
   | 'set_autonomous'          // Toggle autonomous mode at runtime
   | 'set_parallel_media'      // Toggle parallel media generation at runtime
   | 'project_state_sync'      // Client sends full project snapshot
-  | 'redo_node';              // Redo a specific node (invalidate + re-execute)
+  | 'redo_node'               // Redo a specific node (invalidate + re-execute)
+  | 'reset_project';          // Reset project to a specific stage
 
 /**
  * Base message structure for server messages.
@@ -397,6 +398,17 @@ export function isCreateProjectMessage(msg: ClientMessage): msg is ClientMessage
 
 export function isRedoNodeMessage(msg: ClientMessage): msg is ClientMessage<RedoNodeData> {
   return msg.type === 'redo_node';
+}
+
+export interface ResetProjectData {
+  /** Project name (without .kshana suffix) */
+  projectName: string;
+  /** Stage to reset to (e.g., "characters", "shot_image_prompt") */
+  stage: string;
+}
+
+export function isResetProjectMessage(msg: ClientMessage): msg is ClientMessage<ResetProjectData> {
+  return msg.type === 'reset_project';
 }
 
 /**

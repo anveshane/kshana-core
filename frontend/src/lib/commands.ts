@@ -128,8 +128,8 @@ const COMMANDS: Record<string, CommandDef> = {
           timestamp: Date.now(),
         },
       })
-      // Send as a task — the server's executor can handle reset
-      ctx.send({ type: 'start_task', data: { task: `/reset ${projectName} ${stage}` } })
+      // Send as dedicated reset message — runs the reset script server-side
+      ctx.send({ type: 'reset_project', data: { projectName, stage } })
     },
   },
 

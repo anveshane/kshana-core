@@ -37,8 +37,10 @@ import {
   isSelectProjectMessage,
   isCreateProjectMessage,
   isRedoNodeMessage,
+  isResetProjectMessage,
   type ConfigureProjectData,
   type CreateProjectData,
+  type ResetProjectData,
 } from './types.js';
 
 interface ConnectionState {
@@ -244,6 +246,11 @@ export class WebSocketHandler {
 
     if (isRedoNodeMessage(message)) {
       await this.handleRedoNode(sessionId, socket, message.data);
+      return;
+    }
+
+    if (isResetProjectMessage(message)) {
+      await this.handleResetProject(sessionId, socket, message.data);
       return;
     }
 
@@ -460,6 +467,50 @@ export class WebSocketHandler {
       this.sendTimerUpdate(socket, sessionId, false);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.sendError(socket, sessionId, 'redo_error', errorMessage);
+    }
+  }
+
+  /**
+   * Handle reset_project message — runs the reset script as subprocess.
+   */
+  private async handleResetProject(
+    sessionId: string,
+    socket: WebSocket,
+    data: ResetProjectData
+  ): Promise<void> {
+    const { projectName, stage } = data;
+
+    this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+      status: 'busy',
+      message: `Resetting ${projectName} to ${stage}...`,
+    }));
+
+    try {
+      const { execSync } = await import('child_process');
+      const output = execSync(
+        `npx tsx scripts/reset-project.ts ${projectName} ${stage}`,
+        { cwd: process.cwd(), encoding: 'utf-8', timeout: 30000 }
+      );
+
+      // Send the reset output as a notification
+      this.sendMessage(socket, createServerMessage('notification', sessionId, {
+        level: 'info',
+        message: output.trim().split('\n').slice(-3).join('\n'), // Last 3 lines as summary
+      }));
+
+      // Reload the project to refresh state in the session
+      // Re-select the project to reload executor state
+      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+        status: 'completed',
+        message: `Reset to ${stage} complete. Reselect the project to see updated state.`,
+      }));
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Reset failed';
+      this.sendError(socket, sessionId, 'reset_error', errorMessage);
+      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+        status: 'completed',
+        message: 'Reset failed',
+      }));
     }
   }
 
