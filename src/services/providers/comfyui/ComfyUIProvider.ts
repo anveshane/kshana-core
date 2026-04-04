@@ -87,7 +87,7 @@ export class ComfyUIProvider implements GenerationProvider {
       }
     } catch { /* registry not available, use defaults */ }
 
-    const isUserWorkflow = modeManifest && !modeManifest.builtIn;
+    const hasManifestWorkflow = modeManifest && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0;
 
     let inputImageFilename: string | undefined;
     const referenceImageFilenames: string[] = [];
@@ -119,7 +119,7 @@ export class ComfyUIProvider implements GenerationProvider {
 
     let workflow: Record<string, unknown>;
 
-    if (isUserWorkflow && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0) {
+    if (hasManifestWorkflow) {
       // User workflow: load from manifest path, use generic parameterizer
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
@@ -199,8 +199,8 @@ export class ComfyUIProvider implements GenerationProvider {
 
     const registry = getRegistry();
 
-    // Check for user override for image_editing
-    let workflowName = 'qwen_edit';
+    // Check for active image_editing workflow (FLUX Klein is the default)
+    let workflowName = 'flux2_klein_edit';
     let modeManifest: any = null;
     try {
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
@@ -213,7 +213,7 @@ export class ComfyUIProvider implements GenerationProvider {
       }
     } catch { /* registry not available */ }
 
-    const isUserWorkflow = modeManifest && !modeManifest.builtIn;
+    const hasManifestWorkflow = modeManifest && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0;
 
     if (!fs.existsSync(baseImagePath)) {
       throw new Error(`Base image not found: ${baseImagePath}`);
@@ -241,7 +241,7 @@ export class ComfyUIProvider implements GenerationProvider {
 
     let workflow: Record<string, unknown>;
 
-    if (isUserWorkflow && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0) {
+    if (hasManifestWorkflow) {
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
       const manifestDir = modeRegistry.getManifestDir(modeManifest.id);
@@ -338,7 +338,7 @@ export class ComfyUIProvider implements GenerationProvider {
     } catch { /* registry not available, use default */ }
 
     // Determine if this is a user-uploaded workflow or a built-in
-    const isUserWorkflow = modeManifest && !modeManifest.builtIn;
+    const hasManifestWorkflow = modeManifest && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0;
 
     // Ensure output dir exists
     if (!fs.existsSync(outputDir)) {
@@ -376,7 +376,7 @@ export class ComfyUIProvider implements GenerationProvider {
 
     let workflow: Record<string, unknown>;
 
-    if (isUserWorkflow && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0) {
+    if (hasManifestWorkflow) {
       // User-uploaded workflow: load from manifest path, use generic parameterizer
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
