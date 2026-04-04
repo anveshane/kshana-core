@@ -260,16 +260,32 @@ export class ComfyUIProvider implements GenerationProvider {
 
       debugLog(`Loading user edit workflow from: ${workflowPath}`);
       const template = JSON.parse(fs.readFileSync(workflowPath, 'utf-8'));
-      workflow = parameterizeGeneric(template, modeManifest, {
+
+      // Build params — unused reference slots fall back to base image
+      const editParams: Record<string, unknown> = {
         prompt: editPrompt,
         edit_prompt: editPrompt,
         negative_prompt: negativePrompt ?? '',
         base_image: uploadResult.name,
-        reference_image_1: referenceImageFilenames[0] ?? '',
-        reference_image_2: referenceImageFilenames[1] ?? '',
         seed,
         filenamePrefix,
-      }) as Record<string, unknown>;
+      };
+      // Fill reference slots — unused ones get the base image so ComfyUI doesn't reject
+      for (let i = 0; i < 4; i++) {
+        editParams[`reference_image_${i + 1}`] = referenceImageFilenames[i] ?? uploadResult.name;
+      }
+
+      workflow = parameterizeGeneric(template, modeManifest, editParams) as Record<string, unknown>;
+
+      // Safety: set any remaining LoadImage nodes that still have placeholder filenames
+      for (const [, node] of Object.entries(workflow)) {
+        const n = node as { class_type?: string; inputs?: Record<string, unknown> };
+        if (n.class_type === 'LoadImage' && typeof n.inputs?.image === 'string') {
+          if (n.inputs.image.startsWith('ref_image_')) {
+            n.inputs.image = uploadResult.name;
+          }
+        }
+      }
     } else {
       const workflowMetadata = registry.get(workflowName);
       if (!workflowMetadata) {
