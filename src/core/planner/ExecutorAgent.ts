@@ -781,7 +781,15 @@ export class ExecutorAgent extends TypedEventEmitter {
               }
 
               this.log(`  Dependency output missing: ${depId} — resetting to pending for regeneration (attempt ${count}/2)`);
-              this.executor.invalidateNode(depId);
+              // Reset ONLY this dependency node — don't cascade to its dependents
+              // The downstream nodes just need this dep to be re-completed
+              const depNode = this.executor.getNode(depId);
+              if (depNode) {
+                depNode.status = 'pending';
+                depNode.outputPath = undefined;
+                depNode.completedAt = undefined;
+                depNode.error = undefined;
+              }
               this.emit({
                 type: 'notification',
                 level: 'warning',
