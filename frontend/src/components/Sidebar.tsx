@@ -135,7 +135,7 @@ export function Sidebar({ onRedoNode, onRedoNodeWithPrompt }: SidebarProps) {
                       >
                         🔍
                       </button>
-                      {nodeId && !isBusy && (
+                      {nodeId && (
                         <>
                           {onRedoNodeWithPrompt && (
                             <button
