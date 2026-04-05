@@ -45,7 +45,7 @@ describe('Change 1+7: FLFV as default strategy', () => {
   });
 
   it('scene_video_prompt_guide uses slim description format (no firstFrame/lastFrame)', () => {
-    const guidePath = join(process.cwd(), 'prompts/skills/defaults/scene_video_prompt_guide.md');
+    const guidePath = join(process.cwd(), 'prompts/skills/defaults/scene_breakdown_guide.md');
     const guide = readFileSync(guidePath, 'utf-8');
     // Slim scene breakdown: no firstFrame/lastFrame, uses description field instead
     expect(guide).not.toContain('"firstFrame"');

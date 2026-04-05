@@ -121,21 +121,21 @@ describe('Cross-shot chaining: dependency wiring', () => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe('Cross-shot chaining: prompt guide', () => {
-  it('shot_image_guide documents edit_previous_shot mode', () => {
-    const guidePath = join(process.cwd(), 'prompts/skills/defaults/shot_image_guide.md');
+  it('shot_composition_guide documents edit_previous_shot mode', () => {
+    const guidePath = join(process.cwd(), 'prompts/skills/defaults/shot_composition_guide.md');
     const guide = readFileSync(guidePath, 'utf-8');
     expect(guide).toContain('edit_previous_shot');
   });
 
-  it('shot_image_guide explains when to use edit_previous_shot vs image_text_to_image', () => {
-    const guidePath = join(process.cwd(), 'prompts/skills/defaults/shot_image_guide.md');
+  it('shot_composition_guide explains when to use edit_previous_shot vs image_text_to_image', () => {
+    const guidePath = join(process.cwd(), 'prompts/skills/defaults/shot_composition_guide.md');
     const guide = readFileSync(guidePath, 'utf-8');
     // Should have guidance on when to chain vs when to generate fresh
     expect(guide).toMatch(/edit_previous_shot.*continuity|continuation.*edit_previous_shot/i);
   });
 
   it('scene_video_prompt_guide mentions cross-shot chaining for lastFrame', () => {
-    const guidePath = join(process.cwd(), 'prompts/skills/defaults/scene_video_prompt_guide.md');
+    const guidePath = join(process.cwd(), 'prompts/skills/defaults/scene_breakdown_guide.md');
     const guide = readFileSync(guidePath, 'utf-8');
     expect(guide).toMatch(/cross-shot|previous shot|chain/i);
   });

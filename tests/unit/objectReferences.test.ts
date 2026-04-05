@@ -99,9 +99,9 @@ describe('Object references: schema', () => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe('Object references: prompt guides', () => {
-  it('shot_image_guide mentions object references', () => {
+  it('shot_composition_guide mentions object references', () => {
     const guide = readFileSync(
-      join(process.cwd(), 'prompts/skills/defaults/shot_image_guide.md'),
+      join(process.cwd(), 'prompts/skills/defaults/shot_composition_guide.md'),
       'utf-8',
     );
     expect(guide).toMatch(/object|prop/i);

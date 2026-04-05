@@ -307,7 +307,7 @@ const worldStyleArtifact: ArtifactTypeDefinition = {
 
 const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
   id: 'scene_video_prompt',
-  displayName: 'Multi-Shot Motion Prompts',
+  displayName: 'Scene Breakdown',
   category: 'structure',
   description: 'Multi-shot breakdown of each scene into 2-4 cinematic shots with motion/camera direction',
   scope: 'chapter',
@@ -329,7 +329,7 @@ const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
 
 const shotImagePromptArtifact: ArtifactTypeDefinition = {
   id: 'shot_image_prompt',
-  displayName: 'Shot Image Prompts',
+  displayName: 'Shot Composition',
   category: 'structure',
   description: 'Per-shot image generation prompts with reference image integration for visual consistency',
   scope: 'chapter',

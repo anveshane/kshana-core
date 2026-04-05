@@ -94,7 +94,7 @@ describe('Slim scene breakdown: system prompts', () => {
 describe('Slim scene breakdown: guides', () => {
   it('scene_video_prompt_guide has NO firstFrame/lastFrame structure', () => {
     const guide = readFileSync(
-      join(process.cwd(), 'prompts/skills/defaults/scene_video_prompt_guide.md'),
+      join(process.cwd(), 'prompts/skills/defaults/scene_breakdown_guide.md'),
       'utf-8',
     );
     expect(guide).not.toContain('"firstFrame"');
@@ -103,7 +103,7 @@ describe('Slim scene breakdown: guides', () => {
 
   it('scene_video_prompt_guide has description field', () => {
     const guide = readFileSync(
-      join(process.cwd(), 'prompts/skills/defaults/scene_video_prompt_guide.md'),
+      join(process.cwd(), 'prompts/skills/defaults/scene_breakdown_guide.md'),
       'utf-8',
     );
     expect(guide).toMatch(/description.*what happens|description.*brief/i);
@@ -111,7 +111,7 @@ describe('Slim scene breakdown: guides', () => {
 
   it('shot_image_guide has flfv/fmlfv strategy guidance', () => {
     const guide = readFileSync(
-      join(process.cwd(), 'prompts/skills/defaults/shot_image_guide.md'),
+      join(process.cwd(), 'prompts/skills/defaults/shot_composition_guide.md'),
       'utf-8',
     );
     expect(guide).toContain('flfv');
