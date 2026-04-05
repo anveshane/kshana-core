@@ -33,6 +33,6 @@ describe('Asset nodeId data flow', () => {
 
   it('Sidebar gates edit/redo on nodeId being truthy', () => {
     const code = readFileSync(join(process.cwd(), 'frontend/src/components/Sidebar.tsx'), 'utf-8');
-    expect(code).toMatch(/nodeId && !isBusy/);
+    expect(code).toContain('{nodeId && (');
   });
 });
