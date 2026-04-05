@@ -55,7 +55,9 @@ function main() {
       const svpJson = readFileSync(svpPath, 'utf-8');
       const scene = existsSync(scenePath) ? readFileSync(scenePath, 'utf-8') : '(scene description not available)';
 
-      console.log(`\n--- Scene Video Prompt ${i} ---`);
+      // Rough token count (chars / 4 approximation)
+      const approxTokens = Math.round(svpJson.length / 4);
+      console.log(`\n--- Scene Video Prompt ${i} (~${approxTokens} tokens) ---`);
 
       const questionsBlock = rubric.questions
         .map((q: { id: string; question: string }, idx: number) => `${idx + 1}. [${q.id}] ${q.question}`)

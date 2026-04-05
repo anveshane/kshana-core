@@ -8,16 +8,35 @@
 2. Each beat gets at least one shot. Do not merge distinct beats.
 3. Plan at least one character-free shot (establishing, insert, or atmosphere)
 
-## Shot Structure
+## Required Fields — Every Shot, No Exceptions
 
-Each shot must have:
-- **description**: 1-2 sentence brief of what happens in this shot
+Every shot object MUST contain exactly these 6 fields. Missing or empty fields = broken output.
+
+| Field | Type | Description |
+|---|---|---|
+| `shotNumber` | number | Sequential integer starting at 1 |
+| `duration` | number | Seconds (3–10). Quick cuts: 3–4s. Emotional holds: 6–8s |
+| `description` | string | 1–2 sentence visual brief of what happens |
+| `cameraWork` | string | Specific camera direction (angle, movement, framing) |
+| `audio` | string | Everything heard: dialogue, ambient, effects, or silence (see Audio section) |
+| `transition` | string | How this shot transitions FROM the previous shot (see Transitions section) |
+
+Additional optional fields per shot:
 - **characters**: array of character item IDs visible in this shot
 - **setting**: setting item ID or null
-- **cameraWork**: camera movement and angle
-- **soundCue**: what is heard (ambient, effects, explicit silence)
-- **dialogue**: spoken line for this shot, or `null` if none (see Dialogue section below)
-- **transition**: how this shot transitions FROM the previous shot (see below)
+
+```json
+{
+  "shotNumber": 1,
+  "duration": 5,
+  "description": "Elena steps into the rain-soaked alley, her silhouette framed by a flickering neon sign.",
+  "cameraWork": "wide establishing, static tripod, shallow focus on Elena with neon bokeh behind",
+  "audio": "rain pattering on cobblestones, distant thunder rumble, neon sign buzzing",
+  "transition": "fade",
+  "characters": ["elena"],
+  "setting": "alley_noir"
+}
+```
 
 {{AVAILABLE_VIDEO_MODES}}
 
@@ -25,22 +44,41 @@ Each shot must have:
 
 ## Description Field
 
-The `description` field is a brief 1-2 sentence summary of what happens in this shot. It should capture:
+The `description` field is a brief 1–2 sentence summary of what happens in this shot. It should capture:
 - The main action or event
 - Who is involved
 - The emotional beat
 
 This is NOT a detailed image prompt — keep it concise. The downstream shot_image_prompt step will expand this into full frame descriptions with proper cinematographer prose.
 
+## Audio Field
+
+The `audio` field captures **everything heard** in a shot — dialogue, ambient sound, effects, and silence — in a single field. Never leave it empty.
+
+**Format rules:**
+- **Dialogue**: prefix with character name in caps: `"ELENA: Don't follow me. Rain on pavement, footsteps receding"`
+- **Voiceover**: prefix with V.O.: `"ELENA (V.O.): I should have known. Soft piano underscore"`
+- **Ambient only** (no dialogue): `"wind through trees, distant sirens"`
+- **Explicit silence**: `"silence"` or `"near-silence, faint hum of fluorescent lights"`
+- **Multiple elements**: combine with commas: `"MARCUS: Stay here. Thunder crack, rain intensifying, door creaking shut"`
+
+**Rules:**
+- Every shot MUST have a non-empty `audio` field
+- If the scene description includes spoken dialogue, every line MUST appear in the correct shot's `audio` field — do not skip or omit any dialogue
+- If a shot has no dialogue, describe the ambient sounds or effects heard
+- Distribute dialogue across the correct shots — match which shot the line is spoken during
+
 ## Transitions
 
-Each shot specifies how it transitions FROM the previous shot. The first shot of a scene uses `cut` (or `fade` if the scene opens from black).
+Every shot MUST have a `transition` field. No exceptions.
+
+Each shot specifies how it transitions FROM the previous shot. The first shot of a scene uses `cut` or `fade` (use `fade` if opening from black).
 
 **Transition types:**
 - **`cut`** — hard cut, no effect. Default for most shot-to-shot cuts within a continuous action
 - **`crossfade`** — smooth dissolve between shots. Use for time passing, dreamlike moments, parallel action
-- **`fade`** — fade through black. Use for scene breaks, significant time jumps, finality
-- **`dip_to_black`** — fade out > brief black hold > fade in. The classic trailer "breather" beat. Use between scenes or to punctuate dramatic moments
+- **`fade`** — fade through black. Use for scene openings, significant time jumps, finality
+- **`dip_to_black`** — fade out > brief black hold > fade in. Classic trailer "breather" beat. Use between scenes or to punctuate dramatic moments
 - **`flash_to_white`** — quick white flash. Use for impact moments, explosions, revelations, smash cuts
 - **`circle_close`** — contracting circle (blink/iris effect). Use for POV shots, focusing attention, dreamy or surreal moments
 - **`circle_open`** — expanding circle reveal. Use to open a new location or reveal a surprise
@@ -60,29 +98,21 @@ Each shot specifies how it transitions FROM the previous shot. The first shot of
 - Any character visible (even hand/silhouette) or speaking off-screen -> include their ID
 - Named location -> must have setting ID
 
-## Dialogue
-
-- If the scene description includes character dialogue (spoken lines, voiceover, V.O.), you MUST include it
-- Set the `dialogue` field to the character's spoken line for that shot, prefixed with the character name: `"JOHN: Don't worry, Glitch."`
-- For voiceover, prefix with V.O.: `"JOHN (V.O.): 42 years ago, I paid for everything..."`
-- Set `dialogue` to `null` if the shot has no spoken dialogue
-- Distribute dialogue across the correct shots — match which shot the line is spoken during
-- Do NOT skip or omit any dialogue from the scene description
-
-## Sound Cues
-
-- Every shot MUST have a soundCue — ambient, effects, dialogue, or explicit silence
-
 ## Camera Work
 
 - Specific direction: angle, movement, framing, depth of field
 - Not just "medium shot" — describe behavior: "static medium, slight push-in as tension builds"
+- Keep it concise — a short phrase, not a paragraph
 
-## Pre-Output Check
+## Pre-Output Checklist
+
+Before returning JSON, verify every item:
 
 1. Every scene beat has a shot
-2. Duration sum = totalDuration exactly
-3. Every shot has soundCue
-4. All character IDs match provided list
-5. **All dialogue from the scene description is placed** — every spoken line, V.O., or voiceover has a matching `dialogue` field on the correct shot
-6. Every shot has a `transition` field
+2. Duration sum ≈ totalDuration (within ±20%). Each shot is 3–10 seconds
+3. **Every shot has all 6 required fields**: `shotNumber`, `duration`, `description`, `cameraWork`, `audio`, `transition` — none empty
+4. **Every shot has an `audio` field** with dialogue (if any) + ambient/effects. No shot is missing audio
+5. **Every shot has a `transition` field** — first shot uses `fade` or `cut`, all others have an explicit transition value
+6. All dialogue from the scene description is placed in the correct shot's `audio` field — no lines omitted
+7. All character/setting IDs match provided list
+8. Pacing varies: quick cuts for tension, longer holds for emotion

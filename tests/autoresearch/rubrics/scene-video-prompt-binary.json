@@ -47,12 +47,16 @@
       "question": "Does every shot have a 'transition' field specifying how it cuts from the previous shot? Valid values include 'cut', 'crossfade', 'fade', 'dip_to_black', 'flash_to_white'. The first shot should use 'cut' or 'fade'. Most mid-scene cuts should be 'cut' — transitions are seasoning, not the main course."
     },
     {
-      "id": "SLIM_FORMAT",
-      "question": "Does each shot contain ONLY the slim fields: shotNumber, duration, description, cameraWork, audio, transition? No firstFrame, lastFrame, characters[], setting, generationStrategy, shotType, or videoGenerationMode fields. These are handled downstream by the shot_image_prompt stage."
+      "id": "REQUIRED_FIELDS",
+      "question": "Does every shot have ALL required fields: shotNumber (number), duration (number in seconds), description (1-2 sentence visual brief), cameraWork (specific camera direction), audio (dialogue + ambient sounds), transition (cut/crossfade/fade/etc)? Every single shot must have all 6 fields present and non-empty."
     },
     {
       "id": "PACING",
       "question": "Is the pacing varied and appropriate? Quick cuts (3-4s) for action/tension, longer holds (6-8s) for emotional moments, establishing shots at scene openings? Not all the same duration."
+    },
+    {
+      "id": "TOKEN_EFFICIENCY",
+      "question": "Is the output concise and token-efficient? Descriptions should be 1-2 sentences max (not paragraphs). CameraWork should be a short phrase (not a full sentence). Audio should list sounds/dialogue concisely. No redundant words, no flowery prose, no repetition across shots. The entire JSON for a 10-shot scene should be under 800 tokens. Answer NO if any field is unnecessarily verbose or if the total output is bloated."
     }
   ]
 }
