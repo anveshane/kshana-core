@@ -140,3 +140,73 @@ export function formatStateForPrompt(state: SceneState): string {
 
   return lines.join('\n');
 }
+
+/**
+ * Compute a human-readable diff between two states.
+ * Shows only what changed — empty string if identical.
+ */
+export function computeStateDiff(
+  before: Pick<SceneState, 'characters' | 'objects' | 'environment'>,
+  after: Pick<SceneState, 'characters' | 'objects' | 'environment'>,
+): string {
+  const lines: string[] = [];
+
+  // Character changes
+  for (const [id, afterChar] of Object.entries(after.characters ?? {})) {
+    const beforeChar = before.characters?.[id];
+
+    if (!beforeChar || (!beforeChar.inFrame && afterChar.inFrame)) {
+      // Character entered frame
+      const parts: string[] = [];
+      if (afterChar.position !== 'unknown') parts.push(`position: ${afterChar.position}`);
+      if (afterChar.pose !== 'unknown') parts.push(`pose: ${afterChar.pose}`);
+      if (afterChar.expression !== 'unknown') parts.push(`expression: ${afterChar.expression}`);
+      lines.push(`▶ ${id}: ENTERED frame — ${parts.join(', ')}`);
+      continue;
+    }
+
+    if (beforeChar.inFrame && !afterChar.inFrame) {
+      lines.push(`◀ ${id}: LEFT frame`);
+      continue;
+    }
+
+    // Field-by-field diff
+    const fields: Array<keyof CharacterState> = [
+      'position', 'pose', 'expression', 'facing', 'leftHand', 'rightHand', 'legs', 'headTilt',
+    ];
+    const changes: string[] = [];
+    for (const field of fields) {
+      const bVal = beforeChar[field];
+      const aVal = afterChar[field];
+      if (bVal !== aVal && aVal !== 'unknown') {
+        changes.push(`${field}: ${bVal} → ${aVal}`);
+      }
+    }
+    if (changes.length > 0) {
+      lines.push(`△ ${id}: ${changes.join(', ')}`);
+    }
+  }
+
+  // Object changes
+  for (const [id, afterObj] of Object.entries(after.objects ?? {})) {
+    const beforeObj = before.objects?.[id];
+    if (!beforeObj) {
+      lines.push(`+ ${id}: ${afterObj.state} (${afterObj.position})`);
+    } else if (beforeObj.state !== afterObj.state || beforeObj.position !== afterObj.position) {
+      const parts: string[] = [];
+      if (beforeObj.state !== afterObj.state) parts.push(`state: ${beforeObj.state} → ${afterObj.state}`);
+      if (beforeObj.position !== afterObj.position) parts.push(`position: ${beforeObj.position} → ${afterObj.position}`);
+      lines.push(`△ ${id}: ${parts.join(', ')}`);
+    }
+  }
+
+  // Environment changes
+  if (before.environment?.lighting !== after.environment?.lighting) {
+    lines.push(`☀ lighting: ${before.environment?.lighting ?? 'default'} → ${after.environment?.lighting ?? 'default'}`);
+  }
+  if (before.environment?.timeProgression !== after.environment?.timeProgression) {
+    lines.push(`⏱ time: ${before.environment?.timeProgression ?? 'start'} → ${after.environment?.timeProgression ?? 'start'}`);
+  }
+
+  return lines.join('\n');
+}

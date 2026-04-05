@@ -1165,6 +1165,19 @@ export class ExecutorAgent extends TypedEventEmitter {
                       const newState = JSON.parse(cleaned);
                       newState.sceneId = sceneId;
                       newState.shotNumber = shotNum;
+
+                      // Show AFTER state card with diff in UI
+                      const { computeStateDiff, formatStateForPrompt: fmtState } = await import('./sceneState.js');
+                      const diff = computeStateDiff(currentState, newState);
+                      const afterAgentName = this.config.name ?? 'kshana-executor';
+                      const afterCallId = `state_after_${node.itemId}_${Date.now()}`;
+                      this.emit({ type: 'tool_call', toolCallId: afterCallId, toolName: 'scene_state', arguments: { shot: node.itemId, phase: 'AFTER' }, agentName: afterAgentName });
+                      const afterText = diff
+                        ? `CHANGES:\n${diff}\n\n---\nFULL STATE:\n${fmtState(newState)}`
+                        : `No changes\n\n${fmtState(newState)}`;
+                      this.emit({ type: 'tool_streaming', toolCallId: afterCallId, chunk: afterText, done: true, agentName: afterAgentName, toolName: 'scene_state' });
+                      this.emit({ type: 'tool_result', toolCallId: afterCallId, toolName: 'scene_state', result: { phase: 'after', diff, state: newState }, agentName: afterAgentName });
+
                       saveSceneState(this.config.projectDir, sceneId, newState);
                       this.log(`  Scene state updated for ${sceneId} after shot ${shotNum}`);
                     } catch (parseErr) {
@@ -1575,7 +1588,15 @@ Rules:
         if (sceneId) {
           const state = loadSceneState(this.config.projectDir, sceneId);
           if (state && state.shotNumber > 0) {
-            sceneStateContext = `\n\n<scene_state>\n${formatStateForPrompt(state)}\n\nYour shot MUST be consistent with this state. Characters cannot teleport.\nIf a character needs to move, describe the transition in the first frame.\n</scene_state>`;
+            const formattedState = formatStateForPrompt(state);
+            sceneStateContext = `\n\n<scene_state>\n${formattedState}\n\nYour shot MUST be consistent with this state. Characters cannot teleport.\nIf a character needs to move, describe the transition in the first frame.\n</scene_state>`;
+
+            // Show BEFORE state card in UI
+            const agentName = this.config.name ?? 'kshana-executor';
+            const stateCallId = `state_before_${node.itemId}_${Date.now()}`;
+            this.emit({ type: 'tool_call', toolCallId: stateCallId, toolName: 'scene_state', arguments: { shot: node.itemId, phase: 'BEFORE' }, agentName });
+            this.emit({ type: 'tool_streaming', toolCallId: stateCallId, chunk: formattedState, done: true, agentName, toolName: 'scene_state' });
+            this.emit({ type: 'tool_result', toolCallId: stateCallId, toolName: 'scene_state', result: { phase: 'before', state }, agentName });
           }
         }
       } catch { /* state not available yet — first shot */ }
