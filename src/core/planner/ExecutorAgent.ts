@@ -794,8 +794,8 @@ export class ExecutorAgent extends TypedEventEmitter {
         }
 
         // In serial mode: prioritize LLM/content nodes over media generation nodes.
-        // This ensures all prompts are generated before any ComfyUI calls,
-        // reducing wasted time if an image generation fails.
+        // Within content nodes, prioritize shot_image_prompt over shot_motion_directive
+        // so all compositions finish before motion directives start.
         if (!this.config.parallelMediaGeneration) {
           const isMediaNode = (n: ExecutionNode) => {
             const typeDef = this.config.template.artifactTypes[n.typeId];
@@ -804,9 +804,15 @@ export class ExecutorAgent extends TypedEventEmitter {
           };
           const contentNodes = readyNodes.filter(n => !isMediaNode(n));
           const mediaNodes = readyNodes.filter(n => isMediaNode(n));
+
+          // Within content nodes, prioritize compositions over motion directives
+          const compositionNodes = contentNodes.filter(n => n.typeId !== 'shot_motion_directive');
+          const motionNodes = contentNodes.filter(n => n.typeId === 'shot_motion_directive');
+          const prioritizedContent = compositionNodes.length > 0 ? compositionNodes : motionNodes;
+
           // Only process media nodes if no content nodes are available
           readyNodes.length = 0;
-          readyNodes.push(...(contentNodes.length > 0 ? contentNodes : mediaNodes));
+          readyNodes.push(...(prioritizedContent.length > 0 ? prioritizedContent : mediaNodes));
         }
 
         this.log(`Ready nodes: ${readyNodes.map(n => n.id).join(', ')}`);
