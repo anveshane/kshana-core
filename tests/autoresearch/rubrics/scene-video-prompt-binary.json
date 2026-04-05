@@ -48,7 +48,19 @@
     },
     {
       "id": "REQUIRED_FIELDS",
-      "question": "Does every shot have ALL required fields: shotNumber (number), duration (number in seconds), description (1-2 sentence visual brief), cameraWork (specific camera direction), audio (dialogue + ambient sounds), transition (cut/crossfade/fade/etc)? Every single shot must have all 6 fields present and non-empty."
+      "question": "Does every shot have ALL 9 required fields: shotNumber, purpose, secondaryPurpose (can be null), shotType, duration, description, cameraWork, audio, transition? Every single shot must have all fields present."
+    },
+    {
+      "id": "PURPOSE_VALID",
+      "question": "Does every shot have a valid 'purpose' field from the allowed values: set_the_world, set_the_mood, meet_character, show_tension, show_action, show_reaction, show_dialogue, show_clue, show_passage, hold_emotion, show_change, punctuate? No made-up values."
+    },
+    {
+      "id": "SHOT_TYPE_VALID",
+      "question": "Does every shot have a valid 'shotType' field from the allowed values: extreme_wide, wide, medium, close_up, extreme_close_up, over_shoulder, pov, tracking, insert, reaction? No made-up values."
+    },
+    {
+      "id": "PURPOSE_SEQUENCE",
+      "question": "If the scene opens with set_the_world or set_the_mood (no characters), is the next shot with characters marked as meet_character? Characters should not appear without being introduced. Answer YES if no establishing shot or if characters are introduced correctly."
     },
     {
       "id": "PACING",

@@ -9,29 +9,56 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-describe('Scene State UI: BEFORE card', () => {
-  it('executor emits scene_state tool_call BEFORE shot_image_prompt LLM call', () => {
-    const code = readFileSync(join(process.cwd(), 'src/core/planner/ExecutorAgent.ts'), 'utf-8');
-    expect(code).toContain("toolName: 'scene_state'");
-    expect(code).toContain("phase: 'BEFORE'");
+describe('Scene State UI: buildStateContext formats for prompt injection', () => {
+  it('buildStateContext includes PREVIOUS and TARGET state in prompt context', async () => {
+    const { buildStateContext, initializeSceneState } = await import('../../src/core/planner/sceneState.js');
+
+    const prevState = initializeSceneState('scene_1', ['elena'], 'alley');
+    prevState.shotNumber = 1;
+    prevState.characters['elena'].inFrame = true;
+    prevState.characters['elena'].position = 'center_frame';
+
+    const mockLlm = {
+      async *generateStream() {
+        yield {
+          content: JSON.stringify({
+            characters: { elena: { position: 'left_frame', pose: 'walking', expression: 'alert', facing: 'right', inFrame: true, leftHand: 'at_side', rightHand: 'at_side', legs: 'mid_stride', headTilt: 'neutral' } },
+            objects: {},
+            environment: { lighting: 'dim', timeProgression: 'night' },
+          }),
+          done: true,
+        };
+      },
+    };
+
+    const result = await buildStateContext(mockLlm as any, prevState, 'Elena moves to the left.');
+    expect(result.promptContext).toContain('PREVIOUS STATE');
+    expect(result.promptContext).toContain('TARGET STATE');
+    expect(result.promptContext).toContain('CHANGES');
+    expect(result.diff).toContain('center_frame → left_frame');
   });
 
-  it('BEFORE card shows formatted state text', () => {
-    const code = readFileSync(join(process.cwd(), 'src/core/planner/ExecutorAgent.ts'), 'utf-8');
-    // Should emit tool_streaming with the formatted state
-    expect(code).toMatch(/scene_state.*formattedState|formattedState.*scene_state/s);
-  });
-});
+  it('buildStateContext diff shows character entering frame', async () => {
+    const { buildStateContext, initializeSceneState } = await import('../../src/core/planner/sceneState.js');
 
-describe('Scene State UI: AFTER card with diff', () => {
-  it('executor emits scene_state tool_call AFTER state extraction', () => {
-    const code = readFileSync(join(process.cwd(), 'src/core/planner/ExecutorAgent.ts'), 'utf-8');
-    expect(code).toContain("phase: 'AFTER'");
-  });
+    const prevState = initializeSceneState('scene_1', ['marcus'], 'alley');
+    prevState.shotNumber = 1;
 
-  it('AFTER card includes diff of what changed', () => {
-    const code = readFileSync(join(process.cwd(), 'src/core/planner/ExecutorAgent.ts'), 'utf-8');
-    expect(code).toContain('computeStateDiff');
+    const mockLlm = {
+      async *generateStream() {
+        yield {
+          content: JSON.stringify({
+            characters: { marcus: { position: 'entering_left', pose: 'walking', expression: 'determined', facing: 'right', inFrame: true, leftHand: 'at_side', rightHand: 'at_side', legs: 'mid_stride', headTilt: 'neutral' } },
+            objects: {},
+            environment: { lighting: 'neon', timeProgression: 'night' },
+          }),
+          done: true,
+        };
+      },
+    };
+
+    const result = await buildStateContext(mockLlm as any, prevState, 'Marcus enters from the left.');
+    expect(result.diff).toContain('ENTERED');
   });
 });
 

@@ -21,8 +21,8 @@ Before writing a single word of the prompt, extract and write down:
 - Reference images can be characters, settings, or **objects/props** (vehicles, weapons, artifacts, distinctive items).
 - Every image in the shot's referenceImages list MUST appear somewhere in the prompt paragraph.
 - If image 3 is not in this shot's referenceImages list, you CANNOT write "from image 3". Not even if you saw that image referenced elsewhere. Not even if the setting seems to match.
-- If a character image is available but that character does not appear in this specific shot, do not reference that image.
-- If no reference images are listed, use `text_to_image` mode with no "from imageN" references.
+- **If a character is NOT described as visible in the shot description, do NOT reference their image — even if it's in the available list.** Available references are for the whole scene; only use the ones relevant to THIS shot.
+- If no characters or settings from the available list appear in the shot, use `text_to_image` mode with no "from imageN" references and an empty references array.
 
 **Fabricating image numbers is a critical error. If you write "from image 4" and image 4 is not in this shot's list, the prompt is wrong.**
 
@@ -86,7 +86,11 @@ Then write only what those answers contain.
 
 Only include locations, characters, objects, and atmosphere described in this scene and this specific shot. Do not import elements from other shots.
 
+**Time-of-day and lighting must match the scene description exactly.** If the scene says "moonlight" or "night", do NOT write "sunlight", "daylight", or "golden hour." If the scene says "morning", do NOT write "night" or "dusk."
+
 If a character appears in this shot but needs an appearance change from their reference image (different clothing, injuries, different emotional state), describe those changes explicitly.
+
+**Characters and shot description must match exactly.** If the shot description says no characters are visible (establishing shot, insert shot, atmosphere shot), do NOT add characters to the image prompt — even if character reference images are available. Only reference character images for characters explicitly described as visible in THIS shot.
 
 ---
 
@@ -104,6 +108,23 @@ Do not write "dramatic lighting" or "cinematic lighting" — name the actual sou
 If the scene describes a specific light source (energy beams, alien glow, emergency lights), that source must appear in the lighting description with all four components.
 
 Match lighting to what the scene describes. Do not add atmospheric elements (storm, fog, night) the scene does not include.
+
+---
+
+## Frozen Instant — No Motion Verbs
+
+An image prompt describes a SINGLE FROZEN FRAME — one instant in time. The camera has captured this moment and nothing is moving.
+
+**Banned motion verbs:** running, walking, crawling, reaching, turning, falling, moving, stepping, rising, shifting, flying, spinning, drifting, floating, sliding, swinging, lunging, leaping, charging, retreating
+
+**Use static equivalents instead:**
+- "running" → "mid-stride, left foot forward, right arm back"
+- "crawling" → "on hands and knees, weight on left hand, right hand extended forward"
+- "reaching" → "arm outstretched toward the basket, fingers splayed"
+- "turning" → "head angled forty-five degrees to the left, eyes directed at the door"
+- "falling" → "suspended mid-air, hair fanned upward, coat billowing"
+
+Every verb in the prompt must describe a STATE, not an ACTION. Ask: "Could a photographer capture exactly this in a single frame?" If not, rewrite it.
 
 ---
 
@@ -241,8 +262,12 @@ When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MU
   - Lighting changed dramatically (day→night, lamp turned on/off)
   - A transformation or VFX effect occurred
 
-  **IMPORTANT:** Do NOT use `edit_first_frame` for subtle changes like "turns head slightly", "eyes shift", "changes expression". The image editor cannot reliably render these — the result will look identical to the first frame. For subtle motion:
-  - Set the last_frame to the SAME image as the first frame (copy the first_frame prompt exactly)
+  **IMPORTANT:** The last_frame prompt must describe ONLY the delta — what changed from first_frame. Do NOT copy the full first_frame description. Write a short sentence like "Character has moved to the right side of frame, expression shifted from neutral to alarmed."
+
+  If **nothing visually changes** between first and last frame (establishing shot, static mood shot), write: "No visible change from first frame." Do NOT repeat the first_frame prompt.
+
+  Do NOT use `edit_first_frame` for subtle changes like "turns head slightly", "eyes shift", "changes expression". The image editor cannot reliably render these. For subtle motion:
+  - Set last_frame imagePrompt to: "No visible change from first frame."
   - Let the **video model** handle the motion via the motion directive prompt
   - Only use `edit_first_frame` when you need a **clearly different end-state image**
 

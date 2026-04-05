@@ -321,3 +321,47 @@ export function computeStateDiff(
 
   return lines.join('\n');
 }
+
+/**
+ * Compute target state BEFORE generating the image prompt.
+ *
+ * Flow: previous state + shot description → LLM computes target state →
+ * returns both states formatted for prompt injection.
+ *
+ * The image prompt LLM sees BOTH the previous state and the target state,
+ * so it knows exactly what to render. No post-generation state extraction needed.
+ */
+export async function buildStateContext(
+  llm: { generateStream: (opts: any) => AsyncGenerator<{ content?: string; thinking?: string; done?: boolean }, any, any> },
+  previousState: SceneState | null,
+  shotDescription: string,
+): Promise<{ targetState: SceneState | null; promptContext: string; diff: string }> {
+  // Compute target state from shot description
+  const stateResult = await extractStateFromLLM(llm, previousState, shotDescription);
+
+  if (!stateResult.state) {
+    // LLM failed — fall back to previous state only
+    if (previousState && previousState.shotNumber > 0) {
+      return {
+        targetState: null,
+        promptContext: `\n\n<scene_state>\nPREVIOUS STATE (before this shot):\n${formatStateForPrompt(previousState)}\n\nYour shot MUST be consistent with this state.\n</scene_state>`,
+        diff: '',
+      };
+    }
+    return { targetState: null, promptContext: '', diff: '' };
+  }
+
+  const targetState = stateResult.state;
+  const diff = previousState ? computeStateDiff(previousState, targetState) : '';
+
+  const prevSection = previousState
+    ? `PREVIOUS STATE (before this shot):\n${formatStateForPrompt(previousState)}\n\n`
+    : '';
+
+  const targetSection = `TARGET STATE (what this shot must show):\n${formatStateForPrompt(targetState)}`;
+  const diffSection = diff ? `\n\nCHANGES:\n${diff}` : '';
+
+  const promptContext = `\n\n<scene_state>\n${prevSection}${targetSection}${diffSection}\n\nYour image prompt MUST render the TARGET STATE. Characters cannot teleport — if a character's position changed, show the transition.\n</scene_state>`;
+
+  return { targetState, promptContext, diff };
+}

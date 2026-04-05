@@ -6,15 +6,22 @@
 
 1. **List every beat** in the scene — every action, dialogue moment, reaction, transition
 2. Each beat gets at least one shot. Do not merge distinct beats.
-3. Plan at least one character-free shot (establishing, insert, or atmosphere)
+3. If a scene opens with an establishing shot, it must ESTABLISH something specific:
+   - Extreme wide: show scale, weather, or atmosphere (e.g., "rain-soaked marketplace at night, stalls collapsed")
+   - Extreme close-up: a sensory detail (e.g., "raindrops striking a brass bell", "embers floating")
+   - NOT just "the empty setting" — what is happening in this environment?
+4. If characters are not in the first shot, plan a beat where they ENTER or are REVEALED
 
 ## Required Fields — Every Shot, No Exceptions
 
-Every shot object MUST contain exactly these 6 fields. Missing or empty fields = broken output.
+Every shot object MUST contain exactly these 9 fields. Missing or empty fields = broken output.
 
 | Field | Type | Description |
 |---|---|---|
 | `shotNumber` | number | Sequential integer starting at 1 |
+| `purpose` | string | WHY this shot exists (see Purpose section below) |
+| `secondaryPurpose` | string or null | Optional secondary intent if the shot serves two purposes |
+| `shotType` | string | HOW to shoot it (see Shot Type section below) |
 | `duration` | number | Seconds (3–10). Quick cuts: 3–4s. Emotional holds: 6–8s |
 | `description` | string | 1–2 sentence visual brief of what happens |
 | `cameraWork` | string | Specific camera direction (angle, movement, framing) |
@@ -24,13 +31,55 @@ Every shot object MUST contain exactly these 6 fields. Missing or empty fields =
 ```json
 {
   "shotNumber": 1,
-  "duration": 5,
-  "description": "Elena steps into the rain-soaked alley, her silhouette framed by a flickering neon sign.",
-  "cameraWork": "wide establishing, static tripod, shallow focus on Elena with neon bokeh behind",
-  "audio": "rain pattering on cobblestones, distant thunder rumble, neon sign buzzing",
+  "purpose": "set_the_mood",
+  "secondaryPurpose": null,
+  "shotType": "extreme_close_up",
+  "duration": 4,
+  "description": "Raindrops strike a brass bell, each impact sending tiny ripples across the wet metal.",
+  "cameraWork": "macro, static, shallow DOF on bell surface",
+  "audio": "metallic ring of rain on brass, distant thunder rumble",
   "transition": "fade"
 }
 ```
+
+## Purpose — WHY This Shot Exists
+
+Every shot serves a story function. Pick the PRIMARY purpose; use `secondaryPurpose` if the shot does double duty (e.g., a character enters AND speaks).
+
+| Purpose | When to use |
+|---|---|
+| `set_the_world` | Establish WHERE/WHEN — wide/aerial showing location, time, weather |
+| `set_the_mood` | Sensory/atmosphere detail — close-up on rain, fire, texture, sound |
+| `meet_character` | First time we SEE a character — they enter, are revealed, or appear |
+| `show_tension` | Conflict building — something is wrong, stakes rising |
+| `show_action` | Physical event — chase, fight, discovery, movement |
+| `show_reaction` | Response to something — facial expression, body language |
+| `show_dialogue` | Conversation — character speaking |
+| `show_clue` | Important detail — object, letter, clock, evidence |
+| `show_passage` | Time or space transition — montage beat, travel |
+| `hold_emotion` | Linger on a feeling — let it breathe, longer duration |
+| `show_change` | Transformation or VFX — something morphs, dissolves, ignites |
+| `punctuate` | Dramatic emphasis — exclamation mark shot |
+
+**Sequence rules:**
+- After `set_the_world` or `set_the_mood`, the next shot with characters MUST be `meet_character`
+- `meet_character` should show characters ENTERING or being REVEALED — not already centered as if they were always there
+- A scene can skip establishing shots and start directly with `meet_character` or `show_action`
+
+## Shot Type — HOW to Shoot It
+
+| Shot Type | Framing |
+|---|---|
+| `extreme_wide` | Eagle's eye / full scale — character tiny or absent |
+| `wide` | Full environment with characters head-to-toe |
+| `medium` | Waist up — conversational distance |
+| `close_up` | Face fills the frame |
+| `extreme_close_up` | Single feature or detail fills frame |
+| `over_shoulder` | Behind one character, looking at another |
+| `pov` | What a character sees |
+| `tracking` | Camera follows movement |
+| `insert` | Detail shot of object or action |
+| `reaction` | Focus on facial expression / body language |
 
 {{AVAILABLE_VIDEO_MODES}}
 
@@ -98,8 +147,11 @@ Before returning JSON, verify every item:
 
 1. Every scene beat has a shot
 2. Duration sum ≈ totalDuration (within ±20%). Each shot is 3–10 seconds
-3. **Every shot has all 6 required fields**: `shotNumber`, `duration`, `description`, `cameraWork`, `audio`, `transition` — none empty
-4. **Every shot has an `audio` field** with dialogue (if any) + ambient/effects. No shot is missing audio
-5. **Every shot has a `transition` field** — first shot uses `fade` or `cut`, all others have an explicit transition value
-6. All dialogue from the scene description is placed in the correct shot's `audio` field — no lines omitted
-7. Pacing varies: quick cuts for tension, longer holds for emotion
+3. **Every shot has all 9 required fields**: `shotNumber`, `purpose`, `secondaryPurpose`, `shotType`, `duration`, `description`, `cameraWork`, `audio`, `transition` — none empty (secondaryPurpose can be null)
+4. **Every shot has a valid `purpose`** from the taxonomy — not a made-up value
+5. **Every shot has a valid `shotType`** from the taxonomy — not a made-up value
+6. **Every shot has an `audio` field** with dialogue (if any) + ambient/effects
+7. **Every shot has a `transition` field** — first shot uses `fade` or `cut`
+8. All dialogue placed in the correct shot's `audio` field — no lines omitted
+9. After `set_the_world`/`set_the_mood`, next character shot is `meet_character`
+10. Pacing varies: quick cuts for tension, longer holds for emotion

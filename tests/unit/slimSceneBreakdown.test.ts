@@ -68,6 +68,63 @@ describe('Slim scene breakdown: schema', () => {
   });
 });
 
+describe('Slim scene breakdown: purpose and shotType fields', () => {
+  it('schema accepts shot with purpose, secondaryPurpose, and shotType', async () => {
+    const { validateWithSchema } = await import('../../src/core/planner/schemas.js');
+    const result = validateWithSchema('scene_video_prompt', {
+      shots: [{
+        shotNumber: 1,
+        purpose: 'set_the_mood',
+        secondaryPurpose: null,
+        shotType: 'extreme_close_up',
+        duration: 4,
+        description: 'Raindrops strike a brass bell',
+        cameraWork: 'macro, static, shallow DOF',
+        audio: 'metallic ring of rain on brass',
+        transition: 'fade',
+      }],
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('schema accepts shot with secondaryPurpose set', async () => {
+    const { validateWithSchema } = await import('../../src/core/planner/schemas.js');
+    const result = validateWithSchema('scene_video_prompt', {
+      shots: [{
+        shotNumber: 1,
+        purpose: 'meet_character',
+        secondaryPurpose: 'show_dialogue',
+        shotType: 'medium',
+        duration: 6,
+        description: 'Elena walks in and speaks',
+        cameraWork: 'tracking medium',
+        audio: 'ELENA: Dont follow me.',
+        transition: 'cut',
+      }],
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('schema accepts valid purpose enum values', async () => {
+    const { purposeValues } = await import('../../src/core/planner/schemas.js');
+    expect(purposeValues).toContain('set_the_world');
+    expect(purposeValues).toContain('meet_character');
+    expect(purposeValues).toContain('show_dialogue');
+    expect(purposeValues).toContain('show_change');
+    expect(purposeValues).toContain('punctuate');
+    expect(purposeValues.length).toBe(12);
+  });
+
+  it('schema accepts valid shotType enum values', async () => {
+    const { shotTypeValues } = await import('../../src/core/planner/schemas.js');
+    expect(shotTypeValues).toContain('extreme_wide');
+    expect(shotTypeValues).toContain('close_up');
+    expect(shotTypeValues).toContain('pov');
+    expect(shotTypeValues).toContain('insert');
+    expect(shotTypeValues.length).toBe(10);
+  });
+});
+
 describe('Slim scene breakdown: system prompts', () => {
   it('scene_video_prompt system prompt has NO firstFrame/lastFrame in JSON schema', () => {
     const code = readFileSync(join(process.cwd(), 'src/core/planner/ExecutorAgent.ts'), 'utf-8');

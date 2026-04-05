@@ -129,21 +129,94 @@ describe('Scene State: formatting for LLM prompt', () => {
   });
 });
 
-describe('Scene State: executor integration', () => {
-  it('ExecutorAgent injects scene state into shot_image_prompt context', () => {
-    const code = readFileSync(join(process.cwd(), 'src/core/planner/ExecutorAgent.ts'), 'utf-8');
-    expect(code).toContain('scene_state');
-    expect(code).toContain('formatStateForPrompt');
+describe('Scene State: buildStateContext (compute state before prompt)', () => {
+  it('buildStateContext returns previous + target state context for prompt injection', async () => {
+    const { buildStateContext } = await import('../../src/core/planner/sceneState.js');
+    const { initializeSceneState } = await import('../../src/core/planner/sceneState.js');
+
+    const prevState = initializeSceneState('scene_1', ['elena', 'marcus'], 'alley');
+    // Simulate elena already in frame from previous shot
+    prevState.characters['elena'] = {
+      ...prevState.characters['elena'],
+      position: 'center_frame',
+      inFrame: true,
+      expression: 'neutral',
+      facing: 'camera',
+    };
+    prevState.shotNumber = 1;
+
+    const shotDescription = 'Shot 2: Marcus enters from the left, approaching Elena. Purpose: meet_character.';
+
+    // Mock LLM that returns a valid target state
+    const mockLlm = {
+      async *generateStream() {
+        yield {
+          content: JSON.stringify({
+            characters: {
+              elena: { position: 'center_frame', pose: 'standing', expression: 'alert', facing: 'left', inFrame: true, leftHand: 'at_side', rightHand: 'at_side', legs: 'standing_apart', headTilt: 'neutral' },
+              marcus: { position: 'entering_from_left', pose: 'walking', expression: 'determined', facing: 'right', inFrame: true, leftHand: 'at_side', rightHand: 'at_side', legs: 'mid_stride', headTilt: 'neutral' },
+            },
+            objects: {},
+            environment: { lighting: 'neon_glow', timeProgression: 'night' },
+          }),
+          done: true,
+        };
+      },
+    };
+
+    const result = await buildStateContext(mockLlm as any, prevState, shotDescription);
+
+    expect(result.targetState).not.toBeNull();
+    expect(result.targetState!.characters['marcus'].inFrame).toBe(true);
+    expect(result.targetState!.characters['marcus'].position).toContain('enter');
+    expect(result.promptContext).toContain('PREVIOUS STATE');
+    expect(result.promptContext).toContain('TARGET STATE');
+    expect(result.promptContext).toContain('TARGET STATE');
   });
 
-  it('ExecutorAgent extracts new state after shot_image_prompt completes', () => {
-    const code = readFileSync(join(process.cwd(), 'src/core/planner/ExecutorAgent.ts'), 'utf-8');
-    expect(code).toContain('saveSceneState');
+  it('buildStateContext returns previous-only context when LLM fails', async () => {
+    const { buildStateContext, initializeSceneState } = await import('../../src/core/planner/sceneState.js');
+
+    const prevState = initializeSceneState('scene_1', ['elena'], 'alley');
+    prevState.shotNumber = 1;
+    prevState.characters['elena'].inFrame = true;
+
+    // Mock LLM that returns garbage
+    const mockLlm = {
+      async *generateStream() {
+        yield { content: 'not valid json at all', done: true };
+      },
+    };
+
+    const result = await buildStateContext(mockLlm as any, prevState, 'Shot 2: Elena looks around.');
+
+    expect(result.targetState).toBeNull();
+    expect(result.promptContext).toContain('PREVIOUS STATE');
+    expect(result.promptContext).not.toContain('TARGET STATE');
   });
 
-  it('shot_image_prompt nodes depend on previous shot_image_prompt', () => {
-    const code = readFileSync(join(process.cwd(), 'src/core/planner/ExecutorAgent.ts'), 'utf-8');
-    // Should wire prevShotPromptId dependency
-    expect(code).toContain('prevShotPromptId');
+  it('buildStateContext with null previous state (first shot) still computes target', async () => {
+    const { buildStateContext } = await import('../../src/core/planner/sceneState.js');
+
+    const mockLlm = {
+      async *generateStream() {
+        yield {
+          content: JSON.stringify({
+            characters: {
+              elena: { position: 'center_frame', pose: 'standing', expression: 'wary', facing: 'camera', inFrame: true, leftHand: 'at_side', rightHand: 'holding_flashlight', legs: 'standing_apart', headTilt: 'neutral' },
+            },
+            objects: {},
+            environment: { lighting: 'dim_streetlight', timeProgression: 'night' },
+          }),
+          done: true,
+        };
+      },
+    };
+
+    const result = await buildStateContext(mockLlm as any, null, 'Shot 1: Elena stands under a streetlight. Purpose: meet_character.');
+
+    expect(result.targetState).not.toBeNull();
+    expect(result.targetState!.characters['elena'].inFrame).toBe(true);
+    expect(result.promptContext).toContain('TARGET STATE');
   });
 });

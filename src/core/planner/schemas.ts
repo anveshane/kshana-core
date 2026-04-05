@@ -19,9 +19,27 @@ const frameDescriptionSchema = z.object({
 
 // ── Scene Video Prompt ───────────────────────────────────────────────────────
 
+// Shot purpose — WHY this shot exists in the story
+export const purposeValues = [
+  'set_the_world', 'set_the_mood', 'meet_character', 'show_tension',
+  'show_action', 'show_reaction', 'show_dialogue', 'show_clue',
+  'show_passage', 'hold_emotion', 'show_change', 'punctuate',
+] as const;
+
+// Shot type — HOW to shoot it (cinematic execution)
+export const shotTypeValues = [
+  'extreme_wide', 'wide', 'medium', 'close_up', 'extreme_close_up',
+  'over_shoulder', 'pov', 'tracking', 'insert', 'reaction',
+] as const;
+
+const purposeEnum = z.enum(purposeValues);
+const shotTypeEnum = z.enum(shotTypeValues);
+
 const shotSchema = z.object({
   shotNumber: z.number(),
-  shotType: z.string().optional(),
+  purpose: purposeEnum.optional(),
+  secondaryPurpose: purposeEnum.nullable().optional(),
+  shotType: shotTypeEnum.or(z.string()).optional(),
   duration: z.number().optional(),
   generationStrategy: z.string().optional(),
   videoGenerationMode: z.string().optional(),
@@ -31,6 +49,7 @@ const shotSchema = z.object({
   description: z.string().optional(),
   cameraWork: z.string().optional(),
   soundCue: z.string().optional(),
+  audio: z.string().optional(),
   transition: z.string().optional(),
   dialogue: z.string().nullable().optional(),
   characters: z.array(z.string()).optional(),

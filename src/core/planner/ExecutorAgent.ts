@@ -938,7 +938,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.log(`  Context block length: ${inputs.contextBlock.length} chars`);
 
               // 2. Build prompt
-              const { system, user, loadedSkills } = this.buildPromptForNode(node, inputs);
+              const { system, user, loadedSkills } = await this.buildPromptForNode(node, inputs);
               this.log(`  Prompt built: system=${system.length} chars, user=${user.length} chars`);
 
               // 3. Emit tool_call
@@ -1118,65 +1118,8 @@ export class ExecutorAgent extends TypedEventEmitter {
               );
               this.log(`  Written to: ${outputPath}`);
 
-              // Scene state update: after shot_image_prompt is generated, extract new state
-              if (node.typeId === 'shot_image_prompt' && node.itemId && content) {
-                try {
-                  const { loadSceneState, saveSceneState, initializeSceneState } = await import('./sceneState.js');
-                  const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
-                  const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
-                  if (sceneId) {
-                    let currentState = loadSceneState(this.config.projectDir, sceneId);
-                    if (!currentState) {
-                      // First shot — initialize from scene breakdown
-                      const sceneBreakdown = this.executor.getNode(`scene_video_prompt:${sceneId}`);
-                      let chars: string[] = [];
-                      let setting = '';
-                      if (sceneBreakdown?.outputPath) {
-                        try {
-                          const sbJson = JSON.parse(readFileSync(join(this.config.projectDir, sceneBreakdown.outputPath), 'utf-8'));
-                          const allChars = new Set<string>();
-                          for (const shot of sbJson.shots ?? []) {
-                            for (const c of shot.characters ?? []) allChars.add(c);
-                          }
-                          chars = [...allChars];
-                          setting = sbJson.shots?.[0]?.setting ?? '';
-                        } catch { /* ignore */ }
-                      }
-                      currentState = initializeSceneState(sceneId, chars, setting);
-                    }
-
-                    // Ask LLM for the new state given previous state + generated prompt
-                    this.log(`  Extracting scene state update for ${node.itemId}...`);
-                    const { extractStateFromLLM } = await import('./sceneState.js');
-                    const stateResult = await extractStateFromLLM(this.llm, currentState, content);
-
-                    if (stateResult.state) {
-                      const newState = stateResult.state;
-                      newState.sceneId = sceneId!;
-                      newState.shotNumber = shotNum;
-
-                      // Show AFTER state card with diff in UI
-                      const { computeStateDiff, formatStateForPrompt: fmtState } = await import('./sceneState.js');
-                      const diff = computeStateDiff(currentState, newState);
-                      const afterAgentName = this.config.name ?? 'kshana-executor';
-                      const afterCallId = `state_after_${node.itemId}_${Date.now()}`;
-                      this.emit({ type: 'tool_call', toolCallId: afterCallId, toolName: 'scene_state', arguments: { shot: node.itemId, phase: 'AFTER' }, agentName: afterAgentName });
-                      const afterText = diff
-                        ? `CHANGES:\n${diff}\n\n---\nFULL STATE:\n${fmtState(newState)}`
-                        : `No changes\n\n${fmtState(newState)}`;
-                      this.emit({ type: 'tool_streaming', toolCallId: afterCallId, chunk: afterText, done: true, agentName: afterAgentName, toolName: 'scene_state' });
-                      this.emit({ type: 'tool_result', toolCallId: afterCallId, toolName: 'scene_state', result: { phase: 'after', diff, state: newState }, agentName: afterAgentName });
-
-                      saveSceneState(this.config.projectDir, sceneId, newState);
-                      this.log(`  Scene state updated for ${sceneId} after shot ${shotNum}`);
-                    } else {
-                      this.log(`  State extraction failed: ${stateResult.error}`);
-                    }
-                  }
-                } catch (stateErr) {
-                  this.log(`  Scene state extraction failed: ${(stateErr as Error).message}`);
-                }
-              }
+              // State is now computed BEFORE prompt generation in buildPromptForNode().
+              // No post-generation state extraction needed.
 
               // Emit tool_result for the prompt generation
               this.emit({
@@ -1367,10 +1310,10 @@ export class ExecutorAgent extends TypedEventEmitter {
    * Build system + user prompts for a given node based on its artifact category.
    * Uses simple, tool-free prompts — all context is pre-loaded in inputs.
    */
-  private buildPromptForNode(
+  private async buildPromptForNode(
     node: ExecutionNode,
     inputs: ResolvedInputs,
-  ): { system: string; user: string; loadedSkills: string[] } {
+  ): Promise<{ system: string; user: string; loadedSkills: string[] }> {
     const typeDef = this.config.template.artifactTypes[node.typeId];
     const category = typeDef?.category ?? 'concept';
 
@@ -1385,48 +1328,9 @@ export class ExecutorAgent extends TypedEventEmitter {
       // (scene_breakdown_guide.md) which autoresearch optimizes end-to-end
       systemPrompt = `You are a cinematic shot planner. Output ONLY valid JSON.`;
     } else if (node.typeId === 'shot_image_prompt') {
-      systemPrompt = `You are an expert image prompt engineer.
-Output ONLY valid JSON. Respond with the JSON object directly.
-
-For FLFV/FMLFV shots (most shots), use multi-frame format:
-{
-  "shotNumber": <number>,
-  "generationStrategy": "<flfv|fmlfv>",
-  "frames": {
-    "first_frame": {
-      "imagePrompt": "<flowing prose — reference characters/settings/objects as 'from image N'>",
-      "generationMode": "image_text_to_image" or "edit_previous_shot",
-      "references": [{ "imageNumber": 1, "type": "character", "refId": "<ref_id>" }, ...]
-    },
-    "last_frame": {
-      "imagePrompt": "<describe ONLY what changed from first_frame>",
-      "generationMode": "edit_first_frame",
-      "references": []
-    }
-  },
-  "negativePrompt": "<what to avoid>",
-  "aspectRatio": "16:9"
-}
-
-For FMLFV shots, add "mid_frame" with generationMode "edit_first_frame".
-
-generationStrategy rules:
-- "flfv" (DEFAULT): first + last frame. Use for most shots — simple motion, character actions, camera moves, dialogue.
-- "fmlfv": first + mid + last frame. Use for complex VFX, transformations, morphing, or shots where the midpoint looks very different from a simple blend.
-
-generationMode per frame:
-- "image_text_to_image": Generate fresh from character/setting/object references. Use for first_frame of shot 1 in a scene.
-- "edit_previous_shot": Edit the previous shot's last frame for visual continuity. Use for first_frame of shots 2+ when the camera angle is similar.
-- "edit_first_frame": Edit this shot's first frame. Use for last_frame and mid_frame always.
-- "text_to_image": No references. Use only for frames with NO characters/objects visible.
-
-Rules:
-- Reference images as "the [description] from image N" where N matches imageNumber
-- references can be type "character", "setting", or "object"
-- Only reference images listed in available references — do NOT fabricate image numbers
-- edit_first_frame and edit_previous_shot prompts describe the DELTA (what changed), not the full scene
-- For edit modes, references array should be empty
-- Describe one frozen instant — no motion verbs`;
+      // Minimal system prompt — all rules and JSON structure are in the guide
+      // (shot_composition_guide.md) which autoresearch optimizes end-to-end
+      systemPrompt = `You are an expert image prompt engineer. Output ONLY valid JSON.`;
     } else {
       systemPrompt = CATEGORY_PROMPTS[effectiveCategory] ?? CATEGORY_PROMPTS.concept;
     }
@@ -1517,38 +1421,100 @@ Rules:
       : `Create ${typeDef?.displayName ?? node.typeId}`;
 
     // For shot_image_prompt: tell the LLM which image N maps to which character/setting
-    // Actual file resolution happens later at shot image generation time, not prompt time
+    // Gathers ALL completed ref image nodes — LLM decides which to use per shot
     let referenceImageContext = '';
+    let shotContextHint = '';
     if (node.typeId === 'shot_image_prompt' && node.itemId) {
-      referenceImageContext = this.buildShotReferenceMapping(node);
+      const { buildAvailableReferences, formatReferencesForPrompt, buildShotContextHint } = require('./shotReferenceMapping.js');
+      const { refs } = buildAvailableReferences(this.executor);
+      referenceImageContext = formatReferencesForPrompt(refs);
+
+      // Add shot context hint (generation mode suggestions)
+      const prevShotId = node.itemId.replace(/shot_(\d+)/, (_, n: string) => `shot_${parseInt(n, 10) - 1}`);
+      const prevNode = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '1', 10) > 1
+        ? this.executor.getNode(`shot_image:${prevShotId}`)
+        : null;
+      const previousAvailable = prevNode?.status === 'completed';
+      shotContextHint = buildShotContextHint(node.itemId, previousAvailable);
     }
 
-    // Inject scene state for shot_image_prompt — tells LLM where characters/objects are
+    // Compute target state BEFORE generating shot_image_prompt.
+    // Flow: previous state + shot description → LLM computes target → inject both into prompt
     let sceneStateContext = '';
     if (node.typeId === 'shot_image_prompt' && node.itemId) {
       try {
-        const { loadSceneState, formatStateForPrompt } = require('./sceneState.js');
+        const { loadSceneState, initializeSceneState, saveSceneState, formatStateForPrompt, buildStateContext } = require('./sceneState.js');
         const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
+        const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
         if (sceneId) {
-          const state = loadSceneState(this.config.projectDir, sceneId);
-          if (state && state.shotNumber > 0) {
-            const formattedState = formatStateForPrompt(state);
-            sceneStateContext = `\n\n<scene_state>\n${formattedState}\n\nYour shot MUST be consistent with this state. Characters cannot teleport.\nIf a character needs to move, describe the transition in the first frame.\n</scene_state>`;
+          // Load or initialize previous state
+          let previousState = loadSceneState(this.config.projectDir, sceneId);
+          if (!previousState) {
+            const chars = this.executor.getAllNodes()
+              .filter((n: any) => n.typeId === 'character_image' && n.itemId)
+              .map((n: any) => n.itemId!);
+            const settingNode = this.executor.getAllNodes()
+              .find((n: any) => n.typeId === 'setting_image' && n.itemId);
+            const setting = settingNode?.itemId ?? '';
+            previousState = initializeSceneState(sceneId, chars, setting);
+          }
 
-            // Show BEFORE state card in UI
-            const agentName = this.config.name ?? 'kshana-executor';
-            const stateCallId = `state_before_${node.itemId}_${Date.now()}`;
-            this.emit({ type: 'tool_call', toolCallId: stateCallId, toolName: 'scene_state', arguments: { shot: node.itemId, phase: 'BEFORE' }, agentName });
-            this.emit({ type: 'tool_streaming', toolCallId: stateCallId, chunk: formattedState, done: true, agentName, toolName: 'scene_state' });
-            this.emit({ type: 'tool_result', toolCallId: stateCallId, toolName: 'scene_state', result: { phase: 'before', state }, agentName });
+          // Read shot description from scene breakdown
+          const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+          let shotDescription = '';
+          if (svpNode?.outputPath) {
+            try {
+              const svpPath = join(this.config.projectDir, svpNode.outputPath);
+              let svpContent = readFileSync(svpPath, 'utf-8').trim();
+              if (svpContent.startsWith('```')) {
+                svpContent = svpContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+              }
+              const svpJson = JSON.parse(svpContent);
+              const shots = svpJson.shots ?? svpJson;
+              const shot = (Array.isArray(shots) ? shots : []).find((s: any) => s.shotNumber === shotNum);
+              if (shot) {
+                shotDescription = `Shot ${shotNum}: ${shot.description || ''}. Camera: ${shot.cameraWork || ''}. Purpose: ${shot.purpose || 'unknown'}.`;
+              }
+            } catch { /* scene breakdown not readable */ }
+          }
+
+          if (shotDescription) {
+            this.log(`  Computing target state for ${node.itemId}...`);
+            const stateCtx = await buildStateContext(this.llm, previousState, shotDescription);
+            sceneStateContext = stateCtx.promptContext;
+
+            if (stateCtx.targetState) {
+              stateCtx.targetState.sceneId = sceneId;
+              stateCtx.targetState.shotNumber = shotNum;
+              saveSceneState(this.config.projectDir, sceneId, stateCtx.targetState);
+              this.log(`  Target state saved for ${sceneId} shot ${shotNum}`);
+
+              // Show BEFORE + TARGET state cards in UI
+              const agentName = this.config.name ?? 'kshana-executor';
+              const beforeCallId = `state_before_${node.itemId}_${Date.now()}`;
+              this.emit({ type: 'tool_call', toolCallId: beforeCallId, toolName: 'scene_state', arguments: { shot: node.itemId, phase: 'BEFORE' }, agentName });
+              this.emit({ type: 'tool_streaming', toolCallId: beforeCallId, chunk: formatStateForPrompt(previousState), done: true, agentName, toolName: 'scene_state' });
+              this.emit({ type: 'tool_result', toolCallId: beforeCallId, toolName: 'scene_state', result: { phase: 'before', state: previousState }, agentName });
+
+              const targetCallId = `state_target_${node.itemId}_${Date.now()}`;
+              this.emit({ type: 'tool_call', toolCallId: targetCallId, toolName: 'scene_state', arguments: { shot: node.itemId, phase: 'TARGET' }, agentName });
+              const targetText = stateCtx.diff
+                ? `CHANGES:\n${stateCtx.diff}\n\n---\nTARGET STATE:\n${formatStateForPrompt(stateCtx.targetState)}`
+                : `No changes\n\n${formatStateForPrompt(stateCtx.targetState)}`;
+              this.emit({ type: 'tool_streaming', toolCallId: targetCallId, chunk: targetText, done: true, agentName, toolName: 'scene_state' });
+              this.emit({ type: 'tool_result', toolCallId: targetCallId, toolName: 'scene_state', result: { phase: 'target', diff: stateCtx.diff, state: stateCtx.targetState }, agentName });
+            }
+          } else if (previousState.shotNumber > 0) {
+            // No shot description — inject previous state only
+            sceneStateContext = `\n\n<scene_state>\n${formatStateForPrompt(previousState)}\n\nYour shot MUST be consistent with this state.\n</scene_state>`;
           }
         }
-      } catch { /* state not available yet — first shot */ }
+      } catch { /* state not available yet */ }
     }
 
     const user = inputs.contextBlock
-      ? `${task}${projectContext}${referenceImageContext}${sceneStateContext}\n\n${inputs.contextBlock}`
-      : `${task}${projectContext}${referenceImageContext}${sceneStateContext}`;
+      ? `${task}${projectContext}${referenceImageContext}${sceneStateContext}${shotContextHint}\n\n${inputs.contextBlock}`
+      : `${task}${projectContext}${referenceImageContext}${sceneStateContext}${shotContextHint}`;
 
     return { system: systemPrompt, user, loadedSkills };
   }
