@@ -793,9 +793,8 @@ export class ExecutorAgent extends TypedEventEmitter {
           break;
         }
 
-        // In serial mode: prioritize LLM/content nodes over media generation nodes.
-        // Within content nodes, prioritize shot_image_prompt over shot_motion_directive
-        // so all compositions finish before motion directives start.
+        // In serial mode: ALL content finishes before ANY media starts.
+        // Within content, compositions finish before motion directives.
         if (!this.config.parallelMediaGeneration) {
           const isMediaNode = (n: ExecutionNode) => {
             const typeDef = this.config.template.artifactTypes[n.typeId];
@@ -805,14 +804,27 @@ export class ExecutorAgent extends TypedEventEmitter {
           const contentNodes = readyNodes.filter(n => !isMediaNode(n));
           const mediaNodes = readyNodes.filter(n => isMediaNode(n));
 
-          // Within content nodes, prioritize compositions over motion directives
-          const compositionNodes = contentNodes.filter(n => n.typeId !== 'shot_motion_directive');
-          const motionNodes = contentNodes.filter(n => n.typeId === 'shot_motion_directive');
-          const prioritizedContent = compositionNodes.length > 0 ? compositionNodes : motionNodes;
+          // Check if ANY content node is still pending/in-progress in the entire graph
+          // (not just the ready batch). If so, don't start media yet.
+          const allNodes = this.executor.getAllNodes();
+          const pendingContentExists = allNodes.some(n =>
+            !isMediaNode(n) && (n.status === 'pending' || n.status === 'in_progress'),
+          );
 
-          // Only process media nodes if no content nodes are available
-          readyNodes.length = 0;
-          readyNodes.push(...(prioritizedContent.length > 0 ? prioritizedContent : mediaNodes));
+          if (pendingContentExists && mediaNodes.length > 0 && contentNodes.length === 0) {
+            // Media nodes are ready but content is still pending elsewhere — skip this round
+            this.log(`  Serial mode: waiting for all content to finish before media (${allNodes.filter(n => !isMediaNode(n) && n.status === 'pending').length} content pending)`);
+            readyNodes.length = 0;
+          } else {
+            // Within content nodes, prioritize compositions over motion directives
+            const compositionNodes = contentNodes.filter(n => n.typeId !== 'shot_motion_directive');
+            const motionNodes = contentNodes.filter(n => n.typeId === 'shot_motion_directive');
+            const prioritizedContent = compositionNodes.length > 0 ? compositionNodes : motionNodes;
+
+            // Only process media nodes if no content nodes remain anywhere
+            readyNodes.length = 0;
+            readyNodes.push(...(prioritizedContent.length > 0 ? prioritizedContent : mediaNodes));
+          }
         }
 
         this.log(`Ready nodes: ${readyNodes.map(n => n.id).join(', ')}`);
