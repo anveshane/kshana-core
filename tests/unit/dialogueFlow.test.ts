@@ -111,6 +111,27 @@ describe('Dialogue flow: fallback motion prompt', () => {
   });
 });
 
+describe('Dialogue flow: prompt schema matches new format', () => {
+  it('scene_video_prompt schema has purpose and shotType fields', async () => {
+    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
+    const schema = getPromptSchema('scene_video_prompt');
+    expect(schema).not.toBeNull();
+    expect(schema).toContain('purpose');
+    expect(schema).toContain('secondaryPurpose');
+    expect(schema).toContain('shotType');
+    expect(schema).toContain('audio');
+  });
+
+  it('scene_video_prompt schema does NOT have old fields', async () => {
+    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
+    const schema = getPromptSchema('scene_video_prompt');
+    expect(schema).not.toContain('soundCue');
+    expect(schema).not.toContain('"dialogue"');
+    expect(schema).not.toContain('"characters"');
+    expect(schema).not.toContain('"setting"');
+  });
+});
+
 describe('Dialogue flow: motion directive guide', () => {
   it('motion directive guide instructs LLM to read audio field for dialogue', () => {
     const guide = readFileSync(

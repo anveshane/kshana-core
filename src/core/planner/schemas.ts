@@ -154,15 +154,14 @@ export function getPromptSchema(nodeTypeId: string): string | null {
   "shots": [
     {
       "shotNumber": number,
-      "shotType": "string (establishing, tracking, medium, close_up, wide, extreme_close_up)",
+      "purpose": "set_the_world | set_the_mood | meet_character | show_tension | show_action | show_reaction | show_dialogue | show_clue | show_passage | hold_emotion | show_change | punctuate",
+      "secondaryPurpose": "same values as purpose, or null",
+      "shotType": "extreme_wide | wide | medium | close_up | extreme_close_up | over_shoulder | pov | tracking | insert | reaction",
       "duration": number,
       "description": "string (1-2 sentence brief of what happens in this shot)",
-      "characters": ["character_id"],
-      "setting": "setting_id or null",
-      "cameraWork": "string",
-      "soundCue": "string",
-      "transition": "cut | crossfade | dip_to_black | fade",
-      "dialogue": "CHARACTER: line" or null
+      "cameraWork": "string (specific camera direction)",
+      "audio": "string (dialogue prefixed with CHARACTER NAME: + ambient sounds)",
+      "transition": "cut | crossfade | fade | dip_to_black | flash_to_white | circle_close | circle_open | wipe_left | wipe_right"
     }
   ]
 }
