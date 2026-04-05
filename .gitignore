@@ -39,3 +39,13 @@ prompt-optimizer/
 
 # Local outputs (generated images/videos)
 outputs/
+test-output/
+
+# Claude Code local config
+.claude/
+
+# Uploaded files
+uploads/
+
+# Workflow runs
+workflows/runs/
