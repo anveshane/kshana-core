@@ -2996,6 +2996,8 @@ Rules:
       if (additionalFrames.length > 0) {
         node.outputPaths = { first_frame: firstFramePath };
 
+        const agentName = this.config.name ?? 'kshana-executor';
+
         for (const frameId of additionalFrames) {
           const frameData = parsedJson.frames[frameId];
           if (!frameData?.imagePrompt) continue;
@@ -3003,8 +3005,32 @@ Rules:
           const mode = frameData.generationMode || 'edit_first_frame';
           this.log(`  Generating ${frameId} (mode: ${mode})`);
 
+          // Emit tool_call so the frame shows as its own card in the UI
+          const frameCallId = `frame_${node.itemId}_${frameId}_${Date.now()}`;
+          const frameToolName = 'generate_frame_image';
+          this.emit({
+            type: 'tool_call',
+            toolCallId: frameCallId,
+            toolName: frameToolName,
+            arguments: {
+              item: `${node.displayName} — ${frameId.replace('_', ' ')}`,
+              mode,
+              prompt: frameData.imagePrompt.substring(0, 150) + '...',
+            },
+            agentName,
+          });
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId: frameCallId,
+            chunk: `Generating ${frameId} (${mode})...`,
+            done: false,
+            agentName,
+            toolName: frameToolName,
+          });
+
+          let frameRelPath: string | null = null;
+
           if (mode === 'edit_first_frame') {
-            // Use the first frame as base image and edit it
             const firstFrameAbsPath = join(this.config.projectDir, firstFramePath);
             const provider = getProviderRegistry().getImageEditor();
             if (provider?.editImage) {
@@ -3018,9 +3044,9 @@ Rules:
                 outputDir: assetsDir,
                 filenamePrefix: `${node.itemId}_${frameId}`,
               });
-              const relPath = relative(this.config.projectDir, editResult.filePath);
-              node.outputPaths[frameId] = relPath;
-              this.log(`  ${frameId} (edit_first_frame): ${relPath}`);
+              frameRelPath = relative(this.config.projectDir, editResult.filePath);
+              node.outputPaths[frameId] = frameRelPath;
+              this.log(`  ${frameId} (edit_first_frame): ${frameRelPath}`);
             } else {
               this.log(`  No image editor available — falling back to independent generation for ${frameId}`);
               const frameJson = JSON.stringify({
@@ -3032,12 +3058,12 @@ Rules:
               });
               const framePath = await this.executeShotImageGeneration(node, frameJson, toolCallId);
               if (framePath) {
+                frameRelPath = framePath;
                 node.outputPaths[frameId] = framePath;
                 this.log(`  ${frameId} (fallback): ${framePath}`);
               }
             }
           } else {
-            // Independent generation (image_text_to_image or text_to_image)
             const frameJson = JSON.stringify({
               imagePrompt: frameData.imagePrompt,
               negativePrompt: parsedJson.negativePrompt || '',
@@ -3047,9 +3073,47 @@ Rules:
             });
             const framePath = await this.executeShotImageGeneration(node, frameJson, toolCallId);
             if (framePath) {
+              frameRelPath = framePath;
               node.outputPaths[frameId] = framePath;
               this.log(`  ${frameId} (${mode}): ${framePath}`);
             }
+          }
+
+          // Emit result and register asset
+          if (frameRelPath) {
+            this.emit({
+              type: 'tool_streaming',
+              toolCallId: frameCallId,
+              chunk: `${frameId} saved: ${frameRelPath}`,
+              done: true,
+              agentName,
+              toolName: frameToolName,
+            });
+            this.emit({
+              type: 'tool_result',
+              toolCallId: frameCallId,
+              toolName: frameToolName,
+              result: { status: 'completed', file_path: frameRelPath, frame: frameId },
+              agentName,
+            });
+            // Register as asset so it shows in sidebar
+            try {
+              addAsset({
+                id: `frame_${node.itemId}_${frameId}_${Date.now()}`,
+                type: 'scene_image',
+                path: frameRelPath,
+                createdAt: Date.now(),
+                nodeId: node.id,
+              });
+            } catch { /* non-fatal */ }
+          } else {
+            this.emit({
+              type: 'tool_result',
+              toolCallId: frameCallId,
+              toolName: frameToolName,
+              result: { status: 'failed', frame: frameId },
+              agentName,
+            });
           }
         }
         this.log(`  Multi-frame: ${Object.keys(node.outputPaths).length} frames generated`);
