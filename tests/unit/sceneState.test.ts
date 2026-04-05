@@ -24,29 +24,29 @@ afterEach(() => {
 describe('Scene State: initialization', () => {
   it('initializeSceneState creates state with all characters off-screen', async () => {
     const { initializeSceneState } = await import('../../src/core/planner/sceneState.js');
-    const state = initializeSceneState('scene_1', ['keerti', 'mr_patel'], 'master_bedroom');
+    const state = initializeSceneState('scene_1', ['elena', 'marcus'], 'warehouse');
 
     expect(state.sceneId).toBe('scene_1');
     expect(state.shotNumber).toBe(0);
-    expect(state.characters['keerti']).toBeDefined();
-    expect(state.characters['keerti'].inFrame).toBe(false);
-    expect(state.characters['keerti'].position).toBe('off_screen');
-    expect(state.characters['mr_patel'].inFrame).toBe(false);
+    expect(state.characters['elena']).toBeDefined();
+    expect(state.characters['elena'].inFrame).toBe(false);
+    expect(state.characters['elena'].position).toBe('off_screen');
+    expect(state.characters['marcus'].inFrame).toBe(false);
   });
 
   it('initializeSceneState includes hand and leg tracking', async () => {
     const { initializeSceneState } = await import('../../src/core/planner/sceneState.js');
-    const state = initializeSceneState('scene_1', ['keerti'], 'bedroom');
+    const state = initializeSceneState('scene_1', ['elena'], 'warehouse');
 
-    expect(state.characters['keerti'].leftHand).toBeDefined();
-    expect(state.characters['keerti'].rightHand).toBeDefined();
-    expect(state.characters['keerti'].legs).toBeDefined();
-    expect(state.characters['keerti'].headTilt).toBeDefined();
+    expect(state.characters['elena'].leftHand).toBeDefined();
+    expect(state.characters['elena'].rightHand).toBeDefined();
+    expect(state.characters['elena'].legs).toBeDefined();
+    expect(state.characters['elena'].headTilt).toBeDefined();
   });
 
   it('initializeSceneState sets environment from setting', async () => {
     const { initializeSceneState } = await import('../../src/core/planner/sceneState.js');
-    const state = initializeSceneState('scene_1', [], 'master_bedroom');
+    const state = initializeSceneState('scene_1', [], 'warehouse');
 
     expect(state.environment).toBeDefined();
     expect(state.environment.lighting).toBeDefined();
@@ -57,16 +57,16 @@ describe('Scene State: persistence', () => {
   it('saveSceneState writes to disk and loadSceneState reads it back', async () => {
     const { initializeSceneState, saveSceneState, loadSceneState } = await import('../../src/core/planner/sceneState.js');
 
-    const state = initializeSceneState('scene_1', ['keerti'], 'bedroom');
-    state.characters['keerti'].position = 'lying_in_bed';
-    state.characters['keerti'].inFrame = true;
+    const state = initializeSceneState('scene_1', ['elena'], 'warehouse');
+    state.characters['elena'].position = 'crouching_behind_crates';
+    state.characters['elena'].inFrame = true;
     state.shotNumber = 2;
 
     saveSceneState(testDir, 'scene_1', state);
 
     const loaded = loadSceneState(testDir, 'scene_1');
     expect(loaded).not.toBeNull();
-    expect(loaded!.characters['keerti'].position).toBe('lying_in_bed');
+    expect(loaded!.characters['elena'].position).toBe('crouching_behind_crates');
     expect(loaded!.shotNumber).toBe(2);
   });
 
@@ -81,19 +81,19 @@ describe('Scene State: formatting for LLM prompt', () => {
   it('formatStateForPrompt produces readable text', async () => {
     const { initializeSceneState, formatStateForPrompt } = await import('../../src/core/planner/sceneState.js');
 
-    const state = initializeSceneState('scene_1', ['keerti', 'mr_patel'], 'bedroom');
-    state.characters['keerti'] = {
-      position: 'lying_in_bed',
-      pose: 'lying_down',
-      expression: 'peaceful',
+    const state = initializeSceneState('scene_1', ['elena', 'marcus'], 'warehouse');
+    state.characters['elena'] = {
+      position: 'crouching_behind_crates',
+      pose: 'crouching',
+      expression: 'alert',
       facing: 'right',
       inFrame: true,
-      leftHand: 'under_pillow',
-      rightHand: 'on_duvet',
-      legs: 'under_duvet',
+      leftHand: 'gripping_pistol',
+      rightHand: 'steadied_against_crate',
+      legs: 'bent_crouching',
       headTilt: 'neutral',
     };
-    state.characters['mr_patel'] = {
+    state.characters['marcus'] = {
       position: 'off_screen',
       pose: 'unknown',
       expression: 'unknown',
@@ -108,24 +108,24 @@ describe('Scene State: formatting for LLM prompt', () => {
 
     const formatted = formatStateForPrompt(state);
 
-    expect(formatted).toContain('keerti');
-    expect(formatted).toContain('lying_in_bed');
-    expect(formatted).toContain('peaceful');
-    expect(formatted).toContain('under_pillow');
-    expect(formatted).toContain('off screen'); // mr_patel
+    expect(formatted).toContain('elena');
+    expect(formatted).toContain('crouching_behind_crates');
+    expect(formatted).toContain('alert');
+    expect(formatted).toContain('gripping_pistol');
+    expect(formatted).toContain('off screen'); // marcus
     expect(formatted).toContain('shot 1');
   });
 
   it('formatStateForPrompt includes objects and environment', async () => {
     const { initializeSceneState, formatStateForPrompt } = await import('../../src/core/planner/sceneState.js');
 
-    const state = initializeSceneState('scene_1', [], 'bedroom');
-    state.objects = { duvet: { state: 'pulled_up', position: 'bed' } };
-    state.environment = { lighting: 'warm_golden', timeProgression: 'early_morning' };
+    const state = initializeSceneState('scene_1', [], 'warehouse');
+    state.objects = { crate: { state: 'stacked', position: 'warehouse_floor' } };
+    state.environment = { lighting: 'harsh_overhead', timeProgression: 'late_night' };
 
     const formatted = formatStateForPrompt(state);
-    expect(formatted).toContain('duvet');
-    expect(formatted).toContain('warm_golden');
+    expect(formatted).toContain('crate');
+    expect(formatted).toContain('harsh_overhead');
   });
 });
 

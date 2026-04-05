@@ -48,12 +48,9 @@ describe('Scene State E2E: Scenario 1 — No previous state (first shot)', () =>
   it('extracts valid state from first shot description', { timeout: 200000 }, async () => {
     if (!LLM_AVAILABLE) return;
 
-    const initialState = initializeSceneState('scene_1', ['keerti', 'mr_patel'], 'master_bedroom');
+    const initialState = initializeSceneState('scene_1', ['elena', 'marcus'], 'warehouse');
 
-    const shotPrompt = `A close-up shot of Keerti lying in bed, eyes closed peacefully. Morning sunlight
-filters through sheer curtains, casting warm golden light across her face. Her long dark hair is spread
-on the white pillow. Her left hand rests under the pillow, right hand on the duvet. The duvet is pulled
-up to her chin. Mr. Patel is not visible in this shot.`;
+    const shotPrompt = `Elena crouches behind shipping crates, peering through shadows. A single overhead lamp casts harsh light. Her left hand grips a pistol, right hand steadies against the crate. Marcus is not visible in this shot.`;
 
     const result = await extractStateFromLLM(llm, initialState, shotPrompt);
 
@@ -65,17 +62,17 @@ up to her chin. Mr. Patel is not visible in this shot.`;
     const validated = sceneStateSchema.safeParse(result.state);
     expect(validated.success).toBe(true);
 
-    // Keerti should be in frame
-    const keerti = result.state!.characters['keerti'];
-    expect(keerti).toBeDefined();
-    expect(keerti.inFrame).toBe(true);
-    expect(keerti.position).toMatch(/lying|bed/i);
-    expect(keerti.expression).toMatch(/peaceful|calm|serene|sleeping/i);
+    // Elena should be in frame
+    const elena = result.state!.characters['elena'];
+    expect(elena).toBeDefined();
+    expect(elena.inFrame).toBe(true);
+    expect(elena.position).toMatch(/crouch|crate|behind/i);
+    expect(elena.expression).toMatch(/alert|focused|tense|determined/i);
 
-    // Mr. Patel should be off screen
-    const mrPatel = result.state!.characters['mr_patel'];
-    expect(mrPatel).toBeDefined();
-    expect(mrPatel.inFrame).toBe(false);
+    // Marcus should be off screen
+    const marcus = result.state!.characters['marcus'];
+    expect(marcus).toBeDefined();
+    expect(marcus.inFrame).toBe(false);
 
     // Environment should have lighting
     expect(result.state!.environment.lighting).not.toBe('default');
@@ -90,18 +87,18 @@ describe('Scene State E2E: Scenario 2 — Previous state → new shot', () => {
       sceneId: 'scene_1',
       shotNumber: 1,
       characters: {
-        keerti: {
-          position: 'lying_in_bed',
-          pose: 'lying_down',
-          expression: 'peaceful',
+        elena: {
+          position: 'crouching_behind_crates',
+          pose: 'crouching',
+          expression: 'alert',
           facing: 'right',
           inFrame: true,
-          leftHand: 'under_pillow',
-          rightHand: 'on_duvet',
-          legs: 'under_duvet',
+          leftHand: 'gripping_pistol',
+          rightHand: 'steadied_against_crate',
+          legs: 'bent_crouching',
           headTilt: 'neutral',
         },
-        mr_patel: {
+        marcus: {
           position: 'off_screen',
           pose: 'unknown',
           expression: 'unknown',
@@ -114,14 +111,12 @@ describe('Scene State E2E: Scenario 2 — Previous state → new shot', () => {
         },
       },
       objects: {
-        duvet: { state: 'pulled_up', position: 'bed' },
+        crate: { state: 'stacked', position: 'warehouse_floor' },
       },
-      environment: { lighting: 'warm_golden_morning', timeProgression: 'early_morning' },
+      environment: { lighting: 'harsh_overhead_lamp', timeProgression: 'late_night' },
     };
 
-    const shotPrompt = `A medium shot as Mr. Patel enters from the left side of the frame. He walks slowly
-to the bedside and sits down on the edge of the bed. He places his right hand gently on Keerti's shoulder.
-Keerti remains lying down with her eyes closed. The warm morning light bathes both figures.`;
+    const shotPrompt = `Marcus enters from the shadows on the right. He approaches slowly, hands raised, and leans against the wall opposite Elena.`;
 
     const result = await extractStateFromLLM(llm, previousState, shotPrompt);
 
@@ -129,18 +124,17 @@ Keerti remains lying down with her eyes closed. The warm morning light bathes bo
     expect(result.error).toBeUndefined();
     expect(result.state).not.toBeNull();
 
-    // Mr. Patel should now be in frame
-    const mrPatel = result.state!.characters['mr_patel'];
-    expect(mrPatel).toBeDefined();
-    expect(mrPatel.inFrame).toBe(true);
-    expect(mrPatel.position).toMatch(/bed|beside|sitting/i);
-    expect(mrPatel.rightHand).toMatch(/shoulder|keerti/i);
+    // Marcus should now be in frame
+    const marcus = result.state!.characters['marcus'];
+    expect(marcus).toBeDefined();
+    expect(marcus.inFrame).toBe(true);
+    expect(marcus.position).toMatch(/wall|lean|opposite|standing/i);
 
-    // Keerti should be largely unchanged
-    const keerti = result.state!.characters['keerti'];
-    expect(keerti).toBeDefined();
-    expect(keerti.inFrame).toBe(true);
-    expect(keerti.position).toMatch(/lying|bed/i);
+    // Elena should be largely unchanged
+    const elena = result.state!.characters['elena'];
+    expect(elena).toBeDefined();
+    expect(elena.inFrame).toBe(true);
+    expect(elena.position).toMatch(/crouch|crate|behind/i);
   });
 });
 
@@ -161,8 +155,7 @@ describe('Scene State E2E: Scenario 3 — Corrupted previous state', () => {
     (corruptedState as any).characters = 'not_an_object';
     (corruptedState as any).garbage = true;
 
-    const shotPrompt = `A wide establishing shot of the master bedroom. Morning light streams through curtains.
-An empty bed with rumpled white sheets. A bedside table with a water glass and a book.`;
+    const shotPrompt = `A wide establishing shot of the warehouse. A single overhead lamp casts harsh light across stacked shipping crates. Shadows pool in the corners. A metal door hangs ajar on the far wall.`;
 
     const result = await extractStateFromLLM(llm, corruptedState, shotPrompt);
 
@@ -188,28 +181,25 @@ describe('Scene State E2E: Scenario 4 — Subtle body part changes', () => {
       sceneId: 'scene_1',
       shotNumber: 3,
       characters: {
-        keerti: {
-          position: 'sitting_up_in_bed',
-          pose: 'sitting_upright',
-          expression: 'neutral',
+        elena: {
+          position: 'crouching_behind_crates',
+          pose: 'crouching',
+          expression: 'alert',
           facing: 'camera',
           inFrame: true,
-          leftHand: 'on_lap',
-          rightHand: 'on_lap',
-          legs: 'under_duvet',
+          leftHand: 'gripping_pistol',
+          rightHand: 'steadied_against_crate',
+          legs: 'bent_crouching',
           headTilt: 'neutral',
         },
       },
       objects: {
-        duvet: { state: 'at_waist', position: 'bed' },
+        crate: { state: 'stacked', position: 'warehouse_floor' },
       },
-      environment: { lighting: 'warm_golden_morning', timeProgression: 'early_morning' },
+      environment: { lighting: 'harsh_overhead_lamp', timeProgression: 'late_night' },
     };
 
-    const shotPrompt = `A tight close-up of Keerti's face and hands. She slowly closes her eyes, her
-expression shifting to one of deep concentration or pain. Her right hand moves from her lap to grip
-the edge of the duvet tightly, knuckles whitening. Her left hand remains on her lap. Her head tilts
-slightly downward.`;
+    const shotPrompt = `Elena's eyes narrow, her right hand moves from the crate to reach inside her jacket pocket. Her expression shifts from alert to suspicious. Head tilts slightly to listen.`;
 
     const result = await extractStateFromLLM(llm, previousState, shotPrompt);
 
@@ -217,24 +207,24 @@ slightly downward.`;
     expect(result.error).toBeUndefined();
     expect(result.state).not.toBeNull();
 
-    const keerti = result.state!.characters['keerti'];
-    expect(keerti).toBeDefined();
+    const elena = result.state!.characters['elena'];
+    expect(elena).toBeDefined();
 
-    // Position should NOT change — she's still sitting
-    expect(keerti.position).toMatch(/sitting/i);
+    // Position should NOT change — she's still crouching
+    expect(elena.position).toMatch(/crouch|crate|behind/i);
 
     // Expression should change
-    expect(keerti.expression).not.toBe('neutral');
-    expect(keerti.expression).toMatch(/concentrat|pain|distress|tense|anguish/i);
+    expect(elena.expression).not.toBe('alert');
+    expect(elena.expression).toMatch(/suspicious|narrow|wary|distrust/i);
 
     // Right hand should change
-    expect(keerti.rightHand).not.toBe('on_lap');
-    expect(keerti.rightHand).toMatch(/grip|duvet|clench/i);
+    expect(elena.rightHand).not.toBe('steadied_against_crate');
+    expect(elena.rightHand).toMatch(/jacket|pocket|reach/i);
 
-    // Left hand should stay on lap
-    expect(keerti.leftHand).toMatch(/lap/i);
+    // Left hand should stay gripping pistol
+    expect(elena.leftHand).toMatch(/pistol|grip/i);
 
     // Head tilt should change
-    expect(keerti.headTilt).toMatch(/down/i);
+    expect(elena.headTilt).toMatch(/tilt|listen|side/i);
   });
 });

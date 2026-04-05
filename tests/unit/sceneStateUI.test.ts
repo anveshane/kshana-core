@@ -41,29 +41,29 @@ describe('Scene State: diff computation', () => {
 
     const before = {
       characters: {
-        keerti: { position: 'lying_in_bed', pose: 'lying_down', expression: 'peaceful', facing: 'right', inFrame: true, leftHand: 'under_pillow', rightHand: 'on_duvet', legs: 'under_duvet', headTilt: 'neutral' },
+        elena: { position: 'crouching_behind_crates', pose: 'crouching', expression: 'alert', facing: 'right', inFrame: true, leftHand: 'gripping_pistol', rightHand: 'steadied_against_crate', legs: 'bent_crouching', headTilt: 'neutral' },
       },
       objects: {},
-      environment: { lighting: 'warm_golden', timeProgression: 'early_morning' },
+      environment: { lighting: 'harsh_overhead', timeProgression: 'late_night' },
     };
 
     const after = {
       characters: {
-        keerti: { position: 'sitting_up_in_bed', pose: 'upright', expression: 'confused', facing: 'camera', inFrame: true, leftHand: 'gripping_duvet', rightHand: 'at_side', legs: 'under_duvet', headTilt: 'tilted_left' },
+        elena: { position: 'standing_behind_crates', pose: 'upright', expression: 'suspicious', facing: 'camera', inFrame: true, leftHand: 'gripping_pistol', rightHand: 'reaching_into_jacket', legs: 'standing', headTilt: 'tilted_left' },
       },
       objects: {},
-      environment: { lighting: 'warm_golden', timeProgression: 'early_morning' },
+      environment: { lighting: 'harsh_overhead', timeProgression: 'late_night' },
     };
 
     const diff = computeStateDiff(before, after);
 
     // Should identify what changed
-    expect(diff).toContain('keerti');
-    expect(diff).toContain('lying_in_bed → sitting_up_in_bed');
-    expect(diff).toContain('lying_down → upright');
-    expect(diff).toContain('peaceful → confused');
+    expect(diff).toContain('elena');
+    expect(diff).toContain('crouching_behind_crates → standing_behind_crates');
+    expect(diff).toContain('crouching → upright');
+    expect(diff).toContain('alert → suspicious');
     // Unchanged fields should NOT appear in diff
-    expect(diff).not.toContain('under_duvet →');
+    expect(diff).not.toContain('gripping_pistol →');
   });
 
   it('computeStateDiff shows new characters entering frame', async () => {
@@ -71,7 +71,7 @@ describe('Scene State: diff computation', () => {
 
     const before = {
       characters: {
-        keerti: { position: 'off_screen', inFrame: false, pose: 'unknown', expression: 'unknown', facing: 'unknown', leftHand: 'unknown', rightHand: 'unknown', legs: 'unknown', headTilt: 'unknown' },
+        elena: { position: 'off_screen', inFrame: false, pose: 'unknown', expression: 'unknown', facing: 'unknown', leftHand: 'unknown', rightHand: 'unknown', legs: 'unknown', headTilt: 'unknown' },
       },
       objects: {},
       environment: { lighting: 'default', timeProgression: 'start' },
@@ -79,10 +79,10 @@ describe('Scene State: diff computation', () => {
 
     const after = {
       characters: {
-        keerti: { position: 'lying_in_bed', inFrame: true, pose: 'lying_down', expression: 'peaceful', facing: 'right', leftHand: 'under_pillow', rightHand: 'on_duvet', legs: 'under_duvet', headTilt: 'neutral' },
+        elena: { position: 'crouching_behind_crates', inFrame: true, pose: 'crouching', expression: 'alert', facing: 'right', leftHand: 'gripping_pistol', rightHand: 'steadied_against_crate', legs: 'bent_crouching', headTilt: 'neutral' },
       },
       objects: {},
-      environment: { lighting: 'warm_golden', timeProgression: 'early_morning' },
+      environment: { lighting: 'harsh_overhead', timeProgression: 'late_night' },
     };
 
     const diff = computeStateDiff(before, after);
@@ -93,9 +93,9 @@ describe('Scene State: diff computation', () => {
     const { computeStateDiff } = await import('../../src/core/planner/sceneState.js');
 
     const state = {
-      characters: { keerti: { position: 'bed', inFrame: true, pose: 'lying', expression: 'calm', facing: 'right', leftHand: 'side', rightHand: 'side', legs: 'straight', headTilt: 'neutral' } },
+      characters: { elena: { position: 'crate', inFrame: true, pose: 'crouching', expression: 'alert', facing: 'right', leftHand: 'side', rightHand: 'side', legs: 'bent', headTilt: 'neutral' } },
       objects: {},
-      environment: { lighting: 'warm', timeProgression: 'morning' },
+      environment: { lighting: 'harsh', timeProgression: 'night' },
     };
 
     const diff = computeStateDiff(state, state);
