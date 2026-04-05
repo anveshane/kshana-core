@@ -365,3 +365,54 @@ export async function buildStateContext(
 
   return { targetState, promptContext, diff };
 }
+
+/**
+ * Save per-shot state diff (previous + target) so motion directive can read it.
+ */
+export function saveShotStateDiff(
+  projectDir: string,
+  sceneId: string,
+  shotNumber: number,
+  previous: SceneState,
+  target: SceneState,
+): void {
+  const stateDir = join(projectDir, 'prompts', 'videos', 'scenes');
+  if (!existsSync(stateDir)) mkdirSync(stateDir, { recursive: true });
+  const diffPath = join(stateDir, `${sceneId}_shot_${shotNumber}.state_diff.json`);
+  writeFileSync(diffPath, JSON.stringify({ previous, target }, null, 2));
+}
+
+/**
+ * Load per-shot state diff saved by shot_image_prompt step.
+ */
+export function loadShotStateDiff(
+  projectDir: string,
+  sceneId: string,
+  shotNumber: number,
+): { previous: SceneState; target: SceneState } | null {
+  const diffPath = join(projectDir, 'prompts', 'videos', 'scenes', `${sceneId}_shot_${shotNumber}.state_diff.json`);
+  if (!existsSync(diffPath)) return null;
+  try {
+    return JSON.parse(readFileSync(diffPath, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Format state context specifically for motion directive generation.
+ * Emphasizes the DELTA — what needs to MOVE between previous and target state.
+ * The motion directive describes the transition, not the static frame.
+ */
+export function buildMotionStateContext(
+  previousState: SceneState,
+  targetState: SceneState,
+): string {
+  const diff = computeStateDiff(previousState, targetState);
+
+  if (!diff) {
+    return `\n\n<scene_state>\nNo state changes — this is a static/atmospheric shot. Describe subtle environmental motion only (wind, particles, light shifts).\n</scene_state>`;
+  }
+
+  return `\n\n<scene_state>\nSTATE CHANGES (what needs to MOVE in this shot):\n${diff}\n\nDescribe the MOTION that transitions from previous to target state. Each change above is something that should be visible movement in the video.\n</scene_state>`;
+}

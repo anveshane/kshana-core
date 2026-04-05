@@ -1495,6 +1495,9 @@ export class ExecutorAgent extends TypedEventEmitter {
               stateCtx.targetState.sceneId = sceneId;
               stateCtx.targetState.shotNumber = shotNum;
               saveSceneState(this.config.projectDir, sceneId, stateCtx.targetState);
+              // Save per-shot diff so motion directive can read it
+              const { saveShotStateDiff } = require('./sceneState.js');
+              saveShotStateDiff(this.config.projectDir, sceneId, shotNum, previousState, stateCtx.targetState);
               this.log(`  Target state saved for ${sceneId} shot ${shotNum}`);
 
               // Show BEFORE + TARGET state cards in UI
@@ -1518,6 +1521,23 @@ export class ExecutorAgent extends TypedEventEmitter {
           }
         } catch { /* state not available yet */ }
       }
+    }
+
+    // For shot_motion_directive: inject state delta (what needs to MOVE)
+    // The shot_image_prompt step saved a state diff file we can read
+    if (node.typeId === 'shot_motion_directive' && node.itemId) {
+      try {
+        const { loadSceneState, loadShotStateDiff, buildMotionStateContext } = require('./sceneState.js');
+        const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
+        const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+        if (sceneId) {
+          const shotDiff = loadShotStateDiff(this.config.projectDir, sceneId, shotNum);
+          if (shotDiff) {
+            sceneStateContext = buildMotionStateContext(shotDiff.previous, shotDiff.target);
+            this.log(`  Motion directive: injected state delta for shot ${shotNum}`);
+          }
+        }
+      } catch { /* state not available */ }
     }
 
     const user = inputs.contextBlock
