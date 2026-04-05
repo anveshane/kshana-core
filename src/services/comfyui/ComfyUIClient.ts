@@ -254,8 +254,28 @@ export class ComfyUIClient {
       let resolved = false;
       let currentNode: string | undefined;
       let ws: WebSocket;
+      let lastActivityTime = Date.now();
+
+      // Inactivity timeout: if no valid progress for 120s, fall back to HTTP polling
+      const INACTIVITY_TIMEOUT_MS = 120_000;
+      const inactivityCheck = setInterval(() => {
+        if (resolved) return;
+        const inactiveSec = Math.round((Date.now() - lastActivityTime) / 1000);
+        if (inactiveSec > INACTIVITY_TIMEOUT_MS / 1000) {
+          debugLog(`[waitForCompletionWS] No progress for ${inactiveSec}s — falling back to HTTP polling`);
+          clearInterval(inactivityCheck);
+          if (!resolved) {
+            resolved = true;
+            try { ws?.close(); } catch { /* ignore */ }
+            this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+              .then(resolve)
+              .catch(reject);
+          }
+        }
+      }, 10_000);
 
       const cleanup = () => {
+        clearInterval(inactivityCheck);
         try { ws?.close(); } catch { /* ignore */ }
       };
 
@@ -302,6 +322,7 @@ export class ComfyUIClient {
       ws.on('message', (raw: Buffer | string) => {
         try {
           const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
+          lastActivityTime = Date.now(); // Reset inactivity timer on valid message
           const msgType: string = data.type;
 
           if (msgType === 'status' && data.data) {
