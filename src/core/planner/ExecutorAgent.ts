@@ -1147,23 +1147,12 @@ export class ExecutorAgent extends TypedEventEmitter {
 
                     // Ask LLM for the new state given previous state + generated prompt
                     this.log(`  Extracting scene state update for ${node.itemId}...`);
-                    const statePrompt = `Previous scene state:\n${JSON.stringify(currentState, null, 2)}\n\nGenerated shot prompt:\n${content}\n\nGiven the previous state and what happens in this shot, return the NEW complete state as JSON. Include all characters (even off-screen ones). Return ONLY the JSON object.`;
-                    let newStateContent = '';
-                    for await (const chunk of this.llm.generateStream({
-                      messages: [
-                        { role: 'system', content: 'You extract scene state from shot descriptions. Return ONLY valid JSON with the full updated SceneState. Include characters (with position, pose, expression, facing, inFrame, leftHand, rightHand, legs, headTilt), objects, and environment.' },
-                        { role: 'user', content: statePrompt },
-                      ],
-                      temperature: 0.1,
-                    })) {
-                      if (chunk.content) newStateContent += chunk.content;
-                    }
+                    const { extractStateFromLLM } = await import('./sceneState.js');
+                    const stateResult = await extractStateFromLLM(this.llm, currentState, content);
 
-                    try {
-                      let cleaned = newStateContent.trim();
-                      if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-                      const newState = JSON.parse(cleaned);
-                      newState.sceneId = sceneId;
+                    if (stateResult.state) {
+                      const newState = stateResult.state;
+                      newState.sceneId = sceneId!;
                       newState.shotNumber = shotNum;
 
                       // Show AFTER state card with diff in UI
@@ -1180,8 +1169,8 @@ export class ExecutorAgent extends TypedEventEmitter {
 
                       saveSceneState(this.config.projectDir, sceneId, newState);
                       this.log(`  Scene state updated for ${sceneId} after shot ${shotNum}`);
-                    } catch (parseErr) {
-                      this.log(`  Failed to parse state update: ${(parseErr as Error).message}`);
+                    } else {
+                      this.log(`  State extraction failed: ${stateResult.error}`);
                     }
                   }
                 } catch (stateErr) {

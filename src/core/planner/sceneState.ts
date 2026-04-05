@@ -7,7 +7,8 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join } from 'path';
+import { z } from 'zod';
 
 export interface CharacterState {
   position: string;      // "lying_in_bed", "standing_left", "seated_at_table", "off_screen"
@@ -139,6 +140,116 @@ export function formatStateForPrompt(state: SceneState): string {
   }
 
   return lines.join('\n');
+}
+
+// ── Zod schema for validating LLM state output ─────────────────────────────
+
+export const characterStateSchema = z.object({
+  position: z.string(),
+  pose: z.string(),
+  expression: z.string(),
+  facing: z.string(),
+  inFrame: z.boolean(),
+  leftHand: z.string(),
+  rightHand: z.string(),
+  legs: z.string(),
+  headTilt: z.string(),
+});
+
+export const sceneStateSchema = z.object({
+  characters: z.record(z.string(), characterStateSchema),
+  objects: z.record(z.string(), z.object({
+    state: z.string(),
+    position: z.string(),
+  })).optional().default({}),
+  environment: z.object({
+    lighting: z.string(),
+    timeProgression: z.string(),
+  }).optional().default({ lighting: 'default', timeProgression: 'start' }),
+});
+
+/**
+ * Extract new scene state from an LLM given previous state + shot prompt content.
+ * This is the same function called by both production (ExecutorAgent) and E2E tests.
+ */
+export async function extractStateFromLLM(
+  llm: { generateStream: (opts: any) => AsyncGenerator<{ content?: string; thinking?: string; done?: boolean }, any, any> },
+  previousState: SceneState | null,
+  shotPromptContent: string,
+): Promise<{ state: SceneState | null; raw: string; error?: string }> {
+  const stateJson = previousState
+    ? JSON.stringify(previousState, null, 2)
+    : '{ "characters": {}, "objects": {}, "environment": { "lighting": "default", "timeProgression": "start" } }';
+
+  const systemMsg = `You extract scene state from shot descriptions. Return ONLY valid JSON with the full updated state.
+
+The JSON must have this structure:
+{
+  "characters": {
+    "<character_id>": {
+      "position": "string (where in the scene: lying_in_bed, standing_left, seated_at_table, off_screen)",
+      "pose": "string (body pose: lying_down, sitting_upright, leaning_forward, standing)",
+      "expression": "string (facial expression: peaceful, anxious, confused, smiling)",
+      "facing": "string (direction: camera, left, right, away, down)",
+      "inFrame": boolean,
+      "leftHand": "string (what left hand is doing: at_side, on_lap, holding_cup, gripping_duvet)",
+      "rightHand": "string (what right hand is doing: at_side, on_shoulder, touching_face)",
+      "legs": "string (leg position: under_duvet, crossed, standing_apart, curled_up)",
+      "headTilt": "string (head angle: neutral, tilted_left, looking_down, looking_up)"
+    }
+  },
+  "objects": {
+    "<object_id>": { "state": "string", "position": "string" }
+  },
+  "environment": {
+    "lighting": "string (warm_golden, dim_evening, harsh_overhead)",
+    "timeProgression": "string (early_morning, midday, evening)"
+  }
+}
+
+Include ALL characters from previous state (even off-screen ones).
+Return ONLY the JSON — no markdown, no explanation.`;
+
+  const userMsg = `Previous scene state:\n${stateJson}\n\nShot prompt content:\n${shotPromptContent}\n\nReturn the NEW complete state after this shot.`;
+
+  let rawContent = '';
+  try {
+    for await (const chunk of llm.generateStream({
+      messages: [
+        { role: 'system', content: systemMsg },
+        { role: 'user', content: userMsg },
+      ],
+      temperature: 0.1,
+    })) {
+      if (chunk.content) rawContent += chunk.content;
+    }
+  } catch (err) {
+    return { state: null, raw: rawContent, error: `LLM call failed: ${(err as Error).message}` };
+  }
+
+  // Parse and validate
+  try {
+    let cleaned = rawContent.trim();
+    if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    const parsed = JSON.parse(cleaned);
+    const validated = sceneStateSchema.safeParse(parsed);
+
+    if (!validated.success) {
+      return { state: null, raw: rawContent, error: `Schema validation failed: ${validated.error.issues.map(i => i.message).join('; ')}` };
+    }
+
+    const state: SceneState = {
+      sceneId: previousState?.sceneId ?? 'unknown',
+      shotNumber: (previousState?.shotNumber ?? 0) + 1,
+      characters: validated.data.characters as Record<string, CharacterState>,
+      objects: validated.data.objects as Record<string, ObjectState>,
+      environment: validated.data.environment,
+    };
+
+    return { state, raw: rawContent };
+  } catch (err) {
+    return { state: null, raw: rawContent, error: `JSON parse failed: ${(err as Error).message}` };
+  }
 }
 
 /**
