@@ -3843,7 +3843,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               const desc = shot.firstFrame?.description ?? shot.description ?? '';
               motionPrompt = desc;
               if (shot.cameraWork) motionPrompt += ' ' + shot.cameraWork;
-              if (shot.soundCue) motionPrompt += ' ' + shot.soundCue;
+              if (shot.audio || shot.soundCue) motionPrompt += ' ' + (shot.audio || shot.soundCue);
             }
           }
         } catch {

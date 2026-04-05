@@ -21,6 +21,8 @@ A short motion prompt using this proven template:
 
 **If the shot has dialogue**, append it naturally: `[Subject] says "[dialogue line]"` — the video model generates synchronized audio from the text.
 
+**Where to find dialogue**: Look at the `audio` field of the shot in the scene breakdown JSON. Dialogue is prefixed with the character name in CAPS (e.g., `"ELENA: Don't follow me. Rain on pavement"`). Extract the quoted line and format as: `Elena says "Don't follow me."`
+
 Target **30–60 words** (excluding dialogue). The system automatically prepends "Make this image come alive with cinematic motion, smooth animation." — do NOT include this yourself.
 
 ## Prompt Template
