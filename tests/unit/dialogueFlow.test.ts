@@ -111,12 +111,7 @@ describe('Dialogue flow: fallback motion prompt', () => {
   });
 });
 
-describe('Dialogue flow: guided types have no duplicate schema', () => {
-  it('scene_video_prompt has no separate schema (guide is single source of truth)', async () => {
-    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
-    expect(getPromptSchema('scene_video_prompt')).toBeNull();
-  });
-
+describe('Dialogue flow: guide consistency', () => {
   it('scene_breakdown_guide defines the JSON format with purpose and audio fields', async () => {
     const { readFileSync } = await import('fs');
     const { join } = await import('path');
@@ -128,19 +123,49 @@ describe('Dialogue flow: guided types have no duplicate schema', () => {
   });
 });
 
-describe('Dialogue flow: single source of truth — no duplicate schemas for guided types', () => {
-  it('getPromptSchema returns null for types that have guides (guide IS the schema)', async () => {
+describe('Dialogue flow: schemas generated from shared constants (single source of truth)', () => {
+  it('getPromptSchema returns schema for all JSON types', async () => {
     const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
-    // Types with guides should NOT have a separate schema — the guide defines the format
-    expect(getPromptSchema('scene_video_prompt')).toBeNull();
-    expect(getPromptSchema('shot_image_prompt')).toBeNull();
-  });
-
-  it('getPromptSchema still returns schema for types WITHOUT guides', async () => {
-    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
-    // Character/setting image prompts have simple schemas and no complex guide
+    expect(getPromptSchema('scene_video_prompt')).not.toBeNull();
+    expect(getPromptSchema('shot_image_prompt')).not.toBeNull();
     expect(getPromptSchema('character_image')).not.toBeNull();
     expect(getPromptSchema('setting_image')).not.toBeNull();
+  });
+
+  it('scene_video_prompt schema uses purposeValues constant (not hardcoded)', async () => {
+    const { getPromptSchema, purposeValues } = await import('../../src/core/planner/schemas.js');
+    const schema = getPromptSchema('scene_video_prompt')!;
+    // Every purpose value from the constant must appear in the schema
+    for (const p of purposeValues) {
+      expect(schema).toContain(p);
+    }
+  });
+
+  it('scene_video_prompt schema uses shotTypeValues constant (not hardcoded)', async () => {
+    const { getPromptSchema, shotTypeValues } = await import('../../src/core/planner/schemas.js');
+    const schema = getPromptSchema('scene_video_prompt')!;
+    for (const t of shotTypeValues) {
+      expect(schema).toContain(t);
+    }
+  });
+
+  it('scene_video_prompt schema has audio not soundCue', async () => {
+    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
+    const schema = getPromptSchema('scene_video_prompt')!;
+    expect(schema).toContain('audio');
+    expect(schema).not.toContain('soundCue');
+    expect(schema).not.toContain('"dialogue"');
+  });
+
+  it('shot_image_prompt schema has all generation modes', async () => {
+    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
+    const schema = getPromptSchema('shot_image_prompt')!;
+    expect(schema).toContain('image_text_to_image');
+    expect(schema).toContain('edit_previous_shot');
+    expect(schema).toContain('edit_first_frame');
+    expect(schema).toContain('text_to_image');
+    expect(schema).toContain('generationStrategy');
+    expect(schema).toContain('object');
   });
 });
 
