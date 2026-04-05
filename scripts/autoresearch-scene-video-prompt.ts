@@ -7,14 +7,14 @@
  */
 
 import 'dotenv/config';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import { LLMClient } from '../src/core/llm/index.js';
 
 const MAX_ITERATIONS = parseInt(process.argv[2] || '3', 10);
 const PROJECT_DIR = process.argv[3] || 'air_already_thick_promise.kshana';
-const GUIDE_PATH = 'prompts/skills/defaults/scene_video_prompt_guide.md';
+const GUIDE_PATH = 'prompts/skills/defaults/scene_breakdown_guide.md';
 const RUBRIC_PATH = 'tests/autoresearch/rubrics/scene-video-prompt-binary.json';
 const OUTPUT_DIR = 'test-output/autoresearch-svp';
 
@@ -32,21 +32,7 @@ for (let i = 1; i <= 10; i++) {
   scenes.push(readFileSync(p, 'utf-8'));
 }
 
-// Get character/setting IDs
-const charIds: string[] = [];
-const settingIds: string[] = [];
-const charDir = join(PROJECT_DIR, 'characters');
-const setDir = join(PROJECT_DIR, 'settings');
-if (existsSync(charDir)) {
-  for (const f of readdirSync(charDir)) {
-    if (f.endsWith('.md')) charIds.push(f.replace('.md', ''));
-  }
-}
-if (existsSync(setDir)) {
-  for (const f of readdirSync(setDir)) {
-    if (f.endsWith('.md')) settingIds.push(f.replace('.md', ''));
-  }
-}
+// Character/setting IDs no longer needed for scene breakdown (handled downstream)
 
 const llm = new LLMClient({
   baseUrl: process.env['LLM_BASE_URL'],
@@ -80,36 +66,11 @@ function claudeP(prompt: string, jsonSchema?: Record<string, unknown>): string {
 
 async function generateSVP(guide: string, sceneNum: number): Promise<string> {
   const scene = scenes[sceneNum - 1] || '';
-  const systemPrompt = `You are a cinematic shot planner. Break a scene into individual shots.
-Output ONLY valid JSON — no markdown, no explanation, no thinking.
+  const systemPrompt = `You are a cinematic shot planner. Output ONLY valid JSON.
 
 <guide>
 ${guide}
-</guide>
-
-Available character IDs (use EXACTLY these):
-${charIds.map(id => `- "${id}"`).join('\n')}
-
-Available setting IDs (use EXACTLY these):
-${settingIds.map(id => `- "${id}"`).join('\n')}
-
-The JSON must follow this structure:
-{
-  "sceneNumber": ${sceneNum},
-  "sceneTitle": "<title>",
-  "totalDuration": <seconds>,
-  "shots": [
-    {
-      "shotNumber": <number>,
-      "shotType": "<type>",
-      "duration": <seconds>,
-      "description": "<visual + audio description>",
-      "cameraWork": "<camera direction>",
-      "characters": ["<id>", ...],
-      "setting": "<id or null>"
-    }
-  ]
-}`;
+</guide>`;
 
   const response = await llm.generate({
     messages: [
@@ -207,8 +168,7 @@ Do NOT include any preamble, explanation of changes, commentary, or "Here's the 
 async function main() {
   console.log(`Autoresearch: Scene Video Prompt Guide`);
   console.log(`Project: ${PROJECT_DIR} (${scenes.length} scenes)`);
-  console.log(`Characters: ${charIds.join(', ')}`);
-  console.log(`Settings: ${settingIds.join(', ')}\n`);
+  console.log('');
 
   let guide = readFileSync(GUIDE_PATH, 'utf-8');
 

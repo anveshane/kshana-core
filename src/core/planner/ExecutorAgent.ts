@@ -1381,54 +1381,9 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     let systemPrompt: string;
     if (node.typeId === 'scene_video_prompt') {
-      systemPrompt = `You are a cinematic shot planner. Break a scene into individual shots.
-Output ONLY valid JSON. Respond with the JSON object directly.
-
-The JSON must follow this exact structure:
-{
-  "sceneNumber": <number>,
-  "sceneTitle": "<title>",
-  "totalDuration": <seconds>,
-  "shots": [
-    {
-      "shotNumber": <number>,
-      "shotType": "<establishing|wide|medium|close_up|extreme_close_up|over_shoulder|pov|tracking|reaction>",
-      "duration": <seconds>,
-      "description": "<1-2 sentence brief of what happens in this shot>",
-      "characters": ["<character_item_id>"],
-      "setting": "<setting_item_id or null>",
-      "cameraWork": "<camera movement and angle>",
-      "soundCue": "<what is heard — ambient, effects, dialogue, or explicit silence>",
-      "transition": "<cut|crossfade|dip_to_black|fade>",
-      "dialogue": "<CHARACTER: line>" or null
-    }
-  ]
-}
-
-General rules:
-- Shot durations must sum to totalDuration exactly
-- Each shot should be 3-10 seconds
-- characters arrays MUST use ONLY the exact item IDs listed below
-- setting MUST use ONLY the exact item IDs listed below or null
-- Vary shot types for cinematic interest
-- Every shot must have a soundCue — even if it's "dead silence"
-- Every shot must have a transition field
-- description should be a brief 1-2 sentence summary of the shot's content — frame details are handled downstream`;
-
-      // Inject the actual available character and setting IDs
-      const charIds = this.executor.getAllNodes()
-        .filter(n => n.typeId === 'character_image' && n.status === 'completed')
-        .map(n => n.itemId)
-        .filter(Boolean);
-      const settingIds = this.executor.getAllNodes()
-        .filter(n => n.typeId === 'setting_image' && n.status === 'completed')
-        .map(n => n.itemId)
-        .filter(Boolean);
-
-      if (charIds.length > 0 || settingIds.length > 0) {
-        systemPrompt += `\n\nAvailable character IDs (use EXACTLY these in the "characters" array):\n${charIds.map(id => `- "${id}"`).join('\n')}`;
-        systemPrompt += `\n\nAvailable setting IDs (use EXACTLY one of these in the "setting" field):\n${settingIds.map(id => `- "${id}"`).join('\n')}`;
-      }
+      // Minimal system prompt — all rules and field definitions are in the guide
+      // (scene_breakdown_guide.md) which autoresearch optimizes end-to-end
+      systemPrompt = `You are a cinematic shot planner. Output ONLY valid JSON.`;
     } else if (node.typeId === 'shot_image_prompt') {
       systemPrompt = `You are an expert image prompt engineer.
 Output ONLY valid JSON. Respond with the JSON object directly.

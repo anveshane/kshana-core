@@ -21,10 +21,6 @@ Every shot object MUST contain exactly these 6 fields. Missing or empty fields =
 | `audio` | string | Everything heard: dialogue, ambient, effects, or silence (see Audio section) |
 | `transition` | string | How this shot transitions FROM the previous shot (see Transitions section) |
 
-Additional optional fields per shot:
-- **characters**: array of character item IDs visible in this shot
-- **setting**: setting item ID or null
-
 ```json
 {
   "shotNumber": 1,
@@ -32,9 +28,7 @@ Additional optional fields per shot:
   "description": "Elena steps into the rain-soaked alley, her silhouette framed by a flickering neon sign.",
   "cameraWork": "wide establishing, static tripod, shallow focus on Elena with neon bokeh behind",
   "audio": "rain pattering on cobblestones, distant thunder rumble, neon sign buzzing",
-  "transition": "fade",
-  "characters": ["elena"],
-  "setting": "alley_noir"
+  "transition": "fade"
 }
 ```
 
@@ -92,12 +86,6 @@ Each shot specifies how it transitions FROM the previous shot. The first shot of
 - Match transition to emotional beat: `flash_to_white` for shock, `crossfade` for tenderness, `circle_close` for introspection
 - First shot of scene 1: `fade` (opening from black). Last shot's transition to the next scene: `dip_to_black` or `fade`
 
-## Character & Setting IDs
-
-- Use ONLY the exact IDs provided — no variations, no full names
-- Any character visible (even hand/silhouette) or speaking off-screen -> include their ID
-- Named location -> must have setting ID
-
 ## Camera Work
 
 - Specific direction: angle, movement, framing, depth of field
@@ -114,5 +102,4 @@ Before returning JSON, verify every item:
 4. **Every shot has an `audio` field** with dialogue (if any) + ambient/effects. No shot is missing audio
 5. **Every shot has a `transition` field** — first shot uses `fade` or `cut`, all others have an explicit transition value
 6. All dialogue from the scene description is placed in the correct shot's `audio` field — no lines omitted
-7. All character/setting IDs match provided list
-8. Pacing varies: quick cuts for tension, longer holds for emotion
+7. Pacing varies: quick cuts for tension, longer holds for emotion

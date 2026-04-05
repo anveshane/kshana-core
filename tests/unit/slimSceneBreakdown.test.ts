@@ -77,11 +77,10 @@ describe('Slim scene breakdown: system prompts', () => {
     expect(code).not.toMatch(/scene_video_prompt[\s\S]{0,500}"firstFrame"/);
   });
 
-  it('scene_video_prompt system prompt has description field', () => {
-    const code = readFileSync(join(process.cwd(), 'src/core/planner/ExecutorAgent.ts'), 'utf-8');
-    // The scene_video_prompt JSON template should have "description"
-    const svpBlock = code.match(/if \(node\.typeId === 'scene_video_prompt'\) \{[\s\S]*?else if/);
-    expect(svpBlock?.[0]).toContain('"description"');
+  it('scene_breakdown_guide defines description as a required field', () => {
+    const guide = readFileSync(join(process.cwd(), 'prompts/skills/defaults/scene_breakdown_guide.md'), 'utf-8');
+    // The guide must list description as a required field
+    expect(guide).toMatch(/description.*string/i);
   });
 
   it('shot_image_prompt system prompt mentions generationStrategy', () => {
