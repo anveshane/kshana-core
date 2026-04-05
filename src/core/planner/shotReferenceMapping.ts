@@ -98,6 +98,25 @@ export function buildShotContextHint(itemId: string, previousShotAvailable: bool
 }
 
 /**
+ * Build a fallback motion prompt from shot fields when no motion directive exists.
+ * Combines description + cameraWork + audio/soundCue.
+ */
+export function buildFallbackMotionPrompt(shot: {
+  description?: string;
+  cameraWork?: string;
+  audio?: string;
+  soundCue?: string;
+  firstFrame?: { description?: string };
+}): string {
+  const desc = shot.firstFrame?.description ?? shot.description ?? '';
+  let prompt = desc;
+  if (shot.cameraWork) prompt += ' ' + shot.cameraWork;
+  const audioContent = shot.audio || shot.soundCue;
+  if (audioContent) prompt += ' ' + audioContent;
+  return prompt;
+}
+
+/**
  * Filter available references based on shot purpose.
  * Returns filtered refs and the suggested generation mode.
  */

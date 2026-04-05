@@ -3838,12 +3838,10 @@ export class ExecutorAgent extends TypedEventEmitter {
               generationStrategy = shot.videoGenerationMode || shot.generationStrategy || 'i2v';
             }
 
-            // Fallback: if no motion directive, use description + cameraWork
+            // Fallback: if no motion directive, use description + cameraWork + audio
             if (!motionPrompt) {
-              const desc = shot.firstFrame?.description ?? shot.description ?? '';
-              motionPrompt = desc;
-              if (shot.cameraWork) motionPrompt += ' ' + shot.cameraWork;
-              if (shot.audio || shot.soundCue) motionPrompt += ' ' + (shot.audio || shot.soundCue);
+              const { buildFallbackMotionPrompt } = require('./shotReferenceMapping.js');
+              motionPrompt = buildFallbackMotionPrompt(shot);
             }
           }
         } catch {
