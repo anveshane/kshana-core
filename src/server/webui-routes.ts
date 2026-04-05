@@ -219,7 +219,7 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
       }
 
       try {
-        const { resolveNodePromptPath, getAvailableReferences } = await import('./editAndRedo.js');
+        const { resolveNodePromptPath, getAvailableReferences, stripMarkdownFences } = await import('./editAndRedo.js');
         const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
         const nodes = project.executorState?.nodes ?? {};
         const node = nodes[nodeId];
@@ -235,7 +235,8 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
           const absPath = join(process.cwd(), `${name}.kshana`, promptPath);
           if (existsSync(absPath)) {
             try {
-              prompt = JSON.parse(readFileSync(absPath, 'utf-8'));
+              const raw = readFileSync(absPath, 'utf-8');
+              prompt = JSON.parse(stripMarkdownFences(raw));
             } catch { /* empty */ }
           }
         }

@@ -68,6 +68,18 @@ export function resolveNodePromptPath(
 }
 
 /**
+ * Strip markdown code fences from JSON content.
+ * LLM outputs often wrap JSON in ```json ... ``` fences.
+ */
+export function stripMarkdownFences(content: string): string {
+  let cleaned = content.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+  return cleaned;
+}
+
+/**
  * Save an edited prompt to disk, overwriting the original file.
  *
  * Reads project.json to find executor state, resolves the prompt file path,

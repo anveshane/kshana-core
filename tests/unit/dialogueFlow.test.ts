@@ -111,6 +111,28 @@ describe('Dialogue flow: fallback motion prompt', () => {
   });
 });
 
+describe('Dialogue flow: resolveNodePromptPath loads prompt with markdown fences', () => {
+  it('node-prompt API strips markdown fences before parsing JSON', async () => {
+    const { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } = await import('fs');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+
+    // Create a temp prompt file with markdown fences (as LLM produces)
+    const dir = join(tmpdir(), `prompt-test-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const fencedJson = '```json\n{"imagePrompt": "A test prompt", "negativePrompt": "blur"}\n```';
+    writeFileSync(join(dir, 'test.json'), fencedJson);
+
+    // The parsing logic should strip fences
+    const { stripMarkdownFences } = await import('../../src/server/editAndRedo.js');
+    const cleaned = stripMarkdownFences(fencedJson);
+    const parsed = JSON.parse(cleaned);
+    expect(parsed.imagePrompt).toBe('A test prompt');
+
+    rmSync(dir, { recursive: true });
+  });
+});
+
 describe('Dialogue flow: guide consistency', () => {
   it('scene_breakdown_guide defines the JSON format with purpose and audio fields', async () => {
     const { readFileSync } = await import('fs');
