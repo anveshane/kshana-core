@@ -654,7 +654,7 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
             <div className="text-green text-[11px]">Completed</div>
           ) : resultObj?.['error'] ? (
             <div className="text-error">{String(resultObj['error'])}</div>
-          ) : toolName === 'extract_collections' ? null : (
+          ) : toolName === 'extract_collections' || toolName === 'scene_state' ? null : (
             <div className="text-graphite-100">{JSON.stringify(result, null, 2)}</div>
           )}
         </div>
