@@ -145,57 +145,10 @@ export const JSON_SCHEMAS: Record<string, z.ZodSchema> = {
  * Derived from the Zod schemas — always in sync with validation.
  */
 export function getPromptSchema(nodeTypeId: string): string | null {
+  // Types with autoresearch-optimized guides (scene_video_prompt, shot_image_prompt)
+  // do NOT get a separate schema — the guide IS the single source of truth for format.
+  // Only types without complex guides get a schema here.
   const PROMPT_SCHEMAS: Record<string, string> = {
-    scene_video_prompt: `<json_schema>
-{
-  "sceneNumber": number,
-  "sceneTitle": "string",
-  "totalDuration": number,
-  "shots": [
-    {
-      "shotNumber": number,
-      "purpose": "set_the_world | set_the_mood | meet_character | show_tension | show_action | show_reaction | show_dialogue | show_clue | show_passage | hold_emotion | show_change | punctuate",
-      "secondaryPurpose": "same values as purpose, or null",
-      "shotType": "extreme_wide | wide | medium | close_up | extreme_close_up | over_shoulder | pov | tracking | insert | reaction",
-      "duration": number,
-      "description": "string (1-2 sentence brief of what happens in this shot)",
-      "cameraWork": "string (specific camera direction)",
-      "audio": "string (dialogue prefixed with CHARACTER NAME: + ambient sounds)",
-      "transition": "cut | crossfade | fade | dip_to_black | flash_to_white | circle_close | circle_open | wipe_left | wipe_right"
-    }
-  ]
-}
-</json_schema>`,
-    shot_image_prompt: `<json_schema>
-For multi-frame shots (flfv — first + last, DEFAULT):
-{
-  "shotNumber": number,
-  "generationStrategy": "flfv | fmlfv",
-  "frames": {
-    "first_frame": {
-      "imagePrompt": "string (flowing prose, frozen instant, no motion verbs)",
-      "generationMode": "image_text_to_image | edit_previous_shot | text_to_image",
-      "references": [{ "imageNumber": number, "type": "character | setting | object", "refId": "string" }]
-    },
-    "last_frame": {
-      "imagePrompt": "string (delta only — what changed from first_frame, or 'No visible change from first frame.')",
-      "generationMode": "edit_first_frame",
-      "references": []
-    }
-  },
-  "negativePrompt": "string",
-  "aspectRatio": "16:9"
-}
-
-For fmlfv shots, add mid_frame between first_frame and last_frame:
-  "mid_frame": { "imagePrompt": "string (delta from first)", "generationMode": "edit_first_frame", "references": [] }
-
-generationMode options:
-- "image_text_to_image": fresh generation with character/setting/object references
-- "edit_previous_shot": edit previous shot's last frame for visual continuity
-- "edit_first_frame": edit this shot's first frame (for last_frame/mid_frame)
-- "text_to_image": no references (for detail inserts, atmosphere shots)
-</json_schema>`,
     character_image: `<json_schema>
 {
   "imagePrompt": "string (80-250 words, flowing prose, full character description)",

@@ -111,44 +111,36 @@ describe('Dialogue flow: fallback motion prompt', () => {
   });
 });
 
-describe('Dialogue flow: prompt schema matches new format', () => {
-  it('scene_video_prompt schema has purpose and shotType fields', async () => {
+describe('Dialogue flow: guided types have no duplicate schema', () => {
+  it('scene_video_prompt has no separate schema (guide is single source of truth)', async () => {
     const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
-    const schema = getPromptSchema('scene_video_prompt');
-    expect(schema).not.toBeNull();
-    expect(schema).toContain('purpose');
-    expect(schema).toContain('secondaryPurpose');
-    expect(schema).toContain('shotType');
-    expect(schema).toContain('audio');
+    expect(getPromptSchema('scene_video_prompt')).toBeNull();
   });
 
-  it('scene_video_prompt schema does NOT have old fields', async () => {
-    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
-    const schema = getPromptSchema('scene_video_prompt');
-    expect(schema).not.toContain('soundCue');
-    expect(schema).not.toContain('"dialogue"');
-    expect(schema).not.toContain('"characters"');
-    expect(schema).not.toContain('"setting"');
+  it('scene_breakdown_guide defines the JSON format with purpose and audio fields', async () => {
+    const { readFileSync } = await import('fs');
+    const { join } = await import('path');
+    const guide = readFileSync(join(process.cwd(), 'prompts/skills/defaults/scene_breakdown_guide.md'), 'utf-8');
+    expect(guide).toContain('"purpose"');
+    expect(guide).toContain('"audio"');
+    expect(guide).toContain('"shotType"');
+    expect(guide).not.toContain('"soundCue"');
   });
 });
 
-describe('Dialogue flow: shot_image_prompt schema consistency', () => {
-  it('shot_image_prompt schema has generationStrategy field', async () => {
+describe('Dialogue flow: single source of truth — no duplicate schemas for guided types', () => {
+  it('getPromptSchema returns null for types that have guides (guide IS the schema)', async () => {
     const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
-    const schema = getPromptSchema('shot_image_prompt');
-    expect(schema).toContain('generationStrategy');
+    // Types with guides should NOT have a separate schema — the guide defines the format
+    expect(getPromptSchema('scene_video_prompt')).toBeNull();
+    expect(getPromptSchema('shot_image_prompt')).toBeNull();
   });
 
-  it('shot_image_prompt schema has edit_previous_shot mode', async () => {
+  it('getPromptSchema still returns schema for types WITHOUT guides', async () => {
     const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
-    const schema = getPromptSchema('shot_image_prompt');
-    expect(schema).toContain('edit_previous_shot');
-  });
-
-  it('shot_image_prompt schema has object ref type', async () => {
-    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
-    const schema = getPromptSchema('shot_image_prompt');
-    expect(schema).toMatch(/character.*setting.*object|type.*object/);
+    // Character/setting image prompts have simple schemas and no complex guide
+    expect(getPromptSchema('character_image')).not.toBeNull();
+    expect(getPromptSchema('setting_image')).not.toBeNull();
   });
 });
 
