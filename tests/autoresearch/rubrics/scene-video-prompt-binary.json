@@ -48,15 +48,11 @@
     },
     {
       "id": "REQUIRED_FIELDS",
-      "question": "Does every shot have ALL 9 required fields: shotNumber, purpose, secondaryPurpose (can be null), shotType, duration, description, cameraWork, audio, transition? Every single shot must have all fields present."
+      "question": "Does every shot have ALL 7 required fields: shotNumber, purpose, duration, description, cameraWork, audio, transition? Every single shot must have all fields present and non-empty."
     },
     {
       "id": "PURPOSE_VALID",
       "question": "Does every shot have a valid 'purpose' field from the allowed values: set_the_world, set_the_mood, meet_character, show_tension, show_action, show_reaction, show_dialogue, show_clue, show_passage, hold_emotion, show_change, punctuate? No made-up values."
-    },
-    {
-      "id": "SHOT_TYPE_VALID",
-      "question": "Does every shot have a valid 'shotType' field from the allowed values: extreme_wide, wide, medium, close_up, extreme_close_up, over_shoulder, pov, tracking, insert, reaction? No made-up values."
     },
     {
       "id": "PURPOSE_SEQUENCE",

@@ -140,8 +140,9 @@ describe('Dialogue flow: guide consistency', () => {
     const guide = readFileSync(join(process.cwd(), 'prompts/skills/defaults/scene_breakdown_guide.md'), 'utf-8');
     expect(guide).toContain('"purpose"');
     expect(guide).toContain('"audio"');
-    expect(guide).toContain('"shotType"');
+    expect(guide).toContain('"cameraWork"');
     expect(guide).not.toContain('"soundCue"');
+    expect(guide).not.toContain('"shotType"');
   });
 });
 
@@ -163,12 +164,11 @@ describe('Dialogue flow: schemas generated from shared constants (single source 
     }
   });
 
-  it('scene_video_prompt schema uses shotTypeValues constant (not hardcoded)', async () => {
-    const { getPromptSchema, shotTypeValues } = await import('../../src/core/planner/schemas.js');
+  it('scene_video_prompt schema has no shotType or secondaryPurpose', async () => {
+    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
     const schema = getPromptSchema('scene_video_prompt')!;
-    for (const t of shotTypeValues) {
-      expect(schema).toContain(t);
-    }
+    expect(schema).not.toContain('shotType');
+    expect(schema).not.toContain('secondaryPurpose');
   });
 
   it('scene_video_prompt schema has audio not soundCue', async () => {

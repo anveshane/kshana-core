@@ -14,17 +14,15 @@
 
 ## Required Fields — Every Shot, No Exceptions
 
-Every shot object MUST contain exactly these 9 fields. Missing or empty fields = broken output.
+Every shot object MUST contain exactly these 7 fields. Missing or empty fields = broken output.
 
 | Field | Type | Description |
 |---|---|---|
 | `shotNumber` | number | Sequential integer starting at 1 |
 | `purpose` | string | WHY this shot exists (see Purpose section below) |
-| `secondaryPurpose` | string or null | Optional secondary intent if the shot serves two purposes |
-| `shotType` | string | HOW to shoot it (see Shot Type section below) |
 | `duration` | number | Seconds (3–10). Quick cuts: 3–4s. Emotional holds: 6–8s |
 | `description` | string | 1–2 sentence visual brief of what happens |
-| `cameraWork` | string | Specific camera direction (angle, movement, framing) |
+| `cameraWork` | string | Start with framing (wide, medium, close-up, extreme close-up), then angle and movement |
 | `audio` | string | Everything heard: dialogue, ambient, effects, or silence (see Audio section) |
 | `transition` | string | How this shot transitions FROM the previous shot (see Transitions section) |
 
@@ -32,11 +30,9 @@ Every shot object MUST contain exactly these 9 fields. Missing or empty fields =
 {
   "shotNumber": 1,
   "purpose": "set_the_mood",
-  "secondaryPurpose": null,
-  "shotType": "extreme_close_up",
   "duration": 4,
   "description": "Raindrops strike a brass bell, each impact sending tiny ripples across the wet metal.",
-  "cameraWork": "macro, static, shallow DOF on bell surface",
+  "cameraWork": "extreme close-up, macro, static, shallow DOF on bell surface",
   "audio": "metallic ring of rain on brass, distant thunder rumble",
   "transition": "fade"
 }
@@ -44,7 +40,7 @@ Every shot object MUST contain exactly these 9 fields. Missing or empty fields =
 
 ## Purpose — WHY This Shot Exists
 
-Every shot serves a story function. Pick the PRIMARY purpose; use `secondaryPurpose` if the shot does double duty (e.g., a character enters AND speaks).
+Every shot serves a story function. Pick the single most important purpose for this shot.
 
 | Purpose | When to use |
 |---|---|
@@ -65,21 +61,6 @@ Every shot serves a story function. Pick the PRIMARY purpose; use `secondaryPurp
 - After `set_the_world` or `set_the_mood`, the next shot with characters MUST be `meet_character`
 - `meet_character` should show characters ENTERING or being REVEALED — not already centered as if they were always there
 - A scene can skip establishing shots and start directly with `meet_character` or `show_action`
-
-## Shot Type — HOW to Shoot It
-
-| Shot Type | Framing |
-|---|---|
-| `extreme_wide` | Eagle's eye / full scale — character tiny or absent |
-| `wide` | Full environment with characters head-to-toe |
-| `medium` | Waist up — conversational distance |
-| `close_up` | Face fills the frame |
-| `extreme_close_up` | Single feature or detail fills frame |
-| `over_shoulder` | Behind one character, looking at another |
-| `pov` | What a character sees |
-| `tracking` | Camera follows movement |
-| `insert` | Detail shot of object or action |
-| `reaction` | Focus on facial expression / body language |
 
 {{AVAILABLE_VIDEO_MODES}}
 
@@ -137,8 +118,8 @@ Each shot specifies how it transitions FROM the previous shot. The first shot of
 
 ## Camera Work
 
-- Specific direction: angle, movement, framing, depth of field
-- Not just "medium shot" — describe behavior: "static medium, slight push-in as tension builds"
+- Start with framing: wide, medium, close-up, extreme close-up
+- Then add angle and movement: "close-up, low angle, slow push-in as tension builds"
 - Keep it concise — a short phrase, not a paragraph
 
 ## Pre-Output Checklist
@@ -147,11 +128,10 @@ Before returning JSON, verify every item:
 
 1. Every scene beat has a shot
 2. Duration sum ≈ totalDuration (within ±20%). Each shot is 3–10 seconds
-3. **Every shot has all 9 required fields**: `shotNumber`, `purpose`, `secondaryPurpose`, `shotType`, `duration`, `description`, `cameraWork`, `audio`, `transition` — none empty (secondaryPurpose can be null)
+3. **Every shot has all 7 required fields**: `shotNumber`, `purpose`, `duration`, `description`, `cameraWork`, `audio`, `transition` — none empty
 4. **Every shot has a valid `purpose`** from the taxonomy — not a made-up value
-5. **Every shot has a valid `shotType`** from the taxonomy — not a made-up value
-6. **Every shot has an `audio` field** with dialogue (if any) + ambient/effects
-7. **Every shot has a `transition` field** — first shot uses `fade` or `cut`
-8. All dialogue placed in the correct shot's `audio` field — no lines omitted
-9. After `set_the_world`/`set_the_mood`, next character shot is `meet_character`
-10. Pacing varies: quick cuts for tension, longer holds for emotion
+5. **Every shot has an `audio` field** with dialogue (if any) + ambient/effects
+6. **Every shot has a `transition` field** — first shot uses `fade` or `cut`
+7. All dialogue placed in the correct shot's `audio` field — no lines omitted
+8. After `set_the_world`/`set_the_mood`, next character shot is `meet_character`
+9. Pacing varies: quick cuts for tension, longer holds for emotion

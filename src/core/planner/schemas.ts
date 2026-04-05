@@ -26,20 +26,14 @@ export const purposeValues = [
   'show_passage', 'hold_emotion', 'show_change', 'punctuate',
 ] as const;
 
-// Shot type — HOW to shoot it (cinematic execution)
-export const shotTypeValues = [
-  'extreme_wide', 'wide', 'medium', 'close_up', 'extreme_close_up',
-  'over_shoulder', 'pov', 'tracking', 'insert', 'reaction',
-] as const;
-
 const purposeEnum = z.enum(purposeValues);
-const shotTypeEnum = z.enum(shotTypeValues);
 
 const shotSchema = z.object({
   shotNumber: z.number(),
   purpose: purposeEnum.optional(),
-  secondaryPurpose: purposeEnum.nullable().optional(),
-  shotType: shotTypeEnum.or(z.string()).optional(),
+  // shotType removed — cameraWork already contains framing info as natural prose
+  // secondaryPurpose removed — description captures dual-intent naturally
+  shotType: z.string().optional(), // legacy compat only, not used by code
   duration: z.number().optional(),
   generationStrategy: z.string().optional(),
   videoGenerationMode: z.string().optional(),
@@ -157,11 +151,9 @@ export function getPromptSchema(nodeTypeId: string): string | null {
     {
       "shotNumber": number,
       "purpose": "${purposeValues.join(' | ')}",
-      "secondaryPurpose": "same values as purpose, or null",
-      "shotType": "${shotTypeValues.join(' | ')}",
       "duration": number,
       "description": "string (1-2 sentence brief of what happens in this shot)",
-      "cameraWork": "string (specific camera direction)",
+      "cameraWork": "string (start with framing: wide/medium/close-up/extreme close-up, then angle and movement)",
       "audio": "string (dialogue prefixed with CHARACTER NAME: + ambient sounds)",
       "transition": "cut | crossfade | fade | dip_to_black | flash_to_white | circle_close | circle_open | wipe_left | wipe_right"
     }

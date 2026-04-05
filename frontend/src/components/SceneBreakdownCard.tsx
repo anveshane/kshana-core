@@ -8,8 +8,6 @@ import { useState } from 'react'
 interface Shot {
   shotNumber: number
   purpose?: string
-  secondaryPurpose?: string | null
-  shotType?: string
   duration?: number
   description?: string
   cameraWork?: string
@@ -32,18 +30,6 @@ const PURPOSE_COLORS: Record<string, string> = {
   punctuate: 'bg-rose-500/20 text-rose-300',
 }
 
-const SHOT_TYPE_LABELS: Record<string, string> = {
-  extreme_wide: 'XW',
-  wide: 'W',
-  medium: 'M',
-  close_up: 'CU',
-  extreme_close_up: 'XCU',
-  over_shoulder: 'OTS',
-  pov: 'POV',
-  tracking: 'TRK',
-  insert: 'INS',
-  reaction: 'RXN',
-}
 
 function PurposeBadge({ purpose }: { purpose: string }) {
   const color = PURPOSE_COLORS[purpose] ?? 'bg-graphite-300 text-graphite-100'
@@ -125,14 +111,6 @@ export function SceneBreakdownCard({ content }: { content: string }) {
 
               {/* Purpose badge */}
               {shot.purpose && <PurposeBadge purpose={shot.purpose} />}
-              {shot.secondaryPurpose && <PurposeBadge purpose={shot.secondaryPurpose} />}
-
-              {/* Shot type */}
-              {shot.shotType && (
-                <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-graphite-300 text-graphite-100">
-                  {SHOT_TYPE_LABELS[shot.shotType] ?? shot.shotType}
-                </span>
-              )}
 
               {/* Description (truncated) */}
               <span className="text-[11px] text-foreground truncate flex-1">
