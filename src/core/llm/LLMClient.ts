@@ -363,10 +363,17 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
       request.response_format = responseFormat;
     }
 
-    const stream = await this.client.chat.completions.create(request);
-
     // Total wall-clock timeout for the entire streaming call (including thinking)
     const STREAM_TIMEOUT_MS = 200_000; // 200 seconds
+    const abortController = new AbortController();
+    const abortTimer = setTimeout(() => {
+      console.error(`[LLMClient] Hard timeout at ${STREAM_TIMEOUT_MS / 1000}s — aborting stream`);
+      abortController.abort();
+    }, STREAM_TIMEOUT_MS);
+
+    const stream = await this.client.chat.completions.create(request, {
+      signal: abortController.signal,
+    });
     const streamStartTime = Date.now();
 
     // Accumulate for final logging
@@ -376,10 +383,19 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
 
     for await (const chunk of stream) {
       // Check total elapsed time — abort if stuck in reasoning loop
-      if (Date.now() - streamStartTime > STREAM_TIMEOUT_MS) {
-        console.error(`[LLMClient] Stream timeout after ${STREAM_TIMEOUT_MS / 1000}s (likely stuck in reasoning loop)`);
-        stream.controller.abort();
-        throw new Error(`LLM call exceeded ${STREAM_TIMEOUT_MS / 1000}s total time limit`);
+      const elapsed = Date.now() - streamStartTime;
+      if (elapsed > STREAM_TIMEOUT_MS) {
+        console.error(`[LLMClient] Stream timeout after ${Math.round(elapsed / 1000)}s — aborting`);
+        try {
+          // Try multiple abort methods
+          if ('controller' in stream && (stream as any).controller?.abort) {
+            (stream as any).controller.abort();
+          }
+          if ('abort' in stream && typeof (stream as any).abort === 'function') {
+            (stream as any).abort();
+          }
+        } catch { /* abort failed — throw anyway */ }
+        throw new Error(`LLM call exceeded ${STREAM_TIMEOUT_MS / 1000}s total time limit (elapsed: ${Math.round(elapsed / 1000)}s)`);
       }
       const delta = chunk.choices[0]?.delta;
       // Cast to access llama.cpp extension fields not in OpenAI types
@@ -463,6 +479,9 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
         yield { done: true, usage };
       }
     }
+
+    // Stream completed normally — cancel the hard timeout
+    clearTimeout(abortTimer);
   }
 
   /**
