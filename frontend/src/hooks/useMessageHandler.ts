@@ -177,6 +177,18 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
         dispatch({ type: 'SET_TIMELINE', timeline: data.timeline as import('../lib/timeline-types').Timeline })
         break
       }
+
+      case 'session_timer': {
+        dispatch({
+          type: 'SET_TIMER',
+          timer: {
+            elapsedMs: (data.elapsedMs as number) ?? 0,
+            running: (data.running as boolean) ?? false,
+            completed: (data.completed as boolean) ?? false,
+          },
+        })
+        break
+      }
     }
   }, [dispatch])
 }

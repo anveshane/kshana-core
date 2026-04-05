@@ -66,6 +66,9 @@ export interface AppState {
   streamingText: string | null
   agentStatus: 'idle' | 'thinking' | 'waiting' | 'completed' | 'error'
 
+  // Timer
+  timer: { elapsedMs: number; running: boolean; completed: boolean }
+
   // Context usage
   contextUsage: { percentage: number; promptTokens: number; maxTokens: number } | null
 
@@ -92,6 +95,7 @@ export const initialState: AppState = {
   chatMessages: [],
   streamingText: null,
   agentStatus: 'idle',
+  timer: { elapsedMs: 0, running: false, completed: false },
   contextUsage: null,
   assets: [],
   timeline: null,
@@ -122,6 +126,7 @@ export type AppAction =
   | { type: 'SET_PARALLEL_MEDIA'; enabled: boolean }
   | { type: 'SET_TIMELINE'; timeline: Timeline | null }
   | { type: 'SET_ACTIVE_VIEW'; view: 'chat' | 'timeline' }
+  | { type: 'SET_TIMER'; timer: AppState['timer'] }
 
 // ── Reducer ────────────────────────────────────────────────
 
@@ -211,6 +216,9 @@ export function appReducer(state: AppState, action: AppAction): AppState {
 
     case 'SET_TIMELINE':
       return { ...state, timeline: action.timeline }
+
+    case 'SET_TIMER':
+      return { ...state, timer: action.timer }
 
     case 'SET_ACTIVE_VIEW':
       return { ...state, activeView: action.view }

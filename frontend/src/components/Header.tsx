@@ -1,4 +1,15 @@
+import { useState, useEffect } from 'react'
 import { useAppState } from '../lib/store'
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000)
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return `${h}h ${m}m ${s}s`
+  if (m > 0) return `${m}m ${s}s`
+  return `${s}s`
+}
 
 interface HeaderProps {
   onProviderSettings: () => void
@@ -8,7 +19,21 @@ interface HeaderProps {
 }
 
 export function Header({ onProviderSettings, onWorkflows, onStop, projectSelector }: HeaderProps) {
-  const { connectionStatus, selectedProject, phase, contextUsage, autonomousMode, parallelMedia, agentStatus } = useAppState()
+  const { connectionStatus, selectedProject, phase, contextUsage, autonomousMode, parallelMedia, agentStatus, timer } = useAppState()
+
+  // Live tick when timer is running — re-render every second
+  const [runStartedAt] = useState(() => Date.now())
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    if (!timer.running) return
+    const interval = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(interval)
+  }, [timer.running])
+
+  // When running, add live delta to the server-reported elapsedMs
+  const displayMs = timer.running
+    ? timer.elapsedMs + (Date.now() - runStartedAt)
+    : timer.elapsedMs
 
   const statusColor = connectionStatus === 'connected'
     ? 'bg-green' : connectionStatus === 'connecting'
@@ -40,6 +65,18 @@ export function Header({ onProviderSettings, onWorkflows, onStop, projectSelecto
 
         {/* Right: Status + Actions */}
         <div className="flex items-center gap-2">
+          {/* Timer */}
+          {(timer.elapsedMs > 0 || timer.running) && (
+            <div className="flex items-center gap-1.5">
+              {timer.running && (
+                <span className="w-2 h-2 rounded-full bg-green animate-pulse" />
+              )}
+              <span className={`font-mono text-xs ${timer.running ? 'text-cyan' : 'text-graphite-100'}`}>
+                {formatElapsed(displayMs)}
+              </span>
+            </div>
+          )}
+
           {/* Context usage */}
           {contextUsage && (
             <div className="hidden sm:flex items-center gap-1.5">
