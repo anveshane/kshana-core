@@ -1118,6 +1118,64 @@ export class ExecutorAgent extends TypedEventEmitter {
               );
               this.log(`  Written to: ${outputPath}`);
 
+              // Scene state update: after shot_image_prompt is generated, extract new state
+              if (node.typeId === 'shot_image_prompt' && node.itemId && content) {
+                try {
+                  const { loadSceneState, saveSceneState, initializeSceneState } = await import('./sceneState.js');
+                  const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
+                  const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+                  if (sceneId) {
+                    let currentState = loadSceneState(this.config.projectDir, sceneId);
+                    if (!currentState) {
+                      // First shot — initialize from scene breakdown
+                      const sceneBreakdown = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+                      let chars: string[] = [];
+                      let setting = '';
+                      if (sceneBreakdown?.outputPath) {
+                        try {
+                          const sbJson = JSON.parse(readFileSync(join(this.config.projectDir, sceneBreakdown.outputPath), 'utf-8'));
+                          const allChars = new Set<string>();
+                          for (const shot of sbJson.shots ?? []) {
+                            for (const c of shot.characters ?? []) allChars.add(c);
+                          }
+                          chars = [...allChars];
+                          setting = sbJson.shots?.[0]?.setting ?? '';
+                        } catch { /* ignore */ }
+                      }
+                      currentState = initializeSceneState(sceneId, chars, setting);
+                    }
+
+                    // Ask LLM for the new state given previous state + generated prompt
+                    this.log(`  Extracting scene state update for ${node.itemId}...`);
+                    const statePrompt = `Previous scene state:\n${JSON.stringify(currentState, null, 2)}\n\nGenerated shot prompt:\n${content}\n\nGiven the previous state and what happens in this shot, return the NEW complete state as JSON. Include all characters (even off-screen ones). Return ONLY the JSON object.`;
+                    let newStateContent = '';
+                    for await (const chunk of this.llm.generateStream({
+                      messages: [
+                        { role: 'system', content: 'You extract scene state from shot descriptions. Return ONLY valid JSON with the full updated SceneState. Include characters (with position, pose, expression, facing, inFrame, leftHand, rightHand, legs, headTilt), objects, and environment.' },
+                        { role: 'user', content: statePrompt },
+                      ],
+                      temperature: 0.1,
+                    })) {
+                      if (chunk.content) newStateContent += chunk.content;
+                    }
+
+                    try {
+                      let cleaned = newStateContent.trim();
+                      if (cleaned.startsWith('```')) cleaned = cleaned.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+                      const newState = JSON.parse(cleaned);
+                      newState.sceneId = sceneId;
+                      newState.shotNumber = shotNum;
+                      saveSceneState(this.config.projectDir, sceneId, newState);
+                      this.log(`  Scene state updated for ${sceneId} after shot ${shotNum}`);
+                    } catch (parseErr) {
+                      this.log(`  Failed to parse state update: ${(parseErr as Error).message}`);
+                    }
+                  }
+                } catch (stateErr) {
+                  this.log(`  Scene state extraction failed: ${(stateErr as Error).message}`);
+                }
+              }
+
               // Emit tool_result for the prompt generation
               this.emit({
                 type: 'tool_result',
@@ -1508,9 +1566,24 @@ Rules:
       referenceImageContext = this.buildShotReferenceMapping(node);
     }
 
+    // Inject scene state for shot_image_prompt — tells LLM where characters/objects are
+    let sceneStateContext = '';
+    if (node.typeId === 'shot_image_prompt' && node.itemId) {
+      try {
+        const { loadSceneState, formatStateForPrompt } = require('./sceneState.js');
+        const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
+        if (sceneId) {
+          const state = loadSceneState(this.config.projectDir, sceneId);
+          if (state && state.shotNumber > 0) {
+            sceneStateContext = `\n\n<scene_state>\n${formatStateForPrompt(state)}\n\nYour shot MUST be consistent with this state. Characters cannot teleport.\nIf a character needs to move, describe the transition in the first frame.\n</scene_state>`;
+          }
+        }
+      } catch { /* state not available yet — first shot */ }
+    }
+
     const user = inputs.contextBlock
-      ? `${task}${projectContext}${referenceImageContext}\n\n${inputs.contextBlock}`
-      : `${task}${projectContext}${referenceImageContext}`;
+      ? `${task}${projectContext}${referenceImageContext}${sceneStateContext}\n\n${inputs.contextBlock}`
+      : `${task}${projectContext}${referenceImageContext}${sceneStateContext}`;
 
     return { system: systemPrompt, user, loadedSkills };
   }
@@ -2546,6 +2619,24 @@ Rules:
         }
         if (motionDirectiveNode) {
           this.executor.expandCollection(`shot_motion_directive:${sceneId}`, shotItems);
+        }
+
+        // Wire sequential deps for shot_image_prompt nodes (scene state tracking)
+        // Each shot_image_prompt depends on the previous one so state accumulates in order
+        let prevShotPromptId: string | null = null;
+        for (const shot of shotItems) {
+          const promptId = `shot_image_prompt:${shot.itemId}`;
+          const promptNode = this.executor.getNode(promptId);
+          if (promptNode && prevShotPromptId) {
+            if (!promptNode.dependencies.includes(prevShotPromptId)) {
+              promptNode.dependencies.push(prevShotPromptId);
+              const prevNode = this.executor.getNode(prevShotPromptId);
+              if (prevNode && !prevNode.dependents.includes(promptId)) {
+                prevNode.dependents.push(promptId);
+              }
+            }
+          }
+          prevShotPromptId = promptId;
         }
 
         // Also create shot_image and shot_video per-shot nodes with proper dependencies.
