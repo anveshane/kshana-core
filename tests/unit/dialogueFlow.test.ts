@@ -132,6 +132,26 @@ describe('Dialogue flow: prompt schema matches new format', () => {
   });
 });
 
+describe('Dialogue flow: shot_image_prompt schema consistency', () => {
+  it('shot_image_prompt schema has generationStrategy field', async () => {
+    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
+    const schema = getPromptSchema('shot_image_prompt');
+    expect(schema).toContain('generationStrategy');
+  });
+
+  it('shot_image_prompt schema has edit_previous_shot mode', async () => {
+    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
+    const schema = getPromptSchema('shot_image_prompt');
+    expect(schema).toContain('edit_previous_shot');
+  });
+
+  it('shot_image_prompt schema has object ref type', async () => {
+    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
+    const schema = getPromptSchema('shot_image_prompt');
+    expect(schema).toMatch(/character.*setting.*object|type.*object/);
+  });
+});
+
 describe('Dialogue flow: motion directive guide', () => {
   it('motion directive guide instructs LLM to read audio field for dialogue', () => {
     const guide = readFileSync(

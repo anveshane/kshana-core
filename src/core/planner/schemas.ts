@@ -167,37 +167,34 @@ export function getPromptSchema(nodeTypeId: string): string | null {
 }
 </json_schema>`,
     shot_image_prompt: `<json_schema>
-For single-frame shots (i2v):
-{
-  "imagePrompt": "string (80-250 words, flowing prose)",
-  "negativePrompt": "string",
-  "aspectRatio": "16:9",
-  "generationMode": "image_text_to_image | text_to_image",
-  "references": [{ "imageNumber": number, "type": "character | setting", "refId": "string" }]
-}
-
-For multi-frame shots (flfv — first + last):
+For multi-frame shots (flfv — first + last, DEFAULT):
 {
   "shotNumber": number,
+  "generationStrategy": "flfv | fmlfv",
   "frames": {
-    "first_frame": { "imagePrompt": "string", "generationMode": "image_text_to_image", "references": [...] },
-    "last_frame": { "imagePrompt": "string (delta only)", "generationMode": "edit_first_frame", "references": [] }
+    "first_frame": {
+      "imagePrompt": "string (flowing prose, frozen instant, no motion verbs)",
+      "generationMode": "image_text_to_image | edit_previous_shot | text_to_image",
+      "references": [{ "imageNumber": number, "type": "character | setting | object", "refId": "string" }]
+    },
+    "last_frame": {
+      "imagePrompt": "string (delta only — what changed from first_frame, or 'No visible change from first frame.')",
+      "generationMode": "edit_first_frame",
+      "references": []
+    }
   },
   "negativePrompt": "string",
   "aspectRatio": "16:9"
 }
 
-For multi-frame shots (fmlfv — first + mid + last):
-{
-  "shotNumber": number,
-  "frames": {
-    "first_frame": { "imagePrompt": "string", "generationMode": "image_text_to_image", "references": [...] },
-    "mid_frame": { "imagePrompt": "string (delta from first)", "generationMode": "edit_first_frame", "references": [] },
-    "last_frame": { "imagePrompt": "string (delta from first)", "generationMode": "edit_first_frame", "references": [] }
-  },
-  "negativePrompt": "string",
-  "aspectRatio": "16:9"
-}
+For fmlfv shots, add mid_frame between first_frame and last_frame:
+  "mid_frame": { "imagePrompt": "string (delta from first)", "generationMode": "edit_first_frame", "references": [] }
+
+generationMode options:
+- "image_text_to_image": fresh generation with character/setting/object references
+- "edit_previous_shot": edit previous shot's last frame for visual continuity
+- "edit_first_frame": edit this shot's first frame (for last_frame/mid_frame)
+- "text_to_image": no references (for detail inserts, atmosphere shots)
 </json_schema>`,
     character_image: `<json_schema>
 {
