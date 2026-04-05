@@ -1420,34 +1420,61 @@ export class ExecutorAgent extends TypedEventEmitter {
       ? `Create ${typeDef?.displayName ?? node.typeId} for "${node.itemId}"`
       : `Create ${typeDef?.displayName ?? node.typeId}`;
 
-    // For shot_image_prompt: tell the LLM which image N maps to which character/setting
-    // Gathers ALL completed ref image nodes — LLM decides which to use per shot
+    // For shot_image_prompt: gather refs, filter by purpose, compute state, build hints
     let referenceImageContext = '';
     let shotContextHint = '';
+    let sceneStateContext = '';
     if (node.typeId === 'shot_image_prompt' && node.itemId) {
-      const { buildAvailableReferences, formatReferencesForPrompt, buildShotContextHint } = require('./shotReferenceMapping.js');
-      const { refs } = buildAvailableReferences(this.executor);
-      referenceImageContext = formatReferencesForPrompt(refs);
+      const { buildAvailableReferences, formatReferencesForPrompt, filterRefsByPurpose, buildShotContextHint } = require('./shotReferenceMapping.js');
+      const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
+      const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
 
-      // Add shot context hint (generation mode suggestions)
-      const prevShotId = node.itemId.replace(/shot_(\d+)/, (_, n: string) => `shot_${parseInt(n, 10) - 1}`);
-      const prevNode = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '1', 10) > 1
+      // Read shot from scene breakdown (for purpose filtering + state computation)
+      let shotPurpose = '';
+      let shotDescription = '';
+      if (sceneId) {
+        const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+        if (svpNode?.outputPath) {
+          try {
+            const svpPath = join(this.config.projectDir, svpNode.outputPath);
+            let svpContent = readFileSync(svpPath, 'utf-8').trim();
+            if (svpContent.startsWith('```')) {
+              svpContent = svpContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+            }
+            const svpJson = JSON.parse(svpContent);
+            const shots = svpJson.shots ?? svpJson;
+            const shot = (Array.isArray(shots) ? shots : []).find((s: any) => s.shotNumber === shotNum);
+            if (shot) {
+              shotPurpose = shot.purpose || '';
+              shotDescription = `Shot ${shotNum}: ${shot.description || ''}. Camera: ${shot.cameraWork || ''}. Purpose: ${shotPurpose || 'unknown'}.`;
+            }
+          } catch { /* scene breakdown not readable */ }
+        }
+      }
+
+      // Gather all refs, then filter by purpose
+      const { refs: allRefs } = buildAvailableReferences(this.executor);
+      if (shotPurpose) {
+        const filtered = filterRefsByPurpose(allRefs, shotPurpose);
+        referenceImageContext = formatReferencesForPrompt(filtered.refs);
+        this.log(`  Refs filtered by purpose="${shotPurpose}": ${allRefs.length} → ${filtered.refs.length} (mode: ${filtered.generationMode})`);
+      } else {
+        referenceImageContext = formatReferencesForPrompt(allRefs);
+      }
+
+      // Shot context hint
+      const prevShotId = node.itemId.replace(/shot_(\d+)/, (_: string, n: string) => `shot_${parseInt(n, 10) - 1}`);
+      const prevNode = shotNum > 1
         ? this.executor.getNode(`shot_image:${prevShotId}`)
         : null;
       const previousAvailable = prevNode?.status === 'completed';
       shotContextHint = buildShotContextHint(node.itemId, previousAvailable);
-    }
 
-    // Compute target state BEFORE generating shot_image_prompt.
-    // Flow: previous state + shot description → LLM computes target → inject both into prompt
-    let sceneStateContext = '';
-    if (node.typeId === 'shot_image_prompt' && node.itemId) {
-      try {
-        const { loadSceneState, initializeSceneState, saveSceneState, formatStateForPrompt, buildStateContext } = require('./sceneState.js');
-        const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
-        const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
-        if (sceneId) {
-          // Load or initialize previous state
+      // Compute target state BEFORE generating image prompt
+      if (sceneId) {
+        try {
+          const { loadSceneState, initializeSceneState, saveSceneState, formatStateForPrompt, buildStateContext } = require('./sceneState.js');
+
           let previousState = loadSceneState(this.config.projectDir, sceneId);
           if (!previousState) {
             const chars = this.executor.getAllNodes()
@@ -1457,25 +1484,6 @@ export class ExecutorAgent extends TypedEventEmitter {
               .find((n: any) => n.typeId === 'setting_image' && n.itemId);
             const setting = settingNode?.itemId ?? '';
             previousState = initializeSceneState(sceneId, chars, setting);
-          }
-
-          // Read shot description from scene breakdown
-          const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
-          let shotDescription = '';
-          if (svpNode?.outputPath) {
-            try {
-              const svpPath = join(this.config.projectDir, svpNode.outputPath);
-              let svpContent = readFileSync(svpPath, 'utf-8').trim();
-              if (svpContent.startsWith('```')) {
-                svpContent = svpContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-              }
-              const svpJson = JSON.parse(svpContent);
-              const shots = svpJson.shots ?? svpJson;
-              const shot = (Array.isArray(shots) ? shots : []).find((s: any) => s.shotNumber === shotNum);
-              if (shot) {
-                shotDescription = `Shot ${shotNum}: ${shot.description || ''}. Camera: ${shot.cameraWork || ''}. Purpose: ${shot.purpose || 'unknown'}.`;
-              }
-            } catch { /* scene breakdown not readable */ }
           }
 
           if (shotDescription) {
@@ -1508,8 +1516,8 @@ export class ExecutorAgent extends TypedEventEmitter {
             // No shot description — inject previous state only
             sceneStateContext = `\n\n<scene_state>\n${formatStateForPrompt(previousState)}\n\nYour shot MUST be consistent with this state.\n</scene_state>`;
           }
-        }
-      } catch { /* state not available yet */ }
+        } catch { /* state not available yet */ }
+      }
     }
 
     const user = inputs.contextBlock
