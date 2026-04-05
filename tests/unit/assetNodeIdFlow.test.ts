@@ -26,13 +26,5 @@ describe('Asset nodeId data flow', () => {
     expect(code).toMatch(/assets:.*nodeId\?.*string/s);
   });
 
-  it('Sidebar reads nodeId from asset', () => {
-    const code = readFileSync(join(process.cwd(), 'frontend/src/components/Sidebar.tsx'), 'utf-8');
-    expect(code).toContain('asset.nodeId');
-  });
-
-  it('Sidebar gates edit/redo on nodeId being truthy', () => {
-    const code = readFileSync(join(process.cwd(), 'frontend/src/components/Sidebar.tsx'), 'utf-8');
-    expect(code).toContain('{nodeId && (');
-  });
+  // Sidebar behavior tests are in sidebarButtons.test.ts — no source code string checks here
 });
