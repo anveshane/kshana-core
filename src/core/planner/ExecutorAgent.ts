@@ -1425,7 +1425,7 @@ export class ExecutorAgent extends TypedEventEmitter {
     let shotContextHint = '';
     let sceneStateContext = '';
     if (node.typeId === 'shot_image_prompt' && node.itemId) {
-      const { buildAvailableReferences, formatReferencesForPrompt, filterRefsByPurpose, buildShotContextHint } = require('./shotReferenceMapping.js');
+      const { buildAvailableReferences, formatReferencesForPrompt, filterRefsByPurpose, buildShotContextHint } = await import('./shotReferenceMapping.js');
       const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
       const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
 
@@ -1473,7 +1473,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       // Compute target state BEFORE generating image prompt
       if (sceneId) {
         try {
-          const { loadSceneState, initializeSceneState, saveSceneState, formatStateForPrompt, buildStateContext } = require('./sceneState.js');
+          const { loadSceneState, initializeSceneState, saveSceneState, formatStateForPrompt, buildStateContext } = await import('./sceneState.js');
 
           let previousState = loadSceneState(this.config.projectDir, sceneId);
           if (!previousState) {
@@ -1496,7 +1496,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               stateCtx.targetState.shotNumber = shotNum;
               saveSceneState(this.config.projectDir, sceneId, stateCtx.targetState);
               // Save per-shot diff so motion directive can read it
-              const { saveShotStateDiff } = require('./sceneState.js');
+              const { saveShotStateDiff } = await import('./sceneState.js');
               saveShotStateDiff(this.config.projectDir, sceneId, shotNum, previousState, stateCtx.targetState);
               this.log(`  Target state saved for ${sceneId} shot ${shotNum}`);
 
@@ -1527,7 +1527,7 @@ export class ExecutorAgent extends TypedEventEmitter {
     // The shot_image_prompt step saved a state diff file we can read
     if (node.typeId === 'shot_motion_directive' && node.itemId) {
       try {
-        const { loadSceneState, loadShotStateDiff, buildMotionStateContext } = require('./sceneState.js');
+        const { loadShotStateDiff, buildMotionStateContext } = await import('./sceneState.js');
         const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
         const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
         if (sceneId) {
@@ -3860,7 +3860,7 @@ export class ExecutorAgent extends TypedEventEmitter {
 
             // Fallback: if no motion directive, use description + cameraWork + audio
             if (!motionPrompt) {
-              const { buildFallbackMotionPrompt } = require('./shotReferenceMapping.js');
+              const { buildFallbackMotionPrompt } = await import('./shotReferenceMapping.js');
               motionPrompt = buildFallbackMotionPrompt(shot);
             }
           }
