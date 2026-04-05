@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import type { ToolCall } from '../lib/store'
 import { useAppState } from '../lib/store'
+import { SceneBreakdownCard } from './SceneBreakdownCard'
+import { ShotCompositionCard, SceneStateCard } from './ShotCompositionCard'
 
 interface ToolCallCardProps {
   toolCall: ToolCall
@@ -25,6 +27,7 @@ const TOOL_NAMES: Record<string, string> = {
   think: 'Thinking',
   extract_collections: 'Extraction',
   json_repair: 'JSON Repair',
+  scene_state: 'Scene State',
 }
 
 const CONTENT_COLOR = { border: 'border-cyan/20', statusActive: 'text-cyan', statusDone: 'text-green' }
@@ -47,6 +50,7 @@ const TOOL_COLORS: Record<string, { border: string; statusActive: string; status
   generate_shot_video:           VIDEO_COLOR,
   generate_video:                VIDEO_COLOR,
   assemble_final_video:          { border: 'border-green/25', statusActive: 'text-green', statusDone: 'text-green' },
+  scene_state:                   { border: 'border-teal-400/25', statusActive: 'text-teal-400', statusDone: 'text-teal-400' },
 }
 
 const DEFAULT_COLORS = { border: 'border-line-soft', statusActive: 'text-cyan', statusDone: 'text-green' }
@@ -308,20 +312,29 @@ function ContentBody({ args, streamingContent, toolName }: { args: Record<string
         </div>
       )}
       {hasContent && isJsonContent && isJsonTool ? (
-        <div className="px-3 pb-2 space-y-1">
-          <div className="text-xs text-graphite-050">
-            Generating structured JSON...
-            {countJsonShots(trimmedContent) > 0 && (
-              <span className="ml-2 text-cyan">{countJsonShots(trimmedContent)} shots written</span>
-            )}
+        <div className="pb-1 space-y-0">
+          {toolName.includes('scene_video_prompt') ? (
+            <SceneBreakdownCard content={trimmedContent} />
+          ) : toolName.includes('shot_image_prompt') ? (
+            <ShotCompositionCard content={trimmedContent} />
+          ) : (
+            <div className="px-3 pb-2">
+              <pre className="p-2 rounded bg-graphite-300/50 border border-line-soft text-[10px] text-graphite-050 max-h-48 overflow-auto font-mono">
+                {trimmedContent}
+              </pre>
+            </div>
+          )}
+          <div className="px-3 pb-1">
+            <button onClick={() => setShowRaw(!showRaw)} className="text-[10px] text-graphite-200 hover:text-graphite-100 cursor-pointer">
+              {showRaw ? 'Hide JSON' : 'Show JSON'}
+            </button>
           </div>
-          <button onClick={() => setShowRaw(!showRaw)} className="text-[10px] text-graphite-200 hover:text-graphite-100 cursor-pointer">
-            {showRaw ? 'Hide raw output' : 'Show raw output'}
-          </button>
           {showRaw && (
-            <pre className="p-2 rounded bg-graphite-300/50 border border-line-soft text-[10px] text-graphite-050 max-h-48 overflow-auto font-mono">
-              {trimmedContent}
-            </pre>
+            <div className="px-3 pb-2">
+              <pre className="p-2 rounded bg-graphite-300/50 border border-line-soft text-[10px] text-graphite-050 max-h-48 overflow-auto font-mono">
+                {trimmedContent}
+              </pre>
+            </div>
           )}
         </div>
       ) : hasContent && isStructured ? (
@@ -587,13 +600,15 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
         return <AssemblyBody streamingContent={meaningfulContent} />
       case 'extract_collections':
         return <ExtractionBody args={args ?? {}} result={result} status={status} />
+      case 'scene_state':
+        return meaningfulContent ? <SceneStateCard content={meaningfulContent} /> : <DefaultBody args={args ?? {}} selectedProject={selectedProject} />
       default:
         return <DefaultBody args={args ?? {}} selectedProject={selectedProject} />
     }
   }
 
   // For content gen and assembly, streaming is handled in the body
-  const showSeparateStreaming = !isContentGen && toolName !== 'assemble_final_video' && toolName !== 'extract_collections'
+  const showSeparateStreaming = !isContentGen && toolName !== 'assemble_final_video' && toolName !== 'extract_collections' && toolName !== 'scene_state'
 
   return (
     <div className={`rounded-lg border ${borderColor} bg-graphite-400/50 overflow-hidden`}>
