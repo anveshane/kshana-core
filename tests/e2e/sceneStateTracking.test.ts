@@ -45,7 +45,7 @@ beforeAll(async () => {
 }, 15000);
 
 describe('Scene State E2E: Scenario 1 — No previous state (first shot)', () => {
-  it('extracts valid state from first shot description', { timeout: 120000 }, async () => {
+  it('extracts valid state from first shot description', { timeout: 200000 }, async () => {
     if (!LLM_AVAILABLE) return;
 
     const initialState = initializeSceneState('scene_1', ['keerti', 'mr_patel'], 'master_bedroom');
@@ -83,7 +83,7 @@ up to her chin. Mr. Patel is not visible in this shot.`;
 });
 
 describe('Scene State E2E: Scenario 2 — Previous state → new shot', () => {
-  it('correctly updates state when new character enters', { timeout: 120000 }, async () => {
+  it('correctly updates state when new character enters', { timeout: 200000 }, async () => {
     if (!LLM_AVAILABLE) return;
 
     const previousState: SceneState = {
@@ -145,7 +145,7 @@ Keerti remains lying down with her eyes closed. The warm morning light bathes bo
 });
 
 describe('Scene State E2E: Scenario 3 — Corrupted previous state', () => {
-  it('handles corrupted state without crashing', { timeout: 120000 }, async () => {
+  it('handles corrupted state without crashing', { timeout: 200000 }, async () => {
     if (!LLM_AVAILABLE) return;
 
     // Provide garbage as previous state
@@ -181,7 +181,7 @@ An empty bed with rumpled white sheets. A bedside table with a water glass and a
 });
 
 describe('Scene State E2E: Scenario 4 — Subtle body part changes', () => {
-  it('tracks hand and expression changes without moving the character', { timeout: 120000 }, async () => {
+  it('tracks hand and expression changes without moving the character', { timeout: 200000 }, async () => {
     if (!LLM_AVAILABLE) return;
 
     const previousState: SceneState = {
