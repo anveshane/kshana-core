@@ -60,6 +60,11 @@ export interface TimelineRepairResult {
   unrepairedSegmentIds: string[];
 }
 
+interface TimelineIdentity {
+  sceneNumber?: number;
+  shotNumber?: number;
+}
+
 export function buildShotSegmentId(sceneNumber: number, shotNumber: number): string {
   if (!Number.isFinite(sceneNumber) || sceneNumber < 1) {
     throw new Error(`Invalid scene number for shot segment: ${sceneNumber}`);
@@ -100,6 +105,146 @@ function isVisualLikeLayer(layer: TimelineLayerEntry | undefined): boolean {
 
 function hasResolvableAssetReference(layer: TimelineLayerEntry | undefined): boolean {
   return Boolean(layer?.filePath || layer?.artifactId);
+}
+
+function parseIdentityFromText(value: string | undefined): TimelineIdentity {
+  if (!value) {
+    return {};
+  }
+
+  const directMatch =
+    /scene[\s_-]*(\d+)[^\d]+shot[\s_-]*(\d+)/i.exec(value) ??
+    /segment[_-](\d+)[_-]shot[_-](\d+)/i.exec(value);
+  if (!directMatch?.[1] || !directMatch?.[2]) {
+    return {};
+  }
+
+  if (/segment[_-]/i.test(directMatch[0])) {
+    const sceneIndex = Number.parseInt(directMatch[1], 10);
+    const shotNumber = Number.parseInt(directMatch[2], 10);
+    return Number.isFinite(sceneIndex) && Number.isFinite(shotNumber)
+      ? {
+          sceneNumber: sceneIndex + 1,
+          shotNumber,
+        }
+      : {};
+  }
+
+  const sceneNumber = Number.parseInt(directMatch[1], 10);
+  const shotNumber = Number.parseInt(directMatch[2], 10);
+  return Number.isFinite(sceneNumber) && Number.isFinite(shotNumber)
+    ? {
+        sceneNumber,
+        shotNumber,
+      }
+    : {};
+}
+
+function getMetadataNumber(
+  metadata: Record<string, unknown> | undefined,
+  ...keys: string[]
+): number | undefined {
+  if (!metadata) {
+    return undefined;
+  }
+
+  for (const key of keys) {
+    const value = metadata[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number.parseInt(value, 10);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function getSegmentIdentity(segment: TimelineSegment): TimelineIdentity {
+  const parsedSegmentId = parseShotSegmentId(segment.id);
+  if (parsedSegmentId) {
+    return {
+      sceneNumber: parsedSegmentId.sceneNumber,
+      shotNumber: parsedSegmentId.shotNumber,
+    };
+  }
+
+  const metadata = segment.metadata;
+  return {
+    sceneNumber:
+      getMetadataNumber(metadata, 'sceneNumber', 'scene_number') ??
+      parseIdentityFromText(segment.label).sceneNumber,
+    shotNumber:
+      getMetadataNumber(metadata, 'shotNumber', 'shot_number') ??
+      parseIdentityFromText(segment.label).shotNumber,
+  };
+}
+
+function getLayerIdentity(layer: TimelineLayerEntry | undefined): TimelineIdentity {
+  if (!layer) {
+    return {};
+  }
+
+  const metadata = layer.metadata;
+  const metadataIdentity = {
+    sceneNumber: getMetadataNumber(
+      metadata,
+      'sceneNumber',
+      'scene_number',
+      'placementNumber',
+    ),
+    shotNumber: getMetadataNumber(metadata, 'shotNumber', 'shot_number'),
+  };
+  if (
+    metadataIdentity.sceneNumber !== undefined &&
+    metadataIdentity.shotNumber !== undefined
+  ) {
+    return metadataIdentity;
+  }
+
+  const textCandidates = [layer.filePath, layer.artifactId, layer.label];
+  for (const candidate of textCandidates) {
+    const identity = parseIdentityFromText(candidate);
+    if (
+      identity.sceneNumber !== undefined &&
+      identity.shotNumber !== undefined
+    ) {
+      return identity;
+    }
+  }
+
+  return metadataIdentity;
+}
+
+function isLayerIdentityCompatible(
+  segment: TimelineSegment,
+  layer: TimelineLayerEntry | undefined
+): boolean {
+  const segmentIdentity = getSegmentIdentity(segment);
+  const layerIdentity = getLayerIdentity(layer);
+
+  if (
+    segmentIdentity.sceneNumber === undefined ||
+    segmentIdentity.shotNumber === undefined
+  ) {
+    return true;
+  }
+
+  if (
+    layerIdentity.sceneNumber === undefined ||
+    layerIdentity.shotNumber === undefined
+  ) {
+    return true;
+  }
+
+  return (
+    segmentIdentity.sceneNumber === layerIdentity.sceneNumber &&
+    segmentIdentity.shotNumber === layerIdentity.shotNumber
+  );
 }
 
 function findMatchingExistingLayer(
@@ -152,7 +297,9 @@ function getLatestHistoricalResolvableLayer(
   for (let i = history.length - 1; i >= 0; i--) {
     const snapshot = history[i];
     const recoveredLayer = snapshot?.layers.find(layer =>
-      isVisualLikeLayer(layer) && hasResolvableAssetReference(layer)
+      isVisualLikeLayer(layer) &&
+      hasResolvableAssetReference(layer) &&
+      isLayerIdentityCompatible(segment, layer)
     );
     if (recoveredLayer) {
       return recoveredLayer;
@@ -296,6 +443,17 @@ export function updateSegmentLayers(
 
   // Determine fill status: if layers contain a visual, mark as filled
   const hasVisual = layers.some(l => l.type === 'visual' || l.type === 'narration_video');
+  const hasMismatchedVisualLayer = layers.some(
+    layer =>
+      isVisualLikeLayer(layer) &&
+      hasResolvableAssetReference(layer) &&
+      !isLayerIdentityCompatible(existing, layer)
+  );
+  if (hasMismatchedVisualLayer) {
+    throw new Error(
+      `Incoming visual layer does not match target segment identity: ${segmentId}`
+    );
+  }
   const newFillStatus = fillStatus ?? (hasVisual ? 'filled' : 'planned');
 
   // --- Version history ---
@@ -547,6 +705,11 @@ export function validateTimeline(timeline: Timeline): TimelineValidation {
     );
     const hasVisualLayer = visualLayers.length > 0;
     const hasResolvableVisualLayer = visualLayers.some(layer => hasResolvableAssetReference(layer));
+    const hasMismatchedVisualIdentity = visualLayers.some(
+      layer =>
+        hasResolvableAssetReference(layer) &&
+        !isLayerIdentityCompatible(segment, layer)
+    );
     if (segment.fillStatus === 'filled' && !hasVisualLayer) {
       hasInvalidFilledSegment = true;
       warnings.push(
@@ -557,6 +720,12 @@ export function validateTimeline(timeline: Timeline): TimelineValidation {
       hasInvalidFilledSegment = true;
       warnings.push(
         `Segment "${segment.label}" (${segment.id}) is marked filled but its active visual layer has no filePath or artifactId`
+      );
+    }
+    if (segment.fillStatus === 'filled' && hasMismatchedVisualIdentity) {
+      hasInvalidFilledSegment = true;
+      warnings.push(
+        `Segment "${segment.label}" (${segment.id}) is marked filled but its active visual layer points to a different scene/shot`
       );
     }
   }

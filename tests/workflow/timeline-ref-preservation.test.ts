@@ -24,7 +24,7 @@ function createFilledTimeline(): Timeline {
     segments: [
       {
         id: 'segment_0',
-        label: 'Shot 1',
+        label: 'Scene 1 Shot 1: Wide',
         startTime: 0,
         endTime: 4,
         duration: 4,
@@ -34,7 +34,7 @@ function createFilledTimeline(): Timeline {
           {
             type: 'visual',
             artifactId: 'vid_old',
-            filePath: 'assets/videos/clip.mp4',
+            filePath: 'assets/videos/Scene1_shot1_video.mp4',
             label: 'Original clip',
             source: 'generated',
             metadata: { prompt: 'original prompt' },
@@ -64,7 +64,7 @@ function createCorruptedTimeline(): Timeline {
     segments: [
       {
         id: 'segment_0',
-        label: 'Shot 1',
+        label: 'Scene 1 Shot 1: Wide',
         startTime: 0,
         endTime: 4,
         duration: 4,
@@ -90,7 +90,7 @@ function createCorruptedTimeline(): Timeline {
               {
                 type: 'visual',
                 artifactId: 'vid_old',
-                filePath: 'assets/videos/clip-old.mp4',
+                filePath: 'assets/videos/Scene1_shot1_video_old.mp4',
                 label: 'Old clip',
                 source: 'generated',
               },
@@ -103,7 +103,7 @@ function createCorruptedTimeline(): Timeline {
               {
                 type: 'visual',
                 artifactId: 'vid_latest',
-                filePath: 'assets/videos/clip-latest.mp4',
+                filePath: 'assets/videos/Scene1_shot1_video_latest.mp4',
                 label: 'Latest valid clip',
                 source: 'generated',
               },
@@ -146,7 +146,7 @@ describe('timeline ref preservation and repair', () => {
 
     expect(updated.segments[0]?.layers[0]).toMatchObject({
       artifactId: 'vid_old',
-      filePath: 'assets/videos/clip.mp4',
+      filePath: 'assets/videos/Scene1_shot1_video.mp4',
       label: 'Updated clip label',
       source: 'generated',
       metadata: { prompt: 'original prompt' },
@@ -157,7 +157,7 @@ describe('timeline ref preservation and repair', () => {
     });
     expect(updated.segments[0]?.layerHistory?.[0]?.layers[0]).toMatchObject({
       artifactId: 'vid_old',
-      filePath: 'assets/videos/clip.mp4',
+      filePath: 'assets/videos/Scene1_shot1_video.mp4',
       label: 'Original clip',
     });
   });
@@ -175,7 +175,7 @@ describe('timeline ref preservation and repair', () => {
     ]);
     expect(updatedArtifact.segments[0]?.layers[0]).toMatchObject({
       artifactId: 'vid_new',
-      filePath: 'assets/videos/clip.mp4',
+      filePath: 'assets/videos/Scene1_shot1_video.mp4',
     });
 
     const updatedFilePath = updateSegmentLayers(updatedArtifact, 'segment_0', [
@@ -200,10 +200,41 @@ describe('timeline ref preservation and repair', () => {
     expect(repairResult.unrepairedSegmentIds).toEqual([]);
     expect(repairedLayer).toMatchObject({
       artifactId: 'vid_latest',
-      filePath: 'assets/videos/clip-latest.mp4',
+      filePath: 'assets/videos/Scene1_shot1_video_latest.mp4',
       label: 'Corrupted active layer',
       metadata: { prompt: 'current prompt' },
     });
+  });
+
+  it('does not repair from history when the newest resolvable layer belongs to a different shot', () => {
+    const timeline = createCorruptedTimeline();
+    timeline.segments[0] = {
+      ...timeline.segments[0]!,
+      layerHistory: [
+        {
+          version: 1,
+          createdAt: '2026-04-02T00:00:00.000Z',
+          layers: [
+            {
+              type: 'visual',
+              artifactId: 'vid_wrong',
+              filePath: 'assets/videos/Scene2_shot1_video_wrong.mp4',
+              label: 'Wrong shot clip',
+              source: 'generated',
+            },
+          ],
+        },
+      ],
+    };
+
+    const repairResult = repairTimelineAssetReferences(timeline);
+    const validation = validateTimeline(repairResult.timeline);
+
+    expect(repairResult.repairedSegmentIds).toEqual([]);
+    expect(repairResult.unrepairedSegmentIds).toEqual(['segment_0']);
+    expect(validation.warnings).toContain(
+      'Segment "Scene 1 Shot 1: Wide" (segment_0) is marked filled but its active visual layer has no filePath or artifactId'
+    );
   });
 
   it('leaves unrecoverable segments invalid and incomplete', () => {
@@ -227,14 +258,17 @@ describe('timeline ref preservation and repair', () => {
     expect(repairResult.unrepairedSegmentIds).toEqual(['segment_0']);
     expect(validation.isComplete).toBe(false);
     expect(validation.warnings).toContain(
-      'Segment "Shot 1" (segment_0) is marked filled but its active visual layer has no filePath or artifactId'
+      'Segment "Scene 1 Shot 1: Wide" (segment_0) is marked filled but its active visual layer has no filePath or artifactId'
     );
   });
 
   it('keeps assembly resolution working after a partial update on a filled segment', () => {
     const projectRoot = createTempProjectDir();
     fs.mkdirSync(join(projectRoot, 'assets', 'videos'), { recursive: true });
-    fs.writeFileSync(join(projectRoot, 'assets', 'videos', 'clip.mp4'), 'video');
+    fs.writeFileSync(
+      join(projectRoot, 'assets', 'videos', 'Scene1_shot1_video.mp4'),
+      'video',
+    );
 
     const timeline = updateSegmentLayers(createFilledTimeline(), 'segment_0', [
       {
@@ -250,7 +284,7 @@ describe('timeline ref preservation and repair', () => {
     expect(resolution.resolved).toHaveLength(1);
     expect(resolution.resolved[0]).toMatchObject({
       segmentId: 'segment_0',
-      filePath: join(projectRoot, 'assets', 'videos', 'clip.mp4'),
+      filePath: join(projectRoot, 'assets', 'videos', 'Scene1_shot1_video.mp4'),
       mediaType: 'video',
     });
   });
@@ -276,7 +310,7 @@ describe('timeline ref preservation and repair', () => {
     const persisted = loadTimeline(projectRoot);
     expect(persisted?.segments[0]?.layers[0]).toMatchObject({
       artifactId: 'vid_latest',
-      filePath: 'assets/videos/clip-latest.mp4',
+      filePath: 'assets/videos/Scene1_shot1_video_latest.mp4',
     });
   });
 
@@ -305,8 +339,21 @@ describe('timeline ref preservation and repair', () => {
     const persisted = loadTimeline(projectRoot);
     expect(persisted?.segments[0]?.layers[0]).toMatchObject({
       artifactId: 'vid_latest',
-      filePath: 'assets/videos/clip-latest.mp4',
+      filePath: 'assets/videos/Scene1_shot1_video_latest.mp4',
       label: 'Updated after repair',
     });
+  });
+
+  it('rejects updates that point a segment to a different scene shot', () => {
+    expect(() =>
+      updateSegmentLayers(createFilledTimeline(), 'segment_0', [
+        {
+          type: 'visual',
+          filePath: 'assets/videos/Scene2_shot1_video_wrong.mp4',
+          label: 'Wrong segment clip',
+          source: 'generated',
+        },
+      ])
+    ).toThrow('Incoming visual layer does not match target segment identity');
   });
 });
