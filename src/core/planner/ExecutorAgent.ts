@@ -1514,8 +1514,10 @@ export class ExecutorAgent extends TypedEventEmitter {
               stateCtx.targetState.shotNumber = shotNum;
               saveSceneState(this.config.projectDir, sceneId, stateCtx.targetState);
               // Save per-shot diff so motion directive can read it
-              const { saveShotStateDiff } = await import('./sceneState.js');
+              const { saveShotStateDiff, buildLastFrameChanges } = await import('./sceneState.js');
               saveShotStateDiff(this.config.projectDir, sceneId, shotNum, previousState, stateCtx.targetState);
+              // Inject last_frame_changes so the LLM knows what must differ in the last frame
+              sceneStateContext += buildLastFrameChanges(previousState, stateCtx.targetState);
               this.log(`  Target state saved for ${sceneId} shot ${shotNum}`);
 
               // Show BEFORE + TARGET state cards in UI

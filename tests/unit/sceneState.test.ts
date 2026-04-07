@@ -129,6 +129,40 @@ describe('Scene State: formatting for LLM prompt', () => {
   });
 });
 
+describe('Scene State: buildLastFrameChanges', () => {
+  it('formats state diff as last_frame_changes block when changes exist', async () => {
+    const { buildLastFrameChanges, initializeSceneState } = await import('../../src/core/planner/sceneState.js');
+
+    const prevState = initializeSceneState('scene_1', ['the_girl'], 'city');
+    prevState.shotNumber = 1;
+    prevState.characters['the_girl'] = {
+      ...prevState.characters['the_girl'],
+      position: 'center_frame', pose: 'sitting_upright', expression: 'anxious',
+      facing: 'camera', inFrame: true, leftHand: 'on_lap', rightHand: 'on_lap',
+      legs: 'crossed', headTilt: 'neutral',
+    };
+
+    const targetState = { ...prevState, shotNumber: 2, characters: {
+      the_girl: { ...prevState.characters['the_girl'], pose: 'standing', expression: 'defiant', legs: 'standing_apart' },
+    }};
+
+    const block = buildLastFrameChanges(prevState, targetState);
+    expect(block).toContain('<last_frame_changes>');
+    expect(block).toContain('MUST be visible');
+    expect(block).toContain('the_girl');
+    expect(block).toContain('sitting_upright → standing');
+    expect(block).toContain('anxious → defiant');
+  });
+
+  it('returns empty string when no state changes', async () => {
+    const { buildLastFrameChanges, initializeSceneState } = await import('../../src/core/planner/sceneState.js');
+    const state = initializeSceneState('scene_1', ['elena'], 'alley');
+    state.characters['elena'].inFrame = true;
+    const block = buildLastFrameChanges(state, state);
+    expect(block).toBe('');
+  });
+});
+
 describe('Scene State: buildStateContext (compute state before prompt)', () => {
   it('buildStateContext returns previous + target state context for prompt injection', async () => {
     const { buildStateContext } = await import('../../src/core/planner/sceneState.js');

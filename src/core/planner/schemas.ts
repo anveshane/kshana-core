@@ -171,7 +171,7 @@ export function getPromptSchema(nodeTypeId: string): string | null {
       "references": [{ "imageNumber": number, "type": "character | setting | object", "refId": "string" }]
     },
     "last_frame": {
-      "imagePrompt": "string (delta only, or 'No visible change from first frame.')",
+      "imagePrompt": "string (describe the END STATE — what has changed by the end of this shot, per <last_frame_changes>)",
       "generationMode": "edit_first_frame",
       "references": []
     }

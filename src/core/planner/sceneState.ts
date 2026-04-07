@@ -400,6 +400,21 @@ export function loadShotStateDiff(
 }
 
 /**
+ * Build a `<last_frame_changes>` block from state diff.
+ * Tells the LLM what MUST be different in the last frame.
+ * Returns empty string if no changes.
+ */
+export function buildLastFrameChanges(
+  previousState: SceneState,
+  targetState: SceneState,
+): string {
+  const diff = computeStateDiff(previousState, targetState);
+  if (!diff) return '';
+
+  return `\n\n<last_frame_changes>\nThese changes MUST be visible in the last frame:\n${diff}\n\nDescribe the END STATE showing these changes. Do NOT write "No visible change."\n</last_frame_changes>`;
+}
+
+/**
  * Format state context specifically for motion directive generation.
  * Emphasizes the DELTA — what needs to MOVE between previous and target state.
  * The motion directive describes the transition, not the static frame.
