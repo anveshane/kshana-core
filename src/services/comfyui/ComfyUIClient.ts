@@ -394,6 +394,8 @@ export class ComfyUIClient {
           lastActivityTime = Date.now();
           const msgType: string = data.type;
 
+          debugLog(`[queueAndWaitWS] WS msg: ${msgType} prompt=${data.data?.prompt_id || 'n/a'}`);
+
           if (msgType === 'progress' && data.data) {
             const d = data.data as { value: number; max: number };
             const pct = d.max > 0 ? Math.round((d.value / d.max) * 100) : 0;
