@@ -42,7 +42,7 @@ describe('Shot reference mapping: gather refs from executor graph', () => {
     expect(result.refs[1]).toMatchObject({ type: 'character', refId: 'character_image:marcus', imageNumber: 2 });
   });
 
-  it('excludes pending and failed nodes', async () => {
+  it('includes pending and failed ref nodes (only need IDs, not files)', async () => {
     const { buildAvailableReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
     const executor = mockExecutor([
       { id: 'character_image:elena', typeId: 'character_image', status: 'completed', outputPath: 'assets/images/characters/elena.png' },
@@ -51,8 +51,7 @@ describe('Shot reference mapping: gather refs from executor graph', () => {
     ]);
 
     const result = buildAvailableReferences(executor as any);
-    expect(result.refs).toHaveLength(1);
-    expect(result.refs[0].refId).toBe('character_image:elena');
+    expect(result.refs).toHaveLength(3);
   });
 
   it('includes setting_image and object_image nodes', async () => {
@@ -83,10 +82,9 @@ describe('Shot reference mapping: gather refs from executor graph', () => {
     expect(result.refs.map(r => r.imageNumber)).toEqual([1, 2, 3, 4]);
   });
 
-  it('returns empty refs when no completed ref nodes exist', async () => {
+  it('returns empty refs when no ref-type nodes exist at all', async () => {
     const { buildAvailableReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
     const executor = mockExecutor([
-      { id: 'character_image:elena', typeId: 'character_image', status: 'pending' },
       { id: 'story:main', typeId: 'story', status: 'completed', outputPath: 'plans/story.md' },
     ]);
 
@@ -94,11 +92,22 @@ describe('Shot reference mapping: gather refs from executor graph', () => {
     expect(result.refs).toHaveLength(0);
   });
 
-  it('excludes nodes without .png output path', async () => {
+  it('includes pending ref nodes (only IDs needed for composition)', async () => {
+    const { buildAvailableReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const executor = mockExecutor([
+      { id: 'character_image:elena', typeId: 'character_image', status: 'pending' },
+    ]);
+
+    const result = buildAvailableReferences(executor as any);
+    expect(result.refs).toHaveLength(1);
+    expect(result.refs[0].refId).toBe('character_image:elena');
+  });
+
+  it('excludes nodes without itemId', async () => {
     const { buildAvailableReferences } = await import('../../src/core/planner/shotReferenceMapping.js');
     const executor = mockExecutor([
       { id: 'character_image:elena', typeId: 'character_image', status: 'completed', outputPath: 'assets/images/characters/elena.png' },
-      { id: 'character_image:marcus', typeId: 'character_image', status: 'completed', outputPath: 'prompts/characters/marcus.json' },
+      { id: 'character_image', typeId: 'character_image', itemId: undefined, status: 'pending' },
     ]);
 
     const result = buildAvailableReferences(executor as any);

@@ -38,10 +38,12 @@ function typeIdToRefType(typeId: string): 'character' | 'setting' | 'object' {
  * Returns them numbered sequentially (image 1, 2, 3...).
  */
 export function buildAvailableReferences(executor: MinimalExecutor): { refs: AvailableRef[] } {
+  // Include ALL ref nodes (not just completed) — shot_image_prompt only needs
+  // the refId identifiers, not actual .png files. Image resolution happens
+  // later at shot_image generation time.
   const nodes = executor.getAllNodes().filter(n =>
     (REF_TYPE_IDS as readonly string[]).includes(n.typeId)
-    && n.status === 'completed'
-    && n.outputPath?.endsWith('.png'),
+    && n.itemId, // Must have an itemId (expanded collection node)
   );
 
   let imageNum = 1;
