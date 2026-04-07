@@ -13,6 +13,7 @@ import {
   parameterizeWorkflowByName,
   getRegistry,
 } from '../../comfyui/index.js';
+import type { ImageInfo } from '../../comfyui/ComfyUIClient.js';
 import { parameterizeGeneric } from '../../comfyui/WorkflowLoader.js';
 import type {
   GenerationProvider,
@@ -181,10 +182,10 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Queue and wait (WS connects first, then submits — prevents missing cloud events)
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const { promptId } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
+    const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
 
-    // Download result
-    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png');
+    // Download result (use WS-collected outputs for cloud, /history for local)
+    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', wsOutputs);
   }
 
   async editImage(
@@ -467,9 +468,9 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const { promptId } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
+    const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
 
-    const result = await this.downloadFirstOutput(client, promptId, outputDir, 'video/mp4');
+    const result = await this.downloadFirstOutput(client, promptId, outputDir, 'video/mp4', wsOutputs);
     // Inject workflow name into metadata for upstream logging
     const workflowDisplayName = modeManifest?.displayName ?? 'LTX-2.3 (built-in)';
     result.metadata = { ...result.metadata, workflowName: workflowDisplayName, workflowId: modeManifest?.id ?? 'ltx23' };
@@ -482,7 +483,7 @@ export class ComfyUIProvider implements GenerationProvider {
     client: ComfyUIClient,
     workflow: Record<string, unknown>,
     onProgress?: ProviderProgressCallback,
-  ): Promise<{ promptId: string; clientId: string }> {
+  ): Promise<{ promptId: string; clientId: string; outputs: ImageInfo[] }> {
     const progressHandler = (info: { percentage: number; message: string; step?: number; maxSteps?: number; currentNode?: string }) => {
       onProgress?.({
         percentage: info.percentage,
@@ -495,7 +496,7 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Use queueAndWaitWS: connects WS first, submits prompt inside onOpen,
     // prevents missing fast execution events on cloud
-    const { result, promptId, clientId } = await client.queueAndWaitWS(workflow, (info) => {
+    const { result, promptId, clientId, outputs: wsOutputs } = await client.queueAndWaitWS(workflow, (info) => {
       progressHandler({
         percentage: info.percentage,
         message: info.message,
@@ -509,7 +510,7 @@ export class ComfyUIProvider implements GenerationProvider {
       throw new Error(`ComfyUI job did not complete (status: ${result.status})`);
     }
 
-    return { promptId, clientId };
+    return { promptId, clientId, outputs: wsOutputs };
   }
 
   private async downloadFirstOutput(
@@ -517,8 +518,11 @@ export class ComfyUIProvider implements GenerationProvider {
     promptId: string,
     _outputDir: string,
     mimeType: string,
+    preCollectedOutputs?: ImageInfo[],
   ): Promise<GenerationResult> {
-    const images = await client.getOutputImages(promptId);
+    // Use pre-collected outputs from WS (needed for cloud where /history is blocked)
+    // Fall back to HTTP history for local mode
+    const images = preCollectedOutputs?.length ? preCollectedOutputs : await client.getOutputImages(promptId);
     if (!images.length) {
       throw new Error('No output files from ComfyUI');
     }

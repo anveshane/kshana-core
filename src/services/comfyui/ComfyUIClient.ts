@@ -296,7 +296,7 @@ export class ComfyUIClient {
   async queueAndWaitWS(
     workflowJson: Record<string, unknown>,
     progressCallback?: (info: WSProgressInfo) => void,
-  ): Promise<{ result: CompletionResult; promptId: string; clientId: string }> {
+  ): Promise<{ result: CompletionResult; promptId: string; clientId: string; outputs: ImageInfo[] }> {
     const clientId = nanoid();
     const wsUrl = this.buildWsUrl(clientId);
     debugLog(`[queueAndWaitWS] Connecting WS first: ${wsUrl}`);
@@ -305,6 +305,7 @@ export class ComfyUIClient {
       let promptId = '';
       let resolved = false;
       let lastActivityTime = Date.now();
+      const collectedOutputs: ImageInfo[] = [];
       const isCloud = !!this.apiKey;
       const INACTIVITY_TIMEOUT_MS = 120_000;
       let ws: WebSocket;
@@ -319,11 +320,11 @@ export class ComfyUIClient {
             try { ws?.close(); } catch { /* */ }
             if (isCloud) {
               debugLog(`[queueAndWaitWS] Timeout after ${inactiveSec}s on cloud`);
-              resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId });
+              resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId, outputs: collectedOutputs });
             } else {
               debugLog(`[queueAndWaitWS] Timeout — falling back to HTTP polling`);
               this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
-                .then(result => resolve({ result, promptId, clientId }))
+                .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
                 .catch(reject);
             }
           }
@@ -335,7 +336,7 @@ export class ComfyUIClient {
         if (resolved) return;
         resolved = true;
         cleanup();
-        resolve({ result, promptId, clientId });
+        resolve({ result, promptId, clientId, outputs: collectedOutputs });
       };
 
       try {
@@ -348,7 +349,7 @@ export class ComfyUIClient {
             promptId = meta.promptId;
             return this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined);
           })
-          .then(result => resolve({ result, promptId, clientId }))
+          .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
           .catch(reject);
         return;
       }
@@ -369,10 +370,10 @@ export class ComfyUIClient {
         if (!resolved) {
           resolved = true;
           if (isCloud) {
-            resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId });
+            resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId, outputs: collectedOutputs });
           } else {
             this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
-              .then(result => resolve({ result, promptId, clientId }))
+              .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
               .catch(reject);
           }
         }
@@ -383,6 +384,11 @@ export class ComfyUIClient {
       });
 
       ws.on('message', (raw: Buffer | string) => {
+        // Skip binary messages (preview images)
+        if (Buffer.isBuffer(raw) && raw.length > 0 && raw[0] !== 0x7b) {
+          lastActivityTime = Date.now();
+          return;
+        }
         try {
           const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
           lastActivityTime = Date.now();
@@ -394,6 +400,21 @@ export class ComfyUIClient {
             progressCallback?.({ percentage: pct, message: `Step ${d.value}/${d.max}`, step: d.value, maxSteps: d.max });
           } else if (msgType === 'executing' && data.data?.node) {
             progressCallback?.({ percentage: 0, message: `Node: ${data.data.node}`, currentNode: data.data.node });
+          } else if (msgType === 'executed' && data.data?.output) {
+            // Capture output filenames from executed events (needed for cloud where /history is blocked)
+            const output = data.data.output;
+            const nodeId = data.data.node;
+            for (const key of ['images', 'gifs', 'videos']) {
+              const items = output[key];
+              if (Array.isArray(items)) {
+                for (const item of items) {
+                  if (item.filename) {
+                    collectedOutputs.push({ filename: item.filename, subfolder: item.subfolder || '', type: item.type || 'output', node_id: nodeId });
+                    debugLog(`[queueAndWaitWS] Captured output: ${item.filename} from node ${nodeId}`);
+                  }
+                }
+              }
+            }
           } else if (msgType === 'execution_success') {
             finish({ status: 'completed', prompt_id: promptId });
           } else if (msgType === 'execution_error') {
@@ -405,7 +426,7 @@ export class ComfyUIClient {
               progressCallback?.({ percentage: 0, message: `Queued (${qr} ahead)` });
             }
           }
-        } catch { /* non-JSON */ }
+        } catch { /* non-JSON or binary */ }
       });
     });
   }
