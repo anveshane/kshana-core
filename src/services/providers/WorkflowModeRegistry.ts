@@ -13,8 +13,13 @@ import { readFileSync, writeFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { WorkflowManifest, WorkflowManifestFile, WorkflowPipeline } from './types.js';
 
-/** Directories to scan for manifest files */
-const WORKFLOW_DIRS = ['workflows/built-in', 'workflows/user', 'workflows'];
+/** Directories to scan for manifest files — cloud dir added when COMFY_MODE=cloud */
+const WORKFLOW_DIRS = [
+  ...(process.env['COMFY_MODE'] === 'cloud' ? ['workflows/cloud'] : []),
+  'workflows/built-in',
+  'workflows/user',
+  'workflows',
+];
 
 /** Valid pipeline values for manifest validation */
 const VALID_PIPELINES: Set<string> = new Set([

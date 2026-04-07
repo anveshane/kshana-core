@@ -1,0 +1,51 @@
+{
+  "id": "zimage_cloud",
+  "displayName": "Z-Image Cloud",
+  "pipeline": "image_generation",
+  "llmDescription": "Cloud-based text-to-image generation. Default image generation workflow for ComfyUI Cloud.",
+  "selectionCriteria": "Standard image generation from text prompts.",
+  "outputType": "image",
+  "priority": 10,
+  "inputRequirements": [
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "llm",
+      "description": "Image generation prompt",
+      "required": true
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "llm",
+      "description": "Negative prompt",
+      "required": false
+    }
+  ],
+  "workflowFile": "zimage_standard_cloud.json",
+  "format": "api",
+  "parameterMappings": [
+    {
+      "input": "prompt",
+      "nodeId": "6",
+      "field": "text"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "7",
+      "field": "text"
+    },
+    {
+      "input": "seed",
+      "nodeId": "3",
+      "field": "seed"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "9",
+      "field": "filename_prefix"
+    }
+  ],
+  "builtIn": true,
+  "active": true
+}

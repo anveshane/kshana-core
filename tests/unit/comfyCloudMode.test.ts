@@ -54,10 +54,11 @@ describe('ComfyUI Cloud: auth headers', () => {
     expect(headers['X-API-Key']).toBe('test-key');
   });
 
-  it('buildHeaders returns empty object when no apiKey', async () => {
+  it('buildHeaders returns empty object when apiKey is explicitly undefined', async () => {
     const { ComfyUIClient } = await import('../../src/services/comfyui/ComfyUIClient.js');
     const client = new ComfyUIClient({
       baseUrl: 'http://localhost:8188',
+      apiKey: undefined,
     });
     const headers = (client as any).buildHeaders();
     expect(headers['X-API-Key']).toBeUndefined();
@@ -75,10 +76,11 @@ describe('ComfyUI Cloud: auth headers', () => {
     expect(wsUrl).toContain('clientId=my-client-id');
   });
 
-  it('buildWsUrl has no token param for local mode', async () => {
+  it('buildWsUrl has no token param when apiKey is undefined', async () => {
     const { ComfyUIClient } = await import('../../src/services/comfyui/ComfyUIClient.js');
     const client = new ComfyUIClient({
       baseUrl: 'http://localhost:8188',
+      apiKey: undefined,
     });
     const wsUrl = (client as any).buildWsUrl('my-client-id');
     expect(wsUrl).toContain('ws://localhost:8188/ws');
