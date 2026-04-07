@@ -509,6 +509,22 @@ export class WebSocketHandler {
       // Auto-reselect the project to reload executor state
       await this.handleSelectProject(sessionId, socket, projectName);
 
+      // Send fresh todos from the reset project.json so UI updates immediately
+      try {
+        const { readFileSync } = await import('fs');
+        const projectPath = join(process.cwd(), `${projectName}.kshana`, 'project.json');
+        const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
+        const nodes = project.executorState?.nodes ?? {};
+        const todos = Object.values(nodes).map((n: any) => ({
+          id: n.id,
+          text: n.displayName || n.id,
+          status: n.status === 'completed' ? 'done' : n.status === 'failed' ? 'error' : n.status === 'in_progress' ? 'in_progress' : 'pending',
+        }));
+        this.sendMessage(socket, createServerMessage('todo_update', sessionId, {
+          todos,
+        }));
+      } catch { /* best effort */ }
+
       this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
         status: 'completed',
         message: `Reset to ${stage} complete`,
