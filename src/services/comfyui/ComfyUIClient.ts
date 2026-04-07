@@ -28,6 +28,29 @@ export interface ComfyUIClientConfig {
   baseUrl: string;
   outputDir: string;
   timeout: number; // seconds
+  apiKey?: string; // ComfyUI Cloud API key (X-API-Key header)
+}
+
+/**
+ * Build ComfyUI config from environment variables.
+ * Supports two modes: local (default) and cloud.
+ *
+ * Local: uses COMFYUI_BASE_URL (default localhost:8188)
+ * Cloud: uses COMFY_CLOUD_URL + COMFY_CLOUD_API_KEY
+ */
+export function getComfyConfig(env: Record<string, string | undefined> = process.env as any): Partial<ComfyUIClientConfig> {
+  const mode = env['COMFY_MODE'] || 'local';
+  if (mode === 'cloud') {
+    return {
+      baseUrl: env['COMFY_CLOUD_URL'] || 'https://cloud.comfy.org',
+      apiKey: env['COMFY_CLOUD_API_KEY'],
+      timeout: parseInt(env['COMFYUI_TIMEOUT'] || '300', 10),
+    };
+  }
+  return {
+    baseUrl: env['COMFYUI_BASE_URL'] || 'http://localhost:8188',
+    timeout: parseInt(env['COMFYUI_TIMEOUT'] || '300', 10),
+  };
 }
 
 export interface ImageInfo {
@@ -54,12 +77,12 @@ export interface CompletionResult {
   prompt_id: string;
 }
 
+const envConfig = getComfyConfig();
 const DEFAULT_CONFIG: ComfyUIClientConfig = {
-  baseUrl: process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188',
-  // outputDir should be explicitly provided by caller (project-specific)
-  // This default is only used if not specified
+  baseUrl: envConfig.baseUrl || 'http://localhost:8188',
   outputDir: './outputs',
-  timeout: parseInt(process.env['COMFYUI_TIMEOUT'] || '300', 10),
+  timeout: envConfig.timeout || 300,
+  apiKey: envConfig.apiKey,
 };
 
 /**
@@ -69,12 +92,14 @@ export class ComfyUIClient {
   private baseUrl: string;
   private outputDir: string;
   private timeout: number;
+  private apiKey?: string;
 
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
     const merged = { ...DEFAULT_CONFIG, ...config };
     this.baseUrl = merged.baseUrl.replace(/\/$/, '');
     this.outputDir = merged.outputDir;
     this.timeout = merged.timeout;
+    this.apiKey = merged.apiKey;
 
     // Ensure output directory exists
     if (!fs.existsSync(this.outputDir)) {
@@ -83,12 +108,35 @@ export class ComfyUIClient {
   }
 
   /**
+   * Build HTTP headers with API key auth if configured (cloud mode).
+   */
+  private buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    const headers: Record<string, string> = { ...extra };
+    if (this.apiKey) {
+      headers['X-API-Key'] = this.apiKey;
+    }
+    return headers;
+  }
+
+  /**
+   * Build WebSocket URL with token param if configured (cloud mode).
+   */
+  private buildWsUrl(clientId: string): string {
+    const wsBase = this.baseUrl.replace(/^http/, 'ws');
+    let url = `${wsBase}/ws?clientId=${clientId}`;
+    if (this.apiKey) {
+      url += `&token=${this.apiKey}`;
+    }
+    return url;
+  }
+
+  /**
    * Interrupt the currently running ComfyUI generation.
    * Calls POST /interrupt to stop the active prompt immediately.
    */
   async interrupt(): Promise<void> {
     try {
-      await fetch(`${this.baseUrl}/interrupt`, { method: 'POST' });
+      await fetch(`${this.baseUrl}/interrupt`, { method: 'POST', headers: this.buildHeaders() });
     } catch {
       // Best effort — ComfyUI may not be reachable
     }
@@ -117,6 +165,7 @@ export class ComfyUIClient {
 
     const response = await fetch(url, {
       method: 'POST',
+      headers: this.buildHeaders(),
       body: formData,
     });
 
@@ -148,7 +197,7 @@ export class ComfyUIClient {
 
     const response = await fetch(`${this.baseUrl}/prompt`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.buildHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
 
@@ -247,7 +296,7 @@ export class ComfyUIClient {
     clientId: string,
     progressCallback?: (info: WSProgressInfo) => void,
   ): Promise<CompletionResult> {
-    const wsUrl = this.baseUrl.replace(/^http/, 'ws') + `/ws?clientId=${clientId}`;
+    const wsUrl = this.buildWsUrl(clientId);
     debugLog(`[waitForCompletionWS] Connecting to ${wsUrl} for prompt=${promptId}`);
 
     return new Promise<CompletionResult>((resolve, reject) => {
@@ -510,7 +559,7 @@ export class ComfyUIClient {
 
     const url = `${this.baseUrl}/view?${params.toString()}`;
 
-    const response = await fetch(url);
+    const response = await fetch(url, { headers: this.buildHeaders() });
     if (!response.ok) {
       throw new Error(`Failed to download image: ${response.statusText}`);
     }
@@ -575,7 +624,7 @@ export class ComfyUIClient {
   // Helper methods
 
   private async getHistory(promptId: string): Promise<HistoryEntry | null> {
-    const response = await fetch(`${this.baseUrl}/history/${promptId}`);
+    const response = await fetch(`${this.baseUrl}/history/${promptId}`, { headers: this.buildHeaders() });
     if (!response.ok) {
       return null;
     }
