@@ -14,10 +14,9 @@ describe('ComfyUI Cloud: configuration', () => {
   it('ComfyUIClient accepts apiKey in config', async () => {
     const { ComfyUIClient } = await import('../../src/services/comfyui/ComfyUIClient.js');
     const client = new ComfyUIClient({
-      baseUrl: 'https://cloud.comfy.org',
+      baseUrl: 'https://cloud.comfy.org/api',
       apiKey: 'test-key-123',
     });
-    // Client should store the apiKey
     expect((client as any).apiKey).toBe('test-key-123');
   });
 
@@ -27,9 +26,9 @@ describe('ComfyUI Cloud: configuration', () => {
     const config = getComfyConfig({
       COMFY_MODE: 'cloud',
       COMFY_CLOUD_API_KEY: 'my-cloud-key',
-      COMFY_CLOUD_URL: 'https://cloud.comfy.org',
+      COMFY_CLOUD_URL: 'https://cloud.comfy.org/api',
     });
-    expect(config.baseUrl).toBe('https://cloud.comfy.org');
+    expect(config.baseUrl).toBe('https://cloud.comfy.org/api');
     expect(config.apiKey).toBe('my-cloud-key');
   });
 
@@ -47,7 +46,7 @@ describe('ComfyUI Cloud: auth headers', () => {
   it('buildHeaders returns X-API-Key when apiKey is set', async () => {
     const { ComfyUIClient } = await import('../../src/services/comfyui/ComfyUIClient.js');
     const client = new ComfyUIClient({
-      baseUrl: 'https://cloud.comfy.org',
+      baseUrl: 'https://cloud.comfy.org/api',
       apiKey: 'test-key',
     });
     const headers = (client as any).buildHeaders();
@@ -67,7 +66,7 @@ describe('ComfyUI Cloud: auth headers', () => {
   it('buildWsUrl includes token param for cloud mode', async () => {
     const { ComfyUIClient } = await import('../../src/services/comfyui/ComfyUIClient.js');
     const client = new ComfyUIClient({
-      baseUrl: 'https://cloud.comfy.org',
+      baseUrl: 'https://cloud.comfy.org/api',
       apiKey: 'test-key',
     });
     const wsUrl = (client as any).buildWsUrl('my-client-id');

@@ -42,7 +42,7 @@ export function getComfyConfig(env: Record<string, string | undefined> = process
   const mode = env['COMFY_MODE'] || 'local';
   if (mode === 'cloud') {
     return {
-      baseUrl: env['COMFY_CLOUD_URL'] || 'https://cloud.comfy.org',
+      baseUrl: env['COMFY_CLOUD_URL'] || 'https://cloud.comfy.org/api',
       apiKey: env['COMFY_CLOUD_API_KEY'],
       timeout: parseInt(env['COMFYUI_TIMEOUT'] || '300', 10),
     };
@@ -122,7 +122,8 @@ export class ComfyUIClient {
    * Build WebSocket URL with token param if configured (cloud mode).
    */
   private buildWsUrl(clientId: string): string {
-    const wsBase = this.baseUrl.replace(/^http/, 'ws');
+    // Strip /api suffix for WebSocket (cloud WS is at /ws, not /api/ws)
+    const wsBase = this.baseUrl.replace(/\/api\/?$/, '').replace(/^http/, 'ws');
     let url = `${wsBase}/ws?clientId=${clientId}`;
     if (this.apiKey) {
       url += `&token=${this.apiKey}`;
