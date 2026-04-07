@@ -13,10 +13,13 @@ import { readFileSync, writeFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import type { WorkflowManifest, WorkflowManifestFile, WorkflowPipeline } from './types.js';
 
-/** Directories to scan for manifest files — cloud dir added when COMFY_MODE=cloud */
+/** Directories to scan for manifest files.
+ * Cloud mode: uses workflows/cloud instead of workflows/built-in
+ * Local mode: uses workflows/built-in (default)
+ */
+const isCloudMode = process.env['COMFY_MODE'] === 'cloud';
 const WORKFLOW_DIRS = [
-  ...(process.env['COMFY_MODE'] === 'cloud' ? ['workflows/cloud'] : []),
-  'workflows/built-in',
+  ...(isCloudMode ? ['workflows/cloud'] : ['workflows/built-in']),
   'workflows/user',
   'workflows',
 ];
