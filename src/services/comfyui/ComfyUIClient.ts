@@ -289,6 +289,128 @@ export class ComfyUIClient {
   }
 
   /**
+   * Queue a workflow AND wait for completion via WebSocket.
+   * Connects WS first, then submits prompt inside onOpen — prevents missing
+   * fast cloud execution events that fire before WS connects.
+   */
+  async queueAndWaitWS(
+    workflowJson: Record<string, unknown>,
+    progressCallback?: (info: WSProgressInfo) => void,
+  ): Promise<{ result: CompletionResult; promptId: string; clientId: string }> {
+    const clientId = nanoid();
+    const wsUrl = this.buildWsUrl(clientId);
+    debugLog(`[queueAndWaitWS] Connecting WS first: ${wsUrl}`);
+
+    return new Promise((resolve, reject) => {
+      let promptId = '';
+      let resolved = false;
+      let lastActivityTime = Date.now();
+      const isCloud = !!this.apiKey;
+      const INACTIVITY_TIMEOUT_MS = 120_000;
+      let ws: WebSocket;
+
+      const inactivityCheck = setInterval(() => {
+        if (resolved) return;
+        const inactiveSec = Math.round((Date.now() - lastActivityTime) / 1000);
+        if (inactiveSec > INACTIVITY_TIMEOUT_MS / 1000) {
+          clearInterval(inactivityCheck);
+          if (!resolved) {
+            resolved = true;
+            try { ws?.close(); } catch { /* */ }
+            if (isCloud) {
+              debugLog(`[queueAndWaitWS] Timeout after ${inactiveSec}s on cloud`);
+              resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId });
+            } else {
+              debugLog(`[queueAndWaitWS] Timeout — falling back to HTTP polling`);
+              this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+                .then(result => resolve({ result, promptId, clientId }))
+                .catch(reject);
+            }
+          }
+        }
+      }, 10_000);
+
+      const cleanup = () => { clearInterval(inactivityCheck); try { ws?.close(); } catch { /* */ } };
+      const finish = (result: CompletionResult) => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        resolve({ result, promptId, clientId });
+      };
+
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (err) {
+        debugLog(`[queueAndWaitWS] WS failed: ${err}`);
+        // Fall back: submit then poll
+        this.queueWorkflow(workflowJson, clientId, true)
+          .then(meta => {
+            promptId = meta.promptId;
+            return this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined);
+          })
+          .then(result => resolve({ result, promptId, clientId }))
+          .catch(reject);
+        return;
+      }
+
+      ws.on('open', async () => {
+        debugLog(`[queueAndWaitWS] WS connected — now submitting prompt`);
+        try {
+          const meta = await this.queueWorkflow(workflowJson, clientId, true);
+          promptId = meta.promptId;
+          debugLog(`[queueAndWaitWS] Prompt submitted: ${promptId}`);
+        } catch (err) {
+          cleanup();
+          reject(err);
+        }
+      });
+
+      ws.on('close', () => {
+        if (!resolved) {
+          resolved = true;
+          if (isCloud) {
+            resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId });
+          } else {
+            this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+              .then(result => resolve({ result, promptId, clientId }))
+              .catch(reject);
+          }
+        }
+      });
+
+      ws.on('error', (err) => {
+        debugLog(`[queueAndWaitWS] WS error: ${err}`);
+      });
+
+      ws.on('message', (raw: Buffer | string) => {
+        try {
+          const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
+          lastActivityTime = Date.now();
+          const msgType: string = data.type;
+
+          if (msgType === 'progress' && data.data) {
+            const d = data.data as { value: number; max: number };
+            const pct = d.max > 0 ? Math.round((d.value / d.max) * 100) : 0;
+            progressCallback?.({ percentage: pct, message: `Step ${d.value}/${d.max}`, step: d.value, maxSteps: d.max });
+          } else if (msgType === 'executing' && data.data?.node) {
+            progressCallback?.({ percentage: 0, message: `Node: ${data.data.node}`, currentNode: data.data.node });
+          } else if (msgType === 'execution_success') {
+            finish({ status: 'completed', prompt_id: promptId });
+          } else if (msgType === 'execution_error') {
+            debugLog(`[queueAndWaitWS] Execution error: ${JSON.stringify(data.data).substring(0, 300)}`);
+            finish({ status: 'error', prompt_id: promptId });
+          } else if (msgType === 'status') {
+            const qr = data.data?.status?.exec_info?.queue_remaining;
+            if (qr !== undefined && qr > 0) {
+              progressCallback?.({ percentage: 0, message: `Queued (${qr} ahead)` });
+            }
+          }
+        } catch { /* non-JSON */ }
+      });
+    });
+  }
+
+  /**
    * Wait for workflow completion using ComfyUI's WebSocket API.
    * Provides real-time step-by-step progress. Falls back to HTTP polling on WS failure.
    */

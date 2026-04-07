@@ -179,16 +179,9 @@ export class ComfyUIProvider implements GenerationProvider {
       }) as Record<string, unknown>;
     }
 
-    // Queue and wait
+    // Queue and wait (WS connects first, then submits — prevents missing cloud events)
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const queueResult = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
-    const promptId = queueResult.promptId;
-
-    debugLog(`Queued image generation (prompt=${promptId})`);
-    onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
-
-    // Wait for completion with progress
-    await this.waitForCompletion(client, promptId, queueResult.clientId, onProgress);
+    const { promptId } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
 
     // Download result
     return this.downloadFirstOutput(client, promptId, outputDir, 'image/png');
@@ -324,14 +317,9 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const queueResult = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
+    const { promptId } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
 
-    debugLog(`Queued image edit (prompt=${queueResult.promptId})`);
-    onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
-
-    await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
-
-    return this.downloadFirstOutput(client, queueResult.promptId, outputDir, 'image/png');
+    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png');
   }
 
   async generateVideo(
@@ -479,14 +467,9 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const queueResult = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
+    const { promptId } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
 
-    debugLog(`Queued video generation (prompt=${queueResult.promptId})`);
-    onProgress?.({ percentage: 0, message: 'Waiting for ComfyUI...', done: false });
-
-    await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
-
-    const result = await this.downloadFirstOutput(client, queueResult.promptId, outputDir, 'video/mp4');
+    const result = await this.downloadFirstOutput(client, promptId, outputDir, 'video/mp4');
     // Inject workflow name into metadata for upstream logging
     const workflowDisplayName = modeManifest?.displayName ?? 'LTX-2.3 (built-in)';
     result.metadata = { ...result.metadata, workflowName: workflowDisplayName, workflowId: modeManifest?.id ?? 'ltx23' };
@@ -495,12 +478,11 @@ export class ComfyUIProvider implements GenerationProvider {
 
   // ── Shared helpers ──────────────────────────────────────────────────────────
 
-  private async waitForCompletion(
+  private async queueAndWait(
     client: ComfyUIClient,
-    promptId: string,
-    clientId: string | undefined,
+    workflow: Record<string, unknown>,
     onProgress?: ProviderProgressCallback,
-  ): Promise<void> {
+  ): Promise<{ promptId: string; clientId: string }> {
     const progressHandler = (info: { percentage: number; message: string; step?: number; maxSteps?: number; currentNode?: string }) => {
       onProgress?.({
         percentage: info.percentage,
@@ -511,26 +493,23 @@ export class ComfyUIProvider implements GenerationProvider {
       });
     };
 
-    let result;
-    if (clientId) {
-      result = await client.waitForCompletionWS(promptId, clientId, (info) => {
-        progressHandler({
-          percentage: info.percentage,
-          message: info.message,
-          step: info.step,
-          maxSteps: info.maxSteps,
-          currentNode: info.currentNode,
-        });
+    // Use queueAndWaitWS: connects WS first, submits prompt inside onOpen,
+    // prevents missing fast execution events on cloud
+    const { result, promptId, clientId } = await client.queueAndWaitWS(workflow, (info) => {
+      progressHandler({
+        percentage: info.percentage,
+        message: info.message,
+        step: info.step,
+        maxSteps: info.maxSteps,
+        currentNode: info.currentNode,
       });
-    } else {
-      result = await client.waitForCompletion(promptId, (pct, msg) => {
-        progressHandler({ percentage: pct, message: msg });
-      });
-    }
+    });
 
     if (result.status !== 'completed' && result.status !== 'completed_with_timeout') {
       throw new Error(`ComfyUI job did not complete (status: ${result.status})`);
     }
+
+    return { promptId, clientId };
   }
 
   private async downloadFirstOutput(
