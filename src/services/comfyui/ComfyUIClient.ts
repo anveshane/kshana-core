@@ -306,20 +306,29 @@ export class ComfyUIClient {
       let ws: WebSocket;
       let lastActivityTime = Date.now();
 
-      // Inactivity timeout: if no valid progress for 120s, fall back to HTTP polling
+      // Inactivity timeout: if no progress, handle based on mode
+      // Cloud: /history doesn't work, so fail instead of falling back to HTTP polling
+      const isCloud = !!this.apiKey;
       const INACTIVITY_TIMEOUT_MS = 120_000;
       const inactivityCheck = setInterval(() => {
         if (resolved) return;
         const inactiveSec = Math.round((Date.now() - lastActivityTime) / 1000);
         if (inactiveSec > INACTIVITY_TIMEOUT_MS / 1000) {
-          debugLog(`[waitForCompletionWS] No progress for ${inactiveSec}s — falling back to HTTP polling`);
           clearInterval(inactivityCheck);
           if (!resolved) {
             resolved = true;
             try { ws?.close(); } catch { /* ignore */ }
-            this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
-              .then(resolve)
-              .catch(reject);
+            if (isCloud) {
+              // Cloud: /history doesn't work with API key — report timeout error
+              debugLog(`[waitForCompletionWS] No progress for ${inactiveSec}s on cloud — cannot fall back to HTTP polling`);
+              resolve({ status: 'error', prompt_id: promptId });
+            } else {
+              // Local: fall back to HTTP polling
+              debugLog(`[waitForCompletionWS] No progress for ${inactiveSec}s — falling back to HTTP polling`);
+              this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+                .then(resolve)
+                .catch(reject);
+            }
           }
         }
       }, 10_000);
@@ -360,12 +369,18 @@ export class ComfyUIClient {
 
       ws.on('close', () => {
         debugLog(`[waitForCompletionWS] WebSocket closed for prompt=${promptId}`);
-        // If not yet resolved, fall back to polling
         if (!resolved) {
           resolved = true;
-          this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
-            .then(resolve)
-            .catch(reject);
+          if (isCloud) {
+            // Cloud: can't fall back to HTTP polling — report error
+            debugLog(`[waitForCompletionWS] Cloud WS closed unexpectedly — no HTTP fallback`);
+            resolve({ status: 'error', prompt_id: promptId });
+          } else {
+            // Local: fall back to HTTP polling
+            this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+              .then(resolve)
+              .catch(reject);
+          }
         }
       });
 
