@@ -98,6 +98,7 @@ export function createManageTimelineTool(context: TimelineToolContext): ToolDefi
       ? {
           repairedSegmentIds: repairResult.repairedSegmentIds,
           unrepairedSegmentIds: repairResult.unrepairedSegmentIds,
+          issues: repairResult.issues,
         }
       : undefined;
   };

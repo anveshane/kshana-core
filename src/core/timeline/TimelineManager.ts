@@ -58,6 +58,15 @@ export interface TimelineRepairResult {
   timeline: Timeline;
   repairedSegmentIds: string[];
   unrepairedSegmentIds: string[];
+  issues: Array<{
+    segmentId: string;
+    code:
+      | 'repaired_from_history'
+      | 'unrepairable_missing_visual'
+      | 'identity_mismatch'
+      | 'image_over_video_regression_prevented';
+    message: string;
+  }>;
 }
 
 interface TimelineIdentity {
@@ -105,6 +114,56 @@ function isVisualLikeLayer(layer: TimelineLayerEntry | undefined): boolean {
 
 function hasResolvableAssetReference(layer: TimelineLayerEntry | undefined): boolean {
   return Boolean(layer?.filePath || layer?.artifactId);
+}
+
+function detectMediaTypeFromPath(pathValue: string | undefined): 'image' | 'video' | null {
+  if (!pathValue) {
+    return null;
+  }
+
+  const normalized = pathValue.trim().toLowerCase();
+  if (/\.(png|jpe?g|webp|gif|avif)$/i.test(normalized)) {
+    return 'image';
+  }
+  if (/\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(normalized)) {
+    return 'video';
+  }
+  return null;
+}
+
+function detectLayerMediaType(
+  layer: TimelineLayerEntry | undefined
+): 'image' | 'video' | null {
+  if (!layer) {
+    return null;
+  }
+
+  if (layer.type === 'narration_video') {
+    return 'video';
+  }
+
+  const pathType = detectMediaTypeFromPath(layer.filePath);
+  if (pathType) {
+    return pathType;
+  }
+
+  if (typeof layer.artifactId === 'string') {
+    if (layer.artifactId.startsWith('vid_')) {
+      return 'video';
+    }
+    if (layer.artifactId.startsWith('img_')) {
+      return 'image';
+    }
+  }
+
+  if (/\bvideo\b/i.test(layer.label)) {
+    return 'video';
+  }
+  if (/\bimage\b/i.test(layer.label)) {
+    return 'image';
+  }
+
+  return null;
 }
 
 function parseIdentityFromText(value: string | undefined): TimelineIdentity {
@@ -277,15 +336,51 @@ function mergeLayerPreservingRefs(
   };
 }
 
+function shouldPreserveExistingVideoLayer(
+  segment: TimelineSegment,
+  existingLayer: TimelineLayerEntry | undefined,
+  incomingLayer: TimelineLayerEntry
+): boolean {
+  if (!existingLayer || !isVisualLikeLayer(existingLayer) || !isVisualLikeLayer(incomingLayer)) {
+    return false;
+  }
+
+  if (
+    !isLayerIdentityCompatible(segment, existingLayer) ||
+    !isLayerIdentityCompatible(segment, incomingLayer)
+  ) {
+    return false;
+  }
+
+  return (
+    detectLayerMediaType(existingLayer) === 'video' &&
+    detectLayerMediaType(incomingLayer) === 'image'
+  );
+}
+
+function areLayersEquivalent(
+  left: TimelineLayerEntry[],
+  right: TimelineLayerEntry[]
+): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 function repairLayerFromHistory(
   currentLayer: TimelineLayerEntry,
-  recoveredLayer: TimelineLayerEntry
+  recoveredLayer: TimelineLayerEntry,
+  options?: {
+    preferRecoveredRefs?: boolean;
+  }
 ): TimelineLayerEntry {
   return {
     ...recoveredLayer,
     ...currentLayer,
-    artifactId: currentLayer.artifactId ?? recoveredLayer.artifactId,
-    filePath: currentLayer.filePath ?? recoveredLayer.filePath,
+    artifactId: options?.preferRecoveredRefs
+      ? recoveredLayer.artifactId ?? currentLayer.artifactId
+      : currentLayer.artifactId ?? recoveredLayer.artifactId,
+    filePath: options?.preferRecoveredRefs
+      ? recoveredLayer.filePath ?? currentLayer.filePath
+      : currentLayer.filePath ?? recoveredLayer.filePath,
     metadata: currentLayer.metadata ?? recoveredLayer.metadata,
   };
 }
@@ -441,8 +536,6 @@ export function updateSegmentLayers(
   const updatedSegments = [...timeline.segments];
   const existing = updatedSegments[segmentIndex]!;
 
-  // Determine fill status: if layers contain a visual, mark as filled
-  const hasVisual = layers.some(l => l.type === 'visual' || l.type === 'narration_video');
   const hasMismatchedVisualLayer = layers.some(
     layer =>
       isVisualLikeLayer(layer) &&
@@ -454,13 +547,39 @@ export function updateSegmentLayers(
       `Incoming visual layer does not match target segment identity: ${segmentId}`
     );
   }
+  const promptBlockedIndexes = new Set<number>();
+  const normalizedLayers = layers.map((layer, index) => {
+    const matchingExistingLayer = findMatchingExistingLayer(existing.layers, layer, index);
+    if (shouldPreserveExistingVideoLayer(existing, matchingExistingLayer, layer)) {
+      promptBlockedIndexes.add(index);
+      return matchingExistingLayer!;
+    }
+
+    return mergeLayerPreservingRefs(layer, matchingExistingLayer);
+  });
+
+  const newLayers = prompt
+    ? normalizedLayers.map((layer, index) =>
+        index === 0 && !promptBlockedIndexes.has(index)
+          ? { ...layer, metadata: { ...layer.metadata, prompt } }
+          : layer
+      )
+    : normalizedLayers;
+
+  const hasVisual = newLayers.some(
+    l => l.type === 'visual' || l.type === 'narration_video'
+  );
   const newFillStatus = fillStatus ?? (hasVisual ? 'filled' : 'planned');
 
   // --- Version history ---
   const existingHasVisual = existing.layers.some(
     l => l.type === 'visual' || l.type === 'narration_video'
   );
-  const isReplacement = existingHasVisual && existing.fillStatus === 'filled' && hasVisual;
+  const isReplacement =
+    existingHasVisual &&
+    existing.fillStatus === 'filled' &&
+    hasVisual &&
+    !areLayersEquivalent(existing.layers, newLayers);
 
   let layerHistory = existing.layerHistory ? [...existing.layerHistory] : [];
   let versionInfo: SegmentVersionInfo;
@@ -481,20 +600,8 @@ export function updateSegmentLayers(
       totalVersions: currentVersion + 1,
     };
   } else {
-    // First-time fill — initialize version info
     versionInfo = existing.versionInfo ?? { activeVersion: 1, totalVersions: 1 };
   }
-
-  // Store the generation prompt in the first layer's metadata if provided
-  const normalizedLayers = layers.map((layer, index) =>
-    mergeLayerPreservingRefs(layer, findMatchingExistingLayer(existing.layers, layer, index))
-  );
-
-  const newLayers = prompt
-    ? normalizedLayers.map((l, i) =>
-        i === 0 ? { ...l, metadata: { ...l.metadata, prompt } } : l
-      )
-    : normalizedLayers;
 
   updatedSegments[segmentIndex] = {
     ...existing,
@@ -516,6 +623,7 @@ export function updateSegmentLayers(
 export function repairTimelineAssetReferences(timeline: Timeline): TimelineRepairResult {
   const repairedSegmentIds: string[] = [];
   const unrepairedSegmentIds: string[] = [];
+  const issues: TimelineRepairResult['issues'] = [];
 
   const segments = timeline.segments.map(segment => {
     if (segment.fillStatus !== 'filled') {
@@ -525,27 +633,76 @@ export function repairTimelineAssetReferences(timeline: Timeline): TimelineRepai
     const visualLayerIndexes = getVisualLayerIndexes(segment);
     if (visualLayerIndexes.length === 0) {
       unrepairedSegmentIds.push(segment.id);
+      issues.push({
+        segmentId: segment.id,
+        code: 'unrepairable_missing_visual',
+        message: `Filled segment "${segment.label}" has no visual layer to repair.`,
+      });
       return segment;
     }
 
     const hasAnyResolvableVisualLayer = visualLayerIndexes.some(index =>
       hasResolvableAssetReference(segment.layers[index])
     );
-    if (hasAnyResolvableVisualLayer) {
+    const hasMismatchedResolvableVisualLayer = visualLayerIndexes.some((index) => {
+      const layer = segment.layers[index];
+      return (
+        hasResolvableAssetReference(layer) &&
+        !isLayerIdentityCompatible(segment, layer)
+      );
+    });
+    const hasImageActiveLayer = visualLayerIndexes.some((index) => {
+      const layer = segment.layers[index];
+      return (
+        hasResolvableAssetReference(layer) &&
+        isLayerIdentityCompatible(segment, layer) &&
+        detectLayerMediaType(layer) === 'image'
+      );
+    });
+    const recoveredLayer = getLatestHistoricalResolvableLayer(segment);
+    const historicalVideoAvailable = detectLayerMediaType(recoveredLayer) === 'video';
+
+    if (
+      hasAnyResolvableVisualLayer &&
+      !hasMismatchedResolvableVisualLayer &&
+      !(hasImageActiveLayer && historicalVideoAvailable)
+    ) {
       return segment;
     }
-
-    const recoveredLayer = getLatestHistoricalResolvableLayer(segment);
     if (!recoveredLayer) {
       unrepairedSegmentIds.push(segment.id);
+      issues.push({
+        segmentId: segment.id,
+        code: hasAnyResolvableVisualLayer
+          ? 'identity_mismatch'
+          : 'unrepairable_missing_visual',
+        message: hasAnyResolvableVisualLayer
+          ? `Filled segment "${segment.label}" points to media from a different scene or shot.`
+          : `Filled segment "${segment.label}" has no resolvable visual layer and no valid historical recovery.`,
+      });
       return segment;
     }
 
     const repairedLayers = [...segment.layers];
     const repairIndex = visualLayerIndexes[0]!;
     const currentLayer = repairedLayers[repairIndex]!;
-    repairedLayers[repairIndex] = repairLayerFromHistory(currentLayer, recoveredLayer);
+    repairedLayers[repairIndex] = repairLayerFromHistory(currentLayer, recoveredLayer, {
+      preferRecoveredRefs:
+        hasMismatchedResolvableVisualLayer ||
+        (hasImageActiveLayer && historicalVideoAvailable),
+    });
     repairedSegmentIds.push(segment.id);
+    issues.push({
+      segmentId: segment.id,
+      code:
+        hasImageActiveLayer && historicalVideoAvailable
+          ? 'image_over_video_regression_prevented'
+          : 'repaired_from_history',
+      message:
+        hasImageActiveLayer && historicalVideoAvailable
+          ? `Recovered "${segment.label}" by restoring the matching historical video over a stale image-backed active layer.`
+          : `Recovered "${segment.label}" from the newest matching historical layer.`,
+    });
 
     return {
       ...segment,
@@ -563,6 +720,7 @@ export function repairTimelineAssetReferences(timeline: Timeline): TimelineRepai
     timeline: repairedTimeline,
     repairedSegmentIds,
     unrepairedSegmentIds,
+    issues,
   };
 }
 
@@ -710,6 +868,17 @@ export function validateTimeline(timeline: Timeline): TimelineValidation {
         hasResolvableAssetReference(layer) &&
         !isLayerIdentityCompatible(segment, layer)
     );
+    const activeVisualLayer = visualLayers[0];
+    const matchingHistoricalVideo = (segment.layerHistory ?? []).some((snapshot) =>
+      snapshot.layers.some(
+        (layer) =>
+          isVisualLikeLayer(layer) &&
+          hasResolvableAssetReference(layer) &&
+          isLayerIdentityCompatible(segment, layer) &&
+          detectLayerMediaType(layer) === 'video'
+      )
+    );
+    const activeVisualMediaType = detectLayerMediaType(activeVisualLayer);
     if (segment.fillStatus === 'filled' && !hasVisualLayer) {
       hasInvalidFilledSegment = true;
       warnings.push(
@@ -726,6 +895,15 @@ export function validateTimeline(timeline: Timeline): TimelineValidation {
       hasInvalidFilledSegment = true;
       warnings.push(
         `Segment "${segment.label}" (${segment.id}) is marked filled but its active visual layer points to a different scene/shot`
+      );
+    }
+    if (
+      segment.fillStatus === 'filled' &&
+      activeVisualMediaType === 'image' &&
+      matchingHistoricalVideo
+    ) {
+      warnings.push(
+        `Segment "${segment.label}" (${segment.id}) has an image active layer even though a matching video exists in history`
       );
     }
   }

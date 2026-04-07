@@ -204,6 +204,12 @@ describe('timeline ref preservation and repair', () => {
       label: 'Corrupted active layer',
       metadata: { prompt: 'current prompt' },
     });
+    expect(repairResult.issues).toEqual([
+      expect.objectContaining({
+        segmentId: 'segment_0',
+        code: 'repaired_from_history',
+      }),
+    ]);
   });
 
   it('does not repair from history when the newest resolvable layer belongs to a different shot', () => {
@@ -305,6 +311,12 @@ describe('timeline ref preservation and repair', () => {
     expect(result['repair']).toEqual({
       repairedSegmentIds: ['segment_0'],
       unrepairedSegmentIds: [],
+      issues: [
+        expect.objectContaining({
+          segmentId: 'segment_0',
+          code: 'repaired_from_history',
+        }),
+      ],
     });
 
     const persisted = loadTimeline(projectRoot);
@@ -355,5 +367,79 @@ describe('timeline ref preservation and repair', () => {
         },
       ])
     ).toThrow('Incoming visual layer does not match target segment identity');
+  });
+
+  it('prevents an image update from demoting an existing matching video layer', () => {
+    const updated = updateSegmentLayers(createFilledTimeline(), 'segment_0', [
+      {
+        type: 'visual',
+        artifactId: 'img_scene_1_shot_1',
+        filePath: 'assets/images/Scene1_shot1_image.png',
+        label: 'Scene 1 Shot 1 image',
+        source: 'generated',
+      },
+    ]);
+
+    expect(updated.segments[0]?.layers[0]).toMatchObject({
+      artifactId: 'vid_old',
+      filePath: 'assets/videos/Scene1_shot1_video.mp4',
+      label: 'Original clip',
+    });
+    expect(updated.segments[0]?.versionInfo).toEqual({
+      activeVersion: 1,
+      totalVersions: 1,
+    });
+  });
+
+  it('flags image-active segments when matching video exists in history', () => {
+    const timeline = createCorruptedTimeline();
+    timeline.segments[0] = {
+      ...timeline.segments[0]!,
+      layers: [
+        {
+          type: 'visual',
+          artifactId: 'img_latest',
+          filePath: 'assets/images/Scene1_shot1_image.png',
+          label: 'Latest image',
+          source: 'generated',
+        },
+      ],
+    };
+
+    const validation = validateTimeline(timeline);
+
+    expect(validation.warnings).toContain(
+      'Segment "Scene 1 Shot 1: Wide" (segment_0) has an image active layer even though a matching video exists in history'
+    );
+  });
+
+  it('repairs image-backed active layers back to matching video history', () => {
+    const timeline = createCorruptedTimeline();
+    timeline.segments[0] = {
+      ...timeline.segments[0]!,
+      layers: [
+        {
+          type: 'visual',
+          artifactId: 'img_latest',
+          filePath: 'assets/images/Scene1_shot1_image.png',
+          label: 'Latest image',
+          source: 'generated',
+        },
+      ],
+    };
+
+    const repairResult = repairTimelineAssetReferences(timeline);
+
+    expect(repairResult.timeline.segments[0]?.layers[0]).toMatchObject({
+      artifactId: 'vid_latest',
+      filePath: 'assets/videos/Scene1_shot1_video_latest.mp4',
+      label: 'Latest image',
+    });
+    expect(repairResult.issues).toEqual([
+      expect.objectContaining({
+        segmentId: 'segment_0',
+        code: 'image_over_video_regression_prevented',
+      }),
+    ]);
   });
 });

@@ -135,9 +135,11 @@ export async function registerRoutes(
       }
 
       conversationManager.touchSession(sessionId);
+      const timerState = conversationManager.getSessionTimerState(sessionId);
       return reply.send({
         ...session,
         configured: conversationManager.isSessionConfigured(sessionId),
+        ...(timerState ?? {}),
       });
     }
   );

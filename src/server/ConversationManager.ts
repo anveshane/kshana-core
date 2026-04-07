@@ -24,6 +24,8 @@ import {
   stopTimer,
   checkpointTimer,
   updateProjectAutonomousMode,
+  getElapsedMs,
+  loadProject,
 } from '../tasks/video/workflow/ProjectManager.js';
 import {
   captureSessionEnded,
@@ -199,6 +201,31 @@ export class ConversationManager {
   getSession(sessionId: string): SessionState | undefined {
     const session = this.sessions.get(sessionId);
     return session?.state;
+  }
+
+  getSessionTimerState(sessionId: string): {
+    elapsedMs: number;
+    running: boolean;
+    completed: boolean;
+  } | null {
+    const session = this.sessions.get(sessionId);
+    if (!session?.sessionContext) {
+      return null;
+    }
+
+    try {
+      return runInSession(session.sessionContext, () => {
+        const project = loadProject();
+        return {
+          elapsedMs: getElapsedMs(),
+          running: session.state.status === 'running',
+          completed:
+            session.state.status !== 'running' && !!project?.productionCompletedAt,
+        };
+      });
+    } catch {
+      return null;
+    }
   }
 
   /**
