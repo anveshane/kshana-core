@@ -130,8 +130,11 @@ export function filterRefsByPurpose(
       return { refs: allRefs.filter(r => r.type === 'setting'), generationMode: 'image_text_to_image' };
 
     case 'set_the_mood':
-    case 'show_clue':
       return { refs: [], generationMode: 'text_to_image' };
+
+    case 'show_clue':
+      // Clue shots may still reference characters/settings (e.g., a phantom, a hand holding an object)
+      return { refs: allRefs.filter(r => r.type === 'character' || r.type === 'setting'), generationMode: 'image_text_to_image' };
 
     case 'meet_character':
       return { refs: allRefs.filter(r => r.type !== 'object'), generationMode: 'image_text_to_image' };

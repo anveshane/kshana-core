@@ -197,11 +197,12 @@ describe('Shot reference mapping: filter refs by purpose', () => {
     expect(types).not.toContain('object');
   });
 
-  it('show_clue returns empty refs with text_to_image', async () => {
+  it('show_clue returns char + setting refs', async () => {
     const { filterRefsByPurpose } = await import('../../src/core/planner/shotReferenceMapping.js');
     const result = filterRefsByPurpose(allRefs, 'show_clue');
-    expect(result.refs).toHaveLength(0);
-    expect(result.generationMode).toBe('text_to_image');
+    expect(result.refs.map((r: any) => r.type)).toContain('character');
+    expect(result.refs.map((r: any) => r.type)).toContain('setting');
+    expect(result.generationMode).toBe('image_text_to_image');
   });
 
   it('show_action returns all refs', async () => {
