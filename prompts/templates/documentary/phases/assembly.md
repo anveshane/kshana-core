@@ -36,7 +36,7 @@ Call `manage_timeline` with action `validate`. Review the `fileResolution` field
 Call `assemble_from_timeline` to produce the final video. This tool:
 - Resolves all segment file paths (with 3-tier fallback)
 - Converts image segments to static video clips (documentary style only)
-- Runs FFmpeg concat to produce the final assembled video
+- Uses the session-appropriate assembly path and only reports success after the final video is persisted
 
 ### Step 4: Review Result
 Check the returned `output_path`, `duration`, `file_size`, and any `warnings`.
@@ -67,7 +67,7 @@ Note: If audio is included:
 
 ## After Successful Assembly
 
-When `assemble_from_timeline` returns `success: true`, the final video asset is automatically registered and the phase is marked completed. Present the result to the user: output path, duration, file size.
+When `assemble_from_timeline` returns `success: true`, the final video has been persisted and registered successfully. Present the result to the user: output path, duration, file size if available.
 
 ## Quality Criteria
 

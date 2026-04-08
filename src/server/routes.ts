@@ -226,8 +226,19 @@ export async function registerRoutes(
         url.searchParams.get('sessionId') ??
         url.searchParams.get('session_id') ??
         undefined;
+      const desktopCapabilities = {
+        desktopAssembly: url.searchParams.get('desktop_assembly') === '1',
+        desktopRemotion: url.searchParams.get('desktop_remotion') === '1',
+        desktopVersion: url.searchParams.get('desktop_version') ?? undefined,
+      };
       const remoteAddress = request.ip;
-      wsHandler.handleConnection(socket, remoteAddress, apiKey, resumeSessionId);
+      wsHandler.handleConnection(
+        socket,
+        remoteAddress,
+        apiKey,
+        resumeSessionId,
+        desktopCapabilities,
+      );
     }
   );
 

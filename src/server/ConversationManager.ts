@@ -34,6 +34,7 @@ import {
   captureWorkflowFailed,
   captureWorkflowStarted,
 } from './posthog.js';
+import type { DesktopSessionCapabilities } from '../core/remote/DesktopAssemblyBroker.js';
 
 const TIMER_CHECKPOINT_INTERVAL_MS = 60_000; // Flush elapsed time to disk every 60s
 
@@ -87,6 +88,8 @@ interface ActiveSession {
   mode: 'local' | 'remote';
   /** Remote client filesystem (set in remote mode) */
   remoteFs?: IFileSystem;
+  /** Capabilities reported by the connected desktop client */
+  desktopCapabilities?: DesktopSessionCapabilities;
   /** Periodic timer checkpoint interval (flushes elapsedMs to disk) */
   timerCheckpointInterval?: ReturnType<typeof setInterval>;
 }
@@ -291,6 +294,28 @@ export class ConversationManager {
       }
     }
     session.state.lastActivity = Date.now();
+  }
+
+  getSessionMode(sessionId: string): 'local' | 'remote' | null {
+    return this.sessions.get(sessionId)?.mode ?? null;
+  }
+
+  setDesktopCapabilities(
+    sessionId: string,
+    capabilities: DesktopSessionCapabilities,
+  ): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    session.desktopCapabilities = capabilities;
+    session.state.lastActivity = Date.now();
+  }
+
+  getDesktopCapabilities(
+    sessionId: string,
+  ): DesktopSessionCapabilities | undefined {
+    return this.sessions.get(sessionId)?.desktopCapabilities;
   }
 
   /**

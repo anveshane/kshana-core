@@ -35,7 +35,7 @@ If there are resolution errors OR image-only segments (invalid for anime/cinemat
 - This phase does NOT have video generation tools — the orchestrator must re-plan and return to the video generation phase to create missing clips
 
 ### Step 3: Assemble (only when all segments have videos)
-Call `assemble_from_timeline` to run FFmpeg concat. This resolves file paths, validates style requirements, and produces the final video synchronously.
+Call `assemble_from_timeline` to assemble the final video. This resolves file paths, validates style requirements, chooses the session-appropriate assembly path, and only reports success after the final artifact is persisted.
 
 ### Step 4: Review result
 Check the returned `output_path`, `duration`, `file_size`, and any `warnings`.
@@ -80,7 +80,7 @@ Before completing:
 ## After Successful Assembly
 
 When `assemble_from_timeline` returns `success: true`:
-- The final video asset is automatically registered in the manifest
+- The final video asset has been persisted and registered in the manifest
 - The VIDEO_COMBINE phase is automatically marked as completed
 - The project's `finalVideo` field is set with the artifact ID, path, and duration
 - Present the result to the user: output path, duration, file size

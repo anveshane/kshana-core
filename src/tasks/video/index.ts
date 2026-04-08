@@ -9,7 +9,7 @@ import { GenericAgent } from '../../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
-import { contextStore } from '../../core/context/index.js';
+import { getCurrentSession } from '../../core/fs/index.js';
 import { loadAndRenderMarkdown } from '../../core/prompts/loader.js';
 import {
   createPlannerTools,
@@ -256,38 +256,55 @@ export function createGoalDrivenToolRegistry(
     registry.register(tool);
   }
 
+  const persistFinalVideoArtifact = (payload: {
+    outputPath: string;
+    duration: number;
+    artifactId?: string;
+    fileSize?: number;
+  }) => {
+    const proj = loadProject(basePath);
+    if (!proj) return;
+
+    const projectDir = getProjectDir(basePath).replace(/\\/g, '/').replace(/\/+$/, '');
+    const normalizedOutputPath = payload.outputPath.replace(/\\/g, '/');
+    const relativePath = normalizedOutputPath.startsWith(`${projectDir}/`)
+      ? normalizedOutputPath.slice(projectDir.length + 1)
+      : normalizedOutputPath;
+    const finalVideoId = payload.artifactId?.trim() || `final-video-${Date.now()}`;
+
+    addAsset({
+      id: finalVideoId,
+      type: 'final_video',
+      path: relativePath,
+      createdAt: Date.now(),
+      metadata: {
+        duration: payload.duration,
+        ...(typeof payload.fileSize === 'number' ? { fileSize: payload.fileSize } : {}),
+      },
+    }, basePath);
+
+    proj.finalVideo = {
+      artifactId: finalVideoId,
+      path: relativePath,
+      duration: payload.duration,
+      createdAt: Date.now(),
+    };
+    proj.productionCompletedAt = Date.now();
+    saveProject(proj, basePath);
+    updatePhaseStatus(proj, WorkflowPhase.VIDEO_COMBINE, 'completed', basePath);
+  };
+
   // Add timeline tools — use getter so project dir is resolved at execution time
   const timelineContext: TimelineToolContext = {
     getProjectDir: () => getProjectDir(basePath),
     getProjectStyle: () => getProjectStyle(basePath),
+    getSessionMode: () => getCurrentSession()?.mode,
+    getSessionId: () => getCurrentSession()?.sessionId,
     markAssemblyComplete: (outputPath: string, duration: number, fileSize: number) => {
-      const proj = loadProject(basePath);
-      if (!proj) return;
-
-      // Register final video as asset
-      const finalVideoId = `final-video-${Date.now()}`;
-      addAsset({
-        id: finalVideoId,
-        type: 'final_video',
-        path: outputPath.startsWith(getProjectDir(basePath))
-          ? outputPath.slice(getProjectDir(basePath).length + 1)
-          : outputPath,
-        createdAt: Date.now(),
-        metadata: { duration, fileSize },
-      }, basePath);
-
-      // Set finalVideo on project
-      proj.finalVideo = {
-        artifactId: finalVideoId,
-        path: outputPath,
-        duration,
-        createdAt: Date.now(),
-      };
-      proj.productionCompletedAt = Date.now();
-      saveProject(proj, basePath);
-
-      // Mark VIDEO_COMBINE phase as completed
-      updatePhaseStatus(proj, WorkflowPhase.VIDEO_COMBINE, 'completed', basePath);
+      persistFinalVideoArtifact({ outputPath, duration, fileSize });
+    },
+    persistVerifiedFinalVideo: ({ outputPath, duration, artifactId }) => {
+      persistFinalVideoArtifact({ outputPath, duration, artifactId });
     },
   };
   for (const tool of createTimelineTools(timelineContext)) {

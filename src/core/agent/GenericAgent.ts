@@ -1720,6 +1720,8 @@ export class GenericAgent extends TypedEventEmitter {
       // Extract preceding message (LLM reasoning that led to these tool calls)
       const precedingMessage = typeof response.content === 'string' ? response.content : undefined;
 
+      let shouldStopAfterAssembly = false;
+
       // Execute tool calls
       for (const toolCall of response.toolCalls) {
         // Special handling for ask_user - pause execution
@@ -1843,6 +1845,11 @@ export class GenericAgent extends TypedEventEmitter {
               saveTodos([]);
             }
           }
+          shouldStopAfterAssembly = true;
+          finalOutput =
+            (typeof resultObj['output_path'] === 'string'
+              ? `Final video assembled successfully: ${resultObj['output_path']}. Let me know if any scenes or shots need to be regenerated.`
+              : 'Final video assembled successfully. Let me know if any scenes or shots need to be regenerated.');
         }
 
         // Check if tool is waiting for user input (dispatch_agent planning)
@@ -1867,6 +1874,11 @@ export class GenericAgent extends TypedEventEmitter {
           toolCallId: toolCall.id,
           name: toolCall.name,
         });
+      }
+
+      if (shouldStopAfterAssembly) {
+        debugLog('[GenericAgent] Assembly completed successfully — stopping agent execution for this run');
+        break;
       }
     }
 

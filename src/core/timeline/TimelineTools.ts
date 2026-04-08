@@ -22,6 +22,7 @@ import type {
   TransitionType,
   CompositingTransition,
   EasingType,
+  Timeline,
 } from './types.js';
 import {
   createTimelineSkeleton,
@@ -41,7 +42,17 @@ import {
   resolveSegmentFilePaths,
   convertImageToVideo,
   assembleVideos,
+  type ResolvedSegment,
 } from './FFmpegAssembler.js';
+import {
+  desktopAssemblyBroker,
+  type TimelineAssemblyItem,
+  type TimelineAssemblyOverlayItem,
+  type TimelineAssemblyPromptOverlayCue,
+  type TimelineAssemblyRequest,
+  type TimelineAssemblyResult,
+  type TimelineAssemblyTextOverlayCue,
+} from '../remote/DesktopAssemblyBroker.js';
 
 /**
  * Context required for timeline tools.
@@ -54,8 +65,148 @@ export interface TimelineToolContext {
   getProjectDir: () => string;
   /** Returns the project style (e.g., 'anime', 'cinematic_realism', 'documentary') */
   getProjectStyle?: () => string;
+  /** Returns the current session mode for assembly routing */
+  getSessionMode?: () => 'local' | 'remote' | undefined;
+  /** Returns the current session id for desktop assembly routing */
+  getSessionId?: () => string | undefined;
   /** Marks the VIDEO_COMBINE phase as completed and saves project */
   markAssemblyComplete?: (outputPath: string, duration: number, fileSize: number) => void;
+  /** Persists a verified final video result, regardless of where it was assembled */
+  persistVerifiedFinalVideo?: (payload: {
+    outputPath: string;
+    duration: number;
+    artifactId?: string;
+  }) => void;
+}
+
+function resolveLayerPath(
+  projectDir: string,
+  filePath?: string,
+): string | undefined {
+  if (!filePath) {
+    return undefined;
+  }
+  return filePath.startsWith('/') ? filePath : join(projectDir, filePath);
+}
+
+function buildDesktopAssemblyPayload(
+  timeline: Timeline,
+  projectDir: string,
+  resolvedSegments: ResolvedSegment[],
+  outputName: string,
+): Omit<TimelineAssemblyRequest, 'requestId'> {
+  const timelineItems: TimelineAssemblyItem[] = resolvedSegments.map((segment) => ({
+    type: segment.mediaType,
+    path: segment.filePath,
+    duration: segment.duration,
+    startTime: segment.startTime,
+    endTime: segment.endTime,
+    label: segment.label,
+  }));
+
+  const audioLayers = timeline.globalLayers.filter((layer) => layer.type === 'audio');
+  const primaryAudioLayer = audioLayers[0];
+  const overlayItems: TimelineAssemblyOverlayItem[] = [];
+  const textOverlayCues: TimelineAssemblyTextOverlayCue[] = [];
+  const promptOverlayCues: TimelineAssemblyPromptOverlayCue[] = [];
+
+  for (const segment of timeline.segments) {
+    for (const layer of segment.layers) {
+      if (layer.type === 'overlay') {
+        const overlayPath = resolveLayerPath(projectDir, layer.filePath);
+        if (overlayPath) {
+          overlayItems.push({
+            path: overlayPath,
+            duration: segment.duration,
+            startTime: segment.startTime,
+            endTime: segment.endTime,
+            label: layer.label,
+          });
+        }
+
+        const cueText =
+          typeof layer.metadata?.['text'] === 'string'
+            ? layer.metadata['text']
+            : typeof layer.metadata?.['prompt'] === 'string'
+              ? layer.metadata['prompt']
+              : undefined;
+        if (cueText) {
+          textOverlayCues.push({
+            id: `${segment.id}:${layer.label}:text`,
+            startTime: segment.startTime,
+            endTime: segment.endTime,
+            text: cueText,
+            words: [],
+          });
+        }
+      }
+
+      const promptText =
+        typeof layer.metadata?.['prompt'] === 'string'
+          ? layer.metadata['prompt']
+          : undefined;
+      if (promptText) {
+        promptOverlayCues.push({
+          id: `${segment.id}:${layer.label}:prompt`,
+          startTime: segment.startTime,
+          endTime: segment.endTime,
+          text: promptText,
+        });
+      }
+    }
+  }
+
+  return {
+    projectDir,
+    timelineItems,
+    audioPath: resolveLayerPath(projectDir, primaryAudioLayer?.filePath),
+    overlayItems: overlayItems.length > 0 ? overlayItems : undefined,
+    textOverlayCues: textOverlayCues.length > 0 ? textOverlayCues : undefined,
+    promptOverlayCues: promptOverlayCues.length > 0 ? promptOverlayCues : undefined,
+    outputIntent: 'final_video',
+    outputName,
+  };
+}
+
+function validateDesktopAssemblyResult(
+  result: TimelineAssemblyResult,
+  projectDir: string,
+): { ok: true; outputPath: string; duration: number; artifactId?: string } | { ok: false; error: string } {
+  if (result.status !== 'completed') {
+    return { ok: false, error: result.error || 'Desktop final assembly failed.' };
+  }
+
+  const manifestRelativePath = result.manifestRelativePath?.trim();
+  if (!manifestRelativePath) {
+    return {
+      ok: false,
+      error: 'Desktop final assembly result did not include a manifest-relative path.',
+    };
+  }
+
+  const normalizedProjectDir = projectDir.replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalizedOutputPath = result.outputPath?.replace(/\\/g, '/').trim();
+  const expectedOutputPath = `${normalizedProjectDir}/${manifestRelativePath}`;
+  if (!normalizedOutputPath || normalizedOutputPath !== expectedOutputPath) {
+    return {
+      ok: false,
+      error: 'Desktop final assembly result returned an unexpected output path.',
+    };
+  }
+
+  if (typeof result.duration !== 'number' || !Number.isFinite(result.duration) || result.duration <= 0) {
+    return {
+      ok: false,
+      error: 'Desktop final assembly result did not include a valid duration.',
+    };
+  }
+
+  return {
+    ok: true,
+    outputPath: normalizedOutputPath,
+    duration: result.duration,
+    artifactId: result.artifactId,
+  };
 }
 
 /**
@@ -624,9 +775,8 @@ export function createAssembleFromTimelineTool(context: TimelineToolContext): To
 Reads timeline.json from the project directory and:
 1. Validates all segments are filled (no gaps)
 2. Resolves artifact IDs to file paths via the asset manifest
-3. Builds an assembly job based on compositing modes per segment
-4. Handles global audio layers (narration, background music)
-5. Returns a job ID for tracking via wait_for_job
+3. Routes assembly through the session-appropriate path
+4. Persists a verified final video artifact before reporting success
 
 Use this instead of manually listing artifact IDs in stitch_videos.
 The timeline must be fully validated (all segments filled) before assembly.`,
@@ -647,6 +797,8 @@ The timeline must be fully validated (all segments filled) before assembly.`,
     handler: async (params: Record<string, unknown>) => {
       const outputName = (params['output_name'] as string) ?? 'final_video';
       const projectDir = context.getProjectDir();
+      const sessionMode = context.getSessionMode?.() ?? 'local';
+      const sessionId = context.getSessionId?.();
 
       // 1. Load and validate timeline
       const repairResult = loadTimelineWithRepair();
@@ -719,7 +871,59 @@ The timeline must be fully validated (all segments filled) before assembly.`,
       // Report resolution errors as warnings if some segments resolved
       const warnings: string[] = [...resolution.errors];
 
-      // 5. Run real FFmpeg assembly
+      const useDesktopAssembly =
+        sessionMode === 'remote' &&
+        typeof sessionId === 'string' &&
+        sessionId.trim().length > 0 &&
+        desktopAssemblyBroker.canAssemble(sessionId);
+
+      if (useDesktopAssembly) {
+        let desktopResult: TimelineAssemblyResult;
+        try {
+          desktopResult = await desktopAssemblyBroker.requestTimelineAssembly(
+            sessionId!,
+            buildDesktopAssemblyPayload(timeline, projectDir, resolution.resolved, outputName),
+          );
+        } catch (err) {
+          return {
+            success: false,
+            error:
+              err instanceof Error
+                ? err.message
+                : 'Desktop final assembly failed before a result was returned.',
+            resolved_segments: resolution.resolved.length,
+            warnings: warnings.length > 0 ? warnings : undefined,
+          };
+        }
+
+        const verified = validateDesktopAssemblyResult(desktopResult, projectDir);
+        if (!verified.ok) {
+          return {
+            success: false,
+            error: verified.error,
+            resolved_segments: resolution.resolved.length,
+            warnings: warnings.length > 0 ? warnings : undefined,
+          };
+        }
+
+        context.persistVerifiedFinalVideo?.({
+          outputPath: verified.outputPath,
+          duration: verified.duration,
+          artifactId: verified.artifactId,
+        });
+
+        return {
+          success: true,
+          output_path: verified.outputPath,
+          duration: verified.duration,
+          segment_count: resolution.resolved.length,
+          warnings: warnings.length > 0 ? warnings : undefined,
+          message: `Final video assembled on desktop: ${resolution.resolved.length} segments, ` +
+            `${verified.duration.toFixed(1)}s duration. Output: ${verified.outputPath}`,
+        };
+      }
+
+      // 5. Run backend FFmpeg assembly
       const outputPath = join(projectDir, 'assets', 'videos', `${outputName}.mp4`);
       let result;
       try {
@@ -745,7 +949,7 @@ The timeline must be fully validated (all segments filled) before assembly.`,
         file_size: result.fileSize,
         segment_count: resolution.resolved.length,
         warnings: warnings.length > 0 ? warnings : undefined,
-        message: `Final video assembled: ${resolution.resolved.length} segments, ` +
+        message: `Final video assembled via backend FFmpeg: ${resolution.resolved.length} segments, ` +
           `${result.duration.toFixed(1)}s duration, ${(result.fileSize / 1024 / 1024).toFixed(1)}MB. ` +
           `Output: ${result.outputPath}`,
       };
