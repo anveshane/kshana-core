@@ -23,6 +23,8 @@ import type {
   SegmentDescriptor,
   LayerSnapshot,
   SegmentVersionInfo,
+  DowngradePrevention,
+  ArtifactPathCorrection,
 } from './types.js';
 
 /** Default constraints based on current generation capabilities */
@@ -67,6 +69,16 @@ export interface TimelineRepairResult {
       | 'image_over_video_regression_prevented';
     message: string;
   }>;
+  pathCorrections?: ArtifactPathCorrection[];
+}
+
+export interface UpdateSegmentLayerOptions {
+  resolveArtifactPath?: (artifactId: string) => string | undefined;
+}
+
+export interface CanonicalizeTimelineArtifactPathsResult {
+  timeline: Timeline;
+  pathCorrections: ArtifactPathCorrection[];
 }
 
 interface TimelineIdentity {
@@ -114,6 +126,10 @@ function isVisualLikeLayer(layer: TimelineLayerEntry | undefined): boolean {
 
 function hasResolvableAssetReference(layer: TimelineLayerEntry | undefined): boolean {
   return Boolean(layer?.filePath || layer?.artifactId);
+}
+
+function normalizeProjectRelativePath(pathValue: string): string {
+  return pathValue.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
 }
 
 function detectMediaTypeFromPath(pathValue: string | undefined): 'image' | 'video' | null {
@@ -358,6 +374,52 @@ function shouldPreserveExistingVideoLayer(
   );
 }
 
+function getLayerDowngradeReason(
+  segment: TimelineSegment,
+  existingLayer: TimelineLayerEntry | undefined,
+  candidateLayer: TimelineLayerEntry
+): DowngradePrevention['reasons'][number]['reason'] | null {
+  if (!existingLayer || !isVisualLikeLayer(existingLayer) || !isVisualLikeLayer(candidateLayer)) {
+    return null;
+  }
+
+  if (
+    !isLayerIdentityCompatible(segment, existingLayer) ||
+    !isLayerIdentityCompatible(segment, candidateLayer)
+  ) {
+    return null;
+  }
+
+  const existingResolved = hasResolvableAssetReference(existingLayer);
+  const candidateResolved = hasResolvableAssetReference(candidateLayer);
+
+  if (existingLayer.artifactId && !candidateLayer.artifactId) {
+    return 'missing_artifact_id';
+  }
+  if (existingLayer.filePath && !candidateLayer.filePath) {
+    return 'missing_file_path';
+  }
+  if (existingResolved && !candidateResolved) {
+    return 'unresolved_over_resolved';
+  }
+
+  const existingMediaType = detectLayerMediaType(existingLayer);
+  const candidateMediaType = detectLayerMediaType(candidateLayer);
+  if (
+    existingMediaType === 'video' &&
+    candidateMediaType !== null &&
+    candidateMediaType !== 'video'
+  ) {
+    return 'video_over_weaker_media';
+  }
+
+  if (existingLayer.metadata && candidateLayer.metadata === undefined) {
+    return 'metadata_cleared';
+  }
+
+  return null;
+}
+
 function areLayersEquivalent(
   left: TimelineLayerEntry[],
   right: TimelineLayerEntry[]
@@ -527,7 +589,9 @@ export function updateSegmentLayers(
   fillStatus?: SegmentFillStatus,
   prompt?: string,
   note?: string
-): Timeline {
+  ,
+  options?: UpdateSegmentLayerOptions
+): Timeline & { downgradePrevention?: DowngradePrevention; pathCorrections?: ArtifactPathCorrection[] } {
   const segmentIndex = timeline.segments.findIndex(s => s.id === segmentId);
   if (segmentIndex === -1) {
     throw new Error(`Segment not found: ${segmentId}`);
@@ -548,14 +612,52 @@ export function updateSegmentLayers(
     );
   }
   const promptBlockedIndexes = new Set<number>();
+  const pathCorrections: ArtifactPathCorrection[] = [];
+  const downgradePrevention: DowngradePrevention = {
+    preservedIndexes: [],
+    reasons: [],
+  };
   const normalizedLayers = layers.map((layer, index) => {
     const matchingExistingLayer = findMatchingExistingLayer(existing.layers, layer, index);
+    let normalizedIncomingLayer = layer;
+    if (isVisualLikeLayer(layer) && layer.artifactId && options?.resolveArtifactPath) {
+      const canonicalFilePath = options.resolveArtifactPath(layer.artifactId);
+      if (canonicalFilePath) {
+        const previousFilePath = layer.filePath;
+        normalizedIncomingLayer = {
+          ...layer,
+          filePath: canonicalFilePath,
+        };
+        if (
+          previousFilePath !== canonicalFilePath &&
+          normalizeProjectRelativePath(previousFilePath ?? '') !== normalizeProjectRelativePath(canonicalFilePath)
+        ) {
+          pathCorrections.push({
+            index,
+            artifactId: layer.artifactId,
+            previousFilePath,
+            canonicalFilePath,
+          });
+        }
+      }
+    }
     if (shouldPreserveExistingVideoLayer(existing, matchingExistingLayer, layer)) {
       promptBlockedIndexes.add(index);
+      downgradePrevention.preservedIndexes.push(index);
+      downgradePrevention.reasons.push({ index, reason: 'video_over_weaker_media' });
       return matchingExistingLayer!;
     }
 
-    return mergeLayerPreservingRefs(layer, matchingExistingLayer);
+    const mergedLayer = mergeLayerPreservingRefs(normalizedIncomingLayer, matchingExistingLayer);
+    const downgradeReason = getLayerDowngradeReason(existing, matchingExistingLayer, mergedLayer);
+    if (downgradeReason && matchingExistingLayer) {
+      promptBlockedIndexes.add(index);
+      downgradePrevention.preservedIndexes.push(index);
+      downgradePrevention.reasons.push({ index, reason: downgradeReason });
+      return matchingExistingLayer;
+    }
+
+    return mergedLayer;
   });
 
   const newLayers = prompt
@@ -617,7 +719,68 @@ export function updateSegmentLayers(
     segments: updatedSegments,
   };
   updated.validation = validateTimeline(updated);
-  return updated;
+  const extras: {
+    downgradePrevention?: DowngradePrevention;
+    pathCorrections?: ArtifactPathCorrection[];
+  } = {};
+  if (downgradePrevention.preservedIndexes.length > 0) {
+    extras.downgradePrevention = downgradePrevention;
+  }
+  if (pathCorrections.length > 0) {
+    extras.pathCorrections = pathCorrections;
+  }
+  return Object.keys(extras).length > 0 ? { ...updated, ...extras } : updated;
+}
+
+export function canonicalizeTimelineArtifactPaths(
+  timeline: Timeline,
+  resolveArtifactPath: (artifactId: string) => string | undefined
+): CanonicalizeTimelineArtifactPathsResult {
+  const pathCorrections: ArtifactPathCorrection[] = [];
+
+  const segments = timeline.segments.map((segment) => ({
+    ...segment,
+    layers: segment.layers.map((layer, index) => {
+      if (!isVisualLikeLayer(layer) || !layer.artifactId) {
+        return layer;
+      }
+
+      const canonicalFilePath = resolveArtifactPath(layer.artifactId);
+      if (!canonicalFilePath) {
+        return layer;
+      }
+
+      const previousFilePath = layer.filePath;
+      if (
+        previousFilePath &&
+        normalizeProjectRelativePath(previousFilePath) === normalizeProjectRelativePath(canonicalFilePath)
+      ) {
+        return layer;
+      }
+
+      pathCorrections.push({
+        index,
+        artifactId: layer.artifactId,
+        previousFilePath,
+        canonicalFilePath,
+      });
+      return {
+        ...layer,
+        filePath: canonicalFilePath,
+      };
+    }),
+  }));
+
+  const repairedTimeline: Timeline = {
+    ...timeline,
+    segments,
+  };
+  repairedTimeline.validation = validateTimeline(repairedTimeline);
+
+  return {
+    timeline: repairedTimeline,
+    pathCorrections,
+  };
 }
 
 export function repairTimelineAssetReferences(timeline: Timeline): TimelineRepairResult {

@@ -128,6 +128,27 @@ function createTempProjectDir(): string {
   return projectRoot;
 }
 
+function writeManifest(
+  projectRoot: string,
+  assets: Array<{ id: string; type?: string; path: string; createdAt?: number }>
+): void {
+  fs.mkdirSync(join(projectRoot, 'assets'), { recursive: true });
+  fs.writeFileSync(
+    join(projectRoot, 'assets', 'manifest.json'),
+    JSON.stringify(
+      {
+        assets: assets.map((asset, index) => ({
+          type: 'scene_video',
+          createdAt: index + 1,
+          ...asset,
+        })),
+      },
+      null,
+      2
+    )
+  );
+}
+
 afterEach(() => {
   setActiveProjectDir('default.kshana');
 });
@@ -317,6 +338,7 @@ describe('timeline ref preservation and repair', () => {
           code: 'repaired_from_history',
         }),
       ],
+      pathCorrections: [],
     });
 
     const persisted = loadTimeline(projectRoot);
@@ -389,6 +411,123 @@ describe('timeline ref preservation and repair', () => {
       activeVersion: 1,
       totalVersions: 1,
     });
+    expect(updated.downgradePrevention).toEqual({
+      preservedIndexes: [0],
+      reasons: [{ index: 0, reason: 'video_over_weaker_media' }],
+    });
+  });
+
+  it('prevents a label-only visual update from dropping existing refs', () => {
+    const updated = updateSegmentLayers(createFilledTimeline(), 'segment_0', [
+      {
+        type: 'visual',
+        label: 'Late rewrite label only',
+        source: 'generated',
+      },
+    ]);
+
+    expect(updated.segments[0]?.layers[0]).toMatchObject({
+      artifactId: 'vid_old',
+      filePath: 'assets/videos/Scene1_shot1_video.mp4',
+      label: 'Late rewrite label only',
+      metadata: { prompt: 'original prompt' },
+    });
+    expect(updated.downgradePrevention).toBeUndefined();
+    expect(updated.segments[0]?.versionInfo).toEqual({
+      activeVersion: 2,
+      totalVersions: 2,
+    });
+  });
+
+  it('allows valid matching video replacements and snapshots history', () => {
+    const updated = updateSegmentLayers(createFilledTimeline(), 'segment_0', [
+      {
+        type: 'visual',
+        artifactId: 'vid_new',
+        filePath: 'assets/videos/Scene1_shot1_video_v2.mp4',
+        label: 'Replacement clip',
+        source: 'generated',
+      },
+    ]);
+
+    expect(updated.segments[0]?.layers[0]).toMatchObject({
+      artifactId: 'vid_new',
+      filePath: 'assets/videos/Scene1_shot1_video_v2.mp4',
+      label: 'Replacement clip',
+    });
+    expect(updated.segments[0]?.versionInfo).toEqual({
+      activeVersion: 2,
+      totalVersions: 2,
+    });
+    expect(updated.segments[0]?.layerHistory?.[0]?.layers[0]).toMatchObject({
+      artifactId: 'vid_old',
+      filePath: 'assets/videos/Scene1_shot1_video.mp4',
+    });
+  });
+
+  it('ignores a weak final rewrite after earlier valid shot updates', () => {
+    const base = createFilledTimeline();
+    const withSecondShot = {
+      ...base,
+      totalDuration: 8,
+      segments: [
+        base.segments[0]!,
+        {
+          id: 'segment_1',
+          label: 'Scene 1 Shot 2: Close',
+          startTime: 4,
+          endTime: 8,
+          duration: 4,
+          compositingMode: 'replace' as const,
+          fillStatus: 'filled' as const,
+          layers: [
+            {
+              type: 'visual' as const,
+              artifactId: 'vid_second',
+              filePath: 'assets/videos/Scene1_shot2_video.mp4',
+              label: 'Second clip',
+              source: 'generated' as const,
+              metadata: { prompt: 'second prompt' },
+            },
+          ],
+          versionInfo: {
+            activeVersion: 1,
+            totalVersions: 1,
+          },
+        },
+      ],
+      validation: {
+        isComplete: true,
+        filledDuration: 8,
+        gaps: [],
+        warnings: [],
+      },
+    };
+
+    const rewrittenFirst = updateSegmentLayers(withSecondShot, 'segment_0', [
+      {
+        type: 'visual',
+        label: 'Late first rewrite',
+        source: 'generated',
+      },
+    ]);
+    const rewrittenBoth = updateSegmentLayers(rewrittenFirst, 'segment_1', [
+      {
+        type: 'visual',
+        label: 'Late second rewrite',
+        source: 'generated',
+      },
+    ]);
+
+    expect(rewrittenBoth.segments[0]?.layers[0]).toMatchObject({
+      artifactId: 'vid_old',
+      filePath: 'assets/videos/Scene1_shot1_video.mp4',
+    });
+    expect(rewrittenBoth.segments[1]?.layers[0]).toMatchObject({
+      artifactId: 'vid_second',
+      filePath: 'assets/videos/Scene1_shot2_video.mp4',
+    });
+    expect(rewrittenBoth.validation.warnings).toEqual([]);
   });
 
   it('flags image-active segments when matching video exists in history', () => {
@@ -441,5 +580,162 @@ describe('timeline ref preservation and repair', () => {
         code: 'image_over_video_regression_prevented',
       }),
     ]);
+  });
+
+  it('reports ignored weak rewrites through manage_timeline update_segment', async () => {
+    const projectRoot = createTempProjectDir();
+    saveTimeline(projectRoot, createFilledTimeline());
+
+    const tool = createManageTimelineTool({
+      getProjectDir: () => projectRoot,
+    });
+
+    const result = await tool.handler?.({
+      action: 'update_segment',
+      segment_id: 'segment_0',
+      layers: [
+        {
+          type: 'visual',
+          artifact_id: 'img_scene_1_shot_1',
+          file_path: 'assets/images/Scene1_shot1_image.png',
+          label: 'Late weak rewrite',
+          source: 'generated',
+        },
+      ],
+    }) as Record<string, unknown>;
+
+    expect(result['success']).toBe(true);
+    expect(result['downgrade_prevention']).toEqual({
+      preservedIndexes: [0],
+      reasons: [{ index: 0, reason: 'video_over_weaker_media' }],
+    });
+    expect(result['message']).toContain('weaker layer update(s) ignored');
+  });
+
+  it('prefers manifest-backed artifact paths over mismatched timeline file paths during resolution', () => {
+    const projectRoot = createTempProjectDir();
+    fs.mkdirSync(join(projectRoot, 'assets', 'videos'), { recursive: true });
+    fs.writeFileSync(join(projectRoot, 'assets', 'videos', 'canonical.mp4'), 'video');
+    writeManifest(projectRoot, [
+      {
+        id: 'vid_old',
+        path: 'assets/videos/canonical.mp4',
+      },
+    ]);
+
+    const timeline = createFilledTimeline();
+    timeline.segments[0] = {
+      ...timeline.segments[0]!,
+      layers: [
+        {
+          ...timeline.segments[0]!.layers[0]!,
+          filePath: 'assets/videos/wrong.mp4',
+        },
+      ],
+    };
+
+    const resolution = resolveSegmentFilePaths(timeline, projectRoot);
+
+    expect(resolution.resolved).toHaveLength(1);
+    expect(resolution.resolved[0]?.filePath).toBe(
+      join(projectRoot, 'assets', 'videos', 'canonical.mp4')
+    );
+    expect(resolution.errors).toContain(
+      'Segment "segment_0" (Scene 1 Shot 1: Wide): artifact vid_old maps to assets/videos/canonical.mp4 in the manifest, but timeline filePath was assets/videos/wrong.mp4. Using manifest path.'
+    );
+  });
+
+  it('canonicalizes mismatched artifact file paths from the manifest during update_segment', async () => {
+    const projectRoot = createTempProjectDir();
+    writeManifest(projectRoot, [
+      {
+        id: 'vid_old',
+        path: 'assets/videos/canonical.mp4',
+      },
+    ]);
+    saveTimeline(projectRoot, createFilledTimeline());
+
+    const tool = createManageTimelineTool({
+      getProjectDir: () => projectRoot,
+    });
+
+    const result = await tool.handler?.({
+      action: 'update_segment',
+      segment_id: 'segment_0',
+      layers: [
+        {
+          type: 'visual',
+          artifact_id: 'vid_old',
+          file_path: 'assets/videos/wrong.mp4',
+          label: 'Canonicalized clip',
+          source: 'generated',
+        },
+      ],
+    }) as Record<string, unknown>;
+
+    expect(result['success']).toBe(true);
+    expect(result['path_corrections']).toEqual([
+      {
+        index: 0,
+        artifactId: 'vid_old',
+        previousFilePath: 'assets/videos/wrong.mp4',
+        canonicalFilePath: 'assets/videos/canonical.mp4',
+      },
+    ]);
+    expect(result['message']).toContain('artifact path(s) canonicalized from manifest');
+
+    const persisted = loadTimeline(projectRoot);
+    expect(persisted?.segments[0]?.layers[0]).toMatchObject({
+      artifactId: 'vid_old',
+      filePath: 'assets/videos/canonical.mp4',
+      label: 'Canonicalized clip',
+    });
+  });
+
+  it('auto-canonicalizes saved timeline paths from the manifest during get', async () => {
+    const projectRoot = createTempProjectDir();
+    writeManifest(projectRoot, [
+      {
+        id: 'vid_old',
+        path: 'assets/videos/canonical.mp4',
+      },
+    ]);
+    const timeline = createFilledTimeline();
+    timeline.segments[0] = {
+      ...timeline.segments[0]!,
+      layers: [
+        {
+          ...timeline.segments[0]!.layers[0]!,
+          filePath: 'assets/videos/wrong.mp4',
+        },
+      ],
+    };
+    saveTimeline(projectRoot, timeline);
+
+    const tool = createManageTimelineTool({
+      getProjectDir: () => projectRoot,
+    });
+
+    const result = await tool.handler?.({
+      action: 'get',
+    }) as Record<string, unknown>;
+
+    expect(result['success']).toBe(true);
+    expect(result['repair']).toEqual({
+      repairedSegmentIds: [],
+      unrepairedSegmentIds: [],
+      issues: [],
+      pathCorrections: [
+        {
+          index: 0,
+          artifactId: 'vid_old',
+          previousFilePath: 'assets/videos/wrong.mp4',
+          canonicalFilePath: 'assets/videos/canonical.mp4',
+        },
+      ],
+    });
+
+    const persisted = loadTimeline(projectRoot);
+    expect(persisted?.segments[0]?.layers[0]?.filePath).toBe('assets/videos/canonical.mp4');
   });
 });

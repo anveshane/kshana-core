@@ -148,6 +148,26 @@ export interface SegmentVersionInfo {
   totalVersions: number;
 }
 
+export interface DowngradePrevention {
+  preservedIndexes: number[];
+  reasons: Array<{
+    index: number;
+    reason:
+      | 'missing_artifact_id'
+      | 'missing_file_path'
+      | 'unresolved_over_resolved'
+      | 'video_over_weaker_media'
+      | 'metadata_cleared';
+  }>;
+}
+
+export interface ArtifactPathCorrection {
+  index: number;
+  artifactId: string;
+  previousFilePath?: string;
+  canonicalFilePath: string;
+}
+
 /**
  * A gap in the timeline where no content exists.
  */

@@ -7,7 +7,7 @@
  * Follows the single-tool-with-action pattern (like update_project).
  */
 
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { ToolDefinition } from '../llm/index.js';
 import type {
@@ -26,6 +26,7 @@ import type {
 } from './types.js';
 import {
   createTimelineSkeleton,
+  canonicalizeTimelineArtifactPaths,
   getNextPendingTimelineSegment,
   getPendingTimelineSegments,
   updateSegmentLayers,
@@ -53,6 +54,31 @@ import {
   type TimelineAssemblyResult,
   type TimelineAssemblyTextOverlayCue,
 } from '../remote/DesktopAssemblyBroker.js';
+
+interface ManifestAsset {
+  id: string;
+  path: string;
+}
+
+function loadManifestPathMap(projectDir: string): Map<string, string> {
+  const manifestPath = join(projectDir, 'assets', 'manifest.json');
+  if (!existsSync(manifestPath)) {
+    return new Map();
+  }
+
+  try {
+    const data = JSON.parse(readFileSync(manifestPath, 'utf-8')) as {
+      assets?: ManifestAsset[];
+    };
+    return new Map(
+      (data.assets ?? [])
+        .filter((asset): asset is ManifestAsset => typeof asset?.id === 'string' && typeof asset?.path === 'string')
+        .map((asset) => [asset.id, asset.path])
+    );
+  } catch {
+    return new Map();
+  }
+}
 
 /**
  * Context required for timeline tools.
@@ -222,10 +248,24 @@ export function createManageTimelineTool(context: TimelineToolContext): ToolDefi
       return null;
     }
 
-    const repairResult = repairTimelineAssetReferences(timeline);
-    if (repairResult.repairedSegmentIds.length > 0) {
+    const manifestPathMap = loadManifestPathMap(projectDir);
+    const canonicalized = canonicalizeTimelineArtifactPaths(
+      timeline,
+      (artifactId) => manifestPathMap.get(artifactId)
+    );
+    const repairedInputTimeline = canonicalized.timeline;
+
+    const repairResult = repairTimelineAssetReferences(repairedInputTimeline);
+    repairResult.pathCorrections = canonicalized.pathCorrections;
+    if (canonicalized.pathCorrections.length > 0 || repairResult.repairedSegmentIds.length > 0) {
       console.info(
-        `[manage_timeline] Auto-repaired asset refs for segments: ${repairResult.repairedSegmentIds.join(', ')}`
+        `[manage_timeline] Auto-repaired timeline state` +
+          (canonicalized.pathCorrections.length > 0
+            ? `; canonicalized ${canonicalized.pathCorrections.length} artifact path(s)`
+            : '') +
+          (repairResult.repairedSegmentIds.length > 0
+            ? `; repaired asset refs for segments: ${repairResult.repairedSegmentIds.join(', ')}`
+            : '')
       );
       saveTimeline(projectDir, repairResult.timeline);
     }
@@ -245,11 +285,14 @@ export function createManageTimelineTool(context: TimelineToolContext): ToolDefi
       return undefined;
     }
 
-    return repairResult.repairedSegmentIds.length > 0 || repairResult.unrepairedSegmentIds.length > 0
+    return repairResult.repairedSegmentIds.length > 0 ||
+      repairResult.unrepairedSegmentIds.length > 0 ||
+      (repairResult.pathCorrections?.length ?? 0) > 0
       ? {
           repairedSegmentIds: repairResult.repairedSegmentIds,
           unrepairedSegmentIds: repairResult.unrepairedSegmentIds,
           issues: repairResult.issues,
+          pathCorrections: repairResult.pathCorrections,
         }
       : undefined;
   };
@@ -476,8 +519,35 @@ The timeline is saved to timeline.json in the project directory and persists acr
             metadata: l.metadata,
           }));
 
+          let downgradePrevention:
+            | {
+                preservedIndexes: number[];
+                reasons: Array<{ index: number; reason: string }>;
+              }
+            | undefined;
+          let pathCorrections:
+            | Array<{
+                index: number;
+                artifactId: string;
+                previousFilePath?: string;
+                canonicalFilePath: string;
+              }>
+            | undefined;
           try {
-            timeline = updateSegmentLayers(timeline, segmentId, layers, fillStatus, undefined, versionNote);
+            const manifestPathMap = loadManifestPathMap(context.getProjectDir());
+            timeline = updateSegmentLayers(
+              timeline,
+              segmentId,
+              layers,
+              fillStatus,
+              undefined,
+              versionNote,
+              {
+                resolveArtifactPath: (artifactId) => manifestPathMap.get(artifactId),
+              }
+            );
+            downgradePrevention = timeline.downgradePrevention;
+            pathCorrections = timeline.pathCorrections;
           } catch (e) {
             return { success: false, error: String(e) };
           }
@@ -497,7 +567,15 @@ The timeline is saved to timeline.json in the project directory and persists acr
             },
             validation: timeline.validation,
             repair: buildRepairPayload(repairResult),
+            downgrade_prevention: downgradePrevention,
+            path_corrections: pathCorrections,
             message: `Segment "${segment.label}" updated with ${layers.length} layer(s), status: ${segment.fillStatus}` +
+              (downgradePrevention
+                ? ` (${downgradePrevention.preservedIndexes.length} weaker layer update(s) ignored)`
+                : '') +
+              (pathCorrections
+                ? ` (${pathCorrections.length} artifact path(s) canonicalized from manifest)`
+                : '') +
               (segment.versionInfo && segment.versionInfo.totalVersions > 1
                 ? ` (version ${segment.versionInfo.activeVersion} of ${segment.versionInfo.totalVersions})`
                 : ''),
