@@ -5,7 +5,7 @@
  * No tool concerns — this module is the core logic layer.
  */
 
-import { join } from 'path';
+import { isAbsolute, join, relative } from 'path';
 import {
   readProjectText,
   writeProjectText,
@@ -56,22 +56,6 @@ export interface UpsertSceneShotsResult {
   mergedMetadataIntoExistingShots?: boolean;
 }
 
-export interface TimelineRepairResult {
-  timeline: Timeline;
-  repairedSegmentIds: string[];
-  unrepairedSegmentIds: string[];
-  issues: Array<{
-    segmentId: string;
-    code:
-      | 'repaired_from_history'
-      | 'unrepairable_missing_visual'
-      | 'identity_mismatch'
-      | 'image_over_video_regression_prevented';
-    message: string;
-  }>;
-  pathCorrections?: ArtifactPathCorrection[];
-}
-
 export interface UpdateSegmentLayerOptions {
   resolveArtifactPath?: (artifactId: string) => string | undefined;
 }
@@ -79,6 +63,12 @@ export interface UpdateSegmentLayerOptions {
 export interface CanonicalizeTimelineArtifactPathsResult {
   timeline: Timeline;
   pathCorrections: ArtifactPathCorrection[];
+}
+
+export interface TimelineInspectionResult {
+  timeline: Timeline;
+  pathCorrections?: ArtifactPathCorrection[];
+  wouldChangeOnSave: boolean;
 }
 
 interface TimelineIdentity {
@@ -130,6 +120,26 @@ function hasResolvableAssetReference(layer: TimelineLayerEntry | undefined): boo
 
 function normalizeProjectRelativePath(pathValue: string): string {
   return pathValue.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+}
+
+function canonicalizePathForPersistence(projectDir: string, filePath?: string): string | undefined {
+  if (!filePath) {
+    return undefined;
+  }
+
+  const trimmed = filePath.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  if (isAbsolute(trimmed)) {
+    const rel = relative(projectDir, trimmed);
+    if (rel && !rel.startsWith('..') && !isAbsolute(rel)) {
+      return normalizeProjectRelativePath(rel);
+    }
+  }
+
+  return normalizeProjectRelativePath(trimmed);
 }
 
 function detectMediaTypeFromPath(pathValue: string | undefined): 'image' | 'video' | null {
@@ -425,45 +435,6 @@ function areLayersEquivalent(
   right: TimelineLayerEntry[]
 ): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function repairLayerFromHistory(
-  currentLayer: TimelineLayerEntry,
-  recoveredLayer: TimelineLayerEntry,
-  options?: {
-    preferRecoveredRefs?: boolean;
-  }
-): TimelineLayerEntry {
-  return {
-    ...recoveredLayer,
-    ...currentLayer,
-    artifactId: options?.preferRecoveredRefs
-      ? recoveredLayer.artifactId ?? currentLayer.artifactId
-      : currentLayer.artifactId ?? recoveredLayer.artifactId,
-    filePath: options?.preferRecoveredRefs
-      ? recoveredLayer.filePath ?? currentLayer.filePath
-      : currentLayer.filePath ?? recoveredLayer.filePath,
-    metadata: currentLayer.metadata ?? recoveredLayer.metadata,
-  };
-}
-
-function getLatestHistoricalResolvableLayer(
-  segment: TimelineSegment
-): TimelineLayerEntry | undefined {
-  const history = segment.layerHistory ?? [];
-  for (let i = history.length - 1; i >= 0; i--) {
-    const snapshot = history[i];
-    const recoveredLayer = snapshot?.layers.find(layer =>
-      isVisualLikeLayer(layer) &&
-      hasResolvableAssetReference(layer) &&
-      isLayerIdentityCompatible(segment, layer)
-    );
-    if (recoveredLayer) {
-      return recoveredLayer;
-    }
-  }
-
-  return undefined;
 }
 
 function getVisualLayerIndexes(segment: TimelineSegment): number[] {
@@ -783,117 +754,65 @@ export function canonicalizeTimelineArtifactPaths(
   };
 }
 
-export function repairTimelineAssetReferences(timeline: Timeline): TimelineRepairResult {
-  const repairedSegmentIds: string[] = [];
-  const unrepairedSegmentIds: string[] = [];
-  const issues: TimelineRepairResult['issues'] = [];
+function canonicalizeTimelinePathsForPersistence(
+  projectDir: string,
+  timeline: Timeline
+): { timeline: Timeline; changed: boolean } {
+  let changed = false;
 
-  const segments = timeline.segments.map(segment => {
-    if (segment.fillStatus !== 'filled') {
-      return segment;
+  const canonicalizeLayer = (layer: TimelineLayerEntry): TimelineLayerEntry => {
+    const canonicalFilePath = canonicalizePathForPersistence(projectDir, layer.filePath);
+    if (canonicalFilePath === layer.filePath) {
+      return layer;
     }
-
-    const visualLayerIndexes = getVisualLayerIndexes(segment);
-    if (visualLayerIndexes.length === 0) {
-      unrepairedSegmentIds.push(segment.id);
-      issues.push({
-        segmentId: segment.id,
-        code: 'unrepairable_missing_visual',
-        message: `Filled segment "${segment.label}" has no visual layer to repair.`,
-      });
-      return segment;
-    }
-
-    const hasAnyResolvableVisualLayer = visualLayerIndexes.some(index =>
-      hasResolvableAssetReference(segment.layers[index])
-    );
-    const hasMismatchedResolvableVisualLayer = visualLayerIndexes.some((index) => {
-      const layer = segment.layers[index];
-      return (
-        hasResolvableAssetReference(layer) &&
-        !isLayerIdentityCompatible(segment, layer)
-      );
-    });
-    const hasImageActiveLayer = visualLayerIndexes.some((index) => {
-      const layer = segment.layers[index];
-      return (
-        hasResolvableAssetReference(layer) &&
-        isLayerIdentityCompatible(segment, layer) &&
-        detectLayerMediaType(layer) === 'image'
-      );
-    });
-    const recoveredLayer = getLatestHistoricalResolvableLayer(segment);
-    const historicalVideoAvailable = detectLayerMediaType(recoveredLayer) === 'video';
-
-    if (
-      hasAnyResolvableVisualLayer &&
-      !hasMismatchedResolvableVisualLayer &&
-      !(hasImageActiveLayer && historicalVideoAvailable)
-    ) {
-      return segment;
-    }
-    if (!recoveredLayer) {
-      unrepairedSegmentIds.push(segment.id);
-      issues.push({
-        segmentId: segment.id,
-        code: hasAnyResolvableVisualLayer
-          ? 'identity_mismatch'
-          : 'unrepairable_missing_visual',
-        message: hasAnyResolvableVisualLayer
-          ? `Filled segment "${segment.label}" points to media from a different scene or shot.`
-          : `Filled segment "${segment.label}" has no resolvable visual layer and no valid historical recovery.`,
-      });
-      return segment;
-    }
-
-    const repairedLayers = [...segment.layers];
-    const repairIndex = visualLayerIndexes[0]!;
-    const currentLayer = repairedLayers[repairIndex]!;
-    repairedLayers[repairIndex] = repairLayerFromHistory(currentLayer, recoveredLayer, {
-      preferRecoveredRefs:
-        hasMismatchedResolvableVisualLayer ||
-        (hasImageActiveLayer && historicalVideoAvailable),
-    });
-    repairedSegmentIds.push(segment.id);
-    issues.push({
-      segmentId: segment.id,
-      code:
-        hasImageActiveLayer && historicalVideoAvailable
-          ? 'image_over_video_regression_prevented'
-          : 'repaired_from_history',
-      message:
-        hasImageActiveLayer && historicalVideoAvailable
-          ? `Recovered "${segment.label}" by restoring the matching historical video over a stale image-backed active layer.`
-          : `Recovered "${segment.label}" from the newest matching historical layer.`,
-    });
-
+    changed = true;
     return {
-      ...segment,
-      layers: repairedLayers,
+      ...layer,
+      ...(canonicalFilePath ? { filePath: canonicalFilePath } : {}),
+      ...(canonicalFilePath ? {} : { filePath: undefined }),
+    };
+  };
+
+  const segments = timeline.segments.map((segment) => ({
+    ...segment,
+    layers: segment.layers.map(canonicalizeLayer),
+    layerHistory: segment.layerHistory?.map((snapshot) => ({
+      ...snapshot,
+      layers: snapshot.layers.map(canonicalizeLayer),
+    })),
+  }));
+
+  const globalLayers = timeline.globalLayers.map((layer) => {
+    const canonicalFilePath = canonicalizePathForPersistence(projectDir, layer.filePath);
+    if (canonicalFilePath === layer.filePath) {
+      return layer;
+    }
+    changed = true;
+    return {
+      ...layer,
+      ...(canonicalFilePath ? { filePath: canonicalFilePath } : {}),
+      ...(canonicalFilePath ? {} : { filePath: undefined }),
     };
   });
 
-  const repairedTimeline: Timeline = {
-    ...timeline,
-    segments,
-  };
-  repairedTimeline.validation = validateTimeline(repairedTimeline);
-
   return {
-    timeline: repairedTimeline,
-    repairedSegmentIds,
-    unrepairedSegmentIds,
-    issues,
+    timeline: changed ? { ...timeline, segments, globalLayers } : timeline,
+    changed,
   };
 }
 
-export function loadTimelineWithRepair(projectDir: string): TimelineRepairResult | null {
+export function inspectTimeline(projectDir: string): TimelineInspectionResult | null {
   const timeline = loadTimeline(projectDir);
   if (!timeline) {
     return null;
   }
 
-  return repairTimelineAssetReferences(timeline);
+  const canonicalized = canonicalizeTimelinePathsForPersistence(projectDir, timeline);
+
+  return {
+    timeline: canonicalized.timeline,
+    wouldChangeOnSave: canonicalized.changed,
+  };
 }
 
 function isCompatibleShotUpdate(
@@ -1352,11 +1271,14 @@ export function loadTimeline(projectDir: string): Timeline | null {
  * Creates the project directory if it doesn't exist.
  */
 export function saveTimeline(projectDir: string, timeline: Timeline): void {
+  const canonicalized = canonicalizeTimelinePathsForPersistence(projectDir, timeline);
+  const timelineToSave = canonicalized.timeline;
+
   // Revalidate before saving
-  timeline.validation = validateTimeline(timeline);
+  timelineToSave.validation = validateTimeline(timelineToSave);
 
   writeProjectText(
     join(projectDir, TIMELINE_FILENAME),
-    JSON.stringify(timeline, null, 2),
+    JSON.stringify(timelineToSave, null, 2),
   );
 }

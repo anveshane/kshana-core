@@ -84,7 +84,7 @@ import {
 import { comfyProgressBus, type ComfyProgressHandler } from '../../services/comfyui/index.js';
 import {
   createTimelineSkeleton,
-  loadTimelineWithRepair,
+  inspectTimeline,
   saveTimeline,
   upsertSceneShots,
 } from '../timeline/TimelineManager.js';
@@ -191,12 +191,8 @@ function syncTimelineSkeleton(projectDir: string, project: NonNullable<ReturnTyp
 
   const descriptors = buildSceneDescriptors(projectDir, scenes);
   const desiredLabels = descriptors.map(descriptor => descriptor.label);
-  const repaired = loadTimelineWithRepair(projectDir);
+  const repaired = inspectTimeline(projectDir);
   const existing = repaired?.timeline;
-  if (existing && repaired?.repairedSegmentIds.length) {
-    saveTimeline(projectDir, existing);
-    debugLog(`[GenericAgent] Auto-repaired timeline refs before skeleton sync: ${repaired.repairedSegmentIds.join(', ')}`);
-  }
   const hasShotSplits = existing?.segments.some(segment => segment.id.includes('_shot_')) ?? false;
 
   const totalDuration = getTimelineTargetDuration(projectDir, project);
@@ -309,14 +305,10 @@ function syncTimelineForMotionPrompt(
     return skeletonResult;
   }
 
-  const repaired = loadTimelineWithRepair(projectDir);
+  const repaired = inspectTimeline(projectDir);
   const timeline = repaired?.timeline;
   if (!timeline) {
     return { persisted: false, error: 'Failed to create timeline before splitting scene shots' };
-  }
-  if (repaired.repairedSegmentIds.length) {
-    saveTimeline(projectDir, timeline);
-    debugLog(`[GenericAgent] Auto-repaired timeline refs before motion prompt sync: ${repaired.repairedSegmentIds.join(', ')}`);
   }
 
   const scenes = [...project.scenes].sort((a, b) => a.sceneNumber - b.sceneNumber);

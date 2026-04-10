@@ -6,13 +6,16 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { resolveSegmentFilePaths } from '../../src/core/timeline/FFmpegAssembler.js';
 import {
+  inspectTimeline,
   loadTimeline,
-  repairTimelineAssetReferences,
   saveTimeline,
   updateSegmentLayers,
   validateTimeline,
 } from '../../src/core/timeline/TimelineManager.js';
-import { createManageTimelineTool } from '../../src/core/timeline/TimelineTools.js';
+import {
+  createAssembleFromTimelineTool,
+  createManageTimelineTool,
+} from '../../src/core/timeline/TimelineTools.js';
 import type { Timeline } from '../../src/core/timeline/types.js';
 import { setActiveProjectDir } from '../../src/tasks/video/workflow/activeProject.js';
 
@@ -149,11 +152,15 @@ function writeManifest(
   );
 }
 
+function writeRawTimeline(projectRoot: string, timeline: Timeline): void {
+  fs.writeFileSync(join(projectRoot, 'timeline.json'), JSON.stringify(timeline, null, 2));
+}
+
 afterEach(() => {
   setActiveProjectDir('default.kshana');
 });
 
-describe('timeline ref preservation and repair', () => {
+describe('timeline ref preservation', () => {
   it('preserves existing refs when a filled segment receives a label-only update', () => {
     const timeline = createFilledTimeline();
 
@@ -213,80 +220,18 @@ describe('timeline ref preservation and repair', () => {
     });
   });
 
-  it('repairs corrupted active layers from the newest valid historical snapshot', () => {
-    const repairResult = repairTimelineAssetReferences(createCorruptedTimeline());
-    const repairedLayer = repairResult.timeline.segments[0]?.layers[0];
-
-    expect(repairResult.repairedSegmentIds).toEqual(['segment_0']);
-    expect(repairResult.unrepairedSegmentIds).toEqual([]);
-    expect(repairedLayer).toMatchObject({
-      artifactId: 'vid_latest',
-      filePath: 'assets/videos/Scene1_shot1_video_latest.mp4',
-      label: 'Corrupted active layer',
-      metadata: { prompt: 'current prompt' },
-    });
-    expect(repairResult.issues).toEqual([
-      expect.objectContaining({
-        segmentId: 'segment_0',
-        code: 'repaired_from_history',
-      }),
-    ]);
-  });
-
-  it('does not repair from history when the newest resolvable layer belongs to a different shot', () => {
+  it('keeps corrupted active layers invalid instead of auto-repairing from history', () => {
     const timeline = createCorruptedTimeline();
-    timeline.segments[0] = {
-      ...timeline.segments[0]!,
-      layerHistory: [
-        {
-          version: 1,
-          createdAt: '2026-04-02T00:00:00.000Z',
-          layers: [
-            {
-              type: 'visual',
-              artifactId: 'vid_wrong',
-              filePath: 'assets/videos/Scene2_shot1_video_wrong.mp4',
-              label: 'Wrong shot clip',
-              source: 'generated',
-            },
-          ],
-        },
-      ],
-    };
 
-    const repairResult = repairTimelineAssetReferences(timeline);
-    const validation = validateTimeline(repairResult.timeline);
+    const validation = validateTimeline(timeline);
 
-    expect(repairResult.repairedSegmentIds).toEqual([]);
-    expect(repairResult.unrepairedSegmentIds).toEqual(['segment_0']);
-    expect(validation.warnings).toContain(
-      'Segment "Scene 1 Shot 1: Wide" (segment_0) is marked filled but its active visual layer has no filePath or artifactId'
-    );
-  });
-
-  it('leaves unrecoverable segments invalid and incomplete', () => {
-    const timeline = createFilledTimeline();
-    timeline.segments[0] = {
-      ...timeline.segments[0]!,
-      layers: [
-        {
-          type: 'visual',
-          label: 'Broken clip',
-          source: 'generated',
-        },
-      ],
-      layerHistory: undefined,
-    };
-
-    const repairResult = repairTimelineAssetReferences(timeline);
-    const validation = validateTimeline(repairResult.timeline);
-
-    expect(repairResult.repairedSegmentIds).toEqual([]);
-    expect(repairResult.unrepairedSegmentIds).toEqual(['segment_0']);
     expect(validation.isComplete).toBe(false);
     expect(validation.warnings).toContain(
       'Segment "Scene 1 Shot 1: Wide" (segment_0) is marked filled but its active visual layer has no filePath or artifactId'
     );
+    expect(timeline.segments[0]?.layers[0]).toMatchObject({
+      label: 'Corrupted active layer',
+    });
   });
 
   it('keeps assembly resolution working after a partial update on a filled segment', () => {
@@ -316,9 +261,10 @@ describe('timeline ref preservation and repair', () => {
     });
   });
 
-  it('auto-repairs a corrupted saved timeline during get and persists the repaired refs', async () => {
+  it('does not auto-repair refs during get', async () => {
     const projectRoot = createTempProjectDir();
     saveTimeline(projectRoot, createCorruptedTimeline());
+    const before = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
 
     const tool = createManageTimelineTool({
       getProjectDir: () => projectRoot,
@@ -329,26 +275,17 @@ describe('timeline ref preservation and repair', () => {
     }) as Record<string, unknown>;
 
     expect(result['success']).toBe(true);
-    expect(result['repair']).toEqual({
-      repairedSegmentIds: ['segment_0'],
-      unrepairedSegmentIds: [],
-      issues: [
-        expect.objectContaining({
-          segmentId: 'segment_0',
-          code: 'repaired_from_history',
-        }),
-      ],
-      pathCorrections: [],
-    });
+    expect(result['repair']).toBeUndefined();
 
     const persisted = loadTimeline(projectRoot);
     expect(persisted?.segments[0]?.layers[0]).toMatchObject({
-      artifactId: 'vid_latest',
-      filePath: 'assets/videos/Scene1_shot1_video_latest.mp4',
+      label: 'Corrupted active layer',
     });
+    const after = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
+    expect(after).toBe(before);
   });
 
-  it('auto-repairs before update_segment and preserves refs in the saved active layer', async () => {
+  it('does not auto-repair before update_segment', async () => {
     const projectRoot = createTempProjectDir();
     saveTimeline(projectRoot, createCorruptedTimeline());
 
@@ -372,10 +309,10 @@ describe('timeline ref preservation and repair', () => {
 
     const persisted = loadTimeline(projectRoot);
     expect(persisted?.segments[0]?.layers[0]).toMatchObject({
-      artifactId: 'vid_latest',
-      filePath: 'assets/videos/Scene1_shot1_video_latest.mp4',
       label: 'Updated after repair',
     });
+    expect(persisted?.segments[0]?.layers[0]?.artifactId).toBeUndefined();
+    expect(persisted?.segments[0]?.layers[0]?.filePath).toBeUndefined();
   });
 
   it('rejects updates that point a segment to a different scene shot', () => {
@@ -552,7 +489,7 @@ describe('timeline ref preservation and repair', () => {
     );
   });
 
-  it('repairs image-backed active layers back to matching video history', () => {
+  it('does not auto-repair image-backed active layers back to matching video history', () => {
     const timeline = createCorruptedTimeline();
     timeline.segments[0] = {
       ...timeline.segments[0]!,
@@ -567,19 +504,11 @@ describe('timeline ref preservation and repair', () => {
       ],
     };
 
-    const repairResult = repairTimelineAssetReferences(timeline);
-
-    expect(repairResult.timeline.segments[0]?.layers[0]).toMatchObject({
-      artifactId: 'vid_latest',
-      filePath: 'assets/videos/Scene1_shot1_video_latest.mp4',
+    expect(timeline.segments[0]?.layers[0]).toMatchObject({
+      artifactId: 'img_latest',
+      filePath: 'assets/images/Scene1_shot1_image.png',
       label: 'Latest image',
     });
-    expect(repairResult.issues).toEqual([
-      expect.objectContaining({
-        segmentId: 'segment_0',
-        code: 'image_over_video_regression_prevented',
-      }),
-    ]);
   });
 
   it('reports ignored weak rewrites through manage_timeline update_segment', async () => {
@@ -692,7 +621,7 @@ describe('timeline ref preservation and repair', () => {
     });
   });
 
-  it('auto-canonicalizes saved timeline paths from the manifest during get', async () => {
+  it('leaves absolute-path canonicalization for the next mutating save during get', async () => {
     const projectRoot = createTempProjectDir();
     writeManifest(projectRoot, [
       {
@@ -706,11 +635,12 @@ describe('timeline ref preservation and repair', () => {
       layers: [
         {
           ...timeline.segments[0]!.layers[0]!,
-          filePath: 'assets/videos/wrong.mp4',
+          filePath: join(projectRoot, 'assets', 'videos', 'canonical.mp4'),
         },
       ],
     };
-    saveTimeline(projectRoot, timeline);
+    writeRawTimeline(projectRoot, timeline);
+    const before = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
 
     const tool = createManageTimelineTool({
       getProjectDir: () => projectRoot,
@@ -721,21 +651,154 @@ describe('timeline ref preservation and repair', () => {
     }) as Record<string, unknown>;
 
     expect(result['success']).toBe(true);
-    expect(result['repair']).toEqual({
-      repairedSegmentIds: [],
-      unrepairedSegmentIds: [],
-      issues: [],
-      pathCorrections: [
-        {
-          index: 0,
-          artifactId: 'vid_old',
-          previousFilePath: 'assets/videos/wrong.mp4',
-          canonicalFilePath: 'assets/videos/canonical.mp4',
-        },
-      ],
-    });
+    expect(result['repair']).toBeUndefined();
+    const inspection = inspectTimeline(projectRoot);
+    expect(inspection?.wouldChangeOnSave).toBe(true);
 
     const persisted = loadTimeline(projectRoot);
-    expect(persisted?.segments[0]?.layers[0]?.filePath).toBe('assets/videos/canonical.mp4');
+    expect(persisted?.segments[0]?.layers[0]?.filePath).toBe(
+      join(projectRoot, 'assets', 'videos', 'canonical.mp4')
+    );
+    const after = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
+    expect(after).toBe(before);
+  });
+
+  it('saveTimeline canonicalizes absolute paths in active layers and history once', () => {
+    const projectRoot = createTempProjectDir();
+    const absoluteActive = join(projectRoot, 'assets', 'videos', 'active.mp4');
+    const absoluteHistory = join(projectRoot, 'assets', 'videos', 'history.mp4');
+    const timeline = createFilledTimeline();
+    timeline.segments[0] = {
+      ...timeline.segments[0]!,
+      layers: [
+        {
+          ...timeline.segments[0]!.layers[0]!,
+          filePath: absoluteActive,
+        },
+      ],
+      layerHistory: [
+        {
+          version: 1,
+          createdAt: '2026-04-02T00:00:00.000Z',
+          layers: [
+            {
+              type: 'visual',
+              artifactId: 'vid_old',
+              filePath: absoluteHistory,
+              label: 'History clip',
+              source: 'generated',
+            },
+          ],
+        },
+      ],
+    };
+
+    saveTimeline(projectRoot, timeline);
+
+    const persisted = loadTimeline(projectRoot);
+    expect(persisted?.segments[0]?.layers[0]?.filePath).toBe('assets/videos/active.mp4');
+    expect(persisted?.segments[0]?.layerHistory?.[0]?.layers[0]?.filePath).toBe(
+      'assets/videos/history.mp4'
+    );
+  });
+
+  it('inspectTimeline reports save-time normalization needs without mutating disk', () => {
+    const projectRoot = createTempProjectDir();
+    const timeline = createFilledTimeline();
+    timeline.segments[0] = {
+      ...timeline.segments[0]!,
+      layers: [
+        {
+          ...timeline.segments[0]!.layers[0]!,
+          filePath: join(projectRoot, 'assets', 'videos', 'active.mp4'),
+        },
+      ],
+    };
+    writeRawTimeline(projectRoot, timeline);
+    const before = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
+
+    const inspection = inspectTimeline(projectRoot);
+
+    expect(inspection?.wouldChangeOnSave).toBe(true);
+    const after = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
+    expect(after).toBe(before);
+  });
+
+  it('manage_timeline get and validate stay read-only after generation', async () => {
+    const projectRoot = createTempProjectDir();
+    fs.mkdirSync(join(projectRoot, 'assets', 'videos'), { recursive: true });
+    fs.writeFileSync(join(projectRoot, 'assets', 'videos', 'active.mp4'), 'video');
+    writeManifest(projectRoot, [
+      {
+        id: 'vid_old',
+        path: 'assets/videos/active.mp4',
+      },
+    ]);
+
+    const timeline = createFilledTimeline();
+    timeline.segments[0] = {
+      ...timeline.segments[0]!,
+      layers: [
+        {
+          ...timeline.segments[0]!.layers[0]!,
+          filePath: join(projectRoot, 'assets', 'videos', 'active.mp4'),
+        },
+      ],
+    };
+    writeRawTimeline(projectRoot, timeline);
+    const before = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
+
+    const tool = createManageTimelineTool({
+      getProjectDir: () => projectRoot,
+    });
+
+    const getResult = await tool.handler?.({ action: 'get' }) as Record<string, unknown>;
+    expect(getResult['success']).toBe(true);
+    const afterGet = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
+    expect(afterGet).toBe(before);
+
+    const validateResult = await tool.handler?.({ action: 'validate' }) as Record<string, unknown>;
+    expect(validateResult['success']).toBe(true);
+    const afterValidate = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
+    expect(afterValidate).toBe(before);
+  });
+
+  it('assemble_from_timeline stays read-only after final generation checks', async () => {
+    const projectRoot = createTempProjectDir();
+    fs.mkdirSync(join(projectRoot, 'assets', 'images'), { recursive: true });
+    fs.writeFileSync(join(projectRoot, 'assets', 'images', 'still.png'), 'image');
+    writeManifest(projectRoot, [
+      {
+        id: 'img_old',
+        type: 'scene_image',
+        path: 'assets/images/still.png',
+      },
+    ]);
+
+    const timeline = createFilledTimeline();
+    timeline.segments[0] = {
+      ...timeline.segments[0]!,
+      layers: [
+        {
+          type: 'visual',
+          artifactId: 'img_old',
+          filePath: join(projectRoot, 'assets', 'images', 'still.png'),
+          label: 'Still image',
+          source: 'generated',
+        },
+      ],
+    };
+    writeRawTimeline(projectRoot, timeline);
+    const before = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
+
+    const tool = createAssembleFromTimelineTool({
+      getProjectDir: () => projectRoot,
+      getProjectStyle: () => 'anime',
+    });
+
+    const result = await tool.handler?.({ output_name: 'final_video' }) as Record<string, unknown>;
+    expect(result['success']).toBe(false);
+    const after = fs.readFileSync(join(projectRoot, 'timeline.json'), 'utf-8');
+    expect(after).toBe(before);
   });
 });
