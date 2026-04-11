@@ -318,9 +318,9 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const { promptId } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
+    const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
 
-    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png');
+    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', wsOutputs);
   }
 
   async generateVideo(
