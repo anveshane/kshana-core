@@ -150,6 +150,7 @@ export class ExecutorAgent extends TypedEventEmitter {
   private config: ExecutorAgentConfig;
   private running = false;
   private stopped = false;
+  private vlmDisabled = false; // Set true after first 404 — skip all subsequent VLM calls
   private _initialized = false;
   private logPath: string;
   private lockFilePath: string;
@@ -3637,10 +3638,12 @@ export class ExecutorAgent extends TypedEventEmitter {
             this.log(`  Image validation passed`);
 
             // VLM review — send image to vision model for quality check
-            // Shows as its own card in the UI
+            // Skipped entirely if VLM was unavailable on first attempt (404)
             const vlmCallId = `vlm_${node.id}_${Date.now()}`;
             const vlmToolName = 'vlm_image_review';
-            try {
+            if (this.vlmDisabled) {
+              this.log(`  VLM review skipped (disabled after previous 404)`);
+            } else try {
               const { reviewImageWithVLM } = await import('./imageValidator.js');
 
               this.emit({
@@ -3752,7 +3755,13 @@ export class ExecutorAgent extends TypedEventEmitter {
                 });
               }
             } catch (vlmErr) {
-              this.log(`  VLM review skipped: ${(vlmErr as Error).message}`);
+              const vlmErrMsg = (vlmErr as Error).message;
+              this.log(`  VLM review skipped: ${vlmErrMsg}`);
+              // Disable VLM for rest of session if endpoint doesn't exist
+              if (vlmErrMsg.includes('404') || vlmErrMsg.includes('No endpoints') || vlmErrMsg.includes('not found')) {
+                this.vlmDisabled = true;
+                this.log(`  VLM disabled for this session (endpoint not available)`);
+              }
               this.emit({
                 type: 'tool_result',
                 toolCallId: vlmCallId,
