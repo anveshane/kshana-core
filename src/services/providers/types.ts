@@ -206,6 +206,8 @@ export interface WorkflowManifest {
   active?: boolean;
   /** Whether this is a user-selected override for its pipeline (overrides the built-in default) */
   isOverride?: boolean;
+  /** Which ComfyUI mode this workflow is for: "local", "cloud", or "both" (default) */
+  mode?: 'local' | 'cloud' | 'both';
 }
 
 /**

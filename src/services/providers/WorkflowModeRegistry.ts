@@ -167,8 +167,14 @@ export class WorkflowModeRegistry {
               // Store the directory for later workflow path resolution
               manifestDirMap.set(manifest.id, absDir);
               // Tag built-in vs user
-              manifest.builtIn = dir.includes('built-in');
+              manifest.builtIn = dir.includes('built-in') || dir.includes('cloud');
               manifest.active = manifest.active !== false; // default active
+              // Filter by mode: "local", "cloud", or "both" (default)
+              const manifestMode = manifest.mode || 'both';
+              const currentMode = isCloudMode ? 'cloud' : 'local';
+              if (manifestMode !== 'both' && manifestMode !== currentMode) {
+                continue; // Skip manifests that don't match current mode
+              }
               this.modes.set(manifest.id, manifest);
             }
           } catch (err) {
