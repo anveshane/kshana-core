@@ -150,7 +150,7 @@ export class ExecutorAgent extends TypedEventEmitter {
   private config: ExecutorAgentConfig;
   private running = false;
   private stopped = false;
-  private vlmDisabled = false; // Set true after first 404 — skip all subsequent VLM calls
+  private vlmDisabled = process.env['DISABLE_VLM'] === 'true'; // Env flag or auto-disabled after first 404
   private _initialized = false;
   private logPath: string;
   private lockFilePath: string;
