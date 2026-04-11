@@ -1931,6 +1931,86 @@ export class ExecutorAgent extends TypedEventEmitter {
 
         if (didExpand) continue;
 
+        // Strategy B2: Scene-level → shot-level expansion for shot_image_prompt, shot_motion_directive, shot_image, shot_video
+        // After reset, these scene-level collection nodes may be completed/pending but have no per-shot children.
+        // Re-read the scene_video_prompt output to determine shot items and expand.
+        if (!didExpand && node.itemId && node.isCollection &&
+          ['shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video'].includes(node.typeId)) {
+          const sceneId = node.itemId;
+          const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+          if (svpNode?.status === 'completed' && svpNode.outputPath) {
+            // Check if per-shot children already exist
+            const hasChildren = this.executor.getAllNodes().some(
+              n => n.typeId === node.typeId && n.itemId?.startsWith(`${sceneId}_shot_`),
+            );
+            if (!hasChildren) {
+              try {
+                const fullPath = join(this.config.projectDir, svpNode.outputPath);
+                let content = readFileSync(fullPath, 'utf-8').trim();
+                if (content.startsWith('```')) content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+                const parsed = JSON.parse(content);
+                const shots = parsed.shots ?? (Array.isArray(parsed) ? parsed : []);
+                if (shots.length > 0) {
+                  const sceneLabel = sceneId.replace('scene_', 'S');
+                  const shotItems = shots.map((s: any) => ({
+                    itemId: `${sceneId}_shot_${s.shotNumber}`,
+                    name: `${sceneLabel} Shot ${s.shotNumber}: ${s.cameraWork?.split(',')[0] || 'shot'}`,
+                  }));
+                  this.log(`  Re-expanding ${node.id} → ${shotItems.length} per-shot nodes from scene_video_prompt`);
+                  this.executor.expandCollection(node.id, shotItems);
+
+                  // For shot_image_prompt: also create shot_image and shot_video per-shot nodes
+                  if (node.typeId === 'shot_image_prompt') {
+                    const allCharImages = this.executor.getAllNodes()
+                      .filter(n => n.typeId === 'character_image' && n.itemId).map(n => n.id);
+                    const allSettingImages = this.executor.getAllNodes()
+                      .filter(n => n.typeId === 'setting_image' && n.itemId).map(n => n.id);
+                    let prevShotImageId: string | null = null;
+                    for (const shot of shotItems) {
+                      const shotImageId = `shot_image:${shot.itemId}`;
+                      const shotVideoId = `shot_video:${shot.itemId}`;
+                      const motionId = `shot_motion_directive:${shot.itemId}`;
+                      const promptId = `shot_image_prompt:${shot.itemId}`;
+                      if (!this.executor.getNode(shotImageId)) {
+                        const deps = [promptId, ...allCharImages, ...allSettingImages];
+                        if (prevShotImageId) deps.push(prevShotImageId);
+                        this.executor.addNode({
+                          id: shotImageId, typeId: 'shot_image', itemId: shot.itemId,
+                          status: 'pending', displayName: `Shot Images: ${shot.name}`,
+                          isExpensive: true, isCollection: false, dependencies: deps, dependents: [shotVideoId],
+                        });
+                        for (const depId of deps) {
+                          const depNode = this.executor.getNode(depId);
+                          if (depNode && !depNode.dependents.includes(shotImageId)) depNode.dependents.push(shotImageId);
+                        }
+                      }
+                      if (!this.executor.getNode(shotVideoId)) {
+                        this.executor.addNode({
+                          id: shotVideoId, typeId: 'shot_video', itemId: shot.itemId,
+                          status: 'pending', displayName: `Shot Videos: ${shot.name}`,
+                          isExpensive: true, isCollection: false, dependencies: [shotImageId, motionId], dependents: [],
+                        });
+                        const imgNode = this.executor.getNode(shotImageId);
+                        if (imgNode && !imgNode.dependents.includes(shotVideoId)) imgNode.dependents.push(shotVideoId);
+                        const motNode = this.executor.getNode(motionId);
+                        if (motNode && !motNode.dependents.includes(shotVideoId)) motNode.dependents.push(shotVideoId);
+                      }
+                      prevShotImageId = shotImageId;
+                    }
+                  }
+
+                  didExpand = true;
+                  expanded = true;
+                }
+              } catch (err) {
+                this.log(`  Failed to re-expand ${node.id}: ${err}`);
+              }
+            }
+          }
+        }
+
+        if (didExpand) continue;
+
         // Strategy C: For collections that depend on 'story' (scene, character, setting),
         // run extractCollectionItems on the story output to determine items.
         // This handles post-reset state where story is completed but per-item nodes don't exist.
