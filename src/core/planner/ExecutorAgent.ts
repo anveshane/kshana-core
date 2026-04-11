@@ -3664,7 +3664,27 @@ export class ExecutorAgent extends TypedEventEmitter {
 
               const vlmResult = await reviewImageWithVLM(absPath, shotJson.imagePrompt, this.llm);
 
-              if (!vlmResult.pass) {
+              // Check if VLM endpoint doesn't exist — disable for rest of session
+              if (!vlmResult.pass && vlmResult.issues.some(i => i.includes('404') || i.includes('No endpoints'))) {
+                this.vlmDisabled = true;
+                this.log(`  VLM disabled for session — endpoint not available`);
+                // Skip the retry — image is fine, just no VLM to review it
+                this.emit({
+                  type: 'tool_streaming',
+                  toolCallId: vlmCallId,
+                  chunk: 'VLM not available — skipping review for all remaining images',
+                  done: true,
+                  agentName,
+                  toolName: vlmToolName,
+                });
+                this.emit({
+                  type: 'tool_result',
+                  toolCallId: vlmCallId,
+                  toolName: vlmToolName,
+                  result: { status: 'skipped', reason: 'VLM endpoint not available' },
+                  agentName,
+                });
+              } else if (!vlmResult.pass) {
                 this.log(`  VLM review FAILED (attempt 1): ${vlmResult.issues.join('; ')}`);
                 this.emit({
                   type: 'tool_streaming',
