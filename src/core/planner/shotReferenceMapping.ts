@@ -119,6 +119,24 @@ export function buildFallbackMotionPrompt(shot: {
 }
 
 /**
+ * Validate that no node has dependencies pointing to non-existent nodes.
+ * Returns a list of orphaned references.
+ */
+export function validateNoDanglingDeps(
+  nodes: Record<string, { id: string; dependencies: string[] }>,
+): Array<{ nodeId: string; missingDep: string }> {
+  const orphans: Array<{ nodeId: string; missingDep: string }> = [];
+  for (const [nodeId, node] of Object.entries(nodes)) {
+    for (const dep of node.dependencies) {
+      if (!(dep in nodes)) {
+        orphans.push({ nodeId, missingDep: dep });
+      }
+    }
+  }
+  return orphans;
+}
+
+/**
  * Filter available references based on shot purpose.
  * Returns filtered refs and the suggested generation mode.
  */
