@@ -3048,6 +3048,15 @@ export class ExecutorAgent extends TypedEventEmitter {
         }
       }
 
+      // Check if first_frame was already generated in a previous attempt (incremental retry)
+      if (!firstFramePath && node.outputPaths?.['first_frame']) {
+        const existingFirst = join(this.config.projectDir, node.outputPaths['first_frame']);
+        if (existsSync(existingFirst)) {
+          firstFramePath = node.outputPaths['first_frame'];
+          this.log(`  first_frame already exists (incremental retry): ${firstFramePath}`);
+        }
+      }
+
       // Fallback: generate from refs if edit_previous_shot didn't produce a result
       if (!firstFramePath) {
         const firstFrameJson = JSON.stringify({
@@ -3064,13 +3073,22 @@ export class ExecutorAgent extends TypedEventEmitter {
       // Generate additional frames
       const additionalFrames = Object.keys(parsedJson.frames).filter(k => k !== 'first_frame');
       if (additionalFrames.length > 0) {
-        node.outputPaths = { first_frame: firstFramePath };
+        node.outputPaths = { ...node.outputPaths, first_frame: firstFramePath };
 
         const agentName = this.config.name ?? 'kshana-executor';
 
         for (const frameId of additionalFrames) {
           const frameData = parsedJson.frames[frameId];
           if (!frameData?.imagePrompt) continue;
+
+          // Check if this frame was already generated (incremental retry)
+          if (node.outputPaths?.[frameId]) {
+            const existingFrame = join(this.config.projectDir, node.outputPaths[frameId]);
+            if (existsSync(existingFrame)) {
+              this.log(`  ${frameId} already exists (incremental retry): ${node.outputPaths[frameId]}`);
+              continue;
+            }
+          }
 
           const mode = frameData.generationMode || 'edit_first_frame';
           this.log(`  Generating ${frameId} (mode: ${mode})`);
