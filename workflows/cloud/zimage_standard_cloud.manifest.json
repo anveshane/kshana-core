@@ -20,6 +20,18 @@
       "source": "llm",
       "description": "Negative prompt",
       "required": false
+    },
+    {
+      "id": "width",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "height",
+      "type": "number",
+      "source": "system",
+      "required": false
     }
   ],
   "workflowFile": "zimage_standard_cloud.json",
@@ -44,6 +56,16 @@
       "input": "filenamePrefix",
       "nodeId": "9",
       "field": "filename_prefix"
+    },
+    {
+      "input": "width",
+      "nodeId": "13",
+      "field": "width"
+    },
+    {
+      "input": "height",
+      "nodeId": "13",
+      "field": "height"
     }
   ],
   "builtIn": true,

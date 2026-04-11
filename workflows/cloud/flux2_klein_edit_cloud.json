@@ -69,14 +69,8 @@
   "92:62": {
     "inputs": {
       "steps": 4,
-      "width": [
-        "92:81",
-        0
-      ],
-      "height": [
-        "92:81",
-        1
-      ]
+      "width": 848,
+      "height": 480
     },
     "class_type": "Flux2Scheduler",
     "_meta": {
@@ -277,14 +271,8 @@
   },
   "92:66": {
     "inputs": {
-      "width": [
-        "92:81",
-        0
-      ],
-      "height": [
-        "92:81",
-        1
-      ],
+      "width": 848,
+      "height": 480,
       "batch_size": 1
     },
     "class_type": "EmptyFlux2LatentImage",

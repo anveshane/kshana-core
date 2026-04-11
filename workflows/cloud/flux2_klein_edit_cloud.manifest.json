@@ -48,6 +48,18 @@
       "type": "text",
       "source": "system",
       "required": false
+    },
+    {
+      "id": "width",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "height",
+      "type": "number",
+      "source": "system",
+      "required": false
     }
   ],
   "workflowFile": "flux2_klein_edit_cloud.json",
@@ -87,6 +99,26 @@
       "input": "filenamePrefix",
       "nodeId": "94",
       "field": "filename_prefix"
+    },
+    {
+      "input": "width",
+      "nodeId": "92:66",
+      "field": "width"
+    },
+    {
+      "input": "height",
+      "nodeId": "92:66",
+      "field": "height"
+    },
+    {
+      "input": "width",
+      "nodeId": "92:62",
+      "field": "width"
+    },
+    {
+      "input": "height",
+      "nodeId": "92:62",
+      "field": "height"
     }
   ],
   "builtIn": true,
