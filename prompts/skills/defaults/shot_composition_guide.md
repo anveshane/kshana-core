@@ -207,7 +207,7 @@ When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MU
       ]
     },
     "last_frame": {
-      "imagePrompt": "Description of what changed — character moved deeper into passage, torchlight dimmer...",
+      "imagePrompt": "The investigator is now at the far end of the passage, barely visible in deep shadow, only the glint of torchlight on wet stone marking the path behind. The torch has burned low, casting the walls in deep amber.",
       "generationMode": "edit_first_frame",
       "references": []
     }
@@ -262,18 +262,27 @@ When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MU
   - Lighting changed dramatically (day→night, lamp turned on/off)
   - A transformation or VFX effect occurred
 
-  **Last frame describes the END STATE** — what the shot looks like at the end. The video model interpolates between first and last frame. If they're identical, there's no motion anchoring.
+  **Last frame describes the END STATE** — what the shot looks like at the END of the duration. The video model interpolates between first and last frame. If they're too similar, there's nothing to animate.
 
-  **Always describe what changed.** Check the `<last_frame_changes>` block in your context — it lists exactly what must be different:
-  - Character moved position → describe new position
-  - Expression changed → describe new expression
-  - Object appeared/disappeared → describe the change
-  - Lighting shifted → describe new lighting
+  **The last frame must be DRAMATICALLY different from the first frame.** Think: "What does a camera capture 3-5 seconds LATER?" In 5 seconds, a lot changes:
+  - A running character is now 20 feet further away, possibly at the edge of frame or gone
+  - A turning head is now fully facing the other direction
+  - An explosion that started has now engulfed the scene
+  - A falling object has hit the ground with debris scattered
 
-  Write a short sentence describing the end state, NOT the motion:
-  "The girl is now at the far end of the corridor, her back to camera, shoulders heaving."
+  **Use the `<last_frame_changes>` block** — it lists what the state tracking says must differ. But go FURTHER than the state changes. Ask: "After this shot's full duration, what would a freeze-frame look like?"
 
-  Only write "No visible change from first frame." when `<last_frame_changes>` is absent AND the shot is a pure atmosphere/establishing shot with no characters.
+  **Good last frame examples:**
+  - First: "Girl mid-stride, center frame" → Last: "Girl at far right edge of frame, receding into smoke, debris where a phantom collapsed behind her"
+  - First: "Close-up of face, eyes wide with terror" → Last: "Same angle but expression shifted to bitter resolve, mouth open mid-shout, tears streaking through soot"
+  - First: "Wide shot of empty burning street" → Last: "Same street but a massive chunk of building has crashed into the foreground, dust cloud filling the lower third"
+
+  **Bad last frames (too similar):**
+  - "The girl is now standing slightly to the left" — too minor, nothing to animate
+  - "Same scene but with a slightly different expression" — image editor can't render subtle expression changes
+  - Repeating the first frame with minor word changes
+
+  Only write "No visible change from first frame." for pure static atmosphere shots (rain falling, fire burning) where the camera and subject don't move.
 
 - **`edit_previous_shot`** (RECOMMENDED for first_frame of continuation shots) — Generate by **editing the previous shot's last frame**. This maintains visual continuity between consecutive shots in the same scene. The image prompt should describe ONLY what changed from the previous shot's end state. Use when:
   - The camera angle is similar or slightly shifted from the previous shot
