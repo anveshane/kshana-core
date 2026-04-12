@@ -11,7 +11,7 @@ const API_KEY = 'comfyui-8d3e2df13b32a0a09eb0f0c009401e19125ccf373132083cfcc37a5
 const BASE = 'https://cloud.comfy.org';
 const CLIENT_ID = crypto.randomUUID();
 
-const TEST_IMAGE = 'story_begins_girl_sprinting-2.kshana/assets/images/dG3_sqvA_CharRef_thegirl_00002_.png';
+const TEST_IMAGE = 'story_begins_girl_sprinting-2.kshana/assets/images/-eXJo4UY_e5b7f8f8c030490bcbdbd35dac2b90ca77dcb37f61ea66b1ab3a1e20feeec647.png';
 
 async function uploadImage(filePath: string): Promise<string> {
   const form = new FormData();
@@ -137,8 +137,10 @@ async function testWorkflow(
 
   for (const [nodeId, imageName] of Object.entries(imageOverrides)) {
     if (workflow[nodeId]) {
-      workflow[nodeId].inputs.image = imageName;
-      console.log(`  Set node ${nodeId} image → ${imageName.substring(0, 30)}...`);
+      // VHS_LoadVideo uses 'video' field, LoadImage uses 'image' field
+      const field = workflow[nodeId].class_type === 'VHS_LoadVideo' ? 'video' : 'image';
+      workflow[nodeId].inputs[field] = imageName;
+      console.log(`  Set node ${nodeId} ${field} → ${imageName.substring(0, 30)}...`);
     }
   }
 
@@ -159,9 +161,20 @@ async function main() {
   console.log('ComfyUI Cloud Workflow Test');
   console.log('==========================\n');
 
-  // 1. Upload test image
-  console.log('Step 1: Upload test image');
-  const uploadedName = await uploadImage(TEST_IMAGE);
+  // Test V2V Extend only — upload video, not image
+  const testVideo = 'story_begins_girl_sprinting-2.kshana/assets/videos/shots/_HteAs4E_93d844652f3b14beca5c9ccb86e3ef1b385546be28a5fa04f9b3e78d581fdb22.mp4';
+  console.log('Step 1: Upload test video');
+  const uploadedVideo = await uploadImage(testVideo);
+
+  await testWorkflow(
+    'LTX 2.3 V2V Extend',
+    '/Users/ganaraj/Projects/kshana-ink/workflows/cloud/ltx23_v2v_extend_cloud.json',
+    { '319': uploadedVideo },
+    {},
+  );
+
+  console.log('\nDone!');
+  process.exit(0);
 
   // Also set the prompt text for FLUX Klein (node 109)
   const kleinPrompt = 'A girl with determined expression standing in a rain-soaked apocalyptic city street, from image 1, dramatic overhead lighting, shallow depth of field';
