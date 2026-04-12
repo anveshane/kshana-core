@@ -6,27 +6,103 @@
   "selectionCriteria": "Use for complex shots with major visual changes (transformations, VFX, long duration) where a mid-point keyframe improves coherence.",
   "outputType": "video",
   "priority": 10,
-  "strategies": ["fmlfv"],
+  "strategies": [
+    "fmlfv"
+  ],
   "inputRequirements": [
-    { "id": "prompt", "type": "text", "source": "shot_motion_directive", "description": "Motion prompt", "required": true },
-    { "id": "negative_prompt", "type": "text", "source": "system", "description": "Negative prompt", "required": true },
-    { "id": "first_frame", "type": "image", "source": "shot_image", "description": "First frame image", "required": true },
-    { "id": "mid_frame", "type": "image", "source": "shot_image", "description": "Middle frame image", "required": true },
-    { "id": "last_frame", "type": "image", "source": "shot_image", "description": "Last frame image", "required": true },
-    { "id": "seed", "type": "number", "source": "system", "description": "Random seed", "required": false },
-    { "id": "filenamePrefix", "type": "text", "source": "system", "description": "Output filename prefix", "required": false }
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "shot_motion_directive",
+      "description": "Motion prompt",
+      "required": true
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "system",
+      "description": "Negative prompt",
+      "required": true
+    },
+    {
+      "id": "first_frame",
+      "type": "image",
+      "source": "shot_image",
+      "description": "First frame image",
+      "required": true
+    },
+    {
+      "id": "mid_frame",
+      "type": "image",
+      "source": "shot_image",
+      "description": "Middle frame image",
+      "required": true
+    },
+    {
+      "id": "last_frame",
+      "type": "image",
+      "source": "shot_image",
+      "description": "Last frame image",
+      "required": true
+    },
+    {
+      "id": "seed",
+      "type": "number",
+      "source": "system",
+      "description": "Random seed",
+      "required": false
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "description": "Output filename prefix",
+      "required": false
+    }
   ],
   "workflowFile": "ltx23_fml2v_api.json",
   "format": "api",
   "parameterMappings": [
-    { "input": "prompt", "nodeId": "16", "field": "text" },
-    { "input": "negative_prompt", "nodeId": "11", "field": "text" },
-    { "input": "first_frame", "nodeId": "45", "field": "image" },
-    { "input": "last_frame", "nodeId": "47", "field": "image" },
-    { "input": "mid_frame", "nodeId": "56", "field": "image" },
-    { "input": "seed", "nodeId": "15", "field": "noise_seed" },
-    { "input": "seed", "nodeId": "14", "field": "noise_seed" },
-    { "input": "filenamePrefix", "nodeId": "43", "field": "filename_prefix" }
+    {
+      "input": "prompt",
+      "nodeId": "16",
+      "field": "text"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "11",
+      "field": "text"
+    },
+    {
+      "input": "first_frame",
+      "nodeId": "45",
+      "field": "image"
+    },
+    {
+      "input": "last_frame",
+      "nodeId": "47",
+      "field": "image"
+    },
+    {
+      "input": "mid_frame",
+      "nodeId": "56",
+      "field": "image"
+    },
+    {
+      "input": "seed",
+      "nodeId": "15",
+      "field": "noise_seed"
+    },
+    {
+      "input": "seed",
+      "nodeId": "14",
+      "field": "noise_seed"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "43",
+      "field": "filename_prefix"
+    }
   ],
   "promptKeywords": {
     "prepend": "Make this image come alive with cinematic motion, smooth animation.",
@@ -34,5 +110,6 @@
   },
   "builtIn": false,
   "active": true,
-  "isOverride": true
+  "isOverride": true,
+  "mode": "local"
 }
