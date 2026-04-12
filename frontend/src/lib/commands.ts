@@ -70,7 +70,7 @@ const COMMANDS: Record<string, CommandDef> = {
     usage: '/reset [project] <stage>',
     handler: (args, ctx) => {
       const parts = args.trim().split(/\s+/).filter(Boolean)
-      const stages = ['plot', 'story', 'characters', 'world_style', 'character_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video', 'final_video']
+      const stages = ['plot', 'story', 'characters', 'character', 'setting', 'scene', 'world_style', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video', 'final_video']
 
       if (parts.length === 0) {
         ctx.dispatch({
