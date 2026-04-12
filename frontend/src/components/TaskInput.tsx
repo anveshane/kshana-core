@@ -22,6 +22,7 @@ const RESET_STAGES = [
   { name: 'plot', description: 'Reset everything, start from scratch' },
   { name: 'story', description: 'Keep plot, redo story onwards' },
   { name: 'characters', description: 'Keep plot+story, redo characters/settings/scenes onwards' },
+  { name: 'scene', description: 'Keep characters/settings, redo scenes onwards' },
   { name: 'world_style', description: 'Redo visual style guide and all images onwards' },
   { name: 'character_image', description: 'Keep writing, redo all image generation onwards' },
   { name: 'scene_video_prompt', description: 'Redo shot planning, images, and videos' },
