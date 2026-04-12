@@ -1,6 +1,6 @@
 {
-  "name": "Scene Description Binary",
-  "description": "Binary evaluation of scene descriptions. Critical focus: scene boundaries and no cross-scene repetition.",
+  "name": "Scene Narrative Binary",
+  "description": "Binary evaluation of scene narrative descriptions. Focus: boundaries, no repetition, prose quality.",
   "format": "binary",
   "phase": "scenes",
   "promptType": "scene",
@@ -8,47 +8,47 @@
   "questions": [
     {
       "id": "BOUNDARY_RESPECTED",
-      "question": "Does the scene ONLY cover the narrative beats described in its assigned summary? It should NOT include events, climactic moments, or resolution from other scenes. If the summary says 'girl runs and phantoms die' the scene should NOT show the dead end, the scream, or the time reset unless those are in THIS scene's summary."
+      "question": "Does the scene ONLY cover narrative beats described in its assigned summary? It should NOT include events from other scenes — not even as setup or foreshadowing."
     },
     {
       "id": "NO_REPETITION",
-      "question": "Comparing to the other scene summaries provided: does this scene avoid repeating key dramatic moments that belong to OTHER scenes? The same death scene, the same dialogue line, and the same dramatic beat should NOT appear in multiple scenes."
+      "question": "Comparing to other scene summaries: does this scene avoid repeating dramatic moments, deaths, dialogue, or climactic beats that belong to OTHER scenes?"
     },
     {
       "id": "DIALOGUE_PLACEMENT",
-      "question": "Does dialogue appear ONLY where the scene summary indicates it should? If this scene's summary doesn't mention dialogue or a specific line, that line should NOT appear here — it belongs in the scene whose summary includes it."
+      "question": "Does dialogue appear ONLY where this scene's summary indicates? Lines from other scenes' summaries should NOT appear here."
     },
     {
-      "id": "SHOT_BREAKDOWN",
-      "question": "Does every shot have: shot type (WIDE, MEDIUM, CLOSE UP, etc.), duration in seconds, visual description, character action, and a SOUND line?"
+      "id": "ENDS_BEFORE_NEXT",
+      "question": "Does the scene end BEFORE the next scene's first event? If the next scene starts with 'character dies', this scene must end with the character still alive."
     },
     {
-      "id": "DURATION_MATCH",
-      "question": "Do the shot durations sum to a reasonable scene length for the video's total duration? For a 60s video with 4 scenes, each scene should be roughly 12-18s."
+      "id": "NARRATIVE_PROSE",
+      "question": "Is the output written as narrative prose (like a short story or screenplay treatment) — NOT as a shot list with durations, camera directions, or SHOT 1/SHOT 2 labels?"
     },
     {
-      "id": "CHARACTER_ACTIONS",
-      "question": "Are character actions specific physical movements ('her jaw tightens, she looks down'), not vague emotions ('she reacts with sadness')?"
+      "id": "PHYSICAL_ACTIONS",
+      "question": "Are character actions described as concrete physical movements ('her jaw tightens', 'he grips the railing') — not vague emotions ('she reacts with sadness')?"
     },
     {
-      "id": "VISUAL_CONTINUITY",
-      "question": "Are character positions tracked across shots? No teleportation — if running in shot 1, next shot shows still running or having stopped."
+      "id": "SENSORY_DETAIL",
+      "question": "Does the scene include sensory details — what is seen, heard, smelled, felt? Fire, rain, silence, screaming, texture of surfaces?"
     },
     {
       "id": "EMOTIONAL_ARC",
-      "question": "Does the scene have progression? Something changes from first shot to last. Not a flat sequence."
+      "question": "Does the scene have progression? The emotional state at the end differs from the beginning — tension builds, something shifts."
     },
     {
       "id": "STORY_FAITHFUL",
-      "question": "Does the scene accurately represent events from the story without inventing major new elements?"
+      "question": "Does the scene accurately represent events from the story without inventing major new elements or contradicting established facts?"
     },
     {
-      "id": "SOUND_EVERY_SHOT",
-      "question": "Does EVERY shot have a SOUND line? Even if it's 'dead silence'."
+      "id": "PROPORTIONAL_LENGTH",
+      "question": "Is the scene proportional to its share of the video? For a 60s video with 4 scenes, each scene should be 3-6 paragraphs — not a 15-paragraph epic or a 1-paragraph stub."
     },
     {
-      "id": "SCENE_COMPLETE",
-      "question": "Does the scene feel complete within its assigned beats? It should have a beginning, development, and transition to the next scene — not end abruptly mid-action."
+      "id": "CLIFFHANGER_ENDING",
+      "question": "Does the scene end on tension or anticipation — not a resolved conclusion? The audience should want to see what happens next."
     }
   ]
 }

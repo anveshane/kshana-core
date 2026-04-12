@@ -1,4 +1,4 @@
-**PURPOSE**: Write a complete, shootable scene description for a cinematic video. The scene must work as a mini-screenplay — every shot described in enough detail that a director, cinematographer, and actor could execute it without ambiguity.
+**PURPOSE**: Write a narrative scene description — the story of what happens in this scene. Focus on actions, dialogue, emotion, and sensory detail. Do NOT break into shots, durations, or camera directions — that happens downstream.
 
 ---
 
@@ -12,211 +12,120 @@ You will receive:
   - YOUR SCENE's title and summary (the beats you MUST cover)
   - ALL SCENES in the video (so you know what NOT to include)
 
-## CRITICAL: Scene Boundaries (Read Before Writing)
+## CRITICAL: Scene Boundaries
 
-**You are writing ONE scene out of several.** Your `<scene_assignment>` summary defines EXACTLY which narrative beats belong to your scene.
+**You are writing ONE scene out of several.** Your summary defines EXACTLY which narrative beats belong to your scene.
 
-**Rules:**
-1. **ONLY write shots for beats in YOUR summary.** If your summary says "girl runs, phantoms die" — that's ALL you cover. You do NOT show the dead end, the scream, the death, or the time reset.
-2. **Do NOT repeat events from other scenes.** Read the other scene summaries carefully. If "dead end" or "monster kills her" belongs to Scene 2, do NOT show those events in Scene 1 — not even partially, not even as a setup.
-3. **Dialogue belongs to ONE scene only.** If a line appears in Scene 2's summary, it must NOT appear in Scene 1, 3, or 4.
-4. **Stop BEFORE the next scene's first beat.** Read the NEXT scene's summary. Your last shot must END before that scene's first event begins.
+1. **ONLY cover beats in YOUR summary.** If your summary says "she runs, phantoms die" — that's all. Do NOT show the dead end, death, or aftermath.
+2. **Do NOT repeat events from other scenes.** If an event belongs to another scene's summary, do NOT include it.
+3. **Dialogue belongs to ONE scene only.** Place dialogue ONLY in the scene whose summary mentions it.
+4. **Stop BEFORE the next scene's first beat.** Read the NEXT scene's summary. Your scene must end BEFORE that scene's first event.
    - If next scene starts with "character dies" → your scene ends with the character still alive
-   - If next scene starts with "they arrive at the castle" → your scene ends while they're still traveling
-   - If next scene starts with "time passes" → your scene ends at the event, not after it
-   - **Self-test:** Read your last shot. Does it describe something from the NEXT scene's summary? If yes, DELETE that shot.
-5. **End on a cliffhanger, not a resolution.** Your scene leaves the audience wanting more. End mid-tension: the danger is building, the chase is ongoing, the question is unanswered. Do NOT show the outcome of the tension you built.
-6. **Duration budget:** Calculate your target: total_video_duration / number_of_scenes. For a 60s video with 4 scenes = ~15s per scene. Your shots MUST sum to within ±3s of this target. Count your durations before finalizing. If you have 15 shots at 2-3s each = 30-45s, that's DOUBLE the budget — cut to 5-7 shots.
+   - If next scene starts with "they arrive" → your scene ends while they're still traveling
+   - **Self-test:** Does your final paragraph describe something from the NEXT scene's summary? If yes, DELETE it.
+5. **End on tension, not resolution.** Leave the audience wanting more — danger building, chase ongoing, question unanswered.
 
 ## What You Must Produce
 
-A scene description with explicit shot-by-shot breakdown. Each shot must include:
-1. **Shot type** — WIDE, MEDIUM, CLOSE UP, EXTREME CLOSE UP, TRACKING, etc.
-2. **Duration** — how many seconds this shot lasts
-3. **Visual description** — what the camera sees, in specific physical detail
-4. **Character action** — concrete physical movements, not vague reactions
-5. **Dialogue** — if characters speak, include their actual quoted words
-6. **Sound/audio cues** — EVERY shot MUST have a `**SOUND:**` line. This is not optional. Options include: ambient sound, sound effects, dialogue delivery, music direction, or explicit silence ("dead silence", "absence of sound", "only the hum of the air conditioner"). A shot with no sound direction is incomplete.
+A **narrative prose description** of the scene. Write it like a short story or screenplay treatment — NOT a shot list.
 
----
+Include:
+- **Physical actions** — what characters DO, described concretely ("her jaw tightens, she grips the railing" not "she reacts with fear")
+- **Dialogue** — exact quoted words with delivery notes (whispered, shouted, bitter)
+- **Sensory detail** — what is seen, heard, felt (fire, rain, silence, screaming)
+- **Emotional progression** — the scene starts at one emotional state and ends at a different one
+- **Setting grounding** — where are we, what does it look/smell/sound like
 
-## Rules
+Do NOT include:
+- Shot types (WIDE, CLOSE UP, MEDIUM)
+- Durations (3s, 5s)
+- Camera directions (tracking shot, dolly push-in)
+- Sound design labels (**SOUND:**)
+- Shot numbers (SHOT 1, SHOT 2)
 
-### Dialogue (CRITICAL — Mandatory Pre-Step)
+These are handled downstream by the shot breakdown step. Your job is the STORY of the scene, not the cinematography.
 
-**Before writing ANY shots, you MUST complete the Dialogue Inventory step below. This is not optional. It is part of the required output.**
+## Dialogue Rules
 
-#### Step 1: Dialogue Inventory (MUST appear in your output)
+### Step 1: Dialogue Inventory (MUST appear in output)
 
-Scan the scene segment you were given. Find every instance where a character speaks — every quoted line, every reported speech, every "he said / she asked / they whispered" construction. Write them out as a numbered checklist at the top of your output under the heading `**DIALOGUE INVENTORY**`. Format:
+Before writing, scan your scene's summary for any spoken lines. List them:
 
 ```
 **DIALOGUE INVENTORY**
-1. CHARACTER — "Exact words from story"
-2. CHARACTER — "Exact words from story"
-3. CHARACTER — "Exact words from story"
-...
+1. CHARACTER — "Exact words"
+2. CHARACTER — "Exact words"
 ```
 
-If the scene segment contains zero dialogue, write:
-```
-**DIALOGUE INVENTORY**
-None — this scene contains no spoken dialogue.
-```
+If no dialogue: `None — this scene contains no spoken dialogue.`
 
-**This inventory is your contract.** Every line listed here MUST appear in the shots below. No exceptions.
+### Step 2: Place Every Line
 
-#### Step 2: Place Every Line Into Shots
+Every inventory line MUST appear in the prose, formatted as:
 
-As you write shots, assign every inventory line to a specific shot. Each dialogue line must appear formatted as:
+**CHARACTER:** "Exact dialogue" *(delivery note)*
 
-**CHARACTER NAME:** "Exact dialogue from the story" *(delivery note)*
+Do not summarize, paraphrase, or skip any line.
 
-Do not summarize, paraphrase, condense, or skip any line. Do not replace spoken words with action descriptions. Do not convert dialogue into narrated thought or internal monologue.
-
-**Common traps to avoid:**
-
-Source story says: *Ram said, "I can't do this anymore."*
-✅ CORRECT: **RAM:** "I can't do this anymore." *(quiet, strained)*
-❌ WRONG: *Ram turns away, unable to continue.* (Dialogue converted to action — the spoken line is lost)
-❌ WRONG: *Ram expresses that he can't go on.* (Summarized instead of quoted)
-❌ WRONG: Omitting the line entirely
-
-Source story says: *"Wait," she called out. "You forgot this."*
-✅ CORRECT:
-**PRIYA:** "Wait." *(calling out)*
-**PRIYA:** "You forgot this." *(softer, extending her hand)*
-❌ WRONG: *She calls after him, holding out the object.* (Dialogue replaced with action)
-
-Source story says: *He muttered something about being late and grabbed his coat.*
-✅ CORRECT: **ARJUN:** "I'm late." *(muttered, grabbing his coat)* — If the story gives indirect speech, reconstruct the most faithful direct-speech version.
-❌ WRONG: *He grabs his coat, in a hurry.* (The spoken content is erased)
-
-#### Step 3: Delivery Notes
-
-Include a delivery note in parentheses after EVERY dialogue line: *(whispered)*, *(sharp)*, *(breaking)*, *(matter-of-fact)*, *(under breath)*, *(pleading)*, etc. Never leave a dialogue line without a delivery note.
-
-#### Step 4: Post-Check (MUST appear in your output)
-
-After writing all shots, revisit your Dialogue Inventory. For each numbered line, confirm it appears in a shot. Write the verification at the bottom of your output under `**DIALOGUE CHECK**`:
+### Step 3: Post-Check (MUST appear in output)
 
 ```
 **DIALOGUE CHECK**
-1. ✅ SHOT 3
-2. ✅ SHOT 5
-3. ✅ SHOT 5
-...
+1. ✅ Paragraph N
 All inventory lines placed.
 ```
 
-If any line is missing, go back and add it to the appropriate shot before finalizing.
-
----
-
-### Shot Breakdown
-- Label each shot: **SHOT 1 (Duration: Xs)**
-- Specify shot type for every shot
-- Total shot durations must approximately match the scene's target duration
-
-### Insert Shots, Cutaways & Establishing Shots — REQUIRED
-
-Not every shot should have characters. A cinematic scene should include **character-free shots** where appropriate — these create breathing room and visual storytelling. Consider including at least one that serves one of these purposes:
-
-**Time/Place Establishing:**
-- Sunrise over rooftops to signal morning
-- A clock on the wall showing the hour
-- Shadows lengthening across a floor to show time passing
-- Rain beginning to streak a window
-
-**Atmosphere & Mood:**
-- Wind moving through empty trees
-- Dust particles floating in a beam of light
-- Steam rising from a cup left on a table
-- A corridor stretching into darkness
-
-**Narrative Tension:**
-- A door handle, still and waiting
-- A dripping tap in silence
-- An empty chair where someone sat moments ago
-- A phone screen lighting up, unanswered
-
-**Transition & Punctuation:**
-- An exterior wide shot of the building before cutting inside
-- The moon or stars to mark a night scene
-- Birds scattering from a rooftop after a loud event
-- Traffic moving below a window to ground the location in a city
-
-Place these shots where they create **breathing room** — between intense character moments, at the start of a scene to establish place, or at the end before a transition. They should feel like a filmmaker's eye noticing the world around the characters, not just the characters themselves.
+## Writing Rules
 
 ### Character Actions
-- Every shot must describe what characters physically DO — not what they feel
+- Describe what characters physically DO — not what they feel
 - BAD: "She reacts with sadness"
 - GOOD: "Her jaw tightens. She looks down at her hands, then slowly closes her eyes."
-- Actions must be specific enough to direct an actor
 
 ### Character Appearance
-- First appearance of each character in the scene must describe clothing, key physical features, and current state (sweating, bleeding, composed)
-- Reference the character profile for consistency
+- First appearance: describe clothing, physical features, current state (sweating, bleeding, composed)
 
 ### Setting
-- Ground every shot in the physical environment
-- Reference the setting profile for architectural/environmental details
-- Include lighting conditions (source, direction, quality, temperature)
+- Ground the scene in the physical environment
+- Include lighting, weather, atmosphere, textures
 
 ### Visual Continuity
-- Track character positions across shots — if someone is at the door in shot 1, they can't be at the window in shot 2 without movement described
-- Track props — if a character holds something, show when they put it down
-- Maintain spatial relationships between characters
+- Track character positions — if running at the start, show how they stop or keep running
+- Track props — if holding something, show when they put it down
 
 ### Emotional Arc
-- The scene must have progression — something changes from beginning to end
-- Tension rises, information is revealed, a relationship shifts, a decision is made
-
-### Transitions
-- End the scene at a clear transition point
-- The final shot should lead naturally to the next scene
-- Include a transition cue: cut to black, dissolve, hard cut, match cut
+- Something must change from beginning to end
+- Tension rises, information is revealed, a relationship shifts
 
 ### Story Faithfulness
-- Do not invent events, characters, or details not in the story
-- Do not contradict established facts
-- If the story describes a specific action, include it
-- **If the story describes a character speaking, include the exact spoken words as dialogue — never convert speech into narrated action or internal thought**
+- Do not invent events or characters not in the story
+- If the story describes a character speaking, include the exact words as dialogue
 
----
+## Duration Budget
+
+Your scene's prose should be proportional to the video duration:
+- 60s video with 4 scenes → each scene covers ~15s of screen time
+- Write enough detail for that duration — 3-5 paragraphs, not 15
+- If you're writing more than 6 paragraphs, you're covering too many beats
 
 ## Output Format
 
 ```
 **DIALOGUE INVENTORY**
 1. CHARACTER — "Line"
-2. CHARACTER — "Line"
-[... all lines from source scene segment]
+[... or "None"]
 
 ---
 
 **SCENE [N]: [TITLE]**
 
-**[INT/EXT]. [LOCATION] - [TIME]**
-
-**SHOT 1 (Duration: Xs)**
-**[SHOT TYPE]**
-[Visual description with character action, sound cues]
-**CHARACTER NAME:** "Dialogue line" *(delivery note)*
-
-**SHOT 2 (Duration: Xs)**
-**[SHOT TYPE]**
-[Visual description...]
-
-[Continue for all shots]
+[Narrative prose — actions, dialogue, sensory detail, emotion]
 
 ---
 
 **DIALOGUE CHECK**
-1. ✅ SHOT [N]
-2. ✅ SHOT [N]
-[... one entry per inventory line]
+1. ✅ Paragraph N
 All inventory lines placed.
 ```
 
-Output ONLY the scene content — no explanations, no meta-commentary outside the required format sections.
+Output ONLY the scene content — no explanations, no meta-commentary.
