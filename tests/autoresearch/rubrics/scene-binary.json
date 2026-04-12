@@ -1,62 +1,54 @@
 {
-  "name": "Scene Quality Binary",
-  "description": "Binary yes/no evaluation of scene description quality for cinematic video generation. Each scene must be a complete, shootable mini-screenplay.",
+  "name": "Scene Description Binary",
+  "description": "Binary evaluation of scene descriptions. Critical focus: scene boundaries and no cross-scene repetition.",
   "format": "binary",
   "phase": "scenes",
   "promptType": "scene",
-  "context": ["story"],
+  "context": ["story", "scene_summary", "all_scene_summaries"],
   "questions": [
     {
-      "id": "SHOT_BREAKDOWN",
-      "question": "Does the scene contain explicit shot-by-shot breakdown with shot types (WIDE, CLOSE UP, MEDIUM, etc.) and clear descriptions of what the camera sees in each shot?"
+      "id": "BOUNDARY_RESPECTED",
+      "question": "Does the scene ONLY cover the narrative beats described in its assigned summary? It should NOT include events, climactic moments, or resolution from other scenes. If the summary says 'girl runs and phantoms die' the scene should NOT show the dead end, the scream, or the time reset unless those are in THIS scene's summary."
     },
     {
-      "id": "DIALOGUE",
-      "question": "If this scene requires dialogue (characters speak in the corresponding story segment), does the generated scene include the actual quoted dialogue lines? If the story has no dialogue for this scene segment, answer YES — correctly omitting dialogue is correct."
+      "id": "NO_REPETITION",
+      "question": "Comparing to the other scene summaries provided: does this scene avoid repeating key dramatic moments that belong to OTHER scenes? The same death scene, the same dialogue line, and the same dramatic beat should NOT appear in multiple scenes."
+    },
+    {
+      "id": "DIALOGUE_PLACEMENT",
+      "question": "Does dialogue appear ONLY where the scene summary indicates it should? If this scene's summary doesn't mention dialogue or a specific line, that line should NOT appear here — it belongs in the scene whose summary includes it."
+    },
+    {
+      "id": "SHOT_BREAKDOWN",
+      "question": "Does every shot have: shot type (WIDE, MEDIUM, CLOSE UP, etc.), duration in seconds, visual description, character action, and a SOUND line?"
+    },
+    {
+      "id": "DURATION_MATCH",
+      "question": "Do the shot durations sum to a reasonable scene length for the video's total duration? For a 60s video with 4 scenes, each scene should be roughly 12-18s."
+    },
+    {
+      "id": "CHARACTER_ACTIONS",
+      "question": "Are character actions specific physical movements ('her jaw tightens, she looks down'), not vague emotions ('she reacts with sadness')?"
     },
     {
       "id": "VISUAL_CONTINUITY",
-      "question": "Could a director shoot this scene with consistent visual continuity — are character positions, props, and spatial relationships maintained across shots within the scene?"
-    },
-    {
-      "id": "CHARACTER_ACTION",
-      "question": "Does each shot describe specific physical actions characters perform (not vague like 'reacts' but concrete like 'her fingers tighten around the strap' or 'he turns his head sharply to the left')?"
-    },
-    {
-      "id": "DURATION_AWARE",
-      "question": "Does the scene include timing markers or duration cues for each shot (e.g., 'Duration: 5s' or 'SHOT 1 (00:00 - 00:05)') that fit the target video duration?"
-    },
-    {
-      "id": "SOUND_DESIGN",
-      "question": "Does every shot in the scene include an explicit sound/audio direction — whether it's ambient sound, sound effects, dialogue audio, music cues, or explicitly stated silence/absence of sound? A shot with no audio direction at all is a failure."
-    },
-    {
-      "id": "SETTING_GROUNDED",
-      "question": "Is the scene firmly grounded in a specific physical location with environmental details that match the setting profile (not generic or unanchored in space)?"
-    },
-    {
-      "id": "CHARACTER_APPEARANCE",
-      "question": "Are characters described with enough physical detail to maintain visual consistency with their character profiles (clothing, distinguishing features, body language)?"
+      "question": "Are character positions tracked across shots? No teleportation — if running in shot 1, next shot shows still running or having stopped."
     },
     {
       "id": "EMOTIONAL_ARC",
-      "question": "Does the scene have a clear emotional progression — does the mood or tension shift from the beginning to the end of the scene?"
-    },
-    {
-      "id": "TRANSITION_READY",
-      "question": "Does the scene end in a state that naturally leads to the next scene — is there a clear exit point or transition moment (not just an abrupt stop)?"
+      "question": "Does the scene have progression? Something changes from first shot to last. Not a flat sequence."
     },
     {
       "id": "STORY_FAITHFUL",
-      "question": "Comparing to the provided story: does this scene accurately depict events, characters, and details from the story — without inventing new plot points, adding characters not in the story, or contradicting established facts?"
+      "question": "Does the scene accurately represent events from the story without inventing major new elements?"
     },
     {
-      "id": "STORY_PROGRESSION",
-      "question": "Comparing to the provided story: does this scene advance the narrative — does something change (information revealed, relationship shifted, tension raised, decision made) that moves the story forward from where the previous scene left off?"
+      "id": "SOUND_EVERY_SHOT",
+      "question": "Does EVERY shot have a SOUND line? Even if it's 'dead silence'."
     },
     {
-      "id": "INSERT_SHOTS",
-      "question": "Does the scene use cinematic visual storytelling beyond character shots — such as insert shots, cutaways, or establishing shots (e.g., environment details, time-of-day cues, atmospheric moments, tension-building objects)? Answer YES if the scene includes at least one such shot, OR if the scene's pacing genuinely wouldn't benefit from one (e.g., a rapid unbroken action sequence)."
+      "id": "SCENE_COMPLETE",
+      "question": "Does the scene feel complete within its assigned beats? It should have a beginning, development, and transition to the next scene — not end abruptly mid-action."
     }
   ]
 }
