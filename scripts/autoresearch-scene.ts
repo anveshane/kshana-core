@@ -208,29 +208,36 @@ function proposeImprovement(
   ).join('\n');
   const allFailures = [...new Set(evalResults.flatMap(r => r.failures))];
 
-  const prompt = `You are optimizing a prompt guide for scene description generation.
+  const prompt = `You are rewriting a prompt guide. You must output the COMPLETE rewritten guide — every section, every rule, every example. Do NOT output a summary of changes, do NOT describe what you would change, do NOT ask for permission. Output the FULL guide text ready to be saved to a file.
 
-## Current Guide
+## Current Guide (rewrite this entirely)
 ${guide}
 
 ## Evaluation Results
 ${summary}
 
-## Common Failures
+## Failures To Fix
 ${allFailures.map(f => `- ${f}`).join('\n')}
 
-Key issues:
-- BOUNDARY_RESPECTED: Scenes include events from other scenes
-- NO_REPETITION: Same climax/dialogue repeated across scenes
-- DIALOGUE_PLACEMENT: Dialogue appears in wrong scenes
+INSTRUCTIONS:
+1. Keep ALL sections that are working (dialogue inventory, character actions, etc.)
+2. ADD or STRENGTHEN rules to fix the failures listed above
+3. Do NOT add shot types, durations, camera directions — this guide is for NARRATIVE PROSE only
+4. The output must be a COMPLETE, STANDALONE guide — not a diff, not a summary of changes
+5. Start the output with: **PURPOSE**:
+6. Do NOT include any preamble like "Here's the improved guide" or "I need permission"
 
-Rewrite the guide to fix failures. IMPORTANT: Do NOT remove passing sections.
-
-Output ONLY the improved guide. Start with **PURPOSE**:`;
+OUTPUT THE COMPLETE GUIDE NOW:`;
 
   let result = claudeP(prompt);
   const purposeIdx = result.indexOf('**PURPOSE**');
   if (purposeIdx > 0) result = result.substring(purposeIdx);
+
+  // Validate: if the result is too short or doesn't contain guide-like content, keep the original
+  if (result.length < 500 || !result.includes('## ')) {
+    console.log(`  WARNING: Improver output looks like meta-commentary (${result.length} chars), keeping original guide`);
+    return guide;
+  }
   return result;
 }
 
