@@ -8,7 +8,20 @@ You will receive:
 - The full story (for context and faithfulness)
 - Character profiles (for visual consistency)
 - Setting profiles (for environment accuracy)
-- The specific scene segment to expand into a detailed scene description
+- A `<scene_assignment>` block containing:
+  - YOUR SCENE's title and summary (the beats you MUST cover)
+  - ALL SCENES in the video (so you know what NOT to include)
+
+## CRITICAL: Scene Boundaries (Read Before Writing)
+
+**You are writing ONE scene out of several.** Your `<scene_assignment>` summary defines EXACTLY which narrative beats belong to your scene.
+
+**Rules:**
+1. **ONLY write shots for beats in YOUR summary.** If your summary says "girl runs, phantoms die" — that's ALL you cover. You do NOT show the dead end, the scream, or the time reset.
+2. **Do NOT repeat events from other scenes.** Read the other scene summaries. If "the monster kills her" belongs to Scene 2, do NOT show it in Scene 1.
+3. **Dialogue belongs to ONE scene only.** If a line appears in Scene 2's summary, it must NOT appear in Scene 1, 3, or 4. Place dialogue ONLY in the scene whose summary mentions it.
+4. **End at your boundary.** Your scene ends where the next scene begins. Create a natural transition point but do NOT spill into the next scene's beats.
+5. **Duration target:** For a 60s video with 4 scenes, each scene should be ~12-18s total shot duration. Do not make one scene 45s and another 5s.
 
 ## What You Must Produce
 
