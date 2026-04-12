@@ -42,3 +42,70 @@ export function getLastFramePath(node: ExecutionNode): string | null {
 
   return null;
 }
+
+/** Purposes that should use fresh FL2V instead of V2V extend */
+const FRESH_PURPOSES = new Set(['set_the_world', 'show_change']);
+
+/**
+ * Determine video generation strategy for a shot.
+ *
+ * - Shot 1 of scene 1 → 'flfv' (fresh, first shot in video)
+ * - set_the_world / show_change purpose → 'flfv' (fresh, dramatic change)
+ * - Everything else → 'v2v_extend' (continue from previous shot's video)
+ */
+export function getVideoStrategy(itemId: string, purpose: string): 'flfv' | 'v2v_extend' {
+  // First shot in entire video → always fresh
+  if (itemId === 'scene_1_shot_1') return 'flfv';
+
+  // Purposes that require fresh generation
+  if (FRESH_PURPOSES.has(purpose)) return 'flfv';
+
+  // Everything else: extend from previous video
+  return 'v2v_extend';
+}
+
+/**
+ * Find the previous shot's video output path.
+ * Looks within the same scene first, then crosses to the previous scene's last shot.
+ * Returns null for shot 1 of scene 1.
+ */
+export function getPreviousVideoPath(
+  itemId: string,
+  executor: { getNode: (id: string) => ExecutionNode | undefined; getAllNodes: () => ExecutionNode[] },
+): string | null {
+  // Try previous shot within same scene
+  const prevShotId = getPreviousShotId(itemId);
+  if (prevShotId) {
+    const prevVideoNode = executor.getNode(`shot_video:${prevShotId}`);
+    if (prevVideoNode?.status === 'completed' && prevVideoNode.outputPath) {
+      return prevVideoNode.outputPath;
+    }
+    return null;
+  }
+
+  // First shot in scene → look at previous scene's last shot
+  const sceneMatch = itemId.match(/^scene_(\d+)_shot_1$/);
+  if (!sceneMatch) return null;
+
+  const sceneNum = parseInt(sceneMatch[1]!, 10);
+  if (sceneNum <= 1) return null; // Scene 1 shot 1 — no previous
+
+  const prevSceneId = `scene_${sceneNum - 1}`;
+
+  // Find all shot_video nodes for the previous scene, get the highest shot number
+  const prevSceneVideos = executor.getAllNodes()
+    .filter(n => n.typeId === 'shot_video' && n.itemId?.startsWith(`${prevSceneId}_shot_`) && n.status === 'completed')
+    .sort((a, b) => {
+      const aNum = parseInt(a.itemId?.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+      const bNum = parseInt(b.itemId?.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+      return bNum - aNum; // Descending — highest first
+    });
+
+  if (prevSceneVideos.length > 0) {
+    const lastVideo = prevSceneVideos[0]!;
+    const videoNode = executor.getNode(lastVideo.id);
+    if (videoNode?.outputPath) return videoNode.outputPath;
+  }
+
+  return null;
+}
