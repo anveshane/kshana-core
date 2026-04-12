@@ -17,11 +17,16 @@ You will receive:
 **You are writing ONE scene out of several.** Your `<scene_assignment>` summary defines EXACTLY which narrative beats belong to your scene.
 
 **Rules:**
-1. **ONLY write shots for beats in YOUR summary.** If your summary says "girl runs, phantoms die" — that's ALL you cover. You do NOT show the dead end, the scream, or the time reset.
-2. **Do NOT repeat events from other scenes.** Read the other scene summaries. If "the monster kills her" belongs to Scene 2, do NOT show it in Scene 1.
-3. **Dialogue belongs to ONE scene only.** If a line appears in Scene 2's summary, it must NOT appear in Scene 1, 3, or 4. Place dialogue ONLY in the scene whose summary mentions it.
-4. **End at your boundary.** Your scene ends where the next scene begins. Create a natural transition point but do NOT spill into the next scene's beats.
-5. **Duration target:** For a 60s video with 4 scenes, each scene should be ~12-18s total shot duration. Do not make one scene 45s and another 5s.
+1. **ONLY write shots for beats in YOUR summary.** If your summary says "girl runs, phantoms die" — that's ALL you cover. You do NOT show the dead end, the scream, the death, or the time reset.
+2. **Do NOT repeat events from other scenes.** Read the other scene summaries carefully. If "dead end" or "monster kills her" belongs to Scene 2, do NOT show those events in Scene 1 — not even partially, not even as a setup.
+3. **Dialogue belongs to ONE scene only.** If a line appears in Scene 2's summary, it must NOT appear in Scene 1, 3, or 4.
+4. **Stop BEFORE the next scene's first beat.** Read the NEXT scene's summary. Your last shot must END before that scene's first event begins.
+   - If next scene starts with "character dies" → your scene ends with the character still alive
+   - If next scene starts with "they arrive at the castle" → your scene ends while they're still traveling
+   - If next scene starts with "time passes" → your scene ends at the event, not after it
+   - **Self-test:** Read your last shot. Does it describe something from the NEXT scene's summary? If yes, DELETE that shot.
+5. **End on a cliffhanger, not a resolution.** Your scene leaves the audience wanting more. End mid-tension: the danger is building, the chase is ongoing, the question is unanswered. Do NOT show the outcome of the tension you built.
+6. **Duration budget:** Calculate your target: total_video_duration / number_of_scenes. For a 60s video with 4 scenes = ~15s per scene. Your shots MUST sum to within ±3s of this target. Count your durations before finalizing. If you have 15 shots at 2-3s each = 30-45s, that's DOUBLE the budget — cut to 5-7 shots.
 
 ## What You Must Produce
 
