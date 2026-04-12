@@ -36,6 +36,15 @@ describe('V2V Extend: strategy selection', () => {
   });
 });
 
+describe('V2V Extend: strategy in schemas', () => {
+  it('v2v_extend is a valid video generation strategy', async () => {
+    const { getPromptSchema } = await import('../../src/core/planner/schemas.js');
+    const schema = getPromptSchema('shot_image_prompt');
+    // The schema should mention flfv and fmlfv — v2v_extend is code-level, not LLM-chosen
+    expect(schema).toContain('flfv');
+  });
+});
+
 describe('V2V Extend: previous video lookup', () => {
   it('getPreviousVideoPath returns previous shot video within scene', async () => {
     const { getPreviousVideoPath } = await import('../../src/core/planner/crossShotChaining.js');

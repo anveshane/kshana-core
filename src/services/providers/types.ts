@@ -102,6 +102,8 @@ export interface VideoGenerationInput {
   frameImages?: Record<string, string>;
   /** Workflow mode ID for routing to the correct workflow */
   modeId?: string;
+  /** Absolute path to source video for V2V extend (previous shot's video) */
+  sourceVideoPath?: string;
 }
 
 // ---------------------------------------------------------------------------

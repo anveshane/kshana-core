@@ -1855,6 +1855,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                     const allSettingImages = this.executor.getAllNodes()
                       .filter(n => n.typeId === 'setting_image' && n.itemId).map(n => n.id);
                     let prevShotImageId: string | null = null;
+                    let prevShotVideoId2: string | null = null;
                     for (const shot of shotItems) {
                       const shotImageId = `shot_image:${shot.itemId}`;
                       const shotVideoId = `shot_video:${shot.itemId}`;
@@ -1874,17 +1875,20 @@ export class ExecutorAgent extends TypedEventEmitter {
                         }
                       }
                       if (!this.executor.getNode(shotVideoId)) {
+                        const videoDeps = [shotImageId, motionId];
+                        if (prevShotVideoId2) videoDeps.push(prevShotVideoId2);
                         this.executor.addNode({
                           id: shotVideoId, typeId: 'shot_video', itemId: shot.itemId,
                           status: 'pending', displayName: `Shot Videos: ${shot.name}`,
-                          isExpensive: true, isCollection: false, dependencies: [shotImageId, motionId], dependents: [],
+                          isExpensive: true, isCollection: false, dependencies: videoDeps, dependents: [],
                         });
-                        const imgNode = this.executor.getNode(shotImageId);
-                        if (imgNode && !imgNode.dependents.includes(shotVideoId)) imgNode.dependents.push(shotVideoId);
-                        const motNode = this.executor.getNode(motionId);
-                        if (motNode && !motNode.dependents.includes(shotVideoId)) motNode.dependents.push(shotVideoId);
+                        for (const depId of videoDeps) {
+                          const depNode = this.executor.getNode(depId);
+                          if (depNode && !depNode.dependents.includes(shotVideoId)) depNode.dependents.push(shotVideoId);
+                        }
                       }
                       prevShotImageId = shotImageId;
+                      prevShotVideoId2 = shotVideoId;
                     }
                   }
 
@@ -2042,6 +2046,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                     const allSettingImages = this.executor.getAllNodes()
                       .filter(n => n.typeId === 'setting_image' && n.itemId).map(n => n.id);
                     let prevShotImageId: string | null = null;
+                    let prevShotVideoId2: string | null = null;
                     for (const shot of shotItems) {
                       const shotImageId = `shot_image:${shot.itemId}`;
                       const shotVideoId = `shot_video:${shot.itemId}`;
@@ -2785,6 +2790,7 @@ export class ExecutorAgent extends TypedEventEmitter {
           .map(n => n.id);
 
         let prevShotImageId: string | null = null;
+        let prevShotVideoId: string | null = null;
         for (const shot of shotItems) {
           const shotPromptId = `shot_image_prompt:${shot.itemId}`;
           const motionId = `shot_motion_directive:${shot.itemId}`;
@@ -2819,9 +2825,10 @@ export class ExecutorAgent extends TypedEventEmitter {
             }
           }
 
-          // Create or fix shot_video node
+          // Create or fix shot_video node (sequential — each depends on previous for V2V extend)
           if (!this.executor.getNode(shotVideoId)) {
             const shotVideoDeps = [shotImageId, motionId];
+            if (prevShotVideoId) shotVideoDeps.push(prevShotVideoId);
             this.executor.addNode({
               id: shotVideoId,
               typeId: 'shot_video',
@@ -2861,8 +2868,9 @@ export class ExecutorAgent extends TypedEventEmitter {
             }
           }
           prevShotImageId = shotImageId;
+          prevShotVideoId = shotVideoId;
         }
-        this.log(`  Created ${shotItems.length} shot_image + shot_video nodes for ${sceneId} with proper deps (sequential chaining)`);
+        this.log(`  Created ${shotItems.length} shot_image + shot_video nodes for ${sceneId} with proper deps (sequential video chaining for V2V extend)`);
 
         this.emit({
           type: 'notification',
@@ -4114,8 +4122,34 @@ export class ExecutorAgent extends TypedEventEmitter {
       motionPrompt = `Cinematic shot with subtle camera movement, scene ${sceneNum} shot ${shotNum}`;
     }
 
+    // Determine video strategy: v2v_extend for continuation shots, flfv for fresh
+    const { getVideoStrategy, getPreviousVideoPath } = await import('./crossShotChaining.js');
+    const shotPurpose = (() => {
+      try {
+        if (!svpNode?.outputPath) return '';
+        const svpPath = join(this.config.projectDir, svpNode.outputPath);
+        let c = readFileSync(svpPath, 'utf-8').trim();
+        if (c.startsWith('```')) c = c.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+        const p = JSON.parse(c);
+        const s = (p.shots ?? p)?.find?.((s: any) => s.shotNumber === shotNum);
+        return s?.purpose || '';
+      } catch { return ''; }
+    })();
+
+    const videoStrategy = getVideoStrategy(node.itemId ?? '', shotPurpose);
+    let previousVideoPath: string | null = null;
+    if (videoStrategy === 'v2v_extend') {
+      previousVideoPath = getPreviousVideoPath(node.itemId ?? '', this.executor);
+      if (previousVideoPath) {
+        generationStrategy = 'v2v_extend';
+        this.log(`  V2V Extend: will extend ${previousVideoPath}`);
+      } else {
+        this.log(`  V2V Extend: no previous video found — falling back to flfv`);
+        generationStrategy = generationStrategy || 'flfv';
+      }
+    }
+
     // t2v is no longer a valid strategy — every shot uses a first frame image
-    // If t2v slips through from old data, treat as i2v
     const isT2V = false;
     if (!shotImagePath) {
       this.log(`  No shot image found for ${node.id}`);
@@ -4196,6 +4230,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       const result = await provider.generateVideo(
         {
           sourceImagePath: isT2V ? '' : join(this.config.projectDir, shotImagePath),
+          sourceVideoPath: previousVideoPath ? join(this.config.projectDir, previousVideoPath) : undefined,
           prompt: motionPrompt,
           durationSeconds: shotDuration,
           width: videoWidth,

@@ -375,9 +375,14 @@ export class ComfyUIProvider implements GenerationProvider {
 
     const client = new ComfyUIClient({ outputDir });
 
-    // Upload source image (skip for t2v)
+    // Upload source image or video
     let uploadResult: { name: string } | null = null;
-    if (!isT2V) {
+    const isV2VExtend = strategy === 'v2v_extend' && input.sourceVideoPath && fs.existsSync(input.sourceVideoPath);
+    if (isV2VExtend) {
+      onProgress?.({ percentage: 0, message: 'Uploading source video for V2V extend...', done: false });
+      uploadResult = await client.uploadImage(input.sourceVideoPath!, 'input', true);
+      debugLog(`V2V Extend: uploaded source video ${input.sourceVideoPath} → ${uploadResult.name}`);
+    } else if (!isT2V) {
       onProgress?.({ percentage: 0, message: 'Uploading source image...', done: false });
       uploadResult = await client.uploadImage(sourceImagePath, 'input', true);
     } else {
@@ -431,8 +436,10 @@ export class ComfyUIProvider implements GenerationProvider {
         width,
         height,
       };
-      // Set first_frame (uploaded source image)
-      if (!isT2V && uploadResult?.name) {
+      // Set first_frame (uploaded source image) or source_video (V2V extend)
+      if (isV2VExtend && uploadResult?.name) {
+        genericParams['source_video'] = uploadResult.name;
+      } else if (!isT2V && uploadResult?.name) {
         genericParams['first_frame'] = uploadResult.name;
       }
       // Set additional frame images (last_frame, mid_frame, etc.)
