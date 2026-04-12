@@ -151,6 +151,7 @@ export class ExecutorAgent extends TypedEventEmitter {
   private running = false;
   private stopped = false;
   private vlmDisabled = process.env['DISABLE_VLM'] === 'true'; // Env flag or auto-disabled after first 404
+  private sceneSummaries = new Map<string, string>(); // scene_1 → summary text
   private _initialized = false;
   private logPath: string;
   private lockFilePath: string;
@@ -1561,9 +1562,29 @@ export class ExecutorAgent extends TypedEventEmitter {
       } catch { /* state not available */ }
     }
 
+    // For scene nodes: inject scene_assignment with summaries and boundaries
+    let sceneAssignment = '';
+    if (node.typeId === 'scene' && node.itemId && this.sceneSummaries.size > 0) {
+      const mySceneId = node.itemId;
+      const mySummary = this.sceneSummaries.get(mySceneId) || '';
+      const myTitle = node.displayName.replace(/^Scenes:\s*/, '');
+
+      const allSummaries = [...this.sceneSummaries.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([id, summary]) => {
+          const num = id.replace('scene_', '');
+          const title = this.executor.getNode(`scene:${id}`)?.displayName?.replace(/^Scenes:\s*/, '') || id;
+          return `Scene ${num}: "${title}" — ${summary}`;
+        })
+        .join('\n');
+
+      sceneAssignment = `\n\n<scene_assignment>\nYOUR SCENE: ${mySceneId} — "${myTitle}"\nSUMMARY: ${mySummary}\n\nYou must ONLY write content for the beats described in YOUR SUMMARY above.\nDo NOT include events, dialogue, or climactic moments from other scenes.\n\nALL SCENES IN THIS VIDEO (for context only — write ONLY yours):\n${allSummaries}\n</scene_assignment>`;
+      this.log(`  Injected scene_assignment for ${mySceneId} (${mySummary.substring(0, 50)}...)`);
+    }
+
     const user = inputs.contextBlock
-      ? `${task}${projectContext}${referenceImageContext}${sceneStateContext}${shotContextHint}\n\n${inputs.contextBlock}`
-      : `${task}${projectContext}${referenceImageContext}${sceneStateContext}${shotContextHint}`;
+      ? `${task}${projectContext}${referenceImageContext}${sceneStateContext}${shotContextHint}${sceneAssignment}\n\n${inputs.contextBlock}`
+      : `${task}${projectContext}${referenceImageContext}${sceneStateContext}${shotContextHint}${sceneAssignment}`;
 
     return { system: systemPrompt, user, loadedSkills };
   }
@@ -1815,6 +1836,20 @@ export class ExecutorAgent extends TypedEventEmitter {
    * where type-level collections exist but haven't been expanded yet.
    */
   private async expandPendingCollections(): Promise<void> {
+    // Load saved scene summaries from disk (survive restarts)
+    if (this.sceneSummaries.size === 0) {
+      const summaryPath = join(this.config.projectDir, 'prompts', 'scene_summaries.json');
+      if (existsSync(summaryPath)) {
+        try {
+          const saved = JSON.parse(readFileSync(summaryPath, 'utf-8'));
+          for (const [k, v] of Object.entries(saved)) {
+            this.sceneSummaries.set(k, v as string);
+          }
+          this.log(`  Loaded ${this.sceneSummaries.size} scene summaries from disk`);
+        } catch { /* ignore */ }
+      }
+    }
+
     const allNodes = this.executor.getAllNodes();
     let expanded = true;
 
@@ -2953,6 +2988,19 @@ export class ExecutorAgent extends TypedEventEmitter {
           itemId: `scene_${s.sceneNumber}`,
           name: s.title,
         }));
+        // Store scene summaries for injection into scene writer prompts
+        // Save to disk so they survive restarts
+        for (const s of items.scenes ?? []) {
+          if (s.summary) {
+            this.sceneSummaries.set(`scene_${s.sceneNumber}`, s.summary);
+            this.log(`  Stored summary for scene_${s.sceneNumber}: ${s.summary.substring(0, 60)}...`);
+          }
+        }
+        if (this.sceneSummaries.size > 0) {
+          const summaryPath = join(this.config.projectDir, 'prompts', 'scene_summaries.json');
+          if (!existsSync(join(this.config.projectDir, 'prompts'))) mkdirSync(join(this.config.projectDir, 'prompts'), { recursive: true });
+          writeFileSync(summaryPath, JSON.stringify(Object.fromEntries(this.sceneSummaries), null, 2));
+        }
       }
 
       if (applicableItems.length > 0) {
