@@ -90,7 +90,7 @@ const TEMPLATE_DEPS: Record<string, string[]> = {
   world_style: ['story', 'scene', 'setting'],
   character_image: ['character', 'world_style'],
   setting_image: ['setting', 'world_style'],
-  scene_video_prompt: ['scene', 'character_image', 'setting_image', 'world_style'],
+  scene_video_prompt: ['scene', 'world_style'],
   shot_image_prompt: ['scene_video_prompt'],
   shot_motion_directive: ['scene_video_prompt', 'shot_image_prompt', 'world_style'],
   shot_image: ['shot_image_prompt', 'character_image', 'setting_image'],

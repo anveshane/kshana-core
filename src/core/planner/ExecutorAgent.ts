@@ -2214,6 +2214,38 @@ export class ExecutorAgent extends TypedEventEmitter {
         }
       }
     }
+
+    // Post-expansion: fix dangling dependencies (type-level refs to expanded nodes)
+    // e.g., scene_video_prompt:scene_1 depends on 'scene' (type-level, gone after expansion)
+    // → rewire to 'scene:scene_1' (per-item, matching scope)
+    for (const node of this.executor.getAllNodes()) {
+      const newDeps: string[] = [];
+      let fixed = false;
+      for (const depId of node.dependencies) {
+        if (this.executor.getNode(depId)) {
+          newDeps.push(depId);
+        } else {
+          // Try to find a per-item version: depId + ':' + node.itemId's scene prefix
+          // e.g., 'scene' → 'scene:scene_1' when node is 'scene_video_prompt:scene_1'
+          const itemId = node.itemId;
+          if (itemId) {
+            const perItemId = `${depId}:${itemId}`;
+            if (this.executor.getNode(perItemId)) {
+              newDeps.push(perItemId);
+              this.log(`  Fixed dangling dep: ${node.id} → ${depId} rewired to ${perItemId}`);
+              fixed = true;
+              continue;
+            }
+          }
+          // Still dangling — remove it to prevent deadlock
+          this.log(`  Removed dangling dep from ${node.id}: ${depId} (node doesn't exist)`);
+          fixed = true;
+        }
+      }
+      if (fixed) {
+        node.dependencies = newDeps;
+      }
+    }
   }
 
   /**

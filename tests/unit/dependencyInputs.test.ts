@@ -300,7 +300,7 @@ describe('scene dependencies', () => {
 // Scene Video Prompt: should get matching scene + ref images (NOT binary)
 // =====================================================================
 describe('scene_video_prompt dependencies', () => {
-  it('receives matching scene text and image refs but NO binary data', () => {
+  it('receives matching scene text but NO image refs (prevents serial mode deadlock)', () => {
     const node = getNode('scene_video_prompt:scene_1');
     const inputs = resolveInputs(node, executor, projectDir);
 
@@ -309,16 +309,10 @@ describe('scene_video_prompt dependencies', () => {
     // Should NOT read scene_2
     expect(inputs.filesRead).not.toContain('chapters/chapter_1/scenes/scene_2.md');
 
-    // Should list image files as read (tracked) but NOT in context text
-    expect(inputs.filesRead).toContain('assets/images/charref_alice.png');
-    expect(inputs.filesRead).toContain('assets/images/charref_bob.png');
-    expect(inputs.filesRead).toContain('assets/images/settingref_park.png');
-    expect(inputs.filesRead).toContain('assets/images/settingref_house.png');
-
-    // Reference images should be populated
-    expect(inputs.referenceImages.length).toBeGreaterThanOrEqual(2);
-    expect(inputs.referenceImages.some(r => r.type === 'character')).toBe(true);
-    expect(inputs.referenceImages.some(r => r.type === 'setting')).toBe(true);
+    // Should NOT depend on character/setting images (media nodes)
+    // Having media deps here causes serial mode deadlock
+    expect(inputs.filesRead).not.toContain('assets/images/charref_alice.png');
+    expect(inputs.filesRead).not.toContain('assets/images/settingref_park.png');
 
     // Context block must NOT contain binary PNG data
     expect(inputs.contextBlock).not.toContain('\x89PNG');

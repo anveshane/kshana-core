@@ -321,9 +321,11 @@ const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
   requiresPerItemApproval: true,
   dependencies: [
     { artifactTypeId: 'scene', required: true, usage: 'context', scope: 'matching' },
-    { artifactTypeId: 'character_image', required: true, usage: 'reference', scope: 'all' },
-    { artifactTypeId: 'setting_image', required: true, usage: 'reference', scope: 'all' },
     { artifactTypeId: 'world_style', required: true, usage: 'context', scope: 'matching' },
+    // character_image and setting_image REMOVED — scene breakdown only needs
+    // scene text + world style. Having media deps here caused serial mode deadlock:
+    // content (scene_video_prompt) waited for media (character_image) which waited
+    // for all content to finish.
   ],
 };
 
