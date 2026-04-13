@@ -57,6 +57,7 @@ export interface AppState {
   // Project
   projects: Project[]
   selectedProject: string | null
+  projectMode: 'none' | 'existing' | 'new'
   phase: string | null
 
   // Execution
@@ -89,6 +90,7 @@ export const initialState: AppState = {
   connectionStatus: 'disconnected',
   projects: [],
   selectedProject: null,
+  projectMode: 'none',
   phase: null,
   todos: [],
   toolCalls: [],
@@ -110,6 +112,7 @@ export type AppAction =
   | { type: 'SET_CONNECTION'; status: AppState['connectionStatus']; sessionId?: string }
   | { type: 'SET_PROJECTS'; projects: Project[] }
   | { type: 'SELECT_PROJECT'; name: string | null }
+  | { type: 'ENTER_NEW_PROJECT_FLOW' }
   | { type: 'SET_PHASE'; phase: string | null }
   | { type: 'SET_TODOS'; todos: TodoItem[] }
   | { type: 'ADD_TOOL_CALL'; toolCall: ToolCall }
@@ -146,6 +149,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       return {
         ...state,
         selectedProject: action.name,
+        projectMode: action.name ? 'existing' : 'none',
         phase: null,
         todos: [],
         assets: [],
@@ -153,6 +157,26 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         toolCalls: [],
         streamingText: null,
         agentStatus: 'idle',
+        timer: { elapsedMs: 0, running: false, completed: false },
+        contextUsage: null,
+        timeline: null,
+        activeView: 'chat',
+      }
+
+    case 'ENTER_NEW_PROJECT_FLOW':
+      return {
+        ...state,
+        selectedProject: null,
+        projectMode: 'new',
+        phase: null,
+        todos: [],
+        assets: [],
+        chatMessages: [],
+        toolCalls: [],
+        streamingText: null,
+        agentStatus: 'idle',
+        timer: { elapsedMs: 0, running: false, completed: false },
+        contextUsage: null,
         timeline: null,
         activeView: 'chat',
       }

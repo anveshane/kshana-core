@@ -17,6 +17,7 @@ export type ServerMessageType =
   | 'stream_end'          // End of streaming
   | 'context_usage'       // Context window usage stats
   | 'phase_transition'    // Workflow phase change
+  | 'timeline_update'     // Full timeline state update
   | 'notification'        // User-facing notification
   | 'error'               // Error message
   // Remote file system messages (server → client)
@@ -185,6 +186,13 @@ export interface PhaseTransitionData {
   toPhase: string;
   displayName?: string;
   description?: string;
+}
+
+/**
+ * Timeline update message data.
+ */
+export interface TimelineUpdateData {
+  timeline: unknown;
 }
 
 /**

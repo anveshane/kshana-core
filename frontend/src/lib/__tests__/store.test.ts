@@ -24,12 +24,57 @@ describe('appReducer', () => {
       todos: [{ id: '1', text: 'test', status: 'pending' as const }],
       assets: [{ id: 'a1', path: 'p', url: 'u', type: 'image' }],
       phase: 'video_gen',
+      contextUsage: { percentage: 50, promptTokens: 100, maxTokens: 200 },
+      timer: { elapsedMs: 1200, running: true, completed: false },
     }
     const state = appReducer(withState, { type: 'SELECT_PROJECT', name: 'new_proj' })
     expect(state.selectedProject).toBe('new_proj')
+    expect(state.projectMode).toBe('existing')
     expect(state.todos).toEqual([])
     expect(state.assets).toEqual([])
     expect(state.phase).toBeNull()
+    expect(state.contextUsage).toBeNull()
+    expect(state.timer).toEqual({ elapsedMs: 0, running: false, completed: false })
+  })
+
+  it('enters new project flow and clears project-specific state', () => {
+    const withState = {
+      ...initialState,
+      selectedProject: 'existing-project',
+      projectMode: 'existing' as const,
+      phase: 'scene_breakdown',
+      todos: [{ id: '1', text: 'test', status: 'pending' as const }],
+      assets: [{ id: 'a1', path: 'p', url: 'u', type: 'image' }],
+      chatMessages: [{ id: 'm1', type: 'system' as const, content: 'old', timestamp: 1 }],
+      toolCalls: [{ id: 'tc1', toolName: 'tool', status: 'executing' as const, startTime: 1 }],
+      streamingText: 'old stream',
+      agentStatus: 'thinking' as const,
+      contextUsage: { percentage: 50, promptTokens: 100, maxTokens: 200 },
+      timer: { elapsedMs: 1200, running: true, completed: false },
+      timeline: {
+        version: '1.0' as const,
+        totalDuration: 30,
+        defaultCompositingMode: 'replace' as const,
+        segments: [],
+        globalLayers: [],
+        validation: { isComplete: false, filledDuration: 0, gaps: [], warnings: [] },
+      },
+      activeView: 'timeline' as const,
+    }
+    const state = appReducer(withState, { type: 'ENTER_NEW_PROJECT_FLOW' })
+    expect(state.selectedProject).toBeNull()
+    expect(state.projectMode).toBe('new')
+    expect(state.phase).toBeNull()
+    expect(state.todos).toEqual([])
+    expect(state.assets).toEqual([])
+    expect(state.chatMessages).toEqual([])
+    expect(state.toolCalls).toEqual([])
+    expect(state.streamingText).toBeNull()
+    expect(state.agentStatus).toBe('idle')
+    expect(state.contextUsage).toBeNull()
+    expect(state.timer).toEqual({ elapsedMs: 0, running: false, completed: false })
+    expect(state.timeline).toBeNull()
+    expect(state.activeView).toBe('chat')
   })
 
   it('adds tool call', () => {

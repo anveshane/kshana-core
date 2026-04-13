@@ -22,6 +22,7 @@ import {
   type StreamChunkData,
   type ContextUsageData,
   type PhaseTransitionData,
+  type TimelineUpdateData,
   type NotificationData,
   type SessionTimerData,
   type ErrorData,
@@ -552,6 +553,7 @@ export class WebSocketHandler {
   ): Promise<void> {
     const projectDirName = `${projectName}.kshana`;
     const projectFile = join(process.cwd(), projectDirName, 'project.json');
+    const timelineFile = join(process.cwd(), projectDirName, 'timeline.json');
 
     // Read project.json to get templateId, style, duration, and timing
     let templateId = 'narrative';
@@ -590,6 +592,18 @@ export class WebSocketHandler {
       message: `Project set to ${projectName}`,
       tools: toolNames,
     }));
+
+    if (await localFs.exists(timelineFile)) {
+      try {
+        const timelineContent = await localFs.readFile(timelineFile);
+        const timeline = JSON.parse(timelineContent);
+        this.sendMessage(socket, createServerMessage<TimelineUpdateData>('timeline_update', sessionId, {
+          timeline,
+        }));
+      } catch {
+        // Ignore malformed timeline.json and leave timeline empty on the client
+      }
+    }
 
     // Send session timer — recover elapsed time from project
     if (projectData) {
@@ -829,6 +843,10 @@ export class WebSocketHandler {
             }
           });
         } catch { /* ignore */ }
+      },
+
+      onTimelineUpdate: (sid, data) => {
+        this.sendMessage(socket, createServerMessage<TimelineUpdateData>('timeline_update', sid, data));
       },
 
       onNotification: (sid, data) => {

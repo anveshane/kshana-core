@@ -44,6 +44,8 @@ export interface ConversationEvents {
   onContextUsage?: (sessionId: string, data: { promptTokens: number; maxTokens: number; percentage: number; wasCompressed: boolean; iteration: number }) => void;
   /** Workflow phase transition */
   onPhaseTransition?: (sessionId: string, data: { fromPhase: string; toPhase: string; displayName?: string; description?: string }) => void;
+  /** Full timeline state update */
+  onTimelineUpdate?: (sessionId: string, data: { timeline: unknown }) => void;
   /** User-facing notification */
   onNotification?: (sessionId: string, data: { level: 'info' | 'warning' | 'error'; message: string }) => void;
 }
@@ -463,6 +465,12 @@ export class ConversationManager {
     if (events.onPhaseTransition) {
       agent.on('phase_transition', (data) => {
         events.onPhaseTransition!(sessionId, data);
+      });
+    }
+
+    if (events.onTimelineUpdate) {
+      agent.on('timeline_update', (data) => {
+        events.onTimelineUpdate!(sessionId, { timeline: data.timeline });
       });
     }
 

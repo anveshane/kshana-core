@@ -149,6 +149,8 @@ export interface TimelineSegment {
   layerHistory?: LayerSnapshot[];
   /** Current version info for this segment */
   versionInfo?: SegmentVersionInfo;
+  /** Optional segment metadata for shot identity, prompt provenance, etc. */
+  metadata?: Record<string, unknown>;
 }
 
 /**

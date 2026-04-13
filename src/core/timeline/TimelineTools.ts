@@ -282,8 +282,10 @@ The timeline is saved to timeline.json in the project directory and persists acr
             metadata: l.metadata,
           }));
 
+          let updateResult;
           try {
-            timeline = updateSegmentLayers(timeline, segmentId, layers, fillStatus, undefined, versionNote);
+            updateResult = updateSegmentLayers(timeline, segmentId, layers, fillStatus, undefined, versionNote);
+            timeline = updateResult;
           } catch (e) {
             return { success: false, error: String(e) };
           }
@@ -302,7 +304,11 @@ The timeline is saved to timeline.json in the project directory and persists acr
               hasAlternatives: (segment.versionInfo?.totalVersions ?? 1) > 1,
             },
             validation: timeline.validation,
+            downgrade_prevention: updateResult?.downgradePrevention,
             message: `Segment "${segment.label}" updated with ${layers.length} layer(s), status: ${segment.fillStatus}` +
+              (updateResult?.downgradePrevention
+                ? ` (${updateResult.downgradePrevention.preservedIndexes.length} weak layer overwrite(s) ignored)`
+                : '') +
               (segment.versionInfo && segment.versionInfo.totalVersions > 1
                 ? ` (version ${segment.versionInfo.activeVersion} of ${segment.versionInfo.totalVersions})`
                 : ''),
