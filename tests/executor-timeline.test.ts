@@ -221,14 +221,19 @@ describe('Executor timeline lifecycle', () => {
     const agent = createAgent(projectDir, {});
 
     let attempts = 0;
-    (agent as any).ensureSceneShotSegments = () => {
+    (agent as any).materializeSceneBreakdown = () => {
       attempts += 1;
       return {
         sceneId: 'scene_1',
-        extractedShotCount: 2,
-        expectedSegmentIds: ['scene_1_shot_1', 'scene_1_shot_2'],
-        actualSegmentIds: attempts === 1 ? ['scene_1'] : ['scene_1'],
-        rewriteAttempted: true,
+        shotCount: 2,
+        shotItems: [
+          { itemId: 'scene_1_shot_1', name: 'S1 Shot 1: shot_1' },
+          { itemId: 'scene_1_shot_2', name: 'S1 Shot 2: shot_2' },
+        ],
+        expectedTimelineSegmentIds: ['scene_1_shot_1', 'scene_1_shot_2'],
+        actualTimelineSegmentIds: attempts === 1 ? ['scene_1'] : ['scene_1'],
+        graphSatisfied: true,
+        timelineSatisfied: false,
         success: false,
         failureReason: 'missing_expected_segments:scene_1_shot_1,scene_1_shot_2',
       };
@@ -237,7 +242,7 @@ describe('Executor timeline lifecycle', () => {
     expect(() => (agent as any).ensureSceneShotSegmentsStrict('scene_1')).toThrow(
       /Timeline sync failed for scene_1/
     );
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(1);
   });
 
   it('repairs timeline sync on second deterministic attempt', () => {
@@ -245,30 +250,25 @@ describe('Executor timeline lifecycle', () => {
     const agent = createAgent(projectDir, {});
 
     let attempts = 0;
-    (agent as any).ensureSceneShotSegments = () => {
+    (agent as any).materializeSceneBreakdown = () => {
       attempts += 1;
-      return attempts === 1
-        ? {
-            sceneId: 'scene_1',
-            extractedShotCount: 2,
-            expectedSegmentIds: ['scene_1_shot_1', 'scene_1_shot_2'],
-            actualSegmentIds: ['scene_1'],
-            rewriteAttempted: true,
-            success: false,
-            failureReason: 'stale_scene_segment_present:scene_1',
-          }
-        : {
-            sceneId: 'scene_1',
-            extractedShotCount: 2,
-            expectedSegmentIds: ['scene_1_shot_1', 'scene_1_shot_2'],
-            actualSegmentIds: ['scene_1_shot_1', 'scene_1_shot_2'],
-            rewriteAttempted: true,
-            success: true,
-          };
+      return {
+        sceneId: 'scene_1',
+        shotCount: 2,
+        shotItems: [
+          { itemId: 'scene_1_shot_1', name: 'S1 Shot 1: shot_1' },
+          { itemId: 'scene_1_shot_2', name: 'S1 Shot 2: shot_2' },
+        ],
+        expectedTimelineSegmentIds: ['scene_1_shot_1', 'scene_1_shot_2'],
+        actualTimelineSegmentIds: ['scene_1_shot_1', 'scene_1_shot_2'],
+        graphSatisfied: true,
+        timelineSatisfied: true,
+        success: true,
+      };
     };
 
     expect(() => (agent as any).ensureSceneShotSegmentsStrict('scene_1')).not.toThrow();
-    expect(attempts).toBe(2);
+    expect(attempts).toBe(1);
   });
 
   it('reconciles a completed scene prompt against a stale scene-only timeline on resume', () => {
