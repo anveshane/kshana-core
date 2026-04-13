@@ -153,6 +153,32 @@ describe('Timeline Integration', () => {
         splitSegmentIntoShots(timeline, 'nonexistent', [{ label: 'Shot 1', duration: 5 }])
       ).toThrow('Segment not found');
     });
+
+    it('reuses compatible planned shot segments without trying to split the scene again', () => {
+      let timeline = createTimelineSkeleton(15, [
+        { id: 'scene_1', label: 'Scene 1' },
+      ]);
+
+      timeline = splitSegmentIntoShots(timeline, 'scene_1', [
+        { label: 'Shot 1: Wide', duration: 5, metadata: { shotNumber: 1, transition: 'fade' } },
+        { label: 'Shot 2: Close', duration: 5, metadata: { shotNumber: 2, transition: 'cut' } },
+        { label: 'Shot 3: Detail', duration: 5, metadata: { shotNumber: 3, transition: 'dip_to_black' } },
+      ]);
+
+      const updated = upsertSceneShots(timeline, 'scene_1', [
+        { label: 'Shot 1: Wide', duration: 5, metadata: { shotNumber: 1, transition: 'fade' } },
+        { label: 'Shot 2: Close', duration: 5, metadata: { shotNumber: 2, transition: 'cut' } },
+        { label: 'Shot 3: Detail', duration: 5, metadata: { shotNumber: 3, transition: 'dip_to_black' } },
+      ]);
+
+      expect(updated.preservedExistingShots).toBe(true);
+      expect(updated.mergedMetadataIntoExistingShots).toBe(true);
+      expect(updated.timeline.segments.map(s => s.id)).toEqual([
+        'scene_1_shot_1',
+        'scene_1_shot_2',
+        'scene_1_shot_3',
+      ]);
+    });
   });
 
   describe('updateSegmentLayers', () => {

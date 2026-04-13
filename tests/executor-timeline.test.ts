@@ -177,6 +177,45 @@ describe('Executor timeline lifecycle', () => {
     );
   });
 
+  it('uses the freshly written scene breakdown path before node state is marked completed', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'kshana-executor-timeline-'));
+    mkdirSync(join(projectDir, 'prompts', 'videos', 'scenes'), { recursive: true });
+    const relPath = 'prompts/videos/scenes/scene-1.motion.json';
+    writeFileSync(join(projectDir, relPath), JSON.stringify({
+      shots: [
+        { shotNumber: 1, shotType: 'wide', duration: 5 },
+        { shotNumber: 2, shotType: 'close', duration: 7, transition: 'crossfade' },
+      ],
+    }), 'utf-8');
+
+    const agent = createAgent(projectDir, {
+      'scene:scene_1': {
+        typeId: 'scene',
+        itemId: 'scene_1',
+        displayName: 'Scene 1',
+        status: 'completed',
+      },
+      'scene_video_prompt:scene_1': {
+        typeId: 'scene_video_prompt',
+        itemId: 'scene_1',
+        displayName: 'Scene Prompt 1',
+        status: 'in_progress',
+      },
+    });
+
+    const result = (agent as any).ensureSceneShotSegments('scene_1', undefined, {
+      sceneVideoPromptOutputPath: relPath,
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      success: true,
+      extractedShotCount: 2,
+      expectedSegmentIds: ['scene_1_shot_1', 'scene_1_shot_2'],
+      actualSegmentIds: ['scene_1_shot_1', 'scene_1_shot_2'],
+      rewriteAttempted: true,
+    }));
+  });
+
   it('throws when timeline sync still fails after deterministic repair', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'kshana-executor-timeline-'));
     const agent = createAgent(projectDir, {});

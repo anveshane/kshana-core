@@ -652,41 +652,41 @@ export function upsertSceneShots(
 ): UpsertSceneShotsResult {
   const existingShotSegments = getSceneShotSegments(timeline, sceneSegmentId);
   const hasFilledShots = existingShotSegments.some(segment => segment.fillStatus === 'filled');
+  const canMergeIntoExistingShots =
+    existingShotSegments.length === shots.length &&
+    existingShotSegments.every((segment, index) => isCompatibleShotUpdate(segment, shots[index]!));
 
-  if (existingShotSegments.length > 0 && hasFilledShots) {
-    if (
-      existingShotSegments.length === shots.length &&
-      existingShotSegments.every((segment, index) => isCompatibleShotUpdate(segment, shots[index]!))
-    ) {
-      const mergedSegments = timeline.segments.map(segment => {
-        const shotMatch = segment.id.match(new RegExp(`^${sceneSegmentId}_shot_(\\d+)$`));
-        if (!shotMatch?.[1]) return segment;
-        const shotIndex = Number(shotMatch[1]) - 1;
-        const incomingShot = shots[shotIndex];
-        if (!incomingShot) return segment;
-
-        return {
-          ...segment,
-          label: incomingShot.label ?? segment.label,
-          metadata: incomingShot.metadata
-            ? { ...(segment.metadata ?? {}), ...incomingShot.metadata }
-            : segment.metadata,
-        };
-      });
-
-      const updatedTimeline: Timeline = {
-        ...timeline,
-        segments: mergedSegments,
-      };
-      updatedTimeline.validation = validateTimeline(updatedTimeline);
+  if (existingShotSegments.length > 0 && canMergeIntoExistingShots) {
+    const mergedSegments = timeline.segments.map(segment => {
+      const shotMatch = segment.id.match(new RegExp(`^${sceneSegmentId}_shot_(\\d+)$`));
+      if (!shotMatch?.[1]) return segment;
+      const shotIndex = Number(shotMatch[1]) - 1;
+      const incomingShot = shots[shotIndex];
+      if (!incomingShot) return segment;
 
       return {
-        timeline: updatedTimeline,
-        preservedExistingShots: true,
-        mergedMetadataIntoExistingShots: true,
+        ...segment,
+        label: incomingShot.label ?? segment.label,
+        metadata: incomingShot.metadata
+          ? { ...(segment.metadata ?? {}), ...incomingShot.metadata }
+          : segment.metadata,
       };
-    }
+    });
 
+    const updatedTimeline: Timeline = {
+      ...timeline,
+      segments: mergedSegments,
+    };
+    updatedTimeline.validation = validateTimeline(updatedTimeline);
+
+    return {
+      timeline: updatedTimeline,
+      preservedExistingShots: true,
+      mergedMetadataIntoExistingShots: true,
+    };
+  }
+
+  if (existingShotSegments.length > 0 && hasFilledShots) {
     return {
       timeline,
       preservedExistingShots: true,

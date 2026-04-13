@@ -570,12 +570,14 @@ export class ExecutorAgent extends TypedEventEmitter {
 
   private buildShotDescriptorsForScene(
     sceneId: string,
-    sceneVideoPromptNode?: ExecutionNode
+    sceneVideoPromptNode?: ExecutionNode,
+    sceneVideoPromptOutputPath?: string
   ): Array<{ label: string; duration: number; metadata?: Record<string, unknown> }> {
     const promptNode = sceneVideoPromptNode ?? this.executor.getNode(`scene_video_prompt:${sceneId}`);
-    if (!promptNode?.outputPath) return [];
+    const resolvedOutputPath = sceneVideoPromptOutputPath ?? promptNode?.outputPath;
+    if (!resolvedOutputPath) return [];
 
-    const svpPath = join(this.config.projectDir, promptNode.outputPath);
+    const svpPath = join(this.config.projectDir, resolvedOutputPath);
     if (!existsSync(svpPath)) return [];
 
     let svpContent = readFileSync(svpPath, 'utf-8').trim();
@@ -623,10 +625,17 @@ export class ExecutorAgent extends TypedEventEmitter {
       .map(s => s.id);
   }
 
-  private applySceneShotTransitions(sceneId: string, promptNode?: ExecutionNode): void {
-    if (!this.timeline || !promptNode?.outputPath) return;
+  private applySceneShotTransitions(
+    sceneId: string,
+    promptNode?: ExecutionNode,
+    sceneVideoPromptOutputPath?: string
+  ): void {
+    if (!this.timeline) return;
 
-    const svpPath = join(this.config.projectDir, promptNode.outputPath);
+    const resolvedOutputPath = sceneVideoPromptOutputPath ?? promptNode?.outputPath;
+    if (!resolvedOutputPath) return;
+
+    const svpPath = join(this.config.projectDir, resolvedOutputPath);
     if (!existsSync(svpPath)) return;
 
     let svpContent = readFileSync(svpPath, 'utf-8').trim();
@@ -651,7 +660,7 @@ export class ExecutorAgent extends TypedEventEmitter {
   private ensureSceneShotSegments(
     sceneId: string,
     sceneVideoPromptNode?: ExecutionNode,
-    options?: { reloadTimeline?: boolean; reinitializeTimeline?: boolean }
+    options?: { reloadTimeline?: boolean; reinitializeTimeline?: boolean; sceneVideoPromptOutputPath?: string }
   ): {
     sceneId: string;
     extractedShotCount: number;
@@ -682,7 +691,11 @@ export class ExecutorAgent extends TypedEventEmitter {
     }
 
     const promptNode = sceneVideoPromptNode ?? this.executor.getNode(`scene_video_prompt:${sceneId}`);
-    const shotDescriptors = this.buildShotDescriptorsForScene(sceneId, promptNode);
+    const shotDescriptors = this.buildShotDescriptorsForScene(
+      sceneId,
+      promptNode,
+      options?.sceneVideoPromptOutputPath,
+    );
     const expectedSegmentIds = this.getExpectedShotSegmentIds(sceneId, shotDescriptors);
 
     if (shotDescriptors.length === 0) {
@@ -705,7 +718,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       const upserted = upsertSceneShots(this.timeline, sceneId, shotDescriptors);
       this.timeline = upserted.timeline;
       rewriteAttempted = true;
-      this.applySceneShotTransitions(sceneId, promptNode);
+      this.applySceneShotTransitions(sceneId, promptNode, options?.sceneVideoPromptOutputPath);
       saveTimeline(this.config.projectDir, this.timeline);
       this.emitTimelineUpdate();
     } catch (error) {
@@ -741,8 +754,14 @@ export class ExecutorAgent extends TypedEventEmitter {
     };
   }
 
-  private ensureSceneShotSegmentsStrict(sceneId: string, sceneVideoPromptNode?: ExecutionNode): void {
-    const firstAttempt = this.ensureSceneShotSegments(sceneId, sceneVideoPromptNode);
+  private ensureSceneShotSegmentsStrict(
+    sceneId: string,
+    sceneVideoPromptNode?: ExecutionNode,
+    sceneVideoPromptOutputPath?: string
+  ): void {
+    const firstAttempt = this.ensureSceneShotSegments(sceneId, sceneVideoPromptNode, {
+      sceneVideoPromptOutputPath,
+    });
     if (firstAttempt.success) {
       this.log(`Timeline sync OK for ${sceneId}: expected=${firstAttempt.expectedSegmentIds.join(', ')} actual=${firstAttempt.actualSegmentIds.join(', ')}`);
       return;
@@ -757,6 +776,7 @@ export class ExecutorAgent extends TypedEventEmitter {
     const repairedAttempt = this.ensureSceneShotSegments(sceneId, sceneVideoPromptNode, {
       reloadTimeline: true,
       reinitializeTimeline: !this.timelineCoversCurrentScenes(),
+      sceneVideoPromptOutputPath,
     });
     if (repairedAttempt.success) {
       this.log(`Timeline sync repaired for ${sceneId}: expected=${repairedAttempt.expectedSegmentIds.join(', ')} actual=${repairedAttempt.actualSegmentIds.join(', ')}`);
@@ -1497,7 +1517,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                 if (existsSync(writtenFile)) {
                   const writtenContent = readFileSync(writtenFile, 'utf-8');
                   this.log(`  Extracting collection items...`);
-                  await this.handleCollectionExpansion(node, writtenContent);
+                  await this.handleCollectionExpansion(node, writtenContent, finalOutputPath);
                 }
               }
             }
@@ -2997,6 +3017,7 @@ export class ExecutorAgent extends TypedEventEmitter {
   private async handleCollectionExpansion(
     node: ExecutionNode,
     content: string,
+    outputPath?: string,
   ): Promise<void> {
     const agentName = this.config.name ?? 'kshana-executor';
 
@@ -3239,7 +3260,7 @@ export class ExecutorAgent extends TypedEventEmitter {
         this.initializeTimelineFromScenes();
       }
       if (this.timeline && items.shots?.length) {
-        this.ensureSceneShotSegmentsStrict(sceneId, node);
+        this.ensureSceneShotSegmentsStrict(sceneId, node, outputPath);
       }
 
       return;
