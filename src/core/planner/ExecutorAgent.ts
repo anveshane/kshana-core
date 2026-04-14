@@ -3211,6 +3211,7 @@ export class ExecutorAgent extends TypedEventEmitter {
     const isJsonNode = jsonNodeTypes.includes(node.typeId) || typeDef?.outputFormat === 'json';
     if (isJsonNode) {
       options.responseFormat = { type: 'json_object' };
+      options.maxTokens = 5000;
     }
 
     // Inject JSON schema into the system prompt so the LLM sees the exact expected structure.

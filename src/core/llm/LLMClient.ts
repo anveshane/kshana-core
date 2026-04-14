@@ -345,7 +345,7 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
   async *generateStream(
     options: Omit<GenerateOptions, 'stream'>
   ): AsyncGenerator<StreamChunk, void, unknown> {
-    const { messages, tools, temperature = 0.7, responseFormat } = options;
+    const { messages, tools, temperature = 0.7, responseFormat, maxTokens } = options;
     const logger = getLLMLogger();
 
     // Log request
@@ -361,6 +361,9 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
     };
     if (responseFormat) {
       request.response_format = responseFormat;
+    }
+    if (maxTokens) {
+      request.max_tokens = maxTokens;
     }
 
     // Total wall-clock timeout for the entire streaming call (including thinking)
