@@ -25,7 +25,16 @@ function TransitionBadge({ type }: { type: string }) {
 
 function SegmentBlock({ segment, totalDuration }: { segment: TimelineSegment; totalDuration: number }) {
   const widthPercent = totalDuration > 0 ? (segment.duration / totalDuration) * 100 : 0
-  const minWidth = 60 // px minimum so labels are readable
+  const minWidth = 60
+
+  const sceneMatch = segment.id.match(/^scene_(\d+)/)
+  const sceneNumber = sceneMatch ? sceneMatch[1] : null
+
+  const mediaLayer = segment.layers.find(
+    l => (l.type === 'visual' || l.type === 'narration_video') && l.filePath
+  )
+  const isVideo = mediaLayer?.filePath && /\.(mp4|mov|webm|avi)$/i.test(mediaLayer.filePath)
+  const isImage = mediaLayer?.filePath && /\.(jpe?g|png|gif|webp|avif)$/i.test(mediaLayer.filePath)
 
   return (
     <div
@@ -44,10 +53,29 @@ function SegmentBlock({ segment, totalDuration }: { segment: TimelineSegment; to
           <TransitionBadge type={segment.transition.type} />
         )}
       </div>
-      {/* Fill status indicator */}
+      {isVideo && mediaLayer?.filePath && (
+        <video
+          src={mediaLayer.filePath}
+          className="w-full rounded aspect-video object-cover mt-1"
+          muted
+          preload="metadata"
+        />
+      )}
+      {isImage && mediaLayer?.filePath && (
+        <img
+          src={mediaLayer.filePath}
+          alt={segment.label}
+          className="w-full rounded aspect-video object-cover mt-1"
+        />
+      )}
       <div className="text-[8px] uppercase tracking-widest text-graphite-100">
         {fillLabels[segment.fillStatus]}
       </div>
+      {sceneNumber && (
+        <div className="text-[8px] text-graphite-200 mt-auto">
+          Scene {sceneNumber}
+        </div>
+      )}
     </div>
   )
 }
@@ -85,7 +113,6 @@ export function TimelineView() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden p-4 gap-3">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <h2 className="text-sm font-medium text-foreground">
           Timeline
@@ -98,10 +125,8 @@ export function TimelineView() {
         </div>
       </div>
 
-      {/* Time ruler */}
       <TimeRuler totalDuration={totalDuration} />
 
-      {/* Segments row */}
       <div className="flex gap-1 overflow-x-auto pb-2">
         {segments.map(segment => (
           <SegmentBlock
@@ -112,7 +137,6 @@ export function TimelineView() {
         ))}
       </div>
 
-      {/* Progress bar */}
       <div className="mt-auto">
         <div className="flex items-center justify-between text-[10px] text-graphite-100 mb-1">
           <span>Progress</span>

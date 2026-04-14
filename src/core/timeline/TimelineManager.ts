@@ -46,6 +46,46 @@ export interface UpsertSceneShotsResult {
   mergedMetadataIntoExistingShots: boolean;
 }
 
+function buildShotSegmentsFromContainer(
+  sceneSegmentId: string,
+  container: Pick<TimelineSegment, 'startTime' | 'endTime' | 'duration' | 'compositingMode'>,
+  shots: Array<{ label: string; duration: number; metadata?: Record<string, unknown> }>
+): TimelineSegment[] {
+  if (shots.length === 0) {
+    throw new Error('shots array must not be empty');
+  }
+
+  const totalShotDuration = shots.reduce((sum, s) => sum + s.duration, 0);
+  const scale = container.duration / totalShotDuration;
+
+  const shotSegments: TimelineSegment[] = [];
+  let currentTime = container.startTime;
+
+  for (let i = 0; i < shots.length; i++) {
+    const shot = shots[i]!;
+    const isLast = i === shots.length - 1;
+    const shotDuration = isLast
+      ? Math.round((container.endTime - currentTime) * 100) / 100
+      : Math.round(shot.duration * scale * 100) / 100;
+
+    shotSegments.push({
+      id: `${sceneSegmentId}_shot_${i + 1}`,
+      label: shot.label,
+      startTime: Math.round(currentTime * 100) / 100,
+      endTime: Math.round((currentTime + shotDuration) * 100) / 100,
+      duration: shotDuration,
+      compositingMode: container.compositingMode,
+      fillStatus: 'planned',
+      layers: [],
+      ...(shot.metadata ? { metadata: shot.metadata } : {}),
+    });
+
+    currentTime += shotDuration;
+  }
+
+  return shotSegments;
+}
+
 /** Default constraints based on current generation capabilities */
 const DEFAULT_CONSTRAINTS: DurationConstraints = {
   maxClipDuration: 10,
@@ -593,42 +633,8 @@ export function splitSegmentIntoShots(
   if (segmentIndex === -1) {
     throw new Error(`Segment not found: ${sceneSegmentId}`);
   }
-  if (shots.length === 0) {
-    throw new Error('shots array must not be empty');
-  }
-
   const sceneSegment = timeline.segments[segmentIndex]!;
-  const sceneStart = sceneSegment.startTime;
-  const sceneDuration = sceneSegment.duration;
-
-  // Proportionally scale shot durations to fill the scene's allocated time
-  const totalShotDuration = shots.reduce((sum, s) => sum + s.duration, 0);
-  const scale = sceneDuration / totalShotDuration;
-
-  const shotSegments: TimelineSegment[] = [];
-  let currentTime = sceneStart;
-
-  for (let i = 0; i < shots.length; i++) {
-    const shot = shots[i]!;
-    const isLast = i === shots.length - 1;
-    const shotDuration = isLast
-      ? Math.round((sceneSegment.endTime - currentTime) * 100) / 100
-      : Math.round(shot.duration * scale * 100) / 100;
-
-    shotSegments.push({
-      id: `${sceneSegmentId}_shot_${i + 1}`,
-      label: shot.label,
-      startTime: Math.round(currentTime * 100) / 100,
-      endTime: Math.round((currentTime + shotDuration) * 100) / 100,
-      duration: shotDuration,
-      compositingMode: sceneSegment.compositingMode,
-      fillStatus: 'planned',
-      layers: [],
-      ...(shot.metadata ? { metadata: shot.metadata } : {}),
-    });
-
-    currentTime += shotDuration;
-  }
+  const shotSegments = buildShotSegmentsFromContainer(sceneSegmentId, sceneSegment, shots);
 
   // Replace the scene segment with the shot segments
   const updatedSegments = [
@@ -651,6 +657,7 @@ export function upsertSceneShots(
   shots: Array<{ label: string; duration: number; metadata?: Record<string, unknown> }>
 ): UpsertSceneShotsResult {
   const existingShotSegments = getSceneShotSegments(timeline, sceneSegmentId);
+  const sceneSegment = timeline.segments.find(segment => segment.id === sceneSegmentId);
   const hasFilledShots = existingShotSegments.some(segment => segment.fillStatus === 'filled');
   const canMergeIntoExistingShots =
     existingShotSegments.length === shots.length &&
@@ -690,6 +697,41 @@ export function upsertSceneShots(
     return {
       timeline,
       preservedExistingShots: true,
+      mergedMetadataIntoExistingShots: false,
+    };
+  }
+
+  if (!sceneSegment && existingShotSegments.length > 0) {
+    const sortedExisting = [...existingShotSegments].sort((a, b) => a.startTime - b.startTime);
+    const replacementSegments = buildShotSegmentsFromContainer(
+      sceneSegmentId,
+      {
+        startTime: sortedExisting[0]!.startTime,
+        endTime: sortedExisting[sortedExisting.length - 1]!.endTime,
+        duration: Math.round((sortedExisting[sortedExisting.length - 1]!.endTime - sortedExisting[0]!.startTime) * 100) / 100,
+        compositingMode: sortedExisting[0]!.compositingMode,
+      },
+      shots,
+    );
+
+    const existingIds = new Set(sortedExisting.map(segment => segment.id));
+    const insertionIndex = timeline.segments.findIndex(segment => segment.id === sortedExisting[0]!.id);
+    const remainingSegments = timeline.segments.filter(segment => !existingIds.has(segment.id));
+    const updatedSegments = [
+      ...remainingSegments.slice(0, insertionIndex),
+      ...replacementSegments,
+      ...remainingSegments.slice(insertionIndex),
+    ];
+
+    const updatedTimeline: Timeline = {
+      ...timeline,
+      segments: updatedSegments,
+    };
+    updatedTimeline.validation = validateTimeline(updatedTimeline);
+
+    return {
+      timeline: updatedTimeline,
+      preservedExistingShots: false,
       mergedMetadataIntoExistingShots: false,
     };
   }

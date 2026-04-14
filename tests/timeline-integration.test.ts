@@ -346,6 +346,32 @@ describe('Timeline Integration', () => {
       expect(seg.label).toBe('Shot 1 revised');
       expect(seg.metadata).toEqual(expect.objectContaining({ prompt: 'new prompt' }));
     });
+
+    it('rebuilds already-expanded unfilled shots when the base scene segment is gone', () => {
+      let timeline = createTimelineSkeleton(10, [{ id: 'scene_1', label: 'Scene 1' }]);
+      timeline = splitSegmentIntoShots(timeline, 'scene_1', [
+        { label: 'Shot 1', duration: 5, metadata: { shotNumber: 1, shotType: 'wide' } },
+        { label: 'Shot 2', duration: 5, metadata: { shotNumber: 2, shotType: 'close' } },
+      ]);
+
+      const result = upsertSceneShots(timeline, 'scene_1', [
+        { label: 'Shot 1 revised', duration: 3, metadata: { shotNumber: 1, shotType: 'wide' } },
+        { label: 'Shot 2 revised', duration: 4, metadata: { shotNumber: 2, shotType: 'close' } },
+        { label: 'Shot 3 new', duration: 3, metadata: { shotNumber: 3, shotType: 'insert' } },
+      ]);
+
+      expect(result.preservedExistingShots).toBe(false);
+      expect(result.mergedMetadataIntoExistingShots).toBe(false);
+      expect(result.timeline.segments.map(s => s.id)).toEqual([
+        'scene_1_shot_1',
+        'scene_1_shot_2',
+        'scene_1_shot_3',
+      ]);
+      expect(result.timeline.segments[0]?.label).toBe('Shot 1 revised');
+      expect(result.timeline.segments[2]?.label).toBe('Shot 3 new');
+      expect(result.timeline.segments[0]?.startTime).toBe(0);
+      expect(result.timeline.segments[2]?.endTime).toBe(10);
+    });
   });
 
   describe('setSegmentTransition', () => {
