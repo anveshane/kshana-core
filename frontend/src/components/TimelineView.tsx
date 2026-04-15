@@ -23,7 +23,20 @@ function TransitionBadge({ type }: { type: string }) {
   )
 }
 
-function SegmentBlock({ segment, totalDuration }: { segment: TimelineSegment; totalDuration: number }) {
+function buildMediaSrc(selectedProject: string | null, filePath?: string): string | null {
+  if (!selectedProject || !filePath) return null
+  return `/api/v1/assets/${selectedProject}/${filePath}`
+}
+
+function SegmentBlock({
+  segment,
+  totalDuration,
+  selectedProject,
+}: {
+  segment: TimelineSegment
+  totalDuration: number
+  selectedProject: string | null
+}) {
   const widthPercent = totalDuration > 0 ? (segment.duration / totalDuration) * 100 : 0
   const minWidth = 60
 
@@ -35,6 +48,7 @@ function SegmentBlock({ segment, totalDuration }: { segment: TimelineSegment; to
   )
   const isVideo = mediaLayer?.filePath && /\.(mp4|mov|webm|avi)$/i.test(mediaLayer.filePath)
   const isImage = mediaLayer?.filePath && /\.(jpe?g|png|gif|webp|avif)$/i.test(mediaLayer.filePath)
+  const mediaSrc = buildMediaSrc(selectedProject, mediaLayer?.filePath)
 
   return (
     <div
@@ -53,17 +67,17 @@ function SegmentBlock({ segment, totalDuration }: { segment: TimelineSegment; to
           <TransitionBadge type={segment.transition.type} />
         )}
       </div>
-      {isVideo && mediaLayer?.filePath && (
+      {isVideo && mediaSrc && (
         <video
-          src={mediaLayer.filePath}
+          src={mediaSrc}
           className="w-full rounded aspect-video object-cover mt-1"
           muted
           preload="metadata"
         />
       )}
-      {isImage && mediaLayer?.filePath && (
+      {isImage && mediaSrc && (
         <img
-          src={mediaLayer.filePath}
+          src={mediaSrc}
           alt={segment.label}
           className="w-full rounded aspect-video object-cover mt-1"
         />
@@ -97,7 +111,7 @@ function TimeRuler({ totalDuration }: { totalDuration: number }) {
 }
 
 export function TimelineView() {
-  const { timeline } = useAppState()
+  const { timeline, selectedProject } = useAppState()
 
   if (!timeline) {
     return (
@@ -133,6 +147,7 @@ export function TimelineView() {
             key={segment.id}
             segment={segment}
             totalDuration={totalDuration}
+            selectedProject={selectedProject}
           />
         ))}
       </div>

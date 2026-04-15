@@ -249,14 +249,14 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
 
         // For shot images: include available references
         if (node.typeId === 'shot_image') {
-          response.availableReferences = getAvailableReferences(nodes, name);
+          response['availableReferences'] = getAvailableReferences(nodes, name);
         }
 
         // For shot videos: include first frame URL for preview
         if (node.typeId === 'shot_video') {
           const shotImageNode = nodes[`shot_image:${node.itemId}`];
           if (shotImageNode?.outputPath) {
-            response.firstFrameUrl = `/api/v1/assets/${name}/${shotImageNode.outputPath}`;
+            response['firstFrameUrl'] = `/api/v1/assets/${name}/${shotImageNode.outputPath}`;
           }
         }
 

@@ -37,7 +37,7 @@ const mockTimeline: Timeline = {
       duration: 10,
       compositingMode: 'replace',
       fillStatus: 'planned',
-      layers: [],
+      layers: [{ type: 'visual', filePath: 'assets/images/scene-1-shot-2.png', label: 'Shot 2', source: 'generated' }],
       transition: { type: 'crossfade', durationMs: 500 },
     },
     {
@@ -108,10 +108,17 @@ describe('TimelineView', () => {
   })
 
   it('renders video preview for segments with a video layer', () => {
-    const { container } = renderWithState({ timeline: mockTimeline })
+    const { container } = renderWithState({ timeline: mockTimeline, selectedProject: 'demo-project' })
     const video = container.querySelector('video')
     expect(video).toBeTruthy()
-    expect(video?.getAttribute('src')).toBe('test.mp4')
+    expect(video?.getAttribute('src')).toBe('/api/v1/assets/demo-project/test.mp4')
+  })
+
+  it('renders image preview for planned segments with an image layer', () => {
+    const { container } = renderWithState({ timeline: mockTimeline, selectedProject: 'demo-project' })
+    const image = container.querySelector('img')
+    expect(image).toBeTruthy()
+    expect(image?.getAttribute('src')).toBe('/api/v1/assets/demo-project/assets/images/scene-1-shot-2.png')
   })
 
   it('shows scene number at the bottom of each segment card', () => {

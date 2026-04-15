@@ -149,12 +149,28 @@ describe('Executor timeline lifecycle', () => {
     });
 
     const result = (agent as any).ensureSceneShotSegments('scene_1');
+    (agent as any).updateTimelineForShotImage({
+      itemId: 'scene_1_shot_2',
+      displayName: 'Scene 1 Shot 2',
+    }, 'assets/images/scene-1-shot-2.png');
+
+    let timeline = (agent as any).timeline;
+    expect(timeline.segments.find((segment: { id: string }) => segment.id === 'scene_1_shot_2')).toEqual(
+      expect.objectContaining({
+        fillStatus: 'planned',
+        transition: expect.objectContaining({ type: 'crossfade' }),
+        layers: [
+          expect.objectContaining({ filePath: 'assets/images/scene-1-shot-2.png' }),
+        ],
+      })
+    );
+
     (agent as any).updateTimelineForShotVideo({
       itemId: 'scene_1_shot_2',
       displayName: 'Scene 1 Shot 2',
     }, 'assets/videos/scene-1-shot-2.mp4');
 
-    const timeline = (agent as any).timeline;
+    timeline = (agent as any).timeline;
     expect(result).toEqual(expect.objectContaining({
       success: true,
       extractedShotCount: 2,
@@ -172,6 +188,36 @@ describe('Executor timeline lifecycle', () => {
         transition: expect.objectContaining({ type: 'crossfade' }),
         layers: [
           expect.objectContaining({ filePath: 'assets/videos/scene-1-shot-2.mp4' }),
+        ],
+      })
+    );
+  });
+
+  it('does not replace an existing timeline video with a later image preview update', () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'kshana-executor-timeline-'));
+    const agent = createAgent(projectDir, {});
+
+    let timeline = createTimelineSkeleton(6, [{ id: 'scene_1', label: 'Scene 1' }]);
+    timeline = splitSegmentIntoShots(timeline, 'scene_1', [{ label: 'Shot 1', duration: 6 }]);
+    timeline = updateSegmentLayers(timeline, 'scene_1_shot_1', [{
+      type: 'visual',
+      filePath: 'assets/videos/scene-1-shot-1.mp4',
+      label: 'Shot 1 video',
+      source: 'generated',
+    }], 'filled');
+    (agent as any).timeline = timeline;
+
+    (agent as any).updateTimelineForShotImage({
+      itemId: 'scene_1_shot_1',
+      displayName: 'Scene 1 Shot 1',
+    }, 'assets/images/scene-1-shot-1.png');
+
+    const updatedTimeline = (agent as any).timeline;
+    expect(updatedTimeline.segments.find((segment: { id: string }) => segment.id === 'scene_1_shot_1')).toEqual(
+      expect.objectContaining({
+        fillStatus: 'filled',
+        layers: [
+          expect.objectContaining({ filePath: 'assets/videos/scene-1-shot-1.mp4' }),
         ],
       })
     );

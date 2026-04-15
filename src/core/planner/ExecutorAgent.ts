@@ -1173,6 +1173,46 @@ export class ExecutorAgent extends TypedEventEmitter {
     this.log(`Timeline: updated segment ${segmentId} → filled`);
   }
 
+  private updateTimelineForShotImage(node: ExecutionNode, outputPath: string): void {
+    if (!this.timeline || !node.itemId) return;
+
+    const segmentId = node.itemId; // e.g., "scene_1_shot_2"
+    let segment = this.timeline.segments.find(s => s.id === segmentId);
+    if (!segment) {
+      const sceneIdMatch = segmentId.match(/^(scene_\d+)_shot_\d+$/);
+      if (sceneIdMatch?.[1]) {
+        this.log(`Timeline: missing ${segmentId}, attempting repair from ${sceneIdMatch[1]}`);
+        this.ensureSceneShotSegmentsStrict(sceneIdMatch[1]);
+        segment = this.timeline?.segments.find(s => s.id === segmentId);
+      }
+    }
+    if (!segment) {
+      this.log(`Timeline: no segment found for ${segmentId}`);
+      return;
+    }
+
+    const existingVisualLayer = segment.layers.find(
+      layer => layer.type === 'visual' || layer.type === 'narration_video'
+    );
+    const existingFilePath = existingVisualLayer?.filePath?.toLowerCase() ?? '';
+    if (/\.(mp4|mov|webm|m4v|avi|mkv)$/.test(existingFilePath)) {
+      this.log(`Timeline: preserving existing video for ${segmentId} during shot image update`);
+      return;
+    }
+
+    const layer: TimelineLayerEntry = {
+      type: 'visual',
+      filePath: outputPath,
+      label: node.displayName,
+      source: 'generated',
+    };
+
+    this.timeline = updateSegmentLayers(this.timeline, segmentId, [layer], 'planned');
+    saveTimeline(this.config.projectDir, this.timeline);
+    this.emitTimelineUpdate();
+    this.log(`Timeline: updated segment ${segmentId} → planned preview`);
+  }
+
   /**
    * Run the dependency graph execution loop.
    *
@@ -1571,6 +1611,8 @@ export class ExecutorAgent extends TypedEventEmitter {
                 continue;
               }
               finalOutputPath = shotImageResult;
+              // Update timeline segment with the generated first-frame preview
+              this.updateTimelineForShotImage(node, finalOutputPath);
             } else if (node.typeId === 'shot_image' && this.config.skipMediaGeneration) {
               // Test mode: skip shot image generation
               this.log(`  Skipping shot_image (skipMediaGeneration=true)`);
