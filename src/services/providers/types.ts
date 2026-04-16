@@ -116,6 +116,7 @@ export type WorkflowPipeline = 'image_generation' | 'image_editing' | 'image_pro
 /** Where an input comes from at runtime */
 export type InputSource =
   | 'shot_image'            // from generated shot image(s)
+  | 'shot_video'            // from previous shot video (v2v extend)
   | 'shot_motion_directive' // from motion directive text
   | 'image_processing'      // from stage 4 output (chaining)
   | 'llm'                   // LLM generates at runtime
@@ -127,7 +128,7 @@ export interface InputRequirement {
   /** Identifier matching parameterMappings (e.g., 'first_frame', 'prompt') */
   id: string;
   /** Data type */
-  type: 'image' | 'text' | 'number' | 'mask' | 'depth_map';
+  type: 'image' | 'video' | 'text' | 'number' | 'mask' | 'depth_map';
   /** Where the executor should resolve this input from */
   source: InputSource;
   /** Human-readable description (shown in wizard + used by LLM) */

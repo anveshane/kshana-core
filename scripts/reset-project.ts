@@ -19,7 +19,7 @@
  *   1. Resets target stage nodes and ALL downstream nodes to 'pending'
  *   2. Removes expanded per-item nodes below the reset point (they'll be re-expanded)
  *   3. Recreates collection-level placeholder nodes where needed
- *   4. Deletes output files for reset nodes
+ *   4. Disconnects output files (clears outputPath) but preserves files on disk
  *   5. Cleans up orphaned dependency references
  *
  * Examples:
@@ -27,7 +27,7 @@
  *   pnpm tsx scripts/reset-project.ts my_project shot_image_prompt
  */
 
-import { readFileSync, writeFileSync, existsSync, unlinkSync, readdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
 /**
@@ -167,7 +167,7 @@ function main() {
   const resetTypeSet = new Set(resetTypes);
   let resetCount = 0;
   let removedCount = 0;
-  let filesDeleted = 0;
+  // filesDeleted removed — reset no longer deletes files
 
   // Phase 1: Identify nodes to reset vs remove
   // - Type-level collection nodes that match reset types → reset to pending + mark as collection
@@ -189,16 +189,12 @@ function main() {
     }
   }
 
-  // Phase 2: Delete output files for all affected nodes
+  // Phase 2: Disconnect output files — clear outputPath but leave files on disk.
+  // Generated artifacts are preserved so the user can reference, compare, or reuse them.
   for (const nid of [...nodesToReset, ...nodesToRemove]) {
     const node = nodes[nid]!;
     if (node.outputPath) {
-      const fullPath = join(projectDir, node.outputPath);
-      if (existsSync(fullPath)) {
-        unlinkSync(fullPath);
-        filesDeleted++;
-        console.log(`  Deleted: ${node.outputPath}`);
-      }
+      console.log(`  Disconnected: ${node.outputPath}`);
     }
   }
 
@@ -405,22 +401,12 @@ function main() {
     ],
   };
 
-  const cleanDirs: Array<{ dir: string; extensions: string[] }> = [];
-  for (const resetType of resetTypes) {
-    const dirs = TYPE_DIRS[resetType];
-    if (dirs) cleanDirs.push(...dirs);
-  }
-
-  for (const { dir, extensions } of cleanDirs) {
-    if (!existsSync(dir)) continue;
-    for (const f of readdirSync(dir)) {
-      if (extensions.some(ext => f.endsWith(ext))) {
-        unlinkSync(join(dir, f));
-        filesDeleted++;
-        console.log(`  Cleaned: ${dir}/${f}`);
-      }
-    }
-  }
+  // Phase 6: File preservation — files are NOT deleted on reset.
+  // Generated artifacts (images, videos, prompts) stay on disk so the user can
+  // reference, compare, or reuse them. Reset only disconnects them from the
+  // project graph (outputPath cleared in Phase 3/4).
+  // The TYPE_DIRS map above is kept for reference but not used for deletion.
+  console.log(`  Output files preserved (not deleted)`);
 
   // Phase 7: Clean up stale references — remove deps/dependents pointing to non-existent nodes
   const nodeIds = new Set(Object.keys(nodes));
@@ -429,25 +415,7 @@ function main() {
     node.dependents = Array.from(new Set(node.dependents.filter(d => nodeIds.has(d))));
   }
 
-  // Phase 8: Clean asset manifest — remove entries for deleted files
-  const manifestPath = join(projectDir, 'assets', 'manifest.json');
-  if (existsSync(manifestPath)) {
-    try {
-      const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-      if (manifest.assets && Array.isArray(manifest.assets)) {
-        const before = manifest.assets.length;
-        manifest.assets = manifest.assets.filter((a: { path: string }) => {
-          const assetPath = a.path.startsWith('/') ? a.path : join(projectDir, a.path);
-          return existsSync(assetPath);
-        });
-        const removed = before - manifest.assets.length;
-        if (removed > 0) {
-          writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
-          console.log(`  Cleaned manifest: removed ${removed} stale entries (${manifest.assets.length} remaining)`);
-        }
-      }
-    } catch { /* non-fatal */ }
-  }
+  // Phase 8: Asset manifest is preserved — entries stay since files stay on disk.
 
   // Phase 9: Clear completedAt and reset phase
   if (project.executorState) {
@@ -468,7 +436,7 @@ function main() {
   console.log(`Reset to stage: ${stage}`);
   console.log(`  Nodes reset to pending: ${resetCount}`);
   console.log(`  Per-item nodes removed: ${removedCount}`);
-  console.log(`  Output files deleted: ${filesDeleted}`);
+  console.log(`  Output files preserved on disk (disconnected from graph)`);
   console.log(`  Final state: ${completed} completed, ${pending} pending, ${remaining.length} total`);
 }
 

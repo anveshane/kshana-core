@@ -43,6 +43,31 @@ export function getLastFramePath(node: ExecutionNode): string | null {
   return null;
 }
 
+/**
+ * Filter out shots whose content is already included in a v2v_extend successor.
+ *
+ * When shot N+1 is v2v_extend, its output video already contains shot N's frames.
+ * Including both in assembly would duplicate content. This function walks the
+ * segment list and marks predecessors of v2v_extend shots as "subsumed."
+ *
+ * For chains (S1→S2:v2v→S3:v2v), only S3 survives — it contains all prior frames.
+ */
+export function filterSubsumedShots<T extends { segmentId: string; strategy?: string }>(
+  segments: T[],
+): T[] {
+  if (segments.length === 0) return [];
+
+  // Walk backwards: if segment[i] is v2v_extend, mark segment[i-1] as subsumed
+  const subsumed = new Set<number>();
+  for (let i = segments.length - 1; i > 0; i--) {
+    if (segments[i]!.strategy === 'v2v_extend') {
+      subsumed.add(i - 1);
+    }
+  }
+
+  return segments.filter((_, i) => !subsumed.has(i));
+}
+
 /** Purposes that should use fresh FL2V instead of V2V extend */
 const FRESH_PURPOSES = new Set(['set_the_world', 'show_change']);
 

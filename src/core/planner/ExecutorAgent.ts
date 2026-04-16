@@ -4345,7 +4345,7 @@ export class ExecutorAgent extends TypedEventEmitter {
           type: 'scene_video',
           path: relPath,
           createdAt: Date.now(),
-          metadata: { sceneNumber: sceneNum, shotNumber: shotNum, duration: shotDuration },
+          metadata: { sceneNumber: sceneNum, shotNumber: shotNum, duration: shotDuration, generationStrategy },
           nodeId: node.id,
         });
       } catch { /* non-fatal */ }
@@ -4627,6 +4627,50 @@ export class ExecutorAgent extends TypedEventEmitter {
         });
       }
 
+      // Filter out shots subsumed by v2v_extend successors.
+      // A v2v_extend video already contains the previous shot's frames — including both
+      // in the assembly would duplicate content.
+      // Only uses explicit generationStrategy from manifest metadata — never guesses.
+      {
+        const { filterSubsumedShots } = await import('./crossShotChaining.js');
+        const manifestPath = join(projectDir, 'assets', 'manifest.json');
+        let manifest: Array<{ path: string; metadata?: Record<string, unknown> }> = [];
+        try {
+          if (existsSync(manifestPath)) {
+            manifest = JSON.parse(readFileSync(manifestPath, 'utf-8')).assets ?? [];
+          }
+        } catch { /* no manifest */ }
+
+        // Build path→strategy lookup from manifest metadata (only explicit, never inferred)
+        const strategyByPath = new Map<string, string>();
+        for (const asset of manifest) {
+          const strategy = asset.metadata?.['generationStrategy'] as string | undefined;
+          if (strategy && asset.path) {
+            strategyByPath.set(join(projectDir, asset.path), strategy);
+          }
+        }
+
+        const enriched = resolvedSegments.map(s => ({
+          ...s,
+          strategy: strategyByPath.get(s.filePath),
+        }));
+
+        const filtered = filterSubsumedShots(enriched);
+        const removedCount = resolvedSegments.length - filtered.length;
+        if (removedCount > 0) {
+          this.log(`  V2V dedup: removed ${removedCount} shot(s) subsumed by v2v_extend successors`);
+          this.emit({
+            type: 'tool_streaming',
+            toolCallId,
+            chunk: `V2V dedup: ${removedCount} shot(s) subsumed by v2v_extend — skipped to avoid duplicate frames\n`,
+            done: false,
+            agentName,
+            toolName: 'assemble_final_video',
+          });
+        }
+        resolvedSegments = filtered;
+      }
+
       // Log transition data for debugging
       const transitionSummary = resolvedSegments
         .filter(s => s.transition && s.transition !== 'cut')
@@ -4646,7 +4690,16 @@ export class ExecutorAgent extends TypedEventEmitter {
       // Run FFmpeg assembly
       const outputDir = join(projectDir, 'assets', 'videos', 'final');
       if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
-      const outputPath = join(outputDir, 'final_video.mp4');
+      // Don't overwrite existing final videos — find next available version
+      let outputPath = join(outputDir, 'final_video.mp4');
+      if (existsSync(outputPath)) {
+        let version = 2;
+        while (existsSync(join(outputDir, `final_video${version}.mp4`))) {
+          version++;
+        }
+        outputPath = join(outputDir, `final_video${version}.mp4`);
+        this.log(`  Previous final video exists — writing to final_video${version}.mp4`);
+      }
 
       this.emit({
         type: 'tool_streaming',

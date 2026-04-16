@@ -82,16 +82,14 @@ describe('computeResetTypes', () => {
     expect(types).not.toContain('scene');
   });
 
-  it('reset shot_image_prompt includes shot_motion_directive', () => {
-    // shot_motion_directive depends on scene_video_prompt, not shot_image_prompt directly
-    // but shot_image depends on shot_image_prompt, and shot_video depends on shot_image
+  it('reset shot_image_prompt cascades to shot_motion_directive and downstream', () => {
+    // shot_motion_directive depends on shot_image_prompt (among others)
     const types = computeResetTypes('shot_image_prompt');
     expect(types).toContain('shot_image_prompt');
+    expect(types).toContain('shot_motion_directive');
     expect(types).toContain('shot_image');
     expect(types).toContain('shot_video');
     expect(types).toContain('final_video');
-    // shot_motion_directive does NOT depend on shot_image_prompt
-    expect(types).not.toContain('shot_motion_directive');
   });
 
   it('reset setting cascades through setting_image', () => {
@@ -114,6 +112,107 @@ describe('computeResetTypes', () => {
   });
 });
 
+describe('reset preserves files on disk', () => {
+  const { mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } = require('fs');
+  const { join } = require('path');
+  const { execSync } = require('child_process');
+  const { tmpdir } = require('os');
+
+  function createTempProject(): string {
+    const name = `reset-test-${Date.now()}`;
+    const dir = join(process.cwd(), `${name}.kshana`);
+    mkdirSync(join(dir, 'assets', 'videos', 'shots'), { recursive: true });
+    mkdirSync(join(dir, 'assets', 'videos', 'final'), { recursive: true });
+    mkdirSync(join(dir, 'assets', 'images'), { recursive: true });
+
+    // Create fake output files
+    writeFileSync(join(dir, 'assets', 'videos', 'final', 'final_video.mp4'), 'fake-video');
+    writeFileSync(join(dir, 'assets', 'videos', 'shots', 'scene_1_shot_1.mp4'), 'fake-shot');
+    writeFileSync(join(dir, 'assets', 'images', 'char.png'), 'fake-image');
+
+    // Create project.json with executor state
+    const project = {
+      executorState: {
+        nodes: {
+          'final_video': {
+            id: 'final_video',
+            typeId: 'final_video',
+            status: 'completed',
+            displayName: 'Final Video',
+            isExpensive: true,
+            isCollection: false,
+            dependencies: ['shot_video:scene_1_shot_1'],
+            dependents: [],
+            outputPath: 'assets/videos/final/final_video.mp4',
+            completedAt: Date.now(),
+          },
+          'shot_video:scene_1_shot_1': {
+            id: 'shot_video:scene_1_shot_1',
+            typeId: 'shot_video',
+            itemId: 'scene_1_shot_1',
+            status: 'completed',
+            displayName: 'Shot Video S1S1',
+            isExpensive: true,
+            isCollection: false,
+            dependencies: [],
+            dependents: ['final_video'],
+            outputPath: 'assets/videos/shots/scene_1_shot_1.mp4',
+            completedAt: Date.now(),
+          },
+        },
+        targetArtifacts: ['final_video'],
+      },
+    };
+    writeFileSync(join(dir, 'project.json'), JSON.stringify(project, null, 2));
+
+    return name;
+  }
+
+  it('reset final_video preserves video files on disk', () => {
+    const name = createTempProject();
+    const dir = join(process.cwd(), `${name}.kshana`);
+
+    try {
+      const tsxPath = join(process.cwd(), 'node_modules', '.bin', 'tsx');
+      const scriptPath = join(process.cwd(), 'scripts', 'reset-project.ts');
+      execSync(`"${tsxPath}" "${scriptPath}" "${name}" "final_video"`, {
+        cwd: process.cwd(), encoding: 'utf-8', timeout: 15000,
+      });
+
+      // Files must still exist
+      expect(existsSync(join(dir, 'assets', 'videos', 'final', 'final_video.mp4'))).toBe(true);
+      expect(existsSync(join(dir, 'assets', 'videos', 'shots', 'scene_1_shot_1.mp4'))).toBe(true);
+
+      // Node state must be reset
+      const project = JSON.parse(readFileSync(join(dir, 'project.json'), 'utf-8'));
+      expect(project.executorState.nodes['final_video'].status).toBe('pending');
+      expect(project.executorState.nodes['final_video'].outputPath).toBeUndefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('reset shot_video preserves shot video files and images on disk', () => {
+    const name = createTempProject();
+    const dir = join(process.cwd(), `${name}.kshana`);
+
+    try {
+      const tsxPath = join(process.cwd(), 'node_modules', '.bin', 'tsx');
+      const scriptPath = join(process.cwd(), 'scripts', 'reset-project.ts');
+      execSync(`"${tsxPath}" "${scriptPath}" "${name}" "shot_video"`, {
+        cwd: process.cwd(), encoding: 'utf-8', timeout: 15000,
+      });
+
+      // All files must still exist
+      expect(existsSync(join(dir, 'assets', 'videos', 'final', 'final_video.mp4'))).toBe(true);
+      expect(existsSync(join(dir, 'assets', 'videos', 'shots', 'scene_1_shot_1.mp4'))).toBe(true);
+      expect(existsSync(join(dir, 'assets', 'images', 'char.png'))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('STAGE_ALIASES sibling resets', () => {
   /** Helper: resolve alias and compute full reset set (mirrors main() logic) */
   function resolveAlias(stage: string): string[] {
@@ -127,10 +226,11 @@ describe('STAGE_ALIASES sibling resets', () => {
     const types = resolveAlias('character_image');
     expect(types).toContain('character_image');
     expect(types).toContain('setting_image');
-    expect(types).toContain('scene_video_prompt');
     expect(types).toContain('shot_image');
     expect(types).toContain('shot_video');
     expect(types).toContain('final_video');
+    // scene_video_prompt does NOT depend on character_image or setting_image
+    expect(types).not.toContain('scene_video_prompt');
     // Should NOT include upstream content types
     expect(types).not.toContain('character');
     expect(types).not.toContain('setting');

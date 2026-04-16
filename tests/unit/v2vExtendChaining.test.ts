@@ -87,3 +87,93 @@ describe('V2V Extend: previous video lookup', () => {
     expect(getPreviousVideoPath('scene_1_shot_1', mockExecutor as any)).toBeNull();
   });
 });
+
+describe('V2V Extend: assembly deduplication', () => {
+  it('filters out shots subsumed by a v2v_extend successor', async () => {
+    const { filterSubsumedShots } = await import('../../src/core/planner/crossShotChaining.js');
+
+    const segments = [
+      { segmentId: 'shot_video:scene_1_shot_1', strategy: 'flfv' },
+      { segmentId: 'shot_video:scene_1_shot_2', strategy: 'v2v_extend' },
+      { segmentId: 'shot_video:scene_1_shot_3', strategy: 'flfv' },
+    ];
+
+    const result = filterSubsumedShots(segments);
+    expect(result.map(s => s.segmentId)).toEqual([
+      'shot_video:scene_1_shot_2',
+      'shot_video:scene_1_shot_3',
+    ]);
+  });
+
+  it('handles v2v_extend chains — only last in chain survives', async () => {
+    const { filterSubsumedShots } = await import('../../src/core/planner/crossShotChaining.js');
+
+    const segments = [
+      { segmentId: 'shot_video:scene_1_shot_1', strategy: 'flfv' },
+      { segmentId: 'shot_video:scene_1_shot_2', strategy: 'v2v_extend' },
+      { segmentId: 'shot_video:scene_1_shot_3', strategy: 'v2v_extend' },
+    ];
+
+    const result = filterSubsumedShots(segments);
+    expect(result.map(s => s.segmentId)).toEqual([
+      'shot_video:scene_1_shot_3',
+    ]);
+  });
+
+  it('preserves all shots when none use v2v_extend', async () => {
+    const { filterSubsumedShots } = await import('../../src/core/planner/crossShotChaining.js');
+
+    const segments = [
+      { segmentId: 'shot_video:scene_1_shot_1', strategy: 'flfv' },
+      { segmentId: 'shot_video:scene_1_shot_2', strategy: 'flfv' },
+      { segmentId: 'shot_video:scene_1_shot_3', strategy: 'fmlfv' },
+    ];
+
+    const result = filterSubsumedShots(segments);
+    expect(result).toHaveLength(3);
+  });
+
+  it('handles multiple separate v2v_extend chains', async () => {
+    const { filterSubsumedShots } = await import('../../src/core/planner/crossShotChaining.js');
+
+    const segments = [
+      { segmentId: 'shot_video:scene_1_shot_1', strategy: 'flfv' },
+      { segmentId: 'shot_video:scene_1_shot_2', strategy: 'v2v_extend' },
+      { segmentId: 'shot_video:scene_1_shot_3', strategy: 'flfv' },
+      { segmentId: 'shot_video:scene_1_shot_4', strategy: 'v2v_extend' },
+    ];
+
+    const result = filterSubsumedShots(segments);
+    expect(result.map(s => s.segmentId)).toEqual([
+      'shot_video:scene_1_shot_2',
+      'shot_video:scene_1_shot_4',
+    ]);
+  });
+
+  it('handles v2v_extend across scene boundaries', async () => {
+    const { filterSubsumedShots } = await import('../../src/core/planner/crossShotChaining.js');
+
+    const segments = [
+      { segmentId: 'shot_video:scene_1_shot_3', strategy: 'flfv' },
+      { segmentId: 'shot_video:scene_2_shot_1', strategy: 'v2v_extend' },
+      { segmentId: 'shot_video:scene_2_shot_2', strategy: 'flfv' },
+    ];
+
+    const result = filterSubsumedShots(segments);
+    expect(result.map(s => s.segmentId)).toEqual([
+      'shot_video:scene_2_shot_1',
+      'shot_video:scene_2_shot_2',
+    ]);
+  });
+
+  it('returns empty array for empty input', async () => {
+    const { filterSubsumedShots } = await import('../../src/core/planner/crossShotChaining.js');
+    expect(filterSubsumedShots([])).toEqual([]);
+  });
+
+  it('single shot is preserved regardless of strategy', async () => {
+    const { filterSubsumedShots } = await import('../../src/core/planner/crossShotChaining.js');
+    const segments = [{ segmentId: 'shot_video:scene_1_shot_1', strategy: 'flfv' }];
+    expect(filterSubsumedShots(segments)).toHaveLength(1);
+  });
+});

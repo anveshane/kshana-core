@@ -622,6 +622,61 @@ describe('multiple active workflows', () => {
   });
 });
 
+// ---- 7. v2v_extend strategy — shot_video source validation ----------------
+
+describe('v2v_extend strategy routing', () => {
+  const V2V_EXTEND_BUILTIN = makeManifest({
+    id: 'ltx23_v2v_extend',
+    displayName: 'LTX 2.3 V2V Extend',
+    priority: 3,
+    strategies: ['v2v_extend'],
+    inputRequirements: [
+      { id: 'source_video', type: 'video', source: 'shot_video', description: 'Previous shot video', required: true },
+      { id: 'prompt', type: 'text', source: 'llm', description: 'Motion prompt', required: true },
+    ],
+  });
+
+  it('loads manifest with shot_video source without validation error', () => {
+    const builtInDir = join(tempRoot, 'workflows/built-in');
+    writeManifest(builtInDir, V2V_EXTEND_BUILTIN);
+
+    const reg = new WorkflowModeRegistry(tempRoot);
+    reg.refresh();
+
+    const mode = reg.getMode('ltx23_v2v_extend');
+    expect(mode).toBeDefined();
+    expect(mode?.id).toBe('ltx23_v2v_extend');
+  });
+
+  it('routes v2v_extend strategy to the correct workflow, not fallback', () => {
+    const builtInDir = join(tempRoot, 'workflows/built-in');
+    writeManifest(builtInDir, FLFV_BUILTIN);
+    writeManifest(builtInDir, FMLFV_BUILTIN);
+    writeManifest(builtInDir, V2V_EXTEND_BUILTIN);
+
+    const reg = new WorkflowModeRegistry(tempRoot);
+    reg.refresh();
+
+    const result = reg.getWorkflowForStrategy('v2v_extend');
+    expect(result).toBeDefined();
+    expect(result?.id).toBe('ltx23_v2v_extend');
+    expect(result?.id).not.toBe('fmlfv');
+    expect(result?.id).not.toBe('flfv');
+  });
+
+  it('includes v2v_extend in available strategies when registered', () => {
+    const builtInDir = join(tempRoot, 'workflows/built-in');
+    writeManifest(builtInDir, V2V_EXTEND_BUILTIN);
+
+    const reg = new WorkflowModeRegistry(tempRoot);
+    reg.refresh();
+
+    const strategies = reg.getAvailableStrategies();
+    const names = strategies.map(s => s.strategy);
+    expect(names).toContain('v2v_extend');
+  });
+});
+
 // ---- Additional edge cases -----------------------------------------------
 
 describe('edge cases', () => {

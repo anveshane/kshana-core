@@ -31,7 +31,7 @@ const VALID_PIPELINES: Set<string> = new Set([
 
 /** Valid input source values */
 const VALID_SOURCES: Set<string> = new Set([
-  'shot_image', 'shot_motion_directive', 'image_processing', 'llm', 'user', 'system',
+  'shot_image', 'shot_video', 'shot_motion_directive', 'image_processing', 'llm', 'user', 'system',
 ]);
 
 /**
