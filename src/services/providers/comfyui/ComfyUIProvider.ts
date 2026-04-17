@@ -237,9 +237,9 @@ export class ComfyUIProvider implements GenerationProvider {
     onProgress?.({ percentage: 0, message: 'Uploading base image...', done: false });
     const uploadResult = await client.uploadImage(baseImagePath, 'input', true);
 
-    // Upload reference images (up to 2)
+    // Upload reference images (up to 4 — matching workflow reference slots)
     const referenceImageFilenames: string[] = [];
-    for (const refPath of referenceImages.slice(0, 2)) {
+    for (const refPath of referenceImages.slice(0, 4)) {
       if (!fs.existsSync(refPath)) {
         throw new Error(`Reference image not found: ${refPath}`);
       }
@@ -435,6 +435,7 @@ export class ComfyUIProvider implements GenerationProvider {
         filenamePrefix,
         width,
         height,
+        durationSeconds,
       };
       // Set first_frame (uploaded source image) or source_video (V2V extend)
       if (isV2VExtend && uploadResult?.name) {

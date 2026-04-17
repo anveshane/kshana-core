@@ -405,6 +405,9 @@ export interface CollectionItems {
   /** Setting/location names found */
   settings?: string[];
 
+  /** Object/prop names found */
+  objects?: string[];
+
   /** Scene descriptions found */
   scenes?: Array<{ sceneNumber: number; title: string; summary: string }>;
 

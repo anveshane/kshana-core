@@ -1,0 +1,91 @@
+{
+  "id": "ltx23_vl2v_cloud",
+  "displayName": "LTX 2.3 VL2V (Cloud)",
+  "pipeline": "video_generation",
+  "llmDescription": "Extends a previous video toward a target last frame. Combines V2V motion continuity with last-frame story direction.",
+  "selectionCriteria": "Video continuation from a previous shot with a specific visual target endpoint.",
+  "outputType": "video",
+  "priority": 2,
+  "strategies": [
+    "v2v_extend"
+  ],
+  "inputRequirements": [
+    {
+      "id": "source_video",
+      "type": "video",
+      "source": "shot_video",
+      "description": "Previous shot video to extend from",
+      "required": true
+    },
+    {
+      "id": "durationSeconds",
+      "type": "number",
+      "source": "system",
+      "description": "Duration of the new segment in seconds",
+      "required": false
+    },
+    {
+      "id": "last_frame",
+      "type": "image",
+      "source": "shot_image",
+      "description": "Target last frame image to guide the extension toward",
+      "required": true
+    },
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "llm",
+      "description": "Motion prompt for the new segment",
+      "required": true
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "llm",
+      "description": "Negative prompt",
+      "required": false
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "required": false
+    }
+  ],
+  "workflowFile": "ltx23_vl2v_cloud.json",
+  "format": "api",
+  "parameterMappings": [
+    {
+      "input": "source_video",
+      "nodeId": "319",
+      "field": "video"
+    },
+    {
+      "input": "last_frame",
+      "nodeId": "700",
+      "field": "image"
+    },
+    {
+      "input": "prompt",
+      "nodeId": "592",
+      "field": "text"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "110",
+      "field": "text"
+    },
+    {
+      "input": "durationSeconds",
+      "nodeId": "211",
+      "field": "value"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "578",
+      "field": "filename_prefix"
+    }
+  ],
+  "builtIn": true,
+  "active": true
+}

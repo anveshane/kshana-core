@@ -595,6 +595,9 @@ export interface GenericProjectFile {
   /** Video height in pixels */
   resolutionHeight?: number;
 
+  /** Enable V2V extend for continuation shots (default: true). Set to false to use FL2V for all shots. */
+  useV2V?: boolean;
+
   /** Original user input */
   originalInput?: string;
 

@@ -59,14 +59,16 @@ async function extractFromStory(
 Return a JSON object with exactly these fields:
 - "characters": array of unique character names (MAXIMUM ${maxChars} — only characters the camera SEES on screen)
 - "settings": array of unique location/setting names (MAXIMUM ${maxSettings} — consolidate similar locations)
+- "objects": array of distinctive object/prop names that appear in multiple shots or are plot-important (MAXIMUM 5 — only objects the camera needs to show consistently: weapons, artifacts, vehicles, documents, distinctive items)
 - "scenes": array of objects with { "sceneNumber": number, "title": string, "summary": string } (MAXIMUM ${maxScenes})
 
-This is for a ${dur}-second video. Every character and setting requires image generation, so fewer = faster and higher quality.
+This is for a ${dur}-second video. Every character, setting, and object requires image generation, so fewer = faster and higher quality.
 
 Rules:
 - Character names should be proper names as they appear in the story
 - Only include characters who physically appear on screen — not mentioned-only characters
 - Settings should be distinct locations, not variations of the same place (e.g. "hallway" and "room" in same building = one setting)
+- Objects should be visually distinctive items that need consistent appearance across shots (a specific sword, a seal, a vehicle). Do NOT include generic items (a cup, a chair) — only plot-significant props
 - Scenes should be logical narrative units (shifts in location, time, or action)
 - If the story has more than the maximum, select only the most important ones
 - Keep summaries under 50 words each
@@ -76,6 +78,7 @@ Rules:
 {
   "characters": ["Character Name"],
   "settings": ["Location Name"],
+  "objects": ["Object Name"],
   "scenes": [{ "sceneNumber": 1, "title": "Scene Title", "summary": "Brief summary under 50 words" }]
 }
 </json_schema>`,
@@ -94,11 +97,12 @@ Rules:
     return {
       characters: parsed.characters ?? [],
       settings: parsed.settings ?? [],
+      objects: parsed.objects ?? [],
       scenes: parsed.scenes ?? [],
     };
   } catch {
     // If parsing fails, return empty collections
-    return { characters: [], settings: [], scenes: [] };
+    return { characters: [], settings: [], objects: [], scenes: [] };
   }
 }
 

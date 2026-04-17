@@ -303,6 +303,80 @@ export class ExecutorAgent extends TypedEventEmitter {
   }
 
   /**
+   * Resolve an array of LLM reference objects ({refId, type, ...}) to absolute file paths.
+   * Uses the same resolution logic as image_text_to_image — looks up each refId in the
+   * executor graph and returns paths to completed .png files.
+   */
+  private resolveRefIds(references: Array<{ refId?: string; type?: string }>): string[] {
+    if (!references || references.length === 0) return [];
+    const paths: string[] = [];
+    for (const ref of references) {
+      if (!ref.refId) continue;
+      const refNode = this.executor.getNode(ref.refId);
+      if (refNode?.outputPath?.endsWith('.png')) {
+        paths.push(join(this.config.projectDir, refNode.outputPath));
+      }
+    }
+    return paths;
+  }
+
+  /**
+   * Edit an image with layered references. FLUX Klein supports up to 4 refs per call.
+   * When there are more refs than fit in one pass, this iterates:
+   *   Pass 1: base image + refs[0..3] → intermediate image
+   *   Pass 2: intermediate + refs[4..7] → intermediate image
+   *   ...until all refs are applied.
+   */
+  private async editImageLayered(
+    editPrompt: string,
+    baseImagePath: string,
+    referenceImages: string[],
+    outputDir: string,
+    filenamePrefix: string,
+  ): Promise<string> {
+    const provider = getProviderRegistry().getImageEditor();
+    if (!provider?.editImage) {
+      throw new Error('No image editor available');
+    }
+
+    const BATCH_SIZE = 4;
+    let currentBase = baseImagePath;
+
+    if (referenceImages.length <= BATCH_SIZE) {
+      // Single pass — no layering needed
+      const result = await provider.editImage({
+        editPrompt,
+        baseImagePath: currentBase,
+        referenceImages,
+        outputDir,
+        filenamePrefix,
+      });
+      return result.filePath;
+    }
+
+    // Multiple passes — layer refs in batches
+    const totalPasses = Math.ceil(referenceImages.length / BATCH_SIZE);
+    for (let pass = 0; pass < totalPasses; pass++) {
+      const batch = referenceImages.slice(pass * BATCH_SIZE, (pass + 1) * BATCH_SIZE);
+      const isLastPass = pass === totalPasses - 1;
+      const passPrefix = isLastPass ? filenamePrefix : `${filenamePrefix}_layer${pass + 1}`;
+
+      this.log(`  Layered edit pass ${pass + 1}/${totalPasses}: ${batch.length} refs`);
+
+      const result = await provider.editImage({
+        editPrompt,
+        baseImagePath: currentBase,
+        referenceImages: batch,
+        outputDir,
+        filenamePrefix: passPrefix,
+      });
+      currentBase = result.filePath;
+    }
+
+    return currentBase;
+  }
+
+  /**
    * Emit a phase transition if the node's category differs from current phase.
    */
   private emitPhaseIfChanged(node: ExecutionNode): void {
@@ -2021,6 +2095,17 @@ export class ExecutorAgent extends TypedEventEmitter {
                   }
                 }
 
+                // Parse object names from content
+                if (dep.artifactTypeId === 'object' && itemList.length === 0) {
+                  const objectMatches = content.matchAll(/^##\s+(.+)/gm);
+                  for (const m of objectMatches) {
+                    const name = m[1]!.trim();
+                    if (name.length > 2 && !name.startsWith('#')) {
+                      itemList.push({ itemId: name.toLowerCase().replace(/\s+/g, '_'), name });
+                    }
+                  }
+                }
+
                 if (itemList.length > 0) {
                   this.log(`  Expanding type-level ${node.id} → ${itemList.length} items from ${dep.artifactTypeId} output: ${itemList.map(i => i.itemId).join(', ')}`);
                   this.executor.expandCollection(node.id, itemList);
@@ -2157,6 +2242,11 @@ export class ExecutorAgent extends TypedEventEmitter {
                   itemList = extracted.settings.map((s: string) => ({
                     itemId: s.toLowerCase().replace(/\s+/g, '_'),
                     name: s,
+                  }));
+                } else if (node.typeId === 'object' && extracted?.objects?.length) {
+                  itemList = extracted.objects.map((o: string) => ({
+                    itemId: o.toLowerCase().replace(/\s+/g, '_'),
+                    name: o,
                   }));
                 }
 
@@ -3275,14 +3365,17 @@ export class ExecutorAgent extends TypedEventEmitter {
           if (provider?.editImage) {
             const assetsDir = join(this.config.projectDir, 'assets', 'images');
             if (!existsSync(assetsDir)) mkdirSync(assetsDir, { recursive: true });
-            const editResult = await provider.editImage({
-              editPrompt: firstFrameData.imagePrompt,
-              baseImagePath: prevLastFrameAbs,
-              referenceImages: [],
-              outputDir: assetsDir,
-              filenamePrefix: `${node.itemId}_first_frame`,
-            });
-            firstFramePath = relative(this.config.projectDir, editResult.filePath);
+            // Resolve character/setting refs — layered editing handles >4 refs
+            const editRefPaths = this.resolveRefIds(firstFrameData.references ?? []);
+            this.log(`  edit_previous_shot: ${editRefPaths.length} refs (layered if >4)`);
+            const editFilePath = await this.editImageLayered(
+              firstFrameData.imagePrompt,
+              prevLastFrameAbs,
+              editRefPaths,
+              assetsDir,
+              `${node.itemId}_first_frame`,
+            );
+            firstFramePath = relative(this.config.projectDir, editFilePath);
             this.log(`  first_frame (edit_previous_shot): ${firstFramePath}`);
           } else {
             this.log(`  No image editor — falling back to image_text_to_image`);
@@ -3368,15 +3461,20 @@ export class ExecutorAgent extends TypedEventEmitter {
             if (provider?.editImage) {
               const assetsDir = join(this.config.projectDir, 'assets', 'images');
               if (!existsSync(assetsDir)) mkdirSync(assetsDir, { recursive: true });
-
-              const editResult = await provider.editImage({
-                editPrompt: frameData.imagePrompt,
-                baseImagePath: firstFrameAbsPath,
-                referenceImages: [],
-                outputDir: assetsDir,
-                filenamePrefix: `${node.itemId}_${frameId}`,
-              });
-              frameRelPath = relative(this.config.projectDir, editResult.filePath);
+              // Resolve refs — use first_frame refs if last_frame has none; layered if >4
+              const frameRefs = frameData.references?.length > 0
+                ? frameData.references
+                : (firstFrameData.references ?? []);
+              const editRefPaths = this.resolveRefIds(frameRefs);
+              this.log(`  ${frameId} (edit_first_frame): ${editRefPaths.length} refs (layered if >4)`);
+              const editFilePath = await this.editImageLayered(
+                frameData.imagePrompt,
+                firstFrameAbsPath,
+                editRefPaths,
+                assetsDir,
+                `${node.itemId}_${frameId}`,
+              );
+              frameRelPath = relative(this.config.projectDir, editFilePath);
               node.outputPaths[frameId] = frameRelPath;
               this.log(`  ${frameId} (edit_first_frame): ${frameRelPath}`);
             } else {
@@ -4216,7 +4314,10 @@ export class ExecutorAgent extends TypedEventEmitter {
       } catch { return ''; }
     })();
 
-    const videoStrategy = getVideoStrategy(node.itemId ?? '', shotPurpose);
+    const v2vEnabled = this.config.project.useV2V !== false; // default: enabled
+    const videoStrategy = v2vEnabled
+      ? getVideoStrategy(node.itemId ?? '', shotPurpose)
+      : 'flfv';
     let previousVideoPath: string | null = null;
     if (videoStrategy === 'v2v_extend') {
       previousVideoPath = getPreviousVideoPath(node.itemId ?? '', this.executor);
@@ -4227,6 +4328,9 @@ export class ExecutorAgent extends TypedEventEmitter {
         this.log(`  V2V Extend: no previous video found — falling back to flfv`);
         generationStrategy = generationStrategy || 'flfv';
       }
+    }
+    if (!v2vEnabled) {
+      this.log(`  V2V disabled (useV2V=false) — using flfv for all shots`);
     }
 
     // t2v is no longer a valid strategy — every shot uses a first frame image

@@ -29,10 +29,21 @@ describe('V2V Extend: strategy selection', () => {
     expect(getVideoStrategy('scene_3_shot_2', 'show_change')).toBe('flfv');
   });
 
-  it('first shot of scene 2+ gets v2v_extend (cross-scene)', async () => {
+  it('meet_character uses v2v_extend — VL2V last_frame targets the new character', async () => {
     const { getVideoStrategy } = await import('../../src/core/planner/crossShotChaining.js');
-    expect(getVideoStrategy('scene_2_shot_1', 'show_action')).toBe('v2v_extend');
+    expect(getVideoStrategy('scene_1_shot_3', 'meet_character')).toBe('v2v_extend');
     expect(getVideoStrategy('scene_3_shot_1', 'meet_character')).toBe('v2v_extend');
+  });
+
+  it('set_the_mood uses v2v_extend — VL2V last_frame targets the new composition', async () => {
+    const { getVideoStrategy } = await import('../../src/core/planner/crossShotChaining.js');
+    expect(getVideoStrategy('scene_4_shot_1', 'set_the_mood')).toBe('v2v_extend');
+    expect(getVideoStrategy('scene_1_shot_2', 'set_the_mood')).toBe('v2v_extend');
+  });
+
+  it('show_clue uses v2v_extend — VL2V last_frame targets the visual element', async () => {
+    const { getVideoStrategy } = await import('../../src/core/planner/crossShotChaining.js');
+    expect(getVideoStrategy('scene_2_shot_3', 'show_clue')).toBe('v2v_extend');
   });
 });
 

@@ -299,7 +299,7 @@ When the shot's `videoGenerationMode` is `flfv` or `fmlfv`, you must generate MU
 3. **last_frame** and **mid_frame** PREFER `edit_first_frame` — it keeps visual consistency within the shot
 4. Only use `image_text_to_image` for continuation shots if the camera angle changed dramatically or it's a new location
 5. The `edit_first_frame` and `edit_previous_shot` prompts should describe the DELTA (what changed), not the full scene
-6. For `edit_first_frame` and `edit_previous_shot`, the `references` array should be empty (the base image IS the reference)
+6. For `edit_first_frame` and `edit_previous_shot`, ALWAYS include character references using "from image N" phrasing and populate the `references` array — this is required for character consistency even when editing a base image. Reference every character visible in the shot
 7. **refId MUST exactly match the available reference IDs** — copy them from the available references list. Do NOT invent or guess refIds. If the character is "mr_patel", write `"character_image:mr_patel"`, NOT `"character_image:mr_pattern"` or any variation
 8. The last_frame should ALWAYS describe the end state. Check `<last_frame_changes>` for what must differ from first_frame
 

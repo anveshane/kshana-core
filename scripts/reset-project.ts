@@ -88,20 +88,22 @@ const TEMPLATE_DEPS: Record<string, string[]> = {
   setting: ['story'],
   scene: ['story', 'character', 'setting'],
   world_style: ['story', 'scene', 'setting'],
+  object: ['story'],
   character_image: ['character', 'world_style'],
   setting_image: ['setting', 'world_style'],
+  object_image: ['object', 'world_style'],
   scene_video_prompt: ['scene', 'world_style'],
   shot_image_prompt: ['scene_video_prompt'],
   shot_motion_directive: ['scene_video_prompt', 'shot_image_prompt', 'world_style'],
-  shot_image: ['shot_image_prompt', 'character_image', 'setting_image'],
+  shot_image: ['shot_image_prompt', 'character_image', 'setting_image', 'object_image'],
   shot_video: ['shot_image'],
   final_video: ['shot_video'],
 };
 
 // Types that are collections and get expanded into per-item nodes
 const COLLECTION_TYPES = new Set([
-  'character', 'setting', 'scene',
-  'character_image', 'setting_image',
+  'character', 'setting', 'object', 'scene',
+  'character_image', 'setting_image', 'object_image',
   'scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video',
 ]);
 

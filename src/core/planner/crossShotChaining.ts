@@ -68,8 +68,20 @@ export function filterSubsumedShots<T extends { segmentId: string; strategy?: st
   return segments.filter((_, i) => !subsumed.has(i));
 }
 
-/** Purposes that should use fresh FL2V instead of V2V extend */
-const FRESH_PURPOSES = new Set(['set_the_world', 'show_change']);
+/**
+ * Purposes that need completely fresh generation (no source video to extend from).
+ * With VL2V (v2v_extend + last_frame target), most shots can extend from the
+ * previous video toward a target frame — even when introducing new characters
+ * or elements, since the last_frame image provides the visual target.
+ *
+ * Only truly disconnected shots need fresh flfv:
+ * - set_the_world: establishing shot of a completely new location
+ * - show_change: dramatic visual transformation (time skip, flashback)
+ */
+const FRESH_PURPOSES = new Set([
+  'set_the_world',
+  'show_change',
+]);
 
 /**
  * Determine video generation strategy for a shot.
