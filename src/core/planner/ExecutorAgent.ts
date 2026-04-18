@@ -1701,6 +1701,32 @@ export class ExecutorAgent extends TypedEventEmitter {
       }
     }
 
+    // scene_video_prompt: inject the canonical refId list so the LLM uses
+    // exact strings for mainSubject/secondarySubject/focus refs. Without
+    // this, the LLM invents IDs from prose in the scene script (e.g.
+    // "Johnathan O'Hare" → `johnathan` or `johnathan_o_hare` when the
+    // canonical refId is `johnathan_o'hare`). See scene_breakdown_guide.md.
+    let availableRefsBlock = '';
+    if (node.typeId === 'scene_video_prompt') {
+      const refLines: string[] = [];
+      for (const n of allNodes) {
+        if (!n.itemId) continue;
+        if (n.typeId === 'character') refLines.push(`- character:    ${n.itemId}`);
+        else if (n.typeId === 'setting') refLines.push(`- setting:     ${n.itemId}`);
+        else if (n.typeId === 'object') refLines.push(`- object:      ${n.itemId}`);
+      }
+      if (refLines.length > 0) {
+        availableRefsBlock = `\n\n<available_refs>
+Use these EXACT refId strings (copy verbatim — no paraphrasing, no case/punct changes) for:
+mainSubject, secondarySubject, perspectiveOf, focus.primary, focus.background[], focus.lurking.
+
+${refLines.join('\n')}
+
+If you need to reference an entity not on this list, describe it as prose in the shot \`description\` field — never invent a new refId.
+</available_refs>`;
+      }
+    }
+
     // Shot-level: inject this shot's duration based on scene allocation and shot count
     if (node.typeId === 'shot_image_prompt' || node.typeId === 'shot_motion_directive' || node.typeId === 'scene_video' || node.typeId === 'scene_image') {
       // Extract scene ID from itemId (e.g., "scene_1_shot_2" → "scene_1")
@@ -1847,13 +1873,27 @@ export class ExecutorAgent extends TypedEventEmitter {
 
           let previousState = loadSceneState(this.config.projectDir, sceneId);
           if (!previousState) {
-            const chars = this.executor.getAllNodes()
-              .filter((n: any) => n.typeId === 'character_image' && n.itemId)
-              .map((n: any) => n.itemId!);
+            // Scope the initial character list to characters actually referenced
+            // in THIS scene — previously we seeded every character in the graph,
+            // which caused Glitch (apartment cat) to leak into the bar scene
+            // and get rendered as a humanoid. Source of truth: the
+            // scene_video_prompt JSON's mainSubject/secondarySubject and every
+            // focus.* ref across all shots.
+            const sceneCharRefIds = this.extractSceneCharacterRefs(sceneId);
+            const allCharacters = this.executor.getAllNodes()
+              .filter((n: any) => n.typeId === 'character' && n.itemId);
+            const sceneCharacters = sceneCharRefIds.length > 0
+              ? allCharacters.filter((n: any) => sceneCharRefIds.includes(n.itemId!))
+              : allCharacters; // Fallback: if parse failed, use everyone (legacy behavior)
+            const charInits = sceneCharacters.map((n: any) => ({
+              refId: n.itemId!,
+              kind: this.inferCharacterKind(n.itemId!),
+            }));
             const settingNode = this.executor.getAllNodes()
               .find((n: any) => n.typeId === 'setting_image' && n.itemId);
             const setting = settingNode?.itemId ?? '';
-            previousState = initializeSceneState(sceneId, chars, setting);
+            previousState = initializeSceneState(sceneId, charInits, setting);
+            this.log(`  Scene state init (${sceneId}): ${charInits.length} character(s): ${charInits.map(c => `${c.refId}[${c.kind}]`).join(', ')}`);
           }
 
           if (shotDescription) {
@@ -1976,10 +2016,99 @@ export class ExecutorAgent extends TypedEventEmitter {
     }
 
     const user = inputs.contextBlock
-      ? `${task}${projectContext}${referenceImageContext}${sceneStateContext}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}\n\n${inputs.contextBlock}`
-      : `${task}${projectContext}${referenceImageContext}${sceneStateContext}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}`;
+      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}\n\n${inputs.contextBlock}`
+      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}`;
 
     return { system: systemPrompt, user, loadedSkills };
+  }
+
+  /**
+   * Extract the list of character refIds referenced in this scene's
+   * breakdown (scene_video_prompt JSON). Used to scope the initial
+   * scene state to actual scene participants — Glitch (apartment cat)
+   * must not be seeded into the bar scene's state. Reads `mainSubject`,
+   * `secondarySubject`, `perspectiveOf`, and every `focus.*` ref across
+   * all shots, then filters to refIds that exist as `character:*` nodes.
+   *
+   * Returns an empty array if the scene breakdown can't be read — caller
+   * falls back to legacy all-characters behavior.
+   */
+  private extractSceneCharacterRefs(sceneId: string): string[] {
+    const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+    if (!svpNode?.outputPath) return [];
+    try {
+      const path = join(this.config.projectDir, svpNode.outputPath);
+      if (!existsSync(path)) return [];
+      let raw = readFileSync(path, 'utf-8').trim();
+      if (raw.startsWith('```')) raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      const svp = JSON.parse(raw);
+
+      const refs = new Set<string>();
+      if (typeof svp.mainSubject === 'string') refs.add(svp.mainSubject);
+      if (typeof svp.secondarySubject === 'string') refs.add(svp.secondarySubject);
+
+      const shots = Array.isArray(svp.shots) ? svp.shots : [];
+      for (const shot of shots) {
+        if (typeof shot.perspectiveOf === 'string') refs.add(shot.perspectiveOf);
+        const focus = shot.focus ?? {};
+        if (typeof focus.primary === 'string') refs.add(focus.primary);
+        if (typeof focus.lurking === 'string') refs.add(focus.lurking);
+        if (Array.isArray(focus.background)) {
+          for (const bg of focus.background) if (typeof bg === 'string') refs.add(bg);
+        }
+      }
+
+      // Filter to refIds that exist as character nodes (drops settings,
+      // objects, and prose-like entries such as "rifle_sights" or
+      // "whiskey_glass" that share the focus field).
+      const validCharRefs = new Set(
+        this.executor.getAllNodes()
+          .filter(n => n.typeId === 'character' && n.itemId)
+          .map(n => n.itemId!)
+      );
+      return [...refs].filter(r => validCharRefs.has(r));
+    } catch (err) {
+      this.log(`  extractSceneCharacterRefs(${sceneId}) failed: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Infer whether a character is human or animal by reading their
+   * character.md file for animal-indicator keywords (cat, dog, feline,
+   * canine, horse, etc.). Falls back to 'unknown' if the file is
+   * unreadable or ambiguous.
+   *
+   * 'unknown' is treated like 'human' by the state tracker (preserving
+   * the pre-fix schema). 'animal' unlocks the quadruped schema path —
+   * no leftHand/rightHand/legs/headTilt fields.
+   */
+  private inferCharacterKind(refId: string): 'human' | 'animal' | 'unknown' {
+    const charNode = this.executor.getNode(`character:${refId}`);
+    if (!charNode?.outputPath) return 'unknown';
+    try {
+      const path = join(this.config.projectDir, charNode.outputPath);
+      if (!existsSync(path)) return 'unknown';
+      const text = readFileSync(path, 'utf-8').toLowerCase();
+
+      // Animal indicators. Strong signal — checking for any of these near
+      // the top of the profile or in the physical description is enough.
+      const animalKeywords = [
+        'synthetic cat', 'robotic cat', 'cybernetic cat',
+        ' cat ', ' feline ', ' kitten ',
+        ' dog ', ' puppy ', ' canine ',
+        ' horse ', ' mare ', ' stallion ',
+        'tortoiseshell', 'whisker',
+      ];
+      for (const kw of animalKeywords) {
+        if (text.includes(kw)) return 'animal';
+      }
+      // Default: humanoid. Most profiles describe humans and don't need
+      // an explicit "human" marker.
+      return 'human';
+    } catch {
+      return 'unknown';
+    }
   }
 
   /**

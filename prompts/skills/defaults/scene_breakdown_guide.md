@@ -2,15 +2,32 @@
 
 ---
 
+## Canonical refIds — USE EXACTLY, NEVER INVENT
+
+Whenever you write a character, setting, or object reference in this JSON — `mainSubject`, `secondarySubject`, `perspectiveOf`, `focus.primary`, `focus.background[]`, `focus.lurking` — you MUST use the exact refId string from the `<available_refs>` block the system provides in your user message.
+
+Do NOT paraphrase, normalize casing, drop punctuation, or "fix" spellings. The refId is a database key — if the profile is `johnathan_o'hare`, write `johnathan_o'hare` (with the apostrophe). If the setting is `andy's_bar`, write `andy's_bar`. Downstream code looks up per-item nodes by these exact strings; any mismatch silently breaks reference image resolution.
+
+Common failure modes to avoid:
+- Converting `johnathan_o'hare` → `johnathan_o_hare` (underscore substituted for apostrophe)
+- Converting `johnathan_o'hare` → `johnathan` (dropping last-name)
+- Typos (`jonathan` ≠ `johnathan`)
+- Inventing IDs from prose in the scene script — always use the provided refIds
+- Referring to a character or setting that isn't in `<available_refs>` (the LLM invents one, downstream finds nothing)
+
+If the scene needs an entity that isn't in `<available_refs>`, describe it by prose in the shot description instead of referring to it by refId. Never invent a refId.
+
+---
+
 ## Scene Main Subject — REQUIRED
 
-Every scene MUST declare `mainSubject` at the scene_video_prompt level — the refId of the character whose arc this scene follows. Example: `"mainSubject": "vikram"`.
+Every scene MUST declare `mainSubject` at the scene_video_prompt level — **copied verbatim from the character refIds in `<available_refs>`**. Example: if the available refs list includes `vikram`, write `"mainSubject": "vikram"` — never `"Vikram"`, `"vikram_reddy"`, or `"protagonist"`.
 
 - Shot perspectives are interpreted relative to this subject.
 - The scene's shot flow should GENERALLY follow the main subject — their decisions, reactions, and movements drive the camera.
-- When a second character is pivotal (dialogue/confrontation), declare `secondarySubject` as well (e.g., `"secondarySubject": "laila"`).
+- When a second character is pivotal (dialogue/confrontation), declare `secondarySubject` as well — also copied verbatim from `<available_refs>`.
 
-The main subject can change between scenes, but within a scene stays fixed.
+The main subject can change between scenes, but within a scene stays fixed. **The same character uses the same refId across every scene** — don't invent variants.
 
 ## Before Writing Shots
 
@@ -208,7 +225,8 @@ Before returning JSON, verify every item:
 7. All dialogue placed in the correct shot's `audio` field — no lines omitted
 8. After `set_the_world`/`set_the_mood`, next character shot is `meet_character`
 9. Pacing varies: quick cuts for tension, longer holds for emotion
-10. **Scene declares `mainSubject`** (refId) — the character whose arc this scene follows
-11. **Every `show_action` and `meet_character` shot has `perspective`** set
-12. **Non-establishing shots have `focus.primary`** — what's sharp and central in frame
-13. **Main subject continuity verified** — no teleporting between locations; bridging shots (exit/bridge/entry) exist when mainSubject's location changes
+10. **Scene declares `mainSubject`** — and the value is **copied verbatim from `<available_refs>`** (no paraphrasing, no casing changes, no typo fixes)
+11. **Every refId in the JSON** (`mainSubject`, `secondarySubject`, `perspectiveOf`, `focus.primary`, `focus.background[]`, `focus.lurking`) appears verbatim in `<available_refs>` — if you referenced something not in the list, describe it as prose in `description` instead
+12. **Every `show_action` and `meet_character` shot has `perspective`** set
+13. **Non-establishing shots have `focus.primary`** — what's sharp and central in frame
+14. **Main subject continuity verified** — no teleporting between locations; bridging shots (exit/bridge/entry) exist when mainSubject's location changes

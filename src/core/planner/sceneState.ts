@@ -10,17 +10,40 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { z } from 'zod';
 
+/**
+ * Character-kind discriminator. Controls which pose fields apply.
+ *
+ * `human` — humanoid; tracks leftHand/rightHand/legs/headTilt.
+ * `animal` — quadruped (cat, dog, horse, etc.); tracks `bodyPose` only.
+ *            Never leftHand/rightHand/legs — cats don't have hands.
+ * `unknown` — not yet determined; fields remain optional.
+ *
+ * The LLM extractor assigns `kind` based on the character profile or
+ * shot description (e.g., "Glitch nuzzles his lap" → animal).
+ */
+export type CharacterKind = 'human' | 'animal' | 'unknown';
+
 export interface CharacterState {
-  position: string;      // "lying_in_bed", "standing_left", "seated_at_table", "off_screen"
-  pose: string;          // "lying_down", "sitting_upright", "leaning_forward"
-  expression: string;    // "peaceful", "anxious", "smiling"
+  position: string;      // "lying_in_bed", "standing_left", "seated_at_table", "off_screen", "on_lap", "at_window"
+  pose: string;          // "lying_down", "sitting_upright", "leaning_forward", "curled_up", "standing"
+  expression: string;    // "peaceful", "anxious", "smiling" (human); "alert", "calm", "content" (animal)
   facing: string;        // "camera", "left", "right", "away"
   inFrame: boolean;
-  leftHand: string;      // "resting_on_lap", "holding_ring", "gripping_duvet", "at_side"
-  rightHand: string;     // "on_table", "touching_face", "holding_cup", "at_side"
-  legs: string;          // "under_duvet", "crossed", "standing_apart", "curled_up"
-  headTilt: string;      // "neutral", "tilted_left", "looking_down", "looking_up"
   inFocus?: boolean;     // whether this character is the sharp/focal subject of the current shot
+  kind?: CharacterKind;  // humanoid vs animal — controls which pose fields apply (default 'unknown')
+
+  // Humanoid-only fields. Optional because non-human characters (cats,
+  // dogs, etc.) don't have hands/legs in the humanoid sense. Required
+  // schema forced the LLM to invent "right hand touching face" for cats —
+  // see lazarus_drive Glitch-in-bar bug. For `kind: 'animal'`, omit these.
+  leftHand?: string;     // "resting_on_lap", "holding_ring", "at_side"
+  rightHand?: string;    // "on_table", "touching_face", "holding_cup"
+  legs?: string;         // "under_duvet", "crossed", "standing_apart"
+  headTilt?: string;     // "neutral", "tilted_left", "looking_down"
+
+  // Non-human fields — present only for kind: 'animal'.
+  bodyPose?: string;     // "curled_up", "stalking", "alert_standing", "sitting_on_haunches"
+  tail?: string;         // "curled_around_body", "flicking", "low_and_still" — optional, describe if relevant
 }
 
 export interface ObjectState {
@@ -41,32 +64,67 @@ export interface SceneState {
 }
 
 /**
- * Create initial scene state with all characters off-screen.
+ * Describes a character for initial scene state.
+ *
+ * `refId` — canonical character ID (matches character:<refId> node).
+ * `kind` — humanoid vs animal. Drives which pose fields are tracked and
+ *          injected into the prompt. Default 'unknown' if the caller
+ *          can't determine it.
+ */
+export interface SceneCharacterInit {
+  refId: string;
+  kind?: CharacterKind;
+}
+
+/**
+ * Create initial scene state with the given characters off-screen.
+ *
+ * Accepts either:
+ *   - `SceneCharacterInit[]` — characters with kind (humanoid/animal). Preferred.
+ *   - `string[]` — legacy: plain refIds, all treated as `kind: 'unknown'`.
+ *
+ * Only characters ACTUALLY IN THIS SCENE should be passed in. Including
+ * characters from other scenes (e.g. Glitch in the bar scene) causes the
+ * state tracker to carry them across shots and the image-prompt LLM to
+ * hallucinate their presence — the lazarus_drive root cause.
  */
 export function initializeSceneState(
   sceneId: string,
-  characterIds: string[],
-  settingId: string,
+  characters: SceneCharacterInit[] | string[],
+  _settingId: string,
 ): SceneState {
-  const characters: Record<string, CharacterState> = {};
-  for (const id of characterIds) {
-    characters[id] = {
+  const normalized: SceneCharacterInit[] = characters.map(c =>
+    typeof c === 'string' ? { refId: c, kind: 'unknown' } : c,
+  );
+
+  const characterMap: Record<string, CharacterState> = {};
+  for (const { refId, kind = 'unknown' } of normalized) {
+    const base: CharacterState = {
       position: 'off_screen',
       pose: 'unknown',
       expression: 'unknown',
       facing: 'unknown',
       inFrame: false,
-      leftHand: 'unknown',
-      rightHand: 'unknown',
-      legs: 'unknown',
-      headTilt: 'unknown',
+      kind,
     };
+    if (kind === 'human' || kind === 'unknown') {
+      // Humanoid fields start as 'unknown' so the LLM fills them on first in-frame shot
+      base.leftHand = 'unknown';
+      base.rightHand = 'unknown';
+      base.legs = 'unknown';
+      base.headTilt = 'unknown';
+    }
+    if (kind === 'animal') {
+      base.bodyPose = 'unknown';
+      // tail is optional — only populated if visible in a shot
+    }
+    characterMap[refId] = base;
   }
 
   return {
     sceneId,
     shotNumber: 0,
-    characters,
+    characters: characterMap,
     objects: {},
     environment: {
       lighting: 'default',
@@ -100,6 +158,10 @@ export function loadSceneState(projectDir: string, sceneId: string): SceneState 
 
 /**
  * Format scene state as a human-readable text block for LLM injection.
+ *
+ * Renders humanoid-specific fields (hands, legs, head tilt) only for
+ * `kind === 'human'` or `'unknown'`. For animals, renders `bodyPose`
+ * and `tail` instead — a cat's state never includes "right hand".
  */
 export function formatStateForPrompt(state: SceneState): string {
   const lines: string[] = [];
@@ -109,18 +171,29 @@ export function formatStateForPrompt(state: SceneState): string {
   // Characters
   for (const [id, char] of Object.entries(state.characters)) {
     if (!char.inFrame) {
-      lines.push(`- ${id}: off screen`);
+      const kindTag = char.kind && char.kind !== 'unknown' ? ` (${char.kind})` : '';
+      lines.push(`- ${id}${kindTag}: off screen`);
       continue;
     }
     const parts: string[] = [];
-    if (char.position !== 'unknown') parts.push(`position: ${char.position}`);
-    if (char.pose !== 'unknown') parts.push(`pose: ${char.pose}`);
-    if (char.expression !== 'unknown') parts.push(`expression: ${char.expression}`);
-    if (char.facing !== 'unknown') parts.push(`facing: ${char.facing}`);
-    if (char.leftHand !== 'unknown') parts.push(`left hand: ${char.leftHand}`);
-    if (char.rightHand !== 'unknown') parts.push(`right hand: ${char.rightHand}`);
-    if (char.legs !== 'unknown') parts.push(`legs: ${char.legs}`);
-    if (char.headTilt !== 'unknown') parts.push(`head: ${char.headTilt}`);
+    if (char.kind && char.kind !== 'unknown') parts.push(`kind: ${char.kind}`);
+    if (char.position && char.position !== 'unknown') parts.push(`position: ${char.position}`);
+    if (char.pose && char.pose !== 'unknown') parts.push(`pose: ${char.pose}`);
+    if (char.expression && char.expression !== 'unknown') parts.push(`expression: ${char.expression}`);
+    if (char.facing && char.facing !== 'unknown') parts.push(`facing: ${char.facing}`);
+
+    if (char.kind === 'animal') {
+      // Animal-specific fields
+      if (char.bodyPose && char.bodyPose !== 'unknown') parts.push(`body: ${char.bodyPose}`);
+      if (char.tail && char.tail !== 'unknown') parts.push(`tail: ${char.tail}`);
+    } else {
+      // Humanoid fields (or unknown — default to humanoid)
+      if (char.leftHand && char.leftHand !== 'unknown') parts.push(`left hand: ${char.leftHand}`);
+      if (char.rightHand && char.rightHand !== 'unknown') parts.push(`right hand: ${char.rightHand}`);
+      if (char.legs && char.legs !== 'unknown') parts.push(`legs: ${char.legs}`);
+      if (char.headTilt && char.headTilt !== 'unknown') parts.push(`head: ${char.headTilt}`);
+    }
+
     if (char.inFocus) parts.push('IN FOCUS');
     lines.push(`- ${id}: ${parts.join(', ')}`);
   }
@@ -159,11 +232,21 @@ export const characterStateSchema = z.object({
   expression: z.string(),
   facing: z.string(),
   inFrame: z.boolean(),
-  leftHand: z.string(),
-  rightHand: z.string(),
-  legs: z.string(),
-  headTilt: z.string(),
   inFocus: z.boolean().optional().default(false),
+  // Discriminator — tells downstream which pose fields apply.
+  kind: z.enum(['human', 'animal', 'unknown']).optional().default('unknown'),
+
+  // Humanoid fields — optional. Required schema forced the LLM to invent
+  // "right hand touching face" for cats. Now optional, and for
+  // `kind: 'animal'` we tell the LLM to omit them entirely.
+  leftHand: z.string().optional(),
+  rightHand: z.string().optional(),
+  legs: z.string().optional(),
+  headTilt: z.string().optional(),
+
+  // Animal-only fields
+  bodyPose: z.string().optional(),
+  tail: z.string().optional(),
 });
 
 export const sceneStateSchema = z.object({
@@ -194,20 +277,29 @@ export async function extractStateFromLLM(
 
   const systemMsg = `You extract scene state from shot descriptions. Return ONLY valid JSON with the full updated state.
 
+Each character has a \`kind\`: "human", "animal", or "unknown". The previous state tells you the kind for each character — preserve it. If kind is "animal" (cat, dog, horse, etc.), the character has NO hands, NO human legs, NO humanoid head tilt. Those fields do NOT apply. Do not invent them.
+
 The JSON must have this structure:
 {
   "characters": {
     "<character_id>": {
-      "position": "string (where in the scene: lying_in_bed, standing_left, seated_at_table, off_screen)",
-      "pose": "string (body pose: lying_down, sitting_upright, leaning_forward, standing)",
-      "expression": "string (facial expression: peaceful, anxious, confused, smiling)",
+      "kind": "human | animal | unknown (copy from previous state)",
+      "position": "string (where in the scene: lying_in_bed, standing_left, seated_at_table, on_lap, at_window, off_screen)",
+      "pose": "string (overall body pose)",
+      "expression": "string (facial expression)",
       "facing": "string (direction: camera, left, right, away, down)",
       "inFrame": boolean,
-      "leftHand": "string (what left hand is doing: at_side, on_lap, holding_cup, gripping_duvet)",
-      "rightHand": "string (what right hand is doing: at_side, on_shoulder, touching_face)",
-      "legs": "string (leg position: under_duvet, crossed, standing_apart, curled_up)",
-      "headTilt": "string (head angle: neutral, tilted_left, looking_down, looking_up)",
-      "inFocus": "boolean (true only if this character is the sharp/focal subject of THIS shot)"
+      "inFocus": "boolean (true only if this character is the sharp/focal subject of THIS shot)",
+
+      // ── ONLY for kind: 'human' or 'unknown' — OMIT for kind: 'animal' ──
+      "leftHand": "string (what left hand is doing: at_side, on_lap, holding_cup)",
+      "rightHand": "string (what right hand is doing: at_side, touching_face, holding_cup)",
+      "legs": "string (leg position: standing_apart, crossed, under_duvet)",
+      "headTilt": "string (head angle: neutral, tilted_left, looking_down)",
+
+      // ── ONLY for kind: 'animal' — OMIT for kind: 'human' ──
+      "bodyPose": "string (animal posture: curled_up, stalking, alert_standing, sitting_on_haunches, walking)",
+      "tail": "string OPTIONAL (tail position if visible: curled_around_body, flicking, low_and_still)"
     }
   },
   "objects": {
@@ -220,9 +312,13 @@ The JSON must have this structure:
   "focusedEntity": "string | null (refId of the character or object that is razor-sharp in this shot — exactly ONE or null)"
 }
 
-Include ALL characters from previous state (even off-screen ones).
-Only ONE character or object should have inFocus=true per shot — and it must match focusedEntity.
-Return ONLY the JSON — no markdown, no explanation.`;
+IMPORTANT:
+- Include ALL characters from previous state (even off-screen ones).
+- NEVER add a character that is not in the previous state. If the shot description mentions someone not in the state, they are not in this scene — ignore them or describe as prose only.
+- Preserve each character's \`kind\` from the previous state verbatim.
+- For kind: 'animal' characters, use bodyPose/tail — do NOT emit leftHand/rightHand/legs/headTilt.
+- Only ONE character or object should have inFocus=true per shot — and it must match focusedEntity.
+- Return ONLY the JSON — no markdown, no explanation.`;
 
   const userMsg = `Previous scene state:\n${stateJson}\n\nShot prompt content:\n${shotPromptContent}\n\nReturn the NEW complete state after this shot.`;
 
@@ -306,16 +402,18 @@ export function computeStateDiff(
       continue;
     }
 
-    // Field-by-field diff
-    const fields: Array<keyof CharacterState> = [
-      'position', 'pose', 'expression', 'facing', 'leftHand', 'rightHand', 'legs', 'headTilt',
-    ];
+    // Field-by-field diff — pick fields based on character kind so we
+    // don't produce noise like "leftHand: unknown → unknown" for a cat.
+    const kind = afterChar.kind ?? beforeChar.kind ?? 'unknown';
+    const fields: Array<keyof CharacterState> = kind === 'animal'
+      ? ['position', 'pose', 'expression', 'facing', 'bodyPose', 'tail']
+      : ['position', 'pose', 'expression', 'facing', 'leftHand', 'rightHand', 'legs', 'headTilt'];
     const changes: string[] = [];
     for (const field of fields) {
       const bVal = beforeChar[field];
       const aVal = afterChar[field];
-      if (bVal !== aVal && aVal !== 'unknown') {
-        changes.push(`${field}: ${bVal} → ${aVal}`);
+      if (bVal !== aVal && aVal !== 'unknown' && aVal !== undefined) {
+        changes.push(`${field}: ${bVal ?? 'unknown'} → ${aVal}`);
       }
     }
     if (changes.length > 0) {
