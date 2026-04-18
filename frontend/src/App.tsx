@@ -4,6 +4,7 @@ import { useWebSocket } from './hooks/useWebSocket'
 import { useMessageHandler } from './hooks/useMessageHandler'
 import { Header } from './components/Header'
 import { Sidebar } from './components/Sidebar'
+import { Storyboard } from './components/Storyboard'
 import { ChatTimeline } from './components/ChatTimeline'
 import { TimelineView } from './components/TimelineView'
 import { TaskInput } from './components/TaskInput'
@@ -135,13 +136,36 @@ export function App() {
             />
 
             <div className="flex flex-1 overflow-hidden relative z-10">
+              {/* LEFT: Todos only */}
               <Sidebar
                 onRedoNode={(nodeId: string) => send({ type: 'redo_node', data: { nodeId } })}
                 onRedoNodeWithPrompt={(nodeId: string, editedPrompt: Record<string, unknown>) =>
                   send({ type: 'redo_node', data: { nodeId, editedPrompt } })
                 }
               />
-              <main className="flex-1 flex flex-col overflow-hidden">
+
+              {/* CENTER: Storyboard (per scene → per shot → first+last frame) */}
+              <section className="flex-1 flex flex-col overflow-hidden border-r border-line-soft">
+                <div className="flex border-b border-line-soft flex-shrink-0 px-3 py-2">
+                  <h2 className="font-mono text-[11px] uppercase tracking-widest text-graphite-100">
+                    Storyboard
+                  </h2>
+                </div>
+                <Storyboard
+                  onRedoNode={(nodeId: string, frame?: string) =>
+                    send({ type: 'redo_node', data: frame ? { nodeId, frame } : { nodeId } })
+                  }
+                  onRedoPrompt={(nodeId: string) =>
+                    send({ type: 'redo_node', data: { nodeId, scope: 'prompt' } })
+                  }
+                  onRedoNodeWithPrompt={(nodeId: string, editedPrompt: Record<string, unknown>) =>
+                    send({ type: 'redo_node', data: { nodeId, editedPrompt } })
+                  }
+                />
+              </section>
+
+              {/* RIGHT: Chat + tab bar + task input */}
+              <main className="w-[420px] flex-shrink-0 flex flex-col overflow-hidden">
                 {/* Tab bar */}
                 <div className="flex border-b border-line-soft flex-shrink-0">
                   <button

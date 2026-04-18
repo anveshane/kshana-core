@@ -15,6 +15,7 @@ import { join, dirname, relative } from 'path';
 import { TypedEventEmitter } from '../../events/EventEmitter.js';
 import { LLMClient } from '../llm/index.js';
 import type { Message, GenerateOptions } from '../llm/types.js';
+import { buildRouterFromEnv, type LLMRouter, type LLMPurpose } from '../llm/index.js';
 import type { GenericAgentResult } from '../agent/AgentResult.js';
 import type { ExpandableTodoItem } from '../todo/index.js';
 import type {
@@ -31,6 +32,7 @@ import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
 import { resolveInputs, writeOutput, getOutputPath as getOutputPathFn } from './contentResolver.js';
 import { extractCollectionItems } from './collectionExtractor.js';
+import { healStaleMatchingDeps } from './stateHeal.js';
 import type { ArtifactCategory } from '../templates/types.js';
 import { resolveGuide, loadContentTypeSkills, type SkillResolutionContext } from '../prompts/loader.js';
 // Media generation imports
@@ -51,7 +53,13 @@ import {
 } from '../timeline/TimelineManager.js';
 import { assembleVideos, resolveSegmentFilePaths } from '../timeline/FFmpegAssembler.js';
 import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timeline/types.js';
-import { validateWithSchema, normalizeSceneVideoPrompt, getPromptSchema } from './schemas.js';
+import { validateWithSchema, normalizeSceneVideoPrompt, normalizeShotImagePrompt, getPromptSchema } from './schemas.js';
+import {
+  validateContinuitySequence,
+  checkPositionContinuity,
+  formatWarnings as formatContinuityWarnings,
+  shouldRerollShot,
+} from './continuityValidator.js';
 import { getProviderRegistry } from '../../services/providers/index.js';
 import { getWorkflowModeRegistry } from '../../services/providers/WorkflowModeRegistry.js';
 import { addAsset } from '../../tasks/video/workflow/index.js';
@@ -139,6 +147,7 @@ Generate assembly instructions for combining video clips into a final video.`,
  */
 export class ExecutorAgent extends TypedEventEmitter {
   private llm: LLMClient;
+  private router: LLMRouter;
   /**
    * In-memory lock: tracks which project directories have an active executor.
    * Prevents multiple ExecutorAgent instances in the same process from
@@ -163,11 +172,29 @@ export class ExecutorAgent extends TypedEventEmitter {
   private timeline: Timeline | null = null;
   /** Tracks how many times a dependency was regenerated for a given parent node (loop protection) */
   private depRegenCounts = new Map<string, number>();
+  /**
+   * When set, the next run() only executes nodes in this set (filters readyNodes).
+   * Used by redoNode to isolate redo to the targeted node, so other pending work
+   * in the graph does not auto-resume. Cleared at the start of each run().
+   */
+  private redoOnlyNodes: Set<string> | null = null;
+  /**
+   * Shot node IDs that have already had a continuity-reroll hint injected.
+   * Prevents the hint from being applied twice on re-runs of the same node.
+   */
+  private retriedContinuity = new Set<string>();
 
   constructor(llm: LLMClient, config: ExecutorAgentConfig) {
     super();
     this.llm = llm;
     this.config = config;
+    // Build per-call router. When LLM_ROUTING_ENABLED=false (default), every
+    // purpose resolves to the default client so behavior is unchanged.
+    this.router = buildRouterFromEnv(config.projectDir);
+    if (this.router.isEnabled()) {
+      // Best-effort: log routing status to the executor log after initialization
+      setImmediate(() => this.log('LLM routing ENABLED — per-purpose model selection active'));
+    }
 
     // Set up log file — try project dir first, fall back to cwd
     const projectLogsDir = join(config.projectDir, 'logs');
@@ -205,6 +232,22 @@ export class ExecutorAgent extends TypedEventEmitter {
       // Repair missing nodes: if a node references a dependency that doesn't exist,
       // recreate it from the template. This fixes graph corruption from manual resets.
       this.repairMissingNodes();
+
+      // Heal stale matching-scope deps that an earlier buggy version of the
+      // dangling-dep cleanup may have silently stripped (see stateHeal.ts).
+      // Safe to run on every resume — idempotent when deps are healthy.
+      try {
+        const report = healStaleMatchingDeps(this.executor, config.template);
+        if (report.added > 0) {
+          this.log(`State heal: restored ${report.added} stale matching-scope dep(s)`);
+          for (const d of report.details) {
+            this.log(`  ${d.nodeId} ← ${d.restoredDep}`);
+          }
+          this.persistState();
+        }
+      } catch (err) {
+        this.log(`State heal skipped: ${(err as Error).message}`);
+      }
     } else {
       const scanner = new AssetScanner(config.template);
       const scanResult = scanner.scan(config.projectDir, config.project);
@@ -299,6 +342,52 @@ export class ExecutorAgent extends TypedEventEmitter {
       appendFileSync(this.logPath, `[${timestamp}] ${message}\n`);
     } catch {
       // Ignore logging errors
+    }
+  }
+
+  /**
+   * Get the LLMClient configured for a specific call purpose.
+   * When LLM_ROUTING_ENABLED=false (default), returns the default client.
+   * When enabled, resolves via the router's purpose/tier/default chain.
+   */
+  private llmFor(purpose: LLMPurpose): LLMClient {
+    return this.router.isEnabled() ? this.router.getClient(purpose) : this.llm;
+  }
+
+  /**
+   * Return the model name that will be used for a given LLM call purpose.
+   * Used for UI display — each tool_call event attaches this so the user can
+   * see which model produced a given prompt/output. Works with or without
+   * per-purpose routing enabled.
+   */
+  private modelFor(purpose: LLMPurpose): string {
+    try {
+      return this.router.resolveConfig(purpose).model ?? 'unknown';
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  /**
+   * Map an artifact node typeId to an LLM purpose for per-call routing.
+   * Unknown types fall back to content.scene as a reasonable default.
+   */
+  private purposeForNode(node: ExecutionNode): LLMPurpose {
+    switch (node.typeId) {
+      case 'story':           return 'content.story';
+      case 'plot':            return 'content.plot';
+      case 'character':       return 'content.character';
+      case 'setting':         return 'content.setting';
+      case 'object':          return 'content.setting'; // similar scope to setting
+      case 'scene':           return 'content.scene';
+      case 'world_style':     return 'content.world_style';
+      case 'character_image': return 'content.character';
+      case 'setting_image':   return 'content.setting';
+      case 'object_image':    return 'content.setting';
+      case 'scene_video_prompt':    return 'structured.scene_breakdown';
+      case 'shot_image_prompt':     return 'content.shot_image_prompt';
+      case 'shot_motion_directive': return 'content.shot_motion_directive';
+      default:                return 'content.scene';
     }
   }
 
@@ -541,29 +630,130 @@ export class ExecutorAgent extends TypedEventEmitter {
   }
 
   /**
-   * Invalidate a node and all its dependents for re-execution.
-   * Returns the list of invalidated nodes (for cascade preview).
+   * Invalidate a node for re-execution.
+   *
+   * Modes:
+   *   - `redoNode(nodeId)` — full shot/node redo. Cascades to all dependents,
+   *     clears outputPaths entirely, all frames regenerate.
+   *   - `redoNode(nodeId, { frame })` — single-frame redo. Drops just that
+   *     frame from outputPaths. No cascade. Only that frame regenerates;
+   *     downstream video/final are left alone.
+   *   - `redoNode(nodeId, { scope: 'prompt' })` — prompt regen. Invalidates
+   *     the matching shot_image_prompt AND the shot_image (so the LLM re-writes
+   *     the prompt and the image regenerates). No cascade past shot_image.
+   *   - `redoNode(nodeId, { scope: 'image_only' })` — invalidate JUST this
+   *     shot_image node, no cascade. Used by the edit-prompt flow after the
+   *     edited prompt was saved to disk — we want to regenerate the image
+   *     from the edited prompt without touching the prompt node (which would
+   *     re-run the LLM and overwrite edits).
+   *
    * After calling this, call run('') to resume execution of the invalidated nodes.
    */
-  redoNode(nodeId: string): ExecutionNode[] {
-    const invalidated = this.executor.invalidateNode(nodeId);
+  redoNode(
+    nodeId: string,
+    opts: { frame?: string; scope?: 'prompt' | 'image_only' } = {},
+  ): ExecutionNode[] {
+    const { frame, scope } = opts;
+
+    // image_only scope: invalidate this node AND cascade — but ONLY to
+    // dependents that were already completed. If shot_video was generated,
+    // regenerate it from the new image. If shot_video is still pending,
+    // leave it alone — it'll pick up the new image naturally when it runs.
+    //
+    // Frame-specific edit (last_frame / mid_frame only):
+    //   Preserve the other frames so only the edited frame regenerates.
+    //   first_frame edits drop all frames (mid/last derive from first).
+    if (scope === 'image_only') {
+      const preserveOthers = frame === 'last_frame' || frame === 'mid_frame';
+      const invalidated = this.executor.invalidateNode(nodeId, {
+        cascade: true,
+        cascadeOnlyCompleted: true,
+        preserveFramesOther: preserveOthers,
+        singleFrame: preserveOthers ? frame : undefined,
+      });
+      if (invalidated.length === 0) {
+        this.log(`Redo image_only: node '${nodeId}' not found`);
+        return [];
+      }
+      const frameLabel = frame ? ` [frame=${frame}]` : '';
+      this.log(`Redo image_only${frameLabel}: invalidated ${invalidated.length} node(s): ${invalidated.map(n => n.id).join(', ')}`);
+      this.persistState();
+      this.emitTodoUpdate();
+      const cascadedCount = invalidated.length - 1;
+      const cascadedText = cascadedCount > 0
+        ? ` (+${cascadedCount} already-completed dependent${cascadedCount > 1 ? 's' : ''})`
+        : '';
+      this.emit({
+        type: 'notification',
+        level: 'info',
+        message: `Redoing ${nodeId.replace(/^shot_image:/, '')}${frame ? ` · ${frame}` : ''} (from edited prompt)${cascadedText}`,
+      });
+      this.redoOnlyNodes = new Set(invalidated.map(n => n.id));
+      return invalidated;
+    }
+
+    // Prompt scope: invalidate shot_image_prompt + shot_image together, no cascade
+    if (scope === 'prompt') {
+      const shotImageNodeId = nodeId.startsWith('shot_image_prompt:')
+        ? nodeId.replace('shot_image_prompt:', 'shot_image:')
+        : nodeId;
+      const promptNodeId = shotImageNodeId.replace('shot_image:', 'shot_image_prompt:');
+
+      const invalidated: ExecutionNode[] = [];
+      invalidated.push(...this.executor.invalidateNode(promptNodeId, { cascade: false }));
+      invalidated.push(...this.executor.invalidateNode(shotImageNodeId, { cascade: false }));
+      if (invalidated.length === 0) {
+        this.log(`Redo prompt: nodes not found for '${shotImageNodeId}'`);
+        return [];
+      }
+      this.log(`Redo prompt: invalidated ${invalidated.length} node(s): ${invalidated.map(n => n.id).join(', ')}`);
+      this.persistState();
+      this.emitTodoUpdate();
+      this.emit({
+        type: 'notification',
+        level: 'info',
+        message: `Redoing prompt for ${shotImageNodeId.replace('shot_image:', '')}`,
+      });
+      this.redoOnlyNodes = new Set(invalidated.map(n => n.id));
+      return invalidated;
+    }
+
+    // Frame redo:
+    //   - first_frame  → clear ALL outputPaths. Last/mid frames are derived
+    //                    from first_frame via edit_first_frame, so they must
+    //                    also regenerate to stay consistent.
+    //   - mid/last     → clear just that frame. first_frame stays; the other
+    //                    additional frame (if present) also stays.
+    const invalidated = this.executor.invalidateNode(nodeId, frame
+      ? (frame === 'first_frame'
+          ? { cascade: false }  // clear all outputPaths → all frames regen
+          : { cascade: false, preserveFramesOther: true, singleFrame: frame }
+        )
+      : undefined,
+    );
     if (invalidated.length === 0) {
       this.log(`Redo: node '${nodeId}' not found or already pending`);
       return [];
     }
 
-    this.log(`Redo: invalidated ${invalidated.length} node(s): ${invalidated.map(n => n.id).join(', ')}`);
+    const scopeLabel = frame ? `${nodeId} (frame: ${frame})` : nodeId;
+    this.log(`Redo: invalidated ${invalidated.length} node(s) [scope=${scopeLabel}]: ${invalidated.map(n => n.id).join(', ')}`);
     this.persistState();
     this.emitTodoUpdate();
 
     // Notify UI about the cascade
     const names = invalidated.map(n => n.displayName);
+    const dependentText = invalidated.length > 1
+      ? ` (+${invalidated.length - 1} dependent${invalidated.length > 2 ? 's' : ''})`
+      : '';
+    const frameText = frame ? ` [${frame}]` : '';
     this.emit({
       type: 'notification',
       level: 'info',
-      message: `Redoing ${names[0]}${invalidated.length > 1 ? ` (+${invalidated.length - 1} dependent${invalidated.length > 2 ? 's' : ''})` : ''}`,
+      message: `Redoing ${names[0]}${frameText}${dependentText}`,
     });
 
+    this.redoOnlyNodes = new Set(invalidated.map(n => n.id));
     return invalidated;
   }
 
@@ -792,7 +982,25 @@ export class ExecutorAgent extends TypedEventEmitter {
       while (!this.executor.isComplete() && !this.stopped) {
         // Expand any type-level collections before checking for ready nodes
         await this.expandPendingCollections();
-        const readyNodes = this.executor.getNextReady();
+        let readyNodes = this.executor.getNextReady();
+
+        // Isolated-redo mode: a redoNode() call set a whitelist of nodes.
+        // We execute ONLY those nodes (and exit when they're all done), so
+        // other pending work in the graph is NOT auto-resumed. This preserves
+        // the "paused pipeline" semantic — redo one thing, don't restart all.
+        if (this.redoOnlyNodes) {
+          const whitelist = this.redoOnlyNodes;
+          const allWhitelistDone = [...whitelist].every(id => {
+            const n = this.executor.getNode(id);
+            return !n || n.status === 'completed' || n.status === 'failed' || n.status === 'skipped';
+          });
+          if (allWhitelistDone) {
+            this.log(`Isolated redo complete — stopping (whitelist: ${[...whitelist].join(', ')})`);
+            this.redoOnlyNodes = null;
+            break;
+          }
+          readyNodes = readyNodes.filter(n => whitelist.has(n.id));
+        }
 
         if (readyNodes.length === 0) {
           // In parallel mode, if we have pending media, await them and retry
@@ -801,6 +1009,15 @@ export class ExecutorAgent extends TypedEventEmitter {
             await Promise.all(this.pendingMedia.values());
             this.pendingMedia.clear();
             continue;  // Re-check for ready nodes
+          }
+
+          // In isolated-redo mode, skip self-repair of unrelated nodes — we
+          // only care about the whitelisted nodes. If none are ready, the
+          // next iteration's whitelist-done check will break the loop.
+          if (this.redoOnlyNodes) {
+            this.log(`Isolated redo — no whitelisted nodes ready, exiting loop`);
+            this.redoOnlyNodes = null;
+            break;
           }
 
           // Check if we're stuck because of failed nodes blocking downstream
@@ -1041,6 +1258,8 @@ export class ExecutorAgent extends TypedEventEmitter {
               if (loadedSkills.length > 0) {
                 toolArgs['skills'] = loadedSkills.join(', ');
               }
+              // Attach the LLM model that will handle this call (for UI display).
+              toolArgs['model'] = this.modelFor(this.purposeForNode(node));
               this.emit({
                 type: 'tool_call',
                 toolCallId,
@@ -1120,6 +1339,9 @@ export class ExecutorAgent extends TypedEventEmitter {
               const jsonValidatedTypes = ['scene_video_prompt', 'shot_image_prompt', 'character_image', 'setting_image'];
               if (jsonValidatedTypes.includes(node.typeId)) {
                 const validation = this.validateJsonOutput(content, node);
+                if (validation.valid && validation.normalizedContent) {
+                  content = validation.normalizedContent;
+                }
                 if (!validation.valid) {
                   this.log(`  JSON validation failed: ${validation.error} — asking LLM to fix...`);
                   this.emit({
@@ -1144,7 +1366,11 @@ export class ExecutorAgent extends TypedEventEmitter {
                     type: 'tool_call',
                     toolCallId: repairCallId,
                     toolName: 'json_repair',
-                    arguments: { item: node.displayName, error: validation.error },
+                    arguments: {
+                      item: node.displayName,
+                      error: validation.error,
+                      model: this.modelFor('utility.json_repair'),
+                    },
                     agentName,
                   });
                   const fixPrompt = `The following JSON output has an error. Fix it and return ONLY the corrected valid JSON — no explanation, no markdown fences, no extra text.\n\nError: ${validation.error}\n\nBroken JSON:\n${content.substring(0, 8000)}`;
@@ -1154,10 +1380,11 @@ export class ExecutorAgent extends TypedEventEmitter {
                     fixPrompt,
                     repairCallId,
                     'json_repair',
+                    'utility.json_repair',
                   );
                   const fixValidation = this.validateJsonOutput(fixedContent, node);
                   if (fixValidation.valid) {
-                    content = fixedContent;
+                    content = fixValidation.normalizedContent ?? fixedContent;
                     this.log(`  LLM JSON repair succeeded`);
                     this.emit({
                       type: 'tool_result',
@@ -1182,7 +1409,11 @@ export class ExecutorAgent extends TypedEventEmitter {
                       type: 'tool_call',
                       toolCallId: retryCallId,
                       toolName,
-                      arguments: { item: node.displayName, retry: true },
+                      arguments: {
+                        item: node.displayName,
+                        retry: true,
+                        model: this.modelFor(this.purposeForNode(node)),
+                      },
                       agentName,
                     });
                     const retryContent = await this.generateForNode(
@@ -1194,7 +1425,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                     );
                     const retryValidation = this.validateJsonOutput(retryContent, node);
                     if (retryValidation.valid) {
-                      content = retryContent;
+                      content = retryValidation.normalizedContent ?? retryContent;
                       this.log(`  Full retry succeeded — valid JSON`);
                     } else {
                       this.log(`  Full retry also failed: ${retryValidation.error}`);
@@ -1518,6 +1749,8 @@ export class ExecutorAgent extends TypedEventEmitter {
     let referenceImageContext = '';
     let shotContextHint = '';
     let sceneStateContext = '';
+    let perspectiveContext = '';
+    let focusContext = '';
     if (node.typeId === 'shot_image_prompt' && node.itemId) {
       const { buildAvailableReferences, formatReferencesForPrompt, filterRefsByPurpose, buildShotContextHint } = await import('./shotReferenceMapping.js');
       const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
@@ -1526,6 +1759,10 @@ export class ExecutorAgent extends TypedEventEmitter {
       // Read shot from scene breakdown (for purpose filtering + state computation)
       let shotPurpose = '';
       let shotDescription = '';
+      let sceneMainSubject = ''; // hoisted so the later position-continuity check can read it
+      let shotContinuityRole = 'none';
+      let shotPerspective = '';
+      let prevShotPerspective = '';
       if (sceneId) {
         const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
         if (svpNode?.outputPath) {
@@ -1541,6 +1778,40 @@ export class ExecutorAgent extends TypedEventEmitter {
             if (shot) {
               shotPurpose = shot.purpose || '';
               shotDescription = `Shot ${shotNum}: ${shot.description || ''}. Camera: ${shot.cameraWork || ''}. Purpose: ${shotPurpose || 'unknown'}.`;
+              shotContinuityRole = shot.continuityRole || 'none';
+              shotPerspective = shot.perspective || '';
+            }
+            // Look up previous shot's perspective too (for mode hint)
+            const prevShot = (Array.isArray(shots) ? shots : []).find((s: any) => s.shotNumber === shotNum - 1);
+            if (prevShot) {
+              prevShotPerspective = prevShot.perspective || '';
+            }
+
+            // Perspective block — whose POV is this shot from
+            const mainSubject: string = svpJson.mainSubject || '';
+            sceneMainSubject = mainSubject;
+            const secondarySubject: string = svpJson.secondarySubject || '';
+            const perspective: string = shot?.perspective || '';
+            const perspectiveOf: string = shot?.perspectiveOf || (perspective === 'main_subject' ? mainSubject : perspective === 'secondary_subject' ? secondarySubject : '');
+            if (perspective) {
+              const parts = [`perspective: ${perspective}`];
+              if (perspectiveOf) parts.push(`perspectiveOf: ${perspectiveOf}`);
+              if (mainSubject) parts.push(`scene_mainSubject: ${mainSubject}`);
+              if (secondarySubject) parts.push(`scene_secondarySubject: ${secondarySubject}`);
+              perspectiveContext = `\n\n<shot_perspective>\n${parts.join('\n')}\n\nYour prose MUST reflect this viewpoint (see Perspective → Framing Bias in your guide).\n</shot_perspective>`;
+            }
+
+            // Focus block — what's sharp vs blurred
+            const focus = shot?.focus;
+            if (focus?.primary) {
+              const parts = [`primary (sharp): ${focus.primary}`];
+              if (Array.isArray(focus.background) && focus.background.length > 0) {
+                parts.push(`background (blurred): ${focus.background.join(', ')}`);
+              }
+              if (focus.lurking) {
+                parts.push(`lurking (defocused, planted for later): ${focus.lurking}`);
+              }
+              focusContext = `\n\n<shot_focus>\n${parts.join('\n')}\n\nYour prose MUST name what is sharp AND what is blurred (see Focus Rules in your guide).\n</shot_focus>`;
             }
           } catch { /* scene breakdown not readable */ }
         }
@@ -1562,7 +1833,12 @@ export class ExecutorAgent extends TypedEventEmitter {
         ? this.executor.getNode(`shot_image:${prevShotId}`)
         : null;
       const previousAvailable = prevNode?.status === 'completed';
-      shotContextHint = buildShotContextHint(node.itemId, previousAvailable);
+      shotContextHint = buildShotContextHint(node.itemId, previousAvailable, {
+        currentPerspective: shotPerspective,
+        previousPerspective: prevShotPerspective,
+        continuityRole: shotContinuityRole,
+        purpose: shotPurpose,
+      });
 
       // Compute target state BEFORE generating image prompt
       if (sceneId) {
@@ -1582,12 +1858,45 @@ export class ExecutorAgent extends TypedEventEmitter {
 
           if (shotDescription) {
             this.log(`  Computing target state for ${node.itemId}...`);
-            const stateCtx = await buildStateContext(this.llm, previousState, shotDescription);
+            const stateCtx = await buildStateContext(this.llmFor('structured.scene_state'), previousState, shotDescription);
             sceneStateContext = stateCtx.promptContext;
 
             if (stateCtx.targetState) {
               stateCtx.targetState.sceneId = sceneId;
               stateCtx.targetState.shotNumber = shotNum;
+
+              // Option 2 continuity check — LLM judges whether the main subject teleported.
+              // Runs after state extraction, before save, so the warning is associated with the fresh pair.
+              try {
+                const warning = await checkPositionContinuity(
+                  previousState,
+                  stateCtx.targetState,
+                  sceneMainSubject,
+                  shotContinuityRole,
+                  shotNum,
+                  this.llmFor('utility.continuity_check'),
+                );
+                if (warning) {
+                  this.log(`  [Continuity position] ${warning.message}${warning.suggestion ? ` — ${warning.suggestion}` : ''}`);
+                  // Auto-reroll: inject a bridging hint into THIS generation's
+                  // context so the LLM produces a non-teleporting composition.
+                  // Tracked per-node to avoid stacking hints on re-runs.
+                  const decision = shouldRerollShot(warning);
+                  if (decision.reroll && !this.retriedContinuity.has(node.id)) {
+                    this.retriedContinuity.add(node.id);
+                    sceneStateContext += decision.hint;
+                    this.log(`  [Continuity auto-reroll] Injected bridging hint for ${node.id}`);
+                    this.emit({
+                      type: 'notification',
+                      level: 'warning',
+                      message: `Continuity: bridging hint added for ${node.id} (shot ${shotNum})`,
+                    });
+                  }
+                }
+              } catch (err) {
+                this.log(`  [Continuity position] skipped: ${(err as Error).message}`);
+              }
+
               saveSceneState(this.config.projectDir, sceneId, stateCtx.targetState);
               // Save per-shot diff so motion directive can read it
               const { saveShotStateDiff, buildLastFrameChanges } = await import('./sceneState.js');
@@ -1604,7 +1913,17 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.emit({ type: 'tool_result', toolCallId: beforeCallId, toolName: 'scene_state', result: { phase: 'before', state: previousState }, agentName });
 
               const targetCallId = `state_target_${node.itemId}_${Date.now()}`;
-              this.emit({ type: 'tool_call', toolCallId: targetCallId, toolName: 'scene_state', arguments: { shot: node.itemId, phase: 'TARGET' }, agentName });
+              this.emit({
+                type: 'tool_call',
+                toolCallId: targetCallId,
+                toolName: 'scene_state',
+                arguments: {
+                  shot: node.itemId,
+                  phase: 'TARGET',
+                  model: this.modelFor('structured.scene_state'),
+                },
+                agentName,
+              });
               const targetText = stateCtx.diff
                 ? `CHANGES:\n${stateCtx.diff}\n\n---\nTARGET STATE:\n${formatStateForPrompt(stateCtx.targetState)}`
                 : `No changes\n\n${formatStateForPrompt(stateCtx.targetState)}`;
@@ -1657,8 +1976,8 @@ export class ExecutorAgent extends TypedEventEmitter {
     }
 
     const user = inputs.contextBlock
-      ? `${task}${projectContext}${referenceImageContext}${sceneStateContext}${shotContextHint}${sceneAssignment}\n\n${inputs.contextBlock}`
-      : `${task}${projectContext}${referenceImageContext}${sceneStateContext}${shotContextHint}${sceneAssignment}`;
+      ? `${task}${projectContext}${referenceImageContext}${sceneStateContext}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}\n\n${inputs.contextBlock}`
+      : `${task}${projectContext}${referenceImageContext}${sceneStateContext}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}`;
 
     return { system: systemPrompt, user, loadedSkills };
   }
@@ -2223,7 +2542,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               try {
                 const storyContent = readFileSync(storyPath, 'utf-8');
                 const extracted = await extractCollectionItems(
-                  storyNode, storyContent, this.llm,
+                  storyNode, storyContent, this.llmFor('structured.collection_extraction'),
                   this.config.goal.preferences.duration as number | undefined,
                 );
                 let itemList: Array<{ itemId: string; name: string }> = [];
@@ -2281,7 +2600,7 @@ export class ExecutorAgent extends TypedEventEmitter {
           if (!existsSync(fullPath)) continue;
 
           const content = readFileSync(fullPath, 'utf-8');
-          const items = await extractCollectionItems(dep, content, this.llm, this.config.goal.preferences.duration as number | undefined);
+          const items = await extractCollectionItems(dep, content, this.llmFor('structured.collection_extraction'), this.config.goal.preferences.duration as number | undefined);
           if (!items?.shots?.length) continue;
 
           const sceneId = dep.itemId;
@@ -2308,9 +2627,19 @@ export class ExecutorAgent extends TypedEventEmitter {
     // Post-expansion: fix dangling dependencies (type-level refs to expanded nodes)
     // e.g., scene_video_prompt:scene_1 depends on 'scene' (type-level, gone after expansion)
     // → rewire to 'scene:scene_1' (per-item, matching scope)
+    //
+    // CRITICAL: do NOT strip deps from type-level collection nodes that are
+    // still waiting to be expanded. If scene_video_prompt (type-level, no
+    // itemId) has a dep on `scene` that was expanded away, we CANNOT rewire
+    // here (no itemId to key off of) and we MUST NOT strip — those deps are
+    // carried into the per-item nodes when this collection finally gets
+    // expanded. Stripping here caused every downstream per-item node to
+    // inherit a broken dep list with no parent content. (See dep-propagation
+    // regression suite.)
     for (const node of this.executor.getAllNodes()) {
       const newDeps: string[] = [];
       let fixed = false;
+      const isUnexpandedTypeLevel = !node.itemId && node.isCollection;
       for (const depId of node.dependencies) {
         if (this.executor.getNode(depId)) {
           newDeps.push(depId);
@@ -2327,7 +2656,16 @@ export class ExecutorAgent extends TypedEventEmitter {
               continue;
             }
           }
-          // Still dangling — remove it to prevent deadlock
+          if (isUnexpandedTypeLevel) {
+            // Keep the dep so it'll be rewired during expansion. Stripping
+            // it would blind every per-item node this collection produces.
+            newDeps.push(depId);
+            continue;
+          }
+          // Per-item node with a genuinely unresolvable dep — drop it to
+          // prevent deadlock. (Type-level collection nodes preserve deps
+          // above; per-item deps failing to resolve are rarer and usually
+          // indicate template/plan drift.)
           this.log(`  Removed dangling dep from ${node.id}: ${depId} (node doesn't exist)`);
           fixed = true;
         }
@@ -2454,7 +2792,7 @@ export class ExecutorAgent extends TypedEventEmitter {
     return s;
   }
 
-  private validateJsonOutput(content: string, node: ExecutionNode): { valid: boolean; error?: string } {
+  private validateJsonOutput(content: string, node: ExecutionNode): { valid: boolean; error?: string; normalizedContent?: string } {
     // Strip markdown code fences if the LLM wrapped the JSON
     let cleaned = content.trim();
     if (cleaned.startsWith('```')) {
@@ -2473,14 +2811,42 @@ export class ExecutorAgent extends TypedEventEmitter {
         return { valid: false, error: result.error };
       }
 
+      let mutated = false;
+
       // Auto-normalize scene_video_prompt fields
       if (node.typeId === 'scene_video_prompt') {
         normalizeSceneVideoPrompt(parsed);
+        this.runContinuitySequenceCheck(parsed, node.id);
+        mutated = true;
       }
 
-      return { valid: true };
+      // Auto-inherit first_frame references into empty edit_first_frame / edit_previous_shot frames
+      if (node.typeId === 'shot_image_prompt') {
+        normalizeShotImagePrompt(parsed);
+        mutated = true;
+      }
+
+      return {
+        valid: true,
+        normalizedContent: mutated ? JSON.stringify(parsed, null, 2) : undefined,
+      };
     } catch (e) {
       return { valid: false, error: `JSON parse error: ${String(e)}` };
+    }
+  }
+
+  /**
+   * Option 1 continuity check — sync JSON walk of scene_video_prompt shot list.
+   * Logs warnings; does not reject.
+   */
+  private runContinuitySequenceCheck(svp: unknown, nodeId: string): void {
+    try {
+      const warnings = validateContinuitySequence(svp as Parameters<typeof validateContinuitySequence>[0]);
+      if (warnings.length > 0) {
+        this.log(`  [Continuity sequence] ${warnings.length} warning(s) for ${nodeId}:\n${formatContinuityWarnings(warnings)}`);
+      }
+    } catch (err) {
+      this.log(`  [Continuity sequence] skipped: ${(err as Error).message}`);
     }
   }
 
@@ -2651,6 +3017,7 @@ export class ExecutorAgent extends TypedEventEmitter {
     user: string,
     toolCallId?: string,
     toolDisplayName?: string,
+    purposeOverride?: LLMPurpose,
   ): Promise<string> {
     const messages: Message[] = [
       { role: 'system', content: system },
@@ -2692,7 +3059,9 @@ export class ExecutorAgent extends TypedEventEmitter {
     let buffer = '';
     let insideThink = false;
 
-    for await (const chunk of this.llm.generateStream(options)) {
+    const purpose = purposeOverride ?? this.purposeForNode(node);
+    const client = this.llmFor(purpose);
+    for await (const chunk of client.generateStream(options)) {
       // Handle reasoning_content from llama.cpp (separate field, not in-band)
       if (chunk.thinking && toolCallId) {
         this.emit({
@@ -2822,6 +3191,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       arguments: {
         source: node.displayName,
         extracting: extractingLabel,
+        model: this.modelFor('structured.collection_extraction'),
       },
       agentName,
     });
@@ -2834,7 +3204,7 @@ export class ExecutorAgent extends TypedEventEmitter {
       toolName: 'extract_collections',
     });
 
-    const items = await extractCollectionItems(node, content, this.llm, this.config.goal.preferences.duration as number | undefined);
+    const items = await extractCollectionItems(node, content, this.llmFor('structured.collection_extraction'), this.config.goal.preferences.duration as number | undefined);
 
     if (!items) {
       this.log(`  No collection items extracted from ${node.id}`);
@@ -3848,7 +4218,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                 toolName: vlmToolName,
               });
 
-              const vlmResult = await reviewImageWithVLM(absPath, shotJson.imagePrompt, this.llm);
+              const vlmResult = await reviewImageWithVLM(absPath, shotJson.imagePrompt, this.llmFor('utility.image_review'));
 
               // Check if VLM endpoint doesn't exist — disable for rest of session
               if (!vlmResult.pass && vlmResult.issues.some(i => i.includes('404') || i.includes('No endpoints'))) {
@@ -3901,7 +4271,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                   this.log(`  Retry image generated: ${retryPath}`);
                   const retryAbsPath = retryPath.startsWith('/') ? retryPath : join(this.config.projectDir, retryPath);
 
-                  const retryVlm = await reviewImageWithVLM(retryAbsPath, shotJson.imagePrompt, this.llm);
+                  const retryVlm = await reviewImageWithVLM(retryAbsPath, shotJson.imagePrompt, this.llmFor('utility.image_review'));
                   if (retryVlm.pass) {
                     this.log(`  VLM review passed on retry`);
                     filePath = retryPath;

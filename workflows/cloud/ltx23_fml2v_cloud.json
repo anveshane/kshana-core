@@ -718,7 +718,7 @@
   },
   "187": {
     "inputs": {
-      "unet_name": "ltx-2.3-22b-distilled_transformer_only_fp8_input_scaled_v3.safetensors",
+      "unet_name": "ltx-2.3-22b-distilled-1.1_transformer_only_fp8_scaled.safetensors",
       "weight_dtype": "default"
     },
     "class_type": "UNETLoader",

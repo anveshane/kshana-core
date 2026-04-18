@@ -330,6 +330,37 @@ describe('DependencyGraphExecutor', () => {
       executor.invalidateNode('story');
       expect(executor.isComplete()).toBe(false);
     });
+
+    it('cascadeOnlyCompleted skips pending dependents but invalidates completed ones', () => {
+      const executor = buildExecutor(template);
+
+      // Complete plot, story, character — but leave character_image and scene pending
+      executor.markStarted('plot');
+      executor.markCompleted('plot');
+      executor.markStarted('story');
+      executor.markCompleted('story');
+      executor.markStarted('character');
+      executor.markCompleted('character');
+      // character_image, scene, scene_image, final_video remain pending
+
+      const invalidated = executor.invalidateNode('story', {
+        cascade: true,
+        cascadeOnlyCompleted: true,
+      });
+      const invalidatedIds = invalidated.map(n => n.id).sort();
+
+      // Target + completed dependents are invalidated
+      expect(invalidatedIds).toContain('story');
+      expect(invalidatedIds).toContain('character');
+      // Pending dependents (and their downstream) are left alone
+      expect(invalidatedIds).not.toContain('character_image');
+      expect(invalidatedIds).not.toContain('scene');
+      expect(invalidatedIds).not.toContain('final_video');
+
+      // Pending nodes remain pending (unchanged)
+      expect(executor.getNode('character_image')?.status).toBe('pending');
+      expect(executor.getNode('scene')?.status).toBe('pending');
+    });
   });
 
   describe('expandCollection', () => {

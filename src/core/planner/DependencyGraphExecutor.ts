@@ -207,10 +207,35 @@ export class DependencyGraphExecutor {
   }
 
   /**
-   * Invalidate a node and cascade to all its dependents (for redo).
-   * Returns the list of all nodes that were reset.
+   * Invalidate a node (for redo).
+   *
+   * Options:
+   *   - `cascade` (default true): also invalidate downstream dependents.
+   *     Set false for isolated single-node redo (e.g. a single frame).
+   *   - `cascadeOnlyCompleted` (default false): when cascading, only invalidate
+   *     dependents whose status was 'completed'. Dependents still pending are
+   *     left alone (they'll pick up the new upstream naturally when they run).
+   *     Useful for edit flows where we only want to regenerate already-produced
+   *     downstream artifacts.
+   *   - `preserveFramesOther` (default false): for multi-frame nodes, preserve
+   *     all `outputPaths` entries EXCEPT the key in `singleFrame`. When false,
+   *     clear `outputPaths` entirely (forces full regeneration).
+   *   - `singleFrame`: when `preserveFramesOther=true`, this is the frame key
+   *     to drop from `outputPaths` (e.g. "last_frame").
+   *
+   * Returns the list of nodes that were reset.
    */
-  invalidateNode(nodeId: string): ExecutionNode[] {
+  invalidateNode(
+    nodeId: string,
+    options: {
+      cascade?: boolean;
+      cascadeOnlyCompleted?: boolean;
+      preserveFramesOther?: boolean;
+      singleFrame?: string;
+    } = {},
+  ): ExecutionNode[] {
+    const { cascade = true, cascadeOnlyCompleted = false, preserveFramesOther = false, singleFrame } = options;
+
     const invalidated: ExecutionNode[] = [];
     const queue = [nodeId];
     const visited = new Set<string>();
@@ -223,24 +248,117 @@ export class DependencyGraphExecutor {
       const node = this.nodes.get(currentId);
       if (!node) continue;
 
+      const isTarget = currentId === nodeId;
+
+      // When cascading with cascadeOnlyCompleted, skip cascaded dependents that
+      // haven't completed yet — they'll naturally pick up the new upstream when
+      // they run. Don't descend into their dependents either.
+      if (!isTarget && cascadeOnlyCompleted && node.status !== 'completed') {
+        continue;
+      }
+
       // Reset the node
       node.status = 'pending';
       node.completedAt = undefined;
       node.startedAt = undefined;
-      node.outputPath = undefined;
       node.artifactId = undefined;
       node.error = undefined;
+
+      if (isTarget && preserveFramesOther && singleFrame && node.outputPaths) {
+        // Single-frame redo: drop just the target frame, keep others so the
+        // executor's incremental retry check skips them.
+        delete node.outputPaths[singleFrame];
+        // Clear outputPath since it points to first_frame by convention and
+        // will be re-set during generation.
+        if (singleFrame === 'first_frame') {
+          node.outputPath = undefined;
+        }
+      } else {
+        // Full invalidation: clear everything so all frames regenerate.
+        node.outputPath = undefined;
+        node.outputPaths = undefined;
+      }
+
       invalidated.push(node);
 
-      // Cascade to dependents
-      for (const depId of node.dependents) {
-        queue.push(depId);
+      // Cascade to dependents only when requested
+      if (cascade) {
+        for (const depId of node.dependents) {
+          queue.push(depId);
+        }
       }
     }
 
     this.completedAt = undefined;
     this.updatedAt = Date.now();
     return invalidated;
+  }
+
+  /**
+   * Rewire matching-scope type-level deps to their per-item equivalents for a
+   * newly created per-item node.
+   *
+   * Given a per-item node for `typeId:itemId` being created, for each dep in
+   * `deps`:
+   *   - If it's a type-level ref (no colon) AND the template declares it with
+   *     scope='matching' AND a per-item parent (`dep:itemId`) exists, rewire
+   *     to that per-item node.
+   *   - Otherwise leave it alone.
+   *
+   * Also wires the reverse `dependents` edge on the rewired parent so
+   * `getNextReady` can propagate completion correctly.
+   *
+   * This is the backbone of dep propagation during expansion: any time a
+   * per-item node is created, ALL its matching-scope deps that point to
+   * already-expanded parents get rewired — not just the source of the current
+   * cascade. Without this, a per-item node cascaded from parent A (e.g.
+   * shot_motion_directive) would correctly point to A:item but leave its
+   * other matching-scope deps (e.g. shot_image_prompt) pointing at type-level
+   * ghosts that have already been expanded away.
+   */
+  private rewireMatchingDepsForItem(
+    nodeId: string,
+    typeId: string,
+    itemId: string,
+    deps: string[],
+  ): string[] {
+    const typeDef = this.template.artifactTypes[typeId];
+    if (!typeDef) return [...deps];
+
+    // Index matching-scope deps from the template
+    const matchingScopeTypes = new Set<string>();
+    for (const dep of typeDef.dependencies) {
+      if (dep.scope === 'matching') matchingScopeTypes.add(dep.artifactTypeId);
+    }
+
+    const rewired: string[] = [];
+    for (const depId of deps) {
+      if (depId.includes(':')) {
+        // Already per-item — leave alone
+        rewired.push(depId);
+        continue;
+      }
+      if (!matchingScopeTypes.has(depId)) {
+        // Not a matching-scope dep — leave alone
+        rewired.push(depId);
+        continue;
+      }
+      const perItemDepId = `${depId}:${itemId}`;
+      if (this.nodes.get(perItemDepId)) {
+        rewired.push(perItemDepId);
+        // Wire the reverse edge on the parent
+        const parent = this.nodes.get(perItemDepId);
+        if (parent && !parent.dependents.includes(nodeId)) {
+          parent.dependents.push(nodeId);
+        }
+      } else {
+        // Per-item parent doesn't exist yet — keep type-level.
+        // It'll be rewired either when the parent gets expanded, or
+        // by repairMissingNodes on next startup.
+        rewired.push(depId);
+      }
+    }
+    return rewired;
   }
 
   /**
@@ -266,10 +384,21 @@ export class DependencyGraphExecutor {
     const typeDef = this.template.artifactTypes[baseTypeId];
     if (!typeDef) return [];
 
-    // Create per-item nodes
+    // Create per-item nodes. Rewire each per-item's matching-scope deps to
+    // per-item parents that already exist (e.g. `scene` → `scene:scene_1`
+    // if scene was previously expanded). This covers the case where a
+    // collection gets expanded AFTER its parents — without this, the per-item
+    // nodes inherit stale type-level refs that later get stripped by
+    // dangling-dep cleanup, leaving the per-item blind to its parent's content.
     const newNodes: ExecutionNode[] = [];
     for (const item of items) {
       const itemNodeId = `${baseTypeId}:${item.itemId}`;
+      const rewiredDeps = this.rewireMatchingDepsForItem(
+        itemNodeId,
+        baseTypeId,
+        item.itemId,
+        existingNode.dependencies,
+      );
       const itemNode: ExecutionNode = {
         id: itemNodeId,
         typeId: baseTypeId,
@@ -278,7 +407,7 @@ export class DependencyGraphExecutor {
         displayName: `${typeDef.displayName}: ${item.name}`,
         isExpensive: typeDef.isExpensive,
         isCollection: false,
-        dependencies: [...existingNode.dependencies],
+        dependencies: rewiredDeps,
         dependents: [],
       };
       newNodes.push(itemNode);
@@ -341,15 +470,30 @@ export class DependencyGraphExecutor {
     const depTypeDef = this.template.artifactTypes[dependent.typeId];
     if (!depTypeDef) return;
 
-    // Create per-item nodes for the dependent
+    // Create per-item nodes for the dependent.
+    // For each matching-scope dep on the template, rewire to the per-item
+    // parent — not just the source-of-cascade dep. This ensures a per-item
+    // node with multiple matching-scope deps (e.g. shot_video depending on
+    // both shot_image and shot_motion_directive — both matching) gets ALL
+    // its deps pointed at per-item parents if they exist.
     const newDepNodes: ExecutionNode[] = [];
     for (const item of items) {
       const itemNodeId = `${dependent.typeId}:${item.itemId}`;
-      const sourceItemId = `${sourceTypeId}:${item.itemId}`;
 
-      // Replace the source type dep with the matching item dep
-      const otherDeps = dependent.dependencies.filter(d => d !== dependent.typeId && d !== sourceTypeId);
-      const itemDeps = [...otherDeps, sourceItemId];
+      // Start from the template deps filtered to what's in the plan (the
+      // dependent node's current dependencies), then rewire. Drop the old
+      // source type-level ref so it doesn't resurface as dangling.
+      const preRewire = dependent.dependencies.filter(d => d !== dependent.typeId);
+      // Ensure the source per-item dep is in the list (even if the template
+      // dep wasn't previously populated — e.g. plan without the parent type).
+      const sourceItemId = `${sourceTypeId}:${item.itemId}`;
+      if (!preRewire.includes(sourceItemId)) preRewire.push(sourceItemId);
+      const itemDeps = this.rewireMatchingDepsForItem(
+        itemNodeId,
+        dependent.typeId,
+        item.itemId,
+        preRewire,
+      );
 
       // Preserve isCollection from type def — allows further sub-expansion
       // (e.g., shot_image_prompt per-scene → per-shot)
@@ -367,9 +511,11 @@ export class DependencyGraphExecutor {
       newDepNodes.push(itemNode);
       this.nodes.set(itemNodeId, itemNode);
 
-      // Wire the source item's dependent list
+      // Wire the source item's dependent list (rewireMatchingDepsForItem
+      // handles other matching parents, but not the source — handle it here
+      // to be explicit).
       const sourceItem = this.nodes.get(sourceItemId);
-      if (sourceItem) {
+      if (sourceItem && !sourceItem.dependents.includes(itemNodeId)) {
         sourceItem.dependents.push(itemNodeId);
       }
     }
@@ -399,6 +545,14 @@ export class DependencyGraphExecutor {
     // Remove the old type-level dependent node
     this.nodes.delete(dependent.id);
 
+    // Post-expansion rewire: any per-item node that was created earlier in
+    // this cascade chain may still hold a type-level ref to the type we just
+    // expanded (e.g. shot_video:scene_1 created from shot_image cascade has
+    // dep on 'shot_motion_directive' type-level, which is now gone and has
+    // per-item shot_motion_directive:scene_1 etc.). Walk all nodes and rewire
+    // matching-scope type-level refs to their per-item equivalent.
+    this.rewireTypeLevelRefsToPerItem(dependent.typeId);
+
     // Recursive cascade: expand any downstream collection nodes that have
     // matching scope on the type we just expanded
     for (const downstream of downstreamCollections) {
@@ -412,6 +566,47 @@ export class DependencyGraphExecutor {
       if (downstreamDep?.scope === 'matching') {
         this.expandMatchingDependent(downstream, dependent.typeId, items, downstreamDep);
       }
+    }
+  }
+
+  /**
+   * After a type-level collection has been expanded into per-item nodes,
+   * sweep the graph for any remaining type-level refs to it on per-item
+   * nodes and rewire to the matching per-item version.
+   *
+   * This covers the order-of-operations case where a per-item node was
+   * created BEFORE its matching-scope sibling got expanded (e.g.
+   * shot_video:scene_1 was created from shot_image cascade while
+   * shot_motion_directive was still type-level; later when
+   * shot_motion_directive cascades, shot_video:scene_1 still holds the stale
+   * type-level ref and needs to be rewired).
+   */
+  private rewireTypeLevelRefsToPerItem(expandedTypeId: string): void {
+    for (const node of this.nodes.values()) {
+      if (!node.itemId) continue; // Only rewire per-item nodes
+      let changed = false;
+      const newDeps: string[] = [];
+      for (const depId of node.dependencies) {
+        if (depId !== expandedTypeId) {
+          newDeps.push(depId);
+          continue;
+        }
+        const perItemDepId = `${expandedTypeId}:${node.itemId}`;
+        const perItemParent = this.nodes.get(perItemDepId);
+        if (perItemParent) {
+          newDeps.push(perItemDepId);
+          if (!perItemParent.dependents.includes(node.id)) {
+            perItemParent.dependents.push(node.id);
+          }
+          changed = true;
+        } else {
+          // Couldn't find a matching per-item parent — keep the type-level
+          // ref. It'll show up as a dangling dep later, but we shouldn't
+          // silently drop required deps.
+          newDeps.push(depId);
+        }
+      }
+      if (changed) node.dependencies = newDeps;
     }
   }
 

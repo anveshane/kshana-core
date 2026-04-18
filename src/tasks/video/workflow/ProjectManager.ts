@@ -364,6 +364,10 @@ export function createProject(
     inputType: detectedInputType as any,
     ...(targetDuration != null ? { targetDuration } : {}),
     ...(templateId ? { templateId } : {}),
+    // Image-anchored shot chain default: v2v_extend is off so each shot's
+    // generated first/last frames actually appear in the final video. Users
+    // can opt in by setting useV2V: true in project.json.
+    useV2V: false,
     createdAt: now,
     updatedAt: now,
     productionStartedAt: now,

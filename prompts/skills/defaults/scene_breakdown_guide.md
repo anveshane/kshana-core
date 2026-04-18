@@ -2,6 +2,16 @@
 
 ---
 
+## Scene Main Subject — REQUIRED
+
+Every scene MUST declare `mainSubject` at the scene_video_prompt level — the refId of the character whose arc this scene follows. Example: `"mainSubject": "vikram"`.
+
+- Shot perspectives are interpreted relative to this subject.
+- The scene's shot flow should GENERALLY follow the main subject — their decisions, reactions, and movements drive the camera.
+- When a second character is pivotal (dialogue/confrontation), declare `secondarySubject` as well (e.g., `"secondarySubject": "laila"`).
+
+The main subject can change between scenes, but within a scene stays fixed.
+
 ## Before Writing Shots
 
 1. **List every beat** in the scene — every action, dialogue moment, reaction, transition
@@ -61,6 +71,69 @@ Every shot serves a story function. Pick the single most important purpose for t
 - After `set_the_world` or `set_the_mood`, the next shot with characters MUST be `meet_character`
 - `meet_character` should show characters ENTERING or being REVEALED — not already centered as if they were always there
 - A scene can skip establishing shots and start directly with `meet_character` or `show_action`
+
+## Perspective — WHOSE POV IS THIS SHOT FROM
+
+Every `show_action` and `meet_character` shot MUST declare `perspective`. Other shots SHOULD declare it when meaningful.
+
+| Perspective | When to use |
+|---|---|
+| `main_subject` | POV or over-the-shoulder of the scene's mainSubject. **Default flow — majority of shots.** |
+| `secondary_subject` | POV or OTS of secondarySubject. Use for reaction reversals in dialogue. |
+| `observer` | Neutral third-person. Use when neither character's viewpoint should dominate (wide establishing conversations, action seen from outside). |
+| `overhead` | High-angle/birds-eye looking down. Use for spatial establishing or subject-feels-small moments. |
+| `god` | Impossible omniscient viewpoint (extreme wide, birds-eye). Reserve for scale moments. |
+
+**Flow rules:**
+- Shots should GENERALLY follow the mainSubject — non-overhead perspectives default to `main_subject` unless the story calls for a reversal.
+- When the mainSubject is meeting a new character, use `main_subject` perspective (we see through THEIR eyes as the other person enters).
+- Reserve `overhead`/`god` for specific spatial or tonal moments, not casual use.
+- For dialogue scenes, alternate `main_subject` and `secondary_subject` to create the shot/reverse-shot rhythm.
+
+**`perspectiveOf` field:** If a shot's perspective is tied to a specific character, you may set `perspectiveOf` to their refId. When omitted and perspective is `main_subject`, it defaults to `mainSubject`.
+
+## Focus — WHAT'S SHARP VS BLURRED
+
+The `focus` object (optional but recommended for non-establishing shots) specifies what's razor-sharp and what's defocused:
+
+```json
+"focus": {
+  "primary": "laila_face",
+  "background": ["bronze_seal", "vikram_shoulder"],
+  "lurking": "cloaked_figure"
+}
+```
+
+- **`primary`** (required if focus is used): what's razor-sharp — refId preferred, prose allowed (e.g., `"bronze_seal"`, `"vikram_face"`, `"the torn letter"`).
+- **`background`**: visible but blurred elements — characters/objects we can see but are not the focal point.
+- **`lurking`** (optional): a defocused element planted for a later focus-pull. If shot N sets `lurking: cloaked_figure`, shot N+1 or N+2 should pull `focus.primary: cloaked_figure` as the focus pull payoff.
+
+**Use focus to:**
+- Create visual priority — who/what should the viewer look at?
+- Plant future tension — lurking elements become important later.
+- Give shot composition specific DOF guidance.
+
+## Continuity Bridging — NO TELEPORTING
+
+The **main subject cannot teleport between locations**. If the mainSubject changes location between shots, you MUST insert bridging shots.
+
+**`continuityRole` values:**
+- `entry` — main subject arrives in a new location (coming through a door, stepping into frame from off-screen)
+- `exit` — main subject leaves a location (rising, walking to door, opening door, stepping through)
+- `bridge` — travel/montage beat between locations (running down alley, crossing bridge)
+- `none` (default) — not a bridging shot
+
+**Rules:**
+- If mainSubject is in location A at shot N and location B at shot N+2, you need either an `exit` shot (leaving A) and/or `entry` shot (arriving at B) in between.
+- Never jump from "seated in room A" to "seated in room B" for the main subject without a bridge.
+- Secondary subjects may appear/disappear between scenes without bridges (they have their own off-screen lives).
+- Short time-skips can use `crossfade` or `dip_to_black` transitions instead of a `bridge` shot, but physical movement still needs depiction.
+
+**Example bridge sequence for mainSubject leaving a dhaba and arriving at a temple:**
+1. `exit`: Vikram rises from the table, drops coins
+2. `exit`: Vikram pushes through the dhaba's curtain into the rain
+3. `bridge`: Vikram runs down a rain-soaked alley (montage beat)
+4. `entry`: Vikram arrives at the temple steps, breathing hard
 
 {{AVAILABLE_VIDEO_MODES}}
 
@@ -135,3 +208,7 @@ Before returning JSON, verify every item:
 7. All dialogue placed in the correct shot's `audio` field — no lines omitted
 8. After `set_the_world`/`set_the_mood`, next character shot is `meet_character`
 9. Pacing varies: quick cuts for tension, longer holds for emotion
+10. **Scene declares `mainSubject`** (refId) — the character whose arc this scene follows
+11. **Every `show_action` and `meet_character` shot has `perspective`** set
+12. **Non-establishing shots have `focus.primary`** — what's sharp and central in frame
+13. **Main subject continuity verified** — no teleporting between locations; bridging shots (exit/bridge/entry) exist when mainSubject's location changes

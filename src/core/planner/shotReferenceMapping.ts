@@ -73,10 +73,46 @@ export function formatReferencesForPrompt(refs: AvailableRef[]): string {
 }
 
 /**
- * Build a shot context hint block with generation mode suggestions.
- * Hints are suggestions — the LLM can override based on its judgment.
+ * Purposes that require a FRESH composition (no prior-shot chaining).
+ * Kept in sync with `crossShotChaining.FRESH_PURPOSES`. Duplicated locally to
+ * avoid pulling in cross-shot chain logic as a dependency of ref mapping.
  */
-export function buildShotContextHint(itemId: string, previousShotAvailable: boolean): string {
+const FRESH_PURPOSES = new Set([
+  'set_the_world',
+  'show_change',
+  'meet_character',
+  'set_the_mood',
+]);
+
+/**
+ * Build a shot context hint block with generation mode directives for the
+ * image-anchored shot chain strategy.
+ *
+ * Policy:
+ * - Shot 1 of any scene → fresh (no base image to chain from).
+ * - Mid-scene shot with continuityRole entry/exit/bridge → fresh (explicit
+ *   location transition; force a new composition).
+ * - Mid-scene shot whose purpose is a composition reset (set_the_world,
+ *   show_change, meet_character, set_the_mood) → fresh.
+ * - All other mid-scene shots → HARD directive to use edit_previous_shot.
+ *   This is what maintains visual continuity + character consistency: the
+ *   base is the previous shot's last_frame, and character refs are layered
+ *   on top by FLUX Klein.
+ */
+export function buildShotContextHint(
+  itemId: string,
+  previousShotAvailable: boolean,
+  opts: {
+    /** Current shot's perspective ('main_subject', 'observer', etc.) */
+    currentPerspective?: string;
+    /** Previous shot's perspective, if we could read it */
+    previousPerspective?: string;
+    /** Current shot's continuityRole ('none', 'entry', 'exit', 'bridge') */
+    continuityRole?: string;
+    /** Current shot's purpose (affects whether to chain or reset) */
+    purpose?: string;
+  } = {},
+): string {
   const shotMatch = itemId.match(/shot_(\d+)/);
   const shotNum = shotMatch?.[1] ? parseInt(shotMatch[1], 10) : 1;
 
@@ -84,17 +120,48 @@ export function buildShotContextHint(itemId: string, previousShotAvailable: bool
   lines.push(`Shot ${shotNum} of this scene.`);
 
   if (shotNum === 1) {
-    lines.push('This is the first shot in the scene.');
-    lines.push('last_frame/mid_frame should always use edit_first_frame.');
-  } else {
-    if (previousShotAvailable) {
+    lines.push('This is the first shot in the scene. Use "image_text_to_image" or "text_to_image" — there is no previous shot to chain from.');
+    lines.push('last_frame should use generationMode "edit_first_frame".');
+  } else if (previousShotAvailable) {
+    const isBridge =
+      opts.continuityRole === 'entry' ||
+      opts.continuityRole === 'exit' ||
+      opts.continuityRole === 'bridge';
+    const isFreshPurpose = opts.purpose ? FRESH_PURPOSES.has(opts.purpose) : false;
+
+    if (isBridge) {
+      lines.push(
+        `continuityRole="${opts.continuityRole}" — location transition shot. ` +
+        `Use "image_text_to_image" with fresh generation for first_frame.`,
+      );
+    } else if (isFreshPurpose) {
+      lines.push(
+        `purpose="${opts.purpose}" — this is a composition reset. ` +
+        `Use "image_text_to_image" for first_frame (fresh framing), not edit_previous_shot.`,
+      );
+    } else {
+      // HARD DIRECTIVE — enforce image-anchored shot chain for continuity + consistency.
       lines.push(`Previous shot (shot ${shotNum - 1}) is available.`);
-      lines.push('Hint: Consider edit_previous_shot for first_frame if camera angle is similar to the previous shot.');
+      lines.push(
+        `DIRECTIVE: For first_frame you MUST use generationMode "edit_previous_shot". ` +
+        `The base image will be the previous shot's last_frame; layer character/setting ` +
+        `references on top via the references array. This guarantees visual continuity ` +
+        `and character consistency. DO NOT use "image_text_to_image" for this shot.`,
+      );
+      lines.push(
+        `Include every character/setting reference that should remain on screen in the ` +
+        `"references" array with format { imageNumber, type, refId }. Use "from image N" ` +
+        `phrasing in the imagePrompt for every named subject.`,
+      );
     }
-    lines.push('last_frame/mid_frame should always use edit_first_frame.');
+
+    lines.push('last_frame should use generationMode "edit_first_frame".');
+  } else {
+    lines.push('last_frame should use generationMode "edit_first_frame".');
   }
 
   lines.push('aspectRatio: "16:9"');
+  lines.push('generationStrategy: "flfv" (FML2V is disabled — never emit "fmlfv").');
 
   return `\n\n<shot_context>\n${lines.join('\n')}\n</shot_context>`;
 }

@@ -82,6 +82,16 @@
       "field": "image"
     },
     {
+      "input": "width",
+      "nodeId": "166",
+      "field": "value"
+    },
+    {
+      "input": "height",
+      "nodeId": "167",
+      "field": "value"
+    },
+    {
       "input": "filenamePrefix",
       "nodeId": "43",
       "field": "filename_prefix"

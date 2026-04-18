@@ -69,7 +69,8 @@ const STAGE_ALIASES: Record<string, string | string[]> = {
   setting: 'setting',
   scene: 'scene',
   world_style: 'world_style',
-  character_image: ['character_image', 'setting_image'],  // resets both image types (siblings)
+  character_image: ['character_image', 'setting_image', 'object_image'],  // reset all reference-image siblings
+  reference_images: ['character_image', 'setting_image', 'object_image'],  // explicit alias for all three
   setting_image: 'setting_image',
   scene_video_prompt: 'scene_video_prompt',
   shot_image_prompt: 'shot_image_prompt',
@@ -96,7 +97,7 @@ const TEMPLATE_DEPS: Record<string, string[]> = {
   shot_image_prompt: ['scene_video_prompt'],
   shot_motion_directive: ['scene_video_prompt', 'shot_image_prompt', 'world_style'],
   shot_image: ['shot_image_prompt', 'character_image', 'setting_image', 'object_image'],
-  shot_video: ['shot_image'],
+  shot_video: ['shot_image', 'shot_motion_directive'],
   final_video: ['shot_video'],
 };
 

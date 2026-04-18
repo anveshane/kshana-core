@@ -1,0 +1,68 @@
+{
+  "id": "grok_image_edit",
+  "displayName": "Grok Image Edit (Cloud)",
+  "pipeline": "image_editing",
+  "llmDescription": "Image editing using Grok Imagine via x.ai. Edits an existing image based on a text prompt while preserving the original composition.",
+  "selectionCriteria": "Use for image editing when Grok-quality edits are preferred over FLUX Klein.",
+  "outputType": "image",
+  "priority": 5,
+  "strategies": [],
+  "inputRequirements": [
+    {
+      "id": "edit_prompt",
+      "type": "text",
+      "source": "system",
+      "description": "Edit instruction prompt",
+      "required": true
+    },
+    {
+      "id": "base_image",
+      "type": "image",
+      "source": "shot_image",
+      "description": "Base image to edit",
+      "required": true
+    },
+    {
+      "id": "seed",
+      "type": "number",
+      "source": "system",
+      "description": "Random seed",
+      "required": false
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "description": "Output filename prefix",
+      "required": false
+    }
+  ],
+  "workflowFile": "grok_image_edit.json",
+  "format": "api",
+  "parameterMappings": [
+    {
+      "input": "edit_prompt",
+      "nodeId": "8",
+      "field": "prompt"
+    },
+    {
+      "input": "base_image",
+      "nodeId": "6",
+      "field": "image"
+    },
+    {
+      "input": "seed",
+      "nodeId": "8",
+      "field": "seed"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "3",
+      "field": "filename_prefix"
+    }
+  ],
+  "builtIn": false,
+  "active": false,
+  "isOverride": true,
+  "mode": "cloud"
+}

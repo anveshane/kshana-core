@@ -103,6 +103,34 @@ function WorkflowBadge({ name }: { name: string }) {
   )
 }
 
+/**
+ * Short-form label for a model id. OpenRouter-style ids like
+ * "x-ai/grok-4.1-fast" → "grok-4.1-fast"; Anthropic ids like
+ * "claude-sonnet-4-6" stay as-is. Long model ids get truncated.
+ */
+function shortenModel(model: string): string {
+  const slash = model.lastIndexOf('/')
+  const tail = slash >= 0 ? model.slice(slash + 1) : model
+  return tail.length > 32 ? tail.slice(0, 30) + '…' : tail
+}
+
+/**
+ * Compact badge showing which LLM handled a given tool_call. Hover reveals
+ * the full model id. Styling is muted so it reads as metadata, not a status.
+ */
+function ModelBadge({ model }: { model: string }) {
+  const short = shortenModel(model)
+  return (
+    <span
+      title={`Model: ${model}`}
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded bg-graphite-300/60 text-graphite-100 border border-line-soft font-mono"
+    >
+      <span className="text-[8px] text-graphite-200">⚙</span>
+      <span>{short}</span>
+    </span>
+  )
+}
+
 function ItemTitle({ item }: { item: string }) {
   const parts = item.match(/^(.+?):\s*(.+)$/)
   if (!parts) return <span className="text-sm font-medium text-foreground">{item}</span>
@@ -497,7 +525,8 @@ function DefaultBody({ args, selectedProject }: { args: Record<string, string>; 
   if (!args || Object.keys(args).length === 0) return null
   const workflow = args['workflow']
   const prompt = args['prompt']
-  const otherArgs = Object.entries(args).filter(([k]) => k !== 'prompt' && k !== 'workflow')
+  // 'model' is shown as a badge in the header, so skip it in the body to avoid duplication.
+  const otherArgs = Object.entries(args).filter(([k]) => k !== 'prompt' && k !== 'workflow' && k !== 'model')
 
   return (
     <div className="px-3 py-2 space-y-1.5">
@@ -614,13 +643,14 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
     <div className={`rounded-lg border ${borderColor} bg-graphite-400/50 overflow-hidden`}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-line-soft">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 min-w-0">
           <span className={`text-sm ${statusColor}`}>
             {status === 'executing' ? '◉' : status === 'completed' ? '✓' : '✗'}
           </span>
-          <span className="font-mono text-xs text-foreground">{displayName}</span>
+          <span className="font-mono text-xs text-foreground truncate">{displayName}</span>
+          {args?.['model'] && <ModelBadge model={String(args['model'])} />}
         </div>
-        <span className="font-mono text-[10px] text-graphite-100">
+        <span className="font-mono text-[10px] text-graphite-100 flex-shrink-0">
           {elapsed !== undefined ? `${elapsed}s...` : duration !== undefined ? `${duration}s` : ''}
         </span>
       </div>

@@ -62,15 +62,42 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
           })
           // Auto-add completed image assets to sidebar
           if (status === 'completed' && result && typeof result === 'object') {
-            const filePath = (result as Record<string, unknown>)['file_path'] as string | undefined
+            const r = result as Record<string, unknown>
+            const filePath = r['file_path'] as string | undefined
             if (filePath?.match(/\.(png|jpg|jpeg|webp)$/i)) {
+              // Extract shot metadata from toolCallId + result for storyboard grouping.
+              // toolCallId patterns (backend, ExecutorAgent.ts):
+              //   frame_scene_1_shot_3_last_frame_1733...    (multi-frame shot additional frame)
+              //   shotimg_shot_image:scene_1_shot_3_1733...   (first frame via executeShotImageGeneration)
+              const resultFrame = (r['frame'] as string | undefined) ?? undefined
+              const idForParse = toolCallId ?? ''
+              const scenePart = idForParse.match(/scene_(\d+)_shot_(\d+)/)
+              let nodeId: string | undefined
+              let frame: 'first_frame' | 'last_frame' | 'mid_frame' | 'single' | undefined
+              if (scenePart) {
+                nodeId = `shot_image:scene_${scenePart[1]}_shot_${scenePart[2]}`
+                // Prefer explicit result.frame; else infer from toolCallId
+                if (resultFrame === 'first_frame' || resultFrame === 'last_frame' || resultFrame === 'mid_frame') {
+                  frame = resultFrame
+                } else if (idForParse.includes('_last_frame_')) {
+                  frame = 'last_frame'
+                } else if (idForParse.includes('_first_frame_')) {
+                  frame = 'first_frame'
+                } else if (idForParse.includes('_mid_frame_')) {
+                  frame = 'mid_frame'
+                } else {
+                  frame = 'single'
+                }
+              }
               dispatch({
                 type: 'ADD_ASSET',
                 asset: {
-                  id: `asset_${Date.now()}`,
+                  id: `asset_${Date.now()}_${toolCounter}`,
                   path: filePath,
                   url: filePath,
                   type: 'image',
+                  ...(nodeId ? { nodeId } : {}),
+                  ...(frame ? { frame } : {}),
                 },
               })
             }
@@ -187,6 +214,21 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
             completed: (data.completed as boolean) ?? false,
           },
         })
+        break
+      }
+
+      case 'assets_refresh': {
+        // Server sent a fresh asset list — typically after a reset clears
+        // some outputs. Replace the in-memory list entirely so stale
+        // storyboard frames/videos disappear.
+        const projectName = data.projectName as string | undefined
+        const incoming = (data.assets as Array<{ id: string; path: string; type: string; nodeId?: string; frame?: string }>) || []
+        const assets = incoming.map(a => ({
+          ...a,
+          frame: a.frame as 'first_frame' | 'last_frame' | 'mid_frame' | 'single' | undefined,
+          url: projectName ? `/api/v1/assets/${projectName}/${a.path}` : a.path,
+        }))
+        dispatch({ type: 'SET_ASSETS', assets })
         break
       }
     }

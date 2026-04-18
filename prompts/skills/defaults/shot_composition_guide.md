@@ -2,7 +2,7 @@
 
 ---
 
-## Step Zero: Extract These Four Facts From the Motion JSON
+## Step Zero: Extract These Six Facts From the Motion JSON
 
 Before writing a single word of the prompt, extract and write down:
 
@@ -10,6 +10,8 @@ Before writing a single word of the prompt, extract and write down:
 2. **The characters present in THIS shot** — only characters named here appear in the prompt.
 3. **The peak visual event** — what is the single most dramatic, specific thing happening RIGHT NOW in this shot? Not before, not after. Not "ships arrive" if the shot shows beams firing. Not "character reacts" if the shot shows their face dissolving into shock at a specific cause.
 4. **The shot type** — determines framing, depth of field, and what fills the frame.
+5. **The perspective** — whose POV is this shot from? `main_subject`, `secondary_subject`, `observer`, `overhead`, or `god`. This controls the camera position relative to the characters (see Perspective → Framing Bias table below).
+6. **The focus** — `focus.primary` is what's razor-sharp; `focus.background` lists visible-but-blurred elements; `focus.lurking` is a defocused element planted for later. Your prose MUST name what is sharp and what is blurred.
 
 ---
 
@@ -58,6 +60,45 @@ Rules:
 - A close-up means the face fills the frame. Do not describe the character standing in a vast environment.
 - State depth of field explicitly in the prose every time.
 - If the motion JSON specifies a camera angle (low angle, dutch tilt, high angle), include it in the prose.
+
+---
+
+## Perspective → Framing Bias
+
+The shot's `perspective` field determines CAMERA POSITION relative to the characters. Use this table to inform your framing and prose.
+
+| Perspective | Preferred shot types | Prose requirement |
+|---|---|---|
+| `main_subject` + POV | `pov` | First-person viewpoint; do NOT show the POV holder's face. Write "we see what Vikram sees — Laila gliding toward the table..." |
+| `main_subject` + OTS | `over_the_shoulder` | Back of the subject's head/shoulder blurred in foreground; camera peers over their shoulder. "Over Vikram's shoulder — Laila approaches, his soaked kurta softly blurred in the near foreground." |
+| `secondary_subject` | `over_the_shoulder`, `pov` | Frame from the secondary's viewpoint. Used for reaction reversals. |
+| `observer` | `wide`, `medium`, `two_shot` | Neutral — neither character's side. "A wide view of the dhaba interior: Vikram at the table on the left, Laila stepping in from the right." |
+| `overhead` | `birds_eye`, `high_angle` | Camera clearly above the subject looking down. "High angle from above, looking down on the table..." |
+| `god` | `extreme_wide`, `birds_eye` | Impossible omniscient viewpoint. Often an extreme wide or top-down cosmic view. |
+
+**Rules:**
+- The perspective OVERRIDES or REFINES the cameraWork's framing. If cameraWork says "medium shot" and perspective is `main_subject` (POV), prefer the POV treatment.
+- If `perspectiveOf` is set, use that character as the POV/OTS anchor.
+- Never describe the POV character's face in a POV shot — they're looking out of the frame, not into it.
+
+---
+
+## Focus Rules — Sharp vs Blurred
+
+The `focus` object from the shot JSON tells you EXACTLY what should be in focus and what should be blurred.
+
+- **`focus.primary`**: name this element in the prose as razor-sharp with explicit DOF. Example: "Laila's face razor-sharp in a shallow depth of field."
+- **`focus.background`** elements: name them in the prose as "visible but blurred" or "soft bokeh in the background" or "out-of-focus behind the subject."
+- **`focus.lurking`** element (if set): describe it as "barely registered in the defocused background, partially obscured" — present but not drawing the viewer's eye.
+
+**Worked example:**
+- `focus.primary = "laila_face"`, `focus.background = ["vikram_shoulder", "torches"]`, `focus.lurking = "cloaked_figure"`
+- Prose: "A medium close-up over Vikram's shoulder, Laila from image 2 in razor-sharp focus, kohl-rimmed eyes fierce. Vikram's soaked kurta shoulder soft and blurred in the near foreground. Torch flames rendered as warm bokeh behind her. Barely visible at the rear of the dhaba, the cloaked figure from image 3 sits as a defocused indistinct silhouette — present in the frame but outside the viewer's attention."
+
+**Rules:**
+- Every prose paragraph for a shot with `focus` must explicitly name what is sharp AND what is blurred.
+- Never contradict the focus — if `focus.primary` is a character, don't describe the environment as the visual center.
+- If a `lurking` element is specified, it MUST appear in the prose as a defocused background element.
 
 ---
 

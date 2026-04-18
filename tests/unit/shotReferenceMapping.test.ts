@@ -143,27 +143,76 @@ describe('Shot reference mapping: format for LLM', () => {
   });
 });
 
-describe('Shot reference mapping: shot context hints', () => {
-  it('first shot gets first-shot context', async () => {
+describe('Shot reference mapping: shot context hints (image-anchored chain policy)', () => {
+  it('scene opener (shot 1) tells LLM to generate fresh, not chain', async () => {
     const { buildShotContextHint } = await import('../../src/core/planner/shotReferenceMapping.js');
     const hint = buildShotContextHint('scene_1_shot_1', false);
     expect(hint).toContain('Shot 1');
     expect(hint).toContain('first shot');
-    expect(hint).not.toContain('edit_previous_shot');
+    expect(hint).toContain('image_text_to_image');
+    expect(hint).not.toContain('DIRECTIVE');
   });
 
-  it('shot 2+ with previous available gets edit_previous_shot hint', async () => {
+  it('mid-scene shot with prev available emits HARD DIRECTIVE to use edit_previous_shot', async () => {
     const { buildShotContextHint } = await import('../../src/core/planner/shotReferenceMapping.js');
-    const hint = buildShotContextHint('scene_1_shot_3', true);
+    const hint = buildShotContextHint('scene_1_shot_3', true, { purpose: 'show_action' });
     expect(hint).toContain('Shot 3');
+    expect(hint).toContain('DIRECTIVE');
+    expect(hint).toContain('MUST');
     expect(hint).toContain('edit_previous_shot');
+    expect(hint).toContain('DO NOT use "image_text_to_image"');
   });
 
-  it('shot 2+ without previous available does not suggest edit_previous_shot', async () => {
+  it('mid-scene shot without previous available falls back cleanly', async () => {
     const { buildShotContextHint } = await import('../../src/core/planner/shotReferenceMapping.js');
     const hint = buildShotContextHint('scene_1_shot_2', false);
     expect(hint).toContain('Shot 2');
-    expect(hint).not.toContain('edit_previous_shot');
+    expect(hint).not.toContain('DIRECTIVE');
+  });
+
+  it('directive includes character/setting ref layering guidance', async () => {
+    const { buildShotContextHint } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const hint = buildShotContextHint('scene_2_shot_4', true, { purpose: 'show_reaction' });
+    expect(hint).toContain('DIRECTIVE');
+    expect(hint).toContain('from image N');
+    expect(hint).toMatch(/references/);
+  });
+
+  it('continuityRole entry/exit/bridge overrides the directive with fresh generation', async () => {
+    const { buildShotContextHint } = await import('../../src/core/planner/shotReferenceMapping.js');
+    for (const role of ['entry', 'exit', 'bridge']) {
+      const hint = buildShotContextHint('scene_1_shot_4', true, {
+        purpose: 'show_action',
+        continuityRole: role,
+      });
+      expect(hint, `role=${role}`).not.toContain('DIRECTIVE');
+      expect(hint).toContain('image_text_to_image');
+      expect(hint).toContain('location transition');
+    }
+  });
+
+  it('FRESH_PURPOSES (set_the_world, show_change, meet_character, set_the_mood) reset to fresh generation', async () => {
+    const { buildShotContextHint } = await import('../../src/core/planner/shotReferenceMapping.js');
+    for (const purpose of ['set_the_world', 'show_change', 'meet_character', 'set_the_mood']) {
+      const hint = buildShotContextHint('scene_1_shot_3', true, { purpose });
+      expect(hint, `purpose=${purpose}`).not.toContain('DIRECTIVE');
+      expect(hint).toContain('image_text_to_image');
+      expect(hint).toContain('composition reset');
+    }
+  });
+
+  it('always instructs generationStrategy: flfv (fmlfv disabled)', async () => {
+    const { buildShotContextHint } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const hint = buildShotContextHint('scene_1_shot_2', true, { purpose: 'show_action' });
+    expect(hint).toContain('flfv');
+    expect(hint).toContain('FML2V is disabled');
+  });
+
+  it('gracefully handles missing purpose (still applies directive for mid-scene shots)', async () => {
+    const { buildShotContextHint } = await import('../../src/core/planner/shotReferenceMapping.js');
+    const hint = buildShotContextHint('scene_1_shot_3', true);
+    expect(hint).toContain('DIRECTIVE');
+    expect(hint).toContain('edit_previous_shot');
   });
 });
 

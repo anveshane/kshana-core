@@ -20,6 +20,7 @@ export interface CharacterState {
   rightHand: string;     // "on_table", "touching_face", "holding_cup", "at_side"
   legs: string;          // "under_duvet", "crossed", "standing_apart", "curled_up"
   headTilt: string;      // "neutral", "tilted_left", "looking_down", "looking_up"
+  inFocus?: boolean;     // whether this character is the sharp/focal subject of the current shot
 }
 
 export interface ObjectState {
@@ -36,6 +37,7 @@ export interface SceneState {
     lighting: string;
     timeProgression: string;
   };
+  focusedEntity?: string | null;  // refId of the currently focused character/object (one per shot)
 }
 
 /**
@@ -119,6 +121,7 @@ export function formatStateForPrompt(state: SceneState): string {
     if (char.rightHand !== 'unknown') parts.push(`right hand: ${char.rightHand}`);
     if (char.legs !== 'unknown') parts.push(`legs: ${char.legs}`);
     if (char.headTilt !== 'unknown') parts.push(`head: ${char.headTilt}`);
+    if (char.inFocus) parts.push('IN FOCUS');
     lines.push(`- ${id}: ${parts.join(', ')}`);
   }
 
@@ -128,6 +131,12 @@ export function formatStateForPrompt(state: SceneState): string {
     for (const [id, obj] of Object.entries(state.objects)) {
       lines.push(`- ${id}: ${obj.state} (${obj.position})`);
     }
+  }
+
+  // Focus
+  if (state.focusedEntity) {
+    lines.push('');
+    lines.push(`- FOCUS: ${state.focusedEntity}`);
   }
 
   // Environment
@@ -154,6 +163,7 @@ export const characterStateSchema = z.object({
   rightHand: z.string(),
   legs: z.string(),
   headTilt: z.string(),
+  inFocus: z.boolean().optional().default(false),
 });
 
 export const sceneStateSchema = z.object({
@@ -166,6 +176,7 @@ export const sceneStateSchema = z.object({
     lighting: z.string(),
     timeProgression: z.string(),
   }).optional().default({ lighting: 'default', timeProgression: 'start' }),
+  focusedEntity: z.string().nullable().optional(),
 });
 
 /**
@@ -195,7 +206,8 @@ The JSON must have this structure:
       "leftHand": "string (what left hand is doing: at_side, on_lap, holding_cup, gripping_duvet)",
       "rightHand": "string (what right hand is doing: at_side, on_shoulder, touching_face)",
       "legs": "string (leg position: under_duvet, crossed, standing_apart, curled_up)",
-      "headTilt": "string (head angle: neutral, tilted_left, looking_down, looking_up)"
+      "headTilt": "string (head angle: neutral, tilted_left, looking_down, looking_up)",
+      "inFocus": "boolean (true only if this character is the sharp/focal subject of THIS shot)"
     }
   },
   "objects": {
@@ -204,10 +216,12 @@ The JSON must have this structure:
   "environment": {
     "lighting": "string (warm_golden, dim_evening, harsh_overhead)",
     "timeProgression": "string (early_morning, midday, evening)"
-  }
+  },
+  "focusedEntity": "string | null (refId of the character or object that is razor-sharp in this shot — exactly ONE or null)"
 }
 
 Include ALL characters from previous state (even off-screen ones).
+Only ONE character or object should have inFocus=true per shot — and it must match focusedEntity.
 Return ONLY the JSON — no markdown, no explanation.`;
 
   const userMsg = `Previous scene state:\n${stateJson}\n\nShot prompt content:\n${shotPromptContent}\n\nReturn the NEW complete state after this shot.`;
@@ -257,10 +271,21 @@ Return ONLY the JSON — no markdown, no explanation.`;
  * Shows only what changed — empty string if identical.
  */
 export function computeStateDiff(
-  before: Pick<SceneState, 'characters' | 'objects' | 'environment'>,
-  after: Pick<SceneState, 'characters' | 'objects' | 'environment'>,
+  before: Pick<SceneState, 'characters' | 'objects' | 'environment' | 'focusedEntity'>,
+  after: Pick<SceneState, 'characters' | 'objects' | 'environment' | 'focusedEntity'>,
 ): string {
   const lines: string[] = [];
+
+  // Focus pull — the camera's focus target changed
+  const beforeFocus = before.focusedEntity ?? null;
+  const afterFocus = after.focusedEntity ?? null;
+  if (beforeFocus !== afterFocus && afterFocus) {
+    if (beforeFocus) {
+      lines.push(`◉ focus: ${beforeFocus} → ${afterFocus}`);
+    } else {
+      lines.push(`◉ focus → ${afterFocus}`);
+    }
+  }
 
   // Character changes
   for (const [id, afterChar] of Object.entries(after.characters ?? {})) {

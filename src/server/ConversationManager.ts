@@ -504,6 +504,8 @@ export class ConversationManager {
     nodeId: string,
     events?: ConversationEvents,
     editedPrompt?: Record<string, unknown>,
+    frame?: string,
+    scope?: 'prompt',
   ): Promise<GenericAgentResult> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -520,17 +522,33 @@ export class ConversationManager {
     }
 
     // If user edited the prompt, save it to disk BEFORE invalidation
-    if (editedPrompt && Object.keys(editedPrompt).length > 0) {
+    const hasEdits = !!(editedPrompt && Object.keys(editedPrompt).length > 0);
+    if (hasEdits) {
       const { saveEditedPrompt } = await import('./editAndRedo.js');
       const projectDir = session.sessionContext.projectDir;
       await saveEditedPrompt(projectDir, nodeId, editedPrompt);
     }
 
+    // Edit-prompt special case: if user edited a shot_image_prompt, we MUST
+    // NOT invalidate that prompt node (invalidation → re-run LLM → overwrite
+    // the user's edits). Instead, keep the prompt as-is and invalidate only
+    // the dependent shot_image so the image regenerates from the edited prompt.
+    // Downstream video/final stay put — user can redo them manually if needed.
+    let redoTargetNodeId = nodeId;
+    let redoOpts: { frame?: string; scope?: 'prompt' | 'image_only' } = { frame, scope };
+    if (hasEdits && nodeId.startsWith('shot_image_prompt:')) {
+      redoTargetNodeId = nodeId.replace('shot_image_prompt:', 'shot_image:');
+      // Preserve the frame so only that frame regenerates (not the whole shot)
+      redoOpts = { scope: 'image_only', frame };
+    }
+
     // Call redoNode on the agent (invalidates + persists + emits todo update)
     if ('redoNode' in session.agent) {
-      const invalidated = (session.agent as { redoNode(id: string): unknown[] }).redoNode(nodeId);
+      const invalidated = (session.agent as {
+        redoNode(id: string, opts?: { frame?: string; scope?: 'prompt' | 'image_only' }): unknown[];
+      }).redoNode(redoTargetNodeId, redoOpts);
       if (invalidated.length === 0) {
-        throw new Error(`Node '${nodeId}' not found in execution graph`);
+        throw new Error(`Node '${redoTargetNodeId}' not found in execution graph`);
       }
     } else {
       throw new Error('Agent does not support redo');

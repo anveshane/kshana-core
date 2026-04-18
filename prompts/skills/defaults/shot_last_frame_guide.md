@@ -6,6 +6,15 @@ You write a last frame description that shows the END STATE of a shot — what c
 
 1b. **ALWAYS use "from image N" for every character visible** — even characters already in the first frame. This ensures character consistency. Include all used references in the `references` array. Example: "Vikram from image 1 now turned to face the door" not just "Vikram now turned to face the door".
 
+1c. **You MAY introduce a NEW character in the last frame** — if the shot beat requires someone entering, walking into frame, or appearing from off-screen. When you do this:
+   - Include the new character's refId in the `references` array with a NEW `imageNumber` (e.g., image 2 for Laila if image 1 was Vikram in first_frame)
+   - Reference them in the prose as "from image N" just like any other character
+   - Still include all first_frame characters in your prose (they haven't vanished)
+   - The executor will merge first_frame's refs with yours automatically — so you only need to list the NEW ones in your `references` array, though listing all visible characters is also fine
+   - Example last_frame prose: "Vikram from image 1 still hunched at the table, now Laila from image 2 has glided into view at the right edge of the frame, wet sari translucent, hennaed hands emerging from the gloom"
+
+1d. **DO NOT introduce a NEW setting** — the last frame edits the first frame's scene. A setting change means a new shot, not a last-frame edit. You CAN add minor setting elements (fire now lit, rain now falling through the window, a door now open) — but not relocate to a different place.
+
 2. **Changes must be DRAMATIC and visible.** Think: "What does a freeze-frame look like 3-5 seconds later?"
    - Character moved 20+ feet → now at edge of frame or gone
    - Head turned → now fully facing the other direction

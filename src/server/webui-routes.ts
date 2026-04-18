@@ -169,34 +169,20 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
 
       try {
         const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-        const assets = manifest.assets ?? [];
+        const allAssets = manifest.assets ?? [];
 
-        // Enrich assets with nodeId from executor state for redo support
+        // Filter + enrich: drop assets whose `path` is no longer referenced
+        // by any node's outputPath/outputPaths (e.g. cleared by a reset), and
+        // attach `nodeId`/`frame` for storyboard grouping + redo. See
+        // `filterLiveAssets` for the full rationale.
         const projectPath = join(process.cwd(), `${name}.kshana`, 'project.json');
+        let assets = allAssets;
         if (existsSync(projectPath)) {
           try {
             const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
             const nodes = project.executorState?.nodes ?? {};
-
-            // Simple reverse map: outputPath → nodeId
-            const pathToNode = new Map<string, string>();
-            for (const [nodeId, node] of Object.entries(nodes)) {
-              const n = node as { outputPath?: string; outputPaths?: Record<string, string> };
-              if (n.outputPath) pathToNode.set(n.outputPath, nodeId);
-              // Multi-frame nodes (flfv/fmlfv) have multiple output paths
-              if (n.outputPaths) {
-                for (const framePath of Object.values(n.outputPaths)) {
-                  pathToNode.set(framePath, nodeId);
-                }
-              }
-            }
-
-            for (const asset of assets) {
-              if (!asset.nodeId) {
-                const nodeId = pathToNode.get(asset.path);
-                if (nodeId) asset.nodeId = nodeId;
-              }
-            }
+            const { filterLiveAssets } = await import('./assetFilter.js');
+            assets = filterLiveAssets(allAssets, nodes);
           } catch { /* non-fatal */ }
         }
 

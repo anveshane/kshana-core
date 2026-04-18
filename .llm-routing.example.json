@@ -1,0 +1,40 @@
+{
+  "_README": "Copy this file to .llm-routing.json and edit. Enable routing with LLM_ROUTING_ENABLED=true. Env vars LLM_TIER_<TIER>_PROVIDER / API_KEY / MODEL / BASE_URL and LLM_PURPOSE__<SLUG>_PROVIDER etc. override file values.",
+
+  "default": {
+    "provider": "anthropic",
+    "apiKey": "sk-ant-your-default-key",
+    "model": "claude-sonnet-4-6"
+  },
+
+  "tiers": {
+    "heavy": {
+      "provider": "anthropic",
+      "apiKey": "sk-ant-your-heavy-key",
+      "model": "claude-opus-4-7"
+    },
+    "medium": {
+      "provider": "anthropic",
+      "apiKey": "sk-ant-your-medium-key",
+      "model": "claude-sonnet-4-6"
+    },
+    "light": {
+      "provider": "groq",
+      "apiKey": "gsk_your-groq-key",
+      "model": "llama-3.3-70b-versatile"
+    }
+  },
+
+  "purposes": {
+    "utility.image_review": {
+      "provider": "google",
+      "apiKey": "AIza-your-gemini-key",
+      "model": "gemini-2.5-flash"
+    },
+    "content.remotion_code": {
+      "provider": "anthropic",
+      "apiKey": "sk-ant-code-key",
+      "model": "claude-sonnet-4-6"
+    }
+  }
+}

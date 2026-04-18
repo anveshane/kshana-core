@@ -255,8 +255,11 @@ export async function registerRoutes(
       // Run LLM analysis for intelligent suggestions
       let analysis = null;
       try {
-        const { LLMClient } = await import('../core/llm/index.js');
-        const llmClient = new LLMClient(llmConfig);
+        const { LLMClient, buildRouterFromEnv } = await import('../core/llm/index.js');
+        const router = buildRouterFromEnv(process.cwd());
+        const llmClient = router.isEnabled()
+          ? router.getClient('structured.workflow_analysis')
+          : new LLMClient(llmConfig);
         analysis = await analyzeWorkflowWithLLM(body.content, parsed, llmClient);
 
         // Merge LLM suggestions into parsed nodes

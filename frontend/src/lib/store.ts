@@ -73,7 +73,7 @@ export interface AppState {
   contextUsage: { percentage: number; promptTokens: number; maxTokens: number } | null
 
   // Assets
-  assets: Array<{ id: string; path: string; url: string; type: string; nodeId?: string }>
+  assets: Array<{ id: string; path: string; url: string; type: string; nodeId?: string; frame?: 'first_frame' | 'last_frame' | 'mid_frame' | 'single' }>
 
   // Timeline
   timeline: Timeline | null

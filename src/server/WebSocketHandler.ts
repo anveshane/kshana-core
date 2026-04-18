@@ -446,7 +446,7 @@ export class WebSocketHandler {
     this.sendTimerUpdate(socket, sessionId, true);
 
     try {
-      const result = await this.conversationManager.redoNode(sessionId, data.nodeId, events, data.editedPrompt);
+      const result = await this.conversationManager.redoNode(sessionId, data.nodeId, events, data.editedPrompt, data.frame, data.scope);
 
       // Notify UI that timer stopped
       this.sendTimerUpdate(socket, sessionId, false);
@@ -511,7 +511,7 @@ export class WebSocketHandler {
 
       // Send fresh todos from the reset project.json so UI updates immediately
       try {
-        const { readFileSync } = await import('fs');
+        const { readFileSync, existsSync } = await import('fs');
         const projectPath = join(process.cwd(), `${projectName}.kshana`, 'project.json');
         const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
         const nodes = project.executorState?.nodes ?? {};
@@ -523,6 +523,23 @@ export class WebSocketHandler {
         this.sendMessage(socket, createServerMessage('todo_update', sessionId, {
           todos,
         }));
+
+        // Push fresh assets so the storyboard clears anything cleared by reset.
+        // The reset script clears each cleared node's `outputPath` but leaves the
+        // file on disk; filterLiveAssets drops those stale entries.
+        const manifestPath = join(process.cwd(), `${projectName}.kshana`, 'assets', 'manifest.json');
+        if (existsSync(manifestPath)) {
+          try {
+            const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+            const { filterLiveAssets } = await import('./assetFilter.js');
+            const liveAssets = filterLiveAssets(manifest.assets ?? [], nodes);
+
+            this.sendMessage(socket, createServerMessage('assets_refresh', sessionId, {
+              projectName,
+              assets: liveAssets,
+            }));
+          } catch { /* non-fatal */ }
+        }
       } catch { /* best effort */ }
 
       this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {

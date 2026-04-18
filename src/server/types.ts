@@ -33,7 +33,8 @@ export type ServerMessageType =
   | 'file_delete_dir_command'  // Server tells client to delete directory
   | 'batch_write_command'      // Server tells client to write multiple files
   | 'session_timer'            // Production timer updates
-  | 'asset_transfer';          // Server sends generated asset to client
+  | 'asset_transfer'           // Server sends generated asset to client
+  | 'assets_refresh';          // Server pushes full asset list (e.g. after reset)
 
 /**
  * Message types sent from client to server.
@@ -340,6 +341,19 @@ export interface RedoNodeData {
   nodeId: string;
   /** Optional edited prompt — if provided, saved to disk before redo */
   editedPrompt?: Record<string, unknown>;
+  /**
+   * Optional frame key for multi-frame shot_image nodes (first_frame | last_frame | mid_frame).
+   * When set, only that frame is invalidated — the other frames keep their existing outputs
+   * and will be skipped by the executor's incremental retry check.
+   */
+  frame?: string;
+  /**
+   * Optional scope hint. When set to 'prompt' and nodeId is a shot_image node,
+   * the backend invalidates both the shot_image_prompt and the shot_image — so
+   * the LLM re-writes the prompt AND the image regenerates. Does NOT cascade
+   * to shot_video/final so downstream stays put.
+   */
+  scope?: 'prompt';
 }
 
 /**

@@ -28,6 +28,34 @@ export const purposeValues = [
 
 const purposeEnum = z.enum(purposeValues);
 
+// Perspective — whose POV the shot is from
+export const perspectiveValues = [
+  'main_subject',       // POV or OTS of the scene's main subject
+  'secondary_subject',  // POV or OTS of the secondary subject
+  'overhead',           // high-angle, looking down
+  'god',                // impossible omniscient viewpoint (extreme wide / birds_eye)
+  'observer',           // neutral third-person, not tied to any character
+] as const;
+
+const perspectiveEnum = z.enum(perspectiveValues);
+
+// Continuity role — how the shot bridges to adjacent shots for the main subject
+export const continuityRoleValues = [
+  'entry',   // main subject enters this shot (new location arrival)
+  'exit',    // main subject leaves this shot (rising, walking to door)
+  'bridge',  // travel/montage beat between locations
+  'none',    // not a bridging shot
+] as const;
+
+const continuityRoleEnum = z.enum(continuityRoleValues);
+
+// Focus — what's sharp vs blurred in the frame
+const focusSchema = z.object({
+  primary: z.string().min(1),                              // razor-sharp subject (refId or prose name)
+  background: z.array(z.string()).optional().default([]), // visible but blurred elements
+  lurking: z.string().nullable().optional(),              // planted defocused element for a later focus-pull
+});
+
 const shotSchema = z.object({
   shotNumber: z.number(),
   purpose: purposeEnum.optional(),
@@ -48,17 +76,49 @@ const shotSchema = z.object({
   dialogue: z.string().nullable().optional(),
   characters: z.array(z.string()).optional(),
   setting: z.string().nullable().optional(),
+  // Perspective: whose POV this shot is from (required for show_action/meet_character)
+  perspective: perspectiveEnum.optional(),
+  // refId of whose POV/OTS — defaults to scene.mainSubject when perspective is main_subject
+  perspectiveOf: z.string().optional(),
+  // Focus: what's sharp vs blurred in the frame
+  focus: focusSchema.optional(),
+  // How this shot bridges locations for the main subject (prevents teleporting)
+  continuityRole: continuityRoleEnum.optional().default('none'),
 }).refine(
   (shot) => shot.firstFrame?.description || shot.description,
   { message: 'Shot must have either firstFrame.description or description' },
+).refine(
+  (shot) => {
+    // show_action and meet_character shots must specify perspective
+    if (shot.purpose === 'show_action' || shot.purpose === 'meet_character') {
+      return !!shot.perspective;
+    }
+    return true;
+  },
+  { message: 'show_action and meet_character shots must specify perspective' },
 );
 
 export const sceneVideoPromptSchema = z.object({
   sceneNumber: z.number().optional(),
   sceneTitle: z.string().optional(),
   totalDuration: z.number().optional(),
+  // The character whose arc this scene follows — shot perspectives are relative to this
+  mainSubject: z.string().optional(),
+  // Optional second pivotal character (for dialogue/reaction reversals)
+  secondarySubject: z.string().optional(),
   shots: z.array(shotSchema).min(1, 'shots array must not be empty'),
-});
+}).refine(
+  (svp) => {
+    // If any shot uses main_subject perspective, scene must declare mainSubject
+    const needsMain = svp.shots.some(s => s.perspective === 'main_subject');
+    if (needsMain && !svp.mainSubject) return false;
+    // Same for secondary_subject
+    const needsSecondary = svp.shots.some(s => s.perspective === 'secondary_subject');
+    if (needsSecondary && !svp.secondarySubject) return false;
+    return true;
+  },
+  { message: 'Scene must declare mainSubject/secondarySubject when shots reference those perspectives' },
+);
 
 // ── Shot Image Prompt (single-frame) ─────────────────────────────────────────
 
@@ -147,6 +207,8 @@ export function getPromptSchema(nodeTypeId: string): string | null {
   "sceneNumber": number,
   "sceneTitle": "string",
   "totalDuration": number,
+  "mainSubject": "string (refId of the character whose arc this scene follows — e.g., 'vikram')",
+  "secondarySubject": "string (optional refId of a second pivotal character — e.g., 'laila')",
   "shots": [
     {
       "shotNumber": number,
@@ -154,6 +216,14 @@ export function getPromptSchema(nodeTypeId: string): string | null {
       "duration": number,
       "description": "string (1-2 sentence brief of what happens in this shot)",
       "cameraWork": "string (start with framing: wide/medium/close-up/extreme close-up, then angle and movement)",
+      "perspective": "${perspectiveValues.join(' | ')} (REQUIRED for show_action and meet_character; whose POV we see the shot from)",
+      "perspectiveOf": "string (optional refId — who owns the POV/OTS; defaults to mainSubject for main_subject perspective)",
+      "focus": {
+        "primary": "string (refId or prose — what is razor-sharp in the frame)",
+        "background": ["string (visible but blurred elements)"],
+        "lurking": "string | null (defocused element planted for a later focus-pull — optional)"
+      },
+      "continuityRole": "${continuityRoleValues.join(' | ')} (entry/exit/bridge for location transitions of mainSubject; 'none' otherwise)",
       "audio": "string (dialogue prefixed with CHARACTER NAME: + ambient sounds)",
       "transition": "cut | crossfade | fade | dip_to_black | flash_to_white | circle_close | circle_open | wipe_left | wipe_right"
     }
@@ -163,7 +233,7 @@ export function getPromptSchema(nodeTypeId: string): string | null {
     shot_image_prompt: `<json_schema>
 {
   "shotNumber": number,
-  "generationStrategy": "flfv | fmlfv",
+  "generationStrategy": "flfv",
   "frames": {
     "first_frame": {
       "imagePrompt": "string (flowing prose, frozen instant, no motion verbs)",
@@ -179,7 +249,6 @@ export function getPromptSchema(nodeTypeId: string): string | null {
   "negativePrompt": "string",
   "aspectRatio": "16:9"
 }
-For fmlfv, add mid_frame with generationMode "edit_first_frame".
 </json_schema>`,
     character_image: `<json_schema>
 {
@@ -241,5 +310,50 @@ export function normalizeSceneVideoPrompt(parsed: z.infer<typeof sceneVideoPromp
     }
     // Note: generationStrategy is now determined by shot_image_prompt, not scene_video_prompt.
     // Don't default to flfv here — let the downstream reader check shot_image_prompt output.
+  }
+}
+
+/**
+ * Auto-normalize shot_image_prompt data after validation.
+ *
+ * For edit_first_frame / edit_previous_shot frames, MERGE first_frame's
+ * references into the frame's references so that:
+ *   - Empty references → inherit all of first_frame's refs
+ *   - Non-empty references (e.g., last_frame introducing a NEW character)
+ *     → keep the explicit refs AND add first_frame's refs that aren't
+ *       already present (preserves continuity of existing subjects).
+ *
+ * Dedup is by `refId`. Order: last_frame's explicit refs first (preserving
+ * their imageNumber for prose correspondence), then inherited refs after.
+ */
+export function normalizeShotImagePrompt(parsed: unknown): void {
+  if (!parsed || typeof parsed !== 'object') return;
+  const p = parsed as { frames?: Record<string, { generationMode?: string; references?: unknown[] }> };
+  if (!p.frames || typeof p.frames !== 'object') return;
+
+  const firstFrame = p.frames['first_frame'];
+  const firstRefs = (Array.isArray(firstFrame?.references) ? firstFrame!.references : []) as Array<{ refId?: string }>;
+  if (firstRefs.length === 0) return; // nothing to inherit
+
+  for (const [frameId, frame] of Object.entries(p.frames)) {
+    if (frameId === 'first_frame' || !frame) continue;
+    const mode = frame.generationMode;
+    if (mode !== 'edit_first_frame' && mode !== 'edit_previous_shot') continue;
+
+    const currentRefs = (Array.isArray(frame.references) ? frame.references : []) as Array<{ refId?: string }>;
+    if (currentRefs.length === 0) {
+      // Fully inherit
+      frame.references = [...firstRefs];
+      continue;
+    }
+
+    // Merge: keep explicit refs first, then append first_frame refs missing by refId
+    const existingIds = new Set(
+      currentRefs.map(r => r?.refId).filter((id): id is string => typeof id === 'string'),
+    );
+    const toAdd = firstRefs.filter(r => r?.refId && !existingIds.has(r.refId));
+    if (toAdd.length > 0) {
+      frame.references = [...currentRefs, ...toAdd];
+    }
   }
 }

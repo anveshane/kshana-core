@@ -25,12 +25,18 @@ interface PromptData {
 
 interface Props {
   nodeId: string
+  /**
+   * Which frame is being edited (first_frame | mid_frame | last_frame).
+   * Modal pre-populates + writes back to this frame's fields. When undefined
+   * or the prompt has no frames, falls back to the root prompt fields.
+   */
+  frame?: string
   projectName: string
   onSubmit: (nodeId: string, editedPrompt: Record<string, unknown>) => void
   onCancel: () => void
 }
 
-export function PromptEditModal({ nodeId, projectName, onSubmit, onCancel }: Props) {
+export function PromptEditModal({ nodeId, frame, projectName, onSubmit, onCancel }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [data, setData] = useState<PromptData | null>(null)
@@ -52,15 +58,21 @@ export function PromptEditModal({ nodeId, projectName, onSubmit, onCancel }: Pro
         } else {
           // Shot image or character/setting/object image
           const prompt = d.prompt
-          if (prompt.frames?.first_frame) {
-            setImagePrompt(prompt.frames.first_frame.imagePrompt || '')
+          // Pick the target frame: the one requested (last/mid), else first.
+          const targetFrameKey = (frame && prompt.frames?.[frame])
+            ? frame
+            : (prompt.frames?.first_frame ? 'first_frame' : null)
+          if (targetFrameKey) {
+            setImagePrompt(prompt.frames[targetFrameKey].imagePrompt || '')
           } else {
             setImagePrompt(prompt.imagePrompt || '')
           }
           setNegativePrompt(prompt.negativePrompt || '')
 
-          // Set current references
-          const refs = prompt.frames?.first_frame?.references || prompt.references || []
+          // Set current references (from the selected frame, falling back to root)
+          const refs = (targetFrameKey ? prompt.frames[targetFrameKey].references : null)
+            || prompt.references
+            || []
           if (d.availableReferences) {
             const current = refs.map((r: Reference) => {
               const avail = d.availableReferences!.find(a => a.nodeId === r.refId)
@@ -76,7 +88,7 @@ export function PromptEditModal({ nodeId, projectName, onSubmit, onCancel }: Pro
         setError(err.message)
         setLoading(false)
       })
-  }, [nodeId, projectName])
+  }, [nodeId, projectName, frame])
 
   function handleSubmit() {
     if (!data) return
@@ -95,13 +107,16 @@ export function PromptEditModal({ nodeId, projectName, onSubmit, onCancel }: Pro
 
     const hasFrames = data.prompt.frames
     if (hasFrames) {
+      // Write back to the frame the user was editing. Fall back to first_frame
+      // when no specific frame was requested.
+      const targetFrameKey = (frame && data.prompt.frames[frame]) ? frame : 'first_frame'
       onSubmit(nodeId, {
         ...data.prompt,
         negativePrompt,
         frames: {
           ...data.prompt.frames,
-          first_frame: {
-            ...data.prompt.frames.first_frame,
+          [targetFrameKey]: {
+            ...data.prompt.frames[targetFrameKey],
             imagePrompt,
             references: refs,
           },
@@ -169,6 +184,11 @@ export function PromptEditModal({ nodeId, projectName, onSubmit, onCancel }: Pro
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold text-foreground">
             Edit & Redo: <span className="text-cyan">{nodeId}</span>
+            {frame && data.prompt.frames?.[frame] && (
+              <span className="ml-2 text-[10px] uppercase tracking-widest bg-cyan/20 text-cyan px-2 py-0.5 rounded">
+                {frame.replace('_', ' ')}
+              </span>
+            )}
           </h3>
           <button onClick={onCancel} className="text-graphite-100 hover:text-foreground text-lg">✕</button>
         </div>

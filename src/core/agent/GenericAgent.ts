@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
+import { buildRouterFromEnv, type LLMRouter, type LLMPurpose } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
 import {
   buildSystemMessage,
@@ -205,6 +206,7 @@ const CHECKPOINT_INTERVAL_MS = 180_000;
 export class GenericAgent extends TypedEventEmitter {
   private tools: Map<string, ToolDefinition>;
   private llm: LLMClient;
+  private router: LLMRouter;
   private isSubAgent: boolean;
   private maxIterations: number;
   private name: string;
@@ -265,6 +267,7 @@ export class GenericAgent extends TypedEventEmitter {
     super();
     this.tools = tools;
     this.llm = llm;
+    this.router = buildRouterFromEnv(process.cwd());
     this.isSubAgent = config.isSubAgent ?? false;
     this.maxIterations = config.maxIterations ?? 100;
     this.name = config.name ?? `agent-${nanoid(6)}`;
@@ -272,6 +275,14 @@ export class GenericAgent extends TypedEventEmitter {
     this.autonomousMode = config.autonomousMode ?? false;
     this.currentMode = config.initialMode ?? 'orchestrator';
     this.analyticsSessionId = `${this.name}_${Date.now()}_${nanoid(6)}`;
+  }
+
+  /**
+   * Get the LLMClient configured for a given call purpose. Pass-through to
+   * `this.llm` when routing is disabled.
+   */
+  private llmFor(purpose: LLMPurpose): LLMClient {
+    return this.router.isEnabled() ? this.router.getClient(purpose) : this.llm;
   }
 
   /**
@@ -679,7 +690,7 @@ export class GenericAgent extends TypedEventEmitter {
       this.resetThinkTagFilter();
 
       try {
-        for await (const chunk of this.llm.generateStream({ messages, tools, temperature: 0.7 })) {
+        for await (const chunk of this.llmFor('content.scene').generateStream({ messages, tools, temperature: 0.7 })) {
           // Check for abort
           if (this.aborted) {
             if (hasImplicitThinking) {
@@ -2527,7 +2538,7 @@ export class GenericAgent extends TypedEventEmitter {
       // If this is a subsequent iteration (after feedback), we need to reset the streaming display
       const shouldReset = this.planningState.iterations > 1;
 
-      for await (const chunk of this.llm.generateStream({
+      for await (const chunk of this.llmFor('content.scene').generateStream({
         messages: this.planningState.messages,
         temperature: 0.7,
       })) {
@@ -2732,7 +2743,7 @@ Respond in JSON format:
 {"name": "...", "summary": "..."}`;
 
     try {
-      const response = await this.llm.generate({
+      const response = await this.llmFor('utility.metadata').generate({
         messages: [{ role: 'user', content: prompt }],
         temperature: 0,
         maxTokens: 200,
@@ -2769,7 +2780,7 @@ Respond in JSON format:
 {"name": "...", "summary": "..."}`;
 
     try {
-      const response = await this.llm.generate({
+      const response = await this.llmFor('utility.metadata').generate({
         messages: [{ role: 'user', content: prompt }],
         temperature: 0,
         maxTokens: 200,
@@ -3116,7 +3127,7 @@ Respond in JSON format:
       while (true) {
         // During context gathering, use non-streaming with tools
         if (this.contentState.gatheringContext) {
-          const response = await this.llm.generate({
+          const response = await this.llmFor('content.scene').generate({
             messages: this.contentState.messages,
             tools,
             temperature: 0.8,
@@ -3220,7 +3231,24 @@ Respond in JSON format:
           streamOptions.responseFormat = { type: 'json_object' as const };
         }
 
-        for await (const chunk of this.llm.generateStream(streamOptions)) {
+        // Map contentType → purpose for routing. Unknown/unset falls back to content.scene.
+        const ct = this.contentState.contentType as string;
+        const contentPurpose: LLMPurpose = (() => {
+          switch (ct) {
+            case 'story':              return 'content.story';
+            case 'plot':               return 'content.plot';
+            case 'character':          return 'content.character';
+            case 'setting':            return 'content.setting';
+            case 'scene':              return 'content.scene';
+            case 'world_style':        return 'content.world_style';
+            case 'scene_video_prompt': return 'structured.scene_breakdown';
+            case 'shot_image_prompt':  return 'content.shot_image_prompt';
+            case 'shot_motion_directive': return 'content.shot_motion_directive';
+            default:                   return 'content.scene';
+          }
+        })();
+
+        for await (const chunk of this.llmFor(contentPurpose).generateStream(streamOptions)) {
           // Handle content chunks
           if (chunk.content) {
             content += chunk.content;
@@ -3596,7 +3624,7 @@ Respond in JSON format:
       // If this is a subsequent iteration (after feedback), we need to reset the streaming display
       const shouldReset = this.imageGenState.iterations > 1;
 
-      for await (const chunk of this.llm.generateStream({
+      for await (const chunk of this.llmFor('content.shot_image_prompt').generateStream({
         messages: this.imageGenState.messages,
         temperature: 0.7,
       })) {
@@ -4614,7 +4642,7 @@ Respond in JSON format:
 
     const result = await compressMessages(this.messages, async content => {
       // Use LLM to summarize the conversation
-      const summaryResponse = await this.llm.generate({
+      const summaryResponse = await this.llmFor('utility.session_summary').generate({
         messages: [
           { role: 'system', content: SUMMARIZER_SYSTEM_PROMPT },
           { role: 'user', content },

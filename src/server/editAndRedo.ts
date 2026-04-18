@@ -42,6 +42,11 @@ export function resolveNodePromptPath(
     return promptNode?.outputPath ?? null;
   }
 
+  if (typeId === 'shot_image_prompt') {
+    // Prompt node itself — its outputPath IS the prompt file
+    return node.outputPath ?? null;
+  }
+
   if (typeId === 'shot_video') {
     // Find the matching shot_motion_directive node
     const motionNodeId = `shot_motion_directive:${itemId}`;

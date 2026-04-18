@@ -2,7 +2,7 @@
  * Infographic placement prompt expander.
  * Uses LLM to enrich short infographic prompts into detailed Remotion-ready prompts.
  */
-import { getLLMConfig, LLMClient, validateLLMConfig } from '../../../core/llm/index.js';
+import { getLLMConfig, LLMClient, validateLLMConfig, buildRouterFromEnv } from '../../../core/llm/index.js';
 import { loadAndRenderMarkdown } from '../../../core/prompts/loader.js';
 import { getPhaseLogger } from '../../../utils/phaseLogger.js';
 import type { ParsedInfographicPlacement } from './infographicPlacementsParser.js';
@@ -79,7 +79,10 @@ export async function expandInfographicPlacementPrompt(
 
   try {
     const config = getLLMConfig();
-    const client = new LLMClient(config);
+    const router = buildRouterFromEnv(process.cwd());
+    const client = router.isEnabled()
+      ? router.getClient('structured.infographic_expansion')
+      : new LLMClient(config);
 
     logger.info('remotion', 'expand', `Expanding prompt for placement ${placement.placementNumber} (${placement.infographicType})`);
 

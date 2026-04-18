@@ -582,6 +582,16 @@ export interface ProjectFile {
   /** Target video duration in seconds (selected by user at startup) */
   targetDuration?: number;
 
+  /**
+   * Whether to use V2V_extend (video-to-video) chaining between shots.
+   * Default for new projects: false. With v2v off, every shot renders via
+   * FL2V from its own first+last frame, which guarantees all generated
+   * keyframes appear in the final assembly (no subsumption) at the cost of
+   * continuous camera motion between shots. Image-anchored shot chaining at
+   * the IMAGE layer still provides visual continuity even with v2v off.
+   */
+  useV2V?: boolean;
+
   /** Persisted todo list for resuming work */
   todos?: PersistedTodo[];
 

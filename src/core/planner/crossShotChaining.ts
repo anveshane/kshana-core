@@ -70,29 +70,37 @@ export function filterSubsumedShots<T extends { segmentId: string; strategy?: st
 
 /**
  * Purposes that need completely fresh generation (no source video to extend from).
- * With VL2V (v2v_extend + last_frame target), most shots can extend from the
- * previous video toward a target frame — even when introducing new characters
- * or elements, since the last_frame image provides the visual target.
  *
- * Only truly disconnected shots need fresh flfv:
- * - set_the_world: establishing shot of a completely new location
- * - show_change: dramatic visual transformation (time skip, flashback)
+ * In practice, extending too aggressively produces visual drift and clumsy
+ * transitions when a shot introduces a brand-new subject or mood. These
+ * purposes signal that the composition is meant to be distinct from what
+ * came before, so we start fresh:
+ *
+ * - set_the_world: establishing shot of a new location
+ * - show_change:   dramatic visual transformation (time skip, flashback)
+ * - meet_character: introduces a character — the composition is built around
+ *                   the new subject, not the prior shot's tail frame
+ * - set_the_mood:  mood-setting compositions benefit from a clean slate
+ *                  rather than extending from the previous action
  */
 const FRESH_PURPOSES = new Set([
   'set_the_world',
   'show_change',
+  'meet_character',
+  'set_the_mood',
 ]);
 
 /**
  * Determine video generation strategy for a shot.
  *
- * - Shot 1 of scene 1 → 'flfv' (fresh, first shot in video)
- * - set_the_world / show_change purpose → 'flfv' (fresh, dramatic change)
- * - Everything else → 'v2v_extend' (continue from previous shot's video)
+ * - Shot 1 of ANY scene → 'flfv' (scene boundary — fresh framing)
+ * - FRESH_PURPOSES      → 'flfv'
+ * - Everything else     → 'v2v_extend' (continue from previous shot's video)
  */
 export function getVideoStrategy(itemId: string, purpose: string): 'flfv' | 'v2v_extend' {
-  // First shot in entire video → always fresh
-  if (itemId === 'scene_1_shot_1') return 'flfv';
+  // First shot of any scene → scene boundary, start fresh
+  const shotMatch = itemId.match(/^scene_(\d+)_shot_(\d+)$/);
+  if (shotMatch && shotMatch[2] === '1') return 'flfv';
 
   // Purposes that require fresh generation
   if (FRESH_PURPOSES.has(purpose)) return 'flfv';
