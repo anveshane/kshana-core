@@ -30,7 +30,7 @@ import type {
 import { DependencyGraphExecutor } from './DependencyGraphExecutor.js';
 import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
-import { resolveInputs, writeOutput, getOutputPath as getOutputPathFn } from './contentResolver.js';
+import { resolveInputs, writeOutput } from './contentResolver.js';
 import { extractCollectionItems } from './collectionExtractor.js';
 import { healStaleMatchingDeps } from './stateHeal.js';
 import { isStageGateSatisfied, resolveStageToTypeIds } from './stages.js';
@@ -1568,6 +1568,15 @@ export class ExecutorAgent extends TypedEventEmitter {
                 node, content, this.config.projectDir, this.config.template,
               );
               this.log(`  Written to: ${outputPath}`);
+
+              // Record the prompt path in project.json for media nodes so a
+              // later run can legitimately skip LLM regeneration (crash
+              // recovery). Without this explicit record, orphan prompt JSONs
+              // on disk would silently override the pending status — see
+              // `findExistingPromptFile` for the full contract.
+              if (nodeCategory === 'visual_ref' || nodeCategory === 'clip') {
+                node.promptPath = outputPath;
+              }
 
               // State is now computed BEFORE prompt generation in buildPromptForNode().
               // No post-generation state extraction needed.
@@ -3221,14 +3230,34 @@ If you need to reference an entity not on this list, describe it as prose in the
     }
   }
 
+  /**
+   * Return the prompt JSON path IF the project.json says there's a valid
+   * cached prompt for this node. Project.json is the source of truth —
+   * orphan files on disk (e.g. left behind by a reset) do NOT count.
+   *
+   * Background: the executor has an optimization for media nodes — if
+   * the prompt JSON is already on disk, skip the LLM and render only.
+   * Previously this used pure filesystem existence, which meant
+   * `/reset <stage>` → reset node to `pending` but keep file on disk
+   * caused the next run to silently reuse the stale file. The reset's
+   * intent was "regenerate," but the cache defeated it.
+   *
+   * Now: we only carry a prompt file across runs if `node.promptPath` is
+   * explicitly set in project.json. Reset clears `promptPath`, so a
+   * pending node with no `promptPath` ALWAYS regenerates — matching
+   * the user's expectation of what "reset" means.
+   */
   private findExistingPromptFile(node: ExecutionNode): string | null {
-    // Compute the expected prompt path using the same logic as writeOutput
-    const expectedPath = getOutputPathFn(node, this.config.projectDir, this.config.template);
-    const fullPath = join(this.config.projectDir, expectedPath);
-    if (existsSync(fullPath)) {
-      return expectedPath;
+    // Source of truth: project.json must explicitly record a prompt path
+    // before we trust any on-disk file. Orphan files are ignored.
+    if (!node.promptPath) return null;
+
+    const fullPath = join(this.config.projectDir, node.promptPath);
+    if (!existsSync(fullPath)) {
+      // project.json points at a file that's been deleted — also ignore.
+      return null;
     }
-    return null;
+    return node.promptPath;
   }
 
   /**

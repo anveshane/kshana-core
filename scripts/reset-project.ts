@@ -84,6 +84,8 @@ interface ExecutionNode {
   completedAt?: number;
   startedAt?: number;
   outputPath?: string;
+  /** Prompt JSON path for two-stage media nodes. Cleared on reset. */
+  promptPath?: string;
   artifactId?: string;
 }
 
@@ -179,6 +181,13 @@ function main() {
     const node = nodes[nid]!;
     node.status = 'pending';
     node.outputPath = undefined;
+    // Clear the prompt path too — this is what makes a reset actually
+    // regenerate the prompt on the next run. Without clearing, the
+    // executor's media-node fast path would see an orphan JSON on disk
+    // and skip LLM regeneration, defeating the reset's intent. The
+    // file itself stays (reset doesn't delete), but it's no longer
+    // referenced by project.json and treated as orphaned.
+    node.promptPath = undefined;
     node.startedAt = undefined;
     node.completedAt = undefined;
     node.error = undefined;

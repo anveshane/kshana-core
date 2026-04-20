@@ -312,6 +312,23 @@ export interface ExecutionNode {
   /** Multiple output paths keyed by frame requirement ID (for multi-frame modes) */
   outputPaths?: Record<string, string>;
 
+  /**
+   * Path where the intermediate prompt JSON was written — for two-stage
+   * media nodes where the LLM first produces a prompt JSON (step 1) and
+   * then ComfyUI renders an image/video from it (step 2).
+   *
+   * Tracked separately from `outputPath` (which holds the final image/video
+   * path) so the executor can distinguish "prompt already generated, only
+   * re-render the image" from "everything's fresh."
+   *
+   * CRITICAL: project.json is the source of truth — if `promptPath` is
+   * undefined, any JSON file at the expected disk location is an ORPHAN
+   * from a prior run and must NOT short-circuit LLM regeneration. This
+   * is what makes `/reset <stage>` actually regenerate prompts on the
+   * next `/run-to`.
+   */
+  promptPath?: string;
+
   /** Artifact instance ID after creation */
   artifactId?: string;
 }
