@@ -49,12 +49,45 @@ function buildAvailableRefsBlock(allNodes: ExecutionNode[]): string {
   }
   if (refLines.length === 0) return '';
   return `\n\n<available_refs>
-Use these EXACT refId strings (copy verbatim — no paraphrasing, no case/punct changes) for:
-mainSubject, secondarySubject, perspectiveOf, focus.primary, focus.background[], focus.lurking.
+This is a canonical-spelling dictionary for the ENTIRE PROJECT. It is
+NOT a shopping list — do NOT reference every entity here.
 
 ${refLines.join('\n')}
 
-If you need to reference an entity not on this list, describe it as prose in the shot \`description\` field — never invent a new refId.
+How to use this list:
+
+1. **Read the scene script FIRST to determine who/what is in THIS scene.**
+   Only the entities named or clearly implied by the scene's prose belong
+   in this scene's JSON. A character being "available" in the project
+   does not mean they appear in this scene.
+
+2. **When an entity IS in the scene, use the EXACT refId string above**
+   for mainSubject, secondarySubject, perspectiveOf, focus.primary,
+   focus.background[], focus.lurking — copy verbatim, including
+   apostrophes and underscores. Do not paraphrase, normalize, or "fix"
+   spellings.
+
+3. **Omit refs that aren't in the scene.**
+   - \`secondarySubject\` is OPTIONAL. Only set it when the scene
+     script gives a second character a pivotal dialogue/confrontation
+     role. If there's no pivotal second character in THIS scene, omit
+     the field entirely.
+   - \`focus.primary\` names the razor-sharp subject of the shot —
+     it must be something the script says is actually in that shot,
+     not a random pick from the list.
+   - \`focus.background[]\` and \`focus.lurking\` — same rule. Only
+     include entities actually in the shot composition.
+
+4. **If the scene needs an entity that isn't on this list** (e.g. the
+   guards in a dock confrontation), describe them as PROSE in
+   \`description\`/\`audio\`. Don't invent a new refId.
+
+Examples of common failure modes to avoid:
+- Inserting \`glitch\` (the apartment cat) as secondarySubject of a
+  dock-confrontation scene just because glitch is on this list.
+- Setting \`focus.primary\` to \`lazarus_drive\` when the shot's
+  description is about guards raising rifles — the Drive isn't yet
+  the subject of that shot.
 </available_refs>`;
 }
 
@@ -133,10 +166,13 @@ describe('available_refs block — canonical refId injection', () => {
     executor.expandCollection('character', [{ itemId: 'alice', name: 'Alice' }]);
     const block = buildAvailableRefsBlock(executor.getAllNodes());
 
-    // The block must call out verbatim usage and explicitly forbid invention
+    // The block must call out verbatim usage and explicitly forbid invention.
+    // Wording was tightened when we found the LLM treating the list as a
+    // menu — "never invent" was replaced with "Don't invent" but the
+    // semantic is identical.
     expect(block).toMatch(/verbatim/i);
     expect(block).toContain('mainSubject');
-    expect(block).toContain('never invent');
+    expect(block).toMatch(/Don't invent|never invent|do not invent/i);
   });
 
   it('excludes nodes without itemId (type-level collections, single-instance artifacts)', () => {
@@ -149,5 +185,27 @@ describe('available_refs block — canonical refId injection', () => {
     expect(block).not.toContain('world_style');
     expect(block).not.toContain('plot');
     expect(block).not.toContain('story');
+  });
+
+  it('warns against opportunistic ref insertion (dictionary, not shopping list)', () => {
+    // Regression: the original block read "Use these EXACT refId strings for
+    // mainSubject, secondarySubject..." which the LLM interpreted as "fill
+    // every one of these fields using entities from this list." That caused
+    // Glitch (apartment cat) to appear as secondarySubject of a dock scene.
+    // The tightened instruction must make clear that the list is a spelling
+    // dictionary, NOT a menu to pick from exhaustively.
+    const executor = buildExecutor();
+    executor.expandCollection('character', [
+      { itemId: "johnathan_o'hare", name: "Johnathan O'Hare" },
+      { itemId: 'glitch', name: 'Glitch' },
+    ]);
+    const block = buildAvailableRefsBlock(executor.getAllNodes());
+
+    // Must explicitly frame the list as a dictionary
+    expect(block).toMatch(/dictionary|NOT a shopping list|do NOT reference every/i);
+    // Must direct the LLM to read the scene first
+    expect(block).toMatch(/scene script/i);
+    // Must state secondarySubject is optional
+    expect(block).toMatch(/secondarySubject.*OPTIONAL|omit the field/i);
   });
 });
