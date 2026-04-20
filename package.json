@@ -18,6 +18,7 @@
     "reboot": "pnpm kill && pnpm start",
     "test:client": "tsx src/server/testClient.ts",
     "reset": "tsx scripts/reset-project.ts",
+    "run-to": "tsx scripts/run-to.ts",
     "build": "cd frontend && npm run build && cd .. && tsup",
     "build:frontend": "cd frontend && npm run build",
     "test:frontend": "cd frontend && npm test",
