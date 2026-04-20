@@ -12,6 +12,7 @@ const COMMANDS = [
   { name: '/workflows', description: 'Open workflow manager' },
   { name: '/providers', description: 'Open provider settings' },
   { name: '/reset', description: 'Reset project to a stage' },
+  { name: '/run-to', description: 'Run pipeline up to a stage, then pause' },
   { name: '/select', description: 'Select a project' },
   { name: '/auto', description: 'Enable autonomous mode' },
   { name: '/parallel', description: 'Enable parallel media gen' },
@@ -43,12 +44,20 @@ export function TaskInput({ onSend, placeholder: customPlaceholder }: TaskInputP
 
   const isDisabled = connectionStatus !== 'connected' || agentStatus === 'thinking'
 
-  // Filter commands or stage suggestions based on input
+  // Filter commands or stage suggestions based on input.
+  // Both /reset and /run-to share the same stage vocabulary, so we drive
+  // their autocomplete from the same RESET_STAGES list.
   const resetMatch = value.match(/^\/reset\s+(\S*)$/i)
-  const isResetStageMode = !!resetMatch
-  const stageFilter = resetMatch?.[1]?.toLowerCase() ?? ''
+  const runToMatch = value.match(/^\/run-to\s+(\S*)$/i)
+  const isStagePickerMode = !!resetMatch || !!runToMatch
+  const stagePickerCommand: '/reset' | '/run-to' | null = resetMatch
+    ? '/reset'
+    : runToMatch
+      ? '/run-to'
+      : null
+  const stageFilter = (resetMatch?.[1] ?? runToMatch?.[1] ?? '').toLowerCase()
 
-  const suggestions = isResetStageMode
+  const suggestions = isStagePickerMode
     ? RESET_STAGES
         .filter(s => s.name.startsWith(stageFilter))
         .map(s => ({ name: s.name, description: s.description }))
@@ -58,13 +67,13 @@ export function TaskInput({ onSend, placeholder: customPlaceholder }: TaskInputP
 
   // Show/hide suggestions
   useEffect(() => {
-    if (isResetStageMode) {
+    if (isStagePickerMode) {
       setShowSuggestions(suggestions.length > 0)
     } else {
       setShowSuggestions(value.startsWith('/') && suggestions.length > 0 && value !== suggestions[0]?.name)
     }
     setSelectedIndex(0)
-  }, [value, suggestions.length, isResetStageMode])
+  }, [value, suggestions.length, isStagePickerMode])
 
   const handleSubmit = useCallback(() => {
     if (!value.trim() || isDisabled) return
@@ -75,9 +84,9 @@ export function TaskInput({ onSend, placeholder: customPlaceholder }: TaskInputP
   }, [value, isDisabled, onSend])
 
   const applySuggestion = useCallback((cmd: string) => {
-    if (isResetStageMode) {
-      // Replace the stage part: "/reset <partial>" → "/reset <stage>"
-      setValue(`/reset ${cmd}`)
+    if (isStagePickerMode && stagePickerCommand) {
+      // Replace the stage part: "/<cmd> <partial>" → "/<cmd> <stage>"
+      setValue(`${stagePickerCommand} ${cmd}`)
       setShowSuggestions(false)
       // Auto-submit since the command is complete
       setTimeout(() => inputRef.current?.focus(), 0)
@@ -86,7 +95,7 @@ export function TaskInput({ onSend, placeholder: customPlaceholder }: TaskInputP
       setShowSuggestions(false)
       inputRef.current?.focus()
     }
-  }, [isResetStageMode])
+  }, [isStagePickerMode, stagePickerCommand])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (showSuggestions) {

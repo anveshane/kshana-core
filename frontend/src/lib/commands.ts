@@ -21,6 +21,31 @@ interface CommandDef {
   handler: (args: string, ctx: CommandContext) => void
 }
 
+/**
+ * Canonical stage vocabulary. Mirrors the backend's `VALID_STAGES` in
+ * `src/core/planner/stages.ts`. Kept in sync manually — the frontend
+ * can't import from the `src/` build root due to separate tsconfigs.
+ * Consumed by `/reset` and `/run-to` for validation + autocomplete.
+ */
+const STAGES: readonly string[] = [
+  'plot',
+  'story',
+  'characters',
+  'character',
+  'setting',
+  'scene',
+  'world_style',
+  'character_image',
+  'reference_images',
+  'setting_image',
+  'scene_video_prompt',
+  'shot_image_prompt',
+  'shot_motion_directive',
+  'shot_image',
+  'shot_video',
+  'final_video',
+]
+
 const COMMANDS: Record<string, CommandDef> = {
   help: {
     description: 'Show available commands',
@@ -70,7 +95,7 @@ const COMMANDS: Record<string, CommandDef> = {
     usage: '/reset [project] <stage>',
     handler: (args, ctx) => {
       const parts = args.trim().split(/\s+/).filter(Boolean)
-      const stages = ['plot', 'story', 'characters', 'character', 'setting', 'scene', 'world_style', 'character_image', 'setting_image', 'scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video', 'final_video']
+      const stages = STAGES
 
       if (parts.length === 0) {
         ctx.dispatch({
@@ -130,6 +155,58 @@ const COMMANDS: Record<string, CommandDef> = {
       })
       // Send as dedicated reset message — runs the reset script server-side
       ctx.send({ type: 'reset_project', data: { projectName, stage } })
+    },
+  },
+
+  'run-to': {
+    description: 'Run the pipeline up to a stage and pause for inspection',
+    usage: '/run-to <stage>',
+    handler: (args, ctx) => {
+      const parts = args.trim().split(/\s+/).filter(Boolean)
+
+      // Empty — show usage. Helps users who typed `/run-to` alone.
+      if (parts.length === 0) {
+        ctx.dispatch({
+          type: 'ADD_CHAT_MESSAGE',
+          message: {
+            id: `cmd_${Date.now()}`,
+            type: 'system',
+            content: `Usage: \`/run-to <stage>\`\n\nValid stages: ${STAGES.join(', ')}`,
+            timestamp: Date.now(),
+          },
+        })
+        return
+      }
+
+      const stage = parts[0]!
+      if (!STAGES.includes(stage)) {
+        ctx.dispatch({
+          type: 'ADD_CHAT_MESSAGE',
+          message: {
+            id: `cmd_${Date.now()}`,
+            type: 'system',
+            content: `Unknown stage: **${stage}**\n\nValid stages: ${STAGES.join(', ')}`,
+            timestamp: Date.now(),
+          },
+        })
+        return
+      }
+
+      ctx.dispatch({
+        type: 'ADD_CHAT_MESSAGE',
+        message: {
+          id: `cmd_${Date.now()}`,
+          type: 'system',
+          content: `Running pipeline up to **${stage}**, then pausing...`,
+          timestamp: Date.now(),
+        },
+      })
+      // Reuse `start_task` surface — server-side WebSocketHandler
+      // threads `stopAtStage` through to the executor's stage gate.
+      ctx.send({
+        type: 'start_task',
+        data: { task: `Run pipeline up to ${stage}`, stopAtStage: stage },
+      })
     },
   },
 
@@ -227,7 +304,8 @@ const COMMANDS: Record<string, CommandDef> = {
 export function tryExecuteCommand(input: string, ctx: CommandContext): boolean {
   if (!input.startsWith('/')) return false
 
-  const match = input.match(/^\/(\w+)\s*(.*)$/)
+  // Allow hyphens in command names (e.g. `/run-to`). `\w` alone doesn't.
+  const match = input.match(/^\/([\w-]+)\s*(.*)$/)
   if (!match) return false
 
   const [, name, args] = match

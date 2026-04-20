@@ -20,6 +20,25 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
           dispatch({ type: 'SET_AGENT_STATUS', status: 'idle' })
         } else if (status === 'busy') {
           dispatch({ type: 'SET_AGENT_STATUS', status: 'thinking' })
+        } else if (status === 'paused') {
+          // `/run-to <stage>` gate fired — executor stopped cleanly at the
+          // stage boundary. Agent is idle (input re-enabled) and we show
+          // the user which stage we paused at so they know what to inspect
+          // and how to resume.
+          dispatch({ type: 'SET_AGENT_STATUS', status: 'idle' })
+          const stage = data.pausedAtStage as string | undefined
+          const body = stage
+            ? `Paused at **${stage}**. Inspect the outputs, then send \`/run-to <next-stage>\` to continue.`
+            : 'Paused. Send any message to continue.'
+          dispatch({
+            type: 'ADD_CHAT_MESSAGE',
+            message: {
+              id: `paused_${Date.now()}`,
+              type: 'system',
+              content: body,
+              timestamp: Date.now(),
+            },
+          })
         }
         // Phase update
         if (data.phase) {

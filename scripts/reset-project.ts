@@ -29,6 +29,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
+import { STAGE_ALIASES, TEMPLATE_DEPS } from '../src/core/planner/stages.js';
 
 /**
  * Compute the full set of types to reset by traversing the dependency graph downstream.
@@ -59,47 +60,8 @@ function computeResetTypes(startType: string): string[] {
   return Array.from(result);
 }
 
-// Stage aliases for user convenience
-// Values can be a single type or multiple (for sibling resets)
-const STAGE_ALIASES: Record<string, string | string[]> = {
-  plot: 'plot',
-  story: 'story',
-  characters: ['character', 'setting'],     // resets both character + setting (siblings)
-  character: 'character',
-  setting: 'setting',
-  scene: 'scene',
-  world_style: 'world_style',
-  character_image: ['character_image', 'setting_image', 'object_image'],  // reset all reference-image siblings
-  reference_images: ['character_image', 'setting_image', 'object_image'],  // explicit alias for all three
-  setting_image: 'setting_image',
-  scene_video_prompt: 'scene_video_prompt',
-  shot_image_prompt: 'shot_image_prompt',
-  shot_motion_directive: 'shot_motion_directive',
-  shot_image: 'shot_image',
-  shot_video: 'shot_video',
-  final_video: 'final_video',
-};
-
-// Template dependency map: typeId → required dependency typeIds
-// Used to rewire nodes when recreating collection placeholders
-const TEMPLATE_DEPS: Record<string, string[]> = {
-  plot: [],
-  story: ['plot'],
-  character: ['story'],
-  setting: ['story'],
-  scene: ['story', 'character', 'setting'],
-  world_style: ['story', 'scene', 'setting'],
-  object: ['story'],
-  character_image: ['character', 'world_style'],
-  setting_image: ['setting', 'world_style'],
-  object_image: ['object', 'world_style'],
-  scene_video_prompt: ['scene', 'world_style'],
-  shot_image_prompt: ['scene_video_prompt'],
-  shot_motion_directive: ['scene_video_prompt', 'shot_image_prompt', 'world_style'],
-  shot_image: ['shot_image_prompt', 'character_image', 'setting_image', 'object_image'],
-  shot_video: ['shot_image', 'shot_motion_directive'],
-  final_video: ['shot_video'],
-};
+// STAGE_ALIASES and TEMPLATE_DEPS imported from src/core/planner/stages.ts —
+// shared source of truth with the executor's `stopAtStage` gate.
 
 // Types that are collections and get expanded into per-item nodes
 const COLLECTION_TYPES = new Set([
@@ -139,14 +101,14 @@ function main() {
 
   const [projectName, stage] = args;
   const aliasValue = STAGE_ALIASES[stage!];
-  if (!aliasValue) {
+  if (!aliasValue || aliasValue.length === 0) {
     console.error(`Unknown stage: ${stage}`);
     console.error('Valid stages:', Object.keys(STAGE_ALIASES).join(', '));
     process.exit(1);
   }
 
-  // Resolve alias — can be a single type or array of sibling types
-  const startTypes = Array.isArray(aliasValue) ? aliasValue : [aliasValue];
+  // Resolve alias — always an array (stages.ts normalizes single-type stages to [typeId]).
+  const startTypes = aliasValue;
   const resetTypes = [...new Set(startTypes.flatMap(t => computeResetTypes(t)))];
 
   console.log(`Reset types (from ${stage} → ${startTypes.join(', ')}): ${resetTypes.join(', ')}`);

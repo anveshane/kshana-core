@@ -336,7 +336,12 @@ export class WebSocketHandler {
     this.sendTimerUpdate(socket, sessionId, true);
 
     try {
-      const result = await this.conversationManager.runTask(sessionId, data.task, events);
+      const result = await this.conversationManager.runTask(
+        sessionId,
+        data.task,
+        events,
+        { stopAtStage: data.stopAtStage },
+      );
 
       // Notify UI that timer stopped
       this.sendTimerUpdate(socket, sessionId, false);
@@ -347,11 +352,17 @@ export class WebSocketHandler {
         status: mapAgentStatus(result.status),
       }));
 
-      // Send completed status if not awaiting input
+      // Distinguish "paused at stage" from "completed" so the UI can show
+      // an inspect-and-continue affordance instead of the usual finished state.
       if (result.status !== 'waiting_for_user') {
+        const stopReason = this.conversationManager.getAgentStopReason(sessionId);
+        const paused = stopReason === 'paused_at_stage' && !!data.stopAtStage;
         this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
-          status: 'completed',
-          message: 'Task completed',
+          status: paused ? 'paused' : 'completed',
+          message: paused
+            ? `Paused at stage '${data.stopAtStage}'`
+            : 'Task completed',
+          ...(paused && data.stopAtStage ? { pausedAtStage: data.stopAtStage } : {}),
         }));
       }
     } catch (error) {

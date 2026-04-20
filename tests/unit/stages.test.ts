@@ -1,0 +1,91 @@
+/**
+ * Tests for the shared stage vocabulary module.
+ *
+ * Context: `STAGE_ALIASES` + `TEMPLATE_DEPS` used to live privately inside
+ * `scripts/reset-project.ts`. We've extracted them to
+ * `src/core/planner/stages.ts` so both the reset script and the executor's
+ * new `stopAtStage` gate can consume the same vocabulary.
+ *
+ * These tests lock down the contract that consumers of stages.ts rely on.
+ */
+
+import { describe, it, expect } from 'vitest';
+import {
+  STAGE_ALIASES,
+  TEMPLATE_DEPS,
+  VALID_STAGES,
+  resolveStageToTypeIds,
+} from '../../src/core/planner/stages.js';
+
+describe('STAGE_ALIASES', () => {
+  it('every alias value is an array of typeIds (post-normalization)', () => {
+    for (const [stage, typeIds] of Object.entries(STAGE_ALIASES)) {
+      expect(Array.isArray(typeIds), `${stage} alias must be an array`).toBe(true);
+      expect((typeIds as string[]).length, `${stage} alias must not be empty`).toBeGreaterThan(0);
+    }
+  });
+
+  it('character_image alias bundles character_image + setting_image + object_image', () => {
+    // Core value-add of the alias: resetting or gating at character_image
+    // covers all three reference-image siblings in one command.
+    expect(STAGE_ALIASES.character_image).toEqual(
+      expect.arrayContaining(['character_image', 'setting_image', 'object_image'])
+    );
+  });
+
+  it('reference_images is an explicit alias for all three image types', () => {
+    expect(STAGE_ALIASES.reference_images).toEqual(
+      expect.arrayContaining(['character_image', 'setting_image', 'object_image'])
+    );
+  });
+
+  it('single-type stages map to a one-element array', () => {
+    expect(STAGE_ALIASES.plot).toEqual(['plot']);
+    expect(STAGE_ALIASES.story).toEqual(['story']);
+    expect(STAGE_ALIASES.scene_video_prompt).toEqual(['scene_video_prompt']);
+  });
+});
+
+describe('TEMPLATE_DEPS', () => {
+  it('includes every required template dependency edge', () => {
+    // Sanity: reset-script's downstream-computation depends on these edges.
+    expect(TEMPLATE_DEPS.story).toContain('plot');
+    expect(TEMPLATE_DEPS.scene_video_prompt).toContain('scene');
+    expect(TEMPLATE_DEPS.scene_video_prompt).toContain('world_style');
+    expect(TEMPLATE_DEPS.shot_video).toContain('shot_image');
+    expect(TEMPLATE_DEPS.shot_video).toContain('shot_motion_directive');
+    expect(TEMPLATE_DEPS.final_video).toContain('shot_video');
+  });
+
+  it('object_image depends on object + world_style', () => {
+    expect(TEMPLATE_DEPS.object_image).toEqual(
+      expect.arrayContaining(['object', 'world_style'])
+    );
+  });
+});
+
+describe('VALID_STAGES', () => {
+  it('matches Object.keys(STAGE_ALIASES)', () => {
+    expect([...VALID_STAGES].sort()).toEqual(Object.keys(STAGE_ALIASES).sort());
+  });
+});
+
+describe('resolveStageToTypeIds', () => {
+  it('returns the alias array for a known stage', () => {
+    expect(resolveStageToTypeIds('plot')).toEqual(['plot']);
+    expect(resolveStageToTypeIds('character_image')).toEqual(
+      expect.arrayContaining(['character_image', 'setting_image', 'object_image'])
+    );
+  });
+
+  it('returns null for an unknown stage', () => {
+    expect(resolveStageToTypeIds('totally_bogus_stage')).toBeNull();
+    expect(resolveStageToTypeIds('')).toBeNull();
+  });
+
+  it('is case-sensitive (stage names are lowercase canonically)', () => {
+    // Matches reset-project.ts behavior and the frontend's lowercase stage list.
+    expect(resolveStageToTypeIds('Plot')).toBeNull();
+    expect(resolveStageToTypeIds('CHARACTER_IMAGE')).toBeNull();
+  });
+});

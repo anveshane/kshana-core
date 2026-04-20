@@ -83,12 +83,18 @@ export interface ClientMessage<T = unknown> {
  * Status message data.
  */
 export interface StatusData {
-  status: 'connected' | 'ready' | 'busy' | 'completed' | 'error';
+  status: 'connected' | 'ready' | 'busy' | 'completed' | 'error' | 'paused';
   message?: string;
   /** Tool names available to the agent (included with 'ready' status after project selection) */
   tools?: string[];
   /** Project name (included after create_project to auto-select in UI) */
   projectName?: string;
+  /**
+   * Set when status='paused' to tell the UI which `/run-to <stage>` gate
+   * fired. UI can show a "paused — send /run-to <next> to continue"
+   * affordance keyed off this field.
+   */
+  pausedAtStage?: string;
 }
 
 /**
@@ -331,6 +337,13 @@ export interface StartTaskData {
     maxIterations?: number;
     temperature?: number;
   };
+  /**
+   * When set, the executor runs until every node of the given stage is
+   * terminal, then pauses. Stage names are the same canonical set used
+   * by `/reset` — see `src/core/planner/stages.ts` STAGE_ALIASES.
+   * Unknown stage names cause the handler to reject the message.
+   */
+  stopAtStage?: string;
 }
 
 /**

@@ -33,6 +33,7 @@ import { AssetScanner } from './AssetScanner.js';
 import { resolveInputs, writeOutput, getOutputPath as getOutputPathFn } from './contentResolver.js';
 import { extractCollectionItems } from './collectionExtractor.js';
 import { healStaleMatchingDeps } from './stateHeal.js';
+import { isStageGateSatisfied, resolveStageToTypeIds } from './stages.js';
 import type { ArtifactCategory } from '../templates/types.js';
 import { resolveGuide, loadContentTypeSkills, type SkillResolutionContext } from '../prompts/loader.js';
 // Media generation imports
@@ -87,6 +88,21 @@ export interface ExecutorAgentConfig {
    * Example: stopAfterNodeType: 'plot' — runs until plot completes, then stops.
    */
   stopAfterNodeType?: string;
+  /**
+   * Stop the executor when every node of a given stage is terminal.
+   *
+   * A "stage" is a user-facing alias (e.g. 'character_image') that may
+   * cover multiple typeIds (character_image + setting_image + object_image)
+   * and multiple per-item children (character_image:alice, :bob, :glitch).
+   * The gate fires only once ALL of them are in a terminal status
+   * (completed | skipped | failed).
+   *
+   * Unlike stopAfterNodeType (which fires after the FIRST node of a type
+   * completes — retained for legacy test-mode), this is the production
+   * surface for the `/run-to <stage>` user command. See stages.ts for
+   * the canonical alias table.
+   */
+  stopAtStage?: string;
   /**
    * Skip media generation (ComfyUI calls). Only generates LLM prompts.
    * Used for testing — validates prompt structure without calling image/video providers.
@@ -159,6 +175,19 @@ export class ExecutorAgent extends TypedEventEmitter {
   private config: ExecutorAgentConfig;
   private running = false;
   private stopped = false;
+  /**
+   * Resolved typeIds for the current `/run-to <stage>` gate. Null when no
+   * gate is active. Set from config.stopAtStage at construction time and
+   * from `setStopAtStage(stage | null)` at runtime per-task.
+   */
+  private stopAtStageTypeIds: Set<string> | null = null;
+  /**
+   * Why the executor last stopped. Reset at the top of each run().
+   * Read by ConversationManager/WebSocketHandler to distinguish
+   * "paused at stage gate" from "completed" / "cancelled" / "failed"
+   * so the UI can show the right banner.
+   */
+  private stopReason: 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null = null;
   private vlmDisabled = process.env['DISABLE_VLM'] === 'true'; // Env flag or auto-disabled after first 404
   private sceneSummaries = new Map<string, string>(); // scene_1 → summary text
   private _initialized = false;
@@ -188,6 +217,18 @@ export class ExecutorAgent extends TypedEventEmitter {
     super();
     this.llm = llm;
     this.config = config;
+    // Resolve the stage gate up-front if provided via config. Throws early on
+    // invalid stage names so misconfiguration fails at construction, not
+    // silently during the loop.
+    if (config.stopAtStage) {
+      const resolved = resolveStageToTypeIds(config.stopAtStage);
+      if (!resolved) {
+        throw new Error(
+          `Unknown stopAtStage: '${config.stopAtStage}'. See stages.ts VALID_STAGES.`,
+        );
+      }
+      this.stopAtStageTypeIds = new Set(resolved);
+    }
     // Build per-call router. When LLM_ROUTING_ENABLED=false (default), every
     // purpose resolves to the default client so behavior is unchanged.
     this.router = buildRouterFromEnv(config.projectDir);
@@ -590,14 +631,66 @@ export class ExecutorAgent extends TypedEventEmitter {
   }
 
   /**
+   * Is the `/run-to <stage>` gate satisfied? Thin wrapper around the pure
+   * helper in stages.ts — kept as a method so the run loop can consult
+   * it without passing graph state around.
+   */
+  private shouldStopForStageGate(): boolean {
+    return isStageGateSatisfied(
+      this.executor.getAllNodes().map(n => ({ typeId: n.typeId, status: n.status })),
+      this.stopAtStageTypeIds,
+      this.redoOnlyNodes !== null,
+    );
+  }
+
+  /**
    * Stop the agent mid-execution.
    */
   stop(): void {
     this.stopped = true;
+    this.stopReason = 'cancelled';
     // Interrupt any in-progress ComfyUI generation immediately
     import('../../services/comfyui/ComfyUIClient.js')
       .then(({ ComfyUIClient }) => new ComfyUIClient({}).interrupt())
       .catch(() => {});
+  }
+
+  /**
+   * Set or clear the `/run-to <stage>` gate at runtime. Pass a stage name
+   * (e.g. `'character_image'`) to arm the gate; pass `null` to clear it.
+   *
+   * Called by ConversationManager per-task so the long-lived agent can
+   * pick up a per-invocation `stopAtStage` without being reconstructed.
+   * Throws on unknown stage names — fail fast on bad input.
+   */
+  setStopAtStage(stage: string | null): void {
+    if (stage === null) {
+      this.stopAtStageTypeIds = null;
+      return;
+    }
+    const resolved = resolveStageToTypeIds(stage);
+    if (!resolved) {
+      throw new Error(
+        `Unknown stopAtStage: '${stage}'. See stages.ts VALID_STAGES.`,
+      );
+    }
+    this.stopAtStageTypeIds = new Set(resolved);
+  }
+
+  /**
+   * Why the executor last stopped. Returns null before the first run().
+   *
+   * - `'complete'`: `executor.isComplete()` returned true — all target
+   *   artifacts (or their graph) finished naturally.
+   * - `'paused_at_stage'`: the `/run-to <stage>` gate fired (or the
+   *   legacy test-only `stopAfterNodeType` fired). State is safe to
+   *   resume from.
+   * - `'cancelled'`: `stop()` was called externally (user hit the Stop
+   *   button; WebSocket `cancel` message).
+   * - `'failed'`: a node failed and self-repair couldn't recover.
+   */
+  getStopReason(): 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null {
+    return this.stopReason;
   }
 
   /**
@@ -975,6 +1068,25 @@ export class ExecutorAgent extends TypedEventEmitter {
 
       this.emitTodoUpdate();
 
+      // Reset stop reason at the start of this run(). Long-lived agent — if
+      // the previous run() stopped at a stage, we don't want that leaking.
+      this.stopReason = null;
+
+      // Idempotent stage-gate check: if the user asked for /run-to <stage>
+      // and the graph is already past that stage, nothing to do. Fire the
+      // same paused-at-stage notification + set stopped=true BEFORE any
+      // LLM/media calls are made.
+      if (this.shouldStopForStageGate()) {
+        this.log(`Stage gate '${this.config.stopAtStage}' already satisfied — nothing to run`);
+        this.emit({
+          type: 'notification',
+          level: 'info',
+          message: `Already at stage '${this.config.stopAtStage}'.`,
+        });
+        this.stopReason = 'paused_at_stage';
+        this.stopped = true;
+      }
+
       // Main execution loop
       let selfRepairCount = 0;
       const MAX_SELF_REPAIRS = 3;
@@ -1027,13 +1139,16 @@ export class ExecutorAgent extends TypedEventEmitter {
           if (failedNodes.length > 0 && pendingNodes.length > 0) {
             // There are failed nodes blocking progress — retry them
             if (selfRepairCount >= MAX_SELF_REPAIRS) {
-              // Max retries reached — notify user and stop
+              // Max retries reached — notify user and stop. Flag as failure
+              // (not paused_at_stage) so UI can show error banner, not
+              // "paused, continue when ready".
               this.log(`STUCK: ${failedNodes.length} failed node(s) after ${MAX_SELF_REPAIRS} retry attempts. Stopping.`);
               this.emit({
                 type: 'notification',
                 level: 'error',
                 message: `${failedNodes.length} node(s) failed after retries: ${failedNodes.map(n => n.displayName).join(', ')}. Send any message to retry.`,
               });
+              this.stopReason = 'failed';
               break;
             }
 
@@ -1324,6 +1439,17 @@ export class ExecutorAgent extends TypedEventEmitter {
                   this.log(`  COMPLETED (skipped): ${node.id} → ${finalOutputPath}`);
                   if (this.config.stopAfterNodeType && node.typeId === this.config.stopAfterNodeType) {
                     this.log(`  stopAfterNodeType matched: ${node.typeId} — stopping`);
+                    this.stopReason = 'paused_at_stage';
+                    this.stopped = true;
+                  }
+                  if (this.shouldStopForStageGate()) {
+                    this.log(`  stage gate '${this.config.stopAtStage}' satisfied — stopping`);
+                    this.emit({
+                      type: 'notification',
+                      level: 'info',
+                      message: `Paused at stage '${this.config.stopAtStage}'.`,
+                    });
+                    this.stopReason = 'paused_at_stage';
                     this.stopped = true;
                   }
                   continue;
@@ -1542,6 +1668,19 @@ export class ExecutorAgent extends TypedEventEmitter {
             // Check if we should stop after this node type (test mode)
             if (this.config.stopAfterNodeType && node.typeId === this.config.stopAfterNodeType) {
               this.log(`  stopAfterNodeType matched: ${node.typeId} — stopping`);
+              this.stopReason = 'paused_at_stage';
+              this.stopped = true;
+            }
+            // `/run-to <stage>` gate: fire only once every node of the gated
+            // typeIds (all aliased siblings + every per-item child) is terminal.
+            if (this.shouldStopForStageGate()) {
+              this.log(`  stage gate '${this.config.stopAtStage}' satisfied — stopping`);
+              this.emit({
+                type: 'notification',
+                level: 'info',
+                message: `Paused at stage '${this.config.stopAtStage}'.`,
+              });
+              this.stopReason = 'paused_at_stage';
               this.stopped = true;
             }
 
@@ -1589,6 +1728,14 @@ export class ExecutorAgent extends TypedEventEmitter {
       this.log(`=== Execution finished ===`);
       this.log(`Progress: ${JSON.stringify(finalProgress)}`);
       this.log(`Summary: ${summary}`);
+
+      // Settle the stop reason if the loop exited naturally without any of
+      // the earlier paths (stage gate, cancel, failed) setting it.
+      if (this.stopReason === null) {
+        this.stopReason = this.executor.isComplete() ? 'complete'
+          : finalProgress.failed > 0 ? 'failed'
+          : 'complete'; // no pending, no failures — treat as complete
+      }
 
       this.emit({
         type: 'notification',

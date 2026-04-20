@@ -233,11 +233,16 @@ export class ConversationManager {
    * Run a task in a session.
    * Wraps execution in the session's context so all tool/file operations
    * see the correct project directory and filesystem.
+   *
+   * `opts.stopAtStage` arms the executor's `/run-to <stage>` gate for
+   * THIS invocation only — it's cleared in the finally block so the
+   * long-lived agent instance doesn't carry state between tasks.
    */
   async runTask(
     sessionId: string,
     task: string,
-    events?: ConversationEvents
+    events?: ConversationEvents,
+    opts?: { stopAtStage?: string },
   ): Promise<GenericAgentResult> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -281,6 +286,14 @@ export class ConversationManager {
         try { checkpointTimer(); } catch { /* ignore */ }
       }, TIMER_CHECKPOINT_INTERVAL_MS);
 
+      // Arm the `/run-to <stage>` gate for this invocation. Guard with a
+      // capability check so non-executor agents (if any) don't break.
+      const agent = session.agent!;
+      const hasStageGate = typeof (agent as { setStopAtStage?: unknown }).setStopAtStage === 'function';
+      if (opts?.stopAtStage && hasStageGate) {
+        (agent as unknown as { setStopAtStage(s: string | null): void }).setStopAtStage(opts.stopAtStage);
+      }
+
       try {
         const result = await session.agent!.run(task);
 
@@ -307,11 +320,29 @@ export class ConversationManager {
         session.state.lastActivity = Date.now();
         throw error;
       } finally {
+        // Always clear the stage gate — per-invocation, never persists across tasks.
+        if (hasStageGate) {
+          (agent as unknown as { setStopAtStage(s: string | null): void }).setStopAtStage(null);
+        }
         // Clean up event listeners
         session.agent!.removeAllListeners();
         session.abortController = undefined;
       }
     });
+  }
+
+  /**
+   * Read the agent's last stop reason. Used by WebSocketHandler to
+   * distinguish "paused at stage" from "completed" when emitting the
+   * final status message.
+   */
+  getAgentStopReason(sessionId: string): 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null {
+    const session = this.sessions.get(sessionId);
+    const agent = session?.agent;
+    if (agent && typeof (agent as { getStopReason?: unknown }).getStopReason === 'function') {
+      return (agent as unknown as { getStopReason(): 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null }).getStopReason();
+    }
+    return null;
   }
 
   /**
