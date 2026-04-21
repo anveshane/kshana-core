@@ -9,6 +9,10 @@ dist/
 .env.local
 .env.*.local
 
+# Per-machine LLM routing (e.g., points at local LM Studio for VLM eval).
+# Copy from .llm-routing.example.json and edit. Not for git.
+.llm-routing.json
+
 # IDE
 .idea/
 .vscode/

@@ -1,0 +1,53 @@
+{
+  "name": "Shot Image Fidelity Binary",
+  "description": "Binary evaluation of a rendered shot image against the text prompt that produced it. Generic — no project-specific content. Used by the VLM judge (src/core/eval/vlmJudge.ts, prompts/skills/defaults/vlm_image_judge.md). Score = (count YES) / total * 100.",
+  "format": "binary",
+  "phase": "shot_image_eval",
+  "promptType": "shot_image",
+  "questions": [
+    {
+      "id": "PRIMARY_SUBJECT_PRESENT",
+      "question": "Is the primary subject named in the prompt (character, animal, or focal object) clearly visible and identifiable in the image?"
+    },
+    {
+      "id": "PRIMARY_SUBJECT_IDENTITY",
+      "question": "Do the primary subject's stated identity attributes (age bracket, ethnicity or species, gender, build, gross physical features) match the prompt? Fail only on identity-altering mismatches, not cosmetic drift."
+    },
+    {
+      "id": "DISTINCTIVE_FEATURES_VISIBLE",
+      "question": "Are the distinctive features the prompt explicitly calls out (prosthetics, cybernetics, scars, tattoos, uniforms, unique accessories) visible on the correct subject? Mark PASS if the prompt names none."
+    },
+    {
+      "id": "NAMED_PROPS_PRESENT",
+      "question": "Are the specific props the prompt names (drinks, weapons, devices, vehicles, signs, tools) visible in the scene in roughly the right place? Mark PASS if the prompt names no specific props."
+    },
+    {
+      "id": "SETTING_MATCH",
+      "question": "Does the visible setting match what the prompt describes — interior vs exterior, the named location type (bar, dock, apartment, forest, street, etc.)?"
+    },
+    {
+      "id": "TIME_AND_LIGHTING",
+      "question": "Does the time-of-day and lighting quality match the prompt (night vs day, natural vs artificial, color temperature, any named light sources)?"
+    },
+    {
+      "id": "SUBJECT_COUNT_CORRECT",
+      "question": "Is the number of prompt-specified pivotal subjects (named characters, named animals) correct? Background extras the prompt implies are fine with any reasonable count."
+    },
+    {
+      "id": "NO_HALLUCINATED_SUBJECTS",
+      "question": "Are there NO prominent subjects (foreground people or animals) that the prompt did not call for? A duplicated instance of a named character counts as hallucinated."
+    },
+    {
+      "id": "ATMOSPHERE_DETAIL",
+      "question": "If the prompt specifies atmospheric effects (rain, fog, smoke, sparks, glowing particles, snow), are they visibly rendered? Mark PASS if the prompt specifies none."
+    },
+    {
+      "id": "COMPOSITION_FRAMING",
+      "question": "Does the shot framing roughly match the prompt (close-up vs medium vs wide, camera angle, depth of field when called for)? Treat adjacent framing categories as matching."
+    },
+    {
+      "id": "NEGATIVE_RESPECTED",
+      "question": "Are any explicit negative/exclusionary directives honored — e.g. 'no daylight' when night is specified, 'empty' when no characters are called for, stated style ('cinematic realism') not violated by a mismatched style (cartoon, anime)? Be lenient on minor anatomy artifacts."
+    }
+  ]
+}

@@ -340,6 +340,85 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
   }
 
   /**
+   * General-purpose text completion: send a user message (and optional
+   * system prompt) and return the raw response text. No image, no
+   * tools, no streaming. Used by the fidelity judge in
+   * `src/core/eval/vlmJudge.ts` for the prompt-aware comparison call
+   * after the perception call has produced a description.
+   */
+  async chatText(
+    userText: string,
+    systemText?: string,
+    opts?: { temperature?: number; maxTokens?: number },
+  ): Promise<string> {
+    const messages: Array<{ role: 'system' | 'user'; content: string }> = [];
+    if (systemText) messages.push({ role: 'system', content: systemText });
+    messages.push({ role: 'user', content: userText });
+
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      messages: messages as any,
+      temperature: opts?.temperature ?? 0.1,
+      max_tokens: opts?.maxTokens ?? 2000,
+    });
+
+    return response.choices[0]?.message?.content ?? '';
+  }
+
+  /**
+   * General-purpose VLM call: send an image + a system/user prompt pair
+   * and return the raw response text.
+   *
+   * Unlike `reviewImage` (which collapses the response into pass/fail),
+   * this returns whatever the model generated — used by the structured
+   * fidelity judge in `src/core/eval/vlmJudge.ts` which needs the full
+   * JSON it asked for.
+   */
+  async chatWithImage(
+    imagePath: string,
+    userText: string,
+    systemText?: string,
+    opts?: { temperature?: number; maxTokens?: number },
+  ): Promise<string> {
+    const fs = await import('fs');
+    const imageBuffer = fs.readFileSync(imagePath);
+    const base64 = imageBuffer.toString('base64');
+    const ext = imagePath.endsWith('.jpg') || imagePath.endsWith('.jpeg') ? 'jpeg' : 'png';
+    const dataUrl = `data:image/${ext};base64,${base64}`;
+
+    const messages: Array<{ role: 'system' | 'user'; content: string | Array<{ type: string; text?: string; image_url?: { url: string } }> }> = [];
+    if (systemText) {
+      messages.push({ role: 'system', content: systemText });
+    }
+    messages.push({
+      role: 'user',
+      content: [
+        { type: 'text', text: userText },
+        { type: 'image_url', image_url: { url: dataUrl } },
+      ],
+    });
+
+    // `reasoning.exclude: true` is an OpenRouter extension that tells
+    // reasoning models (qwen3.5, deepseek-r1, etc.) to NOT emit a
+    // chain-of-thought — without it, reasoning tokens consume the entire
+    // max_tokens budget and `content` comes back null. Harmless for
+    // non-reasoning models (the field is ignored).
+    const response = await this.client.chat.completions.create({
+      model: this.model,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      messages: messages as any,
+      temperature: opts?.temperature ?? 0.1,
+      max_tokens: opts?.maxTokens ?? 2000,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      reasoning: { exclude: true } as any,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    return response.choices[0]?.message?.content ?? '';
+  }
+
+  /**
    * Generate a streaming response from the LLM.
    */
   async *generateStream(

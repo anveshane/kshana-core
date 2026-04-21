@@ -100,6 +100,8 @@
 - **Detailed Logging** — Every AI call, every tool execution, and every decision is logged for debugging. _Per-phase logs, executor logs, and LLM token/cost logs in logs/ folder._
 - **Full History Database** — Every action taken during a session is recorded in a searchable database. _Session SQLite DB with complete tool call history._
 - **Project Reset** — Reset any project back to a specific stage to re-run from that point forward. _`pnpm reset <project> <stage>` script._
+- **Fidelity Audit** — Score every rendered shot's first/last keyframe against its prompt using a calibrated VLM judge; produces a markdown report with per-shot, per-scene, and bottom-quartile callouts. _`pnpm audit-fidelity <project>`._
+- **VLM Judge Calibration** — Tune the VLM judge prompt by diffing per-question verdicts against Claude on a hand-curated set; passes at >=80% agreement. _`pnpm calibrate-vlm` with cached Claude verdicts._
 
 ## API
 
