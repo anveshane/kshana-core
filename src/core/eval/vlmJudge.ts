@@ -237,32 +237,45 @@ export async function judgeImage(
   const systemPrompt = buildJudgeSystemPrompt(rubric);
   const userText = buildJudgeUserMessage(imagePrompt);
 
-  // Flaky VLM endpoints (OpenRouter reasoning models especially) sometimes
-  // return an empty-content response — reasoning tokens consumed the whole
-  // budget, or a transient provider hiccup. Retry once or twice on empty
-  // output so we don't throw the whole case away.
-  let raw = '';
-  let lastErr: Error | null = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
+  // Flaky VLM endpoints (OpenRouter routing to a slow provider, mistral
+  // refusing some images) sometimes return empty content or hang. Cap
+  // total time per shot: 60s per attempt, max 2 attempts. A single bad
+  // shot must not stall the worker pool for minutes.
+  const PER_CALL_TIMEOUT_MS = 60_000;
+  const MAX_ATTEMPTS = 2;
+
+  async function callWithTimeout(): Promise<string> {
+    const callPromise = (async (): Promise<string> => {
       if (llm.chatWithImage) {
-        raw = await llm.chatWithImage(imagePath, userText, systemPrompt, { maxTokens: 8000 });
+        return await llm.chatWithImage(imagePath, userText, systemPrompt, { maxTokens: 8000 });
       } else if (llm.reviewImage) {
         const combined = `${systemPrompt}\n\n---\n\n${userText}`;
         const r = await llm.reviewImage(imagePath, combined);
-        raw = r.issues[0] ?? '';
+        return r.issues[0] ?? '';
       } else {
         throw new Error('VLM client has neither chatWithImage nor reviewImage');
       }
-      if (raw && raw.trim().length > 0) break; // Got real output
-      // Empty — wait a bit and retry with the same prompt.
-      await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+    })();
+    const timeoutPromise = new Promise<string>((_, reject) =>
+      setTimeout(() => reject(new Error(`vlm call timed out after ${PER_CALL_TIMEOUT_MS}ms`)), PER_CALL_TIMEOUT_MS),
+    );
+    return Promise.race([callPromise, timeoutPromise]);
+  }
+
+  let raw = '';
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    try {
+      raw = await callWithTimeout();
+      if (raw && raw.trim().length > 0) break;
+      // Empty response — short backoff, one more try.
+      if (attempt < MAX_ATTEMPTS - 1) await new Promise(r => setTimeout(r, 1000));
     } catch (err) {
       lastErr = err as Error;
       const msg = lastErr.message ?? '';
-      const retriable = /429|500|502|503|504|timeout|ECONN|fetch failed|rate/i.test(msg);
-      if (!retriable) break;
-      await new Promise(r => setTimeout(r, 2000 * Math.pow(2, attempt)));
+      const retriable = /timeout|429|500|502|503|504|ECONN|fetch failed|rate/i.test(msg);
+      if (!retriable || attempt >= MAX_ATTEMPTS - 1) break;
+      await new Promise(r => setTimeout(r, 1500));
     }
   }
   if (lastErr && !raw) {

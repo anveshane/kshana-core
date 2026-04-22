@@ -1,11 +1,11 @@
 {
   "id": "grok_image_edit",
-  "displayName": "Grok Image Edit (Cloud)",
+  "displayName": "Grok Image Edit (Cloud, multi-ref)",
   "pipeline": "image_editing",
-  "llmDescription": "Image editing using Grok Imagine via x.ai. Edits an existing image based on a text prompt while preserving the original composition.",
-  "selectionCriteria": "Use for image editing when Grok-quality edits are preferred over FLUX Klein.",
+  "llmDescription": "Image editing using grok-imagine-image-beta via x.ai. Supports up to 2 reference images aggregated through BatchImagesNode, plus the base image being edited (3 images total — GrokImageEditNode on ComfyUI Cloud rejects >3 inputs). The workflow JSON is built dynamically in code (see grokWorkflowBuilder.ts) — the file on disk is a reference template only.",
+  "selectionCriteria": "Use for image editing when Grok-quality edits are preferred over FLUX Klein. Supports multi-reference character/setting consistency.",
   "outputType": "image",
-  "priority": 5,
+  "priority": 10,
   "strategies": [],
   "inputRequirements": [
     {
@@ -19,8 +19,22 @@
       "id": "base_image",
       "type": "image",
       "source": "shot_image",
-      "description": "Base image to edit",
+      "description": "Base image to edit — wired as images.image0 on BatchImagesNode",
       "required": true
+    },
+    {
+      "id": "reference_image_1",
+      "type": "image",
+      "source": "shot_image",
+      "description": "Optional reference — wired as images.image1",
+      "required": false
+    },
+    {
+      "id": "reference_image_2",
+      "type": "image",
+      "source": "shot_image",
+      "description": "Optional reference — wired as images.image2",
+      "required": false
     },
     {
       "id": "seed",
@@ -28,6 +42,22 @@
       "source": "system",
       "description": "Random seed",
       "required": false
+    },
+    {
+      "id": "resolution",
+      "type": "text",
+      "source": "system",
+      "description": "Grok output resolution — 1K, 2K, 4K",
+      "required": false,
+      "defaultValue": "1K"
+    },
+    {
+      "id": "aspect_ratio",
+      "type": "text",
+      "source": "system",
+      "description": "Aspect ratio — auto, 1:1, 16:9, 9:16, 4:3, 3:4",
+      "required": false,
+      "defaultValue": "auto"
     },
     {
       "id": "filenamePrefix",
@@ -39,28 +69,7 @@
   ],
   "workflowFile": "grok_image_edit.json",
   "format": "api",
-  "parameterMappings": [
-    {
-      "input": "edit_prompt",
-      "nodeId": "8",
-      "field": "prompt"
-    },
-    {
-      "input": "base_image",
-      "nodeId": "6",
-      "field": "image"
-    },
-    {
-      "input": "seed",
-      "nodeId": "8",
-      "field": "seed"
-    },
-    {
-      "input": "filenamePrefix",
-      "nodeId": "3",
-      "field": "filename_prefix"
-    }
-  ],
+  "parameterMappings": [],
   "builtIn": false,
   "active": false,
   "isOverride": true,

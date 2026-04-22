@@ -14,7 +14,7 @@
   },
   "6": {
     "inputs": {
-      "image": "PLACEHOLDER_node_6.png"
+      "image": "cyberpunk_robot.png"
     },
     "class_type": "LoadImage",
     "_meta": {
@@ -23,20 +23,71 @@
   },
   "8": {
     "inputs": {
-      "model": "grok-imagine-image",
-      "prompt": "Keep the original robot design and framing.\nTransform the scene into a cyberpunk night environment.\nReplace the lighting with high-contrast neon lighting, including blue and orange accent lights.\nAdd glowing light strips and illuminated panels on the robot\u2019s body and fingers.\nDarken the background significantly, with subtle smoke and light bloom effects.\nEnhance metallic reflections and sharp edges to give a high-tech, futuristic feel.\n",
+      "model": "grok-imagine-image-beta",
+      "prompt": "Keep the original robot design and framing.\nTransform the scene into a cyberpunk night environment.\nReplace the lighting with high-contrast neon lighting, including blue and orange accent lights.\nAdd glowing light strips and illuminated panels on the robot’s body and fingers.\nDarken the background significantly, with subtle smoke and light bloom effects.\nEnhance metallic reflections and sharp edges to give a high-tech, futuristic feel.\n",
       "resolution": "1K",
       "number_of_images": 1,
-      "seed": 613361025,
+      "seed": 948576576,
       "aspect_ratio": "auto",
       "image": [
-        "6",
+        "13",
         0
       ]
     },
     "class_type": "GrokImageEditNode",
     "_meta": {
       "title": "Grok Image Edit"
+    }
+  },
+  "10": {
+    "inputs": {
+      "image": "5500890953a4df8d38aa70484c2920621a7fdc515528204902ea7b15dad4c88d.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "11": {
+    "inputs": {
+      "image": "5500890953a4df8d38aa70484c2920621a7fdc515528204902ea7b15dad4c88d.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "12": {
+    "inputs": {
+      "image": "5500890953a4df8d38aa70484c2920621a7fdc515528204902ea7b15dad4c88d.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "13": {
+    "inputs": {
+      "images.image0": [
+        "6",
+        0
+      ],
+      "images.image1": [
+        "10",
+        0
+      ],
+      "images.image2": [
+        "11",
+        0
+      ],
+      "images.image3": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "BatchImagesNode",
+    "_meta": {
+      "title": "Batch Images"
     }
   }
 }

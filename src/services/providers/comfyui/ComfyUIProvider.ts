@@ -15,6 +15,7 @@ import {
 } from '../../comfyui/index.js';
 import type { ImageInfo } from '../../comfyui/ComfyUIClient.js';
 import { parameterizeGeneric } from '../../comfyui/WorkflowLoader.js';
+import { buildGrokEditWorkflow, type GrokResolution, type GrokAspectRatio } from './grokWorkflowBuilder.js';
 import type {
   GenerationProvider,
   GenerationCapability,
@@ -66,7 +67,7 @@ export class ComfyUIProvider implements GenerationProvider {
       referenceImages = [],
     } = input;
     // Randomize seed if not provided — prevents user workflows from reusing the template's fixed seed
-    const seed = inputSeed ?? Math.floor(Math.random() * 2 ** 32);
+    const seed = inputSeed ?? Math.floor(Math.random() * 0x7FFFFFFF);
 
     const registry = getRegistry();
     const client = new ComfyUIClient({ outputDir });
@@ -80,7 +81,23 @@ export class ComfyUIProvider implements GenerationProvider {
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
       const pipeline = useQwenEdit ? 'image_editing' as const : 'image_generation' as const;
-      const activeMode = modeRegistry.getActiveForPipeline(pipeline, 'comfyui');
+      let activeMode = modeRegistry.getActiveForPipeline(pipeline, 'comfyui');
+
+      // Composition-vs-delta split: this method (`generateImage`) handles
+      // first-frame `image_text_to_image` calls. When Grok is the active
+      // image_editing workflow, empirical probes showed Grok recomposes
+      // instead of honoring prompt-level composition directives (OTS
+      // collapses to two-shot; turbans and other secondary-subject details
+      // drop). Klein is the composition workhorse. Fall back to Klein
+      // for first-frame gen; keep Grok only for `editImage` (deltas).
+      if (pipeline === 'image_editing' && activeMode?.id === 'grok_image_edit') {
+        const kleinMode = modeRegistry.getMode('flux2_klein_edit_cloud');
+        if (kleinMode?.active) {
+          activeMode = kleinMode;
+          debugLog('generateImage: Grok active for edits, but routing composition to Klein (grok_image_edit reserved for editImage deltas)');
+        }
+      }
+
       if (activeMode) {
         modeManifest = activeMode;
         workflowName = activeMode.id;
@@ -185,7 +202,7 @@ export class ComfyUIProvider implements GenerationProvider {
     const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
 
     // Download result (use WS-collected outputs for cloud, /history for local)
-    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', wsOutputs);
+    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', wsOutputs, filenamePrefix, modeManifest?.id ?? workflowName);
   }
 
   async editImage(
@@ -202,7 +219,7 @@ export class ComfyUIProvider implements GenerationProvider {
       outputDir,
       filenamePrefix = 'edit',
     } = input;
-    const seed = inputSeed ?? Math.floor(Math.random() * 2 ** 32);
+    const seed = inputSeed ?? Math.floor(Math.random() * 0x7FFFFFFF);
 
     const registry = getRegistry();
 
@@ -233,13 +250,17 @@ export class ComfyUIProvider implements GenerationProvider {
 
     const client = new ComfyUIClient({ outputDir });
 
+    // Grok caps at 1 base + 2 refs (GrokImageEditNode rejects >3 images).
+    // Klein's static template is wired for 1 base + 3 refs.
+    const isGrok = modeManifest?.id === 'grok_image_edit';
+    const maxRefs = isGrok ? 2 : 4;
+
     // Upload base image
     onProgress?.({ percentage: 0, message: 'Uploading base image...', done: false });
     const uploadResult = await client.uploadImage(baseImagePath, 'input', true);
 
-    // Upload reference images (up to 4 — matching workflow reference slots)
     const referenceImageFilenames: string[] = [];
-    for (const refPath of referenceImages.slice(0, 4)) {
+    for (const refPath of referenceImages.slice(0, maxRefs)) {
       if (!fs.existsSync(refPath)) {
         throw new Error(`Reference image not found: ${refPath}`);
       }
@@ -253,7 +274,23 @@ export class ComfyUIProvider implements GenerationProvider {
 
     let workflow: Record<string, unknown>;
 
-    if (hasManifestWorkflow) {
+    if (isGrok) {
+      // Grok edit: builder emits exactly-N-slot workflows because
+      // AILab_ImageToList's image_N inputs are mandatory in API format.
+      // parameterizeGeneric can't delete nodes, so we bypass it.
+      const grokResolution = (modeManifest?.defaultValues?.resolution as GrokResolution | undefined) ?? '1K';
+      const grokAspect = (modeManifest?.defaultValues?.aspect_ratio as GrokAspectRatio | undefined) ?? 'auto';
+      workflow = buildGrokEditWorkflow({
+        baseImage: uploadResult.name,
+        refs: referenceImageFilenames,
+        prompt: editPrompt,
+        seed,
+        filenamePrefix,
+        resolution: grokResolution,
+        aspectRatio: grokAspect,
+      });
+      debugLog(`[Grok] built workflow: base=${uploadResult.name}, refs=${referenceImageFilenames.length}, nodes=${Object.keys(workflow).length}`);
+    } else if (hasManifestWorkflow) {
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
       const manifestDir = modeRegistry.getManifestDir(modeManifest.id);
@@ -320,7 +357,7 @@ export class ComfyUIProvider implements GenerationProvider {
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
     const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
 
-    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', wsOutputs);
+    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', wsOutputs, filenamePrefix, modeManifest?.id ?? workflowName);
   }
 
   async generateVideo(
@@ -337,7 +374,7 @@ export class ComfyUIProvider implements GenerationProvider {
       outputDir,
       filenamePrefix = 'video',
     } = input;
-    const seed = inputSeed ?? Math.floor(Math.random() * 2 ** 32);
+    const seed = inputSeed ?? Math.floor(Math.random() * 0x7FFFFFFF);
 
     const isT2V = !sourceImagePath || !fs.existsSync(sourceImagePath);
 
@@ -385,6 +422,7 @@ export class ComfyUIProvider implements GenerationProvider {
     } else if (!isT2V) {
       onProgress?.({ percentage: 0, message: 'Uploading source image...', done: false });
       uploadResult = await client.uploadImage(sourceImagePath, 'input', true);
+      debugLog(`Uploaded source_image: ${sourceImagePath} → ${uploadResult.name}`);
     } else {
       onProgress?.({ percentage: 0, message: 'Text-to-video mode...', done: false });
     }
@@ -455,6 +493,30 @@ export class ComfyUIProvider implements GenerationProvider {
       // The manifest's defaultValue defines the correct state (e.g., false = i2v mode).
       // When no image is provided (t2v), the default kicks in via parameterizeGeneric.
       // We do NOT override booleans here — the manifest defines the semantics.
+
+      // Audit every LoadImage node's resolved `image` input after
+      // parameterization. If any still points at a workflow placeholder
+      // (filename like `c4HD71Fv_Scene3_00001_.png` or anything with a
+      // nanoid+scene prefix that doesn't match a file we just uploaded),
+      // ComfyUI Cloud will hit its content-hash cache and return a
+      // STALE cached result from some prior submission that used the
+      // same placeholder — silently substituting unrelated video content.
+      // This is the noir S1.1 "potter" bug surfaced on 2026-04-22.
+      const uploadedNames = new Set<string>([
+        uploadResult?.name,
+        ...Object.values(uploadedFrames),
+      ].filter((v): v is string => typeof v === 'string'));
+      for (const [nid, n] of Object.entries(workflow)) {
+        const node = n as { class_type?: string; inputs?: Record<string, unknown> };
+        if (node.class_type === 'LoadImage' && typeof node.inputs?.['image'] === 'string') {
+          const img = node.inputs['image'] as string;
+          const isKnownUpload = uploadedNames.has(img);
+          debugLog(`[video workflow] LoadImage node ${nid}: image=${img}  known_upload=${isKnownUpload}`);
+          if (!isKnownUpload) {
+            debugLog(`[video workflow] WARNING: LoadImage node ${nid} still references ${img} — likely a stale template placeholder. ComfyUI Cloud may return cached output from a prior submission.`);
+          }
+        }
+      }
     } else {
       // Built-in workflow: use the old registry + named parameterizer
       const workflowMetadata = registry.get(workflowName);
@@ -478,7 +540,7 @@ export class ComfyUIProvider implements GenerationProvider {
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
     const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
 
-    const result = await this.downloadFirstOutput(client, promptId, outputDir, 'video/mp4', wsOutputs);
+    const result = await this.downloadFirstOutput(client, promptId, outputDir, 'video/mp4', wsOutputs, filenamePrefix, modeManifest?.id ?? workflowName);
     // Inject workflow name into metadata for upstream logging
     const workflowDisplayName = modeManifest?.displayName ?? 'LTX-2.3 (built-in)';
     result.metadata = { ...result.metadata, workflowName: workflowDisplayName, workflowId: modeManifest?.id ?? 'ltx23' };
@@ -527,6 +589,8 @@ export class ComfyUIProvider implements GenerationProvider {
     _outputDir: string,
     mimeType: string,
     preCollectedOutputs?: ImageInfo[],
+    filenamePrefix?: string,
+    workflowId?: string,
   ): Promise<GenerationResult> {
     // Use pre-collected outputs from WS (needed for cloud where /history is blocked)
     // Fall back to HTTP history for local mode
@@ -536,7 +600,17 @@ export class ComfyUIProvider implements GenerationProvider {
     }
 
     const first = images[0]!;
-    const outputFilename = `${nanoid(8)}_${first.filename}`;
+    // Human-readable filename: caller's prefix (e.g. "scene_1_shot_3_last_frame")
+    // shortened (sNshotM) + short model name (klein / grok / zimage / ltx23)
+    // + nanoid to disambiguate regenerations of the same shot with the same
+    // model. Fall back to the cloud's filename if no prefix was supplied.
+    const ext = first.filename.includes('.') ? first.filename.slice(first.filename.lastIndexOf('.')) : '.png';
+    const humanPrefix = shortenPrefix(filenamePrefix);
+    const modelTag = shortModelName(workflowId);
+    const parts = [humanPrefix, modelTag].filter(Boolean);
+    const outputFilename = parts.length > 0
+      ? `${parts.join('_')}_${nanoid(6)}${ext}`
+      : `${nanoid(8)}_${first.filename}`;
     debugLog(`Downloading ${first.filename} → ${_outputDir}/${outputFilename}`);
 
     const savedPath = await client.downloadImage(
@@ -552,4 +626,45 @@ export class ComfyUIProvider implements GenerationProvider {
       metadata: { promptId, comfyuiFilename: first.filename },
     };
   }
+}
+
+/**
+ * Compact a filename prefix so saved images are legible in Finder.
+ *   scene_1_shot_3_last_frame  → s1shot3_last_frame
+ *   scene_12_shot_7_first_frame → s12shot7_first_frame
+ *   CharRef_vikram → CharRef_vikram  (unchanged; non-shot prefixes pass through)
+ * Returns the trimmed original if the shot pattern doesn't match.
+ * Exported for testing.
+ */
+export function shortenPrefix(prefix: string | undefined): string {
+  if (!prefix) return '';
+  return prefix
+    .replace(/scene_(\d+)_shot_(\d+)/g, 's$1shot$2')
+    // Filesystem-safe: collapse runs of whitespace/separators, strip anything weird
+    .replace(/[^A-Za-z0-9_-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+/**
+ * Short, filesystem-friendly model tag derived from a workflow manifest ID.
+ *   flux2_klein_edit_cloud → klein
+ *   grok_image_edit → grok
+ *   zimage_standard_cloud / zimage_cloud / zimage → zimage
+ *   ltx23_fl2v_cloud / ltx23_fml2v_cloud → ltx23
+ * Unknown workflow IDs fall through as the first segment before an underscore,
+ * e.g. `custom_model_v2` → `custom`. Empty/undefined → empty string.
+ * Exported for testing.
+ */
+export function shortModelName(workflowId: string | undefined): string {
+  if (!workflowId) return '';
+  const id = workflowId.toLowerCase();
+  if (id.includes('klein')) return 'klein';
+  if (id.includes('grok')) return 'grok';
+  if (id.includes('zimage')) return 'zimage';
+  if (id.startsWith('ltx')) return 'ltx23';
+  if (id.includes('qwen')) return 'qwen';
+  if (id.includes('flux')) return 'flux';
+  // Fallback: first token before underscore
+  return id.split('_')[0] ?? '';
 }

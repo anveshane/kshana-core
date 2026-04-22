@@ -191,10 +191,19 @@ export class ComfyUIClient {
       promptPayload = this.workflowToPrompt(workflowJson as unknown as WorkflowFormat);
     }
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       prompt: promptPayload,
       client_id: clientId,
     };
+
+    // ComfyUI Cloud vendor nodes (GrokImageEditNode, etc.) check the
+    // service key from `extra_data.api_key_comfy_org` for billing. Without
+    // it, vendor-backed jobs submit cleanly but never execute — silent
+    // timeout, no execution_error. Non-vendor nodes (Klein, LTX) ignore
+    // the field, so it's safe to always include it on cloud runs.
+    if (this.apiKey) {
+      payload['extra_data'] = { api_key_comfy_org: this.apiKey };
+    }
 
     const response = await fetch(`${this.baseUrl}/prompt`, {
       method: 'POST',
@@ -307,7 +316,13 @@ export class ComfyUIClient {
       let lastActivityTime = Date.now();
       const collectedOutputs: ImageInfo[] = [];
       const isCloud = !!this.apiKey;
-      const INACTIVITY_TIMEOUT_MS = 120_000;
+      // Inactivity timeout — seconds from env COMFYUI_TIMEOUT (default 300).
+      // Cloud queue status messages arrive in bursts separated by 80–120 s of
+      // silence while other jobs execute, so the old 120s tripped false
+      // timeouts mid-queue. Bumping to match the env the rest of the code
+      // already honors.
+      const INACTIVITY_TIMEOUT_MS =
+        Math.max(60, parseInt(process.env['COMFYUI_TIMEOUT'] || '300', 10)) * 1000;
       let ws: WebSocket;
 
       const inactivityCheck = setInterval(() => {
@@ -403,24 +418,40 @@ export class ComfyUIClient {
           } else if (msgType === 'executing' && data.data?.node) {
             progressCallback?.({ percentage: 0, message: `Node: ${data.data.node}`, currentNode: data.data.node });
           } else if (msgType === 'executed' && data.data?.output) {
-            // Capture output filenames from executed events (needed for cloud where /history is blocked)
-            const output = data.data.output;
-            const nodeId = data.data.node;
-            for (const key of ['images', 'gifs', 'videos']) {
-              const items = output[key];
-              if (Array.isArray(items)) {
-                for (const item of items) {
-                  if (item.filename) {
-                    collectedOutputs.push({ filename: item.filename, subfolder: item.subfolder || '', type: item.type || 'output', node_id: nodeId });
-                    debugLog(`[queueAndWaitWS] Captured output: ${item.filename} from node ${nodeId}`);
+            // Capture output filenames from executed events (needed for cloud where /history is blocked).
+            // Guard: only capture events for OUR prompt_id. Without this, cached
+            // results broadcast by ComfyUI Cloud from OTHER concurrent jobs can
+            // leak into our outputs list — we'd download a stranger's video.
+            // (Noir S1.1 "potter" bug, 2026-04-22: our submit was 3748c3b5 but
+            // execution_success arrived for 869d0484, and we captured its
+            // outputs because no prompt_id check existed.)
+            const eventPromptId: string | undefined = data.data.prompt_id;
+            if (promptId && eventPromptId && eventPromptId !== promptId) {
+              debugLog(`[queueAndWaitWS] Ignoring output from foreign prompt ${eventPromptId} (ours=${promptId})`);
+            } else {
+              const output = data.data.output;
+              const nodeId = data.data.node;
+              for (const key of ['images', 'gifs', 'videos']) {
+                const items = output[key];
+                if (Array.isArray(items)) {
+                  for (const item of items) {
+                    if (item.filename) {
+                      collectedOutputs.push({ filename: item.filename, subfolder: item.subfolder || '', type: item.type || 'output', node_id: nodeId });
+                      debugLog(`[queueAndWaitWS] Captured output: ${item.filename} from node ${nodeId}`);
+                    }
                   }
                 }
               }
             }
           } else if (msgType === 'execution_success') {
-            finish({ status: 'completed', prompt_id: promptId });
+            const eventPromptId: string | undefined = data.data?.prompt_id;
+            if (promptId && eventPromptId && eventPromptId !== promptId) {
+              debugLog(`[queueAndWaitWS] Ignoring execution_success from foreign prompt ${eventPromptId} (ours=${promptId})`);
+            } else {
+              finish({ status: 'completed', prompt_id: promptId });
+            }
           } else if (msgType === 'execution_error') {
-            debugLog(`[queueAndWaitWS] Execution error: ${JSON.stringify(data.data).substring(0, 300)}`);
+            debugLog(`[queueAndWaitWS] Execution error: ${JSON.stringify(data.data)}`);
             finish({ status: 'error', prompt_id: promptId });
           } else if (msgType === 'status') {
             const qr = data.data?.status?.exec_info?.queue_remaining;
@@ -454,7 +485,13 @@ export class ComfyUIClient {
       // Inactivity timeout: if no progress, handle based on mode
       // Cloud: /history doesn't work, so fail instead of falling back to HTTP polling
       const isCloud = !!this.apiKey;
-      const INACTIVITY_TIMEOUT_MS = 120_000;
+      // Inactivity timeout — seconds from env COMFYUI_TIMEOUT (default 300).
+      // Cloud queue status messages arrive in bursts separated by 80–120 s of
+      // silence while other jobs execute, so the old 120s tripped false
+      // timeouts mid-queue. Bumping to match the env the rest of the code
+      // already honors.
+      const INACTIVITY_TIMEOUT_MS =
+        Math.max(60, parseInt(process.env['COMFYUI_TIMEOUT'] || '300', 10)) * 1000;
       const inactivityCheck = setInterval(() => {
         if (resolved) return;
         const inactiveSec = Math.round((Date.now() - lastActivityTime) / 1000);

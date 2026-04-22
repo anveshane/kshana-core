@@ -31,6 +31,7 @@ import { DependencyGraphExecutor } from './DependencyGraphExecutor.js';
 import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
 import { resolveInputs, writeOutput } from './contentResolver.js';
+import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
 import { extractCollectionItems } from './collectionExtractor.js';
 import { healStaleMatchingDeps } from './stateHeal.js';
 import { isStageGateSatisfied, resolveStageToTypeIds } from './stages.js';
@@ -2570,9 +2571,10 @@ Examples of common failure modes to avoid:
 
       for (const node of this.executor.getAllNodes()) {
         // Strategy B2: Scene-level → shot-level re-expansion (runs for completed OR pending nodes with itemId)
-        if (node.isCollection && node.itemId &&
-          ['shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video'].includes(node.typeId)) {
-          const sceneId = node.itemId;
+        // Template is authoritative for isCollection — stale saved state (e.g. noir_detective_story_setup-3
+        // persisted shot_motion_directive:scene_1 with isCollection=false) must not block expansion.
+        if (shouldExpandSceneCollectionToShots(node, this.config.template)) {
+          const sceneId = node.itemId!;
           const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
           if (svpNode?.status === 'completed' && svpNode.outputPath) {
             const hasChildren = this.executor.getAllNodes().some(
@@ -2771,9 +2773,8 @@ Examples of common failure modes to avoid:
         // Strategy B2: Scene-level → shot-level expansion for shot_image_prompt, shot_motion_directive, shot_image, shot_video
         // After reset, these scene-level collection nodes may be completed/pending but have no per-shot children.
         // Re-read the scene_video_prompt output to determine shot items and expand.
-        if (!didExpand && node.itemId && node.isCollection &&
-          ['shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video'].includes(node.typeId)) {
-          const sceneId = node.itemId;
+        if (!didExpand && shouldExpandSceneCollectionToShots(node, this.config.template)) {
+          const sceneId = node.itemId!;
           const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
           if (svpNode?.status === 'completed' && svpNode.outputPath) {
             // Check if per-shot children already exist
@@ -4111,7 +4112,7 @@ Examples of common failure modes to avoid:
           generationMode: firstFrameMode === 'edit_previous_shot' ? 'image_text_to_image' : firstFrameMode,
           references: firstFrameData.references || [],
         });
-        firstFramePath = await this.executeShotImageGeneration(node, firstFrameJson, toolCallId);
+        firstFramePath = await this.executeShotImageGeneration(node, firstFrameJson, toolCallId, 'first_frame');
         if (!firstFramePath) return null;
       }
 
@@ -4194,7 +4195,7 @@ Examples of common failure modes to avoid:
                 generationMode: 'image_text_to_image',
                 references: frameData.references || firstFrameData.references || [],
               });
-              const framePath = await this.executeShotImageGeneration(node, frameJson, toolCallId);
+              const framePath = await this.executeShotImageGeneration(node, frameJson, toolCallId, frameId);
               if (framePath) {
                 frameRelPath = framePath;
                 node.outputPaths[frameId] = framePath;
@@ -4209,7 +4210,7 @@ Examples of common failure modes to avoid:
               generationMode: mode,
               references: frameData.references || [],
             });
-            const framePath = await this.executeShotImageGeneration(node, frameJson, toolCallId);
+            const framePath = await this.executeShotImageGeneration(node, frameJson, toolCallId, frameId);
             if (framePath) {
               frameRelPath = framePath;
               node.outputPaths[frameId] = framePath;
@@ -4261,7 +4262,7 @@ Examples of common failure modes to avoid:
     }
 
     // Legacy single-prompt format (i2v, t2v, or old-style shots)
-    const firstFramePath = await this.executeShotImageGeneration(node, jsonContent, toolCallId);
+    const firstFramePath = await this.executeShotImageGeneration(node, jsonContent, toolCallId, 'first_frame');
     if (!firstFramePath) return null;
 
     // Check if the video generation mode requires additional frame images
@@ -4282,7 +4283,7 @@ Examples of common failure modes to avoid:
             if (frameDesc) {
               this.log(`  Generating additional frame (legacy): ${frameReq.id}`);
               const modifiedJson = this.buildFramePromptJson(jsonContent, frameDesc, frameReq.id);
-              const framePath = await this.executeShotImageGeneration(node, modifiedJson, toolCallId);
+              const framePath = await this.executeShotImageGeneration(node, modifiedJson, toolCallId, frameReq.id);
               if (framePath) {
                 node.outputPaths[frameReq.id] = framePath;
                 this.log(`  ${frameReq.id} generated: ${framePath}`);
@@ -4363,6 +4364,7 @@ Examples of common failure modes to avoid:
     node: ExecutionNode,
     jsonContent: string,
     toolCallId: string,
+    frameId?: string,
   ): Promise<string | null> {
     const agentName = this.config.name ?? 'kshana-executor';
 
@@ -4493,6 +4495,7 @@ Examples of common failure modes to avoid:
       });
 
       const sceneNumber = parseInt(node.itemId?.match(/scene_(\d+)/)?.[1] ?? '1', 10);
+      const shotNumber = parseInt(node.itemId?.match(/shot_(\d+)/)?.[1] ?? '0', 10) || undefined;
 
       // Shot images match the project's video resolution
       const shotWidth = this.config.project.resolutionWidth;
@@ -4500,6 +4503,8 @@ Examples of common failure modes to avoid:
 
       const result = await submitImageGeneration({
         scene_number: sceneNumber,
+        shot_number: shotNumber,
+        frame_id: frameId,
         prompt: shotJson.imagePrompt,
         negative_prompt: shotJson.negativePrompt,
         aspect_ratio: shotJson.aspectRatio ?? '16:9',

@@ -95,6 +95,16 @@
       "input": "filenamePrefix",
       "nodeId": "43",
       "field": "filename_prefix"
+    },
+    {
+      "input": "seed",
+      "nodeId": "14",
+      "field": "noise_seed"
+    },
+    {
+      "input": "seed",
+      "nodeId": "15",
+      "field": "noise_seed"
     }
   ],
   "builtIn": true,

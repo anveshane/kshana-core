@@ -211,6 +211,10 @@ export interface ImageGenerationParams {
   reference_images?: ReferenceImage[];
   /** Generation mode: text-to-image or image+text-to-image */
   generation_mode?: 'text_to_image' | 'image_text_to_image';
+  /** Shot number within the scene — included in saved filename so it's scannable in Finder */
+  shot_number?: number;
+  /** Frame identifier within the shot (first_frame, mid_frame, last_frame) — same reason */
+  frame_id?: string;
 }
 
 /**
@@ -291,7 +295,13 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
     const cleanName = setting_name.replace(/[^a-zA-Z0-9]/g, '');
     filenamePrefix = `SettingRef_${cleanName}`;
   } else {
-    filenamePrefix = `Scene${scene_number}`;
+    // Shot scene images: carry full scene/shot/frame identity into the filename
+    // so Finder listings stay scannable. ComfyUIProvider.shortenPrefix will
+    // compress `scene_N_shot_M` → `sNshotM` in the saved filename.
+    const parts = [`scene_${scene_number}`];
+    if (params.shot_number !== undefined) parts.push(`shot_${params.shot_number}`);
+    if (params.frame_id) parts.push(params.frame_id);
+    filenamePrefix = parts.join('_');
   }
 
   // Determine context for linking artifact to project

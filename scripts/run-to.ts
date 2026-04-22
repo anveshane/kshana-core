@@ -39,6 +39,7 @@ import { ExecutorAgent } from '../src/core/planner/ExecutorAgent.js';
 import { LLMClient } from '../src/core/llm/index.js';
 import { getVideoTemplate } from '../src/tasks/video/index.js';
 import { VALID_STAGES } from '../src/core/planner/stages.js';
+import { setActiveProjectDir } from '../src/tasks/video/workflow/activeProject.js';
 import type { GenericProjectFile } from '../src/core/templates/types.js';
 
 function usage(exitCode = 1): never {
@@ -107,6 +108,15 @@ async function main() {
     console.error(`Project not found: ${projectDir}`);
     process.exit(1);
   }
+
+  // Point the shared SessionContext at this project so every helper that reads
+  // `getProjectDir()` / `getAssetsDir()` (submitImageGeneration in
+  // src/tasks/video/tools.ts, asset registry, etc.) writes into this project's
+  // folder. Without this, media downloads leak into `default.kshana` while the
+  // graph registers paths under the correct project — causing "Base image not
+  // found" failures on the next step. The UI does this in App.tsx; the CLI
+  // must do it explicitly.
+  setActiveProjectDir(`${projectName}.kshana`);
 
   const project: GenericProjectFile = JSON.parse(
     readFileSync(join(projectDir, 'project.json'), 'utf-8'),

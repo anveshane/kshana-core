@@ -60,6 +60,16 @@
       "input": "filenamePrefix",
       "nodeId": "578",
       "field": "filename_prefix"
+    },
+    {
+      "input": "seed",
+      "nodeId": "115",
+      "field": "noise_seed"
+    },
+    {
+      "input": "seed",
+      "nodeId": "243",
+      "field": "noise_seed"
     }
   ],
   "builtIn": true,
