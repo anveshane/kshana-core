@@ -606,6 +606,34 @@ export function parameterizeLtx23Workflow(
 }
 
 /**
+ * Parameterize an API-format workflow using declarative parameter mappings.
+ * Iterates over each mapping and sets the corresponding node input field.
+ * Skips entries where the provided value is undefined or null (optional inputs).
+ */
+export function parameterizeGeneric(
+  apiWorkflow: Record<string, unknown>,
+  mappings: Array<{ input: string; nodeId: string; field: string }>,
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  for (const mapping of mappings) {
+    const value = params[mapping.input];
+    if (value === undefined || value === null) continue;
+
+    const node = apiWorkflow[mapping.nodeId] as { inputs?: Record<string, unknown> } | undefined;
+    if (!node) {
+      debugLog(`[parameterizeGeneric] Warning: node ${mapping.nodeId} not found in workflow`);
+      continue;
+    }
+    node.inputs = node.inputs || {};
+    node.inputs[mapping.field] = value;
+    debugLog(
+      `[parameterizeGeneric] Set node ${mapping.nodeId}.inputs.${mapping.field} = ${JSON.stringify(value)}`
+    );
+  }
+  return apiWorkflow;
+}
+
+/**
  * Route to the correct parameterization function based on workflow name.
  */
 export function parameterizeWorkflowByName(
@@ -675,22 +703,39 @@ export function parameterizeWorkflowByName(
       referenceImageFilenames: params.referenceImageFilenames,
     });
   } else if (workflowName === 'ltx23') {
-    // LTX-2.3 GGUF workflow (supports both I2V and T2V)
-    const t2vMode = !params.inputImageFilename;
+    // LTX-2.3 FL2V Cloud workflow — image + text prompt → video
     const extParams = params as {
       durationSeconds?: number;
       width?: number;
       height?: number;
     };
-    return parameterizeLtx23Workflow(template, {
+    const width = extParams.width || (params.aspectRatio === '9:16' ? 720 : 1280);
+    const height = extParams.height || (params.aspectRatio === '9:16' ? 1280 : 720);
+
+    // Load manifest to get parameterMappings
+    const manifestPath = path.join(
+      getWorkflowsDir(),
+      'cloud',
+      'ltx23_fl2v_cloud.manifest.json'
+    );
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as {
+      parameterMappings: Array<{ input: string; nodeId: string; field: string }>;
+    };
+
+    // Cloud workflow is already in API format — use template directly as the API workflow
+    const apiWorkflow = template as unknown as Record<string, unknown>;
+
+    return parameterizeGeneric(apiWorkflow, manifest.parameterMappings, {
       prompt: params.prompt,
-      seed: params.seed,
-      filenamePrefix,
-      inputImageFilename: params.inputImageFilename,
+      negative_prompt: params.negativePrompt,
+      first_frame: params.inputImageFilename,
+      // When no last_frame is provided, mirror first_frame so the cloud node
+      // always has a valid uploaded image (avoids "file doesn't exist" errors)
+      last_frame: params.endImageFilename ?? params.inputImageFilename,
       durationSeconds: extParams.durationSeconds ?? 10,
-      t2vMode,
-      width: extParams.width || (params.aspectRatio === '9:16' ? 720 : 1280),
-      height: extParams.height || (params.aspectRatio === '9:16' ? 1280 : 720),
+      width,
+      height,
+      filenamePrefix: `video/${filenamePrefix}`,
     });
   }
 

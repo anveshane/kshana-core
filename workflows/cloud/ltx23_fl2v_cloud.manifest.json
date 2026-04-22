@@ -1,0 +1,104 @@
+{
+  "id": "ltx23_fl2v_cloud",
+  "displayName": "LTX 2.3 FL2V (Cloud)",
+  "pipeline": "video_generation",
+  "llmDescription": "Cloud-based first+last frame video generation using LTX 2.3.",
+  "selectionCriteria": "Video generation from first and last frame images on ComfyUI Cloud.",
+  "outputType": "video",
+  "priority": 10,
+  "strategies": [
+    "flfv",
+    "i2v"
+  ],
+  "inputRequirements": [
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "llm",
+      "required": true
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "llm",
+      "required": false
+    },
+    {
+      "id": "first_frame",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "last_frame",
+      "type": "image",
+      "source": "shot_image",
+      "required": false
+    },
+    {
+      "id": "seed",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "durationSeconds",
+      "type": "number",
+      "source": "system",
+      "description": "Video duration in seconds",
+      "required": false
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "required": false
+    }
+  ],
+  "workflowFile": "ltx23_fl2v_cloud.json",
+  "format": "api",
+  "parameterMappings": [
+    {
+      "input": "prompt",
+      "nodeId": "16",
+      "field": "text"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "11",
+      "field": "text"
+    },
+    {
+      "input": "first_frame",
+      "nodeId": "45",
+      "field": "image"
+    },
+    {
+      "input": "last_frame",
+      "nodeId": "47",
+      "field": "image"
+    },
+    {
+      "input": "durationSeconds",
+      "nodeId": "169",
+      "field": "value"
+    },
+    {
+      "input": "width",
+      "nodeId": "166",
+      "field": "value"
+    },
+    {
+      "input": "height",
+      "nodeId": "167",
+      "field": "value"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "43",
+      "field": "filename_prefix"
+    }
+  ],
+  "builtIn": true,
+  "active": true
+}
