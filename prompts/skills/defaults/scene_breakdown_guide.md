@@ -29,15 +29,21 @@ Every scene MUST declare `mainSubject` at the scene_video_prompt level — **cop
 
 The main subject can change between scenes, but within a scene stays fixed. **The same character uses the same refId across every scene** — don't invent variants.
 
-## Before Writing Shots
+## Before Writing Shots — MANDATORY PRE-PLANNING
 
-1. **List every beat** in the scene — every action, dialogue moment, reaction, transition
-2. Each beat gets at least one shot. Do not merge distinct beats.
-3. If a scene opens with an establishing shot, it must ESTABLISH something specific:
+**Step 1: Beat list.** List every beat in the scene — every action, dialogue moment, reaction, transition. Each beat gets at least one shot. Do not merge distinct beats.
+
+**Step 2: Dialogue audit.** For EVERY dialogue beat, count the words and pre-compute required duration (see Dialogue Timing below). Write this number down BEFORE drafting the shot. If a line exceeds the 15s cap, plan to split it across multiple shots now — not later.
+
+**Step 3: Purpose sequence check.** Decide the opening purpose:
+   - If shot 1 is `set_the_world` or `set_the_mood` → shot 2 (or the first shot that contains a character) MUST be `meet_character`. No exceptions.
+   - If shot 1 opens directly with characters already present and acting → use `meet_character` or `show_action` as shot 1; do NOT use `set_the_world`/`set_the_mood` as a decorative opener.
+   - Never follow `set_the_world`/`set_the_mood` with `show_dialogue`, `show_reaction`, or `show_action` before the characters have been introduced via `meet_character`.
+
+**Step 4: Establishing shots must establish something specific:**
    - Extreme wide: show scale, weather, or atmosphere (e.g., "rain-soaked marketplace at night, stalls collapsed")
    - Extreme close-up: a sensory detail (e.g., "raindrops striking a brass bell", "embers floating")
    - NOT just "the empty setting" — what is happening in this environment?
-4. If characters are not in the first shot, plan a beat where they ENTER or are REVEALED
 
 ## Required Fields — Every Shot, No Exceptions
 
@@ -65,34 +71,60 @@ Every shot object MUST contain exactly these 7 fields. Missing or empty fields =
 }
 ```
 
-## Dialogue Timing — Shot Duration Must Fit the Line
+## Dialogue Timing — Shot Duration Must Fit the Line (CRITICAL)
 
-The video model generates exactly the duration you request. If a shot carries 25 words of dialogue but you set `duration: 3`, the video cuts off mid-sentence — jarring edits, broken rhythm.
+The video model generates exactly the duration you request. If a shot carries 25 words of dialogue but you set `duration: 3`, the video cuts off mid-sentence. This is the #1 cause of broken outputs — treat it as a hard validation rule, not a guideline.
 
-**Rule:** whenever the shot's `audio` contains dialogue (any `NAME:` pattern), the `duration` MUST be large enough to deliver every spoken word.
-
-**Estimate:** conversational speech ≈ 2.5 words per second. Compute:
+**The formula — apply to every dialogue shot:**
 
 ```
-duration_seconds = ceil(word_count / 2.5) + 1   # +1 second buffer for lead-in/tail
+word_count     = number of words in all speaker turns in this shot
+base_seconds   = word_count / 2.5          # conversational speech rate
+duration       = ceil(base_seconds) + 1    # +1s buffer for lead-in/tail
 ```
 
-**Examples:**
+**Minimum duration lookup table — use this directly:**
 
-| Dialogue | Word count | Estimate | Set duration to |
-|---|---|---:|---:|
-| "Go on, beti." | 3 | 3s | **3s** |
-| "Sorry Madam, had to drop Isha at the academy." | 9 | 5s | **5s** |
-| "Okay Ma. Go now, or you'll be late for Mrs. Sharma's house. Don't scrub the floors too hard today." | 21 | 10s | **10s** |
-| A monologue running past 15s | 40+ | 17s+ | **Split into multiple shots** |
+| Word count | MINIMUM duration |
+|---:|---:|
+| 1–2 words | **3s** |
+| 3–5 words | **3s** |
+| 6–7 words | **4s** |
+| 8–10 words | **5s** |
+| 11–12 words | **6s** |
+| 13–15 words | **7s** |
+| 16–17 words | **8s** |
+| 18–20 words | **9s** |
+| 21–22 words | **10s** |
+| 23–25 words | **11s** |
+| 26–27 words | **12s** |
+| 28–30 words | **13s** |
+| 31–32 words | **14s** |
+| 33–35 words | **15s (CAP)** |
+| 36+ words | **SPLIT across shots** |
 
-**Rules:**
-- Count only words inside the speaker turn — ambient sound in the same audio line doesn't count.
-- If multiple characters speak in the same shot, sum all dialogue word counts.
-- **The cap is 15s per shot.** If one line would require more than 15s, split the line across two shots (e.g. `show_dialogue` → `show_reaction` → `show_dialogue`).
+**Worked examples:**
+
+| Dialogue | Words | Minimum duration |
+|---|---:|---:|
+| "Go on, beti." | 3 | **3s** |
+| "Sorry Madam, had to drop Isha at the academy." | 9 | **5s** |
+| "Okay Ma. Go now, or you'll be late for Mrs. Sharma's house. Don't scrub the floors too hard today." | 21 | **10s** |
+| "I told you not to come here again. Last time it nearly cost us everything, and I am not burying another brother for your schemes." | 27 | **12s** |
+| A monologue of 40+ words | 40+ | **SPLIT** — e.g. 18 words in shot A (9s) → reaction cutaway → 22 words in shot B (10s) |
+
+**Hard rules:**
+- Count only words inside the speaker turn (between `NAME:` and the next non-dialogue phrase). Ambient descriptions in the same audio line don't count.
+- If multiple characters speak in the same shot, SUM all dialogue word counts.
+- **Cap is 15s per shot.** If a single uninterrupted line needs more than 15s, split the line across two or more shots. Typical split pattern: `show_dialogue` (first half) → `show_reaction` (listener, 3–4s cutaway) → `show_dialogue` (second half).
+- When splitting, write the first half in shot N's `audio`, the second half in shot N+M's `audio`. Never duplicate lines across shots.
 - Silent / ambient-only shots follow the normal 3–10s guidance.
+- When unsure, ROUND UP. A 1-second overshoot is invisible; a 1-second undershoot cuts a word.
 
-Under-sizing dialogue is the #1 cause of jarring cuts in the final video — err on the longer side when unsure.
+**Pre-flight check — do this for every shot before finalizing:**
+1. Does `audio` contain a `NAME:` or `(V.O.):` pattern? If yes, count the words.
+2. Look up the minimum duration in the table above.
+3. Is `duration` ≥ the minimum? If no, increase it or split the shot.
 
 ## Purpose — WHY This Shot Exists
 
@@ -113,10 +145,38 @@ Every shot serves a story function. Pick the single most important purpose for t
 | `show_change` | Transformation or VFX — something morphs, dissolves, ignites |
 | `punctuate` | Dramatic emphasis — exclamation mark shot |
 
-**Sequence rules:**
-- After `set_the_world` or `set_the_mood`, the next shot with characters MUST be `meet_character`
-- `meet_character` should show characters ENTERING or being REVEALED — not already centered as if they were always there
-- A scene can skip establishing shots and start directly with `meet_character` or `show_action`
+### Purpose Sequence — HARD RULES
+
+These rules are non-negotiable. Violating them produces jarring edits and confused audiences.
+
+**Rule 1: The "Establish then Meet" rule.**
+If shot N uses `set_the_world` OR `set_the_mood`, then the FIRST subsequent shot that contains a character MUST use `meet_character`. You cannot jump from `set_the_world` → `show_dialogue`, nor from `set_the_mood` → `show_action`, nor from `set_the_world` → `show_reaction`. The character must be formally introduced to the frame first.
+
+   - ✅ `set_the_world` → `meet_character` → `show_dialogue`
+   - ✅ `set_the_mood` → `set_the_world` → `meet_character` → `show_action`
+   - ❌ `set_the_world` → `show_dialogue` (missing `meet_character`)
+   - ❌ `set_the_mood` → `show_reaction` (missing `meet_character`)
+   - ❌ `set_the_world` → `set_the_mood` → `show_action` (character entered without `meet_character`)
+
+**Rule 2: No stacked establishers without payoff.**
+Do not chain more than 2 establishing shots (`set_the_world`/`set_the_mood`) before introducing a character. Two is the maximum; a third feels like a travelogue.
+
+**Rule 3: `meet_character` is one-shot-per-character-per-scene.**
+Once a character has been introduced with `meet_character` in this scene, subsequent shots of them use `show_dialogue`, `show_reaction`, `show_action`, etc. — not another `meet_character`. The exception: a NEW character entering later uses `meet_character` for their first appearance.
+
+**Rule 4: Dialogue needs setup.**
+A shot with dialogue (`show_dialogue`) should be preceded by at least one shot that establishes WHO is speaking — either `meet_character` (first appearance) or the speaker was on-screen in the prior shot. Do not open a scene directly with `show_dialogue` unless the very first frame also introduces the speaker clearly (in which case tag it `meet_character` with dialogue in the audio).
+
+**Rule 5: Opening options.**
+Valid scene openings:
+   - `set_the_world` → `meet_character` → ...
+   - `set_the_mood` → `meet_character` → ...
+   - `set_the_world` → `set_the_mood` → `meet_character` → ...
+   - `meet_character` → ... (skip establishing, start with character)
+   - `show_action` → ... (in-media-res, only if the action itself reveals who's there)
+
+Invalid openings:
+   - Starting with `show_dialogue`, `show_reaction`, `show_tension`, `hold_emotion` without prior `meet_character` in this scene.
 
 ## Perspective — WHOSE POV IS THIS SHOT FROM
 
@@ -210,6 +270,7 @@ The `audio` field captures **everything heard** in a shot — dialogue, ambient 
 - If the scene description includes spoken dialogue, every line MUST appear in the correct shot's `audio` field — do not skip or omit any dialogue
 - If a shot has no dialogue, describe the ambient sounds or effects heard
 - Distribute dialogue across the correct shots — match which shot the line is spoken during
+- **Before finalizing each shot, re-count the dialogue words and verify `duration` meets the minimum from the Dialogue Timing table**
 
 ## Transitions
 
@@ -241,21 +302,30 @@ Each shot specifies how it transitions FROM the previous shot. The first shot of
 - Then add angle and movement: "close-up, low angle, slow push-in as tension builds"
 - Keep it concise — a short phrase, not a paragraph
 
-## Pre-Output Checklist
+## Pre-Output Checklist — RUN EVERY ITEM
 
-Before returning JSON, verify every item:
+Before returning JSON, verify every item. Failing any item = broken output.
 
 1. Every scene beat has a shot
-2. Duration sum ≈ totalDuration (within ±20%). Each shot is 3–15 seconds (15s reserved for dialogue-heavy shots; action is typically 3–10s). Dialogue fit is non-negotiable — see Dialogue Timing above
-3. **Every shot has all 7 required fields**: `shotNumber`, `purpose`, `duration`, `description`, `cameraWork`, `audio`, `transition` — none empty
-4. **Every shot has a valid `purpose`** from the taxonomy — not a made-up value
-5. **Every shot has an `audio` field** with dialogue (if any) + ambient/effects
-6. **Every shot has a `transition` field** — first shot uses `fade` or `cut`
-7. All dialogue placed in the correct shot's `audio` field — no lines omitted
-8. After `set_the_world`/`set_the_mood`, next character shot is `meet_character`
-9. Pacing varies: quick cuts for tension, longer holds for emotion
-10. **Scene declares `mainSubject`** — and the value is **copied verbatim from `<available_refs>`** (no paraphrasing, no casing changes, no typo fixes)
-11. **Every refId in the JSON** (`mainSubject`, `secondarySubject`, `perspectiveOf`, `focus.primary`, `focus.background[]`, `focus.lurking`) appears verbatim in `<available_refs>` — if you referenced something not in the list, describe it as prose in `description` instead
-12. **Every `show_action` and `meet_character` shot has `perspective`** set
-13. **Non-establishing shots have `focus.primary`** — what's sharp and central in frame
-14. **Main subject continuity verified** — no teleporting between locations; bridging shots (exit/bridge/entry) exist when mainSubject's location changes
+2. Duration sum ≈ totalDuration (within ±20%). Each shot is 3–15 seconds.
+3. **DIALOGUE FIT AUDIT** — for every shot whose `audio` contains `NAME:` or `(V.O.):`:
+   - Count the dialogue words
+   - Look up minimum duration in the Dialogue Timing table
+   - Verify `duration` ≥ minimum
+   - If any line would require >15s, confirm it has been split across multiple shots
+4. **Every shot has all 7 required fields**: `shotNumber`, `purpose`, `duration`, `description`, `cameraWork`, `audio`, `transition` — none empty
+5. **Every shot has a valid `purpose`** from the taxonomy — not a made-up value
+6. **PURPOSE SEQUENCE AUDIT** — walk through shots in order:
+   - If any `set_the_world` or `set_the_mood` appears, confirm the next character-containing shot is `meet_character`
+   - Confirm no more than 2 establishing shots in a row
+   - Confirm the scene's opening matches one of the valid openings in Rule 5
+   - Confirm no `show_dialogue` appears before the speaker has been introduced via `meet_character` (or is present in the opening frame)
+7. **Every shot has an `audio` field** with dialogue (if any) + ambient/effects
+8. **Every shot has a `transition` field** — first shot uses `fade` or `cut`
+9. All dialogue placed in the correct shot's `audio` field — no lines omitted
+10. Pacing varies: quick cuts for tension, longer holds for emotion
+11. **Scene declares `mainSubject`** — and the value is **copied verbatim from `<available_refs>`** (no paraphrasing, no casing changes, no typo fixes)
+12. **Every refId in the JSON** (`mainSubject`, `secondarySubject`, `perspectiveOf`, `focus.primary`, `focus.background[]`, `focus.lurking`) appears verbatim in `<available_refs>` — if you referenced something not in the list, describe it as prose in `description` instead
+13. **Every `show_action` and `meet_character` shot has `perspective`** set
+14. **Non-establishing shots have `focus.primary`** — what's sharp and central in frame
+15. **Main subject continuity verified** — no teleporting between locations; bridging shots (exit/bridge/entry) exist when mainSubject's location changes
