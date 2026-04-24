@@ -1265,9 +1265,19 @@ export class ExecutorAgent extends TypedEventEmitter {
 
         this.log(`Ready nodes: ${readyNodes.map(n => n.id).join(', ')}`);
 
-        for (const node of readyNodes) {
-          if (this.stopped) break;
-
+        /**
+         * Process one ready node. Encapsulated as a local async fn so
+         * the outer loop can choose to await serially OR fan out a
+         * bounded number of LLM-eligible nodes concurrently. Every
+         * `continue` in here that used to advance the outer for-loop
+         * has been converted to `return` — behavior identical in
+         * serial mode; enables parallelism when dispatched concurrently.
+         *
+         * Media (ComfyUI / FFmpeg) work still flows through the existing
+         * `parallelMediaGeneration` / `pendingMedia` machinery — this
+         * split is only about LLM calls.
+         */
+        const runOneNode = async (node: ExecutionNode): Promise<void> => {
           // In parallel mode: await any pending media this node depends on
           if (this.config.parallelMediaGeneration) {
             for (const depId of node.dependencies) {
@@ -1313,7 +1323,7 @@ export class ExecutorAgent extends TypedEventEmitter {
             }
             this.persistState();
             this.emitTodoUpdate();
-            continue; // Skip this node — deps need to regenerate first
+            return; // Skip this node — deps need to regenerate first
           }
 
           this.executor.markStarted(node.id);
@@ -1341,7 +1351,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               const assemblyResult = await this.executeFinalAssembly(node, toolCallId);
               if (!assemblyResult) {
                 this.executor.markFailed(node.id, 'Final assembly failed');
-                continue;
+                return;
               }
               finalOutputPath = assemblyResult;
             } else if (nodeCategory === 'final' && this.config.skipMediaGeneration) {
@@ -1350,13 +1360,13 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.executor.markCompleted(node.id, 'skipped-test-mode');
               this.persistState();
               this.emitTodoUpdate();
-              continue;
+              return;
             } else if (node.typeId === 'shot_video' && !this.config.skipMediaGeneration) {
               // Shot video — purely deterministic: take shot image + motion → video provider
               const videoResult = await this.executeShotVideo(node, toolCallId);
               if (!videoResult) {
                 this.executor.markFailed(node.id, 'Shot video generation failed');
-                continue;
+                return;
               }
               finalOutputPath = videoResult;
               // Update timeline segment with the generated video
@@ -1367,13 +1377,13 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.executor.markCompleted(node.id, 'skipped-test-mode');
               this.persistState();
               this.emitTodoUpdate();
-              continue;
+              return;
             } else if (node.typeId === 'shot_image' && !this.config.skipMediaGeneration) {
               // Shot image — deterministic: read prompt JSON, resolve refs, call ComfyUI
               const shotImageResult = await this.executeShotImage(node, toolCallId);
               if (!shotImageResult) {
                 this.executor.markFailed(node.id, 'Shot image generation failed');
-                continue;
+                return;
               }
               finalOutputPath = shotImageResult;
             } else if (node.typeId === 'shot_image' && this.config.skipMediaGeneration) {
@@ -1382,7 +1392,7 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.executor.markCompleted(node.id, 'skipped-test-mode');
               this.persistState();
               this.emitTodoUpdate();
-              continue;
+              return;
             } else {
               // Non-deterministic node — needs LLM (or skip-if-exists)
               // 1. Resolve inputs
@@ -1418,7 +1428,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                 if (!approved) {
                   this.log(`  Skipped by user`);
                   this.executor.markFailed(node.id, 'Skipped by user');
-                  continue;
+                  return;
                 }
               }
 
@@ -1445,7 +1455,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                     } else {
                       this.executor.markFailed(node.id, 'Media generation failed (prompt saved, will retry)');
                       this.emitTodoUpdate();
-                      continue;
+                      return;
                     }
                   }
 
@@ -1480,7 +1490,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                     this.stopReason = 'paused_at_stage';
                     this.stopped = true;
                   }
-                  continue;
+                  return;
                 }
               }
 
@@ -1585,7 +1595,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                       this.log(`  Full retry also failed: ${retryValidation.error}`);
                       this.executor.markFailed(node.id, `Invalid JSON output after retry: ${retryValidation.error}`);
                       this.emitTodoUpdate();
-                      continue;
+                      return;
                     }
                   }
                 }
@@ -1648,9 +1658,9 @@ export class ExecutorAgent extends TypedEventEmitter {
                     });
                   this.pendingMedia.set(node.id, mediaPromise);
                   // Don't mark completed here — the parallel handler will do it
-                  // Skip the markCompleted below by continuing
+                  // Skip the markCompleted below by returning
                   this.log(`  [parallel] Media generation queued for ${node.id}`);
-                  continue; // Skip markCompleted — parallel handler owns the node status
+                  return; // Skip markCompleted — parallel handler owns the node status
                 } else {
                   // Serial mode: block until media is generated (with retry)
                   const mediaPath = await this.executeMediaGenerationWithRetry(node, outputPath, toolCallId);
@@ -1662,7 +1672,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                     this.executor.markFailed(node.id, 'Media generation failed (prompt saved, will retry)');
                     this.emitTodoUpdate();
                     this.log(`  Media gen failed for ${node.id} — marked failed, prompt preserved at ${outputPath}`);
-                    continue;
+                    return;
                   }
                 }
               }
@@ -1749,6 +1759,41 @@ export class ExecutorAgent extends TypedEventEmitter {
               });
             }
           }
+        };
+        // end runOneNode
+
+        // Bounded-concurrency dispatch. LLM-eligible nodes run up to
+        // `llmConcurrency` at a time; media/deterministic nodes stay
+        // serial because their resource isn't bottlenecked at the LLM
+        // provider (ComfyUI / FFmpeg concurrency is managed elsewhere).
+        //
+        // `llmConcurrency = 1` → fully serial behavior — bit-identical
+        // to the previous loop. `> 1` is only enabled when LLM_MODE=cloud
+        // (see `getLLMConcurrency`).
+        const llmConcurrency = this.getLLMConcurrency();
+        const pendingLLM = new Set<Promise<void>>();
+        for (const node of readyNodes) {
+          if (this.stopped) break;
+
+          if (llmConcurrency > 1 && this.isLLMEligibleNode(node)) {
+            // Block when we'd exceed the cap — Promise.race drains
+            // whichever task finishes first before we add another.
+            while (pendingLLM.size >= llmConcurrency) {
+              await Promise.race(pendingLLM);
+            }
+            let p: Promise<void>;
+            const tracked = () => runOneNode(node).finally(() => pendingLLM.delete(p));
+            p = tracked();
+            pendingLLM.add(p);
+          } else {
+            await runOneNode(node);
+          }
+        }
+        // Drain any LLM tasks still in flight before the next round of
+        // ready-node discovery — dependents may be gated on outputs
+        // from nodes we just fanned out.
+        if (pendingLLM.size > 0) {
+          await Promise.all(pendingLLM);
         }
       }
 
@@ -3084,6 +3129,59 @@ Examples of common failure modes to avoid:
    * completed more recently than the prompt file was written.
    * This detects prompts from before a reset that need regeneration.
    */
+  /**
+   * Whether a node represents an LLM call (as opposed to ComfyUI /
+   * FFmpeg / deterministic work). These are the nodes we fan out
+   * concurrently when `LLM_MODE=cloud` enables parallelism.
+   *
+   * Rule: anything with category `visual_ref`, `clip`, or `final` is
+   * NOT an LLM node — those go through ComfyUI or FFmpeg and have their
+   * own concurrency controls. Everything else (content, structure,
+   * concept, etc.) is an LLM node.
+   *
+   * Exception: a media node whose prompt has not yet been generated
+   * still issues an LLM call for the prompt in the SAME pass. That
+   * case is fine to parallelize — the outer `runOneNode` will write
+   * the prompt, then either kick off ComfyUI (parallel media mode) or
+   * block on it (serial media mode). We keep the node classification
+   * stable for simplicity; if the per-node path hits the ComfyUI
+   * block, it's the same as today and unaffected by LLM concurrency.
+   */
+  private isLLMEligibleNode(node: ExecutionNode): boolean {
+    const typeDef = this.config.template.artifactTypes[node.typeId];
+    const cat = typeDef?.category;
+    return cat !== 'visual_ref' && cat !== 'clip' && cat !== 'final';
+  }
+
+  /**
+   * Resolve the concurrency cap for LLM calls from env.
+   *
+   * Config:
+   *   - `LLM_MODE=cloud|local` (default `local`)
+   *   - `LLM_PARALLELISM_CLOUD` (default `4` when mode=cloud)
+   *   - `LLM_PARALLELISM_LOCAL` (default `1` when mode=local)
+   *
+   * Local mode defaults to 1 because a single local model server (LM
+   * Studio, llama.cpp) serializes requests anyway — the value just
+   * fights the server's own queue. Cloud defaults to 4 as a
+   * conservative starting point that fits inside most provider rate
+   * limits; users can tune via the `LLM_PARALLELISM_CLOUD` var.
+   *
+   * Read lazily per-call (no caching) so `.env` edits and test
+   * overrides via `process.env` take effect without a restart of the
+   * orchestrator.
+   */
+  private getLLMConcurrency(): number {
+    const mode = (process.env['LLM_MODE'] ?? 'local').toLowerCase();
+    const key = mode === 'cloud' ? 'LLM_PARALLELISM_CLOUD' : 'LLM_PARALLELISM_LOCAL';
+    const fallback = mode === 'cloud' ? 4 : 1;
+    const raw = process.env[key];
+    if (!raw) return fallback;
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed < 1) return fallback;
+    return parsed;
+  }
+
   /**
    * Check if any completed dependency has a missing output file.
    * Returns the list of dependency IDs whose output files don't exist.
