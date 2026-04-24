@@ -2175,6 +2175,7 @@ Examples of common failure modes to avoid:
 
     // For shot_motion_directive: inject state delta (what needs to MOVE)
     // The shot_image_prompt step saved a state diff file we can read
+    let characterTagsBlock = '';
     if (node.typeId === 'shot_motion_directive' && node.itemId) {
       try {
         const { loadShotStateDiff, buildMotionStateContext } = await import('./sceneState.js');
@@ -2185,6 +2186,53 @@ Examples of common failure modes to avoid:
           if (shotDiff) {
             sceneStateContext = buildMotionStateContext(shotDiff.previous, shotDiff.target);
             this.log(`  Motion directive: injected state delta for shot ${shotNum}`);
+          }
+        }
+
+        // Inject short visual tags for every character visible in this
+        // shot when there are 2+ of them. Video models have no idea who
+        // "Parvati" or "Isha" are — naming them bare produces an
+        // unresolved token and the model invents someone new. Tags like
+        // "the older woman in faded blue salwar" disambiguate across
+        // characters while still being compact.
+        const shotImagePromptNode = this.executor.getNode(`shot_image_prompt:${node.itemId}`);
+        if (shotImagePromptNode?.outputPath) {
+          const promptPath = join(this.config.projectDir, shotImagePromptNode.outputPath);
+          if (existsSync(promptPath)) {
+            try {
+              let raw = readFileSync(promptPath, 'utf-8').trim();
+              if (raw.startsWith('```')) raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+              const shotJson = JSON.parse(raw);
+              // Pull the union of character refs across all frames —
+              // last_frame sometimes lists chars that left the frame
+              // mid-shot, which still need tagging if first_frame has them.
+              const frames = shotJson.frames ?? {};
+              const charRefIds = new Set<string>();
+              for (const f of Object.values(frames) as any[]) {
+                for (const r of f?.references ?? []) {
+                  if (r?.type === 'character' && typeof r.refId === 'string') {
+                    const itemId = r.refId.replace(/^character_image:/, '');
+                    if (itemId) charRefIds.add(itemId);
+                  }
+                }
+              }
+
+              if (charRefIds.size >= 2) {
+                const { buildCharacterTagsBlock } = await import('./characterVisualTags.js');
+                const chars: Array<{ refId: string; mdPath: string }> = [];
+                for (const refId of charRefIds) {
+                  const charNode = this.executor.getNode(`character:${refId}`);
+                  const outPath = charNode?.outputPath;
+                  if (outPath) {
+                    chars.push({ refId, mdPath: join(this.config.projectDir, outPath) });
+                  }
+                }
+                characterTagsBlock = buildCharacterTagsBlock(chars);
+                if (characterTagsBlock) {
+                  this.log(`  Motion directive: injected character tags for ${chars.length} char(s)`);
+                }
+              }
+            } catch { /* shot image prompt unreadable — skip tags */ }
           }
         }
       } catch { /* state not available */ }
@@ -2211,8 +2259,8 @@ Examples of common failure modes to avoid:
     }
 
     const user = inputs.contextBlock
-      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}\n\n${inputs.contextBlock}`
-      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}`;
+      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}\n\n${inputs.contextBlock}`
+      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}`;
 
     return { system: systemPrompt, user, loadedSkills };
   }

@@ -74,13 +74,26 @@ Focus on ONE dominant change per shot. The model handles one thing well. Two com
 
 **GOOD** (single priority): "The figure advances three steps through puddles, each footfall splashing water that catches the neon glow. Camera tracks alongside at waist height."
 
-### No Character Descriptions
+### Naming Characters — Tags, Not Proper Names
 
-The character is already in the image. Do NOT re-describe hair, skin, clothing, build, or features.
+The video model does NOT know who your characters are by name. "Parvati" and "Isha" are unresolved tokens to it — it cannot tell which figure in the image is which. Naming them bare causes the model to invent a new character instead of animating the right one.
 
-**BAD**: "A tall man with silver hair and a black leather jacket stands in the rain-soaked alley with neon signs reflecting off wet pavement. He turns his head slowly."
+**If the shot has exactly ONE character:**
+- Refer to them by position or role ("the figure at the railing", "the runner", "the woman at the sink").
+- Do NOT re-describe hair, skin, clothing, or features — the image already carries those.
 
-**GOOD**: "The figure turns head slowly to the right, gaze shifting toward the alley entrance. Camera holds static."
+**If the shot has TWO OR MORE characters:**
+- A `<character_tags>` block is injected into your context with a short visual description per character.
+- Use those tags to identify each character, NOT their proper names. Keep each tag under ~8 words.
+- If no `<character_tags>` block was provided for a multi-character shot, fall back to short role/position tags that disambiguate the characters from each other ("the older woman in the blue kameez", "the young athlete in red").
+
+**BAD** (single-character, over-described): "A tall man with silver hair and a black leather jacket stands in the rain-soaked alley with neon signs reflecting off wet pavement. He turns his head slowly."
+
+**GOOD** (single-character): "The figure turns head slowly to the right, gaze shifting toward the alley entrance. Camera holds static."
+
+**BAD** (two characters, named): "Parvati watches as Isha jogs away down the track."
+
+**GOOD** (two characters, visually tagged): "The older woman in the faded blue salwar watches as the young runner in the red vest jogs away down the track."
 
 ### No Setting Descriptions
 
@@ -147,7 +160,7 @@ The video model produces silent video. Translate sounds into visible effects ONL
 
 Before outputting, verify:
 
-1. **No appearance descriptions** — search for hair, skin, eyes, clothing, build, features. Remove all.
+1. **Character naming rule** — if 2+ characters in the shot, each mention uses a short visual tag (not a proper name) drawn from the `<character_tags>` block. If only 1 character, use position/role and no appearance details at all.
 2. **No setting descriptions** — search for descriptions of static objects, buildings, weather setup. Remove all.
 3. **Word count under 80** — if over, cut the least essential detail.
 4. **One priority action** — if more than one thing competes for attention, pick the most important.
