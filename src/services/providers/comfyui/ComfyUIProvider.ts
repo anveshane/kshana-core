@@ -110,9 +110,22 @@ export class ComfyUIProvider implements GenerationProvider {
     let inputImageFilename: string | undefined;
     const referenceImageFilenames: string[] = [];
 
-    // Upload reference images if using editing workflow
+    // Upload reference images if using editing workflow.
+    // Klein's edit workflow has 4 LoadImage nodes (manifest: base_image +
+    // reference_image_1..3), so we can take up to 4 refs here. Before
+    // 2026-04-22 this was slice(0, 3) and silently dropped the 4th ref —
+    // specifically hurting shot prompts that listed 3 characters + 1
+    // setting, where the setting got cut and the 4th Klein slot was
+    // filled with a duplicate of the first ref via the safety fallback
+    // at the bottom of this branch.
     if (useQwenEdit) {
-      const imagesToUpload = referenceImages.slice(0, 3);
+      // Upload in caller's order. Any reordering (e.g. "setting first so
+      // it becomes Klein's base") MUST happen upstream at the
+      // shot_image_prompt layer, because the prompt text says "from
+      // image N" and the N's must match the final upload order. We do
+      // that normalization in `normalizeShotImagePrompt` before we ever
+      // hit this provider.
+      const imagesToUpload = referenceImages.slice(0, 4);
       for (let i = 0; i < imagesToUpload.length; i++) {
         const refImage = imagesToUpload[i]!;
         if (!fs.existsSync(refImage.filePath)) {

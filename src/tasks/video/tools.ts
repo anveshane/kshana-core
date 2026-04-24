@@ -353,16 +353,15 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
 
     const useQwenEdit = generation_mode === 'image_text_to_image' && reference_images.length > 0;
 
-    // If qwen_edit mode with references, prepend image mapping context
-    let basePrompt = prompt;
-    if (useQwenEdit && reference_images.length > 0) {
-      const imageContext = reference_images
-        .map((ref, i) => `image${i + 1} is a ${ref.type} reference for "${ref.name}"`)
-        .join('. ');
-      basePrompt = `${imageContext}. ${prompt}`;
-    }
-
-    const enhancedPrompt = `${basePrompt}, ${styleConfig.promptModifier}`;
+    // Legacy pre-amble like `image1 is a character reference for "vikram".
+    // image2 is a character reference for "laila". …` was injected here
+    // on every edit call. The shot_image_prompt already uses "from image N"
+    // phrasing in its prose, so the pre-amble is redundant noise — and
+    // often inaccurate (it lists images that weren't actually uploaded
+    // when the upload cap trimmed the tail of the ref array). Dropped
+    // 2026-04-22. If the model needs image-index context, it should come
+    // from the prompt itself, not a synthetic prefix.
+    const enhancedPrompt = `${prompt}, ${styleConfig.promptModifier}`;
     const enhancedNegativePrompt = negative_prompt
       ? `${negative_prompt}, ${styleConfig.negativePromptModifier}`
       : styleConfig.negativePromptModifier;

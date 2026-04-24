@@ -32,6 +32,7 @@ import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
 import { resolveInputs, writeOutput } from './contentResolver.js';
 import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
+import { normalizeShotImagePrompt as normalizeShotImagePromptFrame } from './shotImagePromptNormalizer.js';
 import { extractCollectionItems } from './collectionExtractor.js';
 import { healStaleMatchingDeps } from './stateHeal.js';
 import { isStageGateSatisfied, resolveStageToTypeIds } from './stages.js';
@@ -4049,6 +4050,19 @@ Examples of common failure modes to avoid:
     if (hasFrames) {
       // New per-frame format: each frame has its own prompt and generation mode
       this.log(`  Per-frame format detected: ${Object.keys(parsedJson.frames).join(', ')}`);
+
+      // Normalize each frame so setting refs land at index 0 (Klein's
+      // base_image slot). This rewrites both the references array and
+      // the `from image N` phrases in imagePrompt to stay in lockstep.
+      // Must happen before ANY downstream consumer reads the references
+      // (submitImageGeneration, editImageLayered, etc.). See
+      // shotImagePromptNormalizer.ts for rationale.
+      for (const frameKey of Object.keys(parsedJson.frames)) {
+        const f = parsedJson.frames[frameKey];
+        if (f && typeof f === 'object' && typeof f.imagePrompt === 'string' && Array.isArray(f.references)) {
+          parsedJson.frames[frameKey] = normalizeShotImagePromptFrame(f);
+        }
+      }
 
       // Generate first_frame
       const firstFrameData = parsedJson.frames['first_frame'];

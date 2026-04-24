@@ -1,5 +1,22 @@
 # Split shot_image_prompt Into Multi-Call Pipeline
 
+## Status: PARKED (2026-04-24)
+
+Pipeline code is built and unit-tested in `src/core/planner/shotImagePipeline.ts`
+(`generateShotImagePromptPipeline`, `assembleShotImagePrompt`, per-mode guides in
+`prompts/skills/defaults/shot_*_guide.md`) but **not wired into ExecutorAgent**.
+`ExecutorAgent.ts` still maps `shot_image_prompt → shot_composition_guide` (the
+single-call monolithic path).
+
+Parked because: on the same model, 2–3 calls per shot is neutral-to-slightly-more
+expensive than 1. The split only pays off if we downgrade to a cheaper model for
+each simpler call, and we're not currently blocked on the `mimo-v2-flash` 80.6%
+ceiling hard enough to justify the wire-up + model-swap work.
+
+To resume: wire `generateShotImagePromptPipeline` into the `shot_image_prompt`
+branch of `ExecutorAgent.generateForNode`, retire `shot_composition_guide.md`,
+and decide per-call model tiers.
+
 ## Priority: HIGH (unblocks quality ceiling for smaller LLMs)
 
 ## Problem
