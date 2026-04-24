@@ -60,6 +60,7 @@ import {
 } from '../timeline/TimelineManager.js';
 import { assembleVideos, resolveSegmentFilePaths } from '../timeline/FFmpegAssembler.js';
 import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timeline/types.js';
+import type { TodoNodeInfo } from '../../events/events.js';
 import { validateWithSchema, normalizeSceneVideoPrompt, normalizeShotImagePrompt, getPromptSchema } from './schemas.js';
 import {
   validateContinuitySequence,
@@ -626,7 +627,28 @@ export class ExecutorAgent extends TypedEventEmitter {
         };
       });
 
-    this.emit({ type: 'todo_update', todos });
+    // Carry a parallel array of node-shape info keyed by the same ids.
+    // Kept separate from `todos` because `ExpandableTodoItem` has a
+    // strict shape — this metadata doesn't fit there — and is needed
+    // by the frontend Storyboard to render shot frames / videos
+    // without parsing filenames.
+    const nodeInfo: TodoNodeInfo[] = sorted
+      .filter(node => !(!node.itemId && expandedTypes.has(node.typeId)))
+      .map(node => {
+        const info: TodoNodeInfo = {
+          id: node.id,
+          typeId: node.typeId,
+          status: node.status,
+        };
+        if (node.itemId !== undefined) info.itemId = node.itemId;
+        if (node.outputPath) info.outputPath = node.outputPath;
+        if (node.outputPaths && Object.keys(node.outputPaths).length > 0) {
+          info.outputPaths = node.outputPaths;
+        }
+        return info;
+      });
+
+    this.emit({ type: 'todo_update', todos, nodes: nodeInfo });
   }
 
   /**

@@ -49,6 +49,26 @@ export interface MediaPreview {
   label?: string
 }
 
+/**
+ * Minimal executor node projection the frontend cares about.
+ *
+ * We only store the fields the UI actually reads. Not the full node —
+ * things like `dependencies`, `promptHistory`, `createdAt` stay
+ * server-side. Keeping this narrow also makes the WebSocket node-update
+ * payload small and the reducer predictable.
+ */
+export interface ExecutorNodeInfo {
+  id: string                 // e.g. "shot_image:scene_1_shot_3"
+  typeId: string             // e.g. "shot_image", "shot_video", "shot_image_prompt"
+  itemId?: string            // e.g. "scene_1_shot_3"
+  displayName?: string
+  status: 'pending' | 'in_progress' | 'completed' | 'failed' | string
+  /** Single output (most node types — shot_video, shot_motion_directive, etc.). */
+  outputPath?: string
+  /** Multi-frame output (shot_image: `{first_frame, last_frame, mid_frame?}`). */
+  outputPaths?: Record<string, string>
+}
+
 export interface AppState {
   // Connection
   sessionId: string | null
@@ -75,6 +95,14 @@ export interface AppState {
   // Assets
   assets: Array<{ id: string; path: string; url: string; type: string; nodeId?: string; frame?: 'first_frame' | 'last_frame' | 'mid_frame' | 'single' }>
 
+  // Executor nodes — keyed by nodeId (e.g. "shot_image:scene_1_shot_3").
+  // This is the canonical source of truth for "which files belong to which
+  // shot". The Storyboard reads shot_image / shot_video nodes directly
+  // from here to get outputPaths; filename parsing is gone. Populated
+  // from `/api/v1/projects/:name` on project select and refreshed via
+  // node update events over WebSocket.
+  nodes: Record<string, ExecutorNodeInfo>
+
   // Timeline
   timeline: Timeline | null
   activeView: 'chat' | 'timeline'
@@ -98,6 +126,7 @@ export const initialState: AppState = {
   timer: { elapsedMs: 0, running: false, completed: false },
   contextUsage: null,
   assets: [],
+  nodes: {},
   timeline: null,
   activeView: 'chat' as const,
   autonomousMode: false,
@@ -122,6 +151,17 @@ export type AppAction =
   | { type: 'SET_CONTEXT_USAGE'; usage: AppState['contextUsage'] }
   | { type: 'SET_ASSETS'; assets: AppState['assets'] }
   | { type: 'ADD_ASSET'; asset: AppState['assets'][0] }
+  /**
+   * Overwrite the entire node map — used on initial project load where
+   * we fetch `/api/v1/projects/:name` and hydrate from `executorState.nodes`.
+   */
+  | { type: 'SET_NODES'; nodes: Record<string, ExecutorNodeInfo> }
+  /**
+   * Merge a single node's info. WebSocket handlers dispatch this when
+   * a shot_image / shot_video node completes and its outputPath(s)
+   * become available. Keeps the Storyboard live without a full reload.
+   */
+  | { type: 'UPDATE_NODE'; node: ExecutorNodeInfo }
   | { type: 'SET_AUTONOMOUS'; enabled: boolean }
   | { type: 'SET_PARALLEL_MEDIA'; enabled: boolean }
   | { type: 'SET_TIMELINE'; timeline: Timeline | null }
@@ -149,6 +189,7 @@ export function appReducer(state: AppState, action: AppAction): AppState {
         phase: null,
         todos: [],
         assets: [],
+        nodes: {},
         chatMessages: [],
         toolCalls: [],
         streamingText: null,
@@ -207,6 +248,16 @@ export function appReducer(state: AppState, action: AppAction): AppState {
       // Avoid duplicates by path
       if (state.assets.some(a => a.path === action.asset.path)) return state
       return { ...state, assets: [...state.assets, action.asset] }
+
+    case 'SET_NODES':
+      return { ...state, nodes: action.nodes }
+
+    case 'UPDATE_NODE': {
+      // Merge-by-id. Preserves fields we already had (e.g. displayName,
+      // typeId) if the incoming partial omits them.
+      const existing = state.nodes[action.node.id]
+      return { ...state, nodes: { ...state.nodes, [action.node.id]: { ...existing, ...action.node } } }
+    }
 
     case 'SET_AUTONOMOUS':
       return { ...state, autonomousMode: action.enabled }

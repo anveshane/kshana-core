@@ -180,6 +180,32 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
             category: t.category,
           })),
         })
+        // Backend sends a parallel `nodes` array alongside `todos` with
+        // typeId + itemId + outputPath(s) per node. Feed it into the
+        // store so the Storyboard stays live as shots complete —
+        // without it, we'd only update on a full project reload.
+        const nodeInfos = (data.nodes as Array<{
+          id: string
+          typeId: string
+          itemId?: string
+          status: string
+          outputPath?: string
+          outputPaths?: Record<string, string>
+        }> | undefined) ?? []
+        for (const n of nodeInfos) {
+          if (!n.id || !n.typeId) continue
+          dispatch({
+            type: 'UPDATE_NODE',
+            node: {
+              id: n.id,
+              typeId: n.typeId,
+              itemId: n.itemId,
+              status: (n.status === 'cancelled' ? 'failed' : n.status) as 'pending' | 'in_progress' | 'completed' | 'failed',
+              outputPath: n.outputPath,
+              outputPaths: n.outputPaths,
+            },
+          })
+        }
         break
       }
 

@@ -83,16 +83,39 @@ export function ProjectSelector({ onSendWs, onNewProject }: ProjectSelectorProps
         dispatch({ type: 'SET_PHASE', phase: data.currentPhase })
       }
 
-      // Extract todos from executor state
+      // Hydrate the full node map AND derive todos from it. The Storyboard
+      // reads shot_image / shot_video nodes out of this map; it's the
+      // canonical source of truth for "which files belong to which shot"
+      // (replaces the fragile filename-based parsing on manifest entries).
       if (data.executorState?.nodes) {
-        const nodes = Object.values(data.executorState.nodes) as Array<{
-          id: string; displayName: string; status: string; typeId: string
+        const rawNodes = data.executorState.nodes as Record<string, {
+          id: string
+          displayName?: string
+          status?: string
+          typeId: string
+          itemId?: string
+          outputPath?: string
+          outputPaths?: Record<string, string>
         }>
-        const todos = nodes
+        const nodeMap: Record<string, import('../lib/store').ExecutorNodeInfo> = {}
+        for (const [id, n] of Object.entries(rawNodes)) {
+          nodeMap[id] = {
+            id,
+            typeId: n.typeId,
+            itemId: n.itemId,
+            displayName: n.displayName,
+            status: (n.status ?? 'pending') as 'pending' | 'in_progress' | 'completed' | 'failed',
+            outputPath: n.outputPath,
+            outputPaths: n.outputPaths,
+          }
+        }
+        dispatch({ type: 'SET_NODES', nodes: nodeMap })
+
+        const todos = Object.values(nodeMap)
           .filter(n => n.displayName && n.typeId !== 'final_video')
           .map(n => ({
             id: n.id,
-            text: n.displayName,
+            text: n.displayName!,
             status: (n.status === 'completed' ? 'completed' : n.status === 'failed' ? 'failed' : n.status === 'in_progress' ? 'in_progress' : 'pending') as 'completed' | 'failed' | 'in_progress' | 'pending',
           }))
         dispatch({ type: 'SET_TODOS', todos })

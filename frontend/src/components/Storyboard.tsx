@@ -28,49 +28,20 @@ interface SceneEntry {
 }
 
 /**
- * Parse the scene and shot numbers from an asset's nodeId or path.
- * Shot image nodeIds look like:  `shot_image:scene_1_shot_3`
- * Paths sometimes include `scene_N_shot_M` but often are just hash names.
- * The frame type (first/last/mid) should come from asset.frame (set by the
- * message handler from the backend's `result.frame` field), with a path-based
- * fallback for legacy assets.
+ * Pull scene + shot numbers from a node's itemId. The executor gives
+ * every per-shot collection node an itemId of the form
+ * `scene_<N>_shot_<M>` — this is the canonical identifier and never
+ * depends on filesystem layout or asset filenames.
  */
-function parseShotInfo(
-  path: string,
-  nodeId: string | undefined,
-  explicitFrame: string | undefined,
-): {
-  sceneNum: number
-  shotNum: number
-  frame: 'first_frame' | 'last_frame' | 'mid_frame' | 'single'
-} | null {
-  const nodeMatch = nodeId?.match(/scene_(\d+)_shot_(\d+)/)
-  const pathMatch = !nodeMatch ? path.match(/scene_(\d+)_shot_(\d+)/i) : null
-  const match = nodeMatch ?? pathMatch
-  if (!match) return null
-
-  const sceneNum = parseInt(match[1]!, 10)
-  const shotNum = parseInt(match[2]!, 10)
-
-  let frame: 'first_frame' | 'last_frame' | 'mid_frame' | 'single'
-  if (explicitFrame === 'first_frame' || explicitFrame === 'last_frame' || explicitFrame === 'mid_frame') {
-    frame = explicitFrame
-  } else if (explicitFrame === 'single') {
-    frame = 'single'
-  } else if (path.includes('_last_frame')) {
-    frame = 'last_frame'
-  } else if (path.includes('_first_frame')) {
-    frame = 'first_frame'
-  } else if (path.includes('_mid_frame')) {
-    frame = 'mid_frame'
-  } else {
-    frame = 'single'
-  }
-  return { sceneNum, shotNum, frame }
+function itemIdToSceneShot(itemId: string | undefined): [number, number] | null {
+  if (!itemId) return null
+  const m = itemId.match(/^scene_(\d+)_shot_(\d+)$/)
+  if (!m) return null
+  return [parseInt(m[1]!, 10), parseInt(m[2]!, 10)]
 }
 
 export function Storyboard({ onRedoNode, onRedoPrompt, onRedoNodeWithPrompt }: StoryboardProps) {
-  const { assets, selectedProject } = useAppState()
+  const { nodes, selectedProject } = useAppState()
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null)
   const [confirmRedo, setConfirmRedo] = useState<string | null>(null)
   // Node ID to edit — for shot-level prompt editing we target the shot_image_prompt node
@@ -84,27 +55,27 @@ export function Storyboard({ onRedoNode, onRedoPrompt, onRedoNodeWithPrompt }: S
     setEditFrame(frame)
   }
 
-  // Build storyboard structure: scene → shots → (first_frame, last_frame, video)
+  /**
+   * Build storyboard structure from executor node state. Flow:
+   *   1. Pull every `shot_image:scene_N_shot_M` node → its outputPaths
+   *      gives first/last/mid-frame file paths directly. Scene + shot
+   *      come from the nodeId, NOT from any filename.
+   *   2. Pull matching `shot_video:scene_N_shot_M` nodes for the video
+   *      URL the same way.
+   *   3. Assemble into `{ scene → shots → frames+video }`.
+   *
+   * The on-disk filename shape is irrelevant to the UI — a shot with
+   * no generated images yet shows empty placeholders; a shot with
+   * complete outputPaths shows fully-populated frames.
+   */
   const scenes = useMemo<SceneEntry[]>(() => {
-    // Shot images (first/mid/last frame) — by nodeId prefix or path shape
-    const shotImageAssets = assets.filter(a => {
-      const isImage = a.type === 'image' || a.url.match(/\.(png|jpg|jpeg|webp)$/i)
-      if (!isImage) return false
-      const hasShotContext = (a.nodeId?.startsWith('shot_image:') ?? false) ||
-        /scene_\d+_shot_\d+/.test(a.path)
-      return hasShotContext
-    })
-
-    // Shot videos — nodeId prefix `shot_video:` OR path `assets/videos/shots/*`
-    const shotVideoAssets = assets.filter(a => {
-      const isVideo = a.type === 'video' || a.url.match(/\.(mp4|webm|mov)$/i)
-      if (!isVideo) return false
-      return (a.nodeId?.startsWith('shot_video:') ?? false) ||
-        a.path.includes('videos/shots/')
-    })
+    const buildUrl = (relPath: string | undefined): string | null => {
+      if (!relPath) return null
+      if (!selectedProject) return relPath
+      return `/api/v1/assets/${selectedProject}/${relPath}`
+    }
 
     const sceneMap = new Map<number, Map<number, ShotEntry>>()
-
     const getOrCreateShot = (sceneNum: number, shotNum: number): ShotEntry => {
       if (!sceneMap.has(sceneNum)) sceneMap.set(sceneNum, new Map())
       const scene = sceneMap.get(sceneNum)!
@@ -126,41 +97,47 @@ export function Storyboard({ onRedoNode, onRedoPrompt, onRedoNodeWithPrompt }: S
       return scene.get(shotNum)!
     }
 
-    for (const asset of shotImageAssets) {
-      const info = parseShotInfo(asset.path, asset.nodeId, asset.frame)
-      if (!info) continue
+    for (const node of Object.values(nodes)) {
+      if (node.typeId === 'shot_image') {
+        const sceneShot = itemIdToSceneShot(node.itemId)
+        if (!sceneShot) continue
+        const [sceneNum, shotNum] = sceneShot
+        const shot = getOrCreateShot(sceneNum, shotNum)
+        shot.nodeId = node.id
 
-      const url = selectedProject ? `/api/v1/assets/${selectedProject}/${asset.path}` : asset.url
-      const shot = getOrCreateShot(info.sceneNum, info.shotNum)
-      if (asset.nodeId?.startsWith('shot_image:')) shot.nodeId = asset.nodeId
-      // Prefer most-recent asset on collisions (assets array is append-order)
-      if (info.frame === 'first_frame' || info.frame === 'single') {
-        shot.firstFrameUrl = url
-        shot.firstFramePath = asset.path
-      }
-      if (info.frame === 'mid_frame') {
-        shot.midFrameUrl = url
-        shot.midFramePath = asset.path
-      }
-      if (info.frame === 'last_frame') {
-        shot.lastFrameUrl = url
-        shot.lastFramePath = asset.path
+        const paths = node.outputPaths ?? {}
+        if (paths['first_frame']) {
+          shot.firstFramePath = paths['first_frame']
+          shot.firstFrameUrl = buildUrl(paths['first_frame'])
+        }
+        if (paths['last_frame']) {
+          shot.lastFramePath = paths['last_frame']
+          shot.lastFrameUrl = buildUrl(paths['last_frame'])
+        }
+        if (paths['mid_frame']) {
+          shot.midFramePath = paths['mid_frame']
+          shot.midFrameUrl = buildUrl(paths['mid_frame'])
+        }
+        // Legacy single-output shot_image nodes stored the frame at
+        // outputPath rather than outputPaths.first_frame. Honor that
+        // as the first frame when multi-frame paths are absent.
+        if (!shot.firstFramePath && node.outputPath) {
+          shot.firstFramePath = node.outputPath
+          shot.firstFrameUrl = buildUrl(node.outputPath)
+        }
+      } else if (node.typeId === 'shot_video') {
+        const sceneShot = itemIdToSceneShot(node.itemId)
+        if (!sceneShot) continue
+        const [sceneNum, shotNum] = sceneShot
+        const shot = getOrCreateShot(sceneNum, shotNum)
+        shot.videoNodeId = node.id
+        if (node.outputPath) {
+          shot.videoPath = node.outputPath
+          shot.videoUrl = buildUrl(node.outputPath)
+        }
       }
     }
 
-    for (const asset of shotVideoAssets) {
-      const match = (asset.nodeId ?? asset.path).match(/scene_(\d+)_shot_(\d+)/)
-      if (!match) continue
-      const sceneNum = parseInt(match[1]!, 10)
-      const shotNum = parseInt(match[2]!, 10)
-      const url = selectedProject ? `/api/v1/assets/${selectedProject}/${asset.path}` : asset.url
-      const shot = getOrCreateShot(sceneNum, shotNum)
-      shot.videoUrl = url
-      shot.videoPath = asset.path
-      shot.videoNodeId = asset.nodeId ?? `shot_video:scene_${sceneNum}_shot_${shotNum}`
-    }
-
-    // Sort scenes, then shots within each scene
     const sceneEntries: SceneEntry[] = []
     for (const sceneNum of [...sceneMap.keys()].sort((a, b) => a - b)) {
       const shots = [...sceneMap.get(sceneNum)!.values()].sort(
@@ -169,7 +146,7 @@ export function Storyboard({ onRedoNode, onRedoPrompt, onRedoNodeWithPrompt }: S
       sceneEntries.push({ sceneNumber: sceneNum, shots })
     }
     return sceneEntries
-  }, [assets, selectedProject])
+  }, [nodes, selectedProject])
 
   // Pending frame-specific redo confirmation (nodeId + frame)
   const [confirmFrameRedo, setConfirmFrameRedo] = useState<{ nodeId: string; frame: string } | null>(null)

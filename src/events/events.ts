@@ -36,11 +36,36 @@ export interface ToolResultEvent {
 }
 
 /**
+ * Node info that travels alongside `todos` on the same event. Only the
+ * fields the frontend Storyboard needs to render shot frames/videos
+ * without parsing filenames. Keyed by the same `id` as the
+ * corresponding todo; the frontend merges it into a separate
+ * node-state map.
+ */
+export interface TodoNodeInfo {
+  id: string;
+  typeId: string;
+  itemId?: string;
+  status: string;
+  /** Single-output node (shot_video, most content nodes). */
+  outputPath?: string;
+  /** Multi-frame output node (shot_image → first/last/mid). */
+  outputPaths?: Record<string, string>;
+}
+
+/**
  * Todo update event when todo list changes.
+ *
+ * `nodes` is a parallel array carrying extra per-node metadata the
+ * frontend Storyboard needs (typeId + itemId + outputPath(s)). It sits
+ * next to `todos` rather than inside each todo because
+ * `ExpandableTodoItem` has a strict shape and this metadata doesn't
+ * belong to the todo semantic. Optional — older emitters may skip it.
  */
 export interface TodoUpdateEvent {
   type: 'todo_update';
   todos: ExpandableTodoItem[];
+  nodes?: TodoNodeInfo[];
   agentName?: string;
 }
 
