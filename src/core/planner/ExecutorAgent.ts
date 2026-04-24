@@ -32,7 +32,11 @@ import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
 import { resolveInputs, writeOutput } from './contentResolver.js';
 import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
-import { normalizeShotImagePrompt as normalizeShotImagePromptFrame } from './shotImagePromptNormalizer.js';
+import {
+  normalizeShotImagePrompt as normalizeShotImagePromptFrame,
+  normalizeShotImagePromptWithRefs,
+  type AvailableRefMinimal,
+} from './shotImagePromptNormalizer.js';
 import { extractCollectionItems } from './collectionExtractor.js';
 import { healStaleMatchingDeps } from './stateHeal.js';
 import { isStageGateSatisfied, resolveStageToTypeIds } from './stages.js';
@@ -3140,9 +3144,27 @@ Examples of common failure modes to avoid:
         mutated = true;
       }
 
-      // Auto-inherit first_frame references into empty edit_first_frame / edit_previous_shot frames
-      if (node.typeId === 'shot_image_prompt') {
-        normalizeShotImagePrompt(parsed);
+      // Per-frame normalization for shot_image_prompt: inject missing
+      // character/setting refs (the LLM frequently names a character in
+      // prose but forgets to add "from image N" and/or the references
+      // array entry), then reorder so settings land at Klein's base_image
+      // slot. See shotImagePromptNormalizer.ts for full rationale.
+      if (node.typeId === 'shot_image_prompt' && parsed?.frames && typeof parsed.frames === 'object') {
+        const availableRefs = this.buildAvailableRefsForShot(node);
+        const allInjected: Array<{ frame: string; label: string; imageNumber: number; kind: string }> = [];
+        for (const frameKey of Object.keys(parsed.frames)) {
+          const f = parsed.frames[frameKey];
+          if (f && typeof f === 'object' && typeof f.imagePrompt === 'string' && Array.isArray(f.references)) {
+            const result = normalizeShotImagePromptWithRefs(f, availableRefs);
+            parsed.frames[frameKey] = result.frame;
+            for (const ev of result.injected) {
+              allInjected.push({ frame: frameKey, ...ev });
+            }
+          }
+        }
+        if (allInjected.length > 0) {
+          this.log(`  [ref-inject] ${node.id}: injected ${allInjected.length} ref(s): ${allInjected.map(i => `${i.frame}/${i.label}#${i.imageNumber}(${i.kind})`).join(', ')}`);
+        }
         mutated = true;
       }
 
@@ -3196,6 +3218,50 @@ Examples of common failure modes to avoid:
       }
     }
     return null;
+  }
+
+  /**
+   * Build the full project reference list for normalizer injection.
+   *
+   * NOTE (Option B, 2026-04-24): this used to mirror the `generateForNode`
+   * path (filter by shot purpose) so the numbers we inject match what
+   * the LLM saw. But the filter excludes characters from shots with
+   * purposes like `show_passage` and `set_the_world` — and the LLM
+   * frequently names those filtered-out characters in its prose anyway
+   * ("Isha mid-stride, Parvati lingering at the gate"). Without their
+   * refs the image generator hallucinates what those characters look
+   * like instead of loading their consistent reference images.
+   *
+   * Switching to UNFILTERED refs here means: if a character is named
+   * in prose, we tag it with its canonical project-wide image number
+   * and add it to the refs array, regardless of the purpose filter.
+   * The reorder pass then renumbers the whole frame to a contiguous
+   * 1..N so the final JSON is internally consistent. This preserves
+   * character consistency at image-gen time without requiring the LLM
+   * to respect the filter perfectly.
+   *
+   * Synchronous by design — called from validateJsonOutput. Returns an
+   * empty array if anything is missing; callers treat that as "nothing
+   * to inject."
+   */
+  private buildAvailableRefsForShot(node: ExecutionNode): AvailableRefMinimal[] {
+    if (node.typeId !== 'shot_image_prompt' || !node.itemId) return [];
+
+    const REF_TYPE_IDS = new Set(['character_image', 'setting_image', 'object_image']);
+    const typeIdToRefType = (typeId: string): 'character' | 'setting' | 'object' => {
+      if (typeId === 'character_image') return 'character';
+      if (typeId === 'setting_image') return 'setting';
+      return 'object';
+    };
+    const nodes = this.executor.getAllNodes().filter((n: any) =>
+      REF_TYPE_IDS.has(n.typeId) && n.itemId,
+    );
+    return nodes.map((n: any, i: number) => ({
+      imageNumber: i + 1,
+      type: typeIdToRefType(n.typeId),
+      refId: n.id,
+      label: n.itemId ?? n.id.split(':')[1] ?? n.id,
+    }));
   }
 
   /**
@@ -4051,12 +4117,11 @@ Examples of common failure modes to avoid:
       // New per-frame format: each frame has its own prompt and generation mode
       this.log(`  Per-frame format detected: ${Object.keys(parsedJson.frames).join(', ')}`);
 
-      // Normalize each frame so setting refs land at index 0 (Klein's
-      // base_image slot). This rewrites both the references array and
-      // the `from image N` phrases in imagePrompt to stay in lockstep.
-      // Must happen before ANY downstream consumer reads the references
-      // (submitImageGeneration, editImageLayered, etc.). See
-      // shotImagePromptNormalizer.ts for rationale.
+      // Normalization (inject + reorder) happens upstream in
+      // validateJsonOutput, so the JSON on disk is already normalized.
+      // We still run a defensive reorder pass here for JSONs that
+      // bypassed validation (e.g. hand-edited prompt files, legacy
+      // fixtures). It's idempotent if already normalized.
       for (const frameKey of Object.keys(parsedJson.frames)) {
         const f = parsedJson.frames[frameKey];
         if (f && typeof f === 'object' && typeof f.imagePrompt === 'string' && Array.isArray(f.references)) {
