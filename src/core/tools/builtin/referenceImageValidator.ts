@@ -4,6 +4,10 @@
  */
 import fs from 'fs';
 import { tryPathVariants } from './contentCreatorTools.js';
+import {
+  projectExists,
+  projectRelativePath,
+} from '../../../tasks/video/workflow/projectFileIO.js';
 
 interface ShotEntry {
   referenceImages?: string[];
@@ -14,6 +18,18 @@ interface SceneVideoPrompt {
   referenceImages?: string[];
   shots?: ShotEntry[];
   [key: string]: unknown;
+}
+
+function referencePathExists(imgPath: string): boolean {
+  const resolved = tryPathVariants(imgPath);
+  if (resolved) return true;
+  if (fs.existsSync(imgPath)) return true;
+
+  try {
+    return projectExists(projectRelativePath(imgPath));
+  } catch {
+    return projectExists(imgPath);
+  }
 }
 
 /**
@@ -35,11 +51,7 @@ export function validateAndSanitizeReferenceImages(
     if (Array.isArray(parsed.referenceImages)) {
       parsed.referenceImages = parsed.referenceImages.filter((imgPath: string) => {
         if (typeof imgPath !== 'string') return false;
-        const resolved = tryPathVariants(imgPath);
-        if (resolved) return true;
-        // Also try with projectDir prefix if tryPathVariants didn't find it
-        const fullPath = fs.existsSync(imgPath) ? imgPath : null;
-        if (fullPath) return true;
+        if (referencePathExists(imgPath)) return true;
         removedPaths.push(imgPath);
         return false;
       });
@@ -51,10 +63,7 @@ export function validateAndSanitizeReferenceImages(
         if (Array.isArray(shot.referenceImages)) {
           shot.referenceImages = shot.referenceImages.filter((imgPath: string) => {
             if (typeof imgPath !== 'string') return false;
-            const resolved = tryPathVariants(imgPath);
-            if (resolved) return true;
-            const fullPath = fs.existsSync(imgPath) ? imgPath : null;
-            if (fullPath) return true;
+            if (referencePathExists(imgPath)) return true;
             // Only add to removedPaths if not already tracked
             if (!removedPaths.includes(imgPath)) {
               removedPaths.push(imgPath);

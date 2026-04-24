@@ -582,6 +582,12 @@ export interface ProjectFile {
   /** Target video duration in seconds (selected by user at startup) */
   targetDuration?: number;
 
+  /** Legacy/setup mirror of selected duration for UI compatibility */
+  duration?: number;
+
+  /** Whether autonomous mode was selected in project setup */
+  autonomousMode?: boolean;
+
   /** Persisted todo list for resuming work */
   todos?: PersistedTodo[];
 

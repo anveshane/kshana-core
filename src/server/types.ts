@@ -33,7 +33,8 @@ export type ServerMessageType =
   | 'file_delete_dir_command'  // Server tells client to delete directory
   | 'batch_write_command'      // Server tells client to write multiple files
   | 'session_timer'            // Production timer updates
-  | 'asset_transfer';          // Server sends generated asset to client
+  | 'asset_transfer'           // Server sends generated asset to client
+  | 'timeline_assembly_request'; // Server asks desktop to assemble final video
 
 /**
  * Message types sent from client to server.
@@ -54,7 +55,9 @@ export type ClientMessageType =
   | 'file_stat_response'      // Client sends file stats
   | 'file_buffer_response'    // Client sends binary file content
   | 'set_autonomous'          // Toggle autonomous mode at runtime
-  | 'project_state_sync';     // Client sends full project snapshot
+  | 'project_state_sync'      // Client sends full project snapshot
+  | 'timeline_assembly_progress' // Desktop reports assembly progress
+  | 'timeline_assembly_result'; // Desktop reports assembly result
 
 /**
  * Base message structure for server messages.
@@ -217,6 +220,7 @@ export interface ConfigureProjectData {
   templateId: string;
   style: string;
   duration: number;
+  autonomousMode?: boolean;
 }
 
 // ==========================================================================
@@ -291,6 +295,23 @@ export interface AssetTransferData {
   downloadUrl?: string;
   mimeType?: string;
   size: number;
+}
+
+export interface TimelineAssemblyProgressData {
+  requestId: string;
+  progress?: number;
+  stage?: 'preparing' | 'rendering' | 'persisting' | 'finalizing';
+  message?: string;
+}
+
+export interface TimelineAssemblyResultData {
+  requestId: string;
+  status: 'completed' | 'failed';
+  outputPath?: string;
+  duration?: number;
+  artifactId?: string;
+  manifestRelativePath?: string;
+  error?: string;
 }
 
 /**
@@ -375,6 +396,18 @@ export function isConfigureProjectMessage(
 
 export function isCreateProjectMessage(msg: ClientMessage): msg is ClientMessage<CreateProjectData> {
   return msg.type === 'create_project';
+}
+
+export function isTimelineAssemblyProgressMessage(
+  msg: ClientMessage,
+): msg is ClientMessage<TimelineAssemblyProgressData> {
+  return msg.type === 'timeline_assembly_progress';
+}
+
+export function isTimelineAssemblyResultMessage(
+  msg: ClientMessage,
+): msg is ClientMessage<TimelineAssemblyResultData> {
+  return msg.type === 'timeline_assembly_result';
 }
 
 /**

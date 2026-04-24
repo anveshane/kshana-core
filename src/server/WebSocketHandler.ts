@@ -35,6 +35,8 @@ import {
   isConfigureProjectMessage,
   isSelectProjectMessage,
   isCreateProjectMessage,
+  isTimelineAssemblyProgressMessage,
+  isTimelineAssemblyResultMessage,
   type ConfigureProjectData,
   type CreateProjectData,
 } from './types.js';
@@ -43,6 +45,10 @@ import {
   getConnectionStatusMessage,
   shouldRemoveTrackedConnection,
 } from './webSocketHandlerUtils.js';
+import {
+  desktopAssemblyBroker,
+  type DesktopSessionCapabilities,
+} from '../core/remote/DesktopAssemblyBroker.js';
 
 interface ConnectionState {
   socket: WebSocket;
@@ -96,7 +102,13 @@ export class WebSocketHandler {
    * Handle a new WebSocket connection.
    * Optionally authenticates via API key and determines connection mode.
    */
-  handleConnection(socket: WebSocket, remoteAddress?: string, apiKey?: string, resumeSessionId?: string): void {
+  handleConnection(
+    socket: WebSocket,
+    remoteAddress?: string,
+    apiKey?: string,
+    resumeSessionId?: string,
+    desktopCapabilities?: DesktopSessionCapabilities,
+  ): void {
     // Determine connection mode
     const skipAuth = shouldSkipAuth(remoteAddress, this.serverMode);
     let connectionMode: 'local' | 'remote' = 'local';
@@ -159,6 +171,13 @@ export class WebSocketHandler {
       connectionState.remoteFs = remoteFs;
       connectionState.projectCache = projectCache;
       this.conversationManager.setRemoteFileSystem(sessionId, remoteFs);
+      if (desktopCapabilities) {
+        this.conversationManager.setDesktopCapabilities(sessionId, desktopCapabilities);
+        desktopAssemblyBroker.setCapabilities(sessionId, desktopCapabilities);
+      }
+      desktopAssemblyBroker.attachSender(sessionId, (type, data) => {
+        this.sendMessage(socket, createServerMessage(type, sessionId, data));
+      });
     }
 
     this.connections.set(sessionId, connectionState);
@@ -242,7 +261,7 @@ export class WebSocketHandler {
     }
 
     if (isConfigureProjectMessage(message)) {
-      this.handleConfigureProject(sessionId, socket, message.data);
+      await this.handleConfigureProject(sessionId, socket, message.data);
       return;
     }
 
@@ -253,6 +272,16 @@ export class WebSocketHandler {
 
     if (isCreateProjectMessage(message)) {
       await this.handleCreateProject(sessionId, socket, message.data);
+      return;
+    }
+
+    if (isTimelineAssemblyProgressMessage(message)) {
+      desktopAssemblyBroker.handleTimelineAssemblyProgress(sessionId, message.data);
+      return;
+    }
+
+    if (isTimelineAssemblyResultMessage(message)) {
+      desktopAssemblyBroker.handleTimelineAssemblyResult(sessionId, message.data);
       return;
     }
 
@@ -286,18 +315,27 @@ export class WebSocketHandler {
   /**
    * Handle configure_project message.
    */
-  private handleConfigureProject(
+  private async handleConfigureProject(
     sessionId: string,
     socket: WebSocket,
     data: ConfigureProjectData,
-  ): void {
+  ): Promise<void> {
     this.conversationManager.configureSessionForProject(
       sessionId,
       data.templateId,
       data.style,
       data.duration,
       data.projectDir,
+      undefined,
+      data.autonomousMode,
     );
+    await this.conversationManager.ensureRemoteProjectJsonCached(sessionId);
+    this.conversationManager.persistProjectConfiguration(sessionId, {
+      templateId: data.templateId,
+      style: data.style,
+      duration: data.duration,
+      autonomousMode: data.autonomousMode,
+    });
 
     const toolNames = this.conversationManager.getSessionToolNames(sessionId);
     this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
@@ -444,7 +482,10 @@ export class WebSocketHandler {
         projectData = JSON.parse(content);
         templateId = projectData.templateId || templateId;
         style = projectData.style || style;
-        duration = projectData.duration || duration;
+        duration =
+          typeof projectData.targetDuration === 'number'
+            ? projectData.targetDuration
+            : projectData.duration || duration;
       } catch {
         // Use defaults if project.json is unreadable
       }
@@ -534,6 +575,13 @@ export class WebSocketHandler {
         data.autonomousMode,
       );
 
+      this.conversationManager.persistProjectConfiguration(sessionId, {
+        templateId: data.templateId,
+        style: data.style,
+        duration: data.duration,
+        autonomousMode: data.autonomousMode,
+      });
+
       const toolNames = this.conversationManager.getSessionToolNames(sessionId);
       const projectName = projectDirName.replace('.kshana', '');
       this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
@@ -574,6 +622,7 @@ export class WebSocketHandler {
       `[WebSocketHandler] Removing connection session=${sessionId} category=${category} reason=${reason}`,
     );
     this.connections.delete(sessionId);
+    desktopAssemblyBroker.detachSession(sessionId);
   }
 
   /**
@@ -589,23 +638,36 @@ export class WebSocketHandler {
         }));
       },
 
-      onToolCall: (sid, toolName, args, agentName) => {
+      onToolCall: (sid, toolCallId, toolName, args, agentName) => {
         this.sendMessage(socket, createServerMessage<ToolCallData>('tool_call', sid, {
           toolName,
-          toolCallId: '',
+          toolCallId,
           arguments: args,
           status: 'started',
           agentName,
         }));
       },
 
-      onToolResult: (sid, toolName, result, agentName) => {
+      onToolResult: (sid, toolCallId, toolName, result, isError, agentName) => {
+        const errorMessage =
+          typeof result === 'string'
+            ? result
+            : (
+              typeof result === 'object' &&
+              result !== null &&
+              'error' in result &&
+              typeof (result as { error?: unknown }).error === 'string'
+            )
+              ? (result as { error: string }).error
+              : String(result);
         this.sendMessage(socket, createServerMessage<ToolCallData>('tool_call', sid, {
           toolName,
-          toolCallId: '',
+          toolCallId,
           arguments: {},
-          status: 'completed',
-          result,
+          status: isError ? 'error' : 'completed',
+          ...(isError
+            ? { error: errorMessage }
+            : { result }),
           agentName,
         }));
 

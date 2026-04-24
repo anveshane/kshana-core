@@ -137,7 +137,7 @@ The timeline.json is the **communication bridge between server and client**. The
 - Do NOT wait until video generation or assembly phase
 - Every video project MUST have a timeline, regardless of template
 - After generating each asset (image, video), update the matching segment if the generation tool does not do it automatically
-- On session resume: if scenes exist but no timeline.json, create it immediately as a repair step
+- On session resume: before any timeline repair, always call `manage_timeline(action: "get")` to verify the current root timeline state. Only create or recreate the timeline if that fresh check shows the root `timeline.json` is actually missing or invalid.
 
 ---
 
@@ -303,7 +303,8 @@ After the multi-shot breakdown is approved:
 - `scan_assets` → `create_backward_plan` with persisted goal
 - If `projectComplete: true` → inform user, await instructions
 - If steps remain → check if timeline.json exists (call `manage_timeline(action: "get")`). If missing but scenes exist, treat it as a repair case and create it immediately with `create_skeleton`
-- Resume from earliest incomplete step
+- If timeline exists → use `nextPendingSegment` / `pendingSegments` from `manage_timeline(action: "get")` as the authoritative resume checkpoint
+- Resume from the earliest incomplete timeline segment, not from scanned file recency or chat history
 
 ### "Redo scene 3" / "That clip looks wrong" (after assembly)
 - The user wants to regenerate specific clips after seeing the final video

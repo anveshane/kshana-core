@@ -60,6 +60,7 @@ vi.mock('../../../../src/services/comfyui/index.js', () => {
     getRegistry: () => ({
       get: () => ({ filename: 'mock-workflow.json' }),
     }),
+    isComfyCloudUrl: (value: string) => value === 'https://cloud.comfy.org',
   };
 });
 
@@ -96,13 +97,20 @@ function createRemoteFs(sentPayloads: string[]) {
 
 describe('ComfyUIProvider remote persistence', () => {
   let tempRoot: string;
+  const previousBaseUrl = process.env['COMFYUI_BASE_URL'];
 
   beforeEach(() => {
     comfyState.downloadCalls.length = 0;
     tempRoot = fs.mkdtempSync(join(os.tmpdir(), 'kshana-comfy-provider-'));
+    process.env['COMFYUI_BASE_URL'] = 'https://cloud.comfy.org';
   });
 
   afterEach(() => {
+    if (previousBaseUrl === undefined) {
+      delete process.env['COMFYUI_BASE_URL'];
+    } else {
+      process.env['COMFYUI_BASE_URL'] = previousBaseUrl;
+    }
     if (fs.existsSync(tempRoot)) {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -143,13 +151,13 @@ describe('ComfyUIProvider remote persistence', () => {
     expect(mkdirMessages.length).toBeGreaterThan(0);
     expect(writeMessage).toBeDefined();
     expect(writeMessage.data.path).toMatch(
-      /^assets\/images\/[A-Za-z0-9_-]+_remote-image\.png$/,
+      /^assets\/images\/CharRef_Leo_[A-Za-z0-9_-]+\.png$/,
     );
     expect(
       Buffer.from(writeMessage.data.data as string, 'base64').toString(),
     ).toBe('remote-image-bytes');
     expect(result.filePath).toMatch(
-      /remote-project\.kshana\/assets\/images\/[A-Za-z0-9_-]+_remote-image\.png$/,
+      /remote-project\.kshana\/assets\/images\/CharRef_Leo_[A-Za-z0-9_-]+\.png$/,
     );
   });
 });

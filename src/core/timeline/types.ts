@@ -125,6 +125,8 @@ export interface TimelineSegment {
   layerHistory?: LayerSnapshot[];
   /** Current version info for this segment */
   versionInfo?: SegmentVersionInfo;
+  /** Optional segment metadata for continuity, source shot data, etc. */
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -144,6 +146,26 @@ export interface LayerSnapshot {
 export interface SegmentVersionInfo {
   activeVersion: number;
   totalVersions: number;
+}
+
+export interface DowngradePrevention {
+  preservedIndexes: number[];
+  reasons: Array<{
+    index: number;
+    reason:
+      | 'missing_artifact_id'
+      | 'missing_file_path'
+      | 'unresolved_over_resolved'
+      | 'video_over_weaker_media'
+      | 'metadata_cleared';
+  }>;
+}
+
+export interface ArtifactPathCorrection {
+  index: number;
+  artifactId: string;
+  previousFilePath?: string;
+  canonicalFilePath: string;
 }
 
 /**

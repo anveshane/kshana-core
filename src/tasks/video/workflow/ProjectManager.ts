@@ -1389,7 +1389,106 @@ export function isProjectCompatible(basePath: string = process.cwd()): {
  */
 export function saveProject(project: ProjectFile, basePath: string = process.cwd()): void {
   project.updatedAt = Date.now();
-  writeProjectText(PROJECT_FILE, JSON.stringify(project, null, 2), basePath);
+  const orderedProject = {
+    version: project.version,
+    id: project.id,
+    title: project.title,
+    originalInputFile: project.originalInputFile,
+    style: project.style,
+    inputType: project.inputType,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+    currentPhase: project.currentPhase,
+    ...(project.templateId ? { templateId: project.templateId } : {}),
+    ...(typeof project.targetDuration === 'number'
+      ? { targetDuration: project.targetDuration }
+      : {}),
+    ...(typeof project.duration === 'number' ? { duration: project.duration } : {}),
+    ...(typeof project.autonomousMode === 'boolean'
+      ? { autonomousMode: project.autonomousMode }
+      : {}),
+    phases: project.phases,
+    content: project.content,
+    characters: project.characters,
+    settings: project.settings,
+    scenes: project.scenes,
+    assets: project.assets,
+    ...(project.finalVideo ? { finalVideo: project.finalVideo } : {}),
+    ...(typeof project.productionStartedAt === 'number'
+      ? { productionStartedAt: project.productionStartedAt }
+      : {}),
+    ...(typeof project.productionCompletedAt === 'number'
+      ? { productionCompletedAt: project.productionCompletedAt }
+      : {}),
+    ...(typeof project.lastCheckpointAt === 'number'
+      ? { lastCheckpointAt: project.lastCheckpointAt }
+      : {}),
+    ...('elapsedMs' in project ? { elapsedMs: project.elapsedMs } : {}),
+    ...('timerLastStartedAt' in project
+      ? { timerLastStartedAt: project.timerLastStartedAt }
+      : {}),
+    ...('files' in project ? { files: project.files } : {}),
+    ...('artifacts' in project ? { artifacts: project.artifacts } : {}),
+    ...('goal' in project ? { goal: project.goal } : {}),
+    ...('todos' in project ? { todos: project.todos } : {}),
+    ...('inputs' in project ? { inputs: project.inputs } : {}),
+    ...('primaryNarration' in project
+      ? { primaryNarration: project.primaryNarration }
+      : {}),
+  };
+  writeProjectText(PROJECT_FILE, JSON.stringify(orderedProject, null, 2), basePath);
+}
+
+export function updateProjectConfiguration(
+  config: {
+    templateId: string;
+    style: ProjectStyle;
+    duration: number;
+    autonomousMode?: boolean;
+  },
+  basePath: string = process.cwd(),
+): boolean {
+  const project = loadProject(basePath);
+  if (!project) {
+    return false;
+  }
+
+  project.templateId = config.templateId;
+  project.style = config.style;
+  project.targetDuration = config.duration;
+  project.duration = config.duration;
+  if (typeof config.autonomousMode === 'boolean') {
+    project.autonomousMode = config.autonomousMode;
+  }
+  project.goal = {
+    targetArtifacts: project.goal?.targetArtifacts ?? ['final_short'],
+    description: project.goal?.description ?? '',
+    preferences: {
+      ...project.goal?.preferences,
+      style: config.style,
+      duration: config.duration,
+    },
+    setAt: project.goal?.setAt ?? Date.now(),
+    status: project.goal?.status ?? 'active',
+    ...(project.goal?.achievedAt ? { achievedAt: project.goal.achievedAt } : {}),
+  };
+
+  saveProject(project, basePath);
+  return true;
+}
+
+export function updateProjectAutonomousMode(
+  autonomousMode: boolean,
+  basePath: string = process.cwd(),
+): boolean {
+  const project = loadProject(basePath);
+  if (!project) {
+    return false;
+  }
+
+  project.autonomousMode = autonomousMode;
+  saveProject(project, basePath);
+  return true;
 }
 
 // ============================================================================

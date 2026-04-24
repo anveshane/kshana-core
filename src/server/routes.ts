@@ -135,7 +135,12 @@ export async function registerRoutes(
       }
 
       conversationManager.touchSession(sessionId);
-      return reply.send(session);
+      const timerState = conversationManager.getSessionTimerState(sessionId);
+      return reply.send({
+        ...session,
+        configured: conversationManager.isSessionConfigured(sessionId),
+        ...(timerState ?? {}),
+      });
     }
   );
 
@@ -221,8 +226,19 @@ export async function registerRoutes(
         url.searchParams.get('sessionId') ??
         url.searchParams.get('session_id') ??
         undefined;
+      const desktopCapabilities = {
+        desktopAssembly: url.searchParams.get('desktop_assembly') === '1',
+        desktopRemotion: url.searchParams.get('desktop_remotion') === '1',
+        desktopVersion: url.searchParams.get('desktop_version') ?? undefined,
+      };
       const remoteAddress = request.ip;
-      wsHandler.handleConnection(socket, remoteAddress, apiKey, resumeSessionId);
+      wsHandler.handleConnection(
+        socket,
+        remoteAddress,
+        apiKey,
+        resumeSessionId,
+        desktopCapabilities,
+      );
     }
   );
 

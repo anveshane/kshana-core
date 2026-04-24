@@ -84,11 +84,11 @@ import {
 import { comfyProgressBus, type ComfyProgressHandler } from '../../services/comfyui/index.js';
 import {
   createTimelineSkeleton,
-  loadTimeline,
+  inspectTimeline,
   saveTimeline,
-  splitSegmentIntoShots,
+  upsertSceneShots,
 } from '../timeline/TimelineManager.js';
-import type { SegmentDescriptor } from '../timeline/types.js';
+import type { SegmentDescriptor, Timeline } from '../timeline/types.js';
 
 // Get the phase logger instance
 const phaseLogger = getPhaseLogger();
@@ -191,8 +191,20 @@ function syncTimelineSkeleton(projectDir: string, project: NonNullable<ReturnTyp
 
   const descriptors = buildSceneDescriptors(projectDir, scenes);
   const desiredLabels = descriptors.map(descriptor => descriptor.label);
-  const existing = loadTimeline(projectDir);
+  const repaired = inspectTimeline(projectDir);
+  const existing = repaired?.timeline;
   const hasShotSplits = existing?.segments.some(segment => segment.id.includes('_shot_')) ?? false;
+
+  const totalDuration = getTimelineTargetDuration(projectDir, project);
+  const desiredTimeline = createTimelineSkeleton(totalDuration, descriptors);
+
+  if (existing) {
+    const extended = extendTimelineWithMissingSceneSegments(existing, desiredTimeline);
+    if (extended.addedCount > 0) {
+      saveTimeline(projectDir, extended.timeline);
+      return { persisted: true, timelineAction: 'timeline_extended' };
+    }
+  }
 
   if (existing && hasShotSplits) {
     return { persisted: true, timelineAction: 'timeline_preserved' };
@@ -205,10 +217,77 @@ function syncTimelineSkeleton(projectDir: string, project: NonNullable<ReturnTyp
     }
   }
 
-  const totalDuration = getTimelineTargetDuration(projectDir, project);
-  const timeline = createTimelineSkeleton(totalDuration, descriptors);
-  saveTimeline(projectDir, timeline);
+  saveTimeline(projectDir, desiredTimeline);
   return { persisted: true, timelineAction: existing ? 'timeline_refreshed' : 'timeline_created' };
+}
+
+function extendTimelineWithMissingSceneSegments(
+  existing: Timeline,
+  desired: Timeline
+): { timeline: Timeline; addedCount: number } {
+  const existingSceneKeys = new Set<string>();
+  const existingSegmentsById = new Map(existing.segments.map(segment => [segment.id, segment] as const));
+  const existingShotSegmentsByScene = new Map<string, Timeline['segments']>();
+  for (const segment of existing.segments) {
+    const shotMatch = /^(segment_\d+)_shot_\d+$/.exec(segment.id);
+    if (shotMatch?.[1]) {
+      existingSceneKeys.add(shotMatch[1]);
+      const current = existingShotSegmentsByScene.get(shotMatch[1]) ?? [];
+      current.push(segment);
+      existingShotSegmentsByScene.set(shotMatch[1], current);
+      continue;
+    }
+    existingSceneKeys.add(segment.id);
+  }
+
+  const desiredRootSegments = desired.segments;
+  const hasMissingSegments = desiredRootSegments.some(segment => !existingSceneKeys.has(segment.id));
+  if (!hasMissingSegments) {
+    return { timeline: existing, addedCount: 0 };
+  }
+
+  const rebuiltSegments: Timeline['segments'] = [];
+  let currentTime = 0;
+
+  for (const desiredSegment of desiredRootSegments) {
+    const existingRootSegment = existingSegmentsById.get(desiredSegment.id);
+    const existingShotSegments = existingShotSegmentsByScene.get(desiredSegment.id) ?? [];
+
+    if (existingShotSegments.length > 0) {
+      const sortedShotSegments = [...existingShotSegments].sort((a, b) => {
+        const shotA = /_shot_(\d+)$/.exec(a.id)?.[1];
+        const shotB = /_shot_(\d+)$/.exec(b.id)?.[1];
+        return Number(shotA ?? 0) - Number(shotB ?? 0);
+      });
+      for (const segment of sortedShotSegments) {
+        const duration = segment.duration;
+        rebuiltSegments.push({
+          ...segment,
+          startTime: currentTime,
+          endTime: currentTime + duration,
+        });
+        currentTime += duration;
+      }
+      continue;
+    }
+
+    const sourceSegment = existingRootSegment ?? desiredSegment;
+    rebuiltSegments.push({
+      ...sourceSegment,
+      startTime: currentTime,
+      endTime: currentTime + sourceSegment.duration,
+    });
+    currentTime += sourceSegment.duration;
+  }
+
+  return {
+    timeline: {
+      ...existing,
+      totalDuration: currentTime,
+      segments: rebuiltSegments,
+    },
+    addedCount: desiredRootSegments.filter(segment => !existingSceneKeys.has(segment.id)).length,
+  };
 }
 
 function syncTimelineForMotionPrompt(
@@ -226,7 +305,8 @@ function syncTimelineForMotionPrompt(
     return skeletonResult;
   }
 
-  const timeline = loadTimeline(projectDir);
+  const repaired = inspectTimeline(projectDir);
+  const timeline = repaired?.timeline;
   if (!timeline) {
     return { persisted: false, error: 'Failed to create timeline before splitting scene shots' };
   }
@@ -237,6 +317,7 @@ function syncTimelineForMotionPrompt(
     return { persisted: false, error: `Scene ${sceneNumber} is not registered in project.scenes` };
   }
 
+  const sceneSegmentId = `segment_${sceneIndex}`;
   const validShots =
     motionPrompt.shots
       ?.map((shot, index) => {
@@ -259,6 +340,11 @@ function syncTimelineForMotionPrompt(
             ...(shot.prompt ? { prompt: shot.prompt } : {}),
             ...(shot.cameraWork ? { cameraWork: shot.cameraWork } : {}),
             ...(shot.dialogue ? { dialogue: shot.dialogue } : {}),
+            ...(shot.continuity_anchor ? { continuity_anchor: shot.continuity_anchor } : {}),
+            ...(shot.wardrobe_lock ? { wardrobe_lock: shot.wardrobe_lock } : {}),
+            ...(shot.setting_lock ? { setting_lock: shot.setting_lock } : {}),
+            ...(shot.scene_palette ? { scene_palette: shot.scene_palette } : {}),
+            ...(shot.do_not_change ? { do_not_change: shot.do_not_change } : {}),
           },
         };
       })
@@ -268,8 +354,22 @@ function syncTimelineForMotionPrompt(
     return { persisted: false, error: `scene_video_prompt for Scene ${sceneNumber} does not contain valid shots` };
   }
 
-  const updatedTimeline = splitSegmentIntoShots(timeline, `segment_${sceneIndex}`, validShots);
-  saveTimeline(projectDir, updatedTimeline);
+  const upsertResult = upsertSceneShots(timeline, sceneSegmentId, validShots);
+  if (upsertResult.preservedExistingShots) {
+    if (upsertResult.mergedMetadataIntoExistingShots) {
+      saveTimeline(projectDir, upsertResult.timeline);
+      return {
+        persisted: true,
+        timelineAction: `timeline_scene_merged_existing_shot_metadata_${sceneNumber}`,
+      };
+    }
+    return {
+      persisted: true,
+      timelineAction: `timeline_scene_preserved_existing_shots_${sceneNumber}`,
+    };
+  }
+
+  saveTimeline(projectDir, upsertResult.timeline);
   return { persisted: true, timelineAction: `timeline_split_scene_${sceneNumber}` };
 }
 
@@ -279,7 +379,7 @@ function contentApprovalNextSteps(contentType: string, persistResult: PersistRes
   }
 
   if (contentType === 'scene_video_prompt') {
-    return 'IMPORTANT: 1) Motion prompt was persisted and the matching timeline scene was split into shots automatically. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.';
+    return 'IMPORTANT: 1) Motion prompt was persisted and the timeline was updated non-destructively. 2) Use TodoRead to check current todos. 3) Use TodoWrite(merge=true) to mark the completed task. 4) Continue with the next pending task.';
   }
 
   if (persistResult.timelineAction === 'timeline_created') {
@@ -1612,6 +1712,8 @@ export class GenericAgent extends TypedEventEmitter {
       // Extract preceding message (LLM reasoning that led to these tool calls)
       const precedingMessage = typeof response.content === 'string' ? response.content : undefined;
 
+      let shouldStopAfterAssembly = false;
+
       // Execute tool calls
       for (const toolCall of response.toolCalls) {
         // Special handling for ask_user - pause execution
@@ -1735,6 +1837,11 @@ export class GenericAgent extends TypedEventEmitter {
               saveTodos([]);
             }
           }
+          shouldStopAfterAssembly = true;
+          finalOutput =
+            (typeof resultObj['output_path'] === 'string'
+              ? `Final video assembled successfully: ${resultObj['output_path']}. Let me know if any scenes or shots need to be regenerated.`
+              : 'Final video assembled successfully. Let me know if any scenes or shots need to be regenerated.');
         }
 
         // Check if tool is waiting for user input (dispatch_agent planning)
@@ -1759,6 +1866,11 @@ export class GenericAgent extends TypedEventEmitter {
           toolCallId: toolCall.id,
           name: toolCall.name,
         });
+      }
+
+      if (shouldStopAfterAssembly) {
+        debugLog('[GenericAgent] Assembly completed successfully — stopping agent execution for this run');
+        break;
       }
     }
 
@@ -3287,6 +3399,9 @@ Respond in JSON format:
     const validContentTypes = [
       // Narrative types
       'plot', 'story', 'character', 'setting', 'scene', 'narration',
+      // Prompt-generation types
+      'character_image_prompt', 'setting_image_prompt', 'scene_image_prompt',
+      'scene_video_prompt', 'shot_image_prompt',
       // Documentary/generic types
       'outline', 'segment', 'thesis', 'research', 'script',
     ];

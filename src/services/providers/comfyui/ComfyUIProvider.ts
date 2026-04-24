@@ -12,6 +12,7 @@ import {
   loadWorkflowTemplate,
   parameterizeWorkflowByName,
   getRegistry,
+  isComfyCloudUrl,
 } from '../../comfyui/index.js';
 import {
   ensureProjectPathDir,
@@ -129,7 +130,7 @@ export class ComfyUIProvider implements GenerationProvider {
     await this.waitForCompletion(client, promptId, queueResult.clientId, onProgress);
 
     // Download result
-    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png');
+    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', filenamePrefix);
   }
 
   async editImage(
@@ -197,7 +198,13 @@ export class ComfyUIProvider implements GenerationProvider {
 
     await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
 
-    return this.downloadFirstOutput(client, queueResult.promptId, outputDir, 'image/png');
+    return this.downloadFirstOutput(
+      client,
+      queueResult.promptId,
+      outputDir,
+      'image/png',
+      filenamePrefix,
+    );
   }
 
   async generateVideo(
@@ -260,7 +267,13 @@ export class ComfyUIProvider implements GenerationProvider {
 
     await this.waitForCompletion(client, queueResult.promptId, queueResult.clientId, onProgress);
 
-    return this.downloadFirstOutput(client, queueResult.promptId, outputDir, 'video/mp4');
+    return this.downloadFirstOutput(
+      client,
+      queueResult.promptId,
+      outputDir,
+      'video/mp4',
+      filenamePrefix,
+    );
   }
 
   // ── Shared helpers ──────────────────────────────────────────────────────────
@@ -308,6 +321,7 @@ export class ComfyUIProvider implements GenerationProvider {
     promptId: string,
     outputDir: string,
     mimeType: string,
+    filenamePrefix?: string,
   ): Promise<GenerationResult> {
     const images = await client.getOutputImages(promptId);
     if (!images.length) {
@@ -315,7 +329,7 @@ export class ComfyUIProvider implements GenerationProvider {
     }
 
     const first = images[0]!;
-    const outputFilename = `${nanoid(8)}_${first.filename}`;
+    const outputFilename = this.buildOutputFilename(first.filename, mimeType, filenamePrefix);
     debugLog(`Downloading ${first.filename} → ${outputDir}/${outputFilename}`);
 
     const downloaded = await client.downloadOutput(
@@ -330,6 +344,29 @@ export class ComfyUIProvider implements GenerationProvider {
       mimeType,
       metadata: { promptId, comfyuiFilename: first.filename },
     };
+  }
+
+  private buildOutputFilename(
+    remoteFilename: string,
+    mimeType: string,
+    filenamePrefix?: string,
+  ): string {
+    const comfyBaseUrl = process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
+    const isCloud = isComfyCloudUrl(comfyBaseUrl);
+    if (!isCloud || !filenamePrefix?.trim()) {
+      return `${nanoid(8)}_${remoteFilename}`;
+    }
+
+    const extension = path.extname(remoteFilename) || this.extensionFromMimeType(mimeType);
+    const sanitizedPrefix = filenamePrefix.trim().replace(/[^A-Za-z0-9_-]+/g, '_');
+    return `${sanitizedPrefix}_${nanoid(8)}${extension}`;
+  }
+
+  private extensionFromMimeType(mimeType: string): string {
+    if (mimeType === 'image/png') return '.png';
+    if (mimeType === 'image/jpeg') return '.jpg';
+    if (mimeType === 'video/mp4') return '.mp4';
+    return '';
   }
 
   private persistOutput(

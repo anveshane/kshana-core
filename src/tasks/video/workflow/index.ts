@@ -68,6 +68,7 @@ export {
   createProject,
   loadProject,
   saveProject,
+  updateProjectConfiguration,
   getOrCreateProject,
   getOriginalInput,
   getCurrentPhase,

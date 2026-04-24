@@ -26,7 +26,7 @@ Process:
    - `errors` — segments that have no resolvable video file
    - `imageCount` — segments with images instead of videos (invalid for anime/cinematic styles)
 3. **If gaps exist — STOP and report**: You do NOT have video generation tools in this phase. Report the specific missing segments back so the orchestrator can re-plan and return to the video generation phase to create them. List exactly which segment IDs need videos.
-4. **Only if all segments resolve**: Call `assemble_from_timeline` to run FFmpeg and produce the final video
+4. **Only if all segments resolve**: Call `assemble_from_timeline` to produce the final video via the session-appropriate assembly path
 5. Present final video to user for approval
 
 ## Motion Types
@@ -78,8 +78,8 @@ You MUST use tools to generate videos - do NOT just output text recommendations.
 ## After Successful Assembly
 
 When `assemble_from_timeline` returns `success: true`:
-- The final video asset is automatically registered in the manifest
-- The VIDEO_COMBINE phase is automatically marked as completed
+- The final video artifact has been persisted and registered in the manifest
+- The VIDEO_COMBINE phase has been marked as completed
 - Report the result back: output path, duration, file size
 
 ## What You Do NOT Do

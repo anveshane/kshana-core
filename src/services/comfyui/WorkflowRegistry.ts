@@ -133,22 +133,20 @@ class WorkflowRegistry {
       qualityLevel: 'ultra',
     });
 
-    // 4. LTX-2.3 GGUF - Video generation (supports both I2V and T2V via toggle)
+    // 4. LTX-2.3 FL2V Cloud - Image + text to video (cloud-based)
     this.register({
       name: 'ltx23',
-      filename: 'video_ltx23_gguf.json',
+      filename: 'cloud/ltx23_fl2v_cloud.json',
       workflowType: WorkflowType.VIDEO_GENERATION,
-      description: 'Generate video using LTX-2.3 GGUF model. Supports both image-to-video and text-to-video modes via a toggle. Duration in seconds (1-20). Uses GGUF quantized models for efficient generation.',
+      description: 'Generate video from an image and text prompt using the cloud-based LTX-2.3 FL2V workflow. Accepts a first frame image and a motion prompt, then outputs a video. Duration is configurable in seconds.',
       capabilities: [
         'single-image-to-video',
-        'text-to-video',
         'motion-from-prompt',
-        'fast-generation',
         'camera-movement',
         'character-animation',
         'configurable-duration',
       ],
-      displayName: 'LTX-2.3 Video (GGUF)',
+      displayName: 'LTX-2.3 FL2V (Cloud)',
       requiresBaseImage: false,
       supportsTextPrompts: true,
       supportsImageToImage: true,

@@ -5,7 +5,9 @@
  * already contains everything from the story relevant to that scene. This module
  * reads the MINIMAL set of files for each content type, eliminating redundant reads.
  */
-import { loadProject } from '../../tasks/video/workflow/ProjectManager.js';
+import { tryParseSceneMotionPrompt } from '../contentValidation.js';
+import { loadTimeline } from '../timeline/TimelineManager.js';
+import { getProjectDir, loadProject } from '../../tasks/video/workflow/ProjectManager.js';
 import type { ProjectFile } from '../../tasks/video/workflow/types.js';
 import {
   projectExists as projectFileExists,
@@ -96,6 +98,83 @@ function buildReferenceImagesSection(
     } else {
       lines.push(`- ${setting.name}: no reference image`);
     }
+  }
+
+  return lines.join('\n');
+}
+
+function buildShotContinuitySection(sceneNumber: number, shotNumber: number): string | null {
+  const projectDir = getProjectDir();
+  const motionPromptPath = `prompts/videos/scenes/scene-${sceneNumber}.motion.json`;
+  const motionPromptContent = readProjectFile(motionPromptPath);
+  const parsedMotionPrompt = motionPromptContent
+    ? tryParseSceneMotionPrompt(motionPromptContent)
+    : null;
+  const shot = parsedMotionPrompt?.shots?.find(candidate => candidate.shotNumber === shotNumber);
+
+  const timeline = loadTimeline(projectDir);
+  const priorTimelineSegments = timeline?.segments
+    .filter(segment => {
+      const match = new RegExp(`^segment_${sceneNumber - 1}_shot_(\\d+)$`).exec(segment.id);
+      if (!match?.[1]) {
+        return false;
+      }
+      return Number(match[1]) < shotNumber;
+    })
+    .sort((a, b) => a.startTime - b.startTime) ?? [];
+
+  const priorPromptBlocks: string[] = [];
+  for (let currentShot = 1; currentShot < shotNumber; currentShot++) {
+    const promptPath = `prompts/images/shots/scene-${sceneNumber}-shot-${currentShot}.prompt.md`;
+    const promptContent = readProjectFile(promptPath);
+    if (promptContent) {
+      priorPromptBlocks.push(`Shot ${currentShot} Prompt (${promptPath})\n${promptContent}`);
+    }
+  }
+
+  const lines: string[] = [];
+  if (shot) {
+    lines.push('### Current Shot Continuity Target');
+    lines.push(`- Shot Number: ${shot.shotNumber ?? shotNumber}`);
+    if (shot.label) lines.push(`- Shot Label: ${shot.label}`);
+    if (shot.shotType) lines.push(`- Shot Type: ${shot.shotType}`);
+    if (shot.cameraWork) lines.push(`- Camera Work: ${shot.cameraWork}`);
+    if (shot.prompt) lines.push(`- Action/Prompt: ${shot.prompt}`);
+    if (shot.continuity_anchor) lines.push(`- Character Appearance Lock: ${shot.continuity_anchor}`);
+    if (shot.wardrobe_lock) lines.push(`- Wardrobe / Props Lock: ${shot.wardrobe_lock}`);
+    if (shot.setting_lock) lines.push(`- Setting Anchor Details: ${shot.setting_lock}`);
+    if (shot.scene_palette) lines.push(`- Lighting / Palette Lock: ${shot.scene_palette}`);
+    if (shot.dialogue) lines.push(`- Emotional Tone / Dialogue: ${shot.dialogue}`);
+    if (shot.do_not_change) lines.push(`- Do Not Change: ${shot.do_not_change}`);
+  }
+
+  if (parsedMotionPrompt) {
+    lines.push('### Scene-Wide Continuity Source');
+    if (parsedMotionPrompt.sceneTitle) lines.push(`- Scene Title: ${parsedMotionPrompt.sceneTitle}`);
+    if (parsedMotionPrompt.totalSceneDuration) {
+      lines.push(`- Scene Duration: ${parsedMotionPrompt.totalSceneDuration}s`);
+    }
+    lines.push(`- Motion Prompt File: ${motionPromptPath}`);
+  }
+
+  if (priorPromptBlocks.length > 0) {
+    lines.push('### Earlier Approved Shot Prompts In This Scene');
+    lines.push(priorPromptBlocks.join('\n\n---\n\n'));
+  }
+
+  if (priorTimelineSegments.length > 0) {
+    lines.push('### Earlier Timeline Continuity References');
+    for (const segment of priorTimelineSegments) {
+      lines.push(
+        `- ${segment.id} (${segment.fillStatus})` +
+        `${segment.metadata ? ` metadata=${JSON.stringify(segment.metadata)}` : ''}` +
+        `${segment.layers[0]?.metadata ? ` layer_prompt=${JSON.stringify(segment.layers[0].metadata)}` : ''}`
+      );
+    }
+  }
+
+  if (lines.length === 0) {
+    return null;
   }
 
   return lines.join('\n');
@@ -287,6 +366,12 @@ export function buildPreloadedContext(
         }
         if (!sceneLoaded) {
           addFileSection(`Scenes Plan (find Scene ${sceneNumber})`, 'plans/scenes.md');
+        }
+        if (shotNumber !== undefined) {
+          const continuitySection = buildShotContinuitySection(sceneNumber, shotNumber);
+          if (continuitySection) {
+            sections.push(continuitySection);
+          }
         }
       }
       for (const char of project.characters) {

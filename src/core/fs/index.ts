@@ -20,6 +20,7 @@ export {
   getSessionProjectDir,
   setSessionProjectDir,
   runInSession,
+  runInSessionAsync,
   createLocalSession,
   createRemoteSession,
   setDefaultProjectDir,

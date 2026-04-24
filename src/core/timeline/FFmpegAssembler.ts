@@ -89,6 +89,10 @@ function detectMediaType(filePath: string): 'video' | 'image' | null {
   return null;
 }
 
+function normalizeProjectRelativePath(filePath: string): string {
+  return filePath.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+}
+
 /**
  * Extract scene/shot numbers from a segment ID.
  * Handles patterns like "segment_1", "segment_5_shot_2", etc.
@@ -136,8 +140,37 @@ export function resolveSegmentFilePaths(
     let absolutePath: string | null = null;
     let mediaType: 'video' | 'image' | null = null;
 
-    // Tier 1: Direct filePath on the layer
-    if (visualLayer?.filePath) {
+    // Tier 1: artifactId -> manifest lookup is authoritative when available
+    if (visualLayer?.artifactId) {
+      const asset = manifest.find(a => a.id === visualLayer.artifactId);
+      if (asset) {
+        if (
+          visualLayer.filePath &&
+          normalizeProjectRelativePath(visualLayer.filePath) !== normalizeProjectRelativePath(asset.path)
+        ) {
+          errors.push(
+            `Segment "${segment.id}" (${segment.label}): artifact ${visualLayer.artifactId} ` +
+            `maps to ${asset.path} in the manifest, but timeline filePath was ${visualLayer.filePath}. ` +
+            `Using manifest path.`
+          );
+        }
+        const candidate = asset.path.startsWith('/')
+          ? asset.path
+          : join(projectDir, asset.path);
+        if (existsSync(candidate)) {
+          absolutePath = candidate;
+          mediaType = detectMediaType(candidate);
+        } else {
+          errors.push(
+            `Segment "${segment.id}" (${segment.label}): artifact ${visualLayer.artifactId} ` +
+            `resolved to missing manifest path ${asset.path}`
+          );
+        }
+      }
+    }
+
+    // Tier 2: Direct filePath on the layer only when no artifact-backed resolution exists
+    if (!absolutePath && visualLayer?.filePath) {
       const candidate = visualLayer.filePath.startsWith('/')
         ? visualLayer.filePath
         : join(projectDir, visualLayer.filePath);
@@ -147,21 +180,7 @@ export function resolveSegmentFilePaths(
       }
     }
 
-    // Tier 2: artifactId → manifest lookup
-    if (!absolutePath && visualLayer?.artifactId) {
-      const asset = manifest.find(a => a.id === visualLayer.artifactId);
-      if (asset) {
-        const candidate = asset.path.startsWith('/')
-          ? asset.path
-          : join(projectDir, asset.path);
-        if (existsSync(candidate)) {
-          absolutePath = candidate;
-          mediaType = detectMediaType(candidate);
-        }
-      }
-    }
-
-    // Tier 3: Search manifest by segment metadata (scene/shot number)
+    // Tier 3: Search manifest by segment metadata (scene/shot number) only without artifact-backed resolution
     if (!absolutePath) {
       const { segmentNum, shotNum } = parseSegmentId(segment.id);
       if (segmentNum !== undefined) {

@@ -44,6 +44,7 @@ import {
 import {
   ensureProjectPathDir,
   projectExists as projectPathExists,
+  projectRelativePath,
   readProjectText,
   writeProjectBufferAtPath,
 } from './workflow/projectFileIO.js';
@@ -423,19 +424,43 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
       ? `${negative_prompt}, ${styleConfig.negativePromptModifier}`
       : styleConfig.negativePromptModifier;
 
-    // Resolve reference images to file paths
-    const resolvedRefImages = reference_images
-      .map(ref => {
-        const refPath = findImagePathFromArtifactId(ref.image_id);
-        if (!refPath || !fs.existsSync(refPath)) {
-          console.warn(
-            `[generate_image] Failed to resolve ref image: id="${ref.image_id}" type=${ref.type} name="${ref.name}" → path: ${refPath ?? 'null'}`
-          );
-          return null;
-        }
-        return { filePath: refPath, type: ref.type as 'character' | 'setting', name: ref.name };
-      })
-      .filter((r): r is NonNullable<typeof r> => r !== null);
+    const referenceImageCleanupFns: Array<() => void> = [];
+
+    // Resolve reference images to local file paths. In remote sessions the
+    // project asset may exist only in the remote cache, so materialize it
+    // locally before handing it to the provider.
+    const resolvedRefImages: Array<{
+      filePath: string;
+      type: 'character' | 'setting';
+      name: string;
+    }> = [];
+    for (const ref of reference_images) {
+      const refPath = findImagePathFromArtifactId(ref.image_id);
+      if (!refPath) {
+        console.warn(
+          `[generate_image] Failed to resolve ref image: id="${ref.image_id}" type=${ref.type} name="${ref.name}" → path: null`
+        );
+        continue;
+      }
+
+      const { localPath, cleanup } = await ensureLocalReferenceImage(refPath);
+      if (!localPath || !fs.existsSync(localPath)) {
+        console.warn(
+          `[generate_image] Failed to materialize ref image: id="${ref.image_id}" type=${ref.type} name="${ref.name}" → path: ${refPath}`
+        );
+        continue;
+      }
+
+      if (cleanup) {
+        referenceImageCleanupFns.push(cleanup);
+      }
+
+      resolvedRefImages.push({
+        filePath: localPath,
+        type: ref.type as 'character' | 'setting',
+        name: ref.name,
+      });
+    }
 
     // Fail if qwen_edit mode but no references resolved
     if (useQwenEdit && resolvedRefImages.length === 0) {
@@ -471,18 +496,29 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
       });
     };
 
-    const result = await provider.generateImage!(
-      {
-        prompt: enhancedPrompt,
-        negativePrompt: enhancedNegativePrompt,
-        aspectRatio: aspect_ratio,
-        seed,
-        outputDir: getAssetsDir(),
-        filenamePrefix,
-        referenceImages: resolvedRefImages.length > 0 ? resolvedRefImages : undefined,
-      },
-      progressCallback,
-    );
+    let result;
+    try {
+      result = await provider.generateImage!(
+        {
+          prompt: enhancedPrompt,
+          negativePrompt: enhancedNegativePrompt,
+          aspectRatio: aspect_ratio,
+          seed,
+          outputDir: getAssetsDir(),
+          filenamePrefix,
+          referenceImages: resolvedRefImages.length > 0 ? resolvedRefImages : undefined,
+        },
+        progressCallback,
+      );
+    } finally {
+      for (const cleanup of referenceImageCleanupFns) {
+        try {
+          cleanup();
+        } catch {
+          // Ignore temp cleanup failures
+        }
+      }
+    }
 
     // Register artifact
     const artifactId = `img_${nanoid(8)}`;
@@ -1560,6 +1596,65 @@ async function ensureLocalVideoSourceImage(
   }
 }
 
+async function ensureLocalReferenceImage(
+  imagePath: string,
+): Promise<{ localPath?: string; cleanup?: () => void }> {
+  if (fs.existsSync(imagePath)) {
+    return { localPath: imagePath };
+  }
+
+  const session = getCurrentSession();
+  if (session?.mode !== 'remote') {
+    return {};
+  }
+
+  try {
+    const sessionFs = getSessionFs();
+    const candidatePaths = new Set<string>([imagePath]);
+    if (path.isAbsolute(imagePath)) {
+      try {
+        candidatePaths.add(projectRelativePath(imagePath));
+      } catch {
+        // Ignore paths outside the project root.
+      }
+    }
+
+    let resolvedRemotePath: string | undefined;
+    for (const candidatePath of candidatePaths) {
+      if (await sessionFs.exists(candidatePath)) {
+        resolvedRemotePath = candidatePath;
+        break;
+      }
+    }
+
+    if (!resolvedRemotePath) {
+      return {};
+    }
+
+    const imageBuffer = await sessionFs.readFileBuffer(resolvedRemotePath);
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kshana-image-ref-'));
+    const extension = path.extname(imagePath) || '.png';
+    const tempPath = path.join(tempDir, `reference${extension}`);
+    fs.writeFileSync(tempPath, imageBuffer);
+
+    return {
+      localPath: tempPath,
+      cleanup: () => {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // Ignore temp cleanup failures
+        }
+      },
+    };
+  } catch (error) {
+    debugLog(
+      `[generate_image] Failed to materialize remote reference image ${imagePath}: ${String(error)}`,
+    );
+    return {};
+  }
+}
+
 function buildPlacementMetadata(
   sceneNumber: number | undefined,
   shotNumber: number | undefined,
@@ -2026,6 +2121,8 @@ This tool blocks until generation is complete and returns the result directly (a
     };
     jobs.set(jobId, job);
 
+    const tempImageCleanupFns: Array<() => void> = [];
+
     try {
       // Resolve the base image path
       let imagePath = params.base_image_path;
@@ -2033,8 +2130,12 @@ This tool blocks until generation is complete and returns the result directly (a
         imagePath = path.join(getProjectDir(), imagePath);
       }
 
-      if (!fs.existsSync(imagePath)) {
+      const localizedBaseImage = await ensureLocalReferenceImage(imagePath);
+      if (!localizedBaseImage.localPath || !fs.existsSync(localizedBaseImage.localPath)) {
         throw new Error(`Base image not found: ${params.base_image_path}`);
+      }
+      if (localizedBaseImage.cleanup) {
+        tempImageCleanupFns.push(localizedBaseImage.cleanup);
       }
 
       // Resolve reference image paths
@@ -2045,10 +2146,14 @@ This tool blocks until generation is complete and returns the result directly (a
           if (!path.isAbsolute(resolvedPath) && !resolvedPath.startsWith('.')) {
             resolvedPath = path.join(getProjectDir(), resolvedPath);
           }
-          if (!fs.existsSync(resolvedPath)) {
+          const localizedRefImage = await ensureLocalReferenceImage(resolvedPath);
+          if (!localizedRefImage.localPath || !fs.existsSync(localizedRefImage.localPath)) {
             throw new Error(`Reference image not found: ${refPath}`);
           }
-          resolvedRefs.push(resolvedPath);
+          if (localizedRefImage.cleanup) {
+            tempImageCleanupFns.push(localizedRefImage.cleanup);
+          }
+          resolvedRefs.push(localizedRefImage.localPath);
         }
       }
 
@@ -2078,7 +2183,7 @@ This tool blocks until generation is complete and returns the result directly (a
       const result = await provider.editImage(
         {
           editPrompt: params.edit_prompt,
-          baseImagePath: imagePath,
+          baseImagePath: localizedBaseImage.localPath,
           referenceImages: resolvedRefs.length > 0 ? resolvedRefs : undefined,
           negativePrompt: params.negative_prompt,
           aspectRatio: params.aspect_ratio,
@@ -2147,6 +2252,14 @@ This tool blocks until generation is complete and returns the result directly (a
         job_id: jobId,
         error: String(error),
       };
+    } finally {
+      for (const cleanup of tempImageCleanupFns) {
+        try {
+          cleanup();
+        } catch {
+          // Ignore temp cleanup failures
+        }
+      }
     }
   }
 );

@@ -54,6 +54,13 @@ export OPENAI_API_KEY=your-api-key
 pnpm start
 ```
 
+**Comfy Cloud for image/video generation:**
+```bash
+export COMFYUI_BASE_URL=https://cloud.comfy.org
+export COMFY_CLOUD_API_KEY=your-comfy-cloud-api-key
+pnpm start
+```
+
 ### Environment Variables
 
 Create a `.env` file (copy from `.env.example`):
@@ -80,7 +87,16 @@ OPENAI_MODEL=gpt-4o
 LLM_BASE_URL=http://127.0.0.1:1234/v1
 LLM_API_KEY=not-needed
 LLM_MODEL=local-model
+
+# ComfyUI / Comfy Cloud
+# Use http://localhost:8188 for local ComfyUI or https://cloud.comfy.org for Comfy Cloud
+COMFYUI_BASE_URL=http://localhost:8188
+# Required only when COMFYUI_BASE_URL=https://cloud.comfy.org
+COMFY_CLOUD_API_KEY=
+COMFYUI_TIMEOUT=300
 ```
+
+When `COMFYUI_BASE_URL` points to `https://cloud.comfy.org`, `kshana-ink` switches to Comfy Cloud mode automatically, uses Cloud API routes, and requires `COMFY_CLOUD_API_KEY`. Any other ComfyUI URL keeps the existing local/self-hosted behavior and ignores `COMFY_CLOUD_API_KEY`.
 
 ### Command Line Options
 
