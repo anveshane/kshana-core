@@ -62,6 +62,7 @@ import { assembleVideos, resolveSegmentFilePaths } from '../timeline/FFmpegAssem
 import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timeline/types.js';
 import type { TodoNodeInfo } from '../../events/events.js';
 import { fitShotDurations } from './shotDurationFit.js';
+import { scanMultiSpeakerShots, scanAmbiguousSpeakerTag } from './dialogueValidation.js';
 import { validateWithSchema, normalizeSceneVideoPrompt, normalizeShotImagePrompt, getPromptSchema } from './schemas.js';
 import {
   validateContinuitySequence,
@@ -1499,6 +1500,17 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.log(`  Calling LLM...`);
               let content = await this.generateForNode(node, system, user, toolCallId, toolName);
               this.log(`  LLM returned ${content.length} chars`);
+
+              // Motion-directive soft-warn: scan for ambiguous speaker
+              // tags ("The woman says", "He says") when 2+ characters
+              // are in the shot. The video model lip-syncs to whichever
+              // character is most visually prominent when the tag is
+              // generic, so dialogue ends up on the wrong mouth. Pure
+              // warning — we don't block or retry (that would risk
+              // oscillation with the guide's own phrasing rules).
+              if (node.typeId === 'shot_motion_directive') {
+                this.scanMotionDirectiveForAmbiguousSpeaker(node, content);
+              }
 
               // Validate JSON output for nodes that require it
               const jsonValidatedTypes = ['scene_video_prompt', 'shot_image_prompt', 'character_image', 'setting_image'];
@@ -3320,6 +3332,15 @@ Examples of common failure modes to avoid:
           if (adjustments.length > 0) {
             this.log(`  [dialogue-fit] ${node.id}: adjusted ${adjustments.length} shot(s): ${adjustments.map(a => `shot${a.shotNumber} ${a.from}s→${a.to}s (dialogue=${a.dialogueSeconds}s)`).join(', ')}`);
           }
+          // Soft-warn: flag any shot with 2+ speakers in its audio
+          // field. See scene_breakdown_guide.md "Step 2a: One speaker
+          // per shot" — video models mis-attribute dialogue when one
+          // shot tries to carry two speakers. Warning only; not a
+          // validation failure, to avoid blocking legacy projects.
+          const multiSpeaker = scanMultiSpeakerShots(parsed.shots as Array<Record<string, unknown>>);
+          if (multiSpeaker.length > 0) {
+            this.log(`  [multi-speaker] ${node.id}: ${multiSpeaker.length} shot(s) carry 2+ speakers — video model will likely mis-attribute: ${multiSpeaker.map(w => `shot${w.shotNumber}(${w.speakers.join('+')})`).join(', ')}`);
+          }
         }
         mutated = true;
       }
@@ -3424,6 +3445,63 @@ Examples of common failure modes to avoid:
    * empty array if anything is missing; callers treat that as "nothing
    * to inject."
    */
+
+  /**
+   * Scan a freshly-generated motion directive for ambiguous speaker
+   * tags (bare "She says", "The woman says", etc.) when 2+ characters
+   * are in the shot. Pure soft warning — logged to help diagnose
+   * dialogue-to-mouth mis-attribution but does not block the run.
+   *
+   * Char list comes from the matching shot_image_prompt JSON's
+   * references array. If the shot_image_prompt isn't readable yet we
+   * skip silently — the scanner is best-effort.
+   */
+  private scanMotionDirectiveForAmbiguousSpeaker(node: ExecutionNode, content: string): void {
+    if (!node.itemId) return;
+    let motionDirective = '';
+    try {
+      const parsed = JSON.parse(content.trim().replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, ''));
+      motionDirective = typeof parsed?.motionDirective === 'string' ? parsed.motionDirective : '';
+    } catch {
+      return; // LLM output wasn't parseable JSON; nothing to scan
+    }
+    if (!motionDirective) return;
+
+    const shotPromptNode = this.executor.getNode(`shot_image_prompt:${node.itemId}`);
+    if (!shotPromptNode?.outputPath) return;
+    const promptPath = join(this.config.projectDir, shotPromptNode.outputPath);
+    if (!existsSync(promptPath)) return;
+
+    const charsInShot: string[] = [];
+    try {
+      let raw = readFileSync(promptPath, 'utf-8').trim();
+      if (raw.startsWith('```')) raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      const shotJson = JSON.parse(raw);
+      const seen = new Set<string>();
+      for (const f of Object.values(shotJson.frames ?? {}) as Array<{ references?: Array<{ type?: string; refId?: string }> }>) {
+        for (const r of f?.references ?? []) {
+          if (r?.type === 'character' && typeof r.refId === 'string') {
+            const label = r.refId.replace(/^character_image:/, '');
+            if (label && !seen.has(label)) {
+              seen.add(label);
+              charsInShot.push(label);
+            }
+          }
+        }
+      }
+    } catch {
+      return;
+    }
+
+    const warnings = scanAmbiguousSpeakerTag(motionDirective, charsInShot);
+    if (warnings.length > 0) {
+      this.log(`  [ambiguous-speaker] ${node.id}: ${warnings.length} ambiguous tag(s) with ${charsInShot.length} chars in frame (${charsInShot.join(', ')}):`);
+      for (const w of warnings) {
+        this.log(`    - "${w.match}" → dialogue: "${w.quotedDialogue}"`);
+      }
+    }
+  }
+
   private buildAvailableRefsForShot(node: ExecutionNode): AvailableRefMinimal[] {
     if (node.typeId !== 'shot_image_prompt' || !node.itemId) return [];
 

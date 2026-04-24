@@ -35,6 +35,12 @@ The main subject can change between scenes, but within a scene stays fixed. **Th
 
 **Step 2: Dialogue audit.** For EVERY dialogue beat, count the words and pre-compute required duration (see Dialogue Timing below). Write this number down BEFORE drafting the shot. If a line exceeds the 15s cap, plan to split it across multiple shots now — not later.
 
+**Step 2a: One speaker per shot.** The video model generates ONE continuous shot per motion directive and cannot reliably route two different speakers' dialogue to the correct mouths. If a beat has two characters in conversation, split them:
+- Shot N: character A speaks (audio = `"NAME_A: line..."`)
+- Shot N+1: character B speaks (audio = `"NAME_B: reply..."`)
+
+A single shot's `audio` field MUST contain at most ONE `NAME:` pattern. Ambient sound after the dialogue is fine ("cicada hum, distant traffic"), but never a second speaker. If you're tempted to write `"PARVATI: line1. ISHA: line2."` in one shot, SPLIT instead — two short shots read naturally, one mis-attributed shot reads broken.
+
 **Step 3: Purpose sequence check.** Decide the opening purpose:
    - If shot 1 is `set_the_world` or `set_the_mood` → shot 2 (or the first shot that contains a character) MUST be `meet_character`. No exceptions.
    - If shot 1 opens directly with characters already present and acting → use `meet_character` or `show_action` as shot 1; do NOT use `set_the_world`/`set_the_mood` as a decorative opener.
@@ -107,9 +113,9 @@ duration       = ceil(base_seconds) + 1    # +1s buffer for lead-in/tail
 
 | Dialogue | Words | Minimum duration |
 |---|---:|---:|
-| "Go on, beti." | 3 | **3s** |
-| "Sorry Madam, had to drop Isha at the academy." | 9 | **5s** |
-| "Okay Ma. Go now, or you'll be late for Mrs. Sharma's house. Don't scrub the floors too hard today." | 21 | **10s** |
+| "Stay down." | 2 | **3s** |
+| "We need to move. The signal is weak." | 8 | **5s** |
+| "Captain, the engines are offline and the hull is breached. Life support will fail in minutes." | 17 | **8s** |
 | "I told you not to come here again. Last time it nearly cost us everything, and I am not burying another brother for your schemes." | 27 | **12s** |
 | A monologue of 40+ words | 40+ | **SPLIT** — e.g. 18 words in shot A (9s) → reaction cutaway → 22 words in shot B (10s) |
 

@@ -76,7 +76,7 @@ Focus on ONE dominant change per shot. The model handles one thing well. Two com
 
 ### Naming Characters — Tags, Not Proper Names
 
-The video model does NOT know who your characters are by name. "Parvati" and "Isha" are unresolved tokens to it — it cannot tell which figure in the image is which. Naming them bare causes the model to invent a new character instead of animating the right one.
+The video model does NOT know who your characters are by name. A proper noun like `"Rohan"` or `"Anika"` is an unresolved token to it — it cannot tell which figure in the image is which. Naming them bare causes the model to invent a new character instead of animating the right one.
 
 **If the shot has exactly ONE character:**
 - Refer to them by position or role ("the figure at the railing", "the runner", "the woman at the sink").
@@ -87,13 +87,36 @@ The video model does NOT know who your characters are by name. "Parvati" and "Is
 - Use those tags to identify each character, NOT their proper names. Keep each tag under ~8 words.
 - If no `<character_tags>` block was provided for a multi-character shot, fall back to short role/position tags that disambiguate the characters from each other ("the older woman in the blue kameez", "the young athlete in red").
 
+### Speaker Disambiguation — The "Says" Subject Must Be Unique
+
+When the shot has 2+ characters in frame AND one of them speaks, the `says` clause MUST name that speaker with a tag that ONLY fits them — never a tag that could apply to multiple characters in the frame. The video model lip-syncs to whichever character's mouth best matches the described subject; a generic tag lets it pick the wrong one, and the dialogue comes out of the wrong character's mouth.
+
+**BANNED speaker tags (only allowed when exactly ONE character is in the shot):**
+- Bare pronouns: "She says", "He says"
+- Generic class nouns: "The woman says", "The man says", "A woman says", "A man says", "The figure says"
+
+**Worked example — TWO MEN in frame** (imagine a grizzled ship captain and his teenage deckhand on a storm-lashed deck):
+
+| speaker | BAD tag | GOOD tag |
+|---|---|---|
+| captain | `"The man says..."` | `"The bearded captain in the oilskin coat, gripping the helm, says..."` |
+| deckhand | `"He says..."` | `"The barefoot boy clutching the rigging says..."` |
+
+**Rule of thumb:** if you can swap the `says` clause's subject for the OTHER character in frame and the sentence still "reads right", your tag is too generic. The tag must be a signature that visually rules out every other character in the shot — clothing, age, position, posture, something physical the model can see.
+
+When in doubt: pull the most distinctive visual detail from `<character_tags>` (clothing color, age, posture, position in frame) into the `says` clause. Six extra words here prevents a fully mis-attributed dialogue.
+
 **BAD** (single-character, over-described): "A tall man with silver hair and a black leather jacket stands in the rain-soaked alley with neon signs reflecting off wet pavement. He turns his head slowly."
 
 **GOOD** (single-character): "The figure turns head slowly to the right, gaze shifting toward the alley entrance. Camera holds static."
 
-**BAD** (two characters, named): "Parvati watches as Isha jogs away down the track."
+**BAD** (two characters, named): "Arjun watches as Meera walks out of the temple."
 
-**GOOD** (two characters, visually tagged): "The older woman in the faded blue salwar watches as the young runner in the red vest jogs away down the track."
+**GOOD** (two characters, visually tagged): "The tattooed warrior in leather armor watches as the robed priestess walks out of the temple."
+
+**BAD** (two characters, ambiguous speaker): "The man at the workbench, slowly lifting his gaze, says 'You should not have come here.'"
+
+**GOOD** (two characters, unique speaker tag): "The silver-haired smith in the leather apron, slowly lifting his gaze from the glowing anvil, says 'You should not have come here.'"
 
 ### No Setting Descriptions
 
