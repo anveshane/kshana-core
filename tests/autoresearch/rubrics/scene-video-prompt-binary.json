@@ -12,7 +12,11 @@
     },
     {
       "id": "DURATION_SUM",
-      "question": "Do the individual shot durations sum approximately to the totalDuration field (within ±20%)? No wildly mismatched totals. Each shot should be 3-10 seconds."
+      "question": "Do the individual shot durations sum approximately to the totalDuration field (within ±20%)? No wildly mismatched totals. Each shot should be 3-15 seconds (the upper bound is reserved for dialogue-heavy shots)."
+    },
+    {
+      "id": "DIALOGUE_DURATION_FIT",
+      "question": "For every shot whose audio field contains dialogue (a NAME: pattern — e.g. 'PARVATI:', 'Mrs. Singh:'), is the declared duration long enough to deliver the full line at conversational pace? Rule of thumb: ~2.5 words/sec plus a 1-second buffer. A shot with 20 words of dialogue needs duration >= 9s; a shot with 5 words needs >= 3s. Count dialogue words only — ambient audio descriptions don't count. If the shot has no dialogue (pure ambient/action), answer YES by default."
     },
     {
       "id": "SHOT_DESCRIPTIONS",
