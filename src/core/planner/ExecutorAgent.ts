@@ -61,6 +61,7 @@ import {
 import { assembleVideos, resolveSegmentFilePaths } from '../timeline/FFmpegAssembler.js';
 import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timeline/types.js';
 import type { TodoNodeInfo } from '../../events/events.js';
+import { fitShotDurations } from './shotDurationFit.js';
 import { validateWithSchema, normalizeSceneVideoPrompt, normalizeShotImagePrompt, getPromptSchema } from './schemas.js';
 import {
   validateContinuitySequence,
@@ -1921,7 +1922,7 @@ export class ExecutorAgent extends TypedEventEmitter {
     if (node.typeId === 'scene' || node.typeId === 'scene_video_prompt') {
       if (perSceneDuration > 0) {
         parts.push(`**This scene's duration:** ~${perSceneDuration} seconds`);
-        parts.push(`**Shot planning:** Break this scene into shots that total ~${perSceneDuration}s. Each shot should be 3-10 seconds.`);
+        parts.push(`**Shot planning:** Break this scene into shots that total ~${perSceneDuration}s. Each shot should be 3-10 seconds for action/atmosphere, up to 15 seconds for dialogue-heavy shots. Dialogue shots MUST size to fit the full spoken line (~2.5 words/sec + 1s buffer) — shorter and the video cuts off mid-sentence.`);
       }
       if (sceneCount > 0) {
         // Figure out which scene number this is
@@ -3309,6 +3310,17 @@ Examples of common failure modes to avoid:
       if (node.typeId === 'scene_video_prompt') {
         normalizeSceneVideoPrompt(parsed);
         this.runContinuitySequenceCheck(parsed, node.id);
+        // Dialogue-fit pass: bump any shot whose declared `duration` is
+        // shorter than the dialogue in its `audio` field. Without this
+        // the video model generates the exact requested duration and
+        // clips long speeches mid-sentence. Capped at 15s (LTX 2.3's
+        // practical ceiling).
+        if (Array.isArray(parsed?.shots)) {
+          const adjustments = fitShotDurations(parsed.shots as Array<Record<string, unknown>>);
+          if (adjustments.length > 0) {
+            this.log(`  [dialogue-fit] ${node.id}: adjusted ${adjustments.length} shot(s): ${adjustments.map(a => `shot${a.shotNumber} ${a.from}s→${a.to}s (dialogue=${a.dialogueSeconds}s)`).join(', ')}`);
+          }
+        }
         mutated = true;
       }
 

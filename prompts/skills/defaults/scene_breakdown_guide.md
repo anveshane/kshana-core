@@ -47,7 +47,7 @@ Every shot object MUST contain exactly these 7 fields. Missing or empty fields =
 |---|---|---|
 | `shotNumber` | number | Sequential integer starting at 1 |
 | `purpose` | string | WHY this shot exists (see Purpose section below) |
-| `duration` | number | Seconds (3–10). Quick cuts: 3–4s. Emotional holds: 6–8s |
+| `duration` | number | Seconds (3–15). Quick cuts: 3–4s. Emotional holds: 6–8s. **Dialogue shots MUST fit the full line — see Dialogue Timing below** |
 | `description` | string | 1–2 sentence visual brief of what happens |
 | `cameraWork` | string | Start with framing (wide, medium, close-up, extreme close-up), then angle and movement |
 | `audio` | string | Everything heard: dialogue, ambient, effects, or silence (see Audio section) |
@@ -64,6 +64,35 @@ Every shot object MUST contain exactly these 7 fields. Missing or empty fields =
   "transition": "fade"
 }
 ```
+
+## Dialogue Timing — Shot Duration Must Fit the Line
+
+The video model generates exactly the duration you request. If a shot carries 25 words of dialogue but you set `duration: 3`, the video cuts off mid-sentence — jarring edits, broken rhythm.
+
+**Rule:** whenever the shot's `audio` contains dialogue (any `NAME:` pattern), the `duration` MUST be large enough to deliver every spoken word.
+
+**Estimate:** conversational speech ≈ 2.5 words per second. Compute:
+
+```
+duration_seconds = ceil(word_count / 2.5) + 1   # +1 second buffer for lead-in/tail
+```
+
+**Examples:**
+
+| Dialogue | Word count | Estimate | Set duration to |
+|---|---|---:|---:|
+| "Go on, beti." | 3 | 3s | **3s** |
+| "Sorry Madam, had to drop Isha at the academy." | 9 | 5s | **5s** |
+| "Okay Ma. Go now, or you'll be late for Mrs. Sharma's house. Don't scrub the floors too hard today." | 21 | 10s | **10s** |
+| A monologue running past 15s | 40+ | 17s+ | **Split into multiple shots** |
+
+**Rules:**
+- Count only words inside the speaker turn — ambient sound in the same audio line doesn't count.
+- If multiple characters speak in the same shot, sum all dialogue word counts.
+- **The cap is 15s per shot.** If one line would require more than 15s, split the line across two shots (e.g. `show_dialogue` → `show_reaction` → `show_dialogue`).
+- Silent / ambient-only shots follow the normal 3–10s guidance.
+
+Under-sizing dialogue is the #1 cause of jarring cuts in the final video — err on the longer side when unsure.
 
 ## Purpose — WHY This Shot Exists
 
@@ -217,7 +246,7 @@ Each shot specifies how it transitions FROM the previous shot. The first shot of
 Before returning JSON, verify every item:
 
 1. Every scene beat has a shot
-2. Duration sum ≈ totalDuration (within ±20%). Each shot is 3–10 seconds
+2. Duration sum ≈ totalDuration (within ±20%). Each shot is 3–15 seconds (15s reserved for dialogue-heavy shots; action is typically 3–10s). Dialogue fit is non-negotiable — see Dialogue Timing above
 3. **Every shot has all 7 required fields**: `shotNumber`, `purpose`, `duration`, `description`, `cameraWork`, `audio`, `transition` — none empty
 4. **Every shot has a valid `purpose`** from the taxonomy — not a made-up value
 5. **Every shot has an `audio` field** with dialogue (if any) + ambient/effects
