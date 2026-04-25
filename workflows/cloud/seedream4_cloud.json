@@ -1,0 +1,97 @@
+{
+  "1": {
+    "inputs": {
+      "model": "seedream-4-0-250828",
+      "prompt": "A medium shot of Parvati from image 2, her face razor-sharp in shallow depth of field, standing before the gate of the district sports complex from image 1. She has begun to lift her arms into a coaching gesture, left arm coming up while the right arm still lowers, her expression shifting from weariness to a weary determination. Behind her, Isha from image 3 stands as a softly blurred silhouette in the background, and the rustic gate with neem trees is rendered as warm bokeh. Golden early morning light streams from camera-left, casting soft shadows and illuminating swirling dust motes in the humid air, creating a mood of quiet resilience., anime style, anime art, vibrant colors, detailed anime, studio quality anime, anime aesthetic",
+      "size_preset": "Custom",
+      "width": 2048,
+      "height": 2048,
+      "sequential_image_generation": "disabled",
+      "max_images": 1,
+      "seed": 1735154765,
+      "watermark": false,
+      "fail_on_partial": true,
+      "image": [
+        "21",
+        0
+      ]
+    },
+    "class_type": "ByteDanceSeedreamNode",
+    "_meta": {
+      "title": "ByteDance Seedream 4.5 & 5.0"
+    }
+  },
+  "11": {
+    "inputs": {
+      "image": "904197ccd084a64eafb7650bd81c4690b5e9379f44d5ac6f41dd53a58a05104e.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "12": {
+    "inputs": {
+      "filename_prefix": "Seedream-4",
+      "images": [
+        "1",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "21": {
+    "inputs": {
+      "images.image0": [
+        "11",
+        0
+      ],
+      "images.image1": [
+        "24",
+        0
+      ],
+      "images.image2": [
+        "25",
+        0
+      ],
+      "images.image3": [
+        "26",
+        0
+      ]
+    },
+    "class_type": "BatchImagesNode",
+    "_meta": {
+      "title": "Batch Images"
+    }
+  },
+  "24": {
+    "inputs": {
+      "image": "6c15576c4b1043e43b2144656a0f839ef757217165d8cb683a853a9e4eecedbd.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "25": {
+    "inputs": {
+      "image": "dce39866e8cdcb9f33e550bdcf758470536d4d50b2d9649333d1988848216701.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "26": {
+    "inputs": {
+      "image": "dce39866e8cdcb9f33e550bdcf758470536d4d50b2d9649333d1988848216701.png"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  }
+}
