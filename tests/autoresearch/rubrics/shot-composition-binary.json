@@ -55,6 +55,18 @@
       "question": "Are there zero references to image numbers NOT listed in available_references? No hallucinated 'from image N' where N exceeds the number of available references. The LLM must not invent image numbers."
     },
     {
+      "id": "OTS_REQUIRES_TWO_CHARS",
+      "question": "If the imagePrompt uses 'over-the-shoulder', 'OTS', or any other two-character framing language, does the references array contain TWO OR MORE character entries? OTS is inherently a two-character composition (foreground anchor blurred + focal subject sharp). Using it with one character causes the image model to invent a phantom second character. For single-character close-ups, the prompt should use 'insert', 'extreme_close_up', or 'close_up' framing instead. Answer YES if the prompt either avoids OTS or has two-plus character refs; NO if OTS phrasing is used with fewer than two character refs."
+    },
+    {
+      "id": "NO_PHANTOM_CHARACTER",
+      "question": "Does the imagePrompt avoid naming any character that is NOT present in the references array? Every character mentioned by name in the prose must have a corresponding entry in the references[] array for that frame. If the prose names someone whose refId is missing from references[], the image model has no anchor for that character's appearance and will invent or blend features. Answer YES if every named character is in references[]; NO if any named character is absent."
+    },
+    {
+      "id": "NO_ORPHAN_REFS",
+      "question": "Is every entry in the references[] array tagged at least once in the prose with 'from image N'? An entry that's uploaded but never named in the prose contributes no signal to the image model and may confuse its attention. Answer YES if every imageNumber in references[] appears at least once as 'from image N' in the prose; NO if any reference is orphaned. (Note: for last_frame delta prompts, the setting reference must still be tagged at least once even if the focus is on character changes.)"
+    },
+    {
       "id": "VALID_JSON",
       "question": "Is the output valid JSON with all required fields? Must have: frames (with first_frame containing imagePrompt, generationMode, references), negativePrompt, and aspectRatio. generationStrategy should be present."
     }

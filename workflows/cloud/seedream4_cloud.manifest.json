@@ -13,17 +13,13 @@
     { "id": "reference_image_2", "type": "image", "source": "shot_image", "required": false },
     { "id": "reference_image_3", "type": "image", "source": "shot_image", "required": false },
     { "id": "seed", "type": "number", "source": "system", "required": false },
-    { "id": "filenamePrefix", "type": "text", "source": "system", "required": false },
-    { "id": "width", "type": "number", "source": "system", "required": false },
-    { "id": "height", "type": "number", "source": "system", "required": false }
+    { "id": "filenamePrefix", "type": "text", "source": "system", "required": false }
   ],
   "workflowFile": "seedream4_cloud.json",
   "format": "api",
   "parameterMappings": [
     { "input": "prompt", "nodeId": "1", "field": "prompt" },
     { "input": "seed", "nodeId": "1", "field": "seed" },
-    { "input": "width", "nodeId": "1", "field": "width" },
-    { "input": "height", "nodeId": "1", "field": "height" },
     { "input": "base_image", "nodeId": "11", "field": "image" },
     { "input": "reference_image_1", "nodeId": "24", "field": "image" },
     { "input": "reference_image_2", "nodeId": "25", "field": "image" },
