@@ -101,6 +101,14 @@ export function injectMissingShotRefs(
   let prose = frame.imagePrompt ?? '';
   const refsArr: ShotImagePromptRef[] = [...(frame.references ?? [])];
 
+  // Track the max imageNumber currently in use so we can allocate
+  // unique numbers for any ref we ADD (never colliding with the
+  // frame's existing local numbering).
+  let maxN = 0;
+  for (const r of refsArr) {
+    if (typeof r.imageNumber === 'number' && r.imageNumber > maxN) maxN = r.imageNumber;
+  }
+
   for (const ar of availableRefs) {
     const proseForm = labelToProseForm(ar.label);
     if (proseForm.length < 2) continue;
@@ -115,38 +123,55 @@ export function injectMissingShotRefs(
     const match = nameRe.exec(prose);
     if (!match) continue; // Label not used in this frame's prose.
 
-    // Canonical "from image N" presence check: N must be THIS ref's
-    // assigned imageNumber. If the LLM used a different N for this
-    // label we'd still re-inject here, which is wrong — but the
-    // canonical N IS what the LLM was told to use in its context, so
-    // mismatches here mean the LLM hallucinated a number and the fix
-    // is to add the correct one.
-    const phraseRe = new RegExp(`\\bfrom\\s+image\\s+${ar.imageNumber}\\b`, 'i');
-    const hasPhrase = phraseRe.test(prose);
+    // Adjacency check: is the FIRST occurrence of the name immediately
+    // followed by `from image N` for ANY N (with optional possessive
+    // `'s`)? If yes, the LLM already wrote a tag — even if N is wrong,
+    // a downstream pass (reorder + renumber, or alignFramesToFirstFrame)
+    // will fix the number. Re-injecting `from image canonicalN` here
+    // would create a duplicate like "Parvati from image 2 from image 1"
+    // because the existing wrong tag stays in place.
+    const adjacencyRe = new RegExp(
+      `${WORD_BOUNDARY_PREFIX}${escapeRegex(proseForm)}${WORD_BOUNDARY_SUFFIX}(?:'s)?\\s+from\\s+image\\s+\\d+\\b`,
+      'i',
+    );
+    const hasAdjacentTag = adjacencyRe.test(prose);
 
     // refId is the stable identity (e.g. "character_image:parvati").
     // We don't match on imageNumber because the LLM sometimes uses a
     // different one — we trust the canonical.
-    const hasRef = refsArr.some(r => r.refId === ar.refId);
+    const existingRef = refsArr.find(r => r.refId === ar.refId);
+    const hasRef = !!existingRef;
 
-    if (hasPhrase && hasRef) continue;
+    if (hasAdjacentTag && hasRef) continue;
 
-    if (!hasPhrase) {
+    // Decide which imageNumber to use for the injected tag/ref.
+    //   - If the ref is ALREADY in this frame's refsArr (under any
+    //     number — possibly placed by the LLM), use that local number.
+    //     This keeps prose consistent with the frame's own numbering.
+    //   - Else, allocate the next free number (maxN + 1). NEVER use
+    //     `ar.imageNumber` directly — that's the project-wide canonical
+    //     from buildAvailableRefsForShot, which has nothing to do with
+    //     the frame's shot-specific numbering and would inject a stale
+    //     tag like "Singh bungalow from image 5" into a frame where
+    //     the setting is actually at local image 1.
+    const targetN = existingRef ? (existingRef.imageNumber as number) : ++maxN;
+
+    if (!hasAdjacentTag) {
       const insertAt = match.index + match[0].length;
-      prose = prose.slice(0, insertAt) + ` from image ${ar.imageNumber}` + prose.slice(insertAt);
+      prose = prose.slice(0, insertAt) + ` from image ${targetN}` + prose.slice(insertAt);
     }
 
     if (!hasRef) {
       refsArr.push({
-        imageNumber: ar.imageNumber,
+        imageNumber: targetN,
         type: ar.type,
         refId: ar.refId,
       });
     }
 
     const kind: InjectionEvent['kind'] =
-      (!hasPhrase && !hasRef) ? 'both' : (!hasPhrase ? 'phrase' : 'array');
-    injected.push({ label: ar.label, imageNumber: ar.imageNumber, kind });
+      (!hasAdjacentTag && !hasRef) ? 'both' : (!hasAdjacentTag ? 'phrase' : 'array');
+    injected.push({ label: ar.label, imageNumber: targetN, kind });
   }
 
   return {
@@ -218,10 +243,68 @@ export function normalizeShotImagePrompt(frame: ShotImagePromptFrame): ShotImage
 }
 
 /**
+ * Rewrite `<name> from image M` to `<name> from image targetN`
+ * whenever the prose tagged a known label with the wrong number.
+ *
+ * Common LLM failure mode: the LLM was given shot-specific numbering
+ * via `<available_references>` but mixes in project-wide numbers, or
+ * the reorder pass renumbered refs and the prose lags behind. The
+ * targetN is read from the FRAME's CURRENT references[] (matched by
+ * refId via availableRefs.label) — NOT from availableRefs.imageNumber,
+ * which is the project-wide canonical and won't match the frame's
+ * shot-specific numbering.
+ *
+ * If a label has no entry in the frame's references[], we leave it
+ * alone (could be a setting whose label doesn't appear in the prose
+ * for this frame, or a hallucinated mention of a different character).
+ */
+export function correctProseNumbersByName(
+  frame: ShotImagePromptFrame,
+  availableRefs: AvailableRefMinimal[],
+): ShotImagePromptFrame {
+  if (!availableRefs || availableRefs.length === 0) return frame;
+  const refs = Array.isArray(frame.references) ? frame.references : [];
+  if (refs.length === 0) return frame;
+
+  // Build refId → current imageNumber from THIS frame's refs.
+  const currentNumberByRefId = new Map<string, number>();
+  for (const r of refs) {
+    if (typeof r.refId === 'string' && typeof r.imageNumber === 'number') {
+      currentNumberByRefId.set(r.refId, r.imageNumber);
+    }
+  }
+
+  let prose = frame.imagePrompt ?? '';
+
+  for (const ar of availableRefs) {
+    const proseForm = labelToProseForm(ar.label);
+    if (proseForm.length < 2) continue;
+
+    const targetN = currentNumberByRefId.get(ar.refId);
+    if (targetN === undefined) continue; // Ref not in this frame's refs.
+
+    // Capture group 1: the name + optional possessive + " from image ".
+    // Capture group 2: the number M to validate.
+    const re = new RegExp(
+      `(${WORD_BOUNDARY_PREFIX}${escapeRegex(proseForm)}${WORD_BOUNDARY_SUFFIX}(?:'s)?\\s+from\\s+image\\s+)(\\d+)\\b`,
+      'gi',
+    );
+    prose = prose.replace(re, (_match, prefix: string, mStr: string) => {
+      const m = parseInt(mStr, 10);
+      if (m === targetN) return `${prefix}${m}`;
+      return `${prefix}${targetN}`;
+    });
+  }
+
+  return { ...frame, imagePrompt: prose };
+}
+
+/**
  * Convenience: inject missing refs (pass 1), then reorder + renumber
- * (pass 2). This is what ExecutorAgent should call at the output
- * boundary. Returns both the final frame and the injection log so the
- * caller can emit telemetry / debug logs.
+ * (pass 2), then correct any name-tagged wrong numbers (pass 3). This
+ * is what ExecutorAgent should call at the output boundary. Returns
+ * both the final frame and the injection log so the caller can emit
+ * telemetry / debug logs.
  */
 export function normalizeShotImagePromptWithRefs(
   frame: ShotImagePromptFrame,
@@ -229,5 +312,261 @@ export function normalizeShotImagePromptWithRefs(
 ): { frame: ShotImagePromptFrame; injected: InjectionEvent[] } {
   const after1 = injectMissingShotRefs(frame, availableRefs);
   const after2 = normalizeShotImagePrompt(after1.frame);
-  return { frame: after2, injected: after1.injected };
+  const after3 = correctProseNumbersByName(after2, availableRefs);
+  return { frame: after3, injected: after1.injected };
+}
+
+/**
+ * Force every non-first frame to use first_frame's (refId → imageNumber)
+ * mapping as canonical. Fixes two LLM failure modes seen in practice:
+ *
+ *   1. Renumbering — last_frame uses N=1 for a refId that first_frame
+ *      had at N=2. We rewrite the frame's `from image N` tags so they
+ *      match first_frame, and fix the `references[]` numbers to match.
+ *
+ *   2. Dropped refs — last_frame omits one of first_frame's refs
+ *      (commonly the setting, because last_frame prose mentions only
+ *      "gate" or "mudroom" rather than the canonical setting label).
+ *      We append the missing first_frame ref at its canonical number.
+ *
+ * For genuinely NEW refs introduced ONLY in a non-first frame
+ * (e.g., a character entering the scene), we keep their imageNumber
+ * unless it collides with a canonical first_frame number — in which
+ * case we move the new ref to the next free number and rewrite its
+ * `from image N` tag in prose accordingly.
+ *
+ * Mutates `parsed` in place.
+ */
+export function alignFramesToFirstFrame(
+  parsed: unknown,
+  availableRefs: AvailableRefMinimal[] = [],
+): void {
+  if (!parsed || typeof parsed !== 'object') return;
+  const p = parsed as { frames?: Record<string, ShotImagePromptFrame | undefined> };
+  if (!p.frames || typeof p.frames !== 'object') return;
+
+  const firstFrame = p.frames['first_frame'];
+  const firstRefs = Array.isArray(firstFrame?.references)
+    ? (firstFrame!.references as ShotImagePromptRef[])
+    : [];
+  if (firstRefs.length === 0) return;
+
+  // Canonical: refId → imageNumber from first_frame.
+  const canonicalNumberByRefId = new Map<string, number>();
+  for (const r of firstRefs) {
+    if (typeof r.refId === 'string' && typeof r.imageNumber === 'number') {
+      canonicalNumberByRefId.set(r.refId, r.imageNumber);
+    }
+  }
+  const canonicalNumbers = new Set(canonicalNumberByRefId.values());
+
+  for (const [frameKey, frame] of Object.entries(p.frames)) {
+    if (frameKey === 'first_frame' || !frame) continue;
+    if (typeof frame.imagePrompt !== 'string') continue;
+
+    const localRefs: ShotImagePromptRef[] = Array.isArray(frame.references)
+      ? frame.references
+      : [];
+
+    // Build renumber map: localN → newN. Two sources of remap:
+    //   (a) refId is in first_frame at a different N — local must move to canonical.
+    //   (b) refId is local-only and its number collides with a canonical — move
+    //       to the next free number above the canonicals.
+    const renumber = new Map<number, number>();
+    const usedNumbers = new Set<number>(canonicalNumbers);
+
+    // Pass (a): shared refIds.
+    for (const r of localRefs) {
+      const canonicalN = canonicalNumberByRefId.get(r.refId);
+      if (canonicalN !== undefined && r.imageNumber !== canonicalN) {
+        renumber.set(r.imageNumber, canonicalN);
+      }
+    }
+
+    // Pass (b): local-only refs that collide with a canonical N. Pick the
+    // next free number, scanning above the highest canonical so we never
+    // reuse a canonical number for a different refId.
+    let nextFree = (usedNumbers.size > 0 ? Math.max(...usedNumbers) : 0) + 1;
+    for (const r of localRefs) {
+      if (canonicalNumberByRefId.has(r.refId)) continue;
+      if (canonicalNumbers.has(r.imageNumber)) {
+        renumber.set(r.imageNumber, nextFree);
+        usedNumbers.add(nextFree);
+        nextFree += 1;
+      } else {
+        usedNumbers.add(r.imageNumber);
+      }
+    }
+
+    // Rewrite prose `from image N` using the renumber map. Single-pass
+    // callback replace prevents cascading double-substitution on swaps.
+    let prose = frame.imagePrompt;
+    if (renumber.size > 0) {
+      prose = prose.replace(/\bfrom\s+image\s+(\d+)\b/gi, (match, mStr: string) => {
+        const m = parseInt(mStr, 10);
+        const newN = renumber.get(m);
+        if (newN === undefined) return match;
+        const keyword = match.slice(0, match.lastIndexOf(' '));
+        return `${keyword} ${newN}`;
+      });
+    }
+
+    // Name-based correction against first_frame canonical: rewrite any
+    // `<name> from image M` to `<name> from image canonicalN` where the
+    // name matches an availableRefs label. Without this, a tag like
+    // "Parvati from image 1" (when canonical Parvati = 2) leaves a
+    // false-positive `from image 1` in tagsInProse — and align's
+    // inheritance loop would then INCORRECTLY think "image 1 is
+    // tagged" and inherit the setting (canonical N = 1), producing a
+    // genuine ORPHAN_REF when the post-correction prose no longer
+    // mentions image 1 anywhere.
+    for (const ar of availableRefs) {
+      const proseForm = labelToProseForm(ar.label);
+      if (proseForm.length < 2) continue;
+      const targetN = canonicalNumberByRefId.get(ar.refId);
+      if (targetN === undefined) continue;
+      const re = new RegExp(
+        `(${WORD_BOUNDARY_PREFIX}${escapeRegex(proseForm)}${WORD_BOUNDARY_SUFFIX}(?:'s)?\\s+from\\s+image\\s+)(\\d+)\\b`,
+        'gi',
+      );
+      prose = prose.replace(re, (_match, prefix: string, mStr: string) => {
+        const m = parseInt(mStr, 10);
+        return m === targetN ? `${prefix}${m}` : `${prefix}${targetN}`;
+      });
+    }
+
+    // After the renumber and name-correction passes, prose `from image N`
+    // tags use canonical numbering. Collect every N still tagged.
+    let tagsInProse = new Set<number>(
+      [...prose.matchAll(/\bfrom\s+image\s+(\d+)\b/gi)].map(m => parseInt(m[1]!, 10)),
+    );
+
+    // Heuristic: rewrite a hallucinated orphan tag to the canonical N
+    // of an inferable first_frame ref. A tag is "covered" if it
+    // corresponds to either:
+    //   (a) a local ref's (renumbered) number, OR
+    //   (b) a first_frame ref whose canonical N is tagged in prose
+    //       (will be inherited in the loop below).
+    // Anything else is an orphan. A first_frame ref is "uncovered" if
+    // it's not in localRefs AND its canonical N isn't in prose tags.
+    // When there's exactly ONE orphan tag and ONE uncovered first_frame
+    // ref, the mapping is unambiguous — rewrite the orphan to the
+    // uncovered ref's canonical N so it gets inherited correctly.
+    //
+    // s4sh1 case: localRefs=[], prose has "Parvati from image 2 ...
+    // mudroom from image 5". After name-correction, image 2 covers
+    // parvati (will be inherited). image 5 is orphan. Setting is the
+    // sole uncovered first_frame ref → remap 5→1.
+    {
+      const coveredNumbers = new Set<number>();
+      for (const r of localRefs) {
+        coveredNumbers.add(renumber.get(r.imageNumber) ?? r.imageNumber);
+      }
+      for (const r of firstRefs) {
+        if (tagsInProse.has(r.imageNumber)) coveredNumbers.add(r.imageNumber);
+      }
+      const orphanTags = [...tagsInProse].filter(n => !coveredNumbers.has(n));
+      const localRefIds = new Set<string>(localRefs.map(r => r.refId));
+      const uncoveredFirstRefs = firstRefs.filter(r =>
+        !localRefIds.has(r.refId) && !tagsInProse.has(r.imageNumber),
+      );
+      if (orphanTags.length === 1 && uncoveredFirstRefs.length === 1) {
+        const orphanN = orphanTags[0]!;
+        const target = uncoveredFirstRefs[0]!;
+        prose = prose.replace(
+          new RegExp(`\\bfrom\\s+image\\s+${orphanN}\\b`, 'gi'),
+          `from image ${target.imageNumber}`,
+        );
+        // Recompute tagsInProse so the gating below sees the new state.
+        tagsInProse = new Set<number>(
+          [...prose.matchAll(/\bfrom\s+image\s+(\d+)\b/gi)].map(m => parseInt(m[1]!, 10)),
+        );
+      }
+    }
+
+    // Build the final references[]:
+    //   1. Keep a local ref ONLY if its (renumbered) N appears tagged
+    //      in prose. A local ref whose number is never tagged means
+    //      the character/setting isn't actually in this frame's beat
+    //      (e.g., Isha walked off in last_frame) — the LLM left a
+    //      stale entry. Dropping it prevents ORPHAN_REF audit hits.
+    //   2. INHERIT a first_frame ref only if its canonical N appears
+    //      tagged in prose AND it's not already locally present.
+    const finalRefs: ShotImagePromptRef[] = [];
+    const seen = new Set<string>();
+    for (const r of localRefs) {
+      const remappedN = renumber.get(r.imageNumber) ?? r.imageNumber;
+      if (!tagsInProse.has(remappedN)) continue;
+      finalRefs.push({ ...r, imageNumber: remappedN });
+      seen.add(r.refId);
+    }
+    for (const r of firstRefs) {
+      if (seen.has(r.refId)) continue;
+      if (!tagsInProse.has(r.imageNumber)) continue;
+      finalRefs.push({ ...r });
+      seen.add(r.refId);
+    }
+
+    frame.references = finalRefs;
+    frame.imagePrompt = prose;
+  }
+}
+
+// ── OTS single-character validator ──────────────────────────────────────────
+
+export interface OTSIssue {
+  frame: string;
+  characterRefCount: number;
+  reason: string;
+}
+
+/**
+ * Scan a parsed shot_image_prompt for frames that combine OTS
+ * (over-the-shoulder) prose with fewer than two character refs.
+ *
+ * OTS is inherently a two-character composition: foreground anchor
+ * blurred + focal subject sharp. With one character, image models
+ * react badly:
+ *   - Klein: produces a regular medium shot, ignoring the OTS hint.
+ *   - Seedream: invents a phantom second character to fill the anchor
+ *     slot (real bug from sun_hadnt_yet_cleared-2 s4sh2).
+ *
+ * Regex deliberately narrow — `\b(over[-\s]the[-\s]shoulder|OTS)\b`.
+ * Matches the cinematographic phrase only, NOT unrelated prose like
+ * "a bag slung over her shoulder" (false-positive from earlier audit).
+ */
+export function scanOTSWithSingleChar(parsed: unknown): OTSIssue[] {
+  const issues: OTSIssue[] = [];
+  if (!parsed || typeof parsed !== 'object') return issues;
+  const p = parsed as { frames?: Record<string, ShotImagePromptFrame | undefined> };
+  if (!p.frames || typeof p.frames !== 'object') return issues;
+
+  // Three patterns covering the cinematographic uses without false-positive
+  // matching of casual prose ("a bag slung over her shoulder"):
+  //   (1) `over-the-shoulder` / `OTS` — explicit framing terms.
+  //   (2) `Over <Name>['s] shoulder` AT a sentence/clause start — the way
+  //       cinematographers describe OTS framings ("Over Parvati's shoulder,
+  //       her hand reaches..."). Sentence-start anchor excludes "...slung
+  //       over her shoulder" because that's preceded by a verb, not a
+  //       boundary.
+  const explicitRe = /\b(over[-\s]the[-\s]shoulder|OTS)\b/i;
+  const sentenceStartOTSRe = /(?:^|[\n.!?])\s*Over\s+[\w'.]+(?:\s+from\s+image\s+\d+)?'s\s+shoulder/;
+
+  for (const [frameKey, frame] of Object.entries(p.frames)) {
+    if (!frame || typeof frame.imagePrompt !== 'string') continue;
+    const prose = frame.imagePrompt;
+    if (!explicitRe.test(prose) && !sentenceStartOTSRe.test(prose)) continue;
+
+    const refs = Array.isArray(frame.references) ? frame.references : [];
+    const characterCount = refs.filter(r => r.type === 'character').length;
+    if (characterCount >= 2) continue;
+
+    issues.push({
+      frame: frameKey,
+      characterRefCount: characterCount,
+      reason: `over-the-shoulder framing requires 2+ character refs — found ${characterCount}. OTS is inherently two-character (anchor blurred + focal subject sharp); a single-character OTS shot will either invent a phantom second character or break focus. Use insert / extreme_close_up / close_up framing instead, with the focal element (hands, object, face) as the subject.`,
+    });
+  }
+
+  return issues;
 }

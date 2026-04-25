@@ -320,15 +320,19 @@ describe('injectMissingShotRefs', () => {
   });
 
   it('injects only after the first mention when a name repeats', () => {
+    // When the ref isn't yet in refsArr, we allocate the next free local
+    // imageNumber (here: 1, since refsArr is empty). The avail.imageNumber=2
+    // is the project-wide canonical and should NOT leak into the frame's
+    // local numbering — see the s3sh1 setting@5 bug from production.
     const input = {
       imagePrompt: 'Parvati stands. Parvati sighs. Parvati walks away.',
       references: [],
     };
     const out = injectMissingShotRefs(input, [avail(2, 'character', 'parvati')]);
     // Count occurrences of the phrase — should be exactly 1.
-    const matches = out.frame.imagePrompt.match(/from image 2/g) ?? [];
+    const matches = out.frame.imagePrompt.match(/from image 1/g) ?? [];
     expect(matches.length).toBe(1);
-    expect(out.frame.imagePrompt.startsWith('Parvati from image 2 stands.')).toBe(true);
+    expect(out.frame.imagePrompt.startsWith('Parvati from image 1 stands.')).toBe(true);
   });
 
   it('is a no-op when availableRefs is empty', () => {
@@ -339,6 +343,56 @@ describe('injectMissingShotRefs', () => {
     const out = injectMissingShotRefs(input, []);
     expect(out.frame).toEqual(input);
     expect(out.injected).toEqual([]);
+  });
+
+  it('does NOT re-inject when prose already has a tag adjacent to the name (even a wrong N)', () => {
+    // Real s4sh3 first_frame bug: LLM emitted "Parvati from image 1" with
+    // refs=[parvati@1, setting@5]. Pre-fix, inject saw `phraseRe /from image 2/`
+    // miss anywhere in prose and injected "from image 2" right after "Parvati",
+    // yielding "Parvati from image 2 from image 1". The reorder pass then
+    // renumbered "from image 1" → "from image 2", producing duplicate
+    // "from image 2 from image 2". Adjacency check fixes this: if any
+    // "from image M" is right after the name, leave it; downstream renumber
+    // will correct M.
+    const input = {
+      imagePrompt:
+        'A medium profile shot of Parvati from image 1, standing in the Singh bungalow from image 5.',
+      references: [
+        { imageNumber: 1, type: 'character' as const, refId: 'character_image:parvati' },
+        { imageNumber: 5, type: 'setting' as const, refId: 'setting_image:singh_bungalow' },
+      ],
+    };
+    const available = [
+      avail(1, 'setting', 'singh_bungalow'),
+      avail(2, 'character', 'parvati'),
+    ];
+    const out = injectMissingShotRefs(input, available);
+
+    // Prose stays untouched — both names already have an adjacent tag.
+    expect(out.frame.imagePrompt).toBe(input.imagePrompt);
+    // No duplicate "from image" after Parvati.
+    expect(out.frame.imagePrompt).not.toMatch(/Parvati from image \d+ from image/);
+    expect(out.injected).toEqual([]);
+  });
+
+  it('still injects when name has no adjacent tag, even if "from image N" exists elsewhere', () => {
+    // Edge: prose mentions "Parvati" without tag, while "from image 2"
+    // appears later for a different character. The OLD phraseRe check
+    // would have falsely seen hasPhrase=true and skipped. With adjacency
+    // check, we correctly detect that PARVATI specifically has no tag
+    // and inject for her.
+    const input = {
+      imagePrompt: 'Parvati stands frozen as Isha from image 2 walks away.',
+      references: [],
+    };
+    const available = [
+      avail(1, 'character', 'parvati'),
+      avail(2, 'character', 'isha'),
+    ];
+    const out = injectMissingShotRefs(input, available);
+    expect(out.frame.imagePrompt).toBe(
+      'Parvati from image 1 stands frozen as Isha from image 2 walks away.',
+    );
   });
 });
 

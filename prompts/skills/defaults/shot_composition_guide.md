@@ -71,8 +71,8 @@ The shot's `perspective` field determines CAMERA POSITION relative to the charac
 | Perspective | Preferred shot types | Prose requirement |
 |---|---|---|
 | `main_subject` + POV | `pov` | First-person viewpoint; do NOT show the POV holder's face. Write "we see what Vikram sees — Laila gliding toward the table..." |
-| `main_subject` + OTS | `over_the_shoulder` | Back of the subject's head/shoulder blurred in foreground; camera peers over their shoulder. "Over Vikram's shoulder — Laila approaches, his soaked kurta softly blurred in the near foreground." |
-| `secondary_subject` | `over_the_shoulder`, `pov` | Frame from the secondary's viewpoint. Used for reaction reversals. |
+| `main_subject` + OTS | `over_the_shoulder` (**ONLY if 2+ characters in frame**) | Back of the subject's head/shoulder blurred in foreground; camera peers over their shoulder. "Over Vikram's shoulder — Laila approaches, his soaked kurta softly blurred in the near foreground." If only ONE character is in the shot, IGNORE this row — use `insert` / `extreme_close_up` / `close_up` and the rule below. |
+| `secondary_subject` | `over_the_shoulder` (**ONLY if 2+ characters in frame**), `pov` | Frame from the secondary's viewpoint. Used for reaction reversals. |
 | `observer` | `wide`, `medium`, `two_shot` | Neutral — neither character's side. "A wide view of the dhaba interior: Vikram at the table on the left, Laila stepping in from the right." |
 | `overhead` | `birds_eye`, `high_angle` | Camera clearly above the subject looking down. "High angle from above, looking down on the table..." |
 | `god` | `extreme_wide`, `birds_eye` | Impossible omniscient viewpoint. Often an extreme wide or top-down cosmic view. |
@@ -81,6 +81,7 @@ The shot's `perspective` field determines CAMERA POSITION relative to the charac
 - The perspective OVERRIDES or REFINES the cameraWork's framing. If cameraWork says "medium shot" and perspective is `main_subject` (POV), prefer the POV treatment.
 - If `perspectiveOf` is set, use that character as the POV/OTS anchor.
 - Never describe the POV character's face in a POV shot — they're looking out of the frame, not into it.
+- **The single-character OTS rule beats this table.** If the shot has only ONE character ref, NEVER write `over-the-shoulder` or `OTS` into the prose — even when `cameraWork` upstream said OTS, even when `perspective` is `main_subject` or `secondary_subject`. Override the cameraWork: pick `insert` / `extreme_close_up` / `close_up` and write the focal element (the hand, the object, the face detail) as the subject. A validator at output time will reject any frame that violates this and force you to regenerate.
 
 ---
 

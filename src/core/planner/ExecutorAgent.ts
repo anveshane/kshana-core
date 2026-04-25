@@ -35,6 +35,8 @@ import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
 import {
   normalizeShotImagePrompt as normalizeShotImagePromptFrame,
   normalizeShotImagePromptWithRefs,
+  alignFramesToFirstFrame,
+  scanOTSWithSingleChar,
   type AvailableRefMinimal,
 } from './shotImagePromptNormalizer.js';
 import { extractCollectionItems } from './collectionExtractor.js';
@@ -63,7 +65,7 @@ import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timelin
 import type { TodoNodeInfo } from '../../events/events.js';
 import { fitShotDurations } from './shotDurationFit.js';
 import { scanMultiSpeakerShots, scanAmbiguousSpeakerTag } from './dialogueValidation.js';
-import { validateWithSchema, normalizeSceneVideoPrompt, normalizeShotImagePrompt, getPromptSchema } from './schemas.js';
+import { validateWithSchema, normalizeSceneVideoPrompt, getPromptSchema } from './schemas.js';
 import {
   validateContinuitySequence,
   checkPositionContinuity,
@@ -3345,15 +3347,46 @@ Examples of common failure modes to avoid:
         mutated = true;
       }
 
-      // Per-frame normalization for shot_image_prompt: inject missing
-      // character/setting refs (the LLM frequently names a character in
-      // prose but forgets to add "from image N" and/or the references
-      // array entry), then reorder so settings land at Klein's base_image
-      // slot. See shotImagePromptNormalizer.ts for full rationale.
+      // Per-frame normalization for shot_image_prompt. Order matters:
+      //
+      //   (1) Normalize first_frame (inject missing refs + reorder so
+      //       settings sit at index 0). This establishes canonical
+      //       (refId → imageNumber) numbering for the shot.
+      //
+      //   (2) alignFramesToFirstFrame propagates first_frame's mapping
+      //       to every non-first frame — inheriting dropped refs and
+      //       rewriting `from image N` tags where the LLM renumbered.
+      //       Must run AFTER (1) so the canonical numbering is stable,
+      //       and BEFORE (3) so the per-frame injector sees aligned
+      //       numbering and doesn't duplicate "from image N" tags.
+      //
+      //   (3) Normalize the remaining frames (last_frame, mid_frame).
+      //       Now safe to inject any missing tags / rerun reorder.
+      //
+      //   (4) OTS-with-single-char hard gate — reject the prompt if any
+      //       frame combines OTS framing with fewer than two character
+      //       refs. Forces regen against the strengthened guide.
       if (node.typeId === 'shot_image_prompt' && parsed?.frames && typeof parsed.frames === 'object') {
         const availableRefs = this.buildAvailableRefsForShot(node);
         const allInjected: Array<{ frame: string; label: string; imageNumber: number; kind: string }> = [];
+
+        // (1) first_frame normalization.
+        const ffKey = 'first_frame';
+        const ff = parsed.frames[ffKey];
+        if (ff && typeof ff === 'object' && typeof ff.imagePrompt === 'string' && Array.isArray(ff.references)) {
+          const result = normalizeShotImagePromptWithRefs(ff, availableRefs);
+          parsed.frames[ffKey] = result.frame;
+          for (const ev of result.injected) {
+            allInjected.push({ frame: ffKey, ...ev });
+          }
+        }
+
+        // (2) Align other frames to first_frame's canonical mapping.
+        alignFramesToFirstFrame(parsed, availableRefs);
+
+        // (3) Per-frame normalization for non-first frames.
         for (const frameKey of Object.keys(parsed.frames)) {
+          if (frameKey === ffKey) continue;
           const f = parsed.frames[frameKey];
           if (f && typeof f === 'object' && typeof f.imagePrompt === 'string' && Array.isArray(f.references)) {
             const result = normalizeShotImagePromptWithRefs(f, availableRefs);
@@ -3363,9 +3396,20 @@ Examples of common failure modes to avoid:
             }
           }
         }
+
         if (allInjected.length > 0) {
           this.log(`  [ref-inject] ${node.id}: injected ${allInjected.length} ref(s): ${allInjected.map(i => `${i.frame}/${i.label}#${i.imageNumber}(${i.kind})`).join(', ')}`);
         }
+
+        // (4) Hard gate: OTS prose + <2 character refs ⇒ reject.
+        const otsIssues = scanOTSWithSingleChar(parsed);
+        if (otsIssues.length > 0) {
+          const detail = otsIssues
+            .map(i => `${i.frame}: ${i.reason}`)
+            .join(' | ');
+          return { valid: false, error: `OTS-with-single-character violation. ${detail}` };
+        }
+
         mutated = true;
       }
 

@@ -202,6 +202,8 @@ Every `show_action` and `meet_character` shot MUST declare `perspective`. Other 
 - Reserve `overhead`/`god` for specific spatial or tonal moments, not casual use.
 - For dialogue scenes, alternate `main_subject` and `secondary_subject` to create the shot/reverse-shot rhythm.
 
+**Hard rule — NEVER write `over-the-shoulder` (or OTS) into `cameraWork` when only ONE character is in the shot.** OTS is inherently a two-character composition: foreground anchor (blurred) + focal subject (sharp). With a single character, the image model either invents a phantom second character or breaks focus. For tight intimate framings of one character (camera angled over their own shoulder, focusing on hands or an object), use `insert`, `extreme_close_up`, or `close_up` in `cameraWork` instead — and write the subject as the focal element (hands, object, face detail), not the character themselves. The `perspective` field can remain `main_subject` for these intimate single-character shots; just don't pair it with OTS framing in `cameraWork`.
+
 **`perspectiveOf` field:** If a shot's perspective is tied to a specific character, you may set `perspectiveOf` to their refId. When omitted and perspective is `main_subject`, it defaults to `mainSubject`.
 
 ## Focus — WHAT'S SHARP VS BLURRED
