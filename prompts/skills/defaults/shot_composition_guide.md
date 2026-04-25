@@ -48,7 +48,7 @@ The shot type from the motion JSON determines framing, camera position, and dept
 | **dutch_angle** | Tilted frame, creates unease and tension | Varies |
 | **birds_eye** | Directly above, unusual perspective, abstract feel | Deep focus |
 | **reaction** | Character responding — focus on facial expression and body language | Shallow — face sharp |
-| **over_the_shoulder** | From behind one character looking at another; foreground character blurred | Shallow — far character sharp, near character blurred |
+| **over_the_shoulder** | From behind one character looking at another; foreground character blurred. **REQUIRES 2+ characters in frame.** | Shallow — far character sharp, near character blurred |
 | **two_shot** | Two characters in frame together, showing spatial relationship | Moderate |
 | **pov** | What a character sees, subjective perspective | Varies by what they're seeing |
 | **insert** | Detail shot of object or action (hands, letter, clock) | Very shallow |
@@ -59,6 +59,7 @@ Rules:
 - A wide or establishing shot uses deep focus and is dominated by the ENVIRONMENT. Characters in wide shots are small figures within the landscape, not central subjects. Do not write wide-shot prompts that center a named character's actions.
 - A close-up means the face fills the frame. Do not describe the character standing in a vast environment.
 - State depth of field explicitly in the prose every time.
+- **Never use `over_the_shoulder` framing or the phrase `"over-the-shoulder of X"` when the shot has only ONE character ref.** OTS is inherently a two-character composition: foreground anchor (blurred) and focal subject (sharp). With only one character ref, the image model will either invent a phantom second character or distort the scene. For tight intimate framings of a single character (camera angled over the character's own shoulder, focusing on their hands or an object), use `insert`, `extreme_close_up`, or `close_up` shot types instead — and write the prose with the focal element (hands, object, face detail) as the subject. Example: instead of `"OTS view of Parvati from image 2 reaching for the bucket"`, write `"Insert shot: Parvati from image 2's hand reaching toward the bucket, fingers extended, in shallow focus..."`
 - If the motion JSON specifies a camera angle (low angle, dutch tilt, high angle), include it in the prose.
 
 ---
