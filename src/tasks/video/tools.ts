@@ -3,10 +3,12 @@
  * These tools integrate with ComfyUI for actual image/video generation.
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { nanoid } from 'nanoid';
 import { createTool } from '../../core/tools/index.js';
 import type { ToolDefinition } from '../../core/llm/index.js';
+import { getCurrentSession, getSessionFs } from '../../core/fs/index.js';
 import {
   ComfyUIClient,
   comfyProgressBus,
@@ -23,7 +25,12 @@ function debugLog(message: string): void {
     // Ignore logging errors
   }
 }
-import { loadTimeline, updateSegmentLayers, saveTimeline } from '../../core/timeline/TimelineManager.js';
+import {
+  buildShotSegmentId,
+  loadTimeline,
+  updateSegmentLayers,
+  saveTimeline,
+} from '../../core/timeline/TimelineManager.js';
 import type { TimelineLayerEntry } from '../../core/timeline/types.js';
 import {
   getProjectDir,
@@ -34,6 +41,13 @@ import {
   updateScene,
   getProjectStyleConfig,
 } from './workflow/index.js';
+import {
+  ensureProjectPathDir,
+  projectExists as projectPathExists,
+  projectRelativePath,
+  readProjectText,
+  writeProjectBufferAtPath,
+} from './workflow/projectFileIO.js';
 
 /**
  * A single shot within a multi-shot scene breakdown.
@@ -58,6 +72,40 @@ export interface MultiShotMotionPrompt {
   shots: ShotPrompt[];
   totalSceneDuration: number;
   referenceImages: string[]; // all ref images for the scene
+}
+
+function readPromptSourceFile(
+  filePath: string,
+): { content?: string; error?: string; suggestion?: string } {
+  if (path.isAbsolute(filePath)) {
+    if (!fs.existsSync(filePath)) {
+      return {
+        error: `Prompt file not found: ${filePath}`,
+        suggestion: 'Check that the prompt file path is correct and the file exists.',
+      };
+    }
+
+    return { content: fs.readFileSync(filePath, 'utf-8') };
+  }
+
+  const content = readProjectText(filePath);
+  if (content == null) {
+    return {
+      error: `Prompt file not found: ${filePath}`,
+      suggestion:
+        'Check that the prompt file path is correct and that it exists under the active project.',
+    };
+  }
+
+  return { content };
+}
+
+function projectPromptFileExists(filePath: string): boolean {
+  if (path.isAbsolute(filePath)) {
+    return fs.existsSync(filePath);
+  }
+
+  return readProjectText(filePath) != null;
 }
 
 /**
@@ -204,6 +252,7 @@ export interface ImageGenerationParams {
   /** Override height in pixels (takes precedence over aspect_ratio) */
   height?: number;
   seed?: number;
+  shot_number?: number;
   image_type?: 'scene' | 'character_ref' | 'setting_ref';
   character_name?: string;
   setting_name?: string;
@@ -211,10 +260,10 @@ export interface ImageGenerationParams {
   reference_images?: ReferenceImage[];
   /** Generation mode: text-to-image or image+text-to-image */
   generation_mode?: 'text_to_image' | 'image_text_to_image';
-  /** Shot number within the scene — included in saved filename so it's scannable in Finder */
-  shot_number?: number;
-  /** Frame identifier within the shot (first_frame, mid_frame, last_frame) — same reason */
+  /** Frame identifier within the shot (first_frame, mid_frame, last_frame) — included in saved filename so it's scannable in Finder */
   frame_id?: string;
+  /** Timeline segment to auto-link for shot images */
+  segment_id?: string;
 }
 
 /**
@@ -255,10 +304,28 @@ function withVideoLock<T>(fn: () => Promise<T>): Promise<T> {
 // Get the project assets directory
 export function getAssetsDir(): string {
   const assetsDir = path.join(getProjectDir(), 'assets', 'images');
-  if (!fs.existsSync(assetsDir)) {
+  if (!ensureProjectPathDir(assetsDir) && !fs.existsSync(assetsDir)) {
     fs.mkdirSync(assetsDir, { recursive: true });
   }
   return assetsDir;
+}
+
+function persistProjectBinaryOutput(
+  outputDir: string,
+  outputFilename: string,
+  buffer: Buffer,
+): string {
+  const outputPath = path.join(outputDir, outputFilename);
+
+  if (!ensureProjectPathDir(outputDir) && !fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  if (!writeProjectBufferAtPath(outputPath, buffer)) {
+    fs.writeFileSync(outputPath, buffer);
+  }
+
+  return outputPath;
 }
 
 /**
@@ -281,8 +348,10 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
     image_type = 'scene',
     character_name,
     setting_name,
+    shot_number,
     generation_mode = 'text_to_image',
     reference_images = [],
+    segment_id,
   } = params;
 
   // Determine filename prefix based on image type
@@ -366,19 +435,43 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
       ? `${negative_prompt}, ${styleConfig.negativePromptModifier}`
       : styleConfig.negativePromptModifier;
 
-    // Resolve reference images to file paths
-    const resolvedRefImages = reference_images
-      .map(ref => {
-        const refPath = findImagePathFromArtifactId(ref.image_id);
-        if (!refPath || !fs.existsSync(refPath)) {
-          console.warn(
-            `[generate_image] Failed to resolve ref image: id="${ref.image_id}" type=${ref.type} name="${ref.name}" → path: ${refPath ?? 'null'}`
-          );
-          return null;
-        }
-        return { filePath: refPath, type: ref.type as 'character' | 'setting', name: ref.name };
-      })
-      .filter((r): r is NonNullable<typeof r> => r !== null);
+    const referenceImageCleanupFns: Array<() => void> = [];
+
+    // Resolve reference images to local file paths. In remote sessions the
+    // project asset may exist only in the remote cache, so materialize it
+    // locally before handing it to the provider.
+    const resolvedRefImages: Array<{
+      filePath: string;
+      type: 'character' | 'setting';
+      name: string;
+    }> = [];
+    for (const ref of reference_images) {
+      const refPath = findImagePathFromArtifactId(ref.image_id);
+      if (!refPath) {
+        console.warn(
+          `[generate_image] Failed to resolve ref image: id="${ref.image_id}" type=${ref.type} name="${ref.name}" → path: null`
+        );
+        continue;
+      }
+
+      const { localPath, cleanup } = await ensureLocalReferenceImage(refPath);
+      if (!localPath || !fs.existsSync(localPath)) {
+        console.warn(
+          `[generate_image] Failed to materialize ref image: id="${ref.image_id}" type=${ref.type} name="${ref.name}" → path: ${refPath}`
+        );
+        continue;
+      }
+
+      if (cleanup) {
+        referenceImageCleanupFns.push(cleanup);
+      }
+
+      resolvedRefImages.push({
+        filePath: localPath,
+        type: ref.type as 'character' | 'setting',
+        name: ref.name,
+      });
+    }
 
     // Fail if qwen_edit mode but no references resolved
     if (useQwenEdit && resolvedRefImages.length === 0) {
@@ -414,20 +507,31 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
       });
     };
 
-    const result = await provider.generateImage!(
-      {
-        prompt: enhancedPrompt,
-        negativePrompt: enhancedNegativePrompt,
-        aspectRatio: aspect_ratio,
-        width: params.width,
-        height: params.height,
-        seed,
-        outputDir: getAssetsDir(),
-        filenamePrefix,
-        referenceImages: resolvedRefImages.length > 0 ? resolvedRefImages : undefined,
-      },
-      progressCallback,
-    );
+    let result;
+    try {
+      result = await provider.generateImage!(
+        {
+          prompt: enhancedPrompt,
+          negativePrompt: enhancedNegativePrompt,
+          aspectRatio: aspect_ratio,
+          width: params.width,
+          height: params.height,
+          seed,
+          outputDir: getAssetsDir(),
+          filenamePrefix,
+          referenceImages: resolvedRefImages.length > 0 ? resolvedRefImages : undefined,
+        },
+        progressCallback,
+      );
+    } finally {
+      for (const cleanup of referenceImageCleanupFns) {
+        try {
+          cleanup();
+        } catch {
+          // Ignore temp cleanup failures
+        }
+      }
+    }
 
     // Register artifact
     const artifactId = `img_${nanoid(8)}`;
@@ -449,8 +553,14 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
         id: artifactId,
         type: assetType,
         path: relativePath,
+        scene_number: assetType === 'scene_image' ? scene_number : undefined,
+        version: 1,
         createdAt: Date.now(),
-        metadata: { jobId, provider: provider.id },
+        metadata: buildPlacementMetadata(
+          assetType === 'scene_image' ? scene_number : undefined,
+          assetType === 'scene_image' ? shot_number : undefined,
+          { jobId, provider: provider.id },
+        ),
       });
     } catch {
       // Project may not exist yet
@@ -458,6 +568,32 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
 
     // Link artifact to project entity
     linkArtifactToProject(context, artifactId, relativePath);
+
+    const autoSegmentId =
+      assetType === 'scene_image'
+        ? resolveAutoSegmentId(scene_number, shot_number, segment_id)
+        : undefined;
+    if (autoSegmentId) {
+      try {
+        const timeline = loadTimeline(projectDir);
+        if (timeline) {
+          const layer: TimelineLayerEntry = {
+            type: 'visual',
+            artifactId,
+            filePath: relativePath,
+            label: `Scene ${scene_number} Shot ${shot_number} image`,
+            source: 'generated',
+          };
+          const updated = updateSegmentLayers(timeline, autoSegmentId, [layer], undefined, prompt);
+          saveTimeline(projectDir, updated);
+          debugLog(
+            `[generate_image] Auto-updated timeline segment ${autoSegmentId} with artifact ${artifactId}`,
+          );
+        }
+      } catch (e) {
+        debugLog(`[generate_image] Timeline auto-update failed for ${autoSegmentId}: ${e}`);
+      }
+    }
 
     // Update job as completed
     job.status = 'completed';
@@ -595,11 +731,15 @@ async function waitForComfyUIJob(
     const firstImage = images[0]!;
     const outputFilename = `${nanoid(8)}_${firstImage.filename}`;
     debugLog(`[waitForComfyUIJob] Downloading ${firstImage.filename} (subfolder=${firstImage.subfolder}, type=${firstImage.type}) to ${assetsDir}/${outputFilename}`);
-    const savedPath = await client.downloadImage(
+    const downloaded = await client.downloadOutput(
       firstImage.filename,
       firstImage.subfolder,
       firstImage.type,
-      outputFilename
+    );
+    const savedPath = persistProjectBinaryOutput(
+      assetsDir,
+      outputFilename,
+      downloaded.buffer,
     );
 
     // Create artifact ID
@@ -634,8 +774,15 @@ async function waitForComfyUIJob(
         id: artifactId,
         type: assetType,
         path: relativePath,
+        scene_number:
+          job.context?.entityType === 'scene' ? job.context.sceneNumber : undefined,
+        version: 1,
         createdAt: Date.now(),
-        metadata: { jobId: job.id, promptId: job.promptId },
+        metadata: buildPlacementMetadata(
+          job.context?.entityType === 'scene' ? job.context.sceneNumber : undefined,
+          job.context?.entityType === 'scene' ? job.context.shotNumber : undefined,
+          { jobId: job.id, promptId: job.promptId },
+        ),
       });
     } catch {
       // Project may not exist yet, that's OK
@@ -738,6 +885,16 @@ This tool blocks until generation is complete and returns the result directly (a
         description:
           'Path to prompt file (e.g., "prompts/images/characters/alice.prompt.md"). Reads the prompt from this file instead of requiring inline prompt text.',
       },
+      shot_number: {
+        type: 'number',
+        description:
+          'Shot number within the scene. Use this when generating a specific scene shot image.',
+      },
+      segment_id: {
+        type: 'string',
+        description:
+          'Optional timeline segment ID to auto-update with this generated shot image. If omitted for scene shots, the tool derives segment_${scene_number - 1}_shot_${shot_number}.',
+      },
       negative_prompt: {
         type: 'string',
         description: 'What to avoid in the image (optional)',
@@ -799,23 +956,42 @@ This tool blocks until generation is complete and returns the result directly (a
   },
   async args => {
     let params = args as unknown as ImageGenerationParams;
+    const shotNumber = args['shot_number'] as number | undefined;
+    const segmentIdArg = args['segment_id'] as string | undefined;
 
     // If prompt_file is provided, read and parse the prompt from the file
-    const promptFile = args['prompt_file'] as string | undefined;
-    if (promptFile) {
-      const fullPath = path.join(getProjectDir(), promptFile);
-      if (!fs.existsSync(fullPath)) {
+    let promptFile = args['prompt_file'] as string | undefined;
+    if (params.image_type === 'scene' && promptFile) {
+      const resolvedPromptFile = resolveScenePromptFile(
+        promptFile,
+        params.scene_number,
+        shotNumber
+      );
+      if (resolvedPromptFile.error) {
         return {
           status: 'error',
-          error: `Prompt file not found: ${promptFile}`,
-          suggestion: 'Check that the prompt file path is correct and the file exists.',
+          error: resolvedPromptFile.error,
+          suggestion: resolvedPromptFile.suggestion,
         };
       }
-      const promptContent = fs.readFileSync(fullPath, 'utf-8');
+      promptFile = resolvedPromptFile.promptFile;
+    }
+    if (promptFile) {
+      const promptFileResult = readPromptSourceFile(promptFile);
+      if (promptFileResult.error || promptFileResult.content == null) {
+        return {
+          status: 'error',
+          error: promptFileResult.error ?? `Prompt file not found: ${promptFile}`,
+          suggestion:
+            promptFileResult.suggestion ??
+            'Check that the prompt file path is correct and the file exists.',
+        };
+      }
+      const promptContent = promptFileResult.content;
 
       // Parse the prompt file for both prompt text and metadata
       const parsed = parsePromptFile(promptContent);
-      params = { ...params, prompt: parsed.prompt };
+      params = { ...params, prompt: parsed.prompt, shot_number: shotNumber, segment_id: segmentIdArg };
 
       // Apply generation mode from prompt file if not explicitly provided
       if (parsed.generationMode && !params.generation_mode) {
@@ -885,7 +1061,11 @@ This tool blocks until generation is complete and returns the result directly (a
     }
 
     // Submit and wait for generation (provider handles the full lifecycle)
-    const submitResult = await submitImageGeneration(params);
+    const submitResult = await submitImageGeneration({
+      ...params,
+      shot_number: shotNumber,
+      segment_id: segmentIdArg,
+    });
 
     if (submitResult.status === 'error') {
       return {
@@ -908,12 +1088,17 @@ This tool blocks until generation is complete and returns the result directly (a
       generation_mode: generationMode,
       params: {
         scene_number: params.scene_number,
+        shot_number: shotNumber,
         image_type: params.image_type ?? 'scene',
         prompt: params.prompt,
         generation_mode: generationMode,
         reference_count: params.reference_images?.length ?? 0,
         references: params.reference_images?.map(r => `${r.type}:${r.name}`) ?? [],
       },
+      segment_id: resolveAutoSegmentId(params.scene_number, shotNumber, segmentIdArg),
+      timeline_updated:
+        (params.image_type ?? 'scene') === 'scene' &&
+        resolveAutoSegmentId(params.scene_number, shotNumber, segmentIdArg) !== undefined,
     };
   }
 );
@@ -1228,17 +1413,132 @@ export function resolveReferencesToPaths(
   return resolved.length > 0 ? resolved : null;
 }
 
+function normalizeNameKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function findReferenceImagePathInProject(
+  project: ReturnType<typeof loadProject>,
+  type: 'character' | 'setting',
+  lookup: string
+): string | undefined {
+  if (!project) {
+    return undefined;
+  }
+
+  const entries = type === 'character' ? project.characters : project.settings;
+  const normalizedLookup = normalizeNameKey(lookup.replace(/^(character|setting)[-_]/i, ''));
+  const projectDir = getProjectDir();
+
+  for (const entry of entries) {
+    const normalizedName = normalizeNameKey(entry.name);
+    const logicalId = `${type}${normalizedName}`;
+    const normalizedReferenceId = entry.referenceImageId
+      ? normalizeNameKey(entry.referenceImageId)
+      : '';
+
+    if (
+      normalizedLookup !== normalizedName &&
+      normalizedLookup !== logicalId &&
+      normalizedLookup !== normalizedReferenceId
+    ) {
+      continue;
+    }
+
+    if (entry.referenceImagePath) {
+      return path.isAbsolute(entry.referenceImagePath)
+        ? entry.referenceImagePath
+        : path.join(projectDir, entry.referenceImagePath);
+    }
+
+    if (entry.referenceImageId) {
+      const imagePath = project.content?.images?.itemFiles?.[entry.referenceImageId];
+      if (imagePath) {
+        return path.isAbsolute(imagePath) ? imagePath : path.join(projectDir, imagePath);
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function resolveScenePromptFile(
+  promptFile: string,
+  sceneNumber: number,
+  shotNumber?: number
+): { promptFile?: string; error?: string; suggestion?: string } {
+  const normalized = promptFile.replace(/\\/g, '/');
+  const isMotionPrompt = /^prompts\/videos\/scenes\/.+\.motion\.(json|md)$/i.test(normalized);
+
+  if (!isMotionPrompt) {
+    return { promptFile };
+  }
+
+  if (!shotNumber) {
+    return {
+      error: `Scene image generation cannot use motion prompt file "${promptFile}" directly.`,
+      suggestion:
+        `Generate or supply the matching shot prompt file under prompts/images/shots/ for scene ${sceneNumber}.`,
+    };
+  }
+
+  const shotPromptFile = `prompts/images/shots/scene-${sceneNumber}-shot-${shotNumber}.prompt.md`;
+  if (!projectPromptFileExists(shotPromptFile)) {
+    return {
+      error:
+        `Scene image generation requires the shot prompt file "${shotPromptFile}". Motion prompt "${promptFile}" cannot be used as prompt_file.`,
+      suggestion: `Generate the shot prompt first, then retry with ${shotPromptFile}.`,
+    };
+  }
+
+  return { promptFile: shotPromptFile };
+}
+
 /**
  * Helper function to find image path from artifact ID.
  */
 export function findImagePathFromArtifactId(artifactId: string): string | undefined {
   // If the input is already an existing absolute file path, return it directly
-  if (path.isAbsolute(artifactId) && fs.existsSync(artifactId)) {
+  if (path.isAbsolute(artifactId) && (fs.existsSync(artifactId) || projectPathExists(artifactId))) {
     return artifactId;
+  }
+
+  const normalizedRelativePath = artifactId.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+  if (
+    normalizedRelativePath &&
+    normalizedRelativePath !== '.' &&
+    normalizedRelativePath !== '..' &&
+    !normalizedRelativePath.startsWith('../')
+  ) {
+    const candidatePath = path.join(getProjectDir(), normalizedRelativePath);
+    if (
+      fs.existsSync(candidatePath) ||
+      projectPathExists(normalizedRelativePath) ||
+      projectPathExists(candidatePath)
+    ) {
+      return candidatePath;
+    }
   }
 
   const project = loadProject();
   if (!project) return undefined;
+
+  const projectImagePath = project.content?.images?.itemFiles?.[artifactId];
+  if (projectImagePath) {
+    return path.isAbsolute(projectImagePath)
+      ? projectImagePath
+      : path.join(getProjectDir(), projectImagePath);
+  }
+
+  const characterReferencePath = findReferenceImagePathInProject(project, 'character', artifactId);
+  if (characterReferencePath) {
+    return characterReferencePath;
+  }
+
+  const settingReferencePath = findReferenceImagePathInProject(project, 'setting', artifactId);
+  if (settingReferencePath) {
+    return settingReferencePath;
+  }
 
   // Check project assets manifest
   const assetsDir = path.join(getProjectDir(), 'assets');
@@ -1268,6 +1568,138 @@ export function findImagePathFromArtifactId(artifactId: string): string | undefi
   return undefined;
 }
 
+async function ensureLocalVideoSourceImage(
+  imagePath: string,
+): Promise<{ localPath?: string; cleanup?: () => void }> {
+  if (fs.existsSync(imagePath)) {
+    return { localPath: imagePath };
+  }
+
+  const session = getCurrentSession();
+  if (session?.mode !== 'remote') {
+    return {};
+  }
+
+  try {
+    const sessionFs = getSessionFs();
+    if (!(await sessionFs.exists(imagePath))) {
+      return {};
+    }
+
+    const imageBuffer = await sessionFs.readFileBuffer(imagePath);
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kshana-video-source-'));
+    const extension = path.extname(imagePath) || '.png';
+    const tempPath = path.join(tempDir, `source${extension}`);
+    fs.writeFileSync(tempPath, imageBuffer);
+
+    return {
+      localPath: tempPath,
+      cleanup: () => {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // Ignore temp cleanup failures
+        }
+      },
+    };
+  } catch (error) {
+    debugLog(
+      `[generate_video_from_image] Failed to materialize remote image ${imagePath}: ${String(error)}`,
+    );
+    return {};
+  }
+}
+
+async function ensureLocalReferenceImage(
+  imagePath: string,
+): Promise<{ localPath?: string; cleanup?: () => void }> {
+  if (fs.existsSync(imagePath)) {
+    return { localPath: imagePath };
+  }
+
+  const session = getCurrentSession();
+  if (session?.mode !== 'remote') {
+    return {};
+  }
+
+  try {
+    const sessionFs = getSessionFs();
+    const candidatePaths = new Set<string>([imagePath]);
+    if (path.isAbsolute(imagePath)) {
+      try {
+        candidatePaths.add(projectRelativePath(imagePath));
+      } catch {
+        // Ignore paths outside the project root.
+      }
+    }
+
+    let resolvedRemotePath: string | undefined;
+    for (const candidatePath of candidatePaths) {
+      if (await sessionFs.exists(candidatePath)) {
+        resolvedRemotePath = candidatePath;
+        break;
+      }
+    }
+
+    if (!resolvedRemotePath) {
+      return {};
+    }
+
+    const imageBuffer = await sessionFs.readFileBuffer(resolvedRemotePath);
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kshana-image-ref-'));
+    const extension = path.extname(imagePath) || '.png';
+    const tempPath = path.join(tempDir, `reference${extension}`);
+    fs.writeFileSync(tempPath, imageBuffer);
+
+    return {
+      localPath: tempPath,
+      cleanup: () => {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch {
+          // Ignore temp cleanup failures
+        }
+      },
+    };
+  } catch (error) {
+    debugLog(
+      `[generate_image] Failed to materialize remote reference image ${imagePath}: ${String(error)}`,
+    );
+    return {};
+  }
+}
+
+function buildPlacementMetadata(
+  sceneNumber: number | undefined,
+  shotNumber: number | undefined,
+  extra: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const metadata: Record<string, unknown> = { ...extra };
+
+  if (sceneNumber !== undefined) {
+    metadata['placementNumber'] = sceneNumber;
+  }
+  if (shotNumber !== undefined) {
+    metadata['shot_number'] = shotNumber;
+  }
+
+  return metadata;
+}
+
+function resolveAutoSegmentId(
+  sceneNumber: number,
+  shotNumber: number | undefined,
+  explicitSegmentId?: string,
+): string | undefined {
+  if (explicitSegmentId?.trim()) {
+    return explicitSegmentId.trim();
+  }
+  if (shotNumber === undefined) {
+    return undefined;
+  }
+  return buildShotSegmentId(sceneNumber, shotNumber);
+}
+
 /**
  * Generate video from single image tool.
  * This is a COMPLEX tool - requires user confirmation.
@@ -1292,7 +1724,7 @@ A scene is composed of multiple shots — call this tool separately for each sho
 
 This tool blocks until video generation is complete and returns the result directly (artifact_id and file_path). No need to call wait_for_job separately. Generate videos one at a time.
 
-**Motion prompt source**: Provide EITHER \`motion_prompt\` (inline text) OR \`motion_prompt_file\` (path to prompt file). Using \`motion_prompt_file\` is preferred as it reads from approved prompt files. If the file is a multi-shot JSON, you MUST specify \`shot_number\` to select the prompt for this shot.`,
+**Motion prompt source**: Provide EITHER \`motion_prompt\` (inline text) OR \`motion_prompt_file\` (path to prompt file). Using \`motion_prompt_file\` is preferred as it reads from approved prompt files. If the file is a multi-shot JSON, you MUST specify \`shot_number\` to select the prompt for this shot. If \`duration\` is omitted and the motion JSON includes a shot duration, that approved shot duration is used automatically.`,
   {
     type: 'object',
     properties: {
@@ -1349,23 +1781,31 @@ This tool blocks until video generation is complete and returns the result direc
     const shotNumber = args['shot_number'] as number;
     let motionPrompt = args['motion_prompt'] as string | undefined;
     const seed = args['seed'] as number | undefined;
-    const duration = args['duration'] as number | undefined;
+    let duration = args['duration'] as number | undefined;
     const videoWidth = args['width'] as number | undefined;
     const videoHeight = args['height'] as number | undefined;
-    const segmentId = args['segment_id'] as string | undefined;
+    const segmentId = resolveAutoSegmentId(
+      sceneNumber,
+      shotNumber,
+      args['segment_id'] as string | undefined,
+    );
 
     // If motion_prompt_file is provided, read and extract the prompt for this shot
     const motionPromptFile = args['motion_prompt_file'] as string | undefined;
     if (motionPromptFile) {
-      const fullPath = path.join(getProjectDir(), motionPromptFile);
-      if (!fs.existsSync(fullPath)) {
+      const motionPromptFileResult = readPromptSourceFile(motionPromptFile);
+      if (motionPromptFileResult.error || motionPromptFileResult.content == null) {
         return {
           status: 'error',
-          error: `Motion prompt file not found: ${motionPromptFile}`,
-          suggestion: 'Check that the motion prompt file path is correct and the file exists.',
+          error:
+            motionPromptFileResult.error ??
+            `Motion prompt file not found: ${motionPromptFile}`,
+          suggestion:
+            motionPromptFileResult.suggestion ??
+            'Check that the motion prompt file path is correct and the file exists.',
         };
       }
-      const promptContent = fs.readFileSync(fullPath, 'utf-8');
+      const promptContent = motionPromptFileResult.content;
 
       if (motionPromptFile.endsWith('.json')) {
         const motionData = parseMotionPrompt(promptContent);
@@ -1379,6 +1819,9 @@ This tool blocks until video generation is complete and returns the result direc
         }
 
         motionPrompt = targetShot.prompt;
+        if (duration == null && Number.isFinite(targetShot.duration) && targetShot.duration > 0) {
+          duration = targetShot.duration;
+        }
         if (targetShot.dialogue) {
           motionPrompt += ` The character speaks: "${targetShot.dialogue}"`;
         }
@@ -1397,8 +1840,23 @@ This tool blocks until video generation is complete and returns the result direc
 
     // Resolve the single shot image
     const imagePath = findImagePathFromArtifactId(shotImageArtifactId);
-    if (!imagePath || !fs.existsSync(imagePath)) {
-      return { status: 'error', error: `Image not found for artifact: ${shotImageArtifactId}` };
+    const sourceImage = imagePath
+      ? await ensureLocalVideoSourceImage(imagePath)
+      : { localPath: undefined as string | undefined };
+    if (!imagePath || !sourceImage.localPath) {
+      const normalizedRelativePath = shotImageArtifactId.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+      const looksLikeProjectPath =
+        normalizedRelativePath.includes('/') &&
+        normalizedRelativePath !== '.' &&
+        normalizedRelativePath !== '..' &&
+        !normalizedRelativePath.startsWith('../');
+      const inputKind = path.isAbsolute(shotImageArtifactId) || looksLikeProjectPath
+        ? 'path'
+        : 'artifact';
+      return {
+        status: 'error',
+        error: `Image not found for ${inputKind}: ${shotImageArtifactId}`,
+      };
     }
 
     const assetsDir = path.join(getProjectDir(), 'assets', 'videos');
@@ -1449,7 +1907,7 @@ This tool blocks until video generation is complete and returns the result direc
 
       const result = await provider.generateVideo(
         {
-          sourceImagePath: imagePath,
+          sourceImagePath: sourceImage.localPath,
           prompt: motionPrompt,
           durationSeconds: duration,
           width: videoWidth,
@@ -1476,8 +1934,13 @@ This tool blocks until video generation is complete and returns the result direc
           id: artifactId,
           type: 'scene_video',
           path: relativePath,
+          scene_number: sceneNumber,
+          version: 1,
           createdAt: Date.now(),
-          metadata: { jobId, provider: provider.id },
+          metadata: buildPlacementMetadata(sceneNumber, shotNumber, {
+            jobId,
+            provider: provider.id,
+          }),
         });
       } catch {
         // Project may not exist yet
@@ -1527,6 +1990,7 @@ This tool blocks until video generation is complete and returns the result direc
           shot_number: shotNumber,
           image_artifact: shotImageArtifactId,
           motion_prompt: motionPrompt,
+          duration,
         },
       };
     } catch (error) {
@@ -1539,6 +2003,8 @@ This tool blocks until video generation is complete and returns the result direc
         job_id: jobId,
         error: String(error),
       };
+    } finally {
+      sourceImage.cleanup?.();
     }
     }); // end withVideoLock
   }
@@ -1669,6 +2135,8 @@ This tool blocks until generation is complete and returns the result directly (a
     };
     jobs.set(jobId, job);
 
+    const tempImageCleanupFns: Array<() => void> = [];
+
     try {
       // Resolve the base image path
       let imagePath = params.base_image_path;
@@ -1676,8 +2144,12 @@ This tool blocks until generation is complete and returns the result directly (a
         imagePath = path.join(getProjectDir(), imagePath);
       }
 
-      if (!fs.existsSync(imagePath)) {
+      const localizedBaseImage = await ensureLocalReferenceImage(imagePath);
+      if (!localizedBaseImage.localPath || !fs.existsSync(localizedBaseImage.localPath)) {
         throw new Error(`Base image not found: ${params.base_image_path}`);
+      }
+      if (localizedBaseImage.cleanup) {
+        tempImageCleanupFns.push(localizedBaseImage.cleanup);
       }
 
       // Resolve reference image paths
@@ -1688,10 +2160,14 @@ This tool blocks until generation is complete and returns the result directly (a
           if (!path.isAbsolute(resolvedPath) && !resolvedPath.startsWith('.')) {
             resolvedPath = path.join(getProjectDir(), resolvedPath);
           }
-          if (!fs.existsSync(resolvedPath)) {
+          const localizedRefImage = await ensureLocalReferenceImage(resolvedPath);
+          if (!localizedRefImage.localPath || !fs.existsSync(localizedRefImage.localPath)) {
             throw new Error(`Reference image not found: ${refPath}`);
           }
-          resolvedRefs.push(resolvedPath);
+          if (localizedRefImage.cleanup) {
+            tempImageCleanupFns.push(localizedRefImage.cleanup);
+          }
+          resolvedRefs.push(localizedRefImage.localPath);
         }
       }
 
@@ -1721,7 +2197,7 @@ This tool blocks until generation is complete and returns the result directly (a
       const result = await provider.editImage(
         {
           editPrompt: params.edit_prompt,
-          baseImagePath: imagePath,
+          baseImagePath: localizedBaseImage.localPath,
           referenceImages: resolvedRefs.length > 0 ? resolvedRefs : undefined,
           negativePrompt: params.negative_prompt,
           aspectRatio: params.aspect_ratio,
@@ -1790,6 +2266,14 @@ This tool blocks until generation is complete and returns the result directly (a
         job_id: jobId,
         error: String(error),
       };
+    } finally {
+      for (const cleanup of tempImageCleanupFns) {
+        try {
+          cleanup();
+        } catch {
+          // Ignore temp cleanup failures
+        }
+      }
     }
   }
 );

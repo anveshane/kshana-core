@@ -39,10 +39,21 @@ import {
   isCreateProjectMessage,
   isRedoNodeMessage,
   isResetProjectMessage,
+  isTimelineAssemblyProgressMessage,
+  isTimelineAssemblyResultMessage,
   type ConfigureProjectData,
   type CreateProjectData,
   type ResetProjectData,
 } from './types.js';
+import {
+  getDisconnectionCategory,
+  getConnectionStatusMessage,
+  shouldRemoveTrackedConnection,
+} from './webSocketHandlerUtils.js';
+import {
+  desktopAssemblyBroker,
+  type DesktopSessionCapabilities,
+} from '../core/remote/DesktopAssemblyBroker.js';
 
 interface ConnectionState {
   socket: WebSocket;
@@ -96,7 +107,13 @@ export class WebSocketHandler {
    * Handle a new WebSocket connection.
    * Optionally authenticates via API key and determines connection mode.
    */
-  handleConnection(socket: WebSocket, remoteAddress?: string, apiKey?: string, resumeSessionId?: string): void {
+  handleConnection(
+    socket: WebSocket,
+    remoteAddress?: string,
+    apiKey?: string,
+    resumeSessionId?: string,
+    desktopCapabilities?: DesktopSessionCapabilities,
+  ): void {
     // Determine connection mode
     const skipAuth = shouldSkipAuth(remoteAddress, this.serverMode);
     let connectionMode: 'local' | 'remote' = 'local';
@@ -128,12 +145,16 @@ export class WebSocketHandler {
 
     // Try to resume an existing session (e.g. after browser reconnect)
     let sessionId: string;
+    let resumedSession = false;
     if (resumeSessionId && this.conversationManager.getSession(resumeSessionId)) {
       sessionId = resumeSessionId;
+      resumedSession = true;
+      this.conversationManager.touchSession(sessionId);
       // Close any stale connection for this session
       const oldConn = this.connections.get(sessionId);
       if (oldConn) {
-        try { oldConn.socket.close(); } catch { /* ignore */ }
+        console.info(`[WebSocketHandler] Replacing stale socket for resumed session ${sessionId}`);
+        try { oldConn.socket.close(1000, 'session_resumed_elsewhere'); } catch { /* ignore */ }
         this.connections.delete(sessionId);
       }
     } else {
@@ -155,6 +176,13 @@ export class WebSocketHandler {
       connectionState.remoteFs = remoteFs;
       connectionState.projectCache = projectCache;
       this.conversationManager.setRemoteFileSystem(sessionId, remoteFs);
+      if (desktopCapabilities) {
+        this.conversationManager.setDesktopCapabilities(sessionId, desktopCapabilities);
+        desktopAssemblyBroker.setCapabilities(sessionId, desktopCapabilities);
+      }
+      desktopAssemblyBroker.attachSender(sessionId, (type, data) => {
+        this.sendMessage(socket, createServerMessage(type, sessionId, data));
+      });
     }
 
     this.connections.set(sessionId, connectionState);
@@ -162,18 +190,24 @@ export class WebSocketHandler {
     // Send connected status
     this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
       status: 'connected',
-      message: `Session created (${connectionMode} mode)`,
+      message: getConnectionStatusMessage(connectionMode, resumedSession),
     }));
 
     // Set up message handler
     socket.on('message', async (data) => {
       connectionState.isAlive = true;
+      this.conversationManager.touchSession(sessionId);
       await this.handleMessage(sessionId, socket, data.toString());
     });
 
     // Set up close handler
-    socket.on('close', () => {
-      this.handleDisconnection(sessionId);
+    socket.on('close', (code, reasonBuffer) => {
+      const reason = reasonBuffer.toString();
+      this.handleDisconnection(
+        sessionId,
+        socket,
+        `socket_close:${code}${reason ? `:${reason}` : ''}`,
+      );
     });
 
     // Set up error handler
@@ -185,6 +219,7 @@ export class WebSocketHandler {
     // Set up pong handler for heartbeat
     socket.on('pong', () => {
       connectionState.isAlive = true;
+      this.conversationManager.touchSession(sessionId);
     });
   }
 
@@ -233,7 +268,7 @@ export class WebSocketHandler {
     }
 
     if (isConfigureProjectMessage(message)) {
-      this.handleConfigureProject(sessionId, socket, message.data);
+      await this.handleConfigureProject(sessionId, socket, message.data);
       return;
     }
 
@@ -254,6 +289,16 @@ export class WebSocketHandler {
 
     if (isResetProjectMessage(message)) {
       await this.handleResetProject(sessionId, socket, message.data);
+      return;
+    }
+
+    if (isTimelineAssemblyProgressMessage(message)) {
+      desktopAssemblyBroker.handleTimelineAssemblyProgress(sessionId, message.data);
+      return;
+    }
+
+    if (isTimelineAssemblyResultMessage(message)) {
+      desktopAssemblyBroker.handleTimelineAssemblyResult(sessionId, message.data);
       return;
     }
 
@@ -294,18 +339,27 @@ export class WebSocketHandler {
   /**
    * Handle configure_project message.
    */
-  private handleConfigureProject(
+  private async handleConfigureProject(
     sessionId: string,
     socket: WebSocket,
     data: ConfigureProjectData,
-  ): void {
+  ): Promise<void> {
     this.conversationManager.configureSessionForProject(
       sessionId,
       data.templateId,
       data.style,
       data.duration,
       data.projectDir,
+      undefined,
+      data.autonomousMode,
     );
+    await this.conversationManager.ensureRemoteProjectJsonCached(sessionId);
+    this.conversationManager.persistProjectConfiguration(sessionId, {
+      templateId: data.templateId,
+      style: data.style,
+      duration: data.duration,
+      autonomousMode: data.autonomousMode,
+    });
 
     const toolNames = this.conversationManager.getSessionToolNames(sessionId);
     this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
@@ -597,7 +651,10 @@ export class WebSocketHandler {
         projectData = JSON.parse(content);
         templateId = projectData.templateId || templateId;
         style = projectData.style || style;
-        duration = projectData.duration || duration;
+        duration =
+          typeof projectData.targetDuration === 'number'
+            ? projectData.targetDuration
+            : projectData.duration || duration;
       } catch {
         // Use defaults if project.json is unreadable
       }
@@ -713,6 +770,13 @@ export class WebSocketHandler {
         data.autonomousMode,
       );
 
+      this.conversationManager.persistProjectConfiguration(sessionId, {
+        templateId: data.templateId,
+        style: data.style,
+        duration: data.duration,
+        autonomousMode: data.autonomousMode,
+      });
+
       const toolNames = this.conversationManager.getSessionToolNames(sessionId);
       const projectName = projectDirName.replace('.kshana', '');
       this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
@@ -739,8 +803,21 @@ export class WebSocketHandler {
    * so the browser can reconnect and resume (e.g. after network blips).
    * The session will be cleaned up by the ConversationManager's stale-session timer.
    */
-  private handleDisconnection(sessionId: string): void {
+  private handleDisconnection(sessionId: string, socket: WebSocket, reason: string): void {
+    const tracked = this.connections.get(sessionId);
+    const category = getDisconnectionCategory(reason);
+    if (!shouldRemoveTrackedConnection(tracked?.socket, socket)) {
+      console.info(
+        `[WebSocketHandler] Ignoring disconnection for stale socket session=${sessionId} category=${category} reason=${reason}`,
+      );
+      return;
+    }
+
+    console.info(
+      `[WebSocketHandler] Removing connection session=${sessionId} category=${category} reason=${reason}`,
+    );
     this.connections.delete(sessionId);
+    desktopAssemblyBroker.detachSession(sessionId);
   }
 
   /**
@@ -756,23 +833,36 @@ export class WebSocketHandler {
         }));
       },
 
-      onToolCall: (sid, toolName, args, agentName, toolCallId) => {
+      onToolCall: (sid, toolCallId, toolName, args, agentName) => {
         this.sendMessage(socket, createServerMessage<ToolCallData>('tool_call', sid, {
           toolName,
-          toolCallId: toolCallId || '',
+          toolCallId,
           arguments: args,
           status: 'started',
           agentName,
         }));
       },
 
-      onToolResult: (sid, toolName, result, agentName, toolCallId) => {
+      onToolResult: (sid, toolCallId, toolName, result, isError, agentName) => {
+        const errorMessage =
+          typeof result === 'string'
+            ? result
+            : (
+              typeof result === 'object' &&
+              result !== null &&
+              'error' in result &&
+              typeof (result as { error?: unknown }).error === 'string'
+            )
+              ? (result as { error: string }).error
+              : String(result);
         this.sendMessage(socket, createServerMessage<ToolCallData>('tool_call', sid, {
           toolName,
-          toolCallId: toolCallId || '',
+          toolCallId,
           arguments: {},
-          status: 'completed',
-          result,
+          status: isError ? 'error' : 'completed',
+          ...(isError
+            ? { error: errorMessage }
+            : { result }),
           agentName,
         }));
 
@@ -936,7 +1026,7 @@ export class WebSocketHandler {
       if (!state.isAlive) {
         // Connection is dead, terminate it
         state.socket.terminate();
-        this.handleDisconnection(sessionId);
+        this.handleDisconnection(sessionId, state.socket, 'heartbeat_timeout');
       } else {
         // Mark as not alive and send ping
         state.isAlive = false;
@@ -956,7 +1046,7 @@ export class WebSocketHandler {
     // Close all connections
     for (const [sessionId, state] of this.connections) {
       state.socket.close(1001, 'Server shutting down');
-      this.handleDisconnection(sessionId);
+      this.handleDisconnection(sessionId, state.socket, 'server_shutdown');
     }
   }
 }

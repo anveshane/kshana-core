@@ -18,6 +18,10 @@ import type {
   VideoGenerationInput,
   ProviderProgressCallback,
 } from '../types.js';
+import {
+  ensureProjectPathDir,
+  writeProjectBufferAtPath,
+} from '../../../tasks/video/workflow/projectFileIO.js';
 
 export class GoogleProvider implements GenerationProvider {
   readonly id = 'google';
@@ -119,11 +123,14 @@ export class GoogleProvider implements GenerationProvider {
     const filename = `${input.filenamePrefix || 'google'}_${nanoid(8)}${ext}`;
     const outputPath = path.join(input.outputDir, filename);
 
-    if (!fs.existsSync(input.outputDir)) {
+    if (!ensureProjectPathDir(input.outputDir) && !fs.existsSync(input.outputDir)) {
       fs.mkdirSync(input.outputDir, { recursive: true });
     }
 
-    fs.writeFileSync(outputPath, Buffer.from(imagePart.inlineData.data, 'base64'));
+    const imageBuffer = Buffer.from(imagePart.inlineData.data, 'base64');
+    if (!writeProjectBufferAtPath(outputPath, imageBuffer)) {
+      fs.writeFileSync(outputPath, imageBuffer);
+    }
 
     onProgress?.({ percentage: 100, message: 'Complete', done: true });
 
@@ -218,11 +225,14 @@ export class GoogleProvider implements GenerationProvider {
     const filename = `${input.filenamePrefix || 'google_edit'}_${nanoid(8)}${ext}`;
     const outputPath = path.join(input.outputDir, filename);
 
-    if (!fs.existsSync(input.outputDir)) {
+    if (!ensureProjectPathDir(input.outputDir) && !fs.existsSync(input.outputDir)) {
       fs.mkdirSync(input.outputDir, { recursive: true });
     }
 
-    fs.writeFileSync(outputPath, Buffer.from(imagePart.inlineData.data, 'base64'));
+    const imageBuffer = Buffer.from(imagePart.inlineData.data, 'base64');
+    if (!writeProjectBufferAtPath(outputPath, imageBuffer)) {
+      fs.writeFileSync(outputPath, imageBuffer);
+    }
 
     onProgress?.({ percentage: 100, message: 'Complete', done: true });
 
@@ -356,13 +366,16 @@ export class GoogleProvider implements GenerationProvider {
     const filename = `${input.filenamePrefix || 'veo'}_${nanoid(8)}.mp4`;
     const outputPath = path.join(input.outputDir, filename);
 
-    if (!fs.existsSync(input.outputDir)) {
+    if (!ensureProjectPathDir(input.outputDir) && !fs.existsSync(input.outputDir)) {
       fs.mkdirSync(input.outputDir, { recursive: true });
     }
 
     if (videoResult.videoData) {
       // Video returned inline as base64
-      fs.writeFileSync(outputPath, Buffer.from(videoResult.videoData, 'base64'));
+      const videoBuffer = Buffer.from(videoResult.videoData, 'base64');
+      if (!writeProjectBufferAtPath(outputPath, videoBuffer)) {
+        fs.writeFileSync(outputPath, videoBuffer);
+      }
     } else if (videoResult.videoUri) {
       // Download from URI
       const videoResponse = await fetch(videoResult.videoUri);
@@ -370,7 +383,9 @@ export class GoogleProvider implements GenerationProvider {
         throw new Error(`Failed to download video from ${videoResult.videoUri}`);
       }
       const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
-      fs.writeFileSync(outputPath, videoBuffer);
+      if (!writeProjectBufferAtPath(outputPath, videoBuffer)) {
+        fs.writeFileSync(outputPath, videoBuffer);
+      }
     } else {
       throw new Error('No video data in Veo response');
     }

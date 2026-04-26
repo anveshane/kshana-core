@@ -21,8 +21,8 @@ function debugLog(message: string): void {
 }
 
 // Get __dirname equivalent for ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const currentDir =
+  typeof __dirname === 'string' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * Get the workflows directory path.
@@ -47,7 +47,7 @@ function getWorkflowsDir(): string {
   try {
     // In node_modules, we might be at kshana-desktop/node_modules/kshana-ink
     // or in a monorepo structure
-    let searchDir = __dirname;
+    let searchDir = currentDir;
     for (let i = 0; i < 5; i++) {
       const desktopWorkflows = path.join(searchDir, '..', '..', 'workflows');
       if (fs.existsSync(desktopWorkflows)) {
@@ -73,7 +73,7 @@ function getWorkflowsDir(): string {
   // 3. Try kshana-ink/workflows (current package)
   // When running from source: src/services/comfyui/WorkflowLoader.ts -> workflows/
   // When running from dist: dist/services/comfyui/WorkflowLoader.js -> workflows/
-  const inkWorkflows = path.resolve(__dirname, '..', '..', 'workflows');
+  const inkWorkflows = path.resolve(currentDir, '..', '..', 'workflows');
   if (fs.existsSync(inkWorkflows)) {
     return inkWorkflows;
   }
@@ -140,6 +140,122 @@ export interface LtxWorkflowParams {
   durationSeconds?: number;
   /** Text-to-video mode (true = T2V, false = I2V). Default false. */
   t2vMode?: boolean;
+}
+
+export interface Ltx23WorkflowBindings {
+  durationNodeId: number;
+  widthNodeId: number;
+  heightNodeId: number;
+  positivePromptNodeId: number;
+  negativePromptNodeId: number | null;
+  inputImageNodeId: number;
+  t2vModeNodeId: number;
+  outputNodeId: number;
+}
+
+function getNodeWidgetText(node: {
+  widgets_values?: unknown[] | Record<string, unknown>;
+}): string {
+  const widgetValues = node.widgets_values;
+  if (!Array.isArray(widgetValues) || widgetValues.length === 0) {
+    return '';
+  }
+  const firstValue = widgetValues[0];
+  return typeof firstValue === 'string' ? firstValue : String(firstValue ?? '');
+}
+
+function looksLikeNegativePrompt(text: string): boolean {
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes('blurry') ||
+    normalized.includes('oversaturated') ||
+    normalized.includes('watermark') ||
+    normalized.includes('artifacts')
+  );
+}
+
+function findUniqueNode(
+  nodes: NonNullable<WorkflowTemplate['nodes']>,
+  description: string,
+  predicate: (node: NonNullable<WorkflowTemplate['nodes']>[number]) => boolean
+): NonNullable<WorkflowTemplate['nodes']>[number] {
+  const matches = nodes.filter(predicate);
+  if (matches.length !== 1) {
+    throw new Error(
+      `Invalid ltx23 workflow: expected exactly one ${description} node, found ${matches.length}`
+    );
+  }
+  return matches[0]!;
+}
+
+export function validateLtx23WorkflowTemplate(
+  template: WorkflowTemplate
+): Ltx23WorkflowBindings {
+  const nodes = template.nodes || [];
+  if (nodes.length === 0) {
+    throw new Error('Invalid ltx23 workflow: template has no nodes');
+  }
+
+  const durationNode = findUniqueNode(
+    nodes,
+    'duration',
+    node => node.type === 'INTConstant' && node.title === 'LENGTH (in seconds)'
+  );
+  const widthNode = findUniqueNode(
+    nodes,
+    'width',
+    node => node.type === 'INTConstant' && node.title === 'WIDTH'
+  );
+  const heightNode = findUniqueNode(
+    nodes,
+    'height',
+    node => node.type === 'INTConstant' && node.title === 'HEIGHT'
+  );
+  const inputImageNode = findUniqueNode(
+    nodes,
+    'input image',
+    node => node.type === 'LoadImage'
+  );
+  const t2vModeNode = findUniqueNode(
+    nodes,
+    'text-to-video toggle',
+    node => node.type === 'PrimitiveBoolean' && (node.title || '').includes('Text To Video')
+  );
+  const outputNode = findUniqueNode(
+    nodes,
+    'video output',
+    node => node.type === 'VHS_VideoCombine'
+  );
+
+  const promptNodes = nodes.filter(node => node.type === 'CLIPTextEncode');
+  if (promptNodes.length < 2) {
+    throw new Error(
+      `Invalid ltx23 workflow: expected at least two CLIPTextEncode nodes, found ${promptNodes.length}`
+    );
+  }
+
+  const negativePromptNode =
+    promptNodes.find(node => looksLikeNegativePrompt(getNodeWidgetText(node))) || null;
+  const positivePromptCandidates = promptNodes.filter(
+    node => negativePromptNode == null || node.id !== negativePromptNode.id
+  );
+
+  if (positivePromptCandidates.length !== 1) {
+    throw new Error(
+      `Invalid ltx23 workflow: expected exactly one positive prompt node, found ${positivePromptCandidates.length}`
+    );
+  }
+
+  return {
+    durationNodeId: durationNode.id,
+    widthNodeId: widthNode.id,
+    heightNodeId: heightNode.id,
+    positivePromptNodeId: positivePromptCandidates[0]!.id,
+    negativePromptNodeId: negativePromptNode?.id ?? null,
+    inputImageNodeId: inputImageNode.id,
+    t2vModeNodeId: t2vModeNode.id,
+    outputNodeId: outputNode.id,
+  };
 }
 
 /**
@@ -377,6 +493,7 @@ export function parameterizeLtx23Workflow(
 ): Record<string, unknown> {
   // Deep copy
   const workflow: WorkflowTemplate = JSON.parse(JSON.stringify(template));
+  const bindings = validateLtx23WorkflowTemplate(workflow);
 
   const durationSeconds = Math.min(Math.max(params.durationSeconds ?? 10, 1), 20);
   const t2vMode = params.t2vMode ?? false;
@@ -386,25 +503,23 @@ export function parameterizeLtx23Workflow(
   for (const node of workflow.nodes || []) {
     const nodeId = node.id;
 
-    // Node 291: Duration in seconds
-    if (nodeId === 291 && node.widgets_values) {
+    if (nodeId === bindings.durationNodeId && node.widgets_values) {
       node.widgets_values[0] = durationSeconds;
-      debugLog(`[Ltx23] Set duration (node 291) to ${durationSeconds}s`);
+      debugLog(`[Ltx23] Set duration (node ${bindings.durationNodeId}) to ${durationSeconds}s`);
     }
-    // Node 292: Width
-    else if (nodeId === 292 && node.widgets_values) {
+    else if (nodeId === bindings.widthNodeId && node.widgets_values) {
       node.widgets_values[0] = width;
-      debugLog(`[Ltx23] Set width (node 292) to ${width}`);
+      debugLog(`[Ltx23] Set width (node ${bindings.widthNodeId}) to ${width}`);
     }
-    // Node 293: Height
-    else if (nodeId === 293 && node.widgets_values) {
+    else if (nodeId === bindings.heightNodeId && node.widgets_values) {
       node.widgets_values[0] = height;
-      debugLog(`[Ltx23] Set height (node 293) to ${height}`);
+      debugLog(`[Ltx23] Set height (node ${bindings.heightNodeId}) to ${height}`);
     }
-    // Node 121: Positive prompt
-    else if (nodeId === 121 && node.widgets_values) {
+    else if (nodeId === bindings.positivePromptNodeId && node.widgets_values) {
       node.widgets_values[0] = params.prompt;
-      debugLog(`[Ltx23] Set positive prompt (node 121): "${(params.prompt || '').substring(0, 50)}..."`);
+      debugLog(
+        `[Ltx23] Set positive prompt (node ${bindings.positivePromptNodeId}): "${(params.prompt || '').substring(0, 50)}..."`
+      );
     }
     // Node 110: Negative prompt — leave as-is (workflow has good built-in defaults)
 
@@ -417,20 +532,23 @@ export function parameterizeLtx23Workflow(
     // Node 167: Input image
     else if (nodeId === 167 && node.widgets_values && params.inputImageFilename) {
       node.widgets_values[0] = params.inputImageFilename;
-      debugLog(`[Ltx23] Set input image (node 167) to: ${params.inputImageFilename}`);
+      debugLog(
+        `[Ltx23] Set input image (node ${bindings.inputImageNodeId}) to: ${params.inputImageFilename}`
+      );
     }
     // Node 290: T2V mode toggle (controls start frame bypass via node 160)
     else if (nodeId === 290 && node.widgets_values) {
       node.widgets_values[0] = t2vMode;
-      debugLog(`[Ltx23] Set T2V mode (node 290) to: ${t2vMode}`);
+      debugLog(`[Ltx23] Set T2V mode (node ${bindings.t2vModeNodeId}) to: ${t2vMode}`);
     }
-    // Node 140: VHS_VideoCombine — set filename_prefix
-    else if (nodeId === 140 && node.widgets_values) {
+    else if (nodeId === bindings.outputNodeId && node.widgets_values) {
       const prefix = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23';
       if (typeof node.widgets_values === 'object' && !Array.isArray(node.widgets_values)) {
         (node.widgets_values as Record<string, unknown>)['filename_prefix'] = prefix;
       }
-      debugLog(`[Ltx23] Set VHS_VideoCombine (node 140) filename_prefix to: ${prefix}`);
+      debugLog(
+        `[Ltx23] Set VHS_VideoCombine (node ${bindings.outputNodeId}) filename_prefix to: ${prefix}`
+      );
     }
   }
 
@@ -440,26 +558,23 @@ export function parameterizeLtx23Workflow(
   // No subgraph expansion needed — this is a flat workflow
   const apiWorkflow = workflowToPrompt(resolvedWorkflow);
 
-  // Also set values in API format to ensure they take effect
-  const node291 = apiWorkflow['291'] as { inputs?: Record<string, unknown> } | undefined;
-  if (node291) {
-    node291.inputs = node291.inputs || {};
-    node291.inputs['value'] = durationSeconds;
-  }
-  const node292 = apiWorkflow['292'] as { inputs?: Record<string, unknown> } | undefined;
-  if (node292) {
-    node292.inputs = node292.inputs || {};
-    node292.inputs['value'] = width;
-  }
-  const node293 = apiWorkflow['293'] as { inputs?: Record<string, unknown> } | undefined;
-  if (node293) {
-    node293.inputs = node293.inputs || {};
-    node293.inputs['value'] = height;
-  }
-  const node121 = apiWorkflow['121'] as { inputs?: Record<string, unknown> } | undefined;
-  if (node121) {
-    node121.inputs = node121.inputs || {};
-    node121.inputs['text'] = params.prompt;
+  const setApiInput = (nodeId: number, inputName: string, value: unknown): void => {
+    const node = apiWorkflow[String(nodeId)] as { inputs?: Record<string, unknown> } | undefined;
+    if (!node) {
+      throw new Error(
+        `Invalid ltx23 workflow: API prompt missing node ${nodeId} for input "${inputName}"`
+      );
+    }
+    node.inputs = node.inputs || {};
+    node.inputs[inputName] = value;
+  };
+
+  setApiInput(bindings.durationNodeId, 'value', durationSeconds);
+  setApiInput(bindings.widthNodeId, 'value', width);
+  setApiInput(bindings.heightNodeId, 'value', height);
+  setApiInput(bindings.positivePromptNodeId, 'text', params.prompt);
+  if (bindings.negativePromptNodeId != null && params.negativePrompt) {
+    setApiInput(bindings.negativePromptNodeId, 'text', params.negativePrompt);
   }
   if (params.inputImageFilename) {
     const node167 = apiWorkflow['167'] as { inputs?: Record<string, unknown> } | undefined;
@@ -483,6 +598,12 @@ export function parameterizeLtx23Workflow(
     node140.inputs = node140.inputs || {};
     node140.inputs['filename_prefix'] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23';
   }
+  setApiInput(bindings.t2vModeNodeId, 'value', t2vMode);
+  setApiInput(
+    bindings.outputNodeId,
+    'filename_prefix',
+    params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23'
+  );
 
   // Explicitly set bypass on I2V nodes based on t2v mode.
   // The node-format links (GetNode → bypass) don't propagate in API format,
@@ -526,6 +647,36 @@ export function parameterizeLtx23Workflow(
   // Bypass any remaining LoraLoaderModelOnly nodes with lora_name "None"
   bypassLoraLoaderNodesWithNone(apiWorkflow);
 
+  return apiWorkflow;
+}
+
+/**
+ * Apply a flat list of parameter mappings directly to an API-format workflow.
+ * Lower-level helper than `parameterizeGeneric` (below): expects the workflow
+ * to already be in API format and the mappings to be a plain array, with no
+ * promptKeywords / template-format handling. Used by the cloud-format
+ * fast paths (e.g. ltx23_fl2v_cloud) where the manifest is read inline.
+ */
+export function applyParameterMappings(
+  apiWorkflow: Record<string, unknown>,
+  mappings: Array<{ input: string; nodeId: string; field: string }>,
+  params: Record<string, unknown>
+): Record<string, unknown> {
+  for (const mapping of mappings) {
+    const value = params[mapping.input];
+    if (value === undefined || value === null) continue;
+
+    const node = apiWorkflow[mapping.nodeId] as { inputs?: Record<string, unknown> } | undefined;
+    if (!node) {
+      debugLog(`[applyParameterMappings] Warning: node ${mapping.nodeId} not found in workflow`);
+      continue;
+    }
+    node.inputs = node.inputs || {};
+    node.inputs[mapping.field] = value;
+    debugLog(
+      `[applyParameterMappings] Set node ${mapping.nodeId}.inputs.${mapping.field} = ${JSON.stringify(value)}`
+    );
+  }
   return apiWorkflow;
 }
 
@@ -611,22 +762,39 @@ export function parameterizeWorkflowByName(
       referenceImageFilenames: params.referenceImageFilenames,
     });
   } else if (workflowName === 'ltx23') {
-    // LTX-2.3 GGUF workflow (supports both I2V and T2V)
-    const t2vMode = !params.inputImageFilename;
+    // LTX-2.3 FL2V Cloud workflow — image + text prompt → video
     const extParams = params as {
       durationSeconds?: number;
       width?: number;
       height?: number;
     };
-    return parameterizeLtx23Workflow(template, {
+    const width = extParams.width || (params.aspectRatio === '9:16' ? 720 : 1280);
+    const height = extParams.height || (params.aspectRatio === '9:16' ? 1280 : 720);
+
+    // Load manifest to get parameterMappings
+    const manifestPath = path.join(
+      getWorkflowsDir(),
+      'cloud',
+      'ltx23_fl2v_cloud.manifest.json'
+    );
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as {
+      parameterMappings: Array<{ input: string; nodeId: string; field: string }>;
+    };
+
+    // Cloud workflow is already in API format — use template directly as the API workflow
+    const apiWorkflow = template as unknown as Record<string, unknown>;
+
+    return applyParameterMappings(apiWorkflow, manifest.parameterMappings, {
       prompt: params.prompt,
-      seed: params.seed,
-      filenamePrefix,
-      inputImageFilename: params.inputImageFilename,
+      negative_prompt: params.negativePrompt,
+      first_frame: params.inputImageFilename,
+      // When no last_frame is provided, mirror first_frame so the cloud node
+      // always has a valid uploaded image (avoids "file doesn't exist" errors)
+      last_frame: params.endImageFilename ?? params.inputImageFilename,
       durationSeconds: extParams.durationSeconds ?? 10,
-      t2vMode,
-      width: extParams.width || (params.aspectRatio === '9:16' ? 720 : 1280),
-      height: extParams.height || (params.aspectRatio === '9:16' ? 1280 : 720),
+      width,
+      height,
+      filenamePrefix: `video/${filenamePrefix}`,
     });
   }
 

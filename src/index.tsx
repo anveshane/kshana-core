@@ -10,6 +10,11 @@ import { getLLMConfig, getLLMProvider, validateLLMConfig, resetLLMLogger, type L
 import { resetPhaseLogger } from './utils/phaseLogger.js';
 import { resetDebugLog } from './hooks/useAgent.js';
 import { startAnalyticsDashboard } from './server/analytics.js';
+import {
+  captureAppStarted,
+  registerPostHogShutdownHandlers,
+  setCommonProperties,
+} from './server/posthog.js';
 
 // Task type for agent specialization
 type TaskType = 'generic' | 'video';
@@ -193,15 +198,27 @@ const currentProvider = getLLMProvider();
 const maskedApiKey = llmConfig.apiKey
   ? `${llmConfig.apiKey.slice(0, 4)}...${llmConfig.apiKey.slice(-4)}`
   : '(not set)';
+const comfyBaseUrl = process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
+const comfyCloudRaw = process.env['COMFY_CLOUD_API_KEY']?.trim();
+const comfyCloudKeyMasked = comfyCloudRaw
+  ? `${comfyCloudRaw.slice(0, 4)}...${comfyCloudRaw.slice(-4)}`
+  : '(not set)';
 console.log(`Provider: ${currentProvider}`);
 console.log(`Model: ${llmConfig.model}`);
 console.log(`Base URL: ${llmConfig.baseUrl}`);
 console.log(`API Key: ${maskedApiKey}`);
 console.log(`Task type: ${taskType}`);
 console.log('');
+console.log(`ComfyUI base URL: ${comfyBaseUrl}`);
+console.log(`COMFY_CLOUD_API_KEY: ${comfyCloudKeyMasked}`);
+console.log('');
 
 // Start analytics dashboard (non-blocking, fire-and-forget)
 startAnalyticsDashboard(3001).catch(() => {});
+const appVersion = process.env['npm_package_version'] ?? '0.1.0';
+setCommonProperties('desktop', appVersion);
+captureAppStarted('desktop');
+registerPostHogShutdownHandlers();
 
 // Start in CLI mode or server mode (default)
 if (cli) {

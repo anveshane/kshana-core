@@ -454,6 +454,8 @@ export interface AssetInfo {
   id: string;
   type: 'character_ref' | 'setting_ref' | 'scene_image' | 'scene_video' | 'scene_infographic' | 'final_video';
   path: string;
+  scene_number?: number;
+  version?: number;
   createdAt: number;
   metadata?: Record<string, unknown>;
   /** Executor node ID for redo support (e.g., "character_image:kai") */
@@ -592,6 +594,12 @@ export interface ProjectFile {
    */
   useV2V?: boolean;
 
+  /** Legacy/setup mirror of selected duration for UI compatibility */
+  duration?: number;
+
+  /** Whether autonomous mode was selected in project setup */
+  autonomousMode?: boolean;
+
   /** Persisted todo list for resuming work */
   todos?: PersistedTodo[];
 
@@ -622,6 +630,7 @@ export interface ProjectFile {
 
   /** Persisted user goal for session resumption */
   goal?: PersistedGoal;
+
 }
 
 /**

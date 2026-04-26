@@ -5,13 +5,14 @@
  * already contains everything from the story relevant to that scene. This module
  * reads the MINIMAL set of files for each content type, eliminating redundant reads.
  */
-import * as fs from 'fs';
-import * as path from 'path';
-import {
-  getProjectDir,
-  loadProject,
-} from '../../tasks/video/workflow/ProjectManager.js';
+import { tryParseSceneMotionPrompt } from '../contentValidation.js';
+import { loadTimeline } from '../timeline/TimelineManager.js';
+import { getProjectDir, loadProject } from '../../tasks/video/workflow/ProjectManager.js';
 import type { ProjectFile } from '../../tasks/video/workflow/types.js';
+import {
+  projectExists as projectFileExists,
+  readProjectText,
+} from '../../tasks/video/workflow/projectFileIO.js';
 
 /**
  * Result of building pre-loaded context.
@@ -27,14 +28,9 @@ export interface PreloadedContext {
  * Safely read a file from the project directory.
  * Returns the content or null if not found.
  */
-function readProjectFile(projectDir: string, relativePath: string): string | null {
+function readProjectFile(relativePath: string): string | null {
   try {
-    const fullPath = path.isAbsolute(relativePath)
-      ? relativePath
-      : path.join(projectDir, relativePath);
-    if (fs.existsSync(fullPath) && fs.statSync(fullPath).isFile()) {
-      return fs.readFileSync(fullPath, 'utf-8');
-    }
+    return readProjectText(relativePath);
   } catch {
     // File not readable
   }
@@ -66,7 +62,6 @@ function getSettingFilePath(project: ProjectFile, settingName: string): string |
  */
 function buildReferenceImagesSection(
   project: ProjectFile,
-  projectDir: string,
   opts?: { filterCharNames?: string[]; filterSettingNames?: string[] }
 ): string {
   const lines: string[] = [];
@@ -82,8 +77,7 @@ function buildReferenceImagesSection(
   lines.push('### Character Reference Images');
   for (const char of chars) {
     if (char.referenceImagePath) {
-      const fullPath = path.join(projectDir, char.referenceImagePath);
-      if (fs.existsSync(fullPath)) {
+      if (projectFileExists(char.referenceImagePath)) {
         lines.push(`- ${char.name}: ${char.referenceImagePath} (exists)`);
       } else {
         lines.push(`- ${char.name}: reference image missing`);
@@ -96,8 +90,7 @@ function buildReferenceImagesSection(
   lines.push('### Setting Reference Images');
   for (const setting of settings) {
     if (setting.referenceImagePath) {
-      const fullPath = path.join(projectDir, setting.referenceImagePath);
-      if (fs.existsSync(fullPath)) {
+      if (projectFileExists(setting.referenceImagePath)) {
         lines.push(`- ${setting.name}: ${setting.referenceImagePath} (exists)`);
       } else {
         lines.push(`- ${setting.name}: reference image missing`);
@@ -105,6 +98,83 @@ function buildReferenceImagesSection(
     } else {
       lines.push(`- ${setting.name}: no reference image`);
     }
+  }
+
+  return lines.join('\n');
+}
+
+function buildShotContinuitySection(sceneNumber: number, shotNumber: number): string | null {
+  const projectDir = getProjectDir();
+  const motionPromptPath = `prompts/videos/scenes/scene-${sceneNumber}.motion.json`;
+  const motionPromptContent = readProjectFile(motionPromptPath);
+  const parsedMotionPrompt = motionPromptContent
+    ? tryParseSceneMotionPrompt(motionPromptContent)
+    : null;
+  const shot = parsedMotionPrompt?.shots?.find(candidate => candidate.shotNumber === shotNumber);
+
+  const timeline = loadTimeline(projectDir);
+  const priorTimelineSegments = timeline?.segments
+    .filter(segment => {
+      const match = new RegExp(`^segment_${sceneNumber - 1}_shot_(\\d+)$`).exec(segment.id);
+      if (!match?.[1]) {
+        return false;
+      }
+      return Number(match[1]) < shotNumber;
+    })
+    .sort((a, b) => a.startTime - b.startTime) ?? [];
+
+  const priorPromptBlocks: string[] = [];
+  for (let currentShot = 1; currentShot < shotNumber; currentShot++) {
+    const promptPath = `prompts/images/shots/scene-${sceneNumber}-shot-${currentShot}.prompt.md`;
+    const promptContent = readProjectFile(promptPath);
+    if (promptContent) {
+      priorPromptBlocks.push(`Shot ${currentShot} Prompt (${promptPath})\n${promptContent}`);
+    }
+  }
+
+  const lines: string[] = [];
+  if (shot) {
+    lines.push('### Current Shot Continuity Target');
+    lines.push(`- Shot Number: ${shot.shotNumber ?? shotNumber}`);
+    if (shot.label) lines.push(`- Shot Label: ${shot.label}`);
+    if (shot.shotType) lines.push(`- Shot Type: ${shot.shotType}`);
+    if (shot.cameraWork) lines.push(`- Camera Work: ${shot.cameraWork}`);
+    if (shot.prompt) lines.push(`- Action/Prompt: ${shot.prompt}`);
+    if (shot.continuity_anchor) lines.push(`- Character Appearance Lock: ${shot.continuity_anchor}`);
+    if (shot.wardrobe_lock) lines.push(`- Wardrobe / Props Lock: ${shot.wardrobe_lock}`);
+    if (shot.setting_lock) lines.push(`- Setting Anchor Details: ${shot.setting_lock}`);
+    if (shot.scene_palette) lines.push(`- Lighting / Palette Lock: ${shot.scene_palette}`);
+    if (shot.dialogue) lines.push(`- Emotional Tone / Dialogue: ${shot.dialogue}`);
+    if (shot.do_not_change) lines.push(`- Do Not Change: ${shot.do_not_change}`);
+  }
+
+  if (parsedMotionPrompt) {
+    lines.push('### Scene-Wide Continuity Source');
+    if (parsedMotionPrompt.sceneTitle) lines.push(`- Scene Title: ${parsedMotionPrompt.sceneTitle}`);
+    if (parsedMotionPrompt.totalSceneDuration) {
+      lines.push(`- Scene Duration: ${parsedMotionPrompt.totalSceneDuration}s`);
+    }
+    lines.push(`- Motion Prompt File: ${motionPromptPath}`);
+  }
+
+  if (priorPromptBlocks.length > 0) {
+    lines.push('### Earlier Approved Shot Prompts In This Scene');
+    lines.push(priorPromptBlocks.join('\n\n---\n\n'));
+  }
+
+  if (priorTimelineSegments.length > 0) {
+    lines.push('### Earlier Timeline Continuity References');
+    for (const segment of priorTimelineSegments) {
+      lines.push(
+        `- ${segment.id} (${segment.fillStatus})` +
+        `${segment.metadata ? ` metadata=${JSON.stringify(segment.metadata)}` : ''}` +
+        `${segment.layers[0]?.metadata ? ` layer_prompt=${JSON.stringify(segment.layers[0].metadata)}` : ''}`
+      );
+    }
+  }
+
+  if (lines.length === 0) {
+    return null;
   }
 
   return lines.join('\n');
@@ -126,13 +196,12 @@ export function buildPreloadedContext(
   const project = loadProject();
   if (!project) return null;
 
-  const projectDir = getProjectDir();
   const filesRead: string[] = [];
   const sections: string[] = [];
 
   // Helper to read and add a file section
   const addFileSection = (label: string, relativePath: string): string | null => {
-    const content = readProjectFile(projectDir, relativePath);
+    const content = readProjectFile(relativePath);
     if (content) {
       filesRead.push(relativePath);
       sections.push(`### ${label}\n**File:** ${relativePath}\n\n${content}`);
@@ -149,6 +218,11 @@ export function buildPreloadedContext(
 **Characters:** ${project.characters.map(c => c.name).join(', ') || 'None'}
 **Settings:** ${project.settings.map(s => s.name).join(', ') || 'None'}`);
 
+  const chapterPaths = (project.files || [])
+    .map(file => file.path)
+    .filter((filePath): filePath is string => /^plans\/chapters\/.+\.story\.md$/.test(filePath))
+    .sort();
+
   switch (contentType) {
     case 'plot': {
       // Plot only needs original_input.md
@@ -164,42 +238,24 @@ export function buildPreloadedContext(
 
     case 'character': {
       // Character needs story chapters (which encapsulate plot + original_input)
-      const chapterDir = path.join(projectDir, 'plans/chapters');
-      if (fs.existsSync(chapterDir)) {
-        const chapterFiles = fs.readdirSync(chapterDir)
-          .filter(f => f.endsWith('.story.md'))
-          .sort();
-        for (const cf of chapterFiles) {
-          addFileSection(`Story Chapter: ${cf}`, `plans/chapters/${cf}`);
-        }
+      for (const chapterPath of chapterPaths) {
+        addFileSection(`Story Chapter: ${chapterPath.split('/').pop()}`, chapterPath);
       }
       break;
     }
 
     case 'setting': {
       // Setting needs story chapters
-      const chapterDir = path.join(projectDir, 'plans/chapters');
-      if (fs.existsSync(chapterDir)) {
-        const chapterFiles = fs.readdirSync(chapterDir)
-          .filter(f => f.endsWith('.story.md'))
-          .sort();
-        for (const cf of chapterFiles) {
-          addFileSection(`Story Chapter: ${cf}`, `plans/chapters/${cf}`);
-        }
+      for (const chapterPath of chapterPaths) {
+        addFileSection(`Story Chapter: ${chapterPath.split('/').pop()}`, chapterPath);
       }
       break;
     }
 
     case 'scene': {
       // Scene needs story + character/setting profiles mentioned in the scene
-      const chapterDir = path.join(projectDir, 'plans/chapters');
-      if (fs.existsSync(chapterDir)) {
-        const chapterFiles = fs.readdirSync(chapterDir)
-          .filter(f => f.endsWith('.story.md'))
-          .sort();
-        for (const cf of chapterFiles) {
-          addFileSection(`Story Chapter: ${cf}`, `plans/chapters/${cf}`);
-        }
+      for (const chapterPath of chapterPaths) {
+        addFileSection(`Story Chapter: ${chapterPath.split('/').pop()}`, chapterPath);
       }
       // Add all character and setting profiles
       for (const char of project.characters) {
@@ -219,7 +275,7 @@ export function buildPreloadedContext(
         const filePath = getCharacterFilePath(project, name);
         if (filePath) addFileSection(`Character Profile: ${name}`, filePath);
       }
-      sections.push(buildReferenceImagesSection(project, projectDir,
+      sections.push(buildReferenceImagesSection(project,
         name ? { filterCharNames: [name] } : undefined));
       break;
     }
@@ -230,7 +286,7 @@ export function buildPreloadedContext(
         const filePath = getSettingFilePath(project, name);
         if (filePath) addFileSection(`Setting Profile: ${name}`, filePath);
       }
-      sections.push(buildReferenceImagesSection(project, projectDir,
+      sections.push(buildReferenceImagesSection(project,
         name ? { filterSettingNames: [name] } : undefined));
       break;
     }
@@ -260,7 +316,7 @@ export function buildPreloadedContext(
         const filePath = getSettingFilePath(project, setting.name);
         if (filePath) addFileSection(`Setting: ${setting.name}`, filePath);
       }
-      sections.push(buildReferenceImagesSection(project, projectDir));
+      sections.push(buildReferenceImagesSection(project));
       break;
     }
 
@@ -287,7 +343,7 @@ export function buildPreloadedContext(
         const filePath = getSettingFilePath(project, setting.name);
         if (filePath) addFileSection(`Setting: ${setting.name}`, filePath);
       }
-      sections.push(buildReferenceImagesSection(project, projectDir));
+      sections.push(buildReferenceImagesSection(project));
       break;
     }
 
@@ -311,6 +367,12 @@ export function buildPreloadedContext(
         if (!sceneLoaded) {
           addFileSection(`Scenes Plan (find Scene ${sceneNumber})`, 'plans/scenes.md');
         }
+        if (shotNumber !== undefined) {
+          const continuitySection = buildShotContinuitySection(sceneNumber, shotNumber);
+          if (continuitySection) {
+            sections.push(continuitySection);
+          }
+        }
       }
       for (const char of project.characters) {
         const filePath = getCharacterFilePath(project, char.name);
@@ -320,7 +382,7 @@ export function buildPreloadedContext(
         const filePath = getSettingFilePath(project, setting.name);
         if (filePath) addFileSection(`Setting: ${setting.name}`, filePath);
       }
-      sections.push(buildReferenceImagesSection(project, projectDir));
+      sections.push(buildReferenceImagesSection(project));
       break;
     }
 

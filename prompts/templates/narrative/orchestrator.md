@@ -47,11 +47,12 @@ Based on the current state, you can:
 
 After planning scenes, use the timeline system to ensure the video fills the target duration:
 
-1. **Create timeline skeleton**: After scenes are planned, call `manage_timeline` with action `create_skeleton`, passing scene descriptors and total duration. This divides the duration proportionally among scenes.
-2. **Update segments**: After generating each scene image or video, call `manage_timeline` with action `update_segment` to fill the segment's layers with the generated asset reference.
+1. **Timeline skeleton is automatic**: After scenes are planned and approved, the backend should create `timeline.json` automatically. Before any repair, verify with `manage_timeline(action: "get")`; use `create_skeleton` only when the root timeline is actually missing or invalid.
+2. **Update segments**: After generating each scene image or video, update the matching segment when the generation tool does not already do it automatically.
 3. **Add global layers**: If the user provides narration audio/video or background music, call `manage_timeline` with action `add_global_layer`. Ask the user for their compositing preference (replace, side_by_side, pip, overlay).
 4. **Validate before assembly**: Call `manage_timeline` with action `validate` to check for empty segments or gaps. If gaps exist, ask the user how to fill them.
 5. **Assemble from timeline**: Use `assemble_from_timeline` instead of manually listing artifact IDs. The timeline drives the assembly order, transitions, and compositing.
+6. **Resume in timeline order**: When resuming, use the first segment with `fillStatus !== "filled"` from the timeline as the next shot to generate. Do not infer progress from chat history or newest files.
 
 ## User Interaction
 

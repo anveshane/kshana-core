@@ -1,20 +1,20 @@
-name: Deploy to Cloud Run
+name: Deploy to Compute Engine
 
 on:
   workflow_dispatch:
     inputs:
       region:
-        description: GCP region for Artifact Registry and Cloud Run
+        description: GCP region for Artifact Registry
         required: false
-        default: asia-south1
+        default: us-central1
       artifact_registry_repo:
         description: Artifact Registry repository name
         required: false
         default: kshana
-      cloud_run_service:
-        description: Cloud Run service name
+      gce_host:
+        description: Compute Engine public host or IP
         required: false
-        default: kshana-ink
+        default: ""
   push:
     branches:
       - master
@@ -27,9 +27,11 @@ jobs:
       contents: read
     env:
       PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-      REGION: ${{ github.event.inputs.region || 'asia-south1' }}
+      REGION: ${{ github.event.inputs.region || 'us-central1' }}
       ARTIFACT_REGISTRY_REPO: ${{ github.event.inputs.artifact_registry_repo || 'kshana' }}
-      CLOUD_RUN_SERVICE: ${{ github.event.inputs.cloud_run_service || 'kshana-ink' }}
+      GCE_HOST: ${{ github.event.inputs.gce_host || secrets.GCE_HOST }}
+      GCE_USER: ${{ secrets.GCE_USER }}
+      REGISTRY_HOST: ${{ (github.event.inputs.region || 'us-central1') }}-docker.pkg.dev
 
     steps:
       - name: Checkout
@@ -45,22 +47,74 @@ jobs:
         with:
           project_id: ${{ env.PROJECT_ID }}
 
+      - name: Load app config from Secret Manager
+        run: |
+          set -euo pipefail
+          sm_get() {
+            gcloud secrets versions access latest --secret="$1" --project="${PROJECT_ID}"
+          }
+          append_multiline_env() {
+            local name="$1"
+            local val
+            val="$(sm_get "${name}")"
+            local delim="SM_${name}_$(openssl rand -hex 16)"
+            {
+              echo "${name}<<${delim}"
+              echo "${val}"
+              echo "${delim}"
+            } >> "${GITHUB_ENV}"
+            echo "::add-mask::${val}"
+          }
+          append_optional_multiline_env() {
+            local name="$1"
+            local val
+            if val="$(sm_get "${name}" 2>/dev/null)"; then
+              local delim="SM_${name}_$(openssl rand -hex 16)"
+              {
+                echo "${name}<<${delim}"
+                echo "${val}"
+                echo "${delim}"
+              } >> "${GITHUB_ENV}"
+              echo "::add-mask::${val}"
+            fi
+          }
+          for name in LLM_PROVIDER LLM_CONTEXT_TOKENS OPENAI_API_KEY OPENAI_BASE_URL OPENAI_MODEL COMFYUI_BASE_URL COMFYUI_TIMEOUT POSTHOG_API_KEY POSTHOG_HOST ANALYTICS_SALT; do
+            append_multiline_env "${name}"
+          done
+          for name in COMFY_CLOUD_API_KEY; do
+            append_optional_multiline_env "${name}"
+          done
+          for name in DEV_LLM_PROVIDER DEV_LLM_CONTEXT_TOKENS DEV_OPENAI_API_KEY DEV_OPENAI_BASE_URL DEV_OPENAI_MODEL DEV_COMFYUI_BASE_URL DEV_COMFYUI_TIMEOUT DEV_POSTHOG_API_KEY DEV_POSTHOG_HOST DEV_ANALYTICS_SALT DEV_COMFY_CLOUD_API_KEY; do
+            append_optional_multiline_env "${name}"
+          done
+
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
 
       - name: Resolve deployment target
         run: |
-          EFFECTIVE_CLOUD_RUN_SERVICE="${CLOUD_RUN_SERVICE}"
-          DEPLOY_ENVIRONMENT="production"
+          if [ -z "${GCE_HOST}" ] || [ -z "${GCE_USER}" ]; then
+            echo "GCE_HOST and GCE_USER must be configured (workflow input or GitHub Secrets)." >&2
+            exit 1
+          fi
 
+          TARGET_SERVICE="kshana-ink-prod"
+          TARGET_ENV_FILE=".env.prod"
+          HEALTHCHECK_URL="http://${GCE_HOST}/api/v1/health"
+          DEPLOY_ENVIRONMENT="production"
           if [ "${GITHUB_REF_NAME}" = "dev" ]; then
-            EFFECTIVE_CLOUD_RUN_SERVICE="${CLOUD_RUN_SERVICE}-dev"
+            DEV_PORT=81
+            TARGET_SERVICE="kshana-ink-dev"
+            TARGET_ENV_FILE=".env.dev"
+            HEALTHCHECK_URL="http://${GCE_HOST}:${DEV_PORT}/api/v1/health"
             DEPLOY_ENVIRONMENT="staging"
           fi
 
-          echo "EFFECTIVE_CLOUD_RUN_SERVICE=${EFFECTIVE_CLOUD_RUN_SERVICE}" >> "${GITHUB_ENV}"
+          echo "TARGET_SERVICE=${TARGET_SERVICE}" >> "${GITHUB_ENV}"
+          echo "TARGET_ENV_FILE=${TARGET_ENV_FILE}" >> "${GITHUB_ENV}"
+          echo "HEALTHCHECK_URL=${HEALTHCHECK_URL}" >> "${GITHUB_ENV}"
           echo "DEPLOY_ENVIRONMENT=${DEPLOY_ENVIRONMENT}" >> "${GITHUB_ENV}"
-          echo "Deploying '${GITHUB_REF_NAME}' branch to ${DEPLOY_ENVIRONMENT} service: ${EFFECTIVE_CLOUD_RUN_SERVICE}"
+          echo "Deploying '${GITHUB_REF_NAME}' to ${TARGET_SERVICE} on ${GCE_HOST}"
 
       - name: Build and push image
         run: |
@@ -69,20 +123,137 @@ jobs:
           docker push "${IMAGE_URI}"
           echo "IMAGE_URI=${IMAGE_URI}" >> "${GITHUB_ENV}"
 
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy "${EFFECTIVE_CLOUD_RUN_SERVICE}" \
-            --image "${IMAGE_URI}" \
-            --region "${REGION}" \
-            --platform managed \
-            --service-account "kshana-ink@${PROJECT_ID}.iam.gserviceaccount.com" \
-            --allow-unauthenticated \
-            --port 8080 \
-            --set-secrets "LLM_PROVIDER=LLM_PROVIDER:latest,LLM_CONTEXT_TOKENS=LLM_CONTEXT_TOKENS:latest,OPENAI_API_KEY=OPENAI_API_KEY:latest,OPENAI_BASE_URL=OPENAI_BASE_URL:latest,OPENAI_MODEL=OPENAI_MODEL:latest,COMFYUI_BASE_URL=COMFYUI_BASE_URL:latest,COMFYUI_TIMEOUT=COMFYUI_TIMEOUT:latest,POSTHOG_API_KEY=POSTHOG_API_KEY:latest,POSTHOG_HOST=POSTHOG_HOST:latest,ANALYTICS_SALT=ANALYTICS_SALT:latest"
+      - name: Sync deployment assets to VM
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ env.GCE_HOST }}
+          username: ${{ env.GCE_USER }}
+          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          source: "deploy/*"
+          target: "~/kshana-ink"
+          strip_components: 1
 
-      - name: Show service URL
+      - name: Deploy selected branch service on VM
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          IMAGE_URI: ${{ env.IMAGE_URI }}
+          TARGET_SERVICE: ${{ env.TARGET_SERVICE }}
+          TARGET_ENV_FILE: ${{ env.TARGET_ENV_FILE }}
+          REGISTRY_HOST: ${{ env.REGISTRY_HOST }}
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+          LLM_PROVIDER: ${{ env.LLM_PROVIDER }}
+          LLM_CONTEXT_TOKENS: ${{ env.LLM_CONTEXT_TOKENS }}
+          OPENAI_API_KEY: ${{ env.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ env.OPENAI_BASE_URL }}
+          OPENAI_MODEL: ${{ env.OPENAI_MODEL }}
+          COMFYUI_BASE_URL: ${{ env.COMFYUI_BASE_URL }}
+          COMFYUI_TIMEOUT: ${{ env.COMFYUI_TIMEOUT }}
+          COMFY_CLOUD_API_KEY: ${{ env.COMFY_CLOUD_API_KEY }}
+          POSTHOG_API_KEY: ${{ env.POSTHOG_API_KEY }}
+          POSTHOG_HOST: ${{ env.POSTHOG_HOST }}
+          ANALYTICS_SALT: ${{ env.ANALYTICS_SALT }}
+          DEV_LLM_PROVIDER: ${{ env.DEV_LLM_PROVIDER }}
+          DEV_LLM_CONTEXT_TOKENS: ${{ env.DEV_LLM_CONTEXT_TOKENS }}
+          DEV_OPENAI_API_KEY: ${{ env.DEV_OPENAI_API_KEY }}
+          DEV_OPENAI_BASE_URL: ${{ env.DEV_OPENAI_BASE_URL }}
+          DEV_OPENAI_MODEL: ${{ env.DEV_OPENAI_MODEL }}
+          DEV_COMFYUI_BASE_URL: ${{ env.DEV_COMFYUI_BASE_URL }}
+          DEV_COMFYUI_TIMEOUT: ${{ env.DEV_COMFYUI_TIMEOUT }}
+          DEV_COMFY_CLOUD_API_KEY: ${{ env.DEV_COMFY_CLOUD_API_KEY }}
+          DEV_POSTHOG_API_KEY: ${{ env.DEV_POSTHOG_API_KEY }}
+          DEV_POSTHOG_HOST: ${{ env.DEV_POSTHOG_HOST }}
+          DEV_ANALYTICS_SALT: ${{ env.DEV_ANALYTICS_SALT }}
+        with:
+          host: ${{ env.GCE_HOST }}
+          username: ${{ env.GCE_USER }}
+          key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
+          envs: IMAGE_URI,TARGET_SERVICE,TARGET_ENV_FILE,REGISTRY_HOST,GCP_SA_KEY,LLM_PROVIDER,LLM_CONTEXT_TOKENS,OPENAI_API_KEY,OPENAI_BASE_URL,OPENAI_MODEL,COMFYUI_BASE_URL,COMFYUI_TIMEOUT,COMFY_CLOUD_API_KEY,POSTHOG_API_KEY,POSTHOG_HOST,ANALYTICS_SALT,DEV_LLM_PROVIDER,DEV_LLM_CONTEXT_TOKENS,DEV_OPENAI_API_KEY,DEV_OPENAI_BASE_URL,DEV_OPENAI_MODEL,DEV_COMFYUI_BASE_URL,DEV_COMFYUI_TIMEOUT,DEV_COMFY_CLOUD_API_KEY,DEV_POSTHOG_API_KEY,DEV_POSTHOG_HOST,DEV_ANALYTICS_SALT
+          script: |
+            set -euo pipefail
+            mkdir -p ~/kshana-ink
+            cd ~/kshana-ink
+
+            write_env() {
+              local target_file="$1"
+              local prefix="$2"
+              # GitHub may pass unset optional DEV_* as empty strings; ${a:-b} does not fall back when a=""
+              dev_or_prod() {
+                local dev_val="$1"
+                local prod_val="$2"
+                if [ -n "${dev_val}" ]; then
+                  printf '%s' "${dev_val}"
+                else
+                  printf '%s' "${prod_val}"
+                fi
+              }
+              select_secret() {
+                local key="$1"
+                if [ "${prefix}" = "DEV_" ]; then
+                  case "${key}" in
+                    LLM_PROVIDER) dev_or_prod "${DEV_LLM_PROVIDER:-}" "${LLM_PROVIDER:-}" ;;
+                    LLM_CONTEXT_TOKENS) dev_or_prod "${DEV_LLM_CONTEXT_TOKENS:-}" "${LLM_CONTEXT_TOKENS:-}" ;;
+                    OPENAI_API_KEY) dev_or_prod "${DEV_OPENAI_API_KEY:-}" "${OPENAI_API_KEY:-}" ;;
+                    OPENAI_BASE_URL) dev_or_prod "${DEV_OPENAI_BASE_URL:-}" "${OPENAI_BASE_URL:-}" ;;
+                    OPENAI_MODEL) dev_or_prod "${DEV_OPENAI_MODEL:-}" "${OPENAI_MODEL:-}" ;;
+                    COMFYUI_BASE_URL) dev_or_prod "${DEV_COMFYUI_BASE_URL:-}" "${COMFYUI_BASE_URL:-}" ;;
+                    COMFYUI_TIMEOUT) dev_or_prod "${DEV_COMFYUI_TIMEOUT:-}" "${COMFYUI_TIMEOUT:-}" ;;
+                    COMFY_CLOUD_API_KEY) dev_or_prod "${DEV_COMFY_CLOUD_API_KEY:-}" "${COMFY_CLOUD_API_KEY:-}" ;;
+                    POSTHOG_API_KEY) dev_or_prod "${DEV_POSTHOG_API_KEY:-}" "${POSTHOG_API_KEY:-}" ;;
+                    POSTHOG_HOST) dev_or_prod "${DEV_POSTHOG_HOST:-}" "${POSTHOG_HOST:-}" ;;
+                    ANALYTICS_SALT) dev_or_prod "${DEV_ANALYTICS_SALT:-}" "${ANALYTICS_SALT:-}" ;;
+                  esac
+                else
+                  case "${key}" in
+                    LLM_PROVIDER) echo "${LLM_PROVIDER:-}" ;;
+                    LLM_CONTEXT_TOKENS) echo "${LLM_CONTEXT_TOKENS:-}" ;;
+                    OPENAI_API_KEY) echo "${OPENAI_API_KEY:-}" ;;
+                    OPENAI_BASE_URL) echo "${OPENAI_BASE_URL:-}" ;;
+                    OPENAI_MODEL) echo "${OPENAI_MODEL:-}" ;;
+                    COMFYUI_BASE_URL) echo "${COMFYUI_BASE_URL:-}" ;;
+                    COMFYUI_TIMEOUT) echo "${COMFYUI_TIMEOUT:-}" ;;
+                    COMFY_CLOUD_API_KEY) echo "${COMFY_CLOUD_API_KEY:-}" ;;
+                    POSTHOG_API_KEY) echo "${POSTHOG_API_KEY:-}" ;;
+                    POSTHOG_HOST) echo "${POSTHOG_HOST:-}" ;;
+                    ANALYTICS_SALT) echo "${ANALYTICS_SALT:-}" ;;
+                  esac
+                fi
+              }
+              {
+                printf "LLM_PROVIDER=%s\n" "$(select_secret LLM_PROVIDER)"
+                printf "LLM_CONTEXT_TOKENS=%s\n" "$(select_secret LLM_CONTEXT_TOKENS)"
+                printf "OPENAI_API_KEY=%s\n" "$(select_secret OPENAI_API_KEY)"
+                printf "OPENAI_BASE_URL=%s\n" "$(select_secret OPENAI_BASE_URL)"
+                printf "OPENAI_MODEL=%s\n" "$(select_secret OPENAI_MODEL)"
+                printf "COMFYUI_BASE_URL=%s\n" "$(select_secret COMFYUI_BASE_URL)"
+                printf "COMFYUI_TIMEOUT=%s\n" "$(select_secret COMFYUI_TIMEOUT)"
+                printf "COMFY_CLOUD_API_KEY=%s\n" "$(select_secret COMFY_CLOUD_API_KEY)"
+                printf "POSTHOG_API_KEY=%s\n" "$(select_secret POSTHOG_API_KEY)"
+                printf "POSTHOG_HOST=%s\n" "$(select_secret POSTHOG_HOST)"
+                printf "ANALYTICS_SALT=%s\n" "$(select_secret ANALYTICS_SALT)"
+              } > "${target_file}"
+            }
+
+            write_env ".env.prod" ""
+            write_env ".env.dev" "DEV_"
+
+            if [ -n "${GCP_SA_KEY}" ]; then
+              printf "%s" "${GCP_SA_KEY}" | docker login -u _json_key --password-stdin "https://${REGISTRY_HOST}"
+            fi
+
+            chmod +x ./deploy.sh
+            ./deploy.sh "${TARGET_SERVICE}" "${IMAGE_URI}" "${TARGET_ENV_FILE}"
+
+      - name: Verify deployed service health
         run: |
+          set -euo pipefail
           echo "Environment: ${DEPLOY_ENVIRONMENT}"
-          gcloud run services describe "${EFFECTIVE_CLOUD_RUN_SERVICE}" \
-            --region "${REGION}" \
-            --format="value(status.url)"
+          echo "Checking: ${HEALTHCHECK_URL}"
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsS --max-time 10 "${HEALTHCHECK_URL}" >/dev/null; then
+              echo "Health check passed for ${TARGET_SERVICE}"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Health check failed for ${TARGET_SERVICE}" >&2
+          exit 1

@@ -88,15 +88,18 @@ export class AssetScanner {
     const issues: ScanIssue[] = [];
 
     // 1. Check project.json for approved artifacts
-    this.scanProjectState(project, registry, issues);
+    this.scanProjectState(projectDir, project, registry, issues);
 
-    // 2. Scan artifact directories for files
+    // 2. Prefer project metadata before falling back to raw directory discovery
+    this.scanProjectMetadata(projectDir, project, registry);
+
+    // 3. Scan artifact directories for files
     this.scanArtifactDirectories(projectDir, registry, issues);
 
-    // 3. Scan prompt directories for existing prompt files
+    // 4. Scan prompt directories for existing prompt files
     this.scanPromptDirectories(projectDir, registry);
 
-    // 4. Check for critical project files
+    // 5. Check for critical project files
     this.checkCriticalFiles(projectDir, issues);
 
     return {
@@ -110,12 +113,23 @@ export class AssetScanner {
    * Scan project state (project.json) for approved artifacts.
    */
   private scanProjectState(
+    projectDir: string,
     project: GenericProjectFile,
     registry: AssetRegistry,
     issues: ScanIssue[]
   ): void {
-    for (const [typeId, instances] of Object.entries(project.artifacts)) {
+    const artifactState = (project as { artifacts?: unknown }).artifacts;
+    if (!artifactState || typeof artifactState !== 'object') {
+      return;
+    }
+
+    for (const [typeId, instances] of Object.entries(artifactState as Record<string, unknown>)) {
       if (!instances || typeof instances !== 'object') {
+        continue;
+      }
+
+      if (this.isLegacyArtifactInstance(instances)) {
+        this.scanLegacyArtifact(projectDir, typeId, instances, registry, issues);
         continue;
       }
 
@@ -142,12 +156,12 @@ export class AssetScanner {
             id: instance.id,
             artifactTypeId: typeId,
             itemId: instance.itemId,
-            path: instance.assetPath || instance.filePath,
+            path: this.normalizeProjectPath(projectDir, instance.assetPath || instance.filePath),
             source: 'previously_generated',
             registeredAt: instance.updatedAt,
             metadata: instance.metadata,
           };
-          registry.assets.set(asset.id, asset);
+          this.registerAsset(registry, asset);
         }
       }
 
@@ -155,6 +169,135 @@ export class AssetScanner {
       if (approved.length > 0) {
         const satisfaction = this.determineSatisfaction(typeDef, approved, total);
         registry.satisfiedArtifacts.set(typeId, satisfaction);
+      }
+    }
+  }
+
+  private isLegacyArtifactInstance(value: object): boolean {
+    return (
+      'status' in value &&
+      (('type' in value && typeof (value as { type?: unknown }).type === 'string') ||
+        ('typeId' in value && typeof (value as { typeId?: unknown }).typeId === 'string'))
+    );
+  }
+
+  private scanLegacyArtifact(
+    projectDir: string,
+    artifactId: string,
+    rawArtifact: object,
+    registry: AssetRegistry,
+    issues: ScanIssue[]
+  ): void {
+    const artifact = rawArtifact as Record<string, unknown>;
+    const typeId =
+      typeof artifact['typeId'] === 'string'
+        ? artifact['typeId']
+        : typeof artifact['type'] === 'string'
+          ? artifact['type']
+          : undefined;
+
+    if (!typeId) {
+      return;
+    }
+
+    const typeDef = this.template.artifactTypes[typeId];
+    if (!typeDef) {
+      issues.push({
+        type: 'warning',
+        message: `Unknown artifact type in project: ${typeId}`,
+      });
+      return;
+    }
+
+    const status = artifact['status'];
+    if (status !== 'approved' && status !== 'complete') {
+      return;
+    }
+
+    const asset: ProvidedAsset = {
+      id: typeof artifact['id'] === 'string' ? artifact['id'] : artifactId,
+      artifactTypeId: typeId,
+      itemId: typeof artifact['itemId'] === 'string' ? artifact['itemId'] : undefined,
+      path: this.normalizeProjectPath(
+        projectDir,
+        typeof artifact['assetPath'] === 'string'
+          ? artifact['assetPath']
+          : typeof artifact['filePath'] === 'string'
+            ? artifact['filePath']
+            : undefined
+      ),
+      source: 'previously_generated',
+      registeredAt:
+        typeof artifact['updatedAt'] === 'number' ? artifact['updatedAt'] : Date.now(),
+      metadata:
+        artifact['metadata'] && typeof artifact['metadata'] === 'object'
+          ? (artifact['metadata'] as Record<string, unknown>)
+          : undefined,
+    };
+
+    this.registerAsset(registry, asset);
+    this.updateSatisfaction(typeId, registry);
+  }
+
+  /**
+   * Scan workflow metadata already tracked in project.json.
+   * This is the primary source of truth for desktop projects.
+   */
+  private scanProjectMetadata(
+    projectDir: string,
+    project: GenericProjectFile,
+    registry: AssetRegistry
+  ): void {
+    const workflowProject = project as GenericProjectFile & Record<string, unknown>;
+
+    this.scanTrackedFiles(
+      projectDir,
+      Array.isArray(workflowProject.files)
+        ? (workflowProject.files as Array<Record<string, unknown>>)
+        : [],
+      registry
+    );
+
+    this.scanPromptMetadata(
+      projectDir,
+      Array.isArray(workflowProject.characters)
+        ? (workflowProject.characters as Array<Record<string, unknown>>)
+        : [],
+      'character',
+      registry
+    );
+    this.scanPromptMetadata(
+      projectDir,
+      Array.isArray(workflowProject.settings)
+        ? (workflowProject.settings as Array<Record<string, unknown>>)
+        : [],
+      'setting',
+      registry
+    );
+
+    const content = workflowProject.content;
+    if (content && typeof content === 'object') {
+      const images = (content as Record<string, unknown>)['images'];
+      const videos = (content as Record<string, unknown>)['videos'];
+
+      if (images && typeof images === 'object') {
+        this.scanGeneratedAssetMap(
+          projectDir,
+          workflowProject,
+          (images as Record<string, unknown>)['itemFiles'],
+          'image',
+          registry
+        );
+      }
+
+      if (videos && typeof videos === 'object') {
+        this.scanGeneratedAssetMap(
+          projectDir,
+          workflowProject,
+          (videos as Record<string, unknown>)['itemFiles'],
+          'video',
+          registry
+        );
       }
     }
   }
@@ -225,7 +368,9 @@ export class AssetScanner {
 
           // Only add if not already in registry
           const existingAsset = Array.from(registry.assets.values()).find(
-            a => a.path === filePath
+            a =>
+              a.artifactTypeId === artifactType &&
+              a.path === this.normalizeProjectPath(projectDir, filePath)
           );
           if (existingAsset) {
             continue;
@@ -237,11 +382,11 @@ export class AssetScanner {
             id: `detected_${artifactType}_${itemId}`,
             artifactTypeId: artifactType,
             itemId,
-            path: filePath,
+            path: this.normalizeProjectPath(projectDir, filePath),
             source: 'detected',
             registeredAt: Date.now(),
           };
-          registry.assets.set(asset.id, asset);
+          this.registerAsset(registry, asset);
 
           // Update satisfaction
           this.updateSatisfaction(artifactType, registry);
@@ -266,14 +411,6 @@ export class AssetScanner {
       return;
     }
 
-    // Map filename patterns to artifact types
-    const PROMPT_FILE_PATTERNS: Array<{ suffix: string; artifactType: string }> = [
-      { suffix: '.prompt.md', artifactType: 'scene_image_prompt' },
-      { suffix: '.motion.json', artifactType: 'scene_video_prompt' },
-      { suffix: '.motion.md', artifactType: 'scene_video_prompt' },
-      { suffix: '.profile.md', artifactType: 'character' },
-    ];
-
     // Recursively walk prompts/ directory
     const walkDir = (dir: string): void => {
       try {
@@ -283,25 +420,25 @@ export class AssetScanner {
           if (entry.isDirectory()) {
             walkDir(fullPath);
           } else if (entry.isFile()) {
-            for (const pattern of PROMPT_FILE_PATTERNS) {
-              if (entry.name.endsWith(pattern.suffix)) {
-                const itemId = entry.name.replace(pattern.suffix, '');
-                const assetId = `detected_${pattern.artifactType}_${itemId}`;
-
-                // Only add if not already in registry
-                if (!registry.assets.has(assetId)) {
-                  registry.assets.set(assetId, {
-                    id: assetId,
-                    artifactTypeId: pattern.artifactType,
-                    itemId,
-                    path: fullPath,
-                    source: 'detected',
-                    registeredAt: Date.now(),
-                  });
-                }
-                break;
-              }
+            const relativePath = this.normalizeProjectPath(projectDir, fullPath);
+            if (!relativePath) {
+              continue;
             }
+            const artifactType = this.inferTrackedArtifactType(relativePath);
+            if (!artifactType || !this.template.artifactTypes[artifactType]) {
+              continue;
+            }
+
+            const itemId = this.itemIdFromPath(relativePath);
+            this.registerAsset(registry, {
+              id: `detected_${artifactType}_${itemId}`,
+              artifactTypeId: artifactType,
+              itemId,
+              path: relativePath,
+              source: 'detected',
+              registeredAt: Date.now(),
+            });
+            this.updateSatisfaction(artifactType, registry);
           }
         }
       } catch {
@@ -321,7 +458,7 @@ export class AssetScanner {
       issues.push({
         type: 'error',
         message: 'CRITICAL: timeline.json is missing. This file is required for video assembly. Call manage_timeline with action "create_skeleton" to create it from your segments before proceeding to video assembly.',
-        location: timelinePath,
+        location: this.normalizeProjectPath(projectDir, timelinePath),
       });
       return;
     }
@@ -333,7 +470,7 @@ export class AssetScanner {
         issues.push({
           type: 'error',
           message: 'CRITICAL: timeline.json is empty or contains a blank object. Call manage_timeline with action "create_skeleton" to recreate it.',
-          location: timelinePath,
+          location: this.normalizeProjectPath(projectDir, timelinePath),
         });
         return;
       }
@@ -344,7 +481,7 @@ export class AssetScanner {
         issues.push({
           type: 'error',
           message: 'CRITICAL: timeline.json is corrupted (missing version). Call manage_timeline with action "create_skeleton" to recreate it.',
-          location: timelinePath,
+          location: this.normalizeProjectPath(projectDir, timelinePath),
         });
         return;
       }
@@ -353,7 +490,7 @@ export class AssetScanner {
         issues.push({
           type: 'error',
           message: 'CRITICAL: timeline.json has no totalDuration. Call manage_timeline with action "create_skeleton" to recreate it with the correct duration.',
-          location: timelinePath,
+          location: this.normalizeProjectPath(projectDir, timelinePath),
         });
         return;
       }
@@ -362,7 +499,7 @@ export class AssetScanner {
         issues.push({
           type: 'error',
           message: 'CRITICAL: timeline.json has no segments. Call manage_timeline with action "create_skeleton" to recreate it from your project segments.',
-          location: timelinePath,
+          location: this.normalizeProjectPath(projectDir, timelinePath),
         });
         return;
       }
@@ -377,14 +514,14 @@ export class AssetScanner {
         issues.push({
           type: 'warning',
           message: `timeline.json has ${emptyCount}/${timeline.segments.length} segments without content. Use manage_timeline with action "update_segment" to fill them with visual assets before assembly.`,
-          location: timelinePath,
+          location: this.normalizeProjectPath(projectDir, timelinePath),
         });
       }
     } catch {
       issues.push({
         type: 'error',
         message: 'CRITICAL: timeline.json contains invalid JSON. Call manage_timeline with action "create_skeleton" to recreate it.',
-        location: timelinePath,
+        location: this.normalizeProjectPath(projectDir, timelinePath),
       });
     }
   }
@@ -445,6 +582,268 @@ export class AssetScanner {
       source: 'user_provided',
       registeredAt: Date.now(),
     };
+  }
+
+  private scanTrackedFiles(
+    projectDir: string,
+    files: Array<Record<string, unknown>>,
+    registry: AssetRegistry
+  ): void {
+    for (const file of files) {
+      const filePath = typeof file['path'] === 'string' ? file['path'] : undefined;
+      if (!filePath) {
+        continue;
+      }
+
+      const relativePath = this.normalizeProjectPath(projectDir, filePath);
+      if (!relativePath) {
+        continue;
+      }
+      const artifactType =
+        this.inferTrackedArtifactType(relativePath, typeof file['type'] === 'string' ? file['type'] : undefined);
+      if (!artifactType || !this.template.artifactTypes[artifactType]) {
+        continue;
+      }
+
+      const itemId =
+        typeof file['name'] === 'string' && file['name'].trim().length > 0
+          ? file['name']
+          : this.itemIdFromPath(relativePath);
+
+      this.registerAsset(registry, {
+        id: `tracked_${artifactType}_${this.sanitizeAssetKey(itemId)}`,
+        artifactTypeId: artifactType,
+        itemId,
+        path: relativePath,
+        source: 'detected',
+        registeredAt: Date.now(),
+      });
+      this.updateSatisfaction(artifactType, registry);
+    }
+  }
+
+  private scanPromptMetadata(
+    projectDir: string,
+    items: Array<Record<string, unknown>>,
+    kind: 'character' | 'setting',
+    registry: AssetRegistry
+  ): void {
+    for (const item of items) {
+      const promptPath = typeof item['imagePromptPath'] === 'string' ? item['imagePromptPath'] : undefined;
+      if (!promptPath) {
+        continue;
+      }
+
+      const relativePath = this.normalizeProjectPath(projectDir, promptPath);
+      if (!relativePath) {
+        continue;
+      }
+      const artifactType = this.inferTrackedArtifactType(relativePath);
+      if (!artifactType || !this.template.artifactTypes[artifactType]) {
+        continue;
+      }
+
+      this.registerAsset(registry, {
+        id: `tracked_${artifactType}_${this.sanitizeAssetKey(
+          typeof item['name'] === 'string' ? item['name'] : kind
+        )}`,
+        artifactTypeId: artifactType,
+        itemId: typeof item['name'] === 'string' ? item['name'] : kind,
+        path: relativePath,
+        source: 'detected',
+        registeredAt: Date.now(),
+      });
+      this.updateSatisfaction(artifactType, registry);
+    }
+  }
+
+  private scanGeneratedAssetMap(
+    projectDir: string,
+    project: GenericProjectFile & Record<string, unknown>,
+    itemFiles: unknown,
+    kind: 'image' | 'video',
+    registry: AssetRegistry
+  ): void {
+    if (!itemFiles || typeof itemFiles !== 'object') {
+      return;
+    }
+
+    for (const [assetId, rawPath] of Object.entries(itemFiles as Record<string, unknown>)) {
+      if (typeof rawPath !== 'string') {
+        continue;
+      }
+
+      const relativePath = this.normalizeProjectPath(projectDir, rawPath);
+      if (!relativePath) {
+        continue;
+      }
+      const artifactType = this.inferGeneratedAssetType(project, assetId, relativePath, kind);
+      if (!artifactType || !this.template.artifactTypes[artifactType]) {
+        continue;
+      }
+
+      this.registerAsset(registry, {
+        id: assetId,
+        artifactTypeId: artifactType,
+        itemId: this.itemIdFromPath(relativePath),
+        path: relativePath,
+        source: 'previously_generated',
+        registeredAt: Date.now(),
+      });
+      this.updateSatisfaction(artifactType, registry);
+    }
+  }
+
+  private inferGeneratedAssetType(
+    project: GenericProjectFile & Record<string, unknown>,
+    assetId: string,
+    relativePath: string,
+    kind: 'image' | 'video'
+  ): string | null {
+    if (kind === 'image') {
+      const characters = Array.isArray(project.characters)
+        ? (project.characters as Array<Record<string, unknown>>)
+        : [];
+      for (const character of characters) {
+        if (
+          character['referenceImageId'] === assetId ||
+          character['referenceImagePath'] === relativePath
+        ) {
+          return 'character_image';
+        }
+      }
+
+      const settings = Array.isArray(project.settings)
+        ? (project.settings as Array<Record<string, unknown>>)
+        : [];
+      for (const setting of settings) {
+        if (
+          setting['referenceImageId'] === assetId ||
+          setting['referenceImagePath'] === relativePath
+        ) {
+          return 'setting_image';
+        }
+      }
+
+      const scenes = Array.isArray(project.scenes)
+        ? (project.scenes as Array<Record<string, unknown>>)
+        : [];
+      for (const scene of scenes) {
+        if (scene['imageArtifactId'] === assetId || scene['imagePath'] === relativePath) {
+          return 'scene_image';
+        }
+      }
+
+      const filename = path.basename(relativePath).toLowerCase();
+      if (filename.includes('charref')) return 'character_image';
+      if (filename.includes('settingref')) return 'setting_image';
+      return 'scene_image';
+    }
+
+    const scenes = Array.isArray(project.scenes)
+      ? (project.scenes as Array<Record<string, unknown>>)
+      : [];
+    for (const scene of scenes) {
+      if (scene['videoArtifactId'] === assetId || scene['videoPath'] === relativePath) {
+        return 'scene_video';
+      }
+    }
+
+    return path.basename(relativePath).toLowerCase().includes('final')
+      ? 'final_video'
+      : 'scene_video';
+  }
+
+  private inferTrackedArtifactType(relativePath: string, explicitType?: string): string | null {
+    const normalized = relativePath.replace(/\\/g, '/');
+
+    if (explicitType) {
+      switch (explicitType) {
+        case 'plot':
+        case 'story':
+        case 'scene':
+        case 'character':
+        case 'setting':
+        case 'scene_image_prompt':
+        case 'scene_video_prompt':
+        case 'shot_image_prompt':
+          return explicitType;
+        case 'character_image_prompt':
+        case 'setting_image_prompt':
+          return null;
+      }
+    }
+
+    if (/^prompts\/images\/shots\/.+\.prompt\.md$/i.test(normalized)) {
+      return 'shot_image_prompt';
+    }
+    if (/^prompts\/images\/scenes\/.+\.prompt\.md$/i.test(normalized)) {
+      return 'scene_image_prompt';
+    }
+    if (/^prompts\/videos\/scenes\/.+\.motion\.(json|md)$/i.test(normalized)) {
+      return 'scene_video_prompt';
+    }
+    if (/^prompts\/images\/(characters|settings)\/.+\.prompt\.md$/i.test(normalized)) {
+      return null;
+    }
+    if (/^characters\/.+\.profile\.md$/i.test(normalized)) {
+      return 'character';
+    }
+    if (/^settings\/.+\.profile\.md$/i.test(normalized)) {
+      return 'setting';
+    }
+    if (/^plans\/plot\.md$/i.test(normalized)) {
+      return 'plot';
+    }
+    if (/^plans\/story\.md$/i.test(normalized) || /^plans\/chapters\/.+\.story\.md$/i.test(normalized)) {
+      return 'story';
+    }
+    if (/^plans\/scenes\/.+\.md$/i.test(normalized) || /^scenes\/.+\.md$/i.test(normalized)) {
+      return 'scene';
+    }
+
+    return null;
+  }
+
+  private registerAsset(registry: AssetRegistry, asset: ProvidedAsset): void {
+    const duplicate = Array.from(registry.assets.values()).find(
+      existing =>
+        existing.artifactTypeId === asset.artifactTypeId &&
+        existing.path &&
+        asset.path &&
+        existing.path === asset.path
+    );
+    if (duplicate) {
+      return;
+    }
+    registry.assets.set(asset.id, asset);
+  }
+
+  private normalizeProjectPath(projectDir: string, candidate?: string): string | undefined {
+    if (!candidate) {
+      return undefined;
+    }
+
+    const root = path.resolve(projectDir);
+    const resolved = path.isAbsolute(candidate) ? path.resolve(candidate) : path.resolve(root, candidate);
+    const relative = path.relative(root, resolved);
+    if (relative && !relative.startsWith('..') && !path.isAbsolute(relative)) {
+      return relative.split(path.sep).join('/');
+    }
+    return candidate;
+  }
+
+  private itemIdFromPath(filePath: string): string {
+    const filename = path.basename(filePath);
+    return filename
+      .replace(/\.motion\.(json|md)$/i, '')
+      .replace(/\.prompt\.md$/i, '')
+      .replace(/\.profile\.md$/i, '')
+      .replace(/\.[^.]+$/i, '');
+  }
+
+  private sanitizeAssetKey(value: string): string {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'main';
   }
 
   /**

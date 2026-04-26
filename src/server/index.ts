@@ -2,6 +2,7 @@
  * kshana-ink server entry point.
  * Creates a Fastify server with HTTP and WebSocket support.
  */
+import { createRequire } from 'module';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyCors from '@fastify/cors';
@@ -9,6 +10,29 @@ import { registerRoutes, type RouteOptions } from './routes.js';
 import { resetLLMLogger } from '../core/llm/index.js';
 import type { ConversationManager } from './ConversationManager.js';
 import type { WebSocketHandler } from './WebSocketHandler.js';
+
+const runtimeRequire =
+  typeof require === 'function' ? require : createRequire(import.meta.url);
+
+function createLoggerConfig() {
+  try {
+    runtimeRequire.resolve('pino-pretty');
+    return {
+      level: 'info',
+      transport: {
+        target: 'pino-pretty',
+        options: {
+          translateTime: 'HH:MM:ss Z',
+          ignore: 'pid,hostname',
+        },
+      },
+    };
+  } catch {
+    return {
+      level: 'info',
+    };
+  }
+}
 
 export interface ServerConfig {
   host?: string;
@@ -45,16 +69,7 @@ export async function createServer(
 
   // Create Fastify instance
   const app = Fastify({
-    logger: {
-      level: 'info',
-      transport: {
-        target: 'pino-pretty',
-        options: {
-          translateTime: 'HH:MM:ss Z',
-          ignore: 'pid,hostname',
-        },
-      },
-    },
+    logger: createLoggerConfig(),
     bodyLimit: 50 * 1024 * 1024, // 50MB for file uploads
   });
 

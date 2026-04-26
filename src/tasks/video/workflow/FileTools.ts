@@ -3,8 +3,6 @@
  * These tools allow agents to read/write project files and manage project state.
  */
 
-import { existsSync, readdirSync, statSync } from 'fs';
-import { join } from 'path';
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
 import {
@@ -74,6 +72,7 @@ import {
 } from './types.js';
 // read_file is imported from the canonical source — single definition for the entire system
 import { readFileTool } from '../../../core/tools/builtin/contentCreatorTools.js';
+import { listProjectTree, projectDirExists, readProjectText } from './projectFileIO.js';
 export { readFileTool };
 
 /**
@@ -82,57 +81,58 @@ export { readFileTool };
  */
 const EXCLUDED_DIRECTORIES = ['flows', 'logs', '.git'];
 
-/**
- * Helper function to recursively list files in a directory
- */
-function listDirectoryContents(
-  dirPath: string,
-  basePath: string,
-  depth: number = 0,
-  maxDepth: number = 3
-): Array<{ path: string; type: 'file' | 'directory'; size?: number }> {
-  const results: Array<{ path: string; type: 'file' | 'directory'; size?: number }> = [];
-
-  if (depth > maxDepth || !existsSync(dirPath)) {
-    return results;
+function normalizeProjectFilePath(filePath: string): string | null {
+  const normalized = filePath.trim().replace(/\\/g, '/').replace(/^\.\/+/, '');
+  if (!normalized || normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
+    return null;
   }
+  return normalized;
+}
 
-  try {
-    const entries = readdirSync(dirPath);
+function collectTrackedAssetPaths(project: ProjectFile | null): string[] {
+  const paths = new Set<string>();
 
-    for (const entry of entries) {
-      // Skip excluded directories
-      if (EXCLUDED_DIRECTORIES.includes(entry)) {
-        continue;
-      }
-
-      const fullPath = join(dirPath, entry);
-      const relativePath = fullPath.replace(basePath + '/', '');
-
-      try {
-        const stats = statSync(fullPath);
-
-        if (stats.isDirectory()) {
-          results.push({ path: relativePath + '/', type: 'directory' });
-          // Recurse into subdirectories
-          const subResults = listDirectoryContents(fullPath, basePath, depth + 1, maxDepth);
-          results.push(...subResults);
-        } else if (stats.isFile()) {
-          results.push({
-            path: relativePath,
-            type: 'file',
-            size: stats.size,
-          });
-        }
-      } catch {
-        // Skip files we can't stat
-      }
+  const addPath = (value: unknown) => {
+    if (typeof value !== 'string') {
+      return;
     }
-  } catch {
-    // Skip directories we can't read
+    const normalized = normalizeProjectFilePath(value);
+    if (normalized) {
+      paths.add(normalized);
+    }
+  };
+
+  const registry = project?.content ?? {};
+  for (const entry of Object.values(registry)) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const itemFiles = (entry as { itemFiles?: Record<string, string> }).itemFiles;
+    if (!itemFiles) {
+      continue;
+    }
+
+    for (const filePath of Object.values(itemFiles)) {
+      addPath(filePath);
+    }
   }
 
-  return results;
+  const manifestContent = readProjectText('assets/manifest.json');
+  if (manifestContent) {
+    try {
+      const manifest = JSON.parse(manifestContent) as {
+        assets?: Array<{ path?: string }>;
+      };
+      for (const asset of manifest.assets ?? []) {
+        addPath(asset.path);
+      }
+    } catch {
+      // Ignore malformed manifest content and fall back to tracked project paths.
+    }
+  }
+
+  return Array.from(paths).sort((a, b) => a.localeCompare(b));
 }
 
 /**
@@ -167,7 +167,7 @@ This is the primary way to find available project content.`,
     const includeSizes = args['include_sizes'] === true;
     const projectDir = getProjectDir();
 
-    if (!existsSync(projectDir)) {
+    if (!projectDirExists()) {
       return {
         status: 'no_project',
         content:
@@ -179,7 +179,25 @@ This is the primary way to find available project content.`,
     }
 
     // Get all files recursively
-    const allFiles = listDirectoryContents(projectDir, projectDir);
+    const allFiles = listProjectTree({
+      maxDepth: 3,
+      excludeDirectories: EXCLUDED_DIRECTORIES,
+    });
+    const trackedAssetPaths = collectTrackedAssetPaths(loadProject());
+    const knownPaths = new Set(allFiles.map(file => file.path));
+
+    for (const assetPath of trackedAssetPaths) {
+      if (knownPaths.has(assetPath)) {
+        continue;
+      }
+      allFiles.push({
+        path: assetPath,
+        type: 'file',
+      });
+      knownPaths.add(assetPath);
+    }
+
+    allFiles.sort((a, b) => a.path.localeCompare(b.path));
 
     // Categorize files by type
     const categorized: Record<string, string[]> = {
@@ -283,7 +301,7 @@ This is the primary way to find available project content.`,
     return {
       status: 'success',
       content, // This field is displayed in the UI
-      project_directory: 'project/',
+      project_directory: projectDir,
       total_files: fileList.length,
       files: fileList,
       usage_hint:
@@ -578,6 +596,17 @@ export const updateProjectTool: ToolDefinition = createTool(
           let originalInput = data['original_input'] as string;
           if (!originalInput) {
             return { status: 'error', error: 'original_input is required for create action' };
+          }
+
+          const existingProject = loadProject();
+          if (existingProject) {
+            return {
+              status: 'success',
+              message: 'Project already exists',
+              project_id: existingProject.id,
+              current_phase: existingProject.currentPhase,
+              already_exists: true,
+            };
           }
 
           const project = createProject(originalInput);

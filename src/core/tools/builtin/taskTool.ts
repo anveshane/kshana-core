@@ -39,7 +39,12 @@ Subagents use read_project() and read_file() to discover and fetch context from 
 - **character**: Character profile
 - **setting**: Location description
 - **scene**: Visual scene description
-- **narration**: Voice-over text`,
+- **narration**: Voice-over text
+- **character_image_prompt**: Character reference image prompt
+- **setting_image_prompt**: Setting reference image prompt
+- **scene_image_prompt**: Scene image prompt
+- **scene_video_prompt**: Scene motion/video prompt
+- **shot_image_prompt**: Shot-level image prompt`,
   {
     type: 'object',
     properties: {
@@ -53,7 +58,7 @@ Subagents use read_project() and read_file() to discover and fetch context from 
       },
       content_type: {
         type: 'string',
-        description: 'For content-creator: type of content to generate (plot, story, character, setting, scene, narration)',
+        description: 'For content-creator: type of content to generate (plot, story, character, setting, scene, narration, character_image_prompt, setting_image_prompt, scene_image_prompt, scene_video_prompt, shot_image_prompt)',
       },
       output_file: {
         type: 'string',

@@ -6,6 +6,11 @@
 import 'dotenv/config';
 import { createServer } from './index.js';
 import { getLLMConfig, getLLMProvider, validateLLMConfig } from '../core/llm/index.js';
+import {
+  captureAppStarted,
+  registerPostHogShutdownHandlers,
+  setCommonProperties,
+} from './posthog.js';
 
 import type { ServerMode } from './WebSocketHandler.js';
 
@@ -120,6 +125,10 @@ Examples:
 // Main
 async function main(): Promise<void> {
   const { host, port, help, provider, mode } = parseArgs();
+  const appVersion = process.env['npm_package_version'] ?? '0.1.0';
+  setCommonProperties('server', appVersion);
+  captureAppStarted('server');
+  registerPostHogShutdownHandlers();
 
   if (help) {
     printHelp();

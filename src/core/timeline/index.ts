@@ -28,6 +28,8 @@ export type {
 
 // Manager functions
 export {
+  buildShotSegmentId,
+  parseShotSegmentId,
   createTimelineSkeleton,
   updateSegmentLayers,
   setSegmentCompositing,
@@ -35,6 +37,10 @@ export {
   addGlobalLayer,
   validateTimeline,
   calculateSegmentDurations,
+  getSceneShotSegments,
+  getPendingTimelineSegments,
+  getNextPendingTimelineSegment,
+  upsertSceneShots,
   loadTimeline,
   saveTimeline,
 } from './TimelineManager.js';

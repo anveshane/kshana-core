@@ -60,6 +60,13 @@ export interface ImageInfo {
   node_id?: string;
 }
 
+export interface DownloadedOutput {
+  buffer: Buffer;
+  filename: string;
+  subfolder: string;
+  type: string;
+}
+
 export interface ProgressCallback {
   (percentage: number, message: string): void | Promise<void>;
 }
@@ -78,6 +85,16 @@ export interface CompletionResult {
 }
 
 const envConfig = getComfyConfig();
+const COMFY_CLOUD_HOST = 'cloud.comfy.org';
+
+export function isComfyCloudUrl(value: string): boolean {
+  try {
+    return new URL(value).hostname.toLowerCase() === COMFY_CLOUD_HOST;
+  } catch {
+    return false;
+  }
+}
+
 const DEFAULT_CONFIG: ComfyUIClientConfig = {
   baseUrl: envConfig.baseUrl || 'http://localhost:8188',
   outputDir: './outputs',
@@ -93,6 +110,9 @@ export class ComfyUIClient {
   private outputDir: string;
   private timeout: number;
   private apiKey?: string;
+  private isCloud: boolean;
+  private cloudApiKey?: string;
+  private cloudOutputs = new Map<string, Record<string, unknown>>();
 
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
     const merged = { ...DEFAULT_CONFIG, ...config };
@@ -100,15 +120,34 @@ export class ComfyUIClient {
     this.outputDir = merged.outputDir;
     this.timeout = merged.timeout;
     this.apiKey = merged.apiKey;
+    this.isCloud = isComfyCloudUrl(this.baseUrl);
+    this.cloudApiKey = merged.apiKey;
 
-    // Ensure output directory exists
-    if (!fs.existsSync(this.outputDir)) {
-      fs.mkdirSync(this.outputDir, { recursive: true });
+    if (this.isCloud && !this.cloudApiKey) {
+      throw new Error(
+        'COMFY_CLOUD_API_KEY is required when COMFYUI_BASE_URL points to https://cloud.comfy.org',
+      );
     }
+  }
+
+  private getPath(pathname: string): string {
+    const normalized = pathname.startsWith('/') ? pathname : `/${pathname}`;
+    return this.isCloud ? `/api${normalized}` : normalized;
+  }
+
+  private buildUrl(pathname: string, searchParams?: URLSearchParams): string {
+    const url = new URL(`${this.baseUrl}${this.getPath(pathname)}`);
+    if (searchParams) {
+      url.search = searchParams.toString();
+    }
+    return url.toString();
   }
 
   /**
    * Build HTTP headers with API key auth if configured (cloud mode).
+   * Returns Record<string, string> shape (callers spread it into fetch's
+   * headers init). Driven by `this.apiKey` from config — does NOT read
+   * env directly so tests can set up clean instances.
    */
   private buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
     const headers: Record<string, string> = { ...extra };
@@ -116,6 +155,21 @@ export class ComfyUIClient {
       headers['X-API-Key'] = this.apiKey;
     }
     return headers;
+  }
+
+  /**
+   * Cloud-aware request wrapper that prepends baseUrl, applies search
+   * params, and attaches auth headers.
+   */
+  private async request(
+    pathname: string,
+    init: RequestInit = {},
+    searchParams?: URLSearchParams,
+  ): Promise<Response> {
+    return fetch(this.buildUrl(pathname, searchParams), {
+      ...init,
+      headers: { ...this.buildHeaders(), ...(init.headers as Record<string, string> | undefined) },
+    });
   }
 
   /**
@@ -155,7 +209,6 @@ export class ComfyUIClient {
       throw new Error(`Image file not found: ${filePath}`);
     }
 
-    const url = `${this.baseUrl}/upload/image`;
     const formData = new FormData();
     const fileBuffer = fs.readFileSync(filePath);
     const fileName = path.basename(filePath);
@@ -164,7 +217,7 @@ export class ComfyUIClient {
     formData.append('type', imageType);
     formData.append('overwrite', overwrite.toString());
 
-    const response = await fetch(url, {
+    const response = await this.request('/upload/image', {
       method: 'POST',
       headers: this.buildHeaders(),
       body: formData,
@@ -267,26 +320,65 @@ export class ComfyUIClient {
       }
 
       try {
-        const history = await this.getHistory(promptId);
-
-        if (history) {
-          const outputs = history.outputs || {};
-
-          if (Object.keys(outputs).length > 0) {
-            debugLog(`[waitForCompletion] Completed via outputs. Node IDs: ${Object.keys(outputs).join(', ')}`);
+        if (this.isCloud) {
+          if (await this.cloudHasOutputs(promptId)) {
+            debugLog(`[waitForCompletion] Completed via cloud history outputs for ${promptId}`);
             if (progressCallback) {
               await this.callProgressCallback(progressCallback, 100, 'Complete!');
             }
             return { status: 'completed', prompt_id: promptId };
           }
 
-          // Check status.completed or status_str === 'success'
-          if (history.status?.completed || history.status?.status_str === 'success') {
-            debugLog(`[waitForCompletion] Completed via status flag (no outputs in history). completed=${history.status?.completed}, status_str=${history.status?.status_str}, messages=${JSON.stringify(history.status?.messages?.map(m => m[0]))}`);
+          const status = await this.getCloudJobStatus(promptId);
+          debugLog(`[waitForCompletion] Cloud status for ${promptId}: ${status ?? 'unknown'}`);
+          if (status === 'completed' || status === 'done' || status === 'success') {
             if (progressCallback) {
               await this.callProgressCallback(progressCallback, 100, 'Complete!');
             }
             return { status: 'completed', prompt_id: promptId };
+          }
+          if (status === 'failed' || status === 'cancelled' || status === 'error') {
+            return { status: 'error', prompt_id: promptId };
+          }
+
+          // Fallback: check history_v2 status flags (covers VHS_VideoCombine and other
+          // nodes that don't populate history.outputs)
+          const cloudHistory = await this.getHistory(promptId);
+          if (cloudHistory?.status?.completed || cloudHistory?.status?.status_str === 'success') {
+            debugLog(
+              `[waitForCompletion] Cloud completed via history_v2 status flag. completed=${cloudHistory.status?.completed}, status_str=${cloudHistory.status?.status_str}`
+            );
+            if (progressCallback) {
+              await this.callProgressCallback(progressCallback, 100, 'Complete!');
+            }
+            // Cache any outputs found so getOutputImages can use them
+            if (cloudHistory.outputs) {
+              this.cloudOutputs.set(promptId, cloudHistory.outputs as Record<string, unknown>);
+            }
+            return { status: 'completed', prompt_id: promptId };
+          }
+        } else {
+          const history = await this.getHistory(promptId);
+
+          if (history) {
+            const outputs = history.outputs || {};
+
+            if (Object.keys(outputs).length > 0) {
+              debugLog(`[waitForCompletion] Completed via outputs. Node IDs: ${Object.keys(outputs).join(', ')}`);
+              if (progressCallback) {
+                await this.callProgressCallback(progressCallback, 100, 'Complete!');
+              }
+              return { status: 'completed', prompt_id: promptId };
+            }
+
+            // Check status.completed or status_str === 'success'
+            if (history.status?.completed || history.status?.status_str === 'success') {
+              debugLog(`[waitForCompletion] Completed via status flag (no outputs in history). completed=${history.status?.completed}, status_str=${history.status?.status_str}, messages=${JSON.stringify(history.status?.messages?.map(m => m[0]))}`);
+              if (progressCallback) {
+                await this.callProgressCallback(progressCallback, 100, 'Complete!');
+              }
+              return { status: 'completed', prompt_id: promptId };
+            }
           }
         }
       } catch (e) {
@@ -568,7 +660,15 @@ export class ComfyUIClient {
 
       ws.on('message', (raw: Buffer | string) => {
         try {
-          const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
+          const payload = typeof raw === 'string' ? raw : raw.toString();
+          const trimmed = payload.replace(/^\u0000+/, '');
+          const jsonStart = trimmed.indexOf('{');
+          if (jsonStart === -1) {
+            debugLog('[waitForCompletionWS] Skipping non-JSON WebSocket message');
+            return;
+          }
+
+          const data = JSON.parse(trimmed.slice(jsonStart));
           lastActivityTime = Date.now(); // Reset inactivity timer on valid message
           const msgType: string = data.type;
 
@@ -629,6 +729,32 @@ export class ComfyUIClient {
               } as WSProgressInfo & { done: boolean });
               finish({ status: 'completed', prompt_id: promptId });
             }
+          } else if (msgType === 'executed' && data.data) {
+            const execPromptId = data.data.prompt_id as string | undefined;
+            if (execPromptId && execPromptId !== promptId) return;
+            const nodeId = data.data.node as string | undefined;
+            const output = data.data.output as Record<string, unknown> | undefined;
+            if (nodeId && output) {
+              const currentOutputs = this.cloudOutputs.get(promptId) || {};
+              currentOutputs[nodeId] = output;
+              this.cloudOutputs.set(promptId, currentOutputs);
+              debugLog(
+                `[waitForCompletionWS] cached executed output for node=${nodeId} prompt=${promptId}`,
+              );
+            }
+            debugLog(
+              `[waitForCompletionWS] executed node=${nodeId ?? 'unknown'} prompt=${promptId}`,
+            );
+          } else if (msgType === 'execution_success' && data.data) {
+            const execPromptId = data.data.prompt_id as string | undefined;
+            if (execPromptId && execPromptId !== promptId) return;
+            debugLog(`[waitForCompletionWS] execution_success for prompt=${promptId}`);
+            progressCallback?.({
+              percentage: 100,
+              message: 'Complete!',
+              currentNode: undefined,
+            });
+            finish({ status: 'completed', prompt_id: promptId });
           } else if (msgType === 'execution_error' && data.data) {
             const execPromptId = data.data.prompt_id as string | undefined;
             if (execPromptId && execPromptId !== promptId) return;
@@ -646,6 +772,17 @@ export class ComfyUIClient {
    * Get output images from completed workflow.
    */
   async getOutputImages(promptId: string): Promise<ImageInfo[]> {
+    const cachedOutputs = this.cloudOutputs.get(promptId);
+    if (cachedOutputs) {
+      const cachedImages = this.collectOutputFiles(cachedOutputs);
+      if (cachedImages.length > 0) {
+        debugLog(
+          `[getOutputImages] Using ${cachedImages.length} cached cloud output(s) for ${promptId}`,
+        );
+        return cachedImages;
+      }
+    }
+
     const history = await this.getHistory(promptId);
     if (!history) {
       console.warn(`No history found for prompt_id=${promptId}`);
@@ -653,55 +790,9 @@ export class ComfyUIClient {
     }
 
     const outputs = history.outputs || {};
-    const images: ImageInfo[] = [];
+    const images = this.collectOutputFiles(outputs);
 
     debugLog(`[getOutputImages] prompt=${promptId} outputNodeIds=${JSON.stringify(Object.keys(outputs))}`);
-
-    for (const [nodeId, nodeOutput] of Object.entries(outputs)) {
-      const output = nodeOutput as {
-        images?: Array<{ filename: string; subfolder?: string; type?: string }>;
-        gifs?: Array<{ filename: string; subfolder?: string; type?: string }>;
-        videos?: Array<{ filename: string; subfolder?: string; type?: string }>;
-      };
-
-      debugLog(`[getOutputImages] Node ${nodeId} output keys: ${JSON.stringify(Object.keys(output))}`);
-
-      // Check for images (standard image output)
-      if (output.images) {
-        for (const img of output.images) {
-          images.push({
-            filename: img.filename,
-            subfolder: img.subfolder || '',
-            type: img.type || 'output',
-            node_id: nodeId,
-          });
-        }
-      }
-
-      // Check for gifs (VHS_VideoCombine output format)
-      if (output.gifs) {
-        for (const gif of output.gifs) {
-          images.push({
-            filename: gif.filename,
-            subfolder: gif.subfolder || '',
-            type: gif.type || 'output',
-            node_id: nodeId,
-          });
-        }
-      }
-
-      // Check for videos (alternative video output format)
-      if (output.videos) {
-        for (const video of output.videos) {
-          images.push({
-            filename: video.filename,
-            subfolder: video.subfolder || '',
-            type: video.type || 'output',
-            node_id: nodeId,
-          });
-        }
-      }
-    }
 
     // Fallback: if no outputs found via standard keys, check status messages.
     // SaveVideo nodes don't populate history.outputs but ComfyUI includes
@@ -741,12 +832,11 @@ export class ComfyUIClient {
   /**
    * Download an image from ComfyUI to local storage.
    */
-  async downloadImage(
+  async downloadOutput(
     filename: string,
     subfolder: string = '',
-    outputType: string = 'output',
-    outputFilename?: string
-  ): Promise<string> {
+    outputType: string = 'output'
+  ): Promise<DownloadedOutput> {
     const params = new URLSearchParams({
       filename,
       type: outputType,
@@ -762,11 +852,35 @@ export class ComfyUIClient {
       throw new Error(`Failed to download image: ${response.statusText}`);
     }
 
-    const buffer = await response.arrayBuffer();
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    return {
+      buffer,
+      filename,
+      subfolder,
+      type: outputType,
+    };
+  }
+
+  /**
+   * Download an image from ComfyUI to local storage.
+   */
+  async downloadImage(
+    filename: string,
+    subfolder: string = '',
+    outputType: string = 'output',
+    outputFilename?: string
+  ): Promise<string> {
+    const downloaded = await this.downloadOutput(filename, subfolder, outputType);
     const finalFilename = outputFilename || filename;
     const outputPath = path.join(this.outputDir, finalFilename);
+    const outputDir = path.dirname(outputPath);
 
-    fs.writeFileSync(outputPath, Buffer.from(buffer));
+    if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    fs.writeFileSync(outputPath, downloaded.buffer);
 
     return outputPath;
   }
@@ -784,12 +898,25 @@ export class ComfyUIClient {
     debugLog(`Starting generate_and_download | client_id=${clientId}`);
 
     // Step 1: Queue workflow
-    const promptId = await this.queueWorkflow(workflowJson, clientId);
+    const queueResult = await this.queueWorkflow(workflowJson, clientId, true);
+    const promptId = queueResult.promptId;
     debugLog(`Workflow queued | prompt_id=${promptId}`);
 
     // Step 2: Wait for completion
     try {
-      await this.waitForCompletion(promptId, progressCallback, pollInterval);
+      await this.waitForCompletionWS(
+        promptId,
+        queueResult.clientId,
+        progressCallback
+          ? async (info) => {
+              await this.callProgressCallback(
+                progressCallback,
+                info.percentage,
+                info.message,
+              );
+            }
+          : undefined,
+      );
     } catch (e) {
       if (e instanceof Error && e.message.includes('did not complete')) {
         console.warn(
@@ -801,7 +928,7 @@ export class ComfyUIClient {
     }
 
     // Step 3: Get output images
-    const images = await this.getOutputImages(promptId);
+    const images = await this.resolveOutputImages(promptId);
     if (!images.length) {
       throw new Error(`No output images found for prompt_id=${promptId}`);
     }
@@ -822,12 +949,93 @@ export class ComfyUIClient {
   // Helper methods
 
   private async getHistory(promptId: string): Promise<HistoryEntry | null> {
-    const response = await fetch(`${this.baseUrl}/history/${promptId}`, { headers: this.buildHeaders() });
+    const response = await this.request(
+      this.isCloud ? `/history_v2/${promptId}` : `/history/${promptId}`,
+    );
     if (!response.ok) {
       return null;
     }
     const history = (await response.json()) as Record<string, HistoryEntry>;
+    // Both local /history/{id} and cloud /history_v2/{id} wrap the entry under the prompt_id key
     return history[promptId] || null;
+  }
+
+  private async getCloudJobStatus(promptId: string): Promise<string | null> {
+    const response = await this.request(`/job/${promptId}/status`);
+    if (!response.ok) {
+      return null;
+    }
+    const body = (await response.json()) as { status?: string };
+    return body.status ?? null;
+  }
+
+  private async cloudHasOutputs(promptId: string): Promise<boolean> {
+    if (this.cloudOutputs.has(promptId)) {
+      const cachedOutputs = this.cloudOutputs.get(promptId);
+      if (cachedOutputs && this.collectOutputFiles(cachedOutputs).length > 0) {
+        return true;
+      }
+    }
+
+    const history = await this.getHistory(promptId);
+    if (!history) {
+      return false;
+    }
+
+    const outputs = history.outputs || {};
+    return Object.keys(outputs).length > 0;
+  }
+
+  private async resolveOutputImages(promptId: string): Promise<ImageInfo[]> {
+    const attempts = this.isCloud ? 10 : 1;
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      const images = await this.getOutputImages(promptId);
+      if (images.length > 0) {
+        return images;
+      }
+
+      if (attempt < attempts) {
+        debugLog(
+          `[resolveOutputImages] No outputs yet for ${promptId}; retry ${attempt}/${attempts - 1}`,
+        );
+        await this.sleep(1000);
+      }
+    }
+
+    return [];
+  }
+
+  private collectOutputFiles(outputs: Record<string, unknown>): ImageInfo[] {
+    const images: ImageInfo[] = [];
+
+    for (const [nodeId, nodeOutput] of Object.entries(outputs)) {
+      const output = nodeOutput as Record<string, unknown>;
+      debugLog(
+        `[getOutputImages] Node ${nodeId} output keys: ${JSON.stringify(Object.keys(output))}`,
+      );
+
+      for (const key of ['images', 'image', 'gifs', 'videos', 'video', 'audio']) {
+        const value = output[key];
+        const items = Array.isArray(value) ? value : value ? [value] : [];
+        for (const item of items) {
+          const file = item as {
+            filename?: string;
+            subfolder?: string;
+            type?: string;
+          };
+          if (!file.filename) continue;
+          images.push({
+            filename: file.filename,
+            subfolder: file.subfolder || '',
+            type: file.type || 'output',
+            node_id: nodeId,
+          });
+        }
+      }
+    }
+
+    return images;
   }
 
   private async callProgressCallback(

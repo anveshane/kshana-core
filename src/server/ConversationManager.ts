@@ -15,10 +15,28 @@ import {
   type SessionContext,
   type IFileSystem,
   runInSession,
+  runInSessionAsync,
   createLocalSession,
   createRemoteSession,
+  requireSession,
 } from '../core/fs/index.js';
-import { startTimer, stopTimer, checkpointTimer } from '../tasks/video/workflow/ProjectManager.js';
+import {
+  startTimer,
+  stopTimer,
+  checkpointTimer,
+  updateProjectAutonomousMode,
+  updateProjectConfiguration,
+  getElapsedMs,
+  loadProject,
+} from '../tasks/video/workflow/ProjectManager.js';
+import {
+  captureSessionEnded,
+  captureSessionStarted,
+  captureWorkflowCompleted,
+  captureWorkflowFailed,
+  captureWorkflowStarted,
+} from './posthog.js';
+import type { DesktopSessionCapabilities } from '../core/remote/DesktopAssemblyBroker.js';
 
 const TIMER_CHECKPOINT_INTERVAL_MS = 60_000; // Flush elapsed time to disk every 60s
 
@@ -30,8 +48,21 @@ export interface ConversationManagerConfig {
 
 export interface ConversationEvents {
   onProgress?: (sessionId: string, percentage: number, message: string) => void;
-  onToolCall?: (sessionId: string, toolName: string, args: Record<string, unknown>, agentName?: string, toolCallId?: string) => void;
-  onToolResult?: (sessionId: string, toolName: string, result: unknown, agentName?: string, toolCallId?: string) => void;
+  onToolCall?: (
+    sessionId: string,
+    toolCallId: string,
+    toolName: string,
+    args: Record<string, unknown>,
+    agentName?: string,
+  ) => void;
+  onToolResult?: (
+    sessionId: string,
+    toolCallId: string,
+    toolName: string,
+    result: unknown,
+    isError?: boolean,
+    agentName?: string,
+  ) => void;
   onTodoUpdate?: (sessionId: string, todos: ExpandableTodoItem[]) => void;
   onAgentText?: (sessionId: string, text: string, isFinal: boolean) => void;
   onQuestion?: (sessionId: string, question: string, isConfirmation: boolean, options?: Array<{ label: string; description?: string }>, autoApproveTimeoutMs?: number) => void;
@@ -75,6 +106,8 @@ interface ActiveSession {
   mode: 'local' | 'remote';
   /** Remote client filesystem (set in remote mode) */
   remoteFs?: IFileSystem;
+  /** Capabilities reported by the connected desktop client */
+  desktopCapabilities?: DesktopSessionCapabilities;
   /** Periodic timer checkpoint interval (flushes elapsedMs to disk) */
   timerCheckpointInterval?: ReturnType<typeof setInterval>;
 }
@@ -85,6 +118,13 @@ export class ConversationManager {
   private sessionTimeoutMs: number;
   private maxIterations: number;
   private cleanupInterval?: ReturnType<typeof setInterval>;
+
+  private getWorkflowName(session: ActiveSession): string {
+    const maybeName = (session.agent as unknown as { name?: unknown } | undefined)?.name;
+    return typeof maybeName === 'string' && maybeName.trim().length > 0
+      ? maybeName
+      : 'unknown';
+  }
 
   constructor(config: ConversationManagerConfig) {
     this.llmConfig = config.llmConfig;
@@ -111,6 +151,7 @@ export class ConversationManager {
     };
 
     this.sessions.set(sessionId, { state, mode, remoteFs });
+    captureSessionStarted(sessionId, new Date(now).toISOString());
 
     return state;
   }
@@ -174,11 +215,49 @@ export class ConversationManager {
     return session?.state;
   }
 
+  getSessionTimerState(sessionId: string): {
+    elapsedMs: number;
+    running: boolean;
+    completed: boolean;
+  } | null {
+    const session = this.sessions.get(sessionId);
+    if (!session?.sessionContext) {
+      return null;
+    }
+
+    try {
+      return runInSession(session.sessionContext, () => {
+        const project = loadProject();
+        return {
+          elapsedMs: getElapsedMs(),
+          running: session.state.status === 'running',
+          completed:
+            session.state.status !== 'running' && !!project?.productionCompletedAt,
+        };
+      });
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * Check if a session exists.
    */
   hasSession(sessionId: string): boolean {
     return this.sessions.has(sessionId);
+  }
+
+  /**
+   * Refresh a session's activity timestamp to keep it eligible for resume.
+   */
+  touchSession(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return false;
+    }
+
+    session.state.lastActivity = Date.now();
+    return true;
   }
 
   /**
@@ -207,6 +286,45 @@ export class ConversationManager {
     }
 
     session.remoteFs = remoteFs;
+    if (session.mode === 'remote') {
+      if (session.sessionContext) {
+        (
+          session.sessionContext as SessionContext & {
+            fs: IFileSystem;
+            mode: 'remote';
+          }
+        ).fs = remoteFs;
+      } else {
+        session.sessionContext = createRemoteSession(
+          sessionId,
+          'default.kshana',
+          remoteFs,
+        );
+      }
+    }
+    session.state.lastActivity = Date.now();
+  }
+
+  getSessionMode(sessionId: string): 'local' | 'remote' | null {
+    return this.sessions.get(sessionId)?.mode ?? null;
+  }
+
+  setDesktopCapabilities(
+    sessionId: string,
+    capabilities: DesktopSessionCapabilities,
+  ): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    session.desktopCapabilities = capabilities;
+    session.state.lastActivity = Date.now();
+  }
+
+  getDesktopCapabilities(
+    sessionId: string,
+  ): DesktopSessionCapabilities | undefined {
+    return this.sessions.get(sessionId)?.desktopCapabilities;
   }
 
   /**
@@ -217,6 +335,49 @@ export class ConversationManager {
     if (!session) return;
     session.state.autonomousMode = enabled;
     session.agent?.setAutonomousMode(enabled);
+    if (session.sessionContext) {
+      runInSession(session.sessionContext, () => {
+        updateProjectAutonomousMode(enabled);
+      });
+    }
+  }
+
+  /**
+   * Ensure project.json is present in the remote project cache so sync
+   * helpers like loadProject() can read it. No-op for local sessions.
+   */
+  async ensureRemoteProjectJsonCached(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session?.sessionContext || session.sessionContext.mode !== 'remote') {
+      return;
+    }
+
+    await runInSessionAsync(session.sessionContext, async () => {
+      try {
+        await requireSession().fs.readFile('project.json');
+      } catch {
+        // Missing or unreadable; persist may still no-op until a project exists on disk.
+      }
+    });
+  }
+
+  persistProjectConfiguration(
+    sessionId: string,
+    config: { templateId: string; style: string; duration: number; autonomousMode?: boolean },
+  ): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session?.sessionContext) {
+      return false;
+    }
+
+    return runInSession(session.sessionContext, () => {
+      return updateProjectConfiguration({
+        templateId: config.templateId,
+        style: config.style,
+        duration: config.duration,
+        autonomousMode: config.autonomousMode,
+      });
+    });
   }
 
   /**
@@ -296,6 +457,13 @@ export class ConversationManager {
         (agent as unknown as { setStopAtStage(s: string | null): void }).setStopAtStage(opts.stopAtStage);
       }
 
+      const workflowName = this.getWorkflowName(session);
+      const workflowStartedAt = Date.now();
+      captureWorkflowStarted({
+        sessionId,
+        workflowName,
+      });
+
       try {
         const result = await session.agent!.run(task);
 
@@ -313,6 +481,12 @@ export class ConversationManager {
           session.state.status = 'error';
         }
 
+        captureWorkflowCompleted({
+          sessionId,
+          workflowName,
+          durationMs: Math.max(0, Date.now() - workflowStartedAt),
+        });
+
         return result;
       } catch (error) {
         // Stop active timer + checkpoint interval on error
@@ -320,6 +494,12 @@ export class ConversationManager {
         try { stopTimer(); } catch { /* ignore */ }
         session.state.status = 'error';
         session.state.lastActivity = Date.now();
+        captureWorkflowFailed({
+          sessionId,
+          workflowName,
+          errorType: error instanceof Error ? error.name : 'unknown_error',
+          durationMs: Math.max(0, Date.now() - workflowStartedAt),
+        });
         throw error;
       } finally {
         // Always clear the stage gate — per-invocation, never persists across tasks.
@@ -441,13 +621,26 @@ export class ConversationManager {
 
     if (events.onToolCall) {
       agent.on('tool_call', (data) => {
-        events.onToolCall!(sessionId, data.toolName, data.arguments, data.agentName, data.toolCallId);
+        events.onToolCall!(
+          sessionId,
+          data.toolCallId,
+          data.toolName,
+          data.arguments,
+          data.agentName,
+        );
       });
     }
 
     if (events.onToolResult) {
       agent.on('tool_result', (data) => {
-        events.onToolResult!(sessionId, data.toolName, data.result, data.agentName, data.toolCallId);
+        events.onToolResult!(
+          sessionId,
+          data.toolCallId,
+          data.toolName,
+          data.result,
+          data.isError,
+          data.agentName,
+        );
       });
     }
 
@@ -603,6 +796,14 @@ export class ConversationManager {
   deleteSession(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
     if (session) {
+      const sessionDurationMs = Math.max(0, Date.now() - session.state.createdAt);
+      captureSessionEnded(
+        sessionId,
+        sessionDurationMs,
+        new Date(session.state.createdAt).toISOString(),
+        session.state.taskHistory.length
+      );
+
       // Cancel any running task
       if (session.abortController) {
         session.abortController.abort();

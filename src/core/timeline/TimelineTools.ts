@@ -7,7 +7,7 @@
  * Follows the single-tool-with-action pattern (like update_project).
  */
 
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import type { ToolDefinition } from '../llm/index.js';
 import type {
@@ -22,13 +22,17 @@ import type {
   TransitionType,
   CompositingTransition,
   EasingType,
+  Timeline,
 } from './types.js';
 import {
   createTimelineSkeleton,
+  getNextPendingTimelineSegment,
+  getPendingTimelineSegments,
   updateSegmentLayers,
   setSegmentCompositing,
   setSegmentTransition,
   addGlobalLayer,
+  inspectTimeline,
   validateTimeline,
   loadTimeline,
   saveTimeline,
@@ -38,7 +42,42 @@ import {
   resolveSegmentFilePaths,
   convertImageToVideo,
   assembleVideos,
+  type ResolvedSegment,
 } from './FFmpegAssembler.js';
+import {
+  desktopAssemblyBroker,
+  type TimelineAssemblyItem,
+  type TimelineAssemblyOverlayItem,
+  type TimelineAssemblyPromptOverlayCue,
+  type TimelineAssemblyRequest,
+  type TimelineAssemblyResult,
+  type TimelineAssemblyTextOverlayCue,
+} from '../remote/DesktopAssemblyBroker.js';
+
+interface ManifestAsset {
+  id: string;
+  path: string;
+}
+
+function loadManifestPathMap(projectDir: string): Map<string, string> {
+  const manifestPath = join(projectDir, 'assets', 'manifest.json');
+  if (!existsSync(manifestPath)) {
+    return new Map();
+  }
+
+  try {
+    const data = JSON.parse(readFileSync(manifestPath, 'utf-8')) as {
+      assets?: ManifestAsset[];
+    };
+    return new Map(
+      (data.assets ?? [])
+        .filter((asset): asset is ManifestAsset => typeof asset?.id === 'string' && typeof asset?.path === 'string')
+        .map((asset) => [asset.id, asset.path])
+    );
+  } catch {
+    return new Map();
+  }
+}
 
 /**
  * Context required for timeline tools.
@@ -51,8 +90,148 @@ export interface TimelineToolContext {
   getProjectDir: () => string;
   /** Returns the project style (e.g., 'anime', 'cinematic_realism', 'documentary') */
   getProjectStyle?: () => string;
+  /** Returns the current session mode for assembly routing */
+  getSessionMode?: () => 'local' | 'remote' | undefined;
+  /** Returns the current session id for desktop assembly routing */
+  getSessionId?: () => string | undefined;
   /** Marks the VIDEO_COMBINE phase as completed and saves project */
   markAssemblyComplete?: (outputPath: string, duration: number, fileSize: number) => void;
+  /** Persists a verified final video result, regardless of where it was assembled */
+  persistVerifiedFinalVideo?: (payload: {
+    outputPath: string;
+    duration: number;
+    artifactId?: string;
+  }) => void;
+}
+
+function resolveLayerPath(
+  projectDir: string,
+  filePath?: string,
+): string | undefined {
+  if (!filePath) {
+    return undefined;
+  }
+  return filePath.startsWith('/') ? filePath : join(projectDir, filePath);
+}
+
+function buildDesktopAssemblyPayload(
+  timeline: Timeline,
+  projectDir: string,
+  resolvedSegments: ResolvedSegment[],
+  outputName: string,
+): Omit<TimelineAssemblyRequest, 'requestId'> {
+  const timelineItems: TimelineAssemblyItem[] = resolvedSegments.map((segment) => ({
+    type: segment.mediaType,
+    path: segment.filePath,
+    duration: segment.duration,
+    startTime: segment.startTime,
+    endTime: segment.endTime,
+    label: segment.label,
+  }));
+
+  const audioLayers = timeline.globalLayers.filter((layer) => layer.type === 'audio');
+  const primaryAudioLayer = audioLayers[0];
+  const overlayItems: TimelineAssemblyOverlayItem[] = [];
+  const textOverlayCues: TimelineAssemblyTextOverlayCue[] = [];
+  const promptOverlayCues: TimelineAssemblyPromptOverlayCue[] = [];
+
+  for (const segment of timeline.segments) {
+    for (const layer of segment.layers) {
+      if (layer.type === 'overlay') {
+        const overlayPath = resolveLayerPath(projectDir, layer.filePath);
+        if (overlayPath) {
+          overlayItems.push({
+            path: overlayPath,
+            duration: segment.duration,
+            startTime: segment.startTime,
+            endTime: segment.endTime,
+            label: layer.label,
+          });
+        }
+
+        const cueText =
+          typeof layer.metadata?.['text'] === 'string'
+            ? layer.metadata['text']
+            : typeof layer.metadata?.['prompt'] === 'string'
+              ? layer.metadata['prompt']
+              : undefined;
+        if (cueText) {
+          textOverlayCues.push({
+            id: `${segment.id}:${layer.label}:text`,
+            startTime: segment.startTime,
+            endTime: segment.endTime,
+            text: cueText,
+            words: [],
+          });
+        }
+      }
+
+      const promptText =
+        typeof layer.metadata?.['prompt'] === 'string'
+          ? layer.metadata['prompt']
+          : undefined;
+      if (promptText) {
+        promptOverlayCues.push({
+          id: `${segment.id}:${layer.label}:prompt`,
+          startTime: segment.startTime,
+          endTime: segment.endTime,
+          text: promptText,
+        });
+      }
+    }
+  }
+
+  return {
+    projectDir,
+    timelineItems,
+    audioPath: resolveLayerPath(projectDir, primaryAudioLayer?.filePath),
+    overlayItems: overlayItems.length > 0 ? overlayItems : undefined,
+    textOverlayCues: textOverlayCues.length > 0 ? textOverlayCues : undefined,
+    promptOverlayCues: promptOverlayCues.length > 0 ? promptOverlayCues : undefined,
+    outputIntent: 'final_video',
+    outputName,
+  };
+}
+
+function validateDesktopAssemblyResult(
+  result: TimelineAssemblyResult,
+  projectDir: string,
+): { ok: true; outputPath: string; duration: number; artifactId?: string } | { ok: false; error: string } {
+  if (result.status !== 'completed') {
+    return { ok: false, error: result.error || 'Desktop final assembly failed.' };
+  }
+
+  const manifestRelativePath = result.manifestRelativePath?.trim();
+  if (!manifestRelativePath) {
+    return {
+      ok: false,
+      error: 'Desktop final assembly result did not include a manifest-relative path.',
+    };
+  }
+
+  const normalizedProjectDir = projectDir.replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalizedOutputPath = result.outputPath?.replace(/\\/g, '/').trim();
+  const expectedOutputPath = `${normalizedProjectDir}/${manifestRelativePath}`;
+  if (!normalizedOutputPath || normalizedOutputPath !== expectedOutputPath) {
+    return {
+      ok: false,
+      error: 'Desktop final assembly result returned an unexpected output path.',
+    };
+  }
+
+  if (typeof result.duration !== 'number' || !Number.isFinite(result.duration) || result.duration <= 0) {
+    return {
+      ok: false,
+      error: 'Desktop final assembly result did not include a valid duration.',
+    };
+  }
+
+  return {
+    ok: true,
+    outputPath: normalizedOutputPath,
+    duration: result.duration,
+    artifactId: result.artifactId,
+  };
 }
 
 /**
@@ -61,6 +240,46 @@ export interface TimelineToolContext {
  * Single tool with action parameter for all timeline operations.
  */
 export function createManageTimelineTool(context: TimelineToolContext): ToolDefinition {
+  const inspectCurrentTimeline = () => {
+    const projectDir = context.getProjectDir();
+    const inspection = inspectTimeline(projectDir);
+    if (!inspection) {
+      return null;
+    }
+
+    return inspection;
+  };
+
+  const loadTimelineForMutation = () => {
+    const inspected = inspectCurrentTimeline();
+    if (!inspected) {
+      return null;
+    }
+
+    if (inspected.wouldChangeOnSave) {
+      console.info(
+        `[manage_timeline] Applying timeline state before mutation; canonicalizing persisted paths`
+      );
+      saveTimeline(context.getProjectDir(), inspected.timeline);
+    }
+
+    return inspected;
+  };
+
+  const buildRepairPayload = (
+    repairResult: ReturnType<typeof inspectCurrentTimeline>
+  ) => {
+    if (!repairResult) {
+      return undefined;
+    }
+
+    return (repairResult.pathCorrections?.length ?? 0) > 0
+      ? {
+          pathCorrections: repairResult.pathCorrections,
+        }
+      : undefined;
+  };
+
   return {
     name: 'manage_timeline',
     description: `Manage the video timeline — the single source of truth for what content goes where, for how long, and how layers composite.
@@ -268,7 +487,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'layers array is required and must not be empty' };
           }
 
-          let timeline = loadTimeline(context.getProjectDir());
+          const repairResult = loadTimelineForMutation();
+          let timeline = repairResult?.timeline;
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -328,7 +548,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'global_layer is required' };
           }
 
-          let timeline = loadTimeline(context.getProjectDir());
+          const repairResult = loadTimelineForMutation();
+          let timeline = repairResult?.timeline;
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -363,7 +584,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'compositing_mode is required' };
           }
 
-          let timeline = loadTimeline(context.getProjectDir());
+          const repairResult = loadTimelineForMutation();
+          let timeline = repairResult?.timeline;
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -434,7 +656,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
         }
 
         case 'validate': {
-          const timeline = loadTimeline(context.getProjectDir());
+          const repairResult = inspectCurrentTimeline();
+          const timeline = repairResult?.timeline;
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -465,11 +688,13 @@ The timeline is saved to timeline.json in the project directory and persists acr
               imageCount,
               errors: resolution.errors,
             },
+            repair: buildRepairPayload(repairResult),
           };
         }
 
         case 'get': {
-          const timeline = loadTimeline(context.getProjectDir());
+          const repairResult = inspectCurrentTimeline();
+          const timeline = repairResult?.timeline;
           if (!timeline) {
             return {
               success: true,
@@ -482,6 +707,9 @@ The timeline is saved to timeline.json in the project directory and persists acr
             success: true,
             exists: true,
             timeline,
+            nextPendingSegment: getNextPendingTimelineSegment(timeline),
+            pendingSegments: getPendingTimelineSegments(timeline),
+            repair: buildRepairPayload(repairResult),
           };
         }
 
@@ -500,7 +728,8 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'shots array is required and must not be empty' };
           }
 
-          let timeline = loadTimeline(context.getProjectDir());
+          const repairResult = loadTimelineForMutation();
+          let timeline = repairResult?.timeline;
           if (!timeline) {
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
@@ -547,6 +776,15 @@ The timeline is saved to timeline.json in the project directory and persists acr
  * This replaces the manual artifact ID listing in stitch_videos.
  */
 export function createAssembleFromTimelineTool(context: TimelineToolContext): ToolDefinition {
+  const inspectCurrentTimeline = () => {
+    const projectDir = context.getProjectDir();
+    const inspection = inspectTimeline(projectDir);
+    if (!inspection) {
+      return null;
+    }
+    return inspection;
+  };
+
   return {
     name: 'assemble_from_timeline',
     description: `Assemble the final video from the timeline.
@@ -554,9 +792,8 @@ export function createAssembleFromTimelineTool(context: TimelineToolContext): To
 Reads timeline.json from the project directory and:
 1. Validates all segments are filled (no gaps)
 2. Resolves artifact IDs to file paths via the asset manifest
-3. Builds an assembly job based on compositing modes per segment
-4. Handles global audio layers (narration, background music)
-5. Returns a job ID for tracking via wait_for_job
+3. Routes assembly through the session-appropriate path
+4. Persists a verified final video artifact before reporting success
 
 Use this instead of manually listing artifact IDs in stitch_videos.
 The timeline must be fully validated (all segments filled) before assembly.`,
@@ -577,9 +814,12 @@ The timeline must be fully validated (all segments filled) before assembly.`,
     handler: async (params: Record<string, unknown>) => {
       const outputName = (params['output_name'] as string) ?? 'final_video';
       const projectDir = context.getProjectDir();
+      const sessionMode = context.getSessionMode?.() ?? 'local';
+      const sessionId = context.getSessionId?.();
 
       // 1. Load and validate timeline
-      const timeline = loadTimeline(projectDir);
+      const repairResult = inspectCurrentTimeline();
+      const timeline = repairResult?.timeline;
       if (!timeline) {
         return { success: false, error: 'No timeline exists. Create and populate a timeline first.' };
       }
@@ -648,7 +888,59 @@ The timeline must be fully validated (all segments filled) before assembly.`,
       // Report resolution errors as warnings if some segments resolved
       const warnings: string[] = [...resolution.errors];
 
-      // 5. Run real FFmpeg assembly
+      const useDesktopAssembly =
+        sessionMode === 'remote' &&
+        typeof sessionId === 'string' &&
+        sessionId.trim().length > 0 &&
+        desktopAssemblyBroker.canAssemble(sessionId);
+
+      if (useDesktopAssembly) {
+        let desktopResult: TimelineAssemblyResult;
+        try {
+          desktopResult = await desktopAssemblyBroker.requestTimelineAssembly(
+            sessionId!,
+            buildDesktopAssemblyPayload(timeline, projectDir, resolution.resolved, outputName),
+          );
+        } catch (err) {
+          return {
+            success: false,
+            error:
+              err instanceof Error
+                ? err.message
+                : 'Desktop final assembly failed before a result was returned.',
+            resolved_segments: resolution.resolved.length,
+            warnings: warnings.length > 0 ? warnings : undefined,
+          };
+        }
+
+        const verified = validateDesktopAssemblyResult(desktopResult, projectDir);
+        if (!verified.ok) {
+          return {
+            success: false,
+            error: verified.error,
+            resolved_segments: resolution.resolved.length,
+            warnings: warnings.length > 0 ? warnings : undefined,
+          };
+        }
+
+        context.persistVerifiedFinalVideo?.({
+          outputPath: verified.outputPath,
+          duration: verified.duration,
+          artifactId: verified.artifactId,
+        });
+
+        return {
+          success: true,
+          output_path: verified.outputPath,
+          duration: verified.duration,
+          segment_count: resolution.resolved.length,
+          warnings: warnings.length > 0 ? warnings : undefined,
+          message: `Final video assembled on desktop: ${resolution.resolved.length} segments, ` +
+            `${verified.duration.toFixed(1)}s duration. Output: ${verified.outputPath}`,
+        };
+      }
+
+      // 5. Run backend FFmpeg assembly
       const outputPath = join(projectDir, 'assets', 'videos', `${outputName}.mp4`);
       let result;
       try {
@@ -674,7 +966,7 @@ The timeline must be fully validated (all segments filled) before assembly.`,
         file_size: result.fileSize,
         segment_count: resolution.resolved.length,
         warnings: warnings.length > 0 ? warnings : undefined,
-        message: `Final video assembled: ${resolution.resolved.length} segments, ` +
+        message: `Final video assembled via backend FFmpeg: ${resolution.resolved.length} segments, ` +
           `${result.duration.toFixed(1)}s duration, ${(result.fileSize / 1024 / 1024).toFixed(1)}MB. ` +
           `Output: ${result.outputPath}`,
       };
@@ -690,6 +982,15 @@ The timeline must be fully validated (all segments filled) before assembly.`,
  * showing the segment label, time range, and prompt text.
  */
 export function createPreviewFromTimelineTool(context: TimelineToolContext): ToolDefinition {
+  const inspectCurrentTimeline = () => {
+    const projectDir = context.getProjectDir();
+    const inspection = inspectTimeline(projectDir);
+    if (!inspection) {
+      return null;
+    }
+    return inspection;
+  };
+
   return {
     name: 'preview_from_timeline',
     description: `Generate a preview from the current timeline state.
@@ -718,7 +1019,8 @@ Returns a preview manifest with segment details, and optionally an FFmpeg comman
       const resolution = (params['resolution'] as string) ?? '1280x720';
       const [width, height] = resolution.split('x').map(Number);
 
-      const timeline = loadTimeline(context.getProjectDir());
+      const repairResult = inspectCurrentTimeline();
+      const timeline = repairResult?.timeline;
       if (!timeline) {
         return { success: false, error: 'No timeline exists. Create and populate a timeline first.' };
       }

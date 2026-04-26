@@ -15,8 +15,24 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROMPTS_DIR = join(__dirname, '..', '..', '..', 'prompts');
+const currentDir =
+  typeof __dirname === 'string' ? __dirname : dirname(fileURLToPath(import.meta.url));
+
+function resolvePromptsDir(): string {
+  const candidates = [
+    // Bundled runtime: dist/server/index.cjs -> ../../prompts
+    join(currentDir, '..', '..', 'prompts'),
+    // Source/runtime from src/core/prompts -> ../../../prompts
+    join(currentDir, '..', '..', '..', 'prompts'),
+    // Fallback when launched from package root
+    join(process.cwd(), 'prompts'),
+  ];
+
+  const resolved = candidates.find((candidate) => existsSync(candidate));
+  return resolved ?? candidates[0];
+}
+
+const PROMPTS_DIR = resolvePromptsDir();
 
 const templateCache = new Map<string, string>();
 

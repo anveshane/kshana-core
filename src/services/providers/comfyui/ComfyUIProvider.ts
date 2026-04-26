@@ -12,10 +12,15 @@ import {
   loadWorkflowTemplate,
   parameterizeWorkflowByName,
   getRegistry,
+  isComfyCloudUrl,
 } from '../../comfyui/index.js';
 import type { ImageInfo } from '../../comfyui/ComfyUIClient.js';
 import { parameterizeGeneric } from '../../comfyui/WorkflowLoader.js';
 import { buildGrokEditWorkflow, type GrokResolution, type GrokAspectRatio } from './grokWorkflowBuilder.js';
+import {
+  ensureProjectPathDir,
+  writeProjectBufferAtPath,
+} from '../../../tasks/video/workflow/projectFileIO.js';
 import type {
   GenerationProvider,
   GenerationCapability,
@@ -412,8 +417,38 @@ export class ComfyUIProvider implements GenerationProvider {
       if (modeManifest) {
         const isOverride = modeManifest.isOverride && !modeManifest.builtIn;
         debugLog(`Strategy "${strategy}" → workflow: ${modeManifest.displayName} (${modeManifest.id})${isOverride ? ' [user override]' : ' [built-in]'}`);
+
+        // Strategy compatibility guard. Strategy registries can resolve a
+        // workflow even when the requested strategy isn't in the workflow's
+        // own `strategies` list (priority/pipeline-based fallback). For v2v
+        // specifically, picking a non-v2v workflow silently uploads the
+        // source video as input then fails midway through generation.
+        // Detect mismatches early.
+        const strategies: string[] | undefined = modeManifest.strategies;
+        const inputs: Array<{ id: string }> | undefined = modeManifest.inputRequirements;
+        const supportsStrategy = !strategies || strategies.includes(strategy);
+        const acceptsSourceVideo = !inputs || inputs.some(i => i.id === 'source_video');
+        if (strategy === 'v2v_extend' && !supportsStrategy) {
+          throw new Error(
+            `Workflow ${modeManifest.id} does not support requested video strategy '${strategy}'`,
+          );
+        }
+        if (strategy === 'v2v_extend' && !acceptsSourceVideo) {
+          throw new Error(
+            `Workflow ${modeManifest.id} missing inputs: source_video`,
+          );
+        }
       }
-    } catch { /* registry not available, use default */ }
+    } catch (err) {
+      // Re-raise strategy guard errors; swallow registry-not-available errors.
+      if (err instanceof Error && (
+        /does not support requested video strategy/.test(err.message) ||
+        /missing inputs:/.test(err.message)
+      )) {
+        throw err;
+      }
+      /* registry not available, use default */
+    }
 
     // Determine if this is a user-uploaded workflow or a built-in
     const hasManifestWorkflow = modeManifest && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0;
@@ -599,7 +634,7 @@ export class ComfyUIProvider implements GenerationProvider {
   private async downloadFirstOutput(
     client: ComfyUIClient,
     promptId: string,
-    _outputDir: string,
+    outputDir: string,
     mimeType: string,
     preCollectedOutputs?: ImageInfo[],
     filenamePrefix?: string,
@@ -624,20 +659,61 @@ export class ComfyUIProvider implements GenerationProvider {
     const outputFilename = parts.length > 0
       ? `${parts.join('_')}_${nanoid(6)}${ext}`
       : `${nanoid(8)}_${first.filename}`;
-    debugLog(`Downloading ${first.filename} → ${_outputDir}/${outputFilename}`);
+    debugLog(`Downloading ${first.filename} → ${outputDir}/${outputFilename}`);
 
-    const savedPath = await client.downloadImage(
+    const downloaded = await client.downloadOutput(
       first.filename,
       first.subfolder,
       first.type,
-      outputFilename,
     );
+    const savedPath = this.persistOutput(downloaded.buffer, outputDir, outputFilename);
 
     return {
       filePath: savedPath,
       mimeType,
       metadata: { promptId, comfyuiFilename: first.filename },
     };
+  }
+
+  private buildOutputFilename(
+    remoteFilename: string,
+    mimeType: string,
+    filenamePrefix?: string,
+  ): string {
+    const comfyBaseUrl = process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
+    const isCloud = isComfyCloudUrl(comfyBaseUrl);
+    if (!isCloud || !filenamePrefix?.trim()) {
+      return `${nanoid(8)}_${remoteFilename}`;
+    }
+
+    const extension = path.extname(remoteFilename) || this.extensionFromMimeType(mimeType);
+    const sanitizedPrefix = filenamePrefix.trim().replace(/[^A-Za-z0-9_-]+/g, '_');
+    return `${sanitizedPrefix}_${nanoid(8)}${extension}`;
+  }
+
+  private extensionFromMimeType(mimeType: string): string {
+    if (mimeType === 'image/png') return '.png';
+    if (mimeType === 'image/jpeg') return '.jpg';
+    if (mimeType === 'video/mp4') return '.mp4';
+    return '';
+  }
+
+  private persistOutput(
+    buffer: Buffer,
+    outputDir: string,
+    outputFilename: string,
+  ): string {
+    const outputPath = path.join(outputDir, outputFilename);
+
+    if (!ensureProjectPathDir(outputDir) && !fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
+    }
+
+    if (!writeProjectBufferAtPath(outputPath, buffer)) {
+      fs.writeFileSync(outputPath, buffer);
+    }
+
+    return outputPath;
   }
 }
 

@@ -26,7 +26,7 @@ Process:
    - `errors` — segments that have no resolvable video file
    - `imageCount` — segments with images instead of videos (invalid for anime/cinematic styles)
 3. **If gaps exist — STOP and report**: You do NOT have video generation tools in this phase. Report the specific missing segments back so the orchestrator can re-plan and return to the video generation phase to create them. List exactly which segment IDs need videos.
-4. **Only if all segments resolve**: Call `assemble_from_timeline` to run FFmpeg and produce the final video
+4. **Only if all segments resolve**: Call `assemble_from_timeline` to produce the final video via the session-appropriate assembly path
 5. Present final video to user for approval
 
 ## Motion Types
@@ -43,15 +43,10 @@ Based on scene content, suggest appropriate motion:
 
 1. **Analyze scene** - Review scene description and image
 2. **Determine motion** - Choose appropriate camera movement
-3. **Submit job** - Call `generate_video` tool with the scene image and motion parameters
-4. **Wait for completion** - Call `wait_for_job` with the returned job_id
-5. **Report result** - Only after `wait_for_job` returns success, report the artifact ID
+3. **Generate the clip** - Call `generate_video_from_image` with the approved shot image, motion prompt file, shot duration, and `segment_id`
+4. **Report result** - The tool blocks until completion and returns the artifact ID directly
 
-**CRITICAL**: Your task is NOT complete until `wait_for_job` returns with status "completed".
-- After calling `generate_video`, you will receive a job_id
-- You MUST call `wait_for_job(job_id)` and wait for it to return
-- Do NOT mark your task as done immediately after submitting - you must wait for the actual video to be generated
-- Video generation can take several minutes - `wait_for_job` will poll ComfyUI until it's done
+**CRITICAL**: `generate_video_from_image` already waits for ComfyUI to finish. Do not call `wait_for_job` after it.
 
 ## IMPORTANT: Tool Usage
 
@@ -59,37 +54,32 @@ You MUST use tools to generate videos - do NOT just output text recommendations.
 
 **Required workflow:**
 
-1. Call `generate_video` tool (or `generate_video_from_image` / `generate_video_from_frames`).
+1. Call `generate_video_from_image`.
    **Always pass `segment_id`** to auto-link the video to the timeline segment — this eliminates the need for a separate `manage_timeline(update_segment)` call:
    ```
    generate_video_from_image({
+     shot_image_artifact_id: "artifact-id-from-shot-image",
      scene_number: 1,
-     image_artifact_id: "artifact-id-from-scene-image",
-     motion_type: "pan_left", // or static, pan_right, zoom_in, zoom_out, camera_follow
-     motion_strength: 0.5,
+     shot_number: 1,
+     motion_prompt_file: "prompts/videos/scenes/scene-1.motion.json",
      duration: 5,
-     segment_id: "segment_0_shot_0" // auto-updates timeline segment
+     segment_id: "segment_0_shot_1"
    })
    ```
 
-2. The tool will return a `job_id` - you MUST then call:
-   ```
-   wait_for_job({ job_id: "the-returned-job-id" })
-   ```
-
-3. Only after `wait_for_job` returns with `status: "completed"` is your task done.
+2. The tool returns only after the clip is completed and the timeline segment has been updated.
 
 **CRITICAL RULES:**
 - Do NOT output just text specifications - you must call the tools
-- Do NOT mark your task complete after just submitting - wait for the job
-- Do NOT skip the `wait_for_job` step - the video takes time to generate
+- Do NOT omit `duration` when the approved shot JSON already defines it
+- Do NOT omit `segment_id` for per-shot generation
 - Video generation typically takes 2-10 minutes depending on complexity
 
 ## After Successful Assembly
 
 When `assemble_from_timeline` returns `success: true`:
-- The final video asset is automatically registered in the manifest
-- The VIDEO_COMBINE phase is automatically marked as completed
+- The final video artifact has been persisted and registered in the manifest
+- The VIDEO_COMBINE phase has been marked as completed
 - Report the result back: output path, duration, file size
 
 ## What You Do NOT Do

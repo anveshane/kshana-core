@@ -133,11 +133,11 @@ manage_timeline(
 The timeline.json is the **communication bridge between server and client**. The client uses it to display the video timeline UI showing what segments exist, what has been generated, and what remains. Without it, the user sees no progress structure.
 
 **Rules:**
-- Create the timeline as early as possible — right after scenes exist
+- The backend now creates the timeline as early as possible — right after scenes exist
 - Do NOT wait until video generation or assembly phase
 - Every video project MUST have a timeline, regardless of template
-- After generating each asset (image, video), call `update_segment` to reflect progress
-- On session resume: if scenes exist but no timeline.json, create it immediately
+- After generating each asset (image, video), update the matching segment if the generation tool does not do it automatically
+- On session resume: before any timeline repair, always call `manage_timeline(action: "get")` to verify the current root timeline state. Only create or recreate the timeline if that fresh check shows the root `timeline.json` is actually missing or invalid.
 
 ---
 
@@ -171,7 +171,7 @@ Do not attempt off-topic tasks even if you technically have tools that could par
 3. **Respect Existing Work** — Never overwrite approved content without explicit permission.
 4. **Expensive Operations Need Approval** — Always confirm before image/video generation via `AskUserQuestion`.
 5. **Be Conversational** — You're working with the user, not executing a script.
-6. **Timeline First** — For any video project, create the timeline skeleton (`manage_timeline` → `create_skeleton`) as soon as scenes/segments are known. The client UI depends on timeline.json to show progress. Never defer timeline creation to assembly.
+6. **Timeline First** — For any video project, scenes and approved motion prompts should create/update timeline.json automatically. Use `manage_timeline` manually only as a repair/debug tool when the automatic path is missing or out of sync.
 
 ### Behavioral Rules
 
@@ -211,14 +211,14 @@ When generating scene videos, each scene is broken into 2-4 cinematic shots. Eac
 For each scene:
   1. Generate multi-shot motion prompt → scene_video_prompt (produces shots breakdown)
   2. User approves the shot breakdown
-  3. Split timeline segment → manage_timeline(action: "split_segment", ...)
+  3. The backend splits the matching timeline scene into shot segments automatically
   4. For each shot in the breakdown:
      a. Check: Does the shot reference characters? → Do character reference images exist?
      b. Check: Does the shot reference settings? → Do setting reference images exist?
      c. If refs exist → Generate shot image prompt → generate_content(content_type: "shot_image_prompt", scene_number: N, shot_number: M)
      d. User approves the shot image prompt
      e. Generate shot image → generate_image(prompt_file: "prompts/images/shots/scene-N-shot-M.prompt.md")
-     f. Generate shot video → generate_video_from_image(shot_image_artifact_ids: {"M": "<artifact_id>"})
+     f. Generate shot video → generate_video_from_image(shot_image_artifact_id: "<artifact_id>", scene_number: N, shot_number: M, motion_prompt_file: "prompts/videos/scenes/scene-N.motion.json", duration: <shot.duration>, segment_id: "segment_N_shot_M")
 ```
 
 ### Per-Shot Image Composition
@@ -256,25 +256,24 @@ Before generating any shot image, verify:
 
 ```
 generate_video_from_image(
-  scene_image_artifact_id: "<fallback scene image>",
-  shot_image_artifact_ids: {
-    "1": "<establishing shot image artifact>",
-    "2": "<close-up shot image artifact>",
-    "3": "<reaction shot image artifact>"
-  },
+  shot_image_artifact_id: "<single shot image artifact>",
   motion_prompt_file: "prompts/videos/scenes/scene-N.motion.json",
-  scene_number: N
+  scene_number: N,
+  shot_number: M,
+  duration: <approved shot duration from scene-motion.json>,
+  segment_id: "segment_N_shot_M"
 )
 ```
 
-Each shot uses its own per-shot image. The `scene_image_artifact_id` serves as fallback for any shot without a specific image.
+Call this once per shot. Each shot uses exactly one approved shot image, the matching shot number from the motion JSON, the approved shot duration, and the matching timeline `segment_id`.
 
 ### Timeline Integration
 
 After the multi-shot breakdown is approved:
-1. `manage_timeline(action: "split_segment", segment_id: "segment_N", shots: [...])`
-2. For each shot, pass `segment_id: "segment_N_shot_M"` to `generate_video_from_image` — the timeline segment is auto-updated after successful generation (no separate `update_segment` call needed)
-3. Use `preview_from_timeline` to see the structure with placeholders before all clips are ready
+1. The backend splits the scene into `segment_N_shot_M` entries automatically from the approved motion JSON
+2. For each shot, pass `shot_image_artifact_id`, `scene_number`, `shot_number`, `motion_prompt_file`, `duration`, and `segment_id: "segment_N_shot_M"` to `generate_video_from_image`
+3. The timeline segment is auto-updated after each successful shot generation, so the desktop timeline refreshes incrementally without a separate `update_segment` call
+4. Use `manage_timeline` manually only if the timeline needs inspection or repair
 
 ---
 
@@ -303,8 +302,9 @@ After the multi-shot breakdown is approved:
 - Read persisted goal from project state
 - `scan_assets` → `create_backward_plan` with persisted goal
 - If `projectComplete: true` → inform user, await instructions
-- If steps remain → check if timeline.json exists (call `manage_timeline(action: "get")`). If missing but scenes exist, create it immediately with `create_skeleton`
-- Resume from earliest incomplete step
+- If steps remain → check if timeline.json exists (call `manage_timeline(action: "get")`). If missing but scenes exist, treat it as a repair case and create it immediately with `create_skeleton`
+- If timeline exists → use `nextPendingSegment` / `pendingSegments` from `manage_timeline(action: "get")` as the authoritative resume checkpoint
+- Resume from the earliest incomplete timeline segment, not from scanned file recency or chat history
 
 ### "Redo scene 3" / "That clip looks wrong" (after assembly)
 - The user wants to regenerate specific clips after seeing the final video

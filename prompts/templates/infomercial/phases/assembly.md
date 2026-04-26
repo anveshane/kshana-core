@@ -32,7 +32,7 @@ If there are resolution errors or image-only segments:
 - The orchestrator must re-plan and return to clip generation
 
 ### Step 3: Assemble (only when all segments have videos)
-Call `assemble_from_timeline` to run FFmpeg concat and produce the final video.
+Call `assemble_from_timeline` to produce the final video via the session-appropriate assembly path.
 
 ### Step 4: Review Result
 Check the returned `output_path`, `duration`, `file_size`, and any `warnings`. Verify total duration matches target.
@@ -89,7 +89,7 @@ Match target duration to:
 
 ## After Successful Assembly
 
-When `assemble_from_timeline` returns `success: true`, the final video asset is automatically registered and the phase is marked completed. Present the result to the user.
+When `assemble_from_timeline` returns `success: true`, the final video has been persisted and registered successfully. Present the result to the user.
 
 ## Quality Criteria
 

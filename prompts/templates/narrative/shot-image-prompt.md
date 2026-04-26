@@ -2,6 +2,14 @@
 
 Generate an image prompt for a specific shot within a multi-shot scene breakdown. This image will be used as the source frame for video generation of this shot.
 
+## Continuity Priority
+
+- Preserve the established scene look before adding novelty
+- Keep character appearance, wardrobe, props, setting anchors, lighting, and palette consistent with the scene continuity context
+- Change only what this shot requires: framing, camera angle, composition, and immediate action
+- If earlier shots in the same scene already establish visual details, reuse them unless the scene text explicitly changes them
+- Treat any "do not change" notes in the context as hard constraints
+
 ## Shot Information
 
 {{SHOT_CONTENT}}
@@ -60,6 +68,13 @@ image_text_to_image
 ```
 
 **IMPORTANT**: Always include the actual file path in square brackets after each reference name. Use `list_project_files` to find the exact paths of character and setting reference images. The path should be relative to the project directory (e.g., `assets/images/0jZCrE-k_CharRef_Parvati_00001_.png`). This ensures reliable image resolution during generation.
+
+Also explicitly carry forward continuity anchors from the provided context into the image prompt text:
+- stable face/hair/body descriptors
+- same wardrobe and key props
+- same room/set dressing and geography
+- same scene lighting direction and palette
+- same emotional tone unless the shot description changes it
 
 When NO reference images exist:
 ```

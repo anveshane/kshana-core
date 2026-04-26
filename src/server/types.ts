@@ -35,7 +35,8 @@ export type ServerMessageType =
   | 'batch_write_command'      // Server tells client to write multiple files
   | 'session_timer'            // Production timer updates
   | 'asset_transfer'           // Server sends generated asset to client
-  | 'assets_refresh';          // Server pushes full asset list (e.g. after reset)
+  | 'assets_refresh'           // Server pushes full asset list (e.g. after reset)
+  | 'timeline_assembly_request'; // Server asks desktop to assemble final video
 
 /**
  * Message types sent from client to server.
@@ -59,7 +60,9 @@ export type ClientMessageType =
   | 'set_parallel_media'      // Toggle parallel media generation at runtime
   | 'project_state_sync'      // Client sends full project snapshot
   | 'redo_node'               // Redo a specific node (invalidate + re-execute)
-  | 'reset_project';          // Reset project to a specific stage
+  | 'reset_project'           // Reset project to a specific stage
+  | 'timeline_assembly_progress' // Desktop reports assembly progress
+  | 'timeline_assembly_result'; // Desktop reports assembly result
 
 /**
  * Base message structure for server messages.
@@ -235,6 +238,7 @@ export interface ConfigureProjectData {
   templateId: string;
   style: string;
   duration: number;
+  autonomousMode?: boolean;
 }
 
 // ==========================================================================
@@ -309,6 +313,23 @@ export interface AssetTransferData {
   downloadUrl?: string;
   mimeType?: string;
   size: number;
+}
+
+export interface TimelineAssemblyProgressData {
+  requestId: string;
+  progress?: number;
+  stage?: 'preparing' | 'rendering' | 'persisting' | 'finalizing';
+  message?: string;
+}
+
+export interface TimelineAssemblyResultData {
+  requestId: string;
+  status: 'completed' | 'failed';
+  outputPath?: string;
+  duration?: number;
+  artifactId?: string;
+  manifestRelativePath?: string;
+  error?: string;
 }
 
 /**
@@ -444,6 +465,18 @@ export interface ResetProjectData {
 
 export function isResetProjectMessage(msg: ClientMessage): msg is ClientMessage<ResetProjectData> {
   return msg.type === 'reset_project';
+}
+
+export function isTimelineAssemblyProgressMessage(
+  msg: ClientMessage,
+): msg is ClientMessage<TimelineAssemblyProgressData> {
+  return msg.type === 'timeline_assembly_progress';
+}
+
+export function isTimelineAssemblyResultMessage(
+  msg: ClientMessage,
+): msg is ClientMessage<TimelineAssemblyResultData> {
+  return msg.type === 'timeline_assembly_result';
 }
 
 /**

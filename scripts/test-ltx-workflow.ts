@@ -40,7 +40,7 @@ import 'dotenv/config';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ComfyUIClient } from '../src/services/comfyui/ComfyUIClient';
-import { loadWorkflowTemplate, parameterizeLtx23Workflow } from '../src/services/comfyui/WorkflowLoader';
+import { loadWorkflowTemplate, parameterizeWorkflowByName } from '../src/services/comfyui/WorkflowLoader';
 
 interface Args {
   mode: 't2v' | 'i2v';
@@ -231,20 +231,20 @@ async function main(): Promise<void> {
     const loadStep = isI2VMode ? 2 : 1;
     const queueStep = isI2VMode ? 3 : 2;
 
-    console.log(`\n[${loadStep}/${stepCount}] Loading workflow template: video_ltx23_gguf.json`);
-    const template = loadWorkflowTemplate('video_ltx23_gguf.json');
+    console.log(`\n[${loadStep}/${stepCount}] Loading workflow template: cloud/ltx23_fl2v_cloud.json`);
+    const template = loadWorkflowTemplate('cloud/ltx23_fl2v_cloud.json');
 
     console.log('      Parameterizing workflow...');
-    const workflow = parameterizeLtx23Workflow(template, {
+    const workflow = parameterizeWorkflowByName('ltx23', template, {
+      sceneNumber: 0,
       prompt: args.prompt,
       seed: args.seed,
       durationSeconds: duration,
       width,
       height,
-      t2vMode,
       inputImageFilename: uploadedImageName,
       filenamePrefix: `LTX23_${args.mode.toUpperCase()}_Test`,
-    });
+    } as Parameters<typeof parameterizeWorkflowByName>[2]);
 
     // Queue workflow
     console.log(`\n[${queueStep}/${stepCount}] Queueing workflow to ComfyUI...`);

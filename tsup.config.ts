@@ -1,11 +1,37 @@
 import { defineConfig } from 'tsup';
 
-export default defineConfig({
-  entry: ['src/index.tsx', 'src/server/cli.ts'],
-  format: ['esm'],
-  dts: true,
-  clean: true,
-  sourcemap: true,
-  target: 'node20',
-  outDir: 'dist',
-});
+export default defineConfig([
+  {
+    entry: {
+      index: 'src/index.tsx',
+    },
+    format: ['esm'],
+    dts: true,
+    clean: true,
+    splitting: false,
+    sourcemap: true,
+    target: 'node20',
+    outDir: 'dist',
+  },
+  {
+    entry: {
+      'server/cli': 'src/server/cli.ts',
+      'server/index': 'src/server/index.ts',
+      'core/llm/index': 'src/core/llm/index.ts',
+    },
+    format: ['cjs'],
+    // Maps import.meta.url to a __filename-based URL in CJS output (avoids empty-import-meta warnings and broken paths).
+    shims: true,
+    dts: false,
+    clean: false,
+    splitting: false,
+    sourcemap: true,
+    target: 'node20',
+    outDir: 'dist',
+    outExtension() {
+      return {
+        js: '.cjs',
+      };
+    },
+  },
+]);
