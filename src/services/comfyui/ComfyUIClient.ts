@@ -196,7 +196,7 @@ export class ComfyUIClient {
    */
   async interrupt(): Promise<void> {
     try {
-      await fetch(`${this.baseUrl}/interrupt`, { method: 'POST', headers: this.buildHeaders() });
+      await fetch(this.buildUrl('/interrupt'), { method: 'POST', headers: this.buildHeaders() });
     } catch {
       // Best effort — ComfyUI may not be reachable
     }
@@ -263,7 +263,7 @@ export class ComfyUIClient {
       payload['extra_data'] = { api_key_comfy_org: this.apiKey };
     }
 
-    const response = await fetch(`${this.baseUrl}/prompt`, {
+    const response = await fetch(this.buildUrl('/prompt'), {
       method: 'POST',
       headers: this.buildHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
@@ -850,7 +850,7 @@ export class ComfyUIClient {
       params.append('subfolder', subfolder);
     }
 
-    const url = `${this.baseUrl}/view?${params.toString()}`;
+    const url = this.buildUrl('/view', params);
 
     const response = await fetch(url, { headers: this.buildHeaders() });
     if (!response.ok) {
