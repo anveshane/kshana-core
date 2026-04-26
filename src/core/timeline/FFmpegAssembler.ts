@@ -295,6 +295,83 @@ export async function convertImageToVideo(
 // ---------------------------------------------------------------------------
 
 /**
+ * Build the per-segment video filter chunk: scale → pad → reset PTS.
+ * Pure function — extracted for testability.
+ */
+export function buildVideoFilter(i: number, width: number, height: number): string {
+  return (
+    `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
+    `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[v${i}]`
+  );
+}
+
+/**
+ * Compute the xfade transition duration for a given transition kind.
+ *
+ * Pure function — extracted for testability. The "cut" case used to be
+ * 0.01 s, but FFmpeg's xfade silently produces broken/truncated output
+ * when `duration` is shorter than 1 frame at the input framerate. At
+ * 24 fps that's ~0.042 s, so 0.01 s breaks the whole chain. We use
+ * 0.083 s (~2 frames at 24 fps) which is visually indistinguishable
+ * from a hard cut and safe for any reasonable framerate ≥ 24.
+ */
+export function xfadeTransitionDuration(
+  transition: string,
+  configuredDuration: number | undefined,
+): number {
+  if (transition === 'cut') return 0.083;
+  if (transition === 'flash_to_white') {
+    return Math.min(configuredDuration ?? 0.2, 0.3);
+  }
+  return configuredDuration ?? 0.5;
+}
+
+/**
+ * Compute the xfade offset and updated accumulator for one transition step.
+ *
+ * Pure function — extracted for testability. The cumulative accumulator must
+ * use ACTUAL clip durations (videoDurations[i]) rather than the timeline's
+ * planned segment.duration. Mismatch was the AV-sync bug on
+ * woman_medieval_village_betrothed/final_video.mp4 — the planner declared
+ * shorter shots than LTX 2.3 actually produced, so xfade truncated the
+ * video to the planner's number while audio played in full.
+ */
+export function computeXfadeOffset(
+  prevAccumulatedDuration: number,
+  thisClipVideoDuration: number,
+  transitionDuration: number,
+): { offset: number; nextAccumulatedDuration: number } {
+  const offset = Math.max(0, prevAccumulatedDuration - transitionDuration);
+  const nextAccumulatedDuration =
+    prevAccumulatedDuration + thisClipVideoDuration - transitionDuration;
+  return { offset, nextAccumulatedDuration };
+}
+
+/**
+ * Build the per-segment audio filter chunk.
+ *
+ * Pads (apad) then trims (atrim) the audio stream to exactly `videoDuration`
+ * seconds. LTX 2.3 clips usually have audio ~10–30 ms shorter than video;
+ * concatenating without this fix lets drift compound across N clips so the
+ * final assembly's voice ends up hundreds of ms ahead of lip movements.
+ *
+ * When the segment has no audio, slices a silence stream to the same length.
+ *
+ * Pure function — extracted for testability.
+ */
+export function buildAudioFilter(
+  i: number,
+  hasAudio: boolean,
+  videoDuration: number,
+  silenceInputIdx: number,
+): string {
+  if (hasAudio) {
+    return `[${i}:a]asetpts=PTS-STARTPTS,apad,atrim=duration=${videoDuration}[a${i}]`;
+  }
+  return `[${silenceInputIdx}:a]atrim=duration=${videoDuration},asetpts=PTS-STARTPTS[a${i}]`;
+}
+
+/**
  * Assemble resolved segments into a single video using FFmpeg concat filter.
  */
 export async function assembleVideos(
@@ -332,6 +409,25 @@ export async function assembleVideos(
     }
   });
 
+  // Probe each input for VIDEO duration. LTX 2.3 outputs typically have
+  // audio ~10–30 ms shorter than video per clip; without padding, that drift
+  // accumulates across N concatenated clips and the final assembly's voice
+  // leads its lip movements by hundreds of ms by the end. We pad audio to
+  // exactly the video duration before concat to keep each clip's [v][a]
+  // pair length-matched.
+  const videoDurations: number[] = segments.map(seg => {
+    try {
+      const probe = execSync(
+        `ffprobe -v error -select_streams v:0 -show_entries stream=duration -of default=nw=1:nk=1 "${seg.filePath}"`,
+        { encoding: 'utf-8', timeout: 5000 }
+      );
+      const dur = parseFloat(probe.trim());
+      return Number.isFinite(dur) && dur > 0 ? dur : seg.duration;
+    } catch {
+      return seg.duration;
+    }
+  });
+
   // Build FFmpeg command args
   const inputArgs: string[] = [];
   const filterParts: string[] = [];
@@ -361,21 +457,10 @@ export async function assembleVideos(
   }
 
   for (let i = 0; i < segments.length; i++) {
-    // Scale each input to target resolution and normalize timestamps
     filterParts.push(
-      `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
-      `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[v${i}]`
+      buildVideoFilter(i, width, height),
+      buildAudioFilter(i, hasAudio[i]!, videoDurations[i]!, silenceInputIdx),
     );
-    // Use actual audio if present, otherwise use the silence source
-    if (hasAudio[i]) {
-      filterParts.push(
-        `[${i}:a]asetpts=PTS-STARTPTS[a${i}]`
-      );
-    } else {
-      filterParts.push(
-        `[${silenceInputIdx}:a]atrim=duration=${segments[i]!.duration},asetpts=PTS-STARTPTS[a${i}]`
-      );
-    }
   }
 
   // Check if any segment has a non-cut transition
@@ -389,7 +474,15 @@ export async function assembleVideos(
     // After each xfade, accumulated duration = prev_accumulated + next_duration - transition_overlap.
     let prevVideoLabel = 'v0';
     let prevAudioLabel = 'a0';
-    let accumulatedDuration = segments[0]!.duration;
+    // Use ACTUAL clip duration, not segment.duration. Timeline durations
+    // are PLANNED values — the actual LTX 2.3 outputs round to integer
+    // frame counts at 24 fps, so a planned 2.14 s shot lands as a 3.04 s
+    // clip. Using the planned 2.14 s as the xfade offset truncates the
+    // video to its first 2 s of frames (only ~half the content), while
+    // the audio chain plays in full — this is the AV-sync drift on the
+    // first run of woman_medieval_village_betrothed (final_video.mp4 was
+    // 44.7 s of video against 82.9 s of audio).
+    let accumulatedDuration = videoDurations[0]!;
 
     // Map our transition names to FFmpeg xfade transition names
     const xfadeMap: Record<string, string> = {
@@ -412,11 +505,15 @@ export async function assembleVideos(
     for (let i = 1; i < segments.length; i++) {
       const seg = segments[i]!;
       const transition = seg.transition ?? 'cut';
-      const isFlash = transition === 'flash_to_white';
-      const tDur = transition === 'cut' ? 0.01 : isFlash ? Math.min(seg.transitionDuration ?? 0.2, 0.3) : (seg.transitionDuration ?? 0.5);
+      const tDur = xfadeTransitionDuration(transition, seg.transitionDuration);
 
-      // Offset = end of accumulated output minus transition overlap
-      const offset = Math.max(0, accumulatedDuration - tDur);
+      // Offset = end of accumulated output minus transition overlap.
+      // Uses videoDurations (actual) — see computeXfadeOffset doc.
+      const { offset, nextAccumulatedDuration } = computeXfadeOffset(
+        accumulatedDuration,
+        videoDurations[i]!,
+        tDur,
+      );
 
       const outVideoLabel = i < segments.length - 1 ? `vx${i}` : 'outv';
       const outAudioLabel = i < segments.length - 1 ? `ax${i}` : 'outa';
@@ -431,8 +528,7 @@ export async function assembleVideos(
         `[${prevAudioLabel}][a${i}]acrossfade=d=${tDur}:c1=tri:c2=tri[${outAudioLabel}]`
       );
 
-      // Update accumulated duration: previous output + new segment - overlap
-      accumulatedDuration = accumulatedDuration + seg.duration - tDur;
+      accumulatedDuration = nextAccumulatedDuration;
 
       prevVideoLabel = outVideoLabel;
       prevAudioLabel = outAudioLabel;
@@ -463,7 +559,7 @@ export async function assembleVideos(
 
   // Get output file stats
   const stats = statSync(outputPath);
-  const totalDuration = segments.reduce((sum, s) => sum + s.duration, 0);
+  const totalDuration = videoDurations.reduce((sum, d) => sum + d, 0);
 
   return {
     success: true,
