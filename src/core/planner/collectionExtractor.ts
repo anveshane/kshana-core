@@ -37,51 +37,142 @@ export async function extractCollectionItems(
 }
 
 /**
- * Extract characters, settings, and scene count from a story.
+ * Extract characters, settings, and scene breakdown from a story.
+ *
+ * P0 (2026-04-26): runs a coverage gate after the initial extraction. The
+ * gate asks a second LLM call which beats from the source were dropped,
+ * and which beats appear in two scene summaries. If issues are found, a
+ * single repair pass regenerates the scenes with that feedback in the
+ * prompt. Without this gate, the LLM silently drops connective story
+ * beats (e.g. the magistrate's secret-sponsorship arc) and duplicates
+ * dramatic ones (e.g. wilderness-hut bandaging in scenes 3 AND 4).
  */
 async function extractFromStory(
   storyContent: string,
   llm: LLMClient,
   durationSeconds?: number,
 ): Promise<CollectionItems> {
-  // Duration-based limits to keep generation manageable
   const dur = durationSeconds || 60;
   const maxChars = dur <= 30 ? 2 : dur <= 60 ? 3 : dur <= 120 ? 5 : dur <= 180 ? 6 : dur <= 300 ? 8 : 10;
   const maxSettings = dur <= 30 ? 1 : dur <= 60 ? 2 : dur <= 120 ? 3 : dur <= 180 ? 4 : dur <= 300 ? 5 : 7;
   const maxScenes = dur <= 30 ? 2 : dur <= 60 ? 4 : dur <= 120 ? 6 : dur <= 180 ? 8 : dur <= 300 ? 10 : 12;
 
+  // Initial extraction.
+  const initial = await runStoryExtraction(storyContent, llm, { dur, maxChars, maxSettings, maxScenes });
+
+  // Coverage gate. Skip if no scenes (initial extraction failed) or for
+  // very short videos where compression isn't a concern.
+  if (!initial.scenes || initial.scenes.length === 0 || dur <= 30) {
+    return initial;
+  }
+
+  const issues = await validateSceneCoverage(storyContent, initial.scenes, llm);
+  if (issues.dropped.length === 0 && issues.duplicated.length === 0) {
+    return initial;
+  }
+
+  // Single repair pass with the issues fed back into the prompt.
+  const repaired = await runStoryExtraction(storyContent, llm, {
+    dur, maxChars, maxSettings, maxScenes,
+    coverageFeedback: issues,
+    originalScenes: initial.scenes,
+  });
+  return repaired;
+}
+
+interface ExtractionParams {
+  dur: number;
+  maxChars: number;
+  maxSettings: number;
+  maxScenes: number;
+  coverageFeedback?: SceneCoverageIssues;
+  originalScenes?: Array<{ sceneNumber: number; title: string; summary: string }>;
+}
+
+async function runStoryExtraction(
+  storyContent: string,
+  llm: LLMClient,
+  params: ExtractionParams,
+): Promise<CollectionItems> {
+  const { dur, maxChars, maxSettings, maxScenes, coverageFeedback, originalScenes } = params;
+
+  let repairBlock = '';
+  if (coverageFeedback && originalScenes) {
+    const dropped = coverageFeedback.dropped.length > 0
+      ? `\nBEATS DROPPED (must appear somewhere — compress as subtext if needed):\n${coverageFeedback.dropped.map(b => `- ${b}`).join('\n')}`
+      : '';
+    const duplicated = coverageFeedback.duplicated.length > 0
+      ? `\nBEATS DUPLICATED (must appear in ONE scene only):\n${coverageFeedback.duplicated.map(d => `- "${d.beat}" appears in scenes ${d.scenes.join(', ')}`).join('\n')}`
+      : '';
+    repairBlock = `
+
+REPAIR PASS — PREVIOUS ATTEMPT HAD COVERAGE ISSUES:
+${dropped}${duplicated}
+
+PREVIOUS SCENES (regenerate, fixing the issues above):
+${originalScenes.map(s => `Scene ${s.sceneNumber}: "${s.title}" — ${s.summary}`).join('\n')}
+`;
+  }
+
   const response = await llm.generate({
     messages: [
       {
         role: 'system',
-        content: `You are a precise extraction tool. Extract structured data from the provided story content.
+        content: `You are a story-aware scene extraction tool for a ${dur}-second video.
 
-Return a JSON object with exactly these fields:
-- "characters": array of unique character names (MAXIMUM ${maxChars} — only characters the camera SEES on screen)
-- "settings": array of unique location/setting names (MAXIMUM ${maxSettings} — consolidate similar locations)
-- "objects": array of distinctive object/prop names that appear in multiple shots or are plot-important (MAXIMUM 5 — only objects the camera needs to show consistently: weapons, artifacts, vehicles, documents, distinctive items)
-- "scenes": array of objects with { "sceneNumber": number, "title": string, "summary": string } (MAXIMUM ${maxScenes})
+## Step 1 — Beat list (think before you extract)
 
-This is for a ${dur}-second video. Every character, setting, and object requires image generation, so fewer = faster and higher quality.
+Internally, list every distinct narrative beat in the source: every action, decision, reveal, location-change, character-introduction, time-jump, and emotional turn. Number them. Do not output this list, but DO use it as the basis for scene assignment.
 
-Rules:
-- Character names should be proper names as they appear in the story
-- Only include characters who physically appear on screen — not mentioned-only characters
-- Settings should be distinct locations, not variations of the same place (e.g. "hallway" and "room" in same building = one setting)
-- Objects should be visually distinctive items that need consistent appearance across shots (a specific sword, a seal, a vehicle). Do NOT include generic items (a cup, a chair) — only plot-significant props
-- Scenes should be logical narrative units (shifts in location, time, or action)
-- If the story has more than the maximum, select only the most important ones
-- Keep summaries under 50 words each
-- Return ONLY valid JSON, no markdown fences, no commentary
+## Step 2 — Compress every beat into ${maxScenes} scenes
+
+You have a HARD CAP of ${maxScenes} scene slots. The source likely has more beats than slots. Your job is COMPRESSION, not selection:
+
+- **Every beat lands in exactly ONE scene.** No beat may be dropped. No beat may appear in two scenes.
+- **Connective beats compress as subtext inside dramatic scenes.** A "secret sponsorship" arc can be one wordless image (a coin pouch on a windowsill) inside the next dramatic scene — not its own scene.
+- **Dramatic beats — confrontations, decisions, reveals — get their own scene.** Connective beats — travel, time-pass, mood-shift — do NOT.
+- **Dropping = the audience can't follow the next scene.** If a character's later behavior depends on a beat, that beat must be visible (even briefly) earlier.
+
+## Step 3 — Dual-arc threading
+
+For every character who appears in 2+ scenes, their state must change visibly between appearances. If a character was an antagonist in scene 1 and an ally in scene 3, scene 2 must contain at least one image showing their shift — even if the scene is "about" someone else.
+
+## Output
+
+Return a JSON object:
+- "characters": unique character names the camera SEES on screen (MAX ${maxChars})
+- "settings": distinct locations (MAX ${maxSettings} — consolidate variations of the same place)
+- "objects": plot-critical props that need consistent appearance across shots (MAX 5; weapons, documents, distinctive artifacts only — NEVER generic items)
+- "scenes": MAX ${maxScenes} scene objects, each a logical dramatic unit covering its assigned beats
+
+## Scene summary requirements (each scene)
+
+Each summary must be 80–150 words and contain ALL of:
+1. **Location** — where this scene takes place
+2. **Characters present** — and each one's state at scene start vs. scene end (what changes)
+3. **Central action** — the dramatic beat this scene exists to deliver
+4. **Connective beats compressed inside** — any source beats not dramatic enough for their own scene, named explicitly so downstream writers know to include them as subtext
+5. **Setup for next scene** — what state-change carries forward
+
+A summary that just narrates plot ("She does X. Then Y happens.") is wrong. The summary must encode dramatic intent and character state.
+
+## Anti-patterns to avoid
+
+- ❌ Two adjacent scene summaries describing the same location with the same characters doing similar things
+- ❌ Summaries shorter than 80 words (too thin to encode character state)
+- ❌ "If the story has more than the maximum, select the most important ones" — this is COMPRESSION, never selection. Every source beat must land somewhere.
+- ❌ A character state-change between scenes that has no visual setup in the prior scene
+
+Return ONLY valid JSON, no markdown fences, no commentary.
 
 <json_schema>
 {
   "characters": ["Character Name"],
   "settings": ["Location Name"],
   "objects": ["Object Name"],
-  "scenes": [{ "sceneNumber": 1, "title": "Scene Title", "summary": "Brief summary under 50 words" }]
+  "scenes": [{ "sceneNumber": 1, "title": "Scene Title", "summary": "80-150 word summary covering all 5 required elements" }]
 }
-</json_schema>`,
+</json_schema>${repairBlock}`,
       },
       {
         role: 'user',
@@ -101,8 +192,79 @@ Rules:
       scenes: parsed.scenes ?? [],
     };
   } catch {
-    // If parsing fails, return empty collections
     return { characters: [], settings: [], objects: [], scenes: [] };
+  }
+}
+
+// ── Coverage gate ─────────────────────────────────────────────────────────────
+
+export interface SceneCoverageIssues {
+  /** Source beats not represented in any scene summary */
+  dropped: string[];
+  /** Beats appearing in two or more scene summaries */
+  duplicated: Array<{ beat: string; scenes: number[] }>;
+}
+
+/**
+ * Audit scene summaries against the source story. Asks the LLM to identify
+ * beats that were silently dropped or duplicated across scenes. Caller
+ * decides whether to regenerate.
+ */
+export async function validateSceneCoverage(
+  storyContent: string,
+  scenes: Array<{ sceneNumber: number; title: string; summary: string }>,
+  llm: LLMClient,
+): Promise<SceneCoverageIssues> {
+  const sceneList = scenes
+    .map(s => `Scene ${s.sceneNumber} ("${s.title}"): ${s.summary}`)
+    .join('\n\n');
+
+  const response = await llm.generate({
+    messages: [
+      {
+        role: 'system',
+        content: `You audit scene summaries against a source story to find coverage gaps.
+
+Return a JSON object with two arrays:
+- "dropped": short phrases describing source beats that DO NOT appear (even as compressed subtext) in any scene summary. A beat is "dropped" only if its absence breaks downstream logic — a character's later behavior wouldn't make sense without seeing that beat.
+- "duplicated": objects { "beat": "short phrase", "scenes": [N, M] } for beats described in TWO OR MORE scene summaries. Two scenes describing the same physical location with the same characters performing similar actions counts as duplication.
+
+Be strict but pragmatic:
+- Connective beats compressed as subtext inside a scene COUNT as covered. Don't flag those.
+- "Same beat" means same dramatic unit, not same word — paraphrasing is fine.
+- An empty array for either field means no issue of that kind.
+- If unsure, prefer to flag — a false positive triggers a regen, a false negative leaves a broken story.
+
+<json_schema>
+{
+  "dropped": ["short beat description"],
+  "duplicated": [{ "beat": "short beat description", "scenes": [3, 4] }]
+}
+</json_schema>
+
+Return ONLY valid JSON.`,
+      },
+      {
+        role: 'user',
+        content: `SOURCE STORY:\n${storyContent}\n\n---\n\nSCENE SUMMARIES:\n${sceneList}`,
+      },
+    ],
+    temperature: 0.1,
+    responseFormat: { type: 'json_object' },
+  });
+
+  try {
+    const parsed = JSON.parse(response.content ?? '{}') as Partial<SceneCoverageIssues>;
+    return {
+      dropped: Array.isArray(parsed.dropped) ? parsed.dropped.filter((b): b is string => typeof b === 'string') : [],
+      duplicated: Array.isArray(parsed.duplicated)
+        ? parsed.duplicated.filter((d): d is { beat: string; scenes: number[] } =>
+            !!d && typeof d.beat === 'string' && Array.isArray(d.scenes) && d.scenes.every(n => typeof n === 'number'))
+        : [],
+    };
+  } catch {
+    // If audit itself fails, treat as "no issues" — don't block extraction.
+    return { dropped: [], duplicated: [] };
   }
 }
 
