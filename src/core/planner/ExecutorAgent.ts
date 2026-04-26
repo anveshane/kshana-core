@@ -1790,6 +1790,17 @@ export class ExecutorAgent extends TypedEventEmitter {
       let selfRepairCount = 0;
       const MAX_SELF_REPAIRS = 3;
 
+      // Deadlock detection for serial mode: when content is pending elsewhere
+      // in the graph but only media nodes are ready, the loop suppresses the
+      // ready batch and goes around again. If nothing else advances (e.g. a
+      // failed scene_video_prompt blocking just one shot's downstream chain),
+      // we'd spin forever — historically this has eaten gigabytes of disk in
+      // log output and starved the HTTP server. We bail out after N
+      // consecutive ticks where no progress was made AND no media is in
+      // flight to wait on.
+      let serialModeIdleTicks = 0;
+      const MAX_SERIAL_IDLE = 25;
+
       while (!this.executor.isComplete() && !this.stopped) {
         // Expand any type-level collections before checking for ready nodes
         await this.expandPendingCollections();
@@ -1921,9 +1932,39 @@ export class ExecutorAgent extends TypedEventEmitter {
           );
 
           if (pendingContentExists && mediaNodes.length > 0 && contentNodes.length === 0) {
-            // Media nodes are ready but content is still pending elsewhere — skip this round
-            this.log(`  Serial mode: waiting for all content to finish before media (${allNodes.filter(n => !isMediaNode(n) && n.status === 'pending').length} content pending)`);
+            // Media nodes are ready but content is still pending elsewhere — skip this round.
+            // Track consecutive idle ticks: if we keep arriving here without
+            // any in-flight media to wait on, the pending content is
+            // permanently blocked (typically because its dep failed or its
+            // type-level collection never expanded) and we'd spin forever.
+            const pendingContent = allNodes.filter(n => !isMediaNode(n) && n.status === 'pending').length;
+            this.log(`  Serial mode: waiting for all content to finish before media (${pendingContent} content pending)`);
             readyNodes.length = 0;
+
+            const inflightMedia = this.pendingMedia.size;
+            if (inflightMedia > 0) {
+              // We have media still working — that's legitimate progress
+              // potential, so don't count this tick as idle.
+              serialModeIdleTicks = 0;
+            } else {
+              serialModeIdleTicks += 1;
+              if (serialModeIdleTicks >= MAX_SERIAL_IDLE) {
+                const stuckIds = allNodes
+                  .filter(n => !isMediaNode(n) && (n.status === 'pending' || n.status === 'in_progress'))
+                  .map(n => n.id);
+                this.log(`STUCK: serial-mode deadlock — ${pendingContent} content node(s) pending with no in-flight media after ${MAX_SERIAL_IDLE} ticks. Stuck nodes: ${stuckIds.slice(0, 8).join(', ')}${stuckIds.length > 8 ? '...' : ''}`);
+                this.emit({
+                  type: 'notification',
+                  level: 'error',
+                  message: `Pipeline deadlocked: ${pendingContent} content node(s) blocked. Likely a failed dependency upstream — check logs and retry.`,
+                });
+                this.stopReason = 'failed';
+                break;
+              }
+              // Brief sleep so we don't spin the CPU and flood the log.
+              // 250ms × MAX_SERIAL_IDLE = ~6s grace before bailing.
+              await new Promise(resolve => setTimeout(resolve, 250));
+            }
           } else {
             // Within content nodes, prioritize compositions over motion directives
             const compositionNodes = contentNodes.filter(n => n.typeId !== 'shot_motion_directive');
@@ -1933,6 +1974,9 @@ export class ExecutorAgent extends TypedEventEmitter {
             // Only process media nodes if no content nodes remain anywhere
             readyNodes.length = 0;
             readyNodes.push(...(prioritizedContent.length > 0 ? prioritizedContent : mediaNodes));
+
+            // Real progress — reset the deadlock counter.
+            serialModeIdleTicks = 0;
           }
         }
 
