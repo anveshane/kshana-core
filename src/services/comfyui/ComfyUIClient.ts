@@ -116,7 +116,12 @@ export class ComfyUIClient {
 
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
     const merged = { ...DEFAULT_CONFIG, ...config };
-    this.baseUrl = merged.baseUrl.replace(/\/$/, '');
+    // Normalize baseUrl: strip trailing slash AND a trailing `/api` segment
+    // so `getPath` (which prepends `/api` in cloud mode) doesn't produce
+    // a double `/api/api/...` path. Users routinely set
+    // `COMFY_CLOUD_URL=https://cloud.comfy.org/api` thinking that's the
+    // canonical base — and the `/upload/image` endpoint then 401s.
+    this.baseUrl = merged.baseUrl.replace(/\/$/, '').replace(/\/api$/, '');
     this.outputDir = merged.outputDir;
     this.timeout = merged.timeout;
     this.apiKey = merged.apiKey;
