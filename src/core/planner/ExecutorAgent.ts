@@ -1729,8 +1729,28 @@ export class ExecutorAgent extends TypedEventEmitter {
       }
 
       // Handle input type — if user provided a full story, skip plot and story stages
-      // and use the original input directly as the story artifact
+      // and use the original input directly as the story artifact.
+      //
+      // IMPORTANT: the file copy and graph-marking are decoupled. The
+      // BackwardPlanner sometimes subtracts `story` from the graph when the
+      // legacy `files` registry says it's already satisfied — but if the
+      // canonical `chapters/chapter_1/plans/story.md` doesn't actually exist,
+      // downstream Strategy C (LLM scene extraction) will fail and the
+      // pipeline deadlocks. So we always ensure the canonical story file
+      // exists when inputType === 'story', regardless of graph state.
       if (this.config.project.inputType === 'story') {
+        const inputFile = join(this.config.projectDir, 'original_input.md');
+        const storyDir = join(this.config.projectDir, 'chapters', 'chapter_1', 'plans');
+        const canonicalStoryPath = join(storyDir, 'story.md');
+        const canonicalRelPath = 'chapters/chapter_1/plans/story.md';
+
+        if (existsSync(inputFile) && !existsSync(canonicalStoryPath)) {
+          if (!existsSync(storyDir)) mkdirSync(storyDir, { recursive: true });
+          const { copyFileSync } = await import('fs');
+          copyFileSync(inputFile, canonicalStoryPath);
+          this.log(`  Input type 'story': copied original input → ${canonicalRelPath}`);
+        }
+
         const inputConfig = this.config.template.inputTypes?.find(
           (t: { id: string }) => t.id === 'story',
         );
@@ -1738,19 +1758,9 @@ export class ExecutorAgent extends TypedEventEmitter {
         for (const skipTypeId of skips) {
           const node = this.executor.getNode(skipTypeId);
           if (node && node.status === 'pending') {
-            // Copy original input to the story output path if this is the story node
             if (skipTypeId === 'story') {
-              const inputFile = join(this.config.projectDir, 'original_input.md');
-              const storyDir = join(this.config.projectDir, 'chapters', 'chapter_1', 'plans');
-              if (existsSync(inputFile)) {
-                if (!existsSync(storyDir)) mkdirSync(storyDir, { recursive: true });
-                const storyPath = join(storyDir, 'story.md');
-                const { copyFileSync } = await import('fs');
-                copyFileSync(inputFile, storyPath);
-                const relPath = 'chapters/chapter_1/plans/story.md';
-                this.executor.markCompleted(node.id, relPath);
-                this.log(`  Input type 'story': copied original input → ${relPath}`);
-              }
+              this.executor.markCompleted(node.id, canonicalRelPath);
+              this.log(`  Input type 'story': marked story node completed → ${canonicalRelPath}`);
             } else {
               // Skip plot — mark as completed with a placeholder
               this.executor.markCompleted(node.id, 'skipped-input-is-story');
@@ -3703,17 +3713,50 @@ Examples of common failure modes to avoid:
         // Strategy C: For collections that depend on 'story' (scene, character, setting),
         // run extractCollectionItems on the story output to determine items.
         // This handles post-reset state where story is completed but per-item nodes don't exist.
-        if (!didExpand) {
-          const storyNode = allNodes.find(n => n.typeId === 'story' && n.status === 'completed' && n.outputPath);
-          if (storyNode?.outputPath && typeDef.dependencies.some(d => d.artifactTypeId === 'story')) {
-            const storyPath = join(this.config.projectDir, storyNode.outputPath);
-            if (existsSync(storyPath)) {
-              try {
-                const storyContent = readFileSync(storyPath, 'utf-8');
-                const extracted = await extractCollectionItems(
-                  storyNode, storyContent, this.llmFor('structured.collection_extraction'),
-                  this.config.goal.preferences.duration as number | undefined,
-                );
+        //
+        // We try multiple sources for the story content (in order):
+        //   1. The story node's own outputPath (normal path).
+        //   2. The template's canonical story filePattern on disk
+        //      (covers cases where BackwardPlanner subtracted story from the
+        //      graph because the legacy `files` registry said it was
+        //      satisfied — story node may be absent but the file is present).
+        //   3. `original_input.md` for inputType === 'story' projects
+        //      (last-resort fallback if neither of the above is found).
+        if (!didExpand && typeDef.dependencies.some(d => d.artifactTypeId === 'story')) {
+          let storyContent: string | null = null;
+          let storyContextNode = allNodes.find(n => n.typeId === 'story' && n.status === 'completed' && n.outputPath);
+          if (storyContextNode?.outputPath) {
+            const p = join(this.config.projectDir, storyContextNode.outputPath);
+            if (existsSync(p)) {
+              try { storyContent = readFileSync(p, 'utf-8'); } catch { /* fall through */ }
+            }
+          }
+          if (!storyContent) {
+            const storyTypeDef = this.config.template.artifactTypes['story'];
+            const canonical = storyTypeDef?.filePattern?.replace(/\{\{chapter\}\}/g, 'chapter_1');
+            if (canonical) {
+              const p = join(this.config.projectDir, canonical);
+              if (existsSync(p)) {
+                try { storyContent = readFileSync(p, 'utf-8'); } catch { /* fall through */ }
+              }
+            }
+          }
+          if (!storyContent && this.config.project.inputType === 'story') {
+            const p = join(this.config.projectDir, 'original_input.md');
+            if (existsSync(p)) {
+              try { storyContent = readFileSync(p, 'utf-8'); } catch { /* fall through */ }
+            }
+          }
+
+          if (storyContent) {
+            // Synthesize a context node for the extractor — it only reads
+            // typeId off this object to dispatch.
+            const ctxNode = storyContextNode ?? ({ typeId: 'story' } as ExecutionNode);
+            try {
+              const extracted = await extractCollectionItems(
+                ctxNode, storyContent, this.llmFor('structured.collection_extraction'),
+                this.config.goal.preferences.duration as number | undefined,
+              );
                 let itemList: Array<{ itemId: string; name: string }> = [];
 
                 if (node.typeId === 'scene' && extracted?.scenes?.length) {
@@ -3751,9 +3794,8 @@ Examples of common failure modes to avoid:
                 } else {
                   this.log(`  Strategy C: no ${node.typeId} items found in story`);
                 }
-              } catch (err) {
-                this.log(`  Strategy C failed: ${err}`);
-              }
+            } catch (err) {
+              this.log(`  Strategy C failed: ${err}`);
             }
           }
         }
