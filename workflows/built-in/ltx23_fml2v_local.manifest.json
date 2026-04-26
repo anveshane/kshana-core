@@ -1,0 +1,113 @@
+{
+  "id": "ltx23_fml2v_local",
+  "displayName": "LTX 2.3 FML2V (Local)",
+  "pipeline": "video_generation",
+  "llmDescription": "Cloud-based first+mid+last frame video generation using LTX 2.3.",
+  "selectionCriteria": "Video generation from three keyframe images on ComfyUI Cloud.",
+  "outputType": "video",
+  "priority": 5,
+  "strategies": [
+    "fmlfv"
+  ],
+  "inputRequirements": [
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "llm",
+      "required": true
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "llm",
+      "required": false
+    },
+    {
+      "id": "first_frame",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "mid_frame",
+      "type": "image",
+      "source": "shot_image",
+      "required": false
+    },
+    {
+      "id": "last_frame",
+      "type": "image",
+      "source": "shot_image",
+      "required": false
+    },
+    {
+      "id": "seed",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "required": false
+    }
+  ],
+  "workflowFile": "ltx23_fml2v_local.json",
+  "format": "api",
+  "parameterMappings": [
+    {
+      "input": "prompt",
+      "nodeId": "16",
+      "field": "text"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "11",
+      "field": "text"
+    },
+    {
+      "input": "first_frame",
+      "nodeId": "45",
+      "field": "image"
+    },
+    {
+      "input": "mid_frame",
+      "nodeId": "56",
+      "field": "image"
+    },
+    {
+      "input": "last_frame",
+      "nodeId": "47",
+      "field": "image"
+    },
+    {
+      "input": "width",
+      "nodeId": "166",
+      "field": "value"
+    },
+    {
+      "input": "height",
+      "nodeId": "167",
+      "field": "value"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "43",
+      "field": "filename_prefix"
+    },
+    {
+      "input": "seed",
+      "nodeId": "14",
+      "field": "noise_seed"
+    },
+    {
+      "input": "seed",
+      "nodeId": "15",
+      "field": "noise_seed"
+    }
+  ],
+  "builtIn": true,
+  "active": true,
+  "mode": "local"
+}

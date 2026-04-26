@@ -8,22 +8,62 @@
     "outputType": "video",
     "priority": 10,
     "inputRequirements": [
-      { "id": "first_frame", "type": "image", "source": "shot_image", "description": "Opening frame of the shot", "required": true },
-      { "id": "prompt", "type": "text", "source": "shot_motion_directive", "description": "Motion/animation prompt", "required": true }
+      {
+        "id": "first_frame",
+        "type": "image",
+        "source": "shot_image",
+        "description": "Opening frame of the shot",
+        "required": true
+      },
+      {
+        "id": "prompt",
+        "type": "text",
+        "source": "shot_motion_directive",
+        "description": "Motion/animation prompt",
+        "required": true
+      }
     ],
     "workflowFile": "../video_ltx23_gguf.json",
     "format": "litegraph",
     "parameterMappings": [
-      { "input": "prompt", "nodeId": "121", "field": "text" },
-      { "input": "first_frame", "nodeId": "167", "field": "image" },
-      { "input": "seed", "nodeId": "296", "field": "seed" },
-      { "input": "durationSeconds", "nodeId": "291", "field": "value" },
-      { "input": "width", "nodeId": "292", "field": "value" },
-      { "input": "height", "nodeId": "293", "field": "value" },
-      { "input": "filenamePrefix", "nodeId": "140", "field": "filename_prefix" }
+      {
+        "input": "prompt",
+        "nodeId": "121",
+        "field": "text"
+      },
+      {
+        "input": "first_frame",
+        "nodeId": "167",
+        "field": "image"
+      },
+      {
+        "input": "seed",
+        "nodeId": "296",
+        "field": "seed"
+      },
+      {
+        "input": "durationSeconds",
+        "nodeId": "291",
+        "field": "value"
+      },
+      {
+        "input": "width",
+        "nodeId": "292",
+        "field": "value"
+      },
+      {
+        "input": "height",
+        "nodeId": "293",
+        "field": "value"
+      },
+      {
+        "input": "filenamePrefix",
+        "nodeId": "140",
+        "field": "filename_prefix"
+      }
     ],
     "builtIn": true,
-    "active": true
+    "active": false
   },
   {
     "id": "t2v",
@@ -34,45 +74,115 @@
     "outputType": "video",
     "priority": 20,
     "inputRequirements": [
-      { "id": "prompt", "type": "text", "source": "shot_motion_directive", "description": "Motion/animation prompt", "required": true }
+      {
+        "id": "prompt",
+        "type": "text",
+        "source": "shot_motion_directive",
+        "description": "Motion/animation prompt",
+        "required": true
+      }
     ],
     "workflowFile": "../video_ltx23_gguf.json",
     "format": "litegraph",
     "parameterMappings": [
-      { "input": "prompt", "nodeId": "121", "field": "text" },
-      { "input": "seed", "nodeId": "296", "field": "seed" },
-      { "input": "durationSeconds", "nodeId": "291", "field": "value" },
-      { "input": "width", "nodeId": "292", "field": "value" },
-      { "input": "height", "nodeId": "293", "field": "value" },
-      { "input": "filenamePrefix", "nodeId": "140", "field": "filename_prefix" }
+      {
+        "input": "prompt",
+        "nodeId": "121",
+        "field": "text"
+      },
+      {
+        "input": "seed",
+        "nodeId": "296",
+        "field": "seed"
+      },
+      {
+        "input": "durationSeconds",
+        "nodeId": "291",
+        "field": "value"
+      },
+      {
+        "input": "width",
+        "nodeId": "292",
+        "field": "value"
+      },
+      {
+        "input": "height",
+        "nodeId": "293",
+        "field": "value"
+      },
+      {
+        "input": "filenamePrefix",
+        "nodeId": "140",
+        "field": "filename_prefix"
+      }
     ],
     "builtIn": true,
-    "active": true
+    "active": false
   },
   {
     "id": "i2v_late_entry",
     "displayName": "Image to Video (Late Character Entry)",
     "pipeline": "video_generation",
-    "llmDescription": "First frame shows only the setting/environment — no characters. A character enters the frame mid-shot. Uses a setting-only reference image as visual anchor while the motion prompt describes the character entering.",
+    "llmDescription": "First frame shows only the setting/environment \u2014 no characters. A character enters the frame mid-shot. Uses a setting-only reference image as visual anchor while the motion prompt describes the character entering.",
     "selectionCriteria": "First frame has no characters but a character enters mid-shot. Walk-into-frame shots, reveal shots, entrance shots where the environment is shown first.",
     "outputType": "video",
     "priority": 15,
     "inputRequirements": [
-      { "id": "first_frame", "type": "image", "source": "shot_image", "description": "Setting-only frame (no characters visible)", "required": true },
-      { "id": "prompt", "type": "text", "source": "shot_motion_directive", "description": "Motion prompt describing character entrance", "required": true }
+      {
+        "id": "first_frame",
+        "type": "image",
+        "source": "shot_image",
+        "description": "Setting-only frame (no characters visible)",
+        "required": true
+      },
+      {
+        "id": "prompt",
+        "type": "text",
+        "source": "shot_motion_directive",
+        "description": "Motion prompt describing character entrance",
+        "required": true
+      }
     ],
     "workflowFile": "../video_ltx23_gguf.json",
     "format": "litegraph",
     "parameterMappings": [
-      { "input": "prompt", "nodeId": "121", "field": "text" },
-      { "input": "first_frame", "nodeId": "167", "field": "image" },
-      { "input": "seed", "nodeId": "296", "field": "seed" },
-      { "input": "durationSeconds", "nodeId": "291", "field": "value" },
-      { "input": "width", "nodeId": "292", "field": "value" },
-      { "input": "height", "nodeId": "293", "field": "value" },
-      { "input": "filenamePrefix", "nodeId": "140", "field": "filename_prefix" }
+      {
+        "input": "prompt",
+        "nodeId": "121",
+        "field": "text"
+      },
+      {
+        "input": "first_frame",
+        "nodeId": "167",
+        "field": "image"
+      },
+      {
+        "input": "seed",
+        "nodeId": "296",
+        "field": "seed"
+      },
+      {
+        "input": "durationSeconds",
+        "nodeId": "291",
+        "field": "value"
+      },
+      {
+        "input": "width",
+        "nodeId": "292",
+        "field": "value"
+      },
+      {
+        "input": "height",
+        "nodeId": "293",
+        "field": "value"
+      },
+      {
+        "input": "filenamePrefix",
+        "nodeId": "140",
+        "field": "filename_prefix"
+      }
     ],
     "builtIn": true,
-    "active": true
+    "active": false
   }
 ]
