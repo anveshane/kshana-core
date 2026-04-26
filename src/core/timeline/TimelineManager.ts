@@ -779,6 +779,26 @@ export function saveTimeline(projectDir: string, timeline: Timeline): void {
 }
 
 /**
+ * Build a deterministic timeline segment ID for a (scene, shot) pair.
+ * Matches the dev-branch convention so cross-merge code that imports
+ * this function from TimelineManager keeps working. The ID format is:
+ *
+ *   segment_{sceneIndex}_shot_{shotNumber}
+ *
+ * Where sceneIndex is `sceneNumber - 1` (zero-indexed scenes, one-indexed
+ * shots — matches how segments are emitted elsewhere in the pipeline).
+ */
+export function buildShotSegmentId(sceneNumber: number, shotNumber: number): string {
+  if (!Number.isFinite(sceneNumber) || sceneNumber < 1) {
+    throw new Error(`Invalid scene number for shot segment: ${sceneNumber}`);
+  }
+  if (!Number.isFinite(shotNumber) || shotNumber < 1) {
+    throw new Error(`Invalid shot number for shot segment: ${shotNumber}`);
+  }
+  return `segment_${sceneNumber - 1}_shot_${shotNumber}`;
+}
+
+/**
  * Minimal `inspectTimeline` for callers (e.g. GenericAgent from the dev
  * merge) that expect the path-canonicalization API. Loads the timeline
  * as-is. The full path-correction pipeline from dev isn't ported yet;
