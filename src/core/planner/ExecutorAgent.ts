@@ -10,7 +10,7 @@
  * writing, and progress tracking happens in deterministic code.
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, statSync, renameSync } from 'fs';
 import { join, dirname, relative } from 'path';
 import { TypedEventEmitter } from '../../events/EventEmitter.js';
 import { LLMClient } from '../llm/index.js';
@@ -305,6 +305,12 @@ export class ExecutorAgent extends TypedEventEmitter {
     }
     this.logPath = join(logsDir, 'executor.log');
     this.lockFilePath = join(config.projectDir, '.executor.lock');
+    // Roll over the log if the existing file has crossed the size cap.
+    // The executor.log is append-only across runs; without this, a
+    // single deadlock-and-spin episode can grow it to GBs (we hit 5 GB
+    // on story_begins_girl_sprinting-2 today). Keep the last 3 rolled
+    // files so recent runs are still inspectable.
+    this.rotateLogIfNeeded(this.logPath, 50 * 1024 * 1024, 3);
     this.log('=== ExecutorAgent initialized ===');
     this.log(`Template: ${config.template.id}, Goal: ${config.goal.description}`);
     this.log(`Target artifacts: ${config.goal.targetArtifacts.join(', ')}`);
@@ -442,6 +448,46 @@ export class ExecutorAgent extends TypedEventEmitter {
       appendFileSync(this.logPath, `[${timestamp}] ${message}\n`);
     } catch {
       // Ignore logging errors
+    }
+  }
+
+  /**
+   * If the log file is at/above `maxBytes`, rotate it:
+   *   executor.log.{keep} is dropped (if it exists),
+   *   executor.log.{keep-1} → .{keep},
+   *   ...
+   *   executor.log.1 → .2,
+   *   executor.log → .1
+   * The next append creates a fresh executor.log.
+   *
+   * Best-effort: any fs error is swallowed so a permissions glitch
+   * doesn't take down the executor at startup.
+   */
+  private rotateLogIfNeeded(logPath: string, maxBytes: number, keep: number): void {
+    try {
+      if (!existsSync(logPath)) return;
+      const size = statSync(logPath).size;
+      if (size < maxBytes) return;
+
+      // Drop the oldest if we already have `keep` rolled files.
+      const oldest = `${logPath}.${keep}`;
+      if (existsSync(oldest)) {
+        try { unlinkSync(oldest); } catch { /* ignore */ }
+      }
+
+      // Shift the existing rolled files: .{N-1} → .{N}, etc.
+      for (let i = keep - 1; i >= 1; i--) {
+        const from = `${logPath}.${i}`;
+        const to = `${logPath}.${i + 1}`;
+        if (existsSync(from)) {
+          try { renameSync(from, to); } catch { /* ignore */ }
+        }
+      }
+
+      // Rotate the current file to .1
+      try { renameSync(logPath, `${logPath}.1`); } catch { /* ignore */ }
+    } catch {
+      // Best-effort — never fail the executor for a log issue.
     }
   }
 
