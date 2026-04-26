@@ -190,7 +190,7 @@ function isCompatibleShotUpdate(
   return true;
 }
 
-function getSceneShotSegments(
+export function getSceneShotSegments(
   timeline: Timeline,
   sceneSegmentId: string
 ): TimelineSegment[] {
@@ -776,6 +776,67 @@ export function saveTimeline(projectDir: string, timeline: Timeline): void {
   timeline.validation = validateTimeline(timeline);
 
   writeFileSync(filePath, JSON.stringify(timeline, null, 2), 'utf-8');
+}
+
+/**
+ * Pending segment summary used by getPendingTimelineSegments /
+ * getNextPendingTimelineSegment. Mirrors dev's shape so callers
+ * (TimelineTools, GenericAgent) get the same surface area.
+ */
+export interface PendingTimelineSegment {
+  segmentId: string;
+  label: string;
+  fillStatus: SegmentFillStatus;
+  sceneNumber?: number;
+  shotNumber?: number;
+}
+
+/**
+ * Parse a shot segment ID like `segment_0_shot_3` into its scene/shot
+ * numbers. Counterpart to `buildShotSegmentId`. Returns null if the ID
+ * doesn't match the convention (e.g. global layer / scene segments).
+ */
+export function parseShotSegmentId(
+  segmentId: string,
+): { sceneIndex: number; sceneNumber: number; shotNumber: number } | null {
+  const match = /^segment_(\d+)_shot_(\d+)$/.exec(segmentId);
+  if (!match?.[1] || !match?.[2]) return null;
+  const sceneIndex = Number(match[1]);
+  const shotNumber = Number(match[2]);
+  if (!Number.isFinite(sceneIndex) || !Number.isFinite(shotNumber)) return null;
+  return { sceneIndex, sceneNumber: sceneIndex + 1, shotNumber };
+}
+
+/**
+ * All segments whose fillStatus isn't `filled`. Used by manage_timeline
+ * tool consumers to figure out what work remains.
+ */
+export function getPendingTimelineSegments(
+  timeline: Timeline,
+): PendingTimelineSegment[] {
+  return timeline.segments
+    .filter(segment => segment.fillStatus !== 'filled')
+    .map(segment => {
+      const parsed = parseShotSegmentId(segment.id);
+      return {
+        segmentId: segment.id,
+        label: segment.label,
+        fillStatus: segment.fillStatus,
+        ...(parsed
+          ? { sceneNumber: parsed.sceneNumber, shotNumber: parsed.shotNumber }
+          : {}),
+      };
+    });
+}
+
+/**
+ * First (in declared segment order) pending segment, or null if everything
+ * is filled. Convenience wrapper around getPendingTimelineSegments.
+ */
+export function getNextPendingTimelineSegment(
+  timeline: Timeline,
+): PendingTimelineSegment | null {
+  return getPendingTimelineSegments(timeline)[0] ?? null;
 }
 
 /**
