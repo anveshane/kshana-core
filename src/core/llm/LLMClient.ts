@@ -430,13 +430,18 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
     // Log request
     logger.logRequest(messages, tools, { temperature });
 
-    const request: OpenAI.ChatCompletionCreateParamsStreaming = {
+    // OpenRouter-specific: `usage: { include: true }` on the request body
+    // makes the final stream chunk's `usage` carry `cost`, `prompt_tokens_details.cached_tokens`,
+    // and `cache_discount`. Harmless on other OpenAI-compatible endpoints (extra body
+    // fields are ignored). See https://openrouter.ai/docs/use-cases/usage-accounting.
+    const request: OpenAI.ChatCompletionCreateParamsStreaming & { usage?: { include: boolean } } = {
       model: this.model,
       messages: this.convertMessages(messages),
       tools: tools ? this.convertTools(tools) : undefined,
       temperature,
       stream: true,
       stream_options: { include_usage: true },
+      usage: { include: true },
     };
     if (responseFormat) {
       request.response_format = responseFormat;
@@ -462,6 +467,12 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
     let fullContent = '';
     const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> =
       new Map();
+    // OpenRouter (and OpenAI when stream_options.include_usage=true) sends
+    // usage in a SEPARATE final chunk where `choices` is empty. Track it
+    // across iterations and yield once we have both finish_reason and usage.
+    let pendingFinishReason: string | null = null;
+    let pendingToolCalls: ToolCall[] | null = null;
+    let loggedComplete = false;
 
     for await (const chunk of stream) {
       // Check total elapsed time — abort if stuck in reasoning loop
@@ -522,7 +533,7 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
       }
 
       if (chunk.choices[0]?.finish_reason) {
-        // Build final tool calls for logging
+        // Build final tool calls (don't log/yield yet — wait for usage chunk)
         const toolCalls: ToolCall[] = [];
         for (const [, acc] of toolCallAccumulators) {
           if (acc.id && acc.name) {
@@ -541,25 +552,48 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
             }
           }
         }
+        pendingFinishReason = chunk.choices[0].finish_reason;
+        pendingToolCalls = toolCalls;
+      }
 
-        // Log complete response
+      // Usage may arrive in a separate trailing chunk (where choices=[])
+      // when stream_options.include_usage=true / OpenRouter usage.include=true.
+      if (chunk.usage && pendingFinishReason !== null) {
+        const u = chunk.usage as typeof chunk.usage & {
+          cost?: number;
+          cache_discount?: number;
+          prompt_tokens_details?: { cached_tokens?: number };
+        };
+        const usage = {
+          promptTokens: u.prompt_tokens,
+          completionTokens: u.completion_tokens,
+          totalTokens: u.total_tokens,
+          cost: typeof u.cost === 'number' ? u.cost : undefined,
+          cachedPromptTokens: u.prompt_tokens_details?.cached_tokens,
+          cacheDiscount: typeof u.cache_discount === 'number' ? u.cache_discount : undefined,
+        };
+
         logger.logStreamComplete({
           content: fullContent || null,
-          toolCalls,
-          finishReason: chunk.choices[0].finish_reason,
+          toolCalls: pendingToolCalls ?? [],
+          finishReason: pendingFinishReason,
+          usage,
         });
-
-        // Include usage if available (requires stream_options: { include_usage: true })
-        const usage = chunk.usage
-          ? {
-              promptTokens: chunk.usage.prompt_tokens,
-              completionTokens: chunk.usage.completion_tokens,
-              totalTokens: chunk.usage.total_tokens,
-            }
-          : undefined;
+        loggedComplete = true;
 
         yield { done: true, usage };
       }
+    }
+
+    // Some providers don't emit a separate usage chunk — log without usage
+    // so the response is still recorded.
+    if (!loggedComplete && pendingFinishReason !== null) {
+      logger.logStreamComplete({
+        content: fullContent || null,
+        toolCalls: pendingToolCalls ?? [],
+        finishReason: pendingFinishReason,
+      });
+      yield { done: true };
     }
 
     // Stream completed normally — cancel the hard timeout

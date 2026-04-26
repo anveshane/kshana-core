@@ -133,11 +133,7 @@ export class LLMLogger {
     }
 
     if (response.usage) {
-      const usageLog = '\n<token_usage>\n' +
-        `  prompt_tokens: ${response.usage.promptTokens}\n` +
-        `  completion_tokens: ${response.usage.completionTokens}\n` +
-        `  total_tokens: ${response.usage.totalTokens}\n` +
-        '</token_usage>\n';
+      const usageLog = this.formatUsage(response.usage);
       fullLog += usageLog;
       truncatedLog += usageLog;
     }
@@ -195,12 +191,41 @@ export class LLMLogger {
       truncatedLog += truncatedToolCalls;
     }
 
+    if (response.usage) {
+      const usageLog = this.formatUsage(response.usage);
+      fullLog += usageLog;
+      truncatedLog += usageLog;
+    }
+
     fullLog += '\n';
     truncatedLog += '\n';
     this.appendLog(fullLog, truncatedLog);
 
     // Reset stream buffer
     this.streamBuffer = '';
+  }
+
+  /**
+   * Format usage info as a `<token_usage>` block. Includes cost and cache
+   * info when available (OpenRouter `usage.include=true` populates these).
+   */
+  private formatUsage(usage: NonNullable<LLMResponse['usage']>): string {
+    const lines = [
+      `  prompt_tokens: ${usage.promptTokens}`,
+      `  completion_tokens: ${usage.completionTokens}`,
+      `  total_tokens: ${usage.totalTokens}`,
+    ];
+    if (typeof usage.cachedPromptTokens === 'number' && usage.promptTokens > 0) {
+      const pct = Math.round((usage.cachedPromptTokens / usage.promptTokens) * 100);
+      lines.push(`  cached_prompt_tokens: ${usage.cachedPromptTokens} (${pct}% cache hit)`);
+    }
+    if (typeof usage.cost === 'number') {
+      lines.push(`  cost_usd: ${usage.cost.toFixed(6)}`);
+    }
+    if (typeof usage.cacheDiscount === 'number' && usage.cacheDiscount !== 0) {
+      lines.push(`  cache_discount_usd: ${usage.cacheDiscount.toFixed(6)}`);
+    }
+    return '\n<token_usage>\n' + lines.join('\n') + '\n</token_usage>\n';
   }
 
   /**
