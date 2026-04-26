@@ -777,3 +777,29 @@ export function saveTimeline(projectDir: string, timeline: Timeline): void {
 
   writeFileSync(filePath, JSON.stringify(timeline, null, 2), 'utf-8');
 }
+
+/**
+ * Minimal `inspectTimeline` for callers (e.g. GenericAgent from the dev
+ * merge) that expect the path-canonicalization API. Loads the timeline
+ * as-is. The full path-correction pipeline from dev isn't ported yet;
+ * we return the timeline unchanged with an empty `pathCorrections`
+ * array so callers can safely read `.length`.
+ *
+ * Returns null when there's no timeline.json on disk.
+ */
+export function inspectTimeline(
+  projectDir: string,
+): {
+  timeline: Timeline;
+  wouldChangeOnSave: boolean;
+  pathCorrections: Array<{
+    index: number;
+    artifactId: string;
+    previousFilePath?: string;
+    canonicalFilePath: string;
+  }>;
+} | null {
+  const timeline = loadTimeline(projectDir);
+  if (!timeline) return null;
+  return { timeline, wouldChangeOnSave: false, pathCorrections: [] };
+}
