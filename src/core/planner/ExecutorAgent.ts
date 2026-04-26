@@ -56,7 +56,7 @@ import {
   saveTimeline,
   createTimelineSkeleton,
   updateSegmentLayers,
-  splitSegmentIntoShots,
+  upsertSceneShots,
   setSegmentTransition,
   validateTimeline,
 } from '../timeline/TimelineManager.js';
@@ -119,6 +119,37 @@ export interface ExecutorAgentConfig {
    * Used for testing — validates prompt structure without calling image/video providers.
    */
   skipMediaGeneration?: boolean;
+}
+
+interface ParsedSceneBreakdownShot {
+  shotNumber: number;
+  shotType: string;
+  duration: number;
+  label: string;
+  transition?: import('../timeline/types.js').TransitionType | 'cut';
+  metadata: Record<string, unknown>;
+}
+
+interface ParsedSceneBreakdown {
+  sceneId: string;
+  outputPath?: string;
+  shots: ParsedSceneBreakdownShot[];
+  shotItems: Array<{ itemId: string; name: string }>;
+  shotDescriptors: Array<{ label: string; duration: number; metadata?: Record<string, unknown> }>;
+  expectedTimelineSegmentIds: string[];
+}
+
+interface SceneMaterializationResult {
+  sceneId: string;
+  shotCount: number;
+  shotItems: Array<{ itemId: string; name: string }>;
+  expectedTimelineSegmentIds: string[];
+  actualTimelineSegmentIds: string[];
+  graphSatisfied: boolean;
+  timelineSatisfied: boolean;
+  success: boolean;
+  failureReason?: string;
+  outputPath?: string;
 }
 
 /**
@@ -223,6 +254,23 @@ export class ExecutorAgent extends TypedEventEmitter {
    * Prevents the hint from being applied twice on re-runs of the same node.
    */
   private retriedContinuity = new Set<string>();
+
+  private static readonly NON_CUT_TRANSITION_DURATIONS: Partial<Record<import('../timeline/types.js').TransitionType, number>> = {
+    flash_to_white: 200,
+    dip_to_black: 800,
+    fade: 500,
+    crossfade: 500,
+    dissolve: 500,
+    wipe_left: 500,
+    wipe_right: 500,
+    wipe_up: 500,
+    wipe_down: 500,
+    circle_open: 500,
+    circle_close: 500,
+    radial: 500,
+    slide_left: 500,
+    slide_right: 500,
+  };
 
   constructor(llm: LLMClient, config: ExecutorAgentConfig) {
     super();
@@ -911,15 +959,591 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     this.timeline = createTimelineSkeleton(totalDuration, descriptors);
     saveTimeline(this.config.projectDir, this.timeline);
+    this.emitTimelineUpdate();
     this.log(`Timeline: created skeleton with ${descriptors.length} scene segments (${totalDuration}s)`);
   }
 
-  /** Update timeline segment after a shot_video node completes. */
+  private timelineCoversCurrentScenes(): boolean {
+    if (!this.timeline) return false;
+
+    const sceneIds = this.executor.getAllNodes()
+      .filter(n => n.typeId === 'scene' && n.status !== 'skipped')
+      .map(n => n.itemId ?? n.id);
+
+    if (sceneIds.length === 0) return true;
+
+    return sceneIds.every(sceneId =>
+      this.timeline!.segments.some(s => s.id === sceneId || s.id.startsWith(`${sceneId}_shot_`))
+    );
+  }
+
+  private ensureTimelineInitialized(): void {
+    const hasSceneNodes = this.executor.getAllNodes().some(
+      n => n.typeId === 'scene' && n.status !== 'skipped'
+    );
+    if (!hasSceneNodes) return;
+
+    if (!this.timeline || !this.timelineCoversCurrentScenes()) {
+      this.initializeTimelineFromScenes();
+    }
+  }
+
+  private buildShotDescriptorsForScene(
+    sceneId: string,
+    sceneVideoPromptNode?: ExecutionNode,
+    sceneVideoPromptOutputPath?: string
+  ): Array<{ label: string; duration: number; metadata?: Record<string, unknown> }> {
+    const promptNode = sceneVideoPromptNode ?? this.executor.getNode(`scene_video_prompt:${sceneId}`);
+    const resolvedOutputPath = sceneVideoPromptOutputPath ?? promptNode?.outputPath;
+    if (!resolvedOutputPath) return [];
+
+    const svpPath = join(this.config.projectDir, resolvedOutputPath);
+    if (!existsSync(svpPath)) return [];
+
+    let svpContent = readFileSync(svpPath, 'utf-8').trim();
+    if (svpContent.startsWith('```')) {
+      svpContent = svpContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+
+    const parsed = JSON.parse(svpContent);
+    if (!Array.isArray(parsed.shots)) return [];
+
+    return parsed.shots.map((shot: {
+      shotNumber?: number;
+      shotType?: string;
+      duration?: number;
+      prompt?: string;
+      imagePrompt?: string;
+      transition?: string;
+    }) => ({
+      label: `Shot ${shot.shotNumber}: ${shot.shotType ?? 'shot'}`,
+      duration: shot.duration || 5,
+      metadata: {
+        ...(shot.shotNumber !== undefined ? { shotNumber: shot.shotNumber } : {}),
+        ...(shot.shotType ? { shotType: shot.shotType } : {}),
+        ...(shot.prompt ? { prompt: shot.prompt } : {}),
+        ...(shot.imagePrompt ? { imagePrompt: shot.imagePrompt } : {}),
+        ...(shot.transition ? { transition: shot.transition } : {}),
+      },
+    }));
+  }
+
+  private resolveSceneVideoPromptOutputPath(
+    sceneId: string,
+    sceneVideoPromptNode?: ExecutionNode,
+    sceneVideoPromptOutputPath?: string,
+  ): string | undefined {
+    return sceneVideoPromptOutputPath
+      ?? sceneVideoPromptNode?.outputPath
+      ?? this.executor.getNode(`scene_video_prompt:${sceneId}`)?.outputPath;
+  }
+
+  private parseSceneBreakdown(
+    sceneId: string,
+    options?: {
+      sceneVideoPromptNode?: ExecutionNode;
+      sceneVideoPromptOutputPath?: string;
+      content?: string;
+    }
+  ): ParsedSceneBreakdown | { sceneId: string; outputPath?: string; failureReason: string } {
+    const resolvedOutputPath = this.resolveSceneVideoPromptOutputPath(
+      sceneId,
+      options?.sceneVideoPromptNode,
+      options?.sceneVideoPromptOutputPath,
+    );
+
+    let rawContent = options?.content;
+    if (!rawContent) {
+      if (!resolvedOutputPath) {
+        return { sceneId, outputPath: resolvedOutputPath, failureReason: 'scene_json_unavailable' };
+      }
+      const fullPath = join(this.config.projectDir, resolvedOutputPath);
+      if (!existsSync(fullPath)) {
+        return { sceneId, outputPath: resolvedOutputPath, failureReason: 'scene_json_missing_on_disk' };
+      }
+      rawContent = readFileSync(fullPath, 'utf-8');
+    }
+
+    let normalized = rawContent.trim();
+    if (normalized.startsWith('```')) {
+      normalized = normalized.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(normalized);
+    } catch (error) {
+      return {
+        sceneId,
+        outputPath: resolvedOutputPath,
+        failureReason: `scene_json_parse_error:${String(error)}`,
+      };
+    }
+
+    if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { shots?: unknown[] }).shots)) {
+      return { sceneId, outputPath: resolvedOutputPath, failureReason: 'scene_json_missing_shots' };
+    }
+
+    const rawShots = (parsed as { shots: Array<{
+      shotNumber?: number;
+      shotType?: string;
+      duration?: number;
+      prompt?: string;
+      imagePrompt?: string;
+      transition?: string;
+    }> }).shots;
+
+    const sceneLabel = sceneId.replace('scene_', 'S');
+    const shots: ParsedSceneBreakdownShot[] = rawShots.flatMap((shot, index) => {
+      if (typeof shot.shotNumber !== 'number' || !Number.isFinite(shot.shotNumber)) {
+        return [];
+      }
+      const shotType = shot.shotType ?? `shot_${shot.shotNumber}`;
+      return [{
+        shotNumber: shot.shotNumber,
+        shotType,
+        duration: shot.duration || 5,
+        label: `Shot ${shot.shotNumber}: ${shotType}`,
+        transition: shot.transition as import('../timeline/types.js').TransitionType | 'cut' | undefined,
+        metadata: {
+          shotNumber: shot.shotNumber,
+          ...(shotType ? { shotType } : {}),
+          ...(shot.prompt ? { prompt: shot.prompt } : {}),
+          ...(shot.imagePrompt ? { imagePrompt: shot.imagePrompt } : {}),
+          ...(shot.transition ? { transition: shot.transition } : {}),
+          shotIndex: index,
+        },
+      }];
+    });
+
+    const shotItems = shots.map(shot => ({
+      itemId: `${sceneId}_shot_${shot.shotNumber}`,
+      name: `${sceneLabel} Shot ${shot.shotNumber}: ${shot.shotType}`,
+    }));
+    const shotDescriptors = shots.map(shot => ({
+      label: shot.label,
+      duration: shot.duration,
+      metadata: shot.metadata,
+    }));
+    const expectedTimelineSegmentIds = shotItems.map(shot => shot.itemId);
+
+    return {
+      sceneId,
+      outputPath: resolvedOutputPath,
+      shots,
+      shotItems,
+      shotDescriptors,
+      expectedTimelineSegmentIds,
+    };
+  }
+
+  private getExpectedShotSegmentIds(
+    sceneId: string,
+    shotDescriptors: Array<{ metadata?: Record<string, unknown> }>
+  ): string[] {
+    return shotDescriptors
+      .map(descriptor => descriptor.metadata?.['shotNumber'])
+      .filter((shotNumber): shotNumber is number => typeof shotNumber === 'number' && Number.isFinite(shotNumber))
+      .map(shotNumber => `${sceneId}_shot_${shotNumber}`);
+  }
+
+  private getSceneTimelineSegmentIds(sceneId: string): string[] {
+    if (!this.timeline) return [];
+    return this.timeline.segments
+      .filter(s => s.id === sceneId || s.id.startsWith(`${sceneId}_shot_`))
+      .map(s => s.id);
+  }
+
+  private timelineHasMaterializedScene(sceneId: string): boolean {
+    return this.getSceneTimelineSegmentIds(sceneId).length > 0;
+  }
+
+  private applySceneShotTransitions(
+    sceneId: string,
+    promptNode?: ExecutionNode,
+    sceneVideoPromptOutputPath?: string
+  ): void {
+    if (!this.timeline) return;
+
+    const resolvedOutputPath = sceneVideoPromptOutputPath ?? promptNode?.outputPath;
+    if (!resolvedOutputPath) return;
+
+    const svpPath = join(this.config.projectDir, resolvedOutputPath);
+    if (!existsSync(svpPath)) return;
+
+    let svpContent = readFileSync(svpPath, 'utf-8').trim();
+    if (svpContent.startsWith('```')) {
+      svpContent = svpContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+    }
+
+    const parsed = JSON.parse(svpContent);
+    if (!Array.isArray(parsed.shots)) return;
+
+    for (const shot of parsed.shots as Array<{ shotNumber: number; transition?: string }>) {
+      if (!shot.transition || shot.transition === 'cut') continue;
+      const transitionType = shot.transition as import('../timeline/types.js').TransitionType;
+      const durationMs = ExecutorAgent.NON_CUT_TRANSITION_DURATIONS[transitionType] ?? 500;
+      this.timeline = setSegmentTransition(this.timeline, `${sceneId}_shot_${shot.shotNumber}`, {
+        type: transitionType,
+        durationMs,
+      });
+    }
+  }
+
+  private expandSceneBreakdownGraph(parsed: ParsedSceneBreakdown): { graphSatisfied: boolean; expandedShotIds: string[] } {
+    const sceneId = parsed.sceneId;
+    const shotItems = parsed.shotItems;
+
+    let shotPromptNode = this.executor.getNode(`shot_image_prompt:${sceneId}`);
+    let motionDirectiveNode = this.executor.getNode(`shot_motion_directive:${sceneId}`);
+
+    if (!shotPromptNode) {
+      const typeLevelPrompt = this.executor.getNode('shot_image_prompt');
+      if (typeLevelPrompt && typeLevelPrompt.isCollection) {
+        this.log(`  Creating per-scene node shot_image_prompt:${sceneId} from type-level collection`);
+        this.executor.expandCollection('shot_image_prompt', [{ itemId: sceneId, name: `Scene ${sceneId.replace('scene_', '')}` }]);
+        shotPromptNode = this.executor.getNode(`shot_image_prompt:${sceneId}`);
+      }
+    }
+    if (!motionDirectiveNode) {
+      const typeLevelMotion = this.executor.getNode('shot_motion_directive');
+      if (typeLevelMotion && typeLevelMotion.isCollection) {
+        this.log(`  Creating per-scene node shot_motion_directive:${sceneId} from type-level collection`);
+        this.executor.expandCollection('shot_motion_directive', [{ itemId: sceneId, name: `Scene ${sceneId.replace('scene_', '')}` }]);
+        motionDirectiveNode = this.executor.getNode(`shot_motion_directive:${sceneId}`);
+      }
+    }
+
+    if (shotPromptNode) {
+      this.executor.expandCollection(`shot_image_prompt:${sceneId}`, shotItems);
+    }
+    if (motionDirectiveNode) {
+      this.executor.expandCollection(`shot_motion_directive:${sceneId}`, shotItems);
+    }
+
+    let prevShotPromptId: string | null = null;
+    for (const shot of shotItems) {
+      const promptId = `shot_image_prompt:${shot.itemId}`;
+      const promptNode = this.executor.getNode(promptId);
+      if (promptNode && prevShotPromptId && !promptNode.dependencies.includes(prevShotPromptId)) {
+        promptNode.dependencies.push(prevShotPromptId);
+        const prevNode = this.executor.getNode(prevShotPromptId);
+        if (prevNode && !prevNode.dependents.includes(promptId)) {
+          prevNode.dependents.push(promptId);
+        }
+      }
+      if (promptNode) prevShotPromptId = promptId;
+    }
+
+    const allCharImages = this.executor.getAllNodes()
+      .filter(n => n.typeId === 'character_image' && n.itemId)
+      .map(n => n.id);
+    const allSettingImages = this.executor.getAllNodes()
+      .filter(n => n.typeId === 'setting_image' && n.itemId)
+      .map(n => n.id);
+
+    let prevShotImageId: string | null = null;
+    let prevShotVideoId: string | null = null;
+    for (const shot of shotItems) {
+      const shotPromptId = `shot_image_prompt:${shot.itemId}`;
+      const motionId = `shot_motion_directive:${shot.itemId}`;
+      const shotImageId = `shot_image:${shot.itemId}`;
+      const shotVideoId = `shot_video:${shot.itemId}`;
+
+      if (!this.executor.getNode(shotImageId)) {
+        const shotImageDeps = [shotPromptId, ...allCharImages, ...allSettingImages];
+        if (prevShotImageId) shotImageDeps.push(prevShotImageId);
+        this.executor.addNode({
+          id: shotImageId,
+          typeId: 'shot_image',
+          itemId: shot.itemId,
+          status: 'pending',
+          displayName: `Shot Images: ${shot.name}`,
+          isExpensive: true,
+          isCollection: false,
+          dependencies: shotImageDeps,
+          dependents: [shotVideoId],
+        });
+        for (const depId of shotImageDeps) {
+          const depNode = this.executor.getNode(depId);
+          if (depNode && !depNode.dependents.includes(shotImageId)) {
+            depNode.dependents.push(shotImageId);
+          }
+        }
+      }
+
+      if (!this.executor.getNode(shotVideoId)) {
+        const shotVideoDeps = [shotImageId, motionId];
+        if (prevShotVideoId) shotVideoDeps.push(prevShotVideoId);
+        this.executor.addNode({
+          id: shotVideoId,
+          typeId: 'shot_video',
+          itemId: shot.itemId,
+          status: 'pending',
+          displayName: `Shot Videos: ${shot.name}`,
+          isExpensive: true,
+          isCollection: false,
+          dependencies: shotVideoDeps,
+          dependents: [],
+        });
+        for (const depId of shotVideoDeps) {
+          const depNode = this.executor.getNode(depId);
+          if (depNode && !depNode.dependents.includes(shotVideoId)) {
+            depNode.dependents.push(shotVideoId);
+          }
+        }
+      } else {
+        const existing = this.executor.getNode(shotVideoId)!;
+        const fixDeps: Array<[string, string]> = [
+          ['shot_motion_directive', motionId],
+          ['shot_image', shotImageId],
+        ];
+        for (const [stale, correct] of fixDeps) {
+          const idx = existing.dependencies.indexOf(stale);
+          if (idx >= 0) {
+            existing.dependencies[idx] = correct;
+            this.log(`  Rewired ${shotVideoId}: ${stale} → ${correct}`);
+          }
+        }
+        if (prevShotVideoId && !existing.dependencies.includes(prevShotVideoId)) {
+          existing.dependencies.push(prevShotVideoId);
+        }
+      }
+
+      const finalNode = this.executor.getNode('final_video');
+      if (finalNode && !finalNode.dependencies.includes(shotVideoId)) {
+        finalNode.dependencies.push(shotVideoId);
+      }
+
+      prevShotImageId = shotImageId;
+      prevShotVideoId = shotVideoId;
+    }
+
+    const graphSatisfied = shotItems.every(shot =>
+      ['shot_image_prompt', 'shot_motion_directive', 'shot_image', 'shot_video']
+        .filter(typeId => this.executor.getNode(typeId) || this.executor.getNode(`${typeId}:${sceneId}`) || this.config.template.artifactTypes[typeId])
+        .every(typeId => Boolean(this.executor.getNode(`${typeId}:${shot.itemId}`)))
+    );
+
+    return {
+      graphSatisfied,
+      expandedShotIds: shotItems.map(shot => shot.itemId),
+    };
+  }
+
+  private materializeSceneBreakdown(
+    sceneId: string,
+    options?: {
+      sceneVideoPromptNode?: ExecutionNode;
+      sceneVideoPromptOutputPath?: string;
+      content?: string;
+      repair?: boolean;
+      emitNotifications?: boolean;
+    }
+  ): SceneMaterializationResult {
+    const parsed = this.parseSceneBreakdown(sceneId, options);
+    if (!('shots' in parsed)) {
+      return {
+        sceneId,
+        shotCount: 0,
+        shotItems: [],
+        expectedTimelineSegmentIds: [],
+        actualTimelineSegmentIds: this.getSceneTimelineSegmentIds(sceneId),
+        graphSatisfied: false,
+        timelineSatisfied: false,
+        success: false,
+        failureReason: parsed.failureReason,
+        outputPath: parsed.outputPath,
+      };
+    }
+
+    const attemptMaterialization = (attemptOptions?: { reloadTimeline?: boolean; reinitializeTimeline?: boolean }): SceneMaterializationResult => {
+      if (attemptOptions?.reloadTimeline) {
+        this.timeline = loadTimeline(this.config.projectDir);
+      }
+
+      const hasMaterializedScene = this.timelineHasMaterializedScene(sceneId);
+      if (attemptOptions?.reinitializeTimeline || (!this.timeline && !hasMaterializedScene)) {
+        this.initializeTimelineFromScenes();
+      } else {
+        this.ensureTimelineInitialized();
+      }
+
+      const { graphSatisfied } = this.expandSceneBreakdownGraph(parsed);
+
+      if (!this.timeline) {
+        return {
+          sceneId,
+          shotCount: parsed.shots.length,
+          shotItems: parsed.shotItems,
+          expectedTimelineSegmentIds: parsed.expectedTimelineSegmentIds,
+          actualTimelineSegmentIds: [],
+          graphSatisfied,
+          timelineSatisfied: false,
+          success: false,
+          failureReason: 'timeline_unavailable',
+          outputPath: parsed.outputPath,
+        };
+      }
+
+      try {
+        const upserted = upsertSceneShots(this.timeline, sceneId, parsed.shotDescriptors);
+        this.timeline = upserted.timeline;
+        this.applySceneShotTransitions(sceneId, options?.sceneVideoPromptNode, parsed.outputPath);
+        saveTimeline(this.config.projectDir, this.timeline);
+        this.emitTimelineUpdate();
+      } catch (error) {
+        return {
+          sceneId,
+          shotCount: parsed.shots.length,
+          shotItems: parsed.shotItems,
+          expectedTimelineSegmentIds: parsed.expectedTimelineSegmentIds,
+          actualTimelineSegmentIds: this.getSceneTimelineSegmentIds(sceneId),
+          graphSatisfied,
+          timelineSatisfied: false,
+          success: false,
+          failureReason: `timeline_update_error:${String(error)}`,
+          outputPath: parsed.outputPath,
+        };
+      }
+
+      const actualTimelineSegmentIds = this.getSceneTimelineSegmentIds(sceneId);
+      const timelineSatisfied =
+        parsed.expectedTimelineSegmentIds.every(id => actualTimelineSegmentIds.includes(id))
+        && !actualTimelineSegmentIds.includes(sceneId);
+      return {
+        sceneId,
+        shotCount: parsed.shots.length,
+        shotItems: parsed.shotItems,
+        expectedTimelineSegmentIds: parsed.expectedTimelineSegmentIds,
+        actualTimelineSegmentIds,
+        graphSatisfied,
+        timelineSatisfied,
+        success: graphSatisfied && timelineSatisfied,
+        failureReason: graphSatisfied
+          ? (timelineSatisfied ? undefined : `timeline_postcondition_failed:${parsed.expectedTimelineSegmentIds.filter(id => !actualTimelineSegmentIds.includes(id)).join(',') || sceneId}`)
+          : 'graph_postcondition_failed',
+        outputPath: parsed.outputPath,
+      };
+    };
+
+    let result = attemptMaterialization();
+    if (!result.success && options?.repair !== false) {
+      this.log(
+        `Scene materialization failed for ${sceneId} (attempt 1): ` +
+        `reason=${result.failureReason ?? 'unknown'} expected=[${result.expectedTimelineSegmentIds.join(', ')}] ` +
+        `actual=[${result.actualTimelineSegmentIds.join(', ')}]`
+      );
+      result = attemptMaterialization({
+        reloadTimeline: true,
+        reinitializeTimeline: !this.timelineCoversCurrentScenes() || !this.timelineHasMaterializedScene(sceneId),
+      });
+    }
+
+    if (options?.emitNotifications && result.shotItems.length > 0) {
+      this.emit({
+        type: 'notification',
+        level: result.success ? 'info' : 'error',
+        message: result.success
+          ? `Expanded shots for ${sceneId}: ${result.shotItems.map(i => i.name).join(', ')}`
+          : `Scene materialization failed for ${sceneId}: ${result.failureReason ?? 'unknown'}`,
+      });
+    }
+
+    return result;
+  }
+
+  private ensureSceneShotSegments(
+    sceneId: string,
+    sceneVideoPromptNode?: ExecutionNode,
+    options?: { reloadTimeline?: boolean; reinitializeTimeline?: boolean; sceneVideoPromptOutputPath?: string }
+  ): {
+    sceneId: string;
+    extractedShotCount: number;
+    expectedSegmentIds: string[];
+    actualSegmentIds: string[];
+    rewriteAttempted: boolean;
+    success: boolean;
+    failureReason?: string;
+  } {
+    const result = this.materializeSceneBreakdown(sceneId, {
+      sceneVideoPromptNode,
+      sceneVideoPromptOutputPath: options?.sceneVideoPromptOutputPath,
+      repair: false,
+    });
+    return {
+      sceneId,
+      extractedShotCount: result.shotCount,
+      expectedSegmentIds: result.expectedTimelineSegmentIds,
+      actualSegmentIds: result.actualTimelineSegmentIds,
+      rewriteAttempted: result.shotCount > 0,
+      success: result.timelineSatisfied,
+      failureReason: result.failureReason,
+    };
+  }
+
+  private ensureSceneShotSegmentsStrict(
+    sceneId: string,
+    sceneVideoPromptNode?: ExecutionNode,
+    sceneVideoPromptOutputPath?: string
+  ): void {
+    const result = this.materializeSceneBreakdown(sceneId, {
+      sceneVideoPromptNode,
+      sceneVideoPromptOutputPath,
+      emitNotifications: false,
+    });
+    if (result.success) {
+      this.log(`Timeline sync OK for ${sceneId}: expected=${result.expectedTimelineSegmentIds.join(', ')} actual=${result.actualTimelineSegmentIds.join(', ')}`);
+      return;
+    }
+
+    const message =
+      `Timeline sync failed for ${sceneId}: ` +
+      `reason=${result.failureReason ?? 'unknown'} ` +
+      `expected=[${result.expectedTimelineSegmentIds.join(', ')}] actual=[${result.actualTimelineSegmentIds.join(', ')}]`;
+    this.log(message);
+    this.emit({
+      type: 'notification',
+      level: 'error',
+      message,
+    });
+    throw new Error(message);
+  }
+
+  private reconcileCompletedSceneTimelineSegments(): void {
+    const completedScenePrompts = this.executor.getAllNodes()
+      .filter(n => n.typeId === 'scene_video_prompt' && n.itemId && n.status === 'completed');
+
+    for (const node of completedScenePrompts) {
+      try {
+        const result = this.materializeSceneBreakdown(node.itemId!, {
+          sceneVideoPromptNode: node,
+          emitNotifications: false,
+        });
+        if (!result.success && result.shotCount > 0) {
+          this.log(`Timeline reconcile failed for ${node.itemId}: expected=[${result.expectedTimelineSegmentIds.join(', ')}] actual=[${result.actualTimelineSegmentIds.join(', ')}] reason=${result.failureReason ?? 'unknown'}`);
+          throw new Error(`Scene reconciliation failed for ${node.itemId}: ${result.failureReason ?? 'unknown'}`);
+        }
+      } catch (error) {
+        this.log(`Timeline reconcile failed for ${node.itemId}: ${String(error)}`);
+        throw error;
+      }
+    }
+  }
+
   private updateTimelineForShotVideo(node: ExecutionNode, outputPath: string): void {
     if (!this.timeline || !node.itemId) return;
 
     const segmentId = node.itemId; // e.g., "scene_1_shot_2"
-    const segment = this.timeline.segments.find(s => s.id === segmentId);
+    let segment = this.timeline.segments.find(s => s.id === segmentId);
+    if (!segment) {
+      const sceneIdMatch = segmentId.match(/^(scene_\d+)_shot_\d+$/);
+      if (sceneIdMatch?.[1]) {
+        this.log(`Timeline: missing ${segmentId}, attempting repair from ${sceneIdMatch[1]}`);
+        this.ensureSceneShotSegmentsStrict(sceneIdMatch[1]);
+        segment = this.timeline?.segments.find(s => s.id === segmentId);
+      }
+    }
     if (!segment) {
       this.log(`Timeline: no segment found for ${segmentId}`);
       return;
@@ -936,6 +1560,46 @@ export class ExecutorAgent extends TypedEventEmitter {
     saveTimeline(this.config.projectDir, this.timeline);
     this.emitTimelineUpdate();
     this.log(`Timeline: updated segment ${segmentId} → filled`);
+  }
+
+  private updateTimelineForShotImage(node: ExecutionNode, outputPath: string): void {
+    if (!this.timeline || !node.itemId) return;
+
+    const segmentId = node.itemId; // e.g., "scene_1_shot_2"
+    let segment = this.timeline.segments.find(s => s.id === segmentId);
+    if (!segment) {
+      const sceneIdMatch = segmentId.match(/^(scene_\d+)_shot_\d+$/);
+      if (sceneIdMatch?.[1]) {
+        this.log(`Timeline: missing ${segmentId}, attempting repair from ${sceneIdMatch[1]}`);
+        this.ensureSceneShotSegmentsStrict(sceneIdMatch[1]);
+        segment = this.timeline?.segments.find(s => s.id === segmentId);
+      }
+    }
+    if (!segment) {
+      this.log(`Timeline: no segment found for ${segmentId}`);
+      return;
+    }
+
+    const existingVisualLayer = segment.layers.find(
+      layer => layer.type === 'visual' || layer.type === 'narration_video'
+    );
+    const existingFilePath = existingVisualLayer?.filePath?.toLowerCase() ?? '';
+    if (/\.(mp4|mov|webm|m4v|avi|mkv)$/.test(existingFilePath)) {
+      this.log(`Timeline: preserving existing video for ${segmentId} during shot image update`);
+      return;
+    }
+
+    const layer: TimelineLayerEntry = {
+      type: 'visual',
+      filePath: outputPath,
+      label: node.displayName,
+      source: 'generated',
+    };
+
+    this.timeline = updateSegmentLayers(this.timeline, segmentId, [layer], 'planned');
+    saveTimeline(this.config.projectDir, this.timeline);
+    this.emitTimelineUpdate();
+    this.log(`Timeline: updated segment ${segmentId} → planned preview`);
   }
 
   /**
@@ -1011,6 +1675,8 @@ export class ExecutorAgent extends TypedEventEmitter {
         this.emitTimelineUpdate();
       }
     }
+    this.ensureTimelineInitialized();
+    this.reconcileCompletedSceneTimelineSegments();
 
     const agentName = this.config.name ?? 'kshana-executor';
 
@@ -1097,6 +1763,7 @@ export class ExecutorAgent extends TypedEventEmitter {
 
       // Expand any collection nodes whose dependencies are already completed
       await this.expandPendingCollections();
+      this.reconcileCompletedSceneTimelineSegments();
 
       this.emitTodoUpdate();
 
@@ -1126,6 +1793,8 @@ export class ExecutorAgent extends TypedEventEmitter {
       while (!this.executor.isComplete() && !this.stopped) {
         // Expand any type-level collections before checking for ready nodes
         await this.expandPendingCollections();
+        this.ensureTimelineInitialized();
+        this.reconcileCompletedSceneTimelineSegments();
         let readyNodes = this.executor.getNextReady();
 
         // Isolated-redo mode: a redoNode() call set a whitelist of nodes.
@@ -1390,6 +2059,8 @@ export class ExecutorAgent extends TypedEventEmitter {
                 return;
               }
               finalOutputPath = shotImageResult;
+              // Update timeline segment with the generated first-frame preview
+              this.updateTimelineForShotImage(node, finalOutputPath);
             } else if (node.typeId === 'shot_image' && this.config.skipMediaGeneration) {
               // Test mode: skip shot image generation
               this.log(`  Skipping shot_image (skipMediaGeneration=true)`);
@@ -1709,7 +2380,7 @@ export class ExecutorAgent extends TypedEventEmitter {
                 if (existsSync(writtenFile)) {
                   const writtenContent = readFileSync(writtenFile, 'utf-8');
                   this.log(`  Extracting collection items...`);
-                  await this.handleCollectionExpansion(node, writtenContent);
+                  await this.handleCollectionExpansion(node, writtenContent, finalOutputPath);
                 }
               }
             }
@@ -3747,6 +4418,7 @@ Examples of common failure modes to avoid:
     const isJsonNode = jsonNodeTypes.includes(node.typeId) || typeDef?.outputFormat === 'json';
     if (isJsonNode) {
       options.responseFormat = { type: 'json_object' };
+      options.maxTokens = 5000;
     }
 
     // Inject JSON schema into the system prompt so the LLM sees the exact expected structure.
@@ -3883,6 +4555,7 @@ Examples of common failure modes to avoid:
   private async handleCollectionExpansion(
     node: ExecutionNode,
     content: string,
+    outputPath?: string,
   ): Promise<void> {
     const agentName = this.config.name ?? 'kshana-executor';
 
@@ -3955,211 +4628,21 @@ Examples of common failure modes to avoid:
       agentName,
     });
 
-    // Handle shot-level expansion: scene_video_prompt:scene_N → shot_image_prompt per shot
-    if (isShotExtraction && items.shots?.length && node.itemId) {
-      const sceneId = node.itemId; // e.g., "scene_1"
-      const sceneLabel = sceneId.replace('scene_', 'S');
-      const shotItems = items.shots.map(s => ({
-        itemId: `${sceneId}_shot_${s.shotNumber}`,
-        name: `${sceneLabel} Shot ${s.shotNumber}: ${s.shotType}`,
-      }));
-
-      // Find the shot_image_prompt and shot_motion_directive nodes for this scene and expand them.
-      // If per-scene nodes don't exist (e.g., after reset), create them from the type-level collection.
-      let shotPromptNode = this.executor.getNode(`shot_image_prompt:${sceneId}`);
-      let motionDirectiveNode = this.executor.getNode(`shot_motion_directive:${sceneId}`);
-
-      // If per-scene nodes don't exist, expand the type-level collection into per-scene first
-      if (!shotPromptNode) {
-        const typeLevelPrompt = this.executor.getNode('shot_image_prompt');
-        if (typeLevelPrompt && typeLevelPrompt.isCollection) {
-          this.log(`  Creating per-scene node shot_image_prompt:${sceneId} from type-level collection`);
-          this.executor.expandCollection('shot_image_prompt', [{ itemId: sceneId, name: `Scene ${sceneId.replace('scene_', '')}` }]);
-          shotPromptNode = this.executor.getNode(`shot_image_prompt:${sceneId}`);
-        }
-      }
-      if (!motionDirectiveNode) {
-        const typeLevelMotion = this.executor.getNode('shot_motion_directive');
-        if (typeLevelMotion && typeLevelMotion.isCollection) {
-          this.log(`  Creating per-scene node shot_motion_directive:${sceneId} from type-level collection`);
-          this.executor.expandCollection('shot_motion_directive', [{ itemId: sceneId, name: `Scene ${sceneId.replace('scene_', '')}` }]);
-          motionDirectiveNode = this.executor.getNode(`shot_motion_directive:${sceneId}`);
-        }
-      }
-
-      if (shotPromptNode || motionDirectiveNode) {
-        this.log(`  Expanding shots for ${sceneId}: ${shotItems.map(i => i.name).join(', ')}`);
-        if (shotPromptNode) {
-          this.executor.expandCollection(`shot_image_prompt:${sceneId}`, shotItems);
-        }
-        if (motionDirectiveNode) {
-          this.executor.expandCollection(`shot_motion_directive:${sceneId}`, shotItems);
-        }
-
-        // Wire sequential deps for shot_image_prompt nodes (scene state tracking)
-        // Each shot_image_prompt depends on the previous one so state accumulates in order
-        let prevShotPromptId: string | null = null;
-        for (const shot of shotItems) {
-          const promptId = `shot_image_prompt:${shot.itemId}`;
-          const promptNode = this.executor.getNode(promptId);
-          if (promptNode && prevShotPromptId) {
-            if (!promptNode.dependencies.includes(prevShotPromptId)) {
-              promptNode.dependencies.push(prevShotPromptId);
-              const prevNode = this.executor.getNode(prevShotPromptId);
-              if (prevNode && !prevNode.dependents.includes(promptId)) {
-                prevNode.dependents.push(promptId);
-              }
-            }
-          }
-          prevShotPromptId = promptId;
-        }
-
-        // Also create shot_image and shot_video per-shot nodes with proper dependencies.
-        // These can't rely on expandCollection's dependency inheritance because the
-        // type-level node's deps don't include per-item refs.
-        const allCharImages = this.executor.getAllNodes()
-          .filter(n => n.typeId === 'character_image' && n.itemId)
-          .map(n => n.id);
-        const allSettingImages = this.executor.getAllNodes()
-          .filter(n => n.typeId === 'setting_image' && n.itemId)
-          .map(n => n.id);
-
-        let prevShotImageId: string | null = null;
-        let prevShotVideoId: string | null = null;
-        for (const shot of shotItems) {
-          const shotPromptId = `shot_image_prompt:${shot.itemId}`;
-          const motionId = `shot_motion_directive:${shot.itemId}`;
-          const shotImageId = `shot_image:${shot.itemId}`;
-          const shotVideoId = `shot_video:${shot.itemId}`;
-
-          // Create shot_image node if it doesn't exist
-          if (!this.executor.getNode(shotImageId)) {
-            const shotImageDeps = [shotPromptId, ...allCharImages, ...allSettingImages];
-            // Cross-shot chaining: each shot depends on the previous shot in the scene
-            // so the executor processes them sequentially and edit_previous_shot can access the last frame
-            if (prevShotImageId) {
-              shotImageDeps.push(prevShotImageId);
-            }
-            this.executor.addNode({
-              id: shotImageId,
-              typeId: 'shot_image',
-              itemId: shot.itemId,
-              status: 'pending',
-              displayName: `Shot Images: ${shot.name}`,
-              isExpensive: true,
-              isCollection: false,
-              dependencies: shotImageDeps,
-              dependents: [shotVideoId],
-            });
-            // Wire dependents on upstream nodes
-            for (const depId of shotImageDeps) {
-              const depNode = this.executor.getNode(depId);
-              if (depNode && !depNode.dependents.includes(shotImageId)) {
-                depNode.dependents.push(shotImageId);
-              }
-            }
-          }
-
-          // Create or fix shot_video node (sequential — each depends on previous for V2V extend)
-          if (!this.executor.getNode(shotVideoId)) {
-            const shotVideoDeps = [shotImageId, motionId];
-            if (prevShotVideoId) shotVideoDeps.push(prevShotVideoId);
-            this.executor.addNode({
-              id: shotVideoId,
-              typeId: 'shot_video',
-              itemId: shot.itemId,
-              status: 'pending',
-              displayName: `Shot Videos: ${shot.name}`,
-              isExpensive: true,
-              isCollection: false,
-              dependencies: shotVideoDeps,
-              dependents: [],
-            });
-            // Wire dependents
-            for (const depId of shotVideoDeps) {
-              const depNode = this.executor.getNode(depId);
-              if (depNode && !depNode.dependents.includes(shotVideoId)) {
-                depNode.dependents.push(shotVideoId);
-              }
-            }
-          } else {
-            // Node exists — fix stale type-level dependencies → per-item
-            const existing = this.executor.getNode(shotVideoId)!;
-            const fixDeps: Array<[string, string]> = [
-              ['shot_motion_directive', motionId],
-              ['shot_image', shotImageId],
-            ];
-            for (const [stale, correct] of fixDeps) {
-              const idx = existing.dependencies.indexOf(stale);
-              if (idx >= 0) {
-                existing.dependencies[idx] = correct;
-                this.log(`  Rewired ${shotVideoId}: ${stale} → ${correct}`);
-              }
-            }
-            // Wire final_video to depend on this shot_video
-            const finalNode = this.executor.getNode('final_video');
-            if (finalNode && !finalNode.dependencies.includes(shotVideoId)) {
-              finalNode.dependencies.push(shotVideoId);
-            }
-          }
-          prevShotImageId = shotImageId;
-          prevShotVideoId = shotVideoId;
-        }
-        this.log(`  Created ${shotItems.length} shot_image + shot_video nodes for ${sceneId} with proper deps (sequential video chaining for V2V extend)`);
-
-        this.emit({
-          type: 'notification',
-          level: 'info',
-          message: `Expanded shots for ${sceneId}: ${shotItems.map(i => i.name).join(', ')}`,
-        });
-      } else {
-        this.log(`  No shot_image_prompt or shot_motion_directive node found for ${sceneId}`);
-      }
+    if (isShotExtraction && node.itemId) {
+      const result = this.materializeSceneBreakdown(node.itemId, {
+        sceneVideoPromptNode: node,
+        sceneVideoPromptOutputPath: outputPath,
+        content,
+        emitNotifications: true,
+      });
       this.emitTodoUpdate();
-
-      // Timeline: create/recreate skeleton on first scene expansion, then split into shots.
-      // Always recreate if the timeline has per-shot segments from a previous run
-      // (stale after reset — scene_1 segments don't exist, only scene_1_shot_N).
-      const needsReinit = !this.timeline ||
-        !this.timeline.segments.some(s => s.id === sceneId);
-      if (needsReinit) {
-        this.initializeTimelineFromScenes();
+      if (!result.success) {
+        throw new Error(
+          `Scene materialization failed for ${node.itemId}: ` +
+          `reason=${result.failureReason ?? 'unknown'} ` +
+          `expected=[${result.expectedTimelineSegmentIds.join(', ')}] actual=[${result.actualTimelineSegmentIds.join(', ')}]`
+        );
       }
-      if (this.timeline && items.shots?.length) {
-        const shotDescriptors = items.shots.map(s => ({
-          label: `Shot ${s.shotNumber}: ${s.shotType}`,
-          duration: s.duration || 5,
-        }));
-        this.timeline = splitSegmentIntoShots(this.timeline, sceneId, shotDescriptors);
-
-        // Propagate transitions from scene_video_prompt JSON (if available)
-        try {
-          if (node.outputPath) {
-            const svpPath = join(this.config.projectDir, node.outputPath);
-            if (existsSync(svpPath)) {
-              let svpContent = readFileSync(svpPath, 'utf-8').trim();
-              if (svpContent.startsWith('```')) svpContent = svpContent.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-              const parsed = JSON.parse(svpContent);
-              if (parsed.shots) {
-                for (const shot of parsed.shots as Array<{ shotNumber: number; transition?: string }>) {
-                  if (shot.transition && shot.transition !== 'cut') {
-                    const segId = `${sceneId}_shot_${shot.shotNumber}`;
-                    this.timeline = setSegmentTransition(this.timeline, segId, {
-                      type: shot.transition as import('../timeline/types.js').TransitionType,
-                      durationMs: shot.transition === 'flash_to_white' ? 200
-                        : shot.transition === 'dip_to_black' ? 800 : 500,
-                    });
-                  }
-                }
-              }
-            }
-          }
-        } catch { /* transitions are non-critical */ }
-
-        saveTimeline(this.config.projectDir, this.timeline);
-        this.emitTimelineUpdate();
-      }
-
       return;
     }
 
@@ -4792,7 +5275,7 @@ Examples of common failure modes to avoid:
       const promptImageNums = new Set<number>();
       let match: RegExpExecArray | null;
       while ((match = imageRefPattern.exec(shotJson.imagePrompt)) !== null) {
-        promptImageNums.add(parseInt(match[1], 10));
+        promptImageNums.add(parseInt(match[1] ?? '0', 10));
       }
 
       if (promptImageNums.size > resolvedRefs.length) {
@@ -5732,98 +6215,34 @@ Examples of common failure modes to avoid:
     });
 
     try {
-      let resolvedSegments: import('../timeline/FFmpegAssembler.js').ResolvedSegment[];
-
-      // Use timeline if available — it has proper durations, transitions, and segment data
-      if (this.timeline) {
-        const validation = validateTimeline(this.timeline);
-        this.log(`  Timeline: ${validation.filledDuration}/${this.timeline.totalDuration}s filled, ${validation.warnings.length} warnings`);
-
-        const { resolved, errors } = resolveSegmentFilePaths(this.timeline, projectDir);
-        if (errors.length > 0) {
-          this.log(`  Timeline resolution errors: ${errors.join('; ')}`);
-        }
-        if (resolved.length === 0) {
-          this.log(`  No resolved segments from timeline — cannot assemble`);
-          return null;
-        }
-        resolvedSegments = resolved;
-
-        this.emit({
-          type: 'tool_streaming',
-          toolCallId,
-          chunk: `Timeline: ${resolved.length} segments resolved (${Math.round(validation.filledDuration)}s filled)\n`,
-          done: false,
-          agentName,
-          toolName: 'assemble_final_video',
-        });
-      } else {
-        // Fallback: build from shot_video nodes directly (no timeline.json)
-        const shotVideoNodes = this.executor.getAllNodes()
-          .filter(n => n.typeId === 'shot_video' && n.status === 'completed' && n.outputPath)
-          .sort((a, b) => (a.itemId ?? '').localeCompare(b.itemId ?? ''));
-
-        if (shotVideoNodes.length === 0) {
-          this.log(`  No completed shot videos found — cannot assemble`);
-          return null;
-        }
-
-        let currentTime = 0;
-        resolvedSegments = shotVideoNodes.map(vn => {
-          const filePath = join(projectDir, vn.outputPath!);
-          const sceneMatch = vn.itemId?.match(/scene_(\d+)/);
-          const shotMatch = vn.itemId?.match(/shot_(\d+)/);
-          const sceneNum = sceneMatch?.[1] ? parseInt(sceneMatch[1], 10) : 1;
-          const shotNum = shotMatch?.[1] ? parseInt(shotMatch[1], 10) : 1;
-
-          let duration = 5;
-          let transition: string | undefined;
-          let transitionDuration: number | undefined;
-          const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
-          if (svpNode?.outputPath) {
-            try {
-              const svpPath = join(projectDir, svpNode.outputPath);
-              if (existsSync(svpPath)) {
-                let content = readFileSync(svpPath, 'utf-8').trim();
-                if (content.startsWith('```')) content = content.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
-                const parsed = JSON.parse(content);
-                const shot = parsed.shots?.find((s: { shotNumber: number }) => s.shotNumber === shotNum);
-                if (shot?.duration) duration = shot.duration;
-                if (shot?.transition) {
-                  transition = shot.transition;
-                  transitionDuration = transition === 'cut' ? undefined
-                    : transition === 'flash_to_white' ? 0.2
-                    : transition === 'dip_to_black' ? 0.8
-                    : 0.5;
-                }
-              }
-            } catch { /* use default */ }
-          }
-
-          const segment = {
-            segmentId: vn.id,
-            label: vn.displayName,
-            startTime: currentTime,
-            endTime: currentTime + duration,
-            duration,
-            filePath,
-            mediaType: 'video' as const,
-            transition,
-            transitionDuration,
-          };
-          currentTime += duration;
-          return segment;
-        });
-
-        this.emit({
-          type: 'tool_streaming',
-          toolCallId,
-          chunk: `Fallback mode: ${resolvedSegments.length} shot videos found\n`,
-          done: false,
-          agentName,
-          toolName: 'assemble_final_video',
-        });
+      this.ensureTimelineInitialized();
+      if (!this.timeline) {
+        this.log(`  Timeline missing — cannot assemble`);
+        return null;
       }
+
+      const validation = validateTimeline(this.timeline);
+      this.log(`  Timeline: ${validation.filledDuration}/${this.timeline.totalDuration}s filled, ${validation.warnings.length} warnings`);
+
+      const { resolved, errors } = resolveSegmentFilePaths(this.timeline, projectDir);
+      if (errors.length > 0) {
+        this.log(`  Timeline resolution errors: ${errors.join('; ')}`);
+        return null;
+      }
+      if (resolved.length === 0) {
+        this.log(`  No resolved segments from timeline — cannot assemble`);
+        return null;
+      }
+      let resolvedSegments = resolved;
+
+      this.emit({
+        type: 'tool_streaming',
+        toolCallId,
+        chunk: `Timeline: ${resolved.length} segments resolved (${Math.round(validation.filledDuration)}s filled)\n`,
+        done: false,
+        agentName,
+        toolName: 'assemble_final_video',
+      });
 
       // Filter out shots subsumed by v2v_extend successors.
       // A v2v_extend video already contains the previous shot's frames — including both

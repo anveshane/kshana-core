@@ -16,6 +16,12 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
     switch (type) {
       case 'status': {
         const status = data.status as string
+        const projectName = data.projectName as string | undefined
+
+        if (projectName) {
+          dispatch({ type: 'SELECT_PROJECT', name: projectName })
+        }
+
         if (status === 'ready' || status === 'completed') {
           dispatch({ type: 'SET_AGENT_STATUS', status: 'idle' })
         } else if (status === 'busy') {

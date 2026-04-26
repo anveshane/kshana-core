@@ -37,7 +37,7 @@ const mockTimeline: Timeline = {
       duration: 10,
       compositingMode: 'replace',
       fillStatus: 'planned',
-      layers: [],
+      layers: [{ type: 'visual', filePath: 'assets/images/scene-1-shot-2.png', label: 'Shot 2', source: 'generated' }],
       transition: { type: 'crossfade', durationMs: 500 },
     },
     {
@@ -63,38 +63,37 @@ const mockTimeline: Timeline = {
 describe('TimelineView', () => {
   it('shows empty state when no timeline', () => {
     renderWithState({ timeline: null })
-    expect(screen.getByText(/No timeline yet/)).toBeInTheDocument()
+    expect(screen.getByText(/No timeline yet/)).toBeTruthy()
   })
 
   it('renders segment blocks for each segment', () => {
     renderWithState({ timeline: mockTimeline })
-    expect(screen.getByText('Shot 1: Wide')).toBeInTheDocument()
-    expect(screen.getByText('Shot 2: Close')).toBeInTheDocument()
-    expect(screen.getByText('Shot 3: Pan')).toBeInTheDocument()
+    expect(screen.getByText('Shot 1: Wide')).toBeTruthy()
+    expect(screen.getByText('Shot 2: Close')).toBeTruthy()
+    expect(screen.getByText('Shot 3: Pan')).toBeTruthy()
   })
 
   it('shows fill status labels', () => {
     renderWithState({ timeline: mockTimeline })
-    expect(screen.getByText('Filled')).toBeInTheDocument()
-    expect(screen.getByText('Planned')).toBeInTheDocument()
-    expect(screen.getByText('Empty')).toBeInTheDocument()
+    expect(screen.getByText('Filled')).toBeTruthy()
+    expect(screen.getByText('Planned')).toBeTruthy()
+    expect(screen.getByText('Empty')).toBeTruthy()
   })
 
   it('shows progress bar with correct percentage', () => {
     renderWithState({ timeline: mockTimeline })
-    // 10/30 = 33%
-    expect(screen.getByText(/33%/)).toBeInTheDocument()
-    expect(screen.getByText(/10s \/ 30s/)).toBeInTheDocument()
+    expect(screen.getByText(/33%/)).toBeTruthy()
+    expect(screen.getByText(/10s \/ 30s/)).toBeTruthy()
   })
 
   it('shows filled/total count', () => {
     renderWithState({ timeline: mockTimeline })
-    expect(screen.getByText('1/3 filled')).toBeInTheDocument()
+    expect(screen.getByText('1/3 filled')).toBeTruthy()
   })
 
   it('shows transition badge for non-cut transitions', () => {
     renderWithState({ timeline: mockTimeline })
-    expect(screen.getByText('crossfade')).toBeInTheDocument()
+    expect(screen.getByText('crossfade')).toBeTruthy()
   })
 
   it('shows segment durations', () => {
@@ -105,6 +104,26 @@ describe('TimelineView', () => {
 
   it('shows header with segment count and total duration', () => {
     renderWithState({ timeline: mockTimeline })
-    expect(screen.getByText(/3 segments \/ 30s/)).toBeInTheDocument()
+    expect(screen.getByText(/3 segments \/ 30s/)).toBeTruthy()
+  })
+
+  it('renders video preview for segments with a video layer', () => {
+    const { container } = renderWithState({ timeline: mockTimeline, selectedProject: 'demo-project' })
+    const video = container.querySelector('video')
+    expect(video).toBeTruthy()
+    expect(video?.getAttribute('src')).toBe('/api/v1/assets/demo-project/test.mp4')
+  })
+
+  it('renders image preview for planned segments with an image layer', () => {
+    const { container } = renderWithState({ timeline: mockTimeline, selectedProject: 'demo-project' })
+    const image = container.querySelector('img')
+    expect(image).toBeTruthy()
+    expect(image?.getAttribute('src')).toBe('/api/v1/assets/demo-project/assets/images/scene-1-shot-2.png')
+  })
+
+  it('shows scene number at the bottom of each segment card', () => {
+    renderWithState({ timeline: mockTimeline })
+    const sceneLabels = screen.getAllByText(/^Scene \d+$/)
+    expect(sceneLabels.length).toBeGreaterThanOrEqual(3)
   })
 })

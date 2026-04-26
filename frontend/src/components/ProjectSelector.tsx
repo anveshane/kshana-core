@@ -11,13 +11,15 @@ interface ProjectInfo {
 interface ProjectSelectorProps {
   onSendWs: (msg: Record<string, unknown>) => void
   onNewProject?: () => void
+  refreshToken?: number
 }
 
-export function ProjectSelector({ onSendWs, onNewProject }: ProjectSelectorProps) {
-  const { selectedProject } = useAppState()
+export function ProjectSelector({ onSendWs, onNewProject, refreshToken = 0 }: ProjectSelectorProps) {
+  const { selectedProject, agentStatus } = useAppState()
   const dispatch = useAppDispatch()
   const [projects, setProjects] = useState<ProjectInfo[]>([])
   const [open, setOpen] = useState(false)
+  const [queuedSelection, setQueuedSelection] = useState<string | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   const loadProjects = useCallback(async () => {
@@ -35,7 +37,7 @@ export function ProjectSelector({ onSendWs, onNewProject }: ProjectSelectorProps
 
   useEffect(() => {
     loadProjects()
-  }, [loadProjects])
+  }, [loadProjects, refreshToken])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -48,30 +50,7 @@ export function ProjectSelector({ onSendWs, onNewProject }: ProjectSelectorProps
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open])
 
-  const handleSelect = (dirName: string) => {
-    setOpen(false)
-    const projectName = dirName.replace('.kshana', '')
-    // Store project name WITHOUT .kshana — asset URLs use this directly
-    dispatch({ type: 'SELECT_PROJECT', name: projectName })
-    onSendWs({ type: 'select_project', data: { projectName } })
-    loadProjectAssets(dirName)
-    loadProjectState(dirName)
-
-    // Load project without auto-starting execution
-    setTimeout(() => {
-      dispatch({
-        type: 'ADD_CHAT_MESSAGE',
-        message: {
-          id: `sel_${Date.now()}`,
-          type: 'system',
-          content: `Project **${projectName}** loaded. Type a task to start, or use \`/reset <stage>\` to reset to a specific point.`,
-          timestamp: Date.now(),
-        },
-      })
-    }, 1500)
-  }
-
-  const loadProjectState = async (dirName: string) => {
+  const loadProjectState = useCallback(async (dirName: string) => {
     try {
       const name = dirName.replace('.kshana', '')
       const res = await fetch(`/api/v1/projects/${name}`)
@@ -121,9 +100,9 @@ export function ProjectSelector({ onSendWs, onNewProject }: ProjectSelectorProps
         dispatch({ type: 'SET_TODOS', todos })
       }
     } catch { /* */ }
-  }
+  }, [dispatch])
 
-  const loadProjectAssets = async (dirName: string) => {
+  const loadProjectAssets = useCallback(async (dirName: string) => {
     try {
       const name = dirName.replace('.kshana', '')
       const res = await fetch(`/api/v1/projects/${name}/assets`)
@@ -135,6 +114,40 @@ export function ProjectSelector({ onSendWs, onNewProject }: ProjectSelectorProps
       }))
       dispatch({ type: 'SET_ASSETS', assets })
     } catch { /* */ }
+  }, [dispatch])
+
+  const handleSelectNow = useCallback((dirName: string) => {
+    const projectName = dirName.replace('.kshana', '')
+    // Store project name WITHOUT .kshana — asset URLs use this directly
+    dispatch({ type: 'SELECT_PROJECT', name: projectName })
+    onSendWs({ type: 'select_project', data: { projectName } })
+    loadProjectAssets(dirName)
+    loadProjectState(dirName)
+    dispatch({
+      type: 'ADD_CHAT_MESSAGE',
+      message: {
+        id: `sel_${Date.now()}`,
+        type: 'system',
+        content: `Project **${projectName}** loaded. Type a task to start, or use \`/reset <stage>\` to reset to a specific point.`,
+        timestamp: Date.now(),
+      },
+    })
+  }, [dispatch, loadProjectAssets, loadProjectState, onSendWs])
+
+  useEffect(() => {
+    if (!queuedSelection || agentStatus === 'thinking') return
+    handleSelectNow(queuedSelection)
+    setQueuedSelection(null)
+  }, [agentStatus, handleSelectNow, queuedSelection])
+
+  const handleSelect = (dirName: string) => {
+    setOpen(false)
+    if (agentStatus === 'thinking') {
+      onSendWs({ type: 'cancel' })
+      setQueuedSelection(dirName)
+      return
+    }
+    handleSelectNow(dirName)
   }
 
   const selectedTitle = projects.find(p => p.dirName.replace('.kshana', '') === selectedProject)?.title

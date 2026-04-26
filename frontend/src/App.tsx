@@ -1,4 +1,4 @@
-import { useReducer, useState, useCallback, useRef } from 'react'
+import { useReducer, useState, useCallback, useRef, useEffect } from 'react'
 import { AppStateContext, AppDispatchContext, appReducer, initialState } from './lib/store'
 import { useWebSocket } from './hooks/useWebSocket'
 import { useMessageHandler } from './hooks/useMessageHandler'
@@ -20,10 +20,13 @@ export function App() {
   const [showProviders, setShowProviders] = useState(false)
   const [showWorkflows, setShowWorkflows] = useState(false)
   const [showNewProject, setShowNewProject] = useState(false)
+  const [projectListRefreshToken, setProjectListRefreshToken] = useState(0)
+  const [queuedNewProjectOpen, setQueuedNewProjectOpen] = useState(false)
 
   // When wizard completes (template/style/duration selected),
   // store the config and wait for user to type description in chat input
   const [pendingProject, setPendingProject] = useState<NewProjectState | null>(null)
+  const [pendingAutoTask, setPendingAutoTask] = useState<string | null>(null)
 
   // Stable refs for WebSocket callbacks
   const dispatchRef = useRef(dispatch)
@@ -45,6 +48,37 @@ export function App() {
     onConnect: stableOnConnect,
     onDisconnect: stableOnDisconnect,
   })
+
+  useEffect(() => {
+    if (!queuedNewProjectOpen || state.agentStatus === 'thinking') return
+    dispatch({ type: 'ENTER_NEW_PROJECT_FLOW' })
+    setShowNewProject(true)
+    setQueuedNewProjectOpen(false)
+  }, [dispatch, queuedNewProjectOpen, state.agentStatus])
+
+  useEffect(() => {
+    if (!pendingAutoTask || !state.selectedProject) return
+
+    setPendingAutoTask(null)
+    setProjectListRefreshToken(token => token + 1)
+    send({ type: 'start_task', data: { task: pendingAutoTask } })
+    dispatch({ type: 'SET_AGENT_STATUS', status: 'thinking' })
+  }, [dispatch, pendingAutoTask, send, state.selectedProject])
+
+  const handleNewProjectRequest = useCallback(() => {
+    setPendingProject(null)
+    setPendingAutoTask(null)
+    setShowNewProject(false)
+
+    if (state.agentStatus === 'thinking') {
+      send({ type: 'cancel' })
+      setQueuedNewProjectOpen(true)
+      return
+    }
+
+    dispatch({ type: 'ENTER_NEW_PROJECT_FLOW' })
+    setShowNewProject(true)
+  }, [dispatch, send, state.agentStatus])
 
   const handleSendTask = useCallback((task: string) => {
     if (!task.trim()) return
@@ -87,11 +121,8 @@ export function App() {
         },
       })
 
-      // Auto-start execution after project creation
-      setTimeout(() => {
-        send({ type: 'start_task', data: { task: 'Create a video project' } })
-        dispatch({ type: 'SET_AGENT_STATUS', status: 'thinking' })
-      }, 2000)
+      // Auto-start only after the server reports the new project is ready.
+      setPendingAutoTask('Start working on this project. The project has just been created with the user content.')
       return
     }
 
@@ -132,7 +163,7 @@ export function App() {
               onProviderSettings={() => setShowProviders(true)}
               onWorkflows={() => setShowWorkflows(true)}
               onStop={() => send({ type: 'cancel' })}
-              projectSelector={<ProjectSelector onSendWs={send} onNewProject={() => setShowNewProject(true)} />}
+              projectSelector={<ProjectSelector onSendWs={send} onNewProject={handleNewProjectRequest} refreshToken={projectListRefreshToken} />}
             />
 
             <div className="flex flex-1 overflow-hidden relative z-10">
@@ -211,7 +242,10 @@ export function App() {
                         },
                       })
                     }}
-                    onCancel={() => setShowNewProject(false)}
+                    onCancel={() => {
+                      setShowNewProject(false)
+                      dispatch({ type: 'SELECT_PROJECT', name: null })
+                    }}
                     onStepChange={(step, value) => {
                       dispatch({
                         type: 'ADD_CHAT_MESSAGE',

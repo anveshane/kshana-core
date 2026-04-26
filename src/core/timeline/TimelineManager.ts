@@ -22,6 +22,70 @@ import type {
   SegmentVersionInfo,
 } from './types.js';
 
+export type LayerDowngradeReason =
+  | 'missing_artifact_id'
+  | 'missing_file_path'
+  | 'video_over_weaker_media'
+  | 'metadata_cleared';
+
+export interface DowngradePrevention {
+  preservedIndexes: number[];
+  reasons: Array<{
+    index: number;
+    reason: LayerDowngradeReason;
+  }>;
+}
+
+export interface UpdateSegmentLayersResult extends Timeline {
+  downgradePrevention?: DowngradePrevention;
+}
+
+export interface UpsertSceneShotsResult {
+  timeline: Timeline;
+  preservedExistingShots: boolean;
+  mergedMetadataIntoExistingShots: boolean;
+}
+
+function buildShotSegmentsFromContainer(
+  sceneSegmentId: string,
+  container: Pick<TimelineSegment, 'startTime' | 'endTime' | 'duration' | 'compositingMode'>,
+  shots: Array<{ label: string; duration: number; metadata?: Record<string, unknown> }>
+): TimelineSegment[] {
+  if (shots.length === 0) {
+    throw new Error('shots array must not be empty');
+  }
+
+  const totalShotDuration = shots.reduce((sum, s) => sum + s.duration, 0);
+  const scale = container.duration / totalShotDuration;
+
+  const shotSegments: TimelineSegment[] = [];
+  let currentTime = container.startTime;
+
+  for (let i = 0; i < shots.length; i++) {
+    const shot = shots[i]!;
+    const isLast = i === shots.length - 1;
+    const shotDuration = isLast
+      ? Math.round((container.endTime - currentTime) * 100) / 100
+      : Math.round(shot.duration * scale * 100) / 100;
+
+    shotSegments.push({
+      id: `${sceneSegmentId}_shot_${i + 1}`,
+      label: shot.label,
+      startTime: Math.round(currentTime * 100) / 100,
+      endTime: Math.round((currentTime + shotDuration) * 100) / 100,
+      duration: shotDuration,
+      compositingMode: container.compositingMode,
+      fillStatus: 'planned',
+      layers: [],
+      ...(shot.metadata ? { metadata: shot.metadata } : {}),
+    });
+
+    currentTime += shotDuration;
+  }
+
+  return shotSegments;
+}
+
 /** Default constraints based on current generation capabilities */
 const DEFAULT_CONSTRAINTS: DurationConstraints = {
   maxClipDuration: 10,
@@ -30,6 +94,108 @@ const DEFAULT_CONSTRAINTS: DurationConstraints = {
 };
 
 const TIMELINE_FILENAME = 'timeline.json';
+
+function isVisualLikeLayer(layer: TimelineLayerEntry | undefined): boolean {
+  return layer?.type === 'visual' || layer?.type === 'narration_video';
+}
+
+function detectLayerMediaType(layer: TimelineLayerEntry | undefined): 'video' | 'image' | null {
+  if (!layer) return null;
+  if (layer.type === 'narration_video') return 'video';
+
+  const path = layer.filePath?.toLowerCase() ?? '';
+  if (/\.(mp4|mov|webm|m4v|avi|mkv)$/.test(path)) return 'video';
+  if (/\.(png|jpe?g|webp|gif|avif|bmp)$/.test(path)) return 'image';
+
+  const artifactId = layer.artifactId?.toLowerCase() ?? '';
+  if (artifactId.startsWith('vid_')) return 'video';
+  if (artifactId.startsWith('img_')) return 'image';
+
+  const label = layer.label.toLowerCase();
+  if (label.includes('video')) return 'video';
+  if (label.includes('image')) return 'image';
+
+  return null;
+}
+
+function mergeLayerMetadata(
+  existingMetadata?: Record<string, unknown>,
+  incomingMetadata?: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  if (!existingMetadata && !incomingMetadata) return undefined;
+  return { ...(existingMetadata ?? {}), ...(incomingMetadata ?? {}) };
+}
+
+function hasUsefulMetadata(metadata?: Record<string, unknown>): boolean {
+  if (!metadata) return false;
+  const usefulKeys = [
+    'prompt',
+    'promptFile',
+    'prompt_file',
+    'motionPrompt',
+    'motion_prompt',
+    'negativePrompt',
+    'negative_prompt',
+    'shotType',
+    'shot_type',
+  ];
+  return usefulKeys.some((key) => metadata[key] !== undefined);
+}
+
+function layersHaveEquivalentAssetIdentity(
+  existing: TimelineLayerEntry[],
+  next: TimelineLayerEntry[]
+): boolean {
+  const max = Math.max(existing.length, next.length);
+  for (let i = 0; i < max; i++) {
+    const left = existing[i];
+    const right = next[i];
+    if (!left || !right) return false;
+    if (!isVisualLikeLayer(left) && !isVisualLikeLayer(right)) continue;
+    if (left.type !== right.type) return false;
+    if ((left.artifactId ?? '') !== (right.artifactId ?? '')) return false;
+    if ((left.filePath ?? '') !== (right.filePath ?? '')) return false;
+  }
+  return true;
+}
+
+function isCompatibleShotUpdate(
+  existingSegment: TimelineSegment,
+  incomingShot: { label: string; duration: number; metadata?: Record<string, unknown> }
+): boolean {
+  if (Math.abs(existingSegment.duration - incomingShot.duration) > 0.01) {
+    return false;
+  }
+
+  const existingShotType = existingSegment.metadata?.['shotType'];
+  const incomingShotType = incomingShot.metadata?.['shotType'];
+  if (
+    typeof existingShotType === 'string' &&
+    typeof incomingShotType === 'string' &&
+    existingShotType !== incomingShotType
+  ) {
+    return false;
+  }
+
+  const existingShotNumber = existingSegment.metadata?.['shotNumber'];
+  const incomingShotNumber = incomingShot.metadata?.['shotNumber'];
+  if (
+    typeof existingShotNumber === 'number' &&
+    typeof incomingShotNumber === 'number' &&
+    existingShotNumber !== incomingShotNumber
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+function getSceneShotSegments(
+  timeline: Timeline,
+  sceneSegmentId: string
+): TimelineSegment[] {
+  return timeline.segments.filter(segment => segment.id.startsWith(`${sceneSegmentId}_shot_`));
+}
 
 /**
  * Calculate how to divide total duration among segments.
@@ -147,7 +313,7 @@ export function updateSegmentLayers(
   fillStatus?: SegmentFillStatus,
   prompt?: string,
   note?: string
-): Timeline {
+): UpdateSegmentLayersResult {
   const segmentIndex = timeline.segments.findIndex(s => s.id === segmentId);
   if (segmentIndex === -1) {
     throw new Error(`Segment not found: ${segmentId}`);
@@ -155,16 +321,95 @@ export function updateSegmentLayers(
 
   const updatedSegments = [...timeline.segments];
   const existing = updatedSegments[segmentIndex]!;
+  const downgradePrevention: DowngradePrevention = {
+    preservedIndexes: [],
+    reasons: [],
+  };
+
+  const newLayers = layers.map((incomingLayer, index) => {
+    const existingLayer = existing.layers[index];
+    if (!isVisualLikeLayer(existingLayer) || !isVisualLikeLayer(incomingLayer)) {
+      return prompt
+        ? {
+            ...incomingLayer,
+            metadata: index === 0
+              ? { ...(incomingLayer.metadata ?? {}), prompt }
+              : incomingLayer.metadata,
+          }
+        : incomingLayer;
+    }
+
+    const strongExistingLayer = existingLayer;
+
+    const reasons: LayerDowngradeReason[] = [];
+
+    if (strongExistingLayer.artifactId && !incomingLayer.artifactId) {
+      reasons.push('missing_artifact_id');
+    }
+    if (strongExistingLayer.filePath && !incomingLayer.filePath) {
+      reasons.push('missing_file_path');
+    }
+
+    const existingMediaType = detectLayerMediaType(strongExistingLayer);
+    const incomingMediaType = detectLayerMediaType(incomingLayer);
+    if (existingMediaType === 'video' && incomingMediaType !== 'video') {
+      reasons.push('video_over_weaker_media');
+    }
+
+    if (
+      hasUsefulMetadata(strongExistingLayer.metadata) &&
+      incomingLayer.metadata !== undefined &&
+      !hasUsefulMetadata(incomingLayer.metadata)
+    ) {
+      reasons.push('metadata_cleared');
+    }
+
+    const mergedMetadata = mergeLayerMetadata(strongExistingLayer.metadata, incomingLayer.metadata);
+
+    if (reasons.length === 0) {
+      return prompt
+        ? {
+            ...incomingLayer,
+            metadata: index === 0 ? { ...(mergedMetadata ?? {}), prompt } : mergedMetadata,
+          }
+        : {
+            ...incomingLayer,
+            metadata: mergedMetadata,
+          };
+    }
+
+    downgradePrevention.preservedIndexes.push(index);
+    for (const reason of reasons) {
+      downgradePrevention.reasons.push({ index, reason });
+    }
+
+    return {
+      ...incomingLayer,
+      type: existingMediaType === 'video' && incomingMediaType !== 'video'
+        ? strongExistingLayer.type
+        : incomingLayer.type,
+      artifactId: incomingLayer.artifactId ?? strongExistingLayer.artifactId,
+      filePath: incomingLayer.filePath ?? strongExistingLayer.filePath,
+      metadata: index === 0 && prompt
+        ? { ...(mergedMetadata ?? {}), ['prompt']: (mergedMetadata ?? {})['prompt'] ?? prompt }
+        : mergedMetadata,
+    };
+  });
 
   // Determine fill status: if layers contain a visual, mark as filled
-  const hasVisual = layers.some(l => l.type === 'visual' || l.type === 'narration_video');
+  const hasVisual = newLayers.some(l => l.type === 'visual' || l.type === 'narration_video');
   const newFillStatus = fillStatus ?? (hasVisual ? 'filled' : 'planned');
 
   // --- Version history ---
   const existingHasVisual = existing.layers.some(
     l => l.type === 'visual' || l.type === 'narration_video'
   );
-  const isReplacement = existingHasVisual && existing.fillStatus === 'filled' && hasVisual;
+  const assetIdentityChanged = !layersHaveEquivalentAssetIdentity(existing.layers, newLayers);
+  const isReplacement =
+    existingHasVisual &&
+    hasVisual &&
+    assetIdentityChanged &&
+    downgradePrevention.preservedIndexes.length === 0;
 
   let layerHistory = existing.layerHistory ? [...existing.layerHistory] : [];
   let versionInfo: SegmentVersionInfo;
@@ -189,13 +434,6 @@ export function updateSegmentLayers(
     versionInfo = existing.versionInfo ?? { activeVersion: 1, totalVersions: 1 };
   }
 
-  // Store the generation prompt in the first layer's metadata if provided
-  const newLayers = prompt
-    ? layers.map((l, i) =>
-        i === 0 ? { ...l, metadata: { ...l.metadata, prompt } } : l
-      )
-    : layers;
-
   updatedSegments[segmentIndex] = {
     ...existing,
     layers: newLayers,
@@ -210,7 +448,9 @@ export function updateSegmentLayers(
     segments: updatedSegments,
   };
   updated.validation = validateTimeline(updated);
-  return updated;
+  return downgradePrevention.preservedIndexes.length > 0
+    ? { ...updated, downgradePrevention }
+    : updated;
 }
 
 /**
@@ -393,42 +633,8 @@ export function splitSegmentIntoShots(
   if (segmentIndex === -1) {
     throw new Error(`Segment not found: ${sceneSegmentId}`);
   }
-  if (shots.length === 0) {
-    throw new Error('shots array must not be empty');
-  }
-
   const sceneSegment = timeline.segments[segmentIndex]!;
-  const sceneStart = sceneSegment.startTime;
-  const sceneDuration = sceneSegment.duration;
-
-  // Proportionally scale shot durations to fill the scene's allocated time
-  const totalShotDuration = shots.reduce((sum, s) => sum + s.duration, 0);
-  const scale = sceneDuration / totalShotDuration;
-
-  const shotSegments: TimelineSegment[] = [];
-  let currentTime = sceneStart;
-
-  for (let i = 0; i < shots.length; i++) {
-    const shot = shots[i]!;
-    const isLast = i === shots.length - 1;
-    const shotDuration = isLast
-      ? Math.round((sceneSegment.endTime - currentTime) * 100) / 100
-      : Math.round(shot.duration * scale * 100) / 100;
-
-    shotSegments.push({
-      id: `${sceneSegmentId}_shot_${i + 1}`,
-      label: shot.label,
-      startTime: Math.round(currentTime * 100) / 100,
-      endTime: Math.round((currentTime + shotDuration) * 100) / 100,
-      duration: shotDuration,
-      compositingMode: sceneSegment.compositingMode,
-      fillStatus: 'planned',
-      layers: [],
-      ...(shot.metadata ? { metadata: shot.metadata } : {}),
-    });
-
-    currentTime += shotDuration;
-  }
+  const shotSegments = buildShotSegmentsFromContainer(sceneSegmentId, sceneSegment, shots);
 
   // Replace the scene segment with the shot segments
   const updatedSegments = [
@@ -443,6 +649,98 @@ export function splitSegmentIntoShots(
   };
   updated.validation = validateTimeline(updated);
   return updated;
+}
+
+export function upsertSceneShots(
+  timeline: Timeline,
+  sceneSegmentId: string,
+  shots: Array<{ label: string; duration: number; metadata?: Record<string, unknown> }>
+): UpsertSceneShotsResult {
+  const existingShotSegments = getSceneShotSegments(timeline, sceneSegmentId);
+  const sceneSegment = timeline.segments.find(segment => segment.id === sceneSegmentId);
+  const hasFilledShots = existingShotSegments.some(segment => segment.fillStatus === 'filled');
+  const canMergeIntoExistingShots =
+    existingShotSegments.length === shots.length &&
+    existingShotSegments.every((segment, index) => isCompatibleShotUpdate(segment, shots[index]!));
+
+  if (existingShotSegments.length > 0 && canMergeIntoExistingShots) {
+    const mergedSegments = timeline.segments.map(segment => {
+      const shotMatch = segment.id.match(new RegExp(`^${sceneSegmentId}_shot_(\\d+)$`));
+      if (!shotMatch?.[1]) return segment;
+      const shotIndex = Number(shotMatch[1]) - 1;
+      const incomingShot = shots[shotIndex];
+      if (!incomingShot) return segment;
+
+      return {
+        ...segment,
+        label: incomingShot.label ?? segment.label,
+        metadata: incomingShot.metadata
+          ? { ...(segment.metadata ?? {}), ...incomingShot.metadata }
+          : segment.metadata,
+      };
+    });
+
+    const updatedTimeline: Timeline = {
+      ...timeline,
+      segments: mergedSegments,
+    };
+    updatedTimeline.validation = validateTimeline(updatedTimeline);
+
+    return {
+      timeline: updatedTimeline,
+      preservedExistingShots: true,
+      mergedMetadataIntoExistingShots: true,
+    };
+  }
+
+  if (existingShotSegments.length > 0 && hasFilledShots) {
+    return {
+      timeline,
+      preservedExistingShots: true,
+      mergedMetadataIntoExistingShots: false,
+    };
+  }
+
+  if (!sceneSegment && existingShotSegments.length > 0) {
+    const sortedExisting = [...existingShotSegments].sort((a, b) => a.startTime - b.startTime);
+    const replacementSegments = buildShotSegmentsFromContainer(
+      sceneSegmentId,
+      {
+        startTime: sortedExisting[0]!.startTime,
+        endTime: sortedExisting[sortedExisting.length - 1]!.endTime,
+        duration: Math.round((sortedExisting[sortedExisting.length - 1]!.endTime - sortedExisting[0]!.startTime) * 100) / 100,
+        compositingMode: sortedExisting[0]!.compositingMode,
+      },
+      shots,
+    );
+
+    const existingIds = new Set(sortedExisting.map(segment => segment.id));
+    const insertionIndex = timeline.segments.findIndex(segment => segment.id === sortedExisting[0]!.id);
+    const remainingSegments = timeline.segments.filter(segment => !existingIds.has(segment.id));
+    const updatedSegments = [
+      ...remainingSegments.slice(0, insertionIndex),
+      ...replacementSegments,
+      ...remainingSegments.slice(insertionIndex),
+    ];
+
+    const updatedTimeline: Timeline = {
+      ...timeline,
+      segments: updatedSegments,
+    };
+    updatedTimeline.validation = validateTimeline(updatedTimeline);
+
+    return {
+      timeline: updatedTimeline,
+      preservedExistingShots: false,
+      mergedMetadataIntoExistingShots: false,
+    };
+  }
+
+  return {
+    timeline: splitSegmentIntoShots(timeline, sceneSegmentId, shots),
+    preservedExistingShots: false,
+    mergedMetadataIntoExistingShots: false,
+  };
 }
 
 /**

@@ -8,6 +8,7 @@ import {
   createTimelineSkeleton,
   updateSegmentLayers,
   splitSegmentIntoShots,
+  upsertSceneShots,
   setSegmentTransition,
   validateTimeline,
 } from '../src/core/timeline/TimelineManager.js';
@@ -152,6 +153,32 @@ describe('Timeline Integration', () => {
         splitSegmentIntoShots(timeline, 'nonexistent', [{ label: 'Shot 1', duration: 5 }])
       ).toThrow('Segment not found');
     });
+
+    it('reuses compatible planned shot segments without trying to split the scene again', () => {
+      let timeline = createTimelineSkeleton(15, [
+        { id: 'scene_1', label: 'Scene 1' },
+      ]);
+
+      timeline = splitSegmentIntoShots(timeline, 'scene_1', [
+        { label: 'Shot 1: Wide', duration: 5, metadata: { shotNumber: 1, transition: 'fade' } },
+        { label: 'Shot 2: Close', duration: 5, metadata: { shotNumber: 2, transition: 'cut' } },
+        { label: 'Shot 3: Detail', duration: 5, metadata: { shotNumber: 3, transition: 'dip_to_black' } },
+      ]);
+
+      const updated = upsertSceneShots(timeline, 'scene_1', [
+        { label: 'Shot 1: Wide', duration: 5, metadata: { shotNumber: 1, transition: 'fade' } },
+        { label: 'Shot 2: Close', duration: 5, metadata: { shotNumber: 2, transition: 'cut' } },
+        { label: 'Shot 3: Detail', duration: 5, metadata: { shotNumber: 3, transition: 'dip_to_black' } },
+      ]);
+
+      expect(updated.preservedExistingShots).toBe(true);
+      expect(updated.mergedMetadataIntoExistingShots).toBe(true);
+      expect(updated.timeline.segments.map(s => s.id)).toEqual([
+        'scene_1_shot_1',
+        'scene_1_shot_2',
+        'scene_1_shot_3',
+      ]);
+    });
   });
 
   describe('updateSegmentLayers', () => {
@@ -195,6 +222,155 @@ describe('Timeline Integration', () => {
 
       const seg = updated.segments.find(s => s.id === 'scene_1_shot_1')!;
       expect(seg.fillStatus).toBe('filled');
+    });
+
+    it('preserves strong refs when a later label-only visual update arrives', () => {
+      let timeline = createTimelineSkeleton(10, [{ id: 'scene_1', label: 'Scene 1' }]);
+      timeline = splitSegmentIntoShots(timeline, 'scene_1', [{ label: 'Shot 1', duration: 10 }]);
+
+      const strongLayer: TimelineLayerEntry = {
+        type: 'visual',
+        artifactId: 'vid_strong',
+        filePath: 'assets/videos/scene-1-shot-1.mp4',
+        label: 'Strong',
+        source: 'generated',
+        metadata: { prompt: 'keep this prompt' },
+      };
+      timeline = updateSegmentLayers(timeline, 'scene_1_shot_1', [strongLayer], 'filled');
+
+      const weakUpdate: TimelineLayerEntry = {
+        type: 'visual',
+        label: 'Late label rewrite',
+        source: 'generated',
+      };
+      const updated = updateSegmentLayers(timeline, 'scene_1_shot_1', [weakUpdate], 'filled');
+
+      const seg = updated.segments.find(s => s.id === 'scene_1_shot_1')!;
+      expect(seg.layers[0]).toEqual(expect.objectContaining({
+        artifactId: 'vid_strong',
+        filePath: 'assets/videos/scene-1-shot-1.mp4',
+        label: 'Late label rewrite',
+      }));
+      expect(seg.layers[0]!.metadata).toEqual(expect.objectContaining({ prompt: 'keep this prompt' }));
+      expect(updated.downgradePrevention?.preservedIndexes).toEqual([0]);
+      expect(seg.versionInfo).toEqual({ activeVersion: 1, totalVersions: 1 });
+    });
+
+    it('preserves both refs when a later partial weaker update drops one field', () => {
+      let timeline = createTimelineSkeleton(10, [{ id: 'scene_1', label: 'Scene 1' }]);
+      timeline = splitSegmentIntoShots(timeline, 'scene_1', [{ label: 'Shot 1', duration: 10 }]);
+
+      const strongLayer: TimelineLayerEntry = {
+        type: 'visual',
+        artifactId: 'vid_strong',
+        filePath: 'assets/videos/scene-1-shot-1.mp4',
+        label: 'Strong',
+        source: 'generated',
+      };
+      timeline = updateSegmentLayers(timeline, 'scene_1_shot_1', [strongLayer], 'filled');
+
+      const partialUpdate: TimelineLayerEntry = {
+        type: 'visual',
+        artifactId: 'vid_strong',
+        label: 'Partial',
+        source: 'generated',
+      };
+      const updated = updateSegmentLayers(timeline, 'scene_1_shot_1', [partialUpdate], 'filled');
+
+      const seg = updated.segments.find(s => s.id === 'scene_1_shot_1')!;
+      expect(seg.layers[0]).toEqual(expect.objectContaining({
+        artifactId: 'vid_strong',
+        filePath: 'assets/videos/scene-1-shot-1.mp4',
+      }));
+      expect(updated.downgradePrevention?.reasons).toEqual(
+        expect.arrayContaining([{ index: 0, reason: 'missing_file_path' }])
+      );
+    });
+
+    it('allows valid matching video replacement and versions it', () => {
+      let timeline = createTimelineSkeleton(10, [{ id: 'scene_1', label: 'Scene 1' }]);
+      timeline = splitSegmentIntoShots(timeline, 'scene_1', [{ label: 'Shot 1', duration: 10 }]);
+
+      timeline = updateSegmentLayers(timeline, 'scene_1_shot_1', [{
+        type: 'visual',
+        artifactId: 'vid_old',
+        filePath: 'assets/videos/old.mp4',
+        label: 'Old',
+        source: 'generated',
+      }], 'filled');
+
+      const updated = updateSegmentLayers(timeline, 'scene_1_shot_1', [{
+        type: 'visual',
+        artifactId: 'vid_new',
+        filePath: 'assets/videos/new.mp4',
+        label: 'New',
+        source: 'generated',
+      }], 'filled');
+
+      const seg = updated.segments.find(s => s.id === 'scene_1_shot_1')!;
+      expect(seg.layers[0]).toEqual(expect.objectContaining({
+        artifactId: 'vid_new',
+        filePath: 'assets/videos/new.mp4',
+      }));
+      expect(seg.versionInfo).toEqual({ activeVersion: 2, totalVersions: 2 });
+      expect(seg.layerHistory).toHaveLength(1);
+      expect(updated.downgradePrevention).toBeUndefined();
+    });
+  });
+
+  describe('upsertSceneShots', () => {
+    it('preserves compatible filled shots and merges metadata instead of rebuilding', () => {
+      let timeline = createTimelineSkeleton(10, [{ id: 'scene_1', label: 'Scene 1' }]);
+      timeline = splitSegmentIntoShots(timeline, 'scene_1', [
+        { label: 'Shot 1', duration: 5, metadata: { shotNumber: 1, shotType: 'wide' } },
+        { label: 'Shot 2', duration: 5, metadata: { shotNumber: 2, shotType: 'close' } },
+      ]);
+      timeline = updateSegmentLayers(timeline, 'scene_1_shot_1', [{
+        type: 'visual',
+        artifactId: 'vid_1',
+        filePath: 'assets/videos/shot-1.mp4',
+        label: 'Shot 1',
+        source: 'generated',
+      }], 'filled');
+
+      const result = upsertSceneShots(timeline, 'scene_1', [
+        { label: 'Shot 1 revised', duration: 5, metadata: { shotNumber: 1, shotType: 'wide', prompt: 'new prompt' } },
+        { label: 'Shot 2 revised', duration: 5, metadata: { shotNumber: 2, shotType: 'close' } },
+      ]);
+
+      expect(result.preservedExistingShots).toBe(true);
+      expect(result.mergedMetadataIntoExistingShots).toBe(true);
+      const seg = result.timeline.segments.find(s => s.id === 'scene_1_shot_1')!;
+      expect(seg.fillStatus).toBe('filled');
+      expect(seg.layers[0]!.artifactId).toBe('vid_1');
+      expect(seg.label).toBe('Shot 1 revised');
+      expect(seg.metadata).toEqual(expect.objectContaining({ prompt: 'new prompt' }));
+    });
+
+    it('rebuilds already-expanded unfilled shots when the base scene segment is gone', () => {
+      let timeline = createTimelineSkeleton(10, [{ id: 'scene_1', label: 'Scene 1' }]);
+      timeline = splitSegmentIntoShots(timeline, 'scene_1', [
+        { label: 'Shot 1', duration: 5, metadata: { shotNumber: 1, shotType: 'wide' } },
+        { label: 'Shot 2', duration: 5, metadata: { shotNumber: 2, shotType: 'close' } },
+      ]);
+
+      const result = upsertSceneShots(timeline, 'scene_1', [
+        { label: 'Shot 1 revised', duration: 3, metadata: { shotNumber: 1, shotType: 'wide' } },
+        { label: 'Shot 2 revised', duration: 4, metadata: { shotNumber: 2, shotType: 'close' } },
+        { label: 'Shot 3 new', duration: 3, metadata: { shotNumber: 3, shotType: 'insert' } },
+      ]);
+
+      expect(result.preservedExistingShots).toBe(false);
+      expect(result.mergedMetadataIntoExistingShots).toBe(false);
+      expect(result.timeline.segments.map(s => s.id)).toEqual([
+        'scene_1_shot_1',
+        'scene_1_shot_2',
+        'scene_1_shot_3',
+      ]);
+      expect(result.timeline.segments[0]?.label).toBe('Shot 1 revised');
+      expect(result.timeline.segments[2]?.label).toBe('Shot 3 new');
+      expect(result.timeline.segments[0]?.startTime).toBe(0);
+      expect(result.timeline.segments[2]?.endTime).toBe(10);
     });
   });
 
@@ -328,6 +504,59 @@ describe('Timeline Integration', () => {
       expect(shot2.transition?.type).toBe('crossfade');
       const scene2shot1 = timeline.segments.find(s => s.id === 'scene_2_shot_1')!;
       expect(scene2shot1.transition?.type).toBe('dip_to_black');
+    });
+
+    it('keeps strong refs through a weak final rewrite pass', () => {
+      let timeline = createTimelineSkeleton(12, [
+        { id: 'scene_1', label: 'Scene 1' },
+        { id: 'scene_2', label: 'Scene 2' },
+      ]);
+      timeline = splitSegmentIntoShots(timeline, 'scene_1', [
+        { label: 'Shot 1', duration: 6 },
+        { label: 'Shot 2', duration: 6 },
+      ]);
+
+      timeline = updateSegmentLayers(timeline, 'scene_1_shot_1', [{
+        type: 'visual',
+        artifactId: 'vid_magic_1',
+        filePath: 'assets/videos/magical-1.mp4',
+        label: 'Magical 1',
+        source: 'generated',
+        metadata: { prompt: 'spark burst' },
+      }], 'filled');
+      timeline = updateSegmentLayers(timeline, 'scene_1_shot_2', [{
+        type: 'visual',
+        artifactId: 'vid_magic_2',
+        filePath: 'assets/videos/magical-2.mp4',
+        label: 'Magical 2',
+        source: 'generated',
+        metadata: { prompt: 'transformation beam' },
+      }], 'filled');
+
+      timeline = updateSegmentLayers(timeline, 'scene_1_shot_1', [{
+        type: 'visual',
+        label: 'weak rewrite 1',
+        source: 'generated',
+      }], 'filled');
+      timeline = updateSegmentLayers(timeline, 'scene_1_shot_2', [{
+        type: 'visual',
+        artifactId: 'vid_magic_2',
+        label: 'weak rewrite 2',
+        source: 'generated',
+      }], 'filled');
+
+      const shot1 = timeline.segments.find(s => s.id === 'scene_1_shot_1')!;
+      const shot2 = timeline.segments.find(s => s.id === 'scene_1_shot_2')!;
+      expect(shot1.layers[0]).toEqual(expect.objectContaining({
+        artifactId: 'vid_magic_1',
+        filePath: 'assets/videos/magical-1.mp4',
+      }));
+      expect(shot2.layers[0]).toEqual(expect.objectContaining({
+        artifactId: 'vid_magic_2',
+        filePath: 'assets/videos/magical-2.mp4',
+      }));
+      expect(shot1.layers[0]!.metadata).toEqual(expect.objectContaining({ prompt: 'spark burst' }));
+      expect(shot2.layers[0]!.metadata).toEqual(expect.objectContaining({ prompt: 'transformation beam' }));
     });
   });
 });
