@@ -8,6 +8,7 @@ import {
   normalizeSceneVideoPrompt,
   sceneVideoPromptSchema,
   getPromptSchema,
+  maxTokensForJsonNode,
 } from '../src/core/planner/schemas.js';
 
 describe('scene_video_prompt schema', () => {
@@ -65,6 +66,48 @@ describe('scene_video_prompt schema', () => {
       }],
     });
     expect(result.valid).toBe(true);
+  });
+
+  it('accepts null secondarySubject (LLM frequently emits null for absent values)', () => {
+    const result = validateWithSchema('scene_video_prompt', {
+      sceneNumber: 1,
+      sceneTitle: 'Solo Scene',
+      mainSubject: 'vikram',
+      secondarySubject: null,
+      shots: [{ shotNumber: 1, description: 'Lone figure walks.' }],
+    });
+    expect(result.valid).toBe(true);
+  });
+
+  it('accepts null perspectiveOf on shots', () => {
+    const result = validateWithSchema('scene_video_prompt', {
+      shots: [{
+        shotNumber: 1,
+        description: 'Wide establishing shot.',
+        perspective: 'observer',
+        perspectiveOf: null,
+      }],
+    });
+    expect(result.valid).toBe(true);
+  });
+});
+
+describe('maxTokensForJsonNode', () => {
+  it('gives scene_video_prompt a 12000-token budget (long multi-shot output)', () => {
+    // Regression: scene_4 of woman_medieval_village_betrothed kept failing with
+    // "Unexpected end of JSON input" because maxTokens=5000 truncated the
+    // streamed response mid-shot. Bumped to 12000.
+    expect(maxTokensForJsonNode('scene_video_prompt')).toBe(12000);
+  });
+
+  it('keeps single-frame JSON nodes at 5000 tokens', () => {
+    expect(maxTokensForJsonNode('shot_image_prompt')).toBe(5000);
+    expect(maxTokensForJsonNode('character_image')).toBe(5000);
+    expect(maxTokensForJsonNode('setting_image')).toBe(5000);
+  });
+
+  it('returns 5000 for unknown node types (safe default)', () => {
+    expect(maxTokensForJsonNode('totally_made_up')).toBe(5000);
   });
 });
 

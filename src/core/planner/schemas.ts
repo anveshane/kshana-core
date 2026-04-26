@@ -79,7 +79,7 @@ const shotSchema = z.object({
   // Perspective: whose POV this shot is from (required for show_action/meet_character)
   perspective: perspectiveEnum.optional(),
   // refId of whose POV/OTS — defaults to scene.mainSubject when perspective is main_subject
-  perspectiveOf: z.string().optional(),
+  perspectiveOf: z.string().nullable().optional(),
   // Focus: what's sharp vs blurred in the frame
   focus: focusSchema.optional(),
   // How this shot bridges locations for the main subject (prevents teleporting)
@@ -105,7 +105,7 @@ export const sceneVideoPromptSchema = z.object({
   // The character whose arc this scene follows — shot perspectives are relative to this
   mainSubject: z.string().optional(),
   // Optional second pivotal character (for dialogue/reaction reversals)
-  secondarySubject: z.string().optional(),
+  secondarySubject: z.string().nullable().optional(),
   shots: z.array(shotSchema).min(1, 'shots array must not be empty'),
 }).refine(
   (svp) => {
@@ -267,6 +267,23 @@ export function getPromptSchema(nodeTypeId: string): string | null {
   };
 
   return PROMPT_SCHEMAS[nodeTypeId] ?? null;
+}
+
+// ── Token budget for JSON-output nodes ───────────────────────────────────────
+
+/**
+ * maxTokens budget for JSON-output LLM calls.
+ *
+ * scene_video_prompt with 5–7 shots regularly exceeded 5000 tokens, producing
+ * mid-stream truncation and "Unexpected end of JSON input" parse errors
+ * (observed on scene_4 of the woman_medieval_village_betrothed run on
+ * 2026-04-26). Bumped to 12000 specifically for that node type.
+ *
+ * Other JSON nodes (shot_image_prompt, character_image, setting_image) are
+ * single-frame or tightly bounded and stay at 5000.
+ */
+export function maxTokensForJsonNode(nodeTypeId: string): number {
+  return nodeTypeId === 'scene_video_prompt' ? 12000 : 5000;
 }
 
 // ── Validation helper ────────────────────────────────────────────────────────

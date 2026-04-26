@@ -65,7 +65,7 @@ import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timelin
 import type { TodoNodeInfo } from '../../events/events.js';
 import { fitShotDurations } from './shotDurationFit.js';
 import { scanMultiSpeakerShots, scanAmbiguousSpeakerTag } from './dialogueValidation.js';
-import { validateWithSchema, normalizeSceneVideoPrompt, getPromptSchema } from './schemas.js';
+import { validateWithSchema, normalizeSceneVideoPrompt, getPromptSchema, maxTokensForJsonNode } from './schemas.js';
 import {
   validateContinuitySequence,
   checkPositionContinuity,
@@ -4550,7 +4550,7 @@ Examples of common failure modes to avoid:
     const isJsonNode = jsonNodeTypes.includes(node.typeId) || typeDef?.outputFormat === 'json';
     if (isJsonNode) {
       options.responseFormat = { type: 'json_object' };
-      options.maxTokens = 5000;
+      options.maxTokens = maxTokensForJsonNode(node.typeId);
     }
 
     // Inject JSON schema into the system prompt so the LLM sees the exact expected structure.
@@ -6023,7 +6023,12 @@ Examples of common failure modes to avoid:
       } catch { return ''; }
     })();
 
-    const v2vEnabled = this.config.project.useV2V !== false; // default: enabled
+    // Default OFF so each shot's generated first/last frames actually appear
+    // in the final video. Opt-in via `useV2V: true` in project.json. See
+    // ProjectManager.ts:382 — that comment captures the original intent;
+    // the runtime previously defaulted ON, so projects without the flag
+    // (legacy or hand-edited) were silently running v2v_extend.
+    const v2vEnabled = this.config.project.useV2V === true;
     const videoStrategy = v2vEnabled
       ? getVideoStrategy(node.itemId ?? '', shotPurpose)
       : 'flfv';
