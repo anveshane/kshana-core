@@ -45,8 +45,11 @@ prompt-optimizer/
 outputs/
 test-output/
 
-# Claude Code local config
-.claude/
+# Claude Code local config (per-user) — ignore everything in .claude/
+# EXCEPT skills/, which are project-local and ship with the repo so
+# agents driving this codebase find them.
+.claude/*
+!.claude/skills
 
 # Uploaded files
 uploads/
