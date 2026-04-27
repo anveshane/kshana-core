@@ -20,12 +20,12 @@
  * failure shapes.
  */
 
-export type SceneBundleRender = () => Promise<string | null>;
+export type SceneBundleRender<T> = () => Promise<T | null>;
 
-export class SceneBundleLockMap {
-  private locks = new Map<number, Promise<string | null>>();
+export class SceneBundleLockMap<T = string> {
+  private locks = new Map<number, Promise<T | null>>();
 
-  acquire(sceneNum: number, render: SceneBundleRender): Promise<string | null> {
+  acquire(sceneNum: number, render: SceneBundleRender<T>): Promise<T | null> {
     const existing = this.locks.get(sceneNum);
     if (existing) return existing;
 
