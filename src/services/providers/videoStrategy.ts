@@ -34,3 +34,27 @@ export function getVideoStrategy(env: Record<string, string | undefined> = proce
 export function isPromptRelayMode(env?: Record<string, string | undefined>): boolean {
   return getVideoStrategy(env) === 'prompt_relay';
 }
+
+/**
+ * Decide whether an "extra" frame (last_frame, mid_frame, anything that
+ * isn't the first frame) should be generated for a given shot.
+ *
+ * Per-shot mode: yes — flfv needs last_frame, fmlfv needs mid + last,
+ * and so on. The executor's existing logic stays in charge.
+ *
+ * Prompt-relay mode: no. The relay renders the whole scene as one mp4
+ * driven by per-segment first_frames + a temporal prompt schedule;
+ * generated last/mid frames are unused and burn image-gen budget for
+ * nothing.
+ *
+ * `first_frame` always returns true regardless of mode — every segment
+ * in relay mode is anchored by its first frame, and per-shot mode
+ * obviously needs it too.
+ */
+export function shouldGenerateExtraFrame(
+  frameId: string,
+  env?: Record<string, string | undefined>,
+): boolean {
+  if (frameId === 'first_frame') return true;
+  return !isPromptRelayMode(env);
+}

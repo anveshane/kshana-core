@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { getVideoStrategy, isPromptRelayMode } from '../../src/services/providers/videoStrategy.js';
+import { getVideoStrategy, isPromptRelayMode, shouldGenerateExtraFrame } from '../../src/services/providers/videoStrategy.js';
 
 describe('getVideoStrategy', () => {
   it('defaults to prompt_relay when env var is unset', () => {
@@ -47,5 +47,31 @@ describe('isPromptRelayMode', () => {
 
   it('false when per_shot', () => {
     expect(isPromptRelayMode({ KSHANA_VIDEO_STRATEGY: 'per_shot' })).toBe(false);
+  });
+});
+
+describe('shouldGenerateExtraFrame', () => {
+  it('first_frame is always required, in either mode', () => {
+    expect(shouldGenerateExtraFrame('first_frame', {})).toBe(true);
+    expect(shouldGenerateExtraFrame('first_frame', { KSHANA_VIDEO_STRATEGY: 'per_shot' })).toBe(true);
+    expect(shouldGenerateExtraFrame('first_frame', { KSHANA_VIDEO_STRATEGY: 'prompt_relay' })).toBe(true);
+  });
+
+  it('skips last_frame in prompt_relay mode (default)', () => {
+    expect(shouldGenerateExtraFrame('last_frame', {})).toBe(false);
+    expect(shouldGenerateExtraFrame('last_frame', { KSHANA_VIDEO_STRATEGY: 'prompt_relay' })).toBe(false);
+  });
+
+  it('skips mid_frame in prompt_relay mode (default)', () => {
+    expect(shouldGenerateExtraFrame('mid_frame', {})).toBe(false);
+  });
+
+  it('keeps last_frame and mid_frame in per_shot mode', () => {
+    expect(shouldGenerateExtraFrame('last_frame', { KSHANA_VIDEO_STRATEGY: 'per_shot' })).toBe(true);
+    expect(shouldGenerateExtraFrame('mid_frame', { KSHANA_VIDEO_STRATEGY: 'per_shot' })).toBe(true);
+  });
+
+  it('skips arbitrary "extra" frames in prompt_relay mode', () => {
+    expect(shouldGenerateExtraFrame('whatever', {})).toBe(false);
   });
 });
