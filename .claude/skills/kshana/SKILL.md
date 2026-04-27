@@ -38,9 +38,9 @@ invoke this skill — they probably want to edit source.
 ## The 8 commands
 
 ```bash
-# CREATE — input can come from stdin (default), --text, or --input <file>
-pnpm new <project> [--text "..." | --input <file>] [--style <style>] [--duration <sec>]
-echo "story text" | pnpm new <project>          # stdin form (most common from agents)
+# CREATE — --style and --duration are REQUIRED. Input via stdin (default), --text, or --input <file>.
+pnpm new <project> --style <live|anime> --duration <sec> [--text "..." | --input <file>]
+echo "story text" | pnpm new <project> --style live --duration 60      # stdin form
 
 # INSPECT
 pnpm status <project>                                    # phase + node rollup
@@ -91,28 +91,32 @@ Common stops:
 
 **Create from inline string (simplest — agents should use this form):**
 ```bash
-pnpm new myproj --text "A woman refused her betrothal and fled into the night."
-pnpm run-to myproj
+pnpm new noir_60s --style live --duration 60 --text "A noir detective enters the rain..."
+pnpm run-to noir_60s
 ```
 
 **Create from stdin (good for multi-line input you'd build up programmatically):**
 ```bash
-cat <<EOF | pnpm new myproj --style anime --duration 60
-A woman in a medieval village refused her betrothal.
-She fled the village at dawn.
+cat <<EOF | pnpm new my_anime --style anime --duration 30
+A girl finds an ancient music box in her grandmother's attic.
+The melody opens a door to another world.
 EOF
-pnpm run-to myproj
+pnpm run-to my_anime
 ```
 
 **Create from a file (when the input is already on disk):**
 ```bash
-pnpm new myproj --input story.md --style anime --duration 60
+pnpm new myproj --style live --duration 90 --input story.md
 pnpm run-to myproj
 ```
 
+**Style aliases** (resolved case-insensitively):
+- `live` / `live-action` / `realism` / `realistic` / `cinematic` → `cinematic_realism`
+- `anime` / `animation` / `animated` / `cartoon` / `2d` → `anime`
+
 **Stop before any image is generated, then continue:**
 ```bash
-pnpm new myproj --text "..."
+pnpm new myproj --style live --duration 60 --text "..."
 pnpm run-to myproj scene_video_prompt    # all prompts, no media
 pnpm inspect myproj scene_2.svp          # check the LLM's plan
 pnpm run-to myproj                        # continue to final video

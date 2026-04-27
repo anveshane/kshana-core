@@ -2,23 +2,32 @@
 /**
  * Create a new kshana-ink project from a text input.
  *
+ * Required flags:
+ *   --style <s>      `live` (cinematic_realism) or `anime` (animation)
+ *   --duration <sec> target video length in seconds
+ *
  * Three input modes (pick one):
- *   1. STDIN     pnpm new my_story <<EOF
+ *   1. STDIN     pnpm new my_story --style live --duration 60 <<EOF
  *                A woman fled a betrothal...
  *                EOF
  *
- *                echo "She refused the lord." | pnpm new my_story
+ *   2. INLINE    pnpm new my_story --text "A woman fled..." --style anime --duration 60
  *
- *   2. INLINE    pnpm new my_story --text "A woman fled..."
+ *   3. FILE      pnpm new my_story --input story.md --style live --duration 90
  *
- *   3. FILE      pnpm new my_story --input story.md
+ * Optional: --template <id> (default: narrative).
  *
- * Optional flags: --style <style>, --duration <sec>, --template <id>.
- *
- * Creates `<project-name>.kshana/` next to the cwd, writes the input to
+ * Creates `<project-name>.kshana/`, writes the input to
  * `original_input.md`, and writes a `project.json` with the right
  * inputType detected from the content (story vs idea). After this you can
  * run `pnpm run-to <project-name> [stage]` to drive the pipeline forward.
+ *
+ * Why these are required (not defaulted):
+ *   - Style picks photorealistic vs animation, which colors every prompt
+ *     downstream. A silent default makes accidental style mismatches easy.
+ *   - Duration drives scene-count and shot-count budgets. Without an explicit
+ *     value the pipeline silently aims for 60 s, which is wrong for short
+ *     clips and very wrong for 3-minute pieces.
  */
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, resolve } from 'path';
@@ -97,22 +106,72 @@ async function readStdin(): Promise<string> {
 }
 
 function printUsageAndExit(code: number = 1): never {
-  console.error('Usage: pnpm new <project-name> [input-source] [options]');
+  console.error('Usage: pnpm new <project-name> --style <style> --duration <sec> [input-source] [options]');
+  console.error('');
+  console.error('Required:');
+  console.error('  --style, -s <style>   live  (= cinematic_realism, photorealistic / live-action)');
+  console.error('                        anime (= animation, stylized 2D)');
+  console.error('  --duration, -d <sec>  target video duration in seconds (e.g. 30, 60, 120)');
   console.error('');
   console.error('Input source (pick ONE):');
-  console.error('  (default)            read from stdin     `echo "..." | pnpm new myproj`');
-  console.error('  --text "..."         pass inline text');
-  console.error('  --input, -i <file>   read from a file');
+  console.error('  (default)             read from stdin    `echo "..." | pnpm new myproj ...`');
+  console.error('  --text "..."          pass inline text');
+  console.error('  --input, -i <file>    read from a file');
   console.error('');
-  console.error('Options:');
-  console.error('  --style, -s <style>   cinematic_realism | anime | noir | ... (default: cinematic_realism)');
-  console.error('  --duration, -d <sec>  target video duration in seconds (default: 60)');
+  console.error('Optional:');
   console.error('  --template, -t <id>   template id (default: narrative)');
+  console.error('');
+  console.error('Examples:');
+  console.error('  pnpm new noir_60s --style live --duration 60 --text "A noir detective..."');
+  console.error('  echo "Story..." | pnpm new my_anime --style anime --duration 30');
   process.exit(code);
+}
+
+/**
+ * Normalize friendly style aliases to the canonical engine values.
+ *  live / live_action / realism / realistic / cinematic / cinematic_realism → cinematic_realism
+ *  anime / animation / animated / cartoon → anime
+ *
+ * Returns null for unknown values; caller prints usage and exits.
+ */
+export function resolveStyle(input: string): string | null {
+  const lower = input.toLowerCase().trim();
+  const liveAction = new Set([
+    'live', 'live-action', 'live_action', 'liveaction',
+    'realism', 'realistic', 'cinematic', 'cinematic_realism',
+    'photorealistic', 'real',
+  ]);
+  const animation = new Set([
+    'anime', 'animation', 'animated', 'cartoon', '2d', 'illustrated',
+  ]);
+  if (liveAction.has(lower)) return 'cinematic_realism';
+  if (animation.has(lower)) return 'anime';
+  return null;
 }
 
 async function main() {
   const args = parseArgs();
+
+  // Required: style + duration. No silent defaults.
+  if (!args.style) {
+    console.error('Error: --style is required. Pick one of: live, anime');
+    console.error('  live  → cinematic_realism (photorealistic, live-action look)');
+    console.error('  anime → animation (stylized 2D)');
+    printUsageAndExit();
+  }
+  if (args.duration === undefined) {
+    console.error('Error: --duration is required (target video length in seconds, e.g. 60).');
+    printUsageAndExit();
+  }
+  if (!Number.isFinite(args.duration!) || args.duration! <= 0) {
+    console.error(`Error: --duration must be a positive number (got: ${args.duration}).`);
+    printUsageAndExit();
+  }
+  const canonicalStyle = resolveStyle(args.style!);
+  if (!canonicalStyle) {
+    console.error(`Error: unknown style "${args.style}". Pick one of: live, anime`);
+    printUsageAndExit();
+  }
 
   // Resolve input content from one of: --input file, --text inline, or stdin.
   // Exactly one must be set (or stdin must be piped).
@@ -168,16 +227,16 @@ async function main() {
 
   console.log(`Creating project: ${projectDirName}`);
   console.log(`  Source:     ${inputSource} (${inputContent.length} bytes)`);
-  console.log(`  Style:      ${args.style ?? 'cinematic_realism'}`);
-  console.log(`  Duration:   ${args.duration ?? 60}s`);
+  console.log(`  Style:      ${canonicalStyle} (from --style ${args.style})`);
+  console.log(`  Duration:   ${args.duration}s`);
   console.log(`  Template:   ${args.templateId ?? 'narrative'}`);
   console.log('');
 
   const project = createProject(
     inputContent,
-    args.style ?? 'cinematic_realism',
+    canonicalStyle!,
     basePath,
-    args.duration ?? 60,
+    args.duration!,
     args.templateId,
   );
 
