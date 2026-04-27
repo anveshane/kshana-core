@@ -222,6 +222,30 @@ export function resolveSegmentFilePaths(
             mediaType = detectMediaType(candidate);
           }
         }
+
+        // Tier 3.5: Scene-bundle fallback. When no shot-specific asset
+        // matched, look for a scene_video registered as a bundle for
+        // this scene (metadata.isBundle === true && sceneNumber match).
+        // The bundle covers every shot in the scene — that's the
+        // contract prompt-relay rendering establishes.
+        if (!absolutePath) {
+          const bundles = manifest.filter(a => {
+            if (a.type !== 'scene_video') return false;
+            const meta = (a.metadata ?? {}) as Record<string, unknown>;
+            return meta['isBundle'] === true && meta['sceneNumber'] === segmentNum;
+          });
+          if (bundles.length > 0) {
+            bundles.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+            const best = bundles[0]!;
+            const candidate = best.path.startsWith('/')
+              ? best.path
+              : join(projectDir, best.path);
+            if (existsSync(candidate)) {
+              absolutePath = candidate;
+              mediaType = detectMediaType(candidate);
+            }
+          }
+        }
       }
     }
 
@@ -254,6 +278,40 @@ export function resolveSegmentFilePaths(
   }
 
   return { resolved, errors };
+}
+
+/**
+ * Collapse consecutive segments that resolve to the same physical file
+ * into a single segment.
+ *
+ * Use case: prompt-relay scenes register one bundle mp4 covering N
+ * shots, so all N timeline segments for that scene resolve to the same
+ * filePath. Without this, the assembler would concat the bundle N
+ * times — defeating the whole point of relay (smooth cross-shot
+ * transitions baked into the bundle).
+ *
+ * Behavior:
+ *  - run-length collapse on filePath (only adjacent dupes merge — a
+ *    non-adjacent repeat is preserved as a deliberate playback)
+ *  - the collapsed segment keeps the FIRST segment's id and transition
+ *    so cross-scene transition logic on the next segment still works
+ *  - duration = sum of run; startTime = first.startTime; endTime = last.endTime
+ */
+export function collapseBundleSegments(segments: ResolvedSegment[]): ResolvedSegment[] {
+  const out: ResolvedSegment[] = [];
+  for (const seg of segments) {
+    const last = out[out.length - 1];
+    if (last && last.filePath === seg.filePath) {
+      out[out.length - 1] = {
+        ...last,
+        endTime: seg.endTime,
+        duration: last.duration + seg.duration,
+      };
+    } else {
+      out.push(seg);
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +525,12 @@ export async function assembleVideos(
     preset = 'fast',
     timeoutMs = DEFAULT_TIMEOUT_MS,
   } = config;
+
+  // Run-length collapse consecutive segments that resolve to the same
+  // file. This is what makes prompt-relay scenes work end-to-end:
+  // 9 segments all pointing at the same scene-bundle mp4 collapse to
+  // 1, so we concat the bundle once instead of 9× re-encoding it.
+  segments = collapseBundleSegments(segments);
 
   if (segments.length === 0) {
     throw new Error('No segments to assemble');
