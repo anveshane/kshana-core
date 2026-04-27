@@ -78,6 +78,7 @@ import { getWorkflowModeRegistry } from '../../services/providers/WorkflowModeRe
 import { shouldGenerateExtraFrame, isPromptRelayMode } from '../../services/providers/videoStrategy.js';
 import type { SceneBundleShot, SceneBundleResult } from './sceneBundleRenderer.js';
 import type { CharacterId } from '../../services/providers/promptRelayGlobalPrompt.js';
+import { SceneBundleLockMap } from './sceneBundleLockMap.js';
 import { addAsset } from '../../tasks/video/workflow/index.js';
 
 /**
@@ -264,10 +265,11 @@ export class ExecutorAgent extends TypedEventEmitter {
   /** Pending media generation promises (parallel mode) */
   private pendingMedia = new Map<string, Promise<string | null>>();
   /** prompt_relay mode: shot_video nodes for the same scene share one
-   *  bundle render. Map keyed by sceneNumber → resolved bundle path
-   *  (or null on failure). First shot_video to arrive fires the
-   *  render; later shots `await` the same promise. */
-  private sceneBundleLocks = new Map<number, Promise<string | null>>();
+   *  bundle render. First arrival fires the render; later arrivals
+   *  await the same promise. On null/throw the lock is cleared so the
+   *  next caller retries (handles the race where shot_video fires
+   *  before all sibling shot_images have completed). */
+  private sceneBundleLocks = new SceneBundleLockMap();
   /** Timeline state — populated during execution, saved to timeline.json */
   private timeline: Timeline | null = null;
   /** Tracks how many times a dependency was regenerated for a given parent node (loop protection) */
@@ -6384,22 +6386,7 @@ Examples of common failure modes to avoid:
       return null;
     }
     const sceneNum = parseInt(sceneMatch[1]!, 10);
-
-    // Existing in-flight render for this scene? Share its promise.
-    const existing = this.sceneBundleLocks.get(sceneNum);
-    if (existing) {
-      this.log(`  prompt_relay: ${node.itemId} awaiting in-flight scene ${sceneNum} bundle render`);
-      return existing;
-    }
-
-    // Build the request and store the lock immediately so concurrent
-    // calls don't double-fire.
-    const promise = this.executeSceneBundle(sceneNum, agentName).catch(err => {
-      this.log(`  prompt_relay: scene ${sceneNum} bundle error: ${String(err)}`);
-      return null;
-    });
-    this.sceneBundleLocks.set(sceneNum, promise);
-    return promise;
+    return this.sceneBundleLocks.acquire(sceneNum, () => this.executeSceneBundle(sceneNum, agentName));
   }
 
   /** Gather all shots in the scene + render the bundle. */
