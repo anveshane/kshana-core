@@ -19,6 +19,12 @@ export interface LLMResponse {
   content: string | null;
   toolCalls: ToolCall[];
   finishReason: string | null;
+  /**
+   * Provider reasoning payload returned by reasoning/thinking models.
+   * Kept for provider protocol continuity only; do not display to users.
+   */
+  reasoning?: string;
+  reasoningDetails?: unknown[];
   usage?: {
     promptTokens: number;
     completionTokens: number;
@@ -40,6 +46,12 @@ export interface Message {
   toolCalls?: ToolCall[];
   toolCallId?: string;
   name?: string;
+  /**
+   * Provider reasoning payload to replay on follow-up requests when required
+   * by reasoning/thinking models during tool use.
+   */
+  reasoning?: string;
+  reasoningDetails?: unknown[];
 }
 
 /**

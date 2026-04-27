@@ -460,6 +460,8 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
 
     // Accumulate for final logging
     let fullContent = '';
+    let fullReasoning = '';
+    const reasoningDetails: unknown[] = [];
     const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> =
       new Map();
 
@@ -558,7 +560,12 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
             }
           : undefined;
 
-        yield { done: true, usage };
+        yield {
+          done: true,
+          usage,
+          reasoning: fullReasoning || undefined,
+          reasoningDetails: reasoningDetails.length > 0 ? reasoningDetails : undefined,
+        };
       }
     }
 
@@ -606,6 +613,14 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
             },
           }));
         }
+        const providerAssistantMsg = assistantMsg as unknown as Record<string, unknown>;
+        if (msg.reasoningDetails && msg.reasoningDetails.length > 0) {
+          providerAssistantMsg['reasoning_details'] = msg.reasoningDetails;
+        } else if (msg.reasoning) {
+          // OpenRouter accepts reasoning_content as an alias for reasoning, and
+          // DeepSeek's native API requires this exact field during thinking-mode tool calls.
+          providerAssistantMsg['reasoning_content'] = msg.reasoning;
+        }
         result.push(assistantMsg);
       } else if (msg.role === 'tool') {
         result.push({
@@ -643,6 +658,11 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
     if (!choice) {
       return { content: null, toolCalls: [], finishReason: null };
     }
+    const providerMessage = choice.message as typeof choice.message & {
+      reasoning?: string;
+      reasoning_content?: string;
+      reasoning_details?: unknown[];
+    };
 
     const toolCalls: ToolCall[] = (choice.message.tool_calls ?? []).map(tc => ({
       id: tc.id,
@@ -654,6 +674,10 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
       content: this.cleanContent(choice.message.content),
       toolCalls,
       finishReason: choice.finish_reason,
+      reasoning: providerMessage.reasoning ?? providerMessage.reasoning_content ?? undefined,
+      reasoningDetails: Array.isArray(providerMessage.reasoning_details)
+        ? providerMessage.reasoning_details
+        : undefined,
       usage: response.usage
         ? {
             promptTokens: response.usage.prompt_tokens,
