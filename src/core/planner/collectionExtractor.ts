@@ -11,6 +11,7 @@
 
 import type { LLMClient } from '../llm/index.js';
 import type { CollectionItems, ExecutionNode } from './types.js';
+import { runDurationFirstExtraction, checkDurationBand } from './durationFirstExtractor.js';
 
 /**
  * Extract collection items from generated content based on the node type.
@@ -39,13 +40,13 @@ export async function extractCollectionItems(
 /**
  * Extract characters, settings, and scene breakdown from a story.
  *
- * P0 (2026-04-26): runs a coverage gate after the initial extraction. The
- * gate asks a second LLM call which beats from the source were dropped,
- * and which beats appear in two scene summaries. If issues are found, a
- * single repair pass regenerates the scenes with that feedback in the
- * prompt. Without this gate, the LLM silently drops connective story
- * beats (e.g. the magistrate's secret-sponsorship arc) and duplicates
- * dramatic ones (e.g. wilderness-hut bandaging in scenes 3 AND 4).
+ * 2026-04-26 (duration-first): primary path runs the duration-first
+ * extractor (`durationFirstExtractor.ts`) — beats with grounded
+ * durations, story-driven scene count, time as guidance.
+ *
+ * Fallback: if the duration-first path produces zero beats or zero
+ * scenes (LLM failure), falls back to the legacy structural extractor
+ * with the P0 coverage gate.
  */
 async function extractFromStory(
   storyContent: string,
@@ -53,15 +54,46 @@ async function extractFromStory(
   durationSeconds?: number,
 ): Promise<CollectionItems> {
   const dur = durationSeconds || 60;
+
+  // Duration-first path.
+  try {
+    const result = await runDurationFirstExtraction(storyContent, dur, llm);
+    if (result.beats.length > 0 && result.scenes.length > 0) {
+      const band = checkDurationBand(result.totalEstimatedDuration, dur);
+      // Log the band status — telemetry only, we don't block on it since
+      // the user explicitly chose time-as-guidance over time-as-cap.
+      // eslint-disable-next-line no-console
+      console.log(
+        `[duration-first] ${result.beats.length} beats → ${result.scenes.length} scenes, ` +
+        `total ~${result.totalEstimatedDuration.toFixed(0)}s (target ${dur}s, ratio ${band.ratio.toFixed(2)}, ${band.status})`,
+      );
+      return {
+        characters: result.characters,
+        settings: result.settings,
+        objects: result.objects,
+        scenes: result.scenes.map(s => ({
+          sceneNumber: s.sceneNumber,
+          title: s.title,
+          summary: s.summary,
+          estimatedDuration: s.estimatedDuration,
+        })),
+      };
+    }
+    // Fall through to legacy path.
+    // eslint-disable-next-line no-console
+    console.warn('[duration-first] empty beats or scenes — falling back to legacy extractor');
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(`[duration-first] failed (${(err as Error).message}) — falling back to legacy extractor`);
+  }
+
+  // Legacy fallback: structural extractor + P0 coverage gate.
   const maxChars = dur <= 30 ? 2 : dur <= 60 ? 3 : dur <= 120 ? 5 : dur <= 180 ? 6 : dur <= 300 ? 8 : 10;
   const maxSettings = dur <= 30 ? 1 : dur <= 60 ? 2 : dur <= 120 ? 3 : dur <= 180 ? 4 : dur <= 300 ? 5 : 7;
   const maxScenes = dur <= 30 ? 2 : dur <= 60 ? 4 : dur <= 120 ? 6 : dur <= 180 ? 8 : dur <= 300 ? 10 : 12;
 
-  // Initial extraction.
   const initial = await runStoryExtraction(storyContent, llm, { dur, maxChars, maxSettings, maxScenes });
 
-  // Coverage gate. Skip if no scenes (initial extraction failed) or for
-  // very short videos where compression isn't a concern.
   if (!initial.scenes || initial.scenes.length === 0 || dur <= 30) {
     return initial;
   }
@@ -71,7 +103,6 @@ async function extractFromStory(
     return initial;
   }
 
-  // Single repair pass with the issues fed back into the prompt.
   const repaired = await runStoryExtraction(storyContent, llm, {
     dur, maxChars, maxSettings, maxScenes,
     coverageFeedback: issues,

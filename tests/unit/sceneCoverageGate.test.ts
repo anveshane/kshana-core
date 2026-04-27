@@ -73,8 +73,15 @@ const STORY_NODE: ExecutionNode = {
 
 // ── extractFromStory: prompt structure & flow ─────────────────────────────────
 
-describe('extractFromStory — new prompt requires beat-list-first compression', () => {
-  it('emits the new prompt rules (beat list, no dropping, dual-arc threading)', async () => {
+// As of the duration-first refactor, extractFromStory tries the duration-first
+// path first. These tests force that path to short-circuit (by returning an
+// empty beats list) so they exercise the legacy structural+audit fallback —
+// which is what these tests were originally written for and which still
+// matters as a regression net.
+const EMPTY_BEATS = JSON.stringify({ beats: [], characters: [], settings: [], objects: [] });
+
+describe('extractFromStory legacy fallback — structural prompt + coverage gate', () => {
+  it('legacy fallback prompt carries beat-list-first / no-dropping / dual-arc rules', async () => {
     const goodScenes = JSON.stringify({
       characters: ['Elara', 'Aldric', 'MobLeader'],
       settings: ['Town', 'WildernessHut'],
@@ -86,10 +93,10 @@ describe('extractFromStory — new prompt requires beat-list-first compression',
         { sceneNumber: 4, title: 'Rescue and Union', summary: 'D'.repeat(120) },
       ],
     });
-    // Coverage gate finds nothing → no repair pass.
     const cleanAudit = JSON.stringify({ dropped: [], duplicated: [] });
 
     const { llm, callLog } = makeMockLLM([
+      { systemContains: 'extract a complete beat list', response: EMPTY_BEATS }, // force legacy fallback
       { systemContains: 'story-aware scene extraction tool', response: goodScenes },
       { systemContains: 'audit scene summaries', response: cleanAudit },
     ]);
@@ -97,14 +104,12 @@ describe('extractFromStory — new prompt requires beat-list-first compression',
     const result = await extractCollectionItems(STORY_NODE, FIXTURE_STORY, llm, 60);
 
     expect(result?.scenes).toHaveLength(4);
-    const sysPrompt = callLog()[0]!.system;
-    // Behavioral assertion: the new prompt's load-bearing instructions are present.
-    expect(sysPrompt).toContain('Beat list');
-    expect(sysPrompt).toContain('Compress every beat');
-    expect(sysPrompt).toContain('No beat may be dropped');
-    expect(sysPrompt).toContain('Dual-arc threading');
-    // 80–150 word scene summary requirement
-    expect(sysPrompt).toMatch(/80.{0,5}150 words/);
+    const legacyPrompt = callLog()[1]!.system; // call 0 is duration-first beat extract
+    expect(legacyPrompt).toContain('Beat list');
+    expect(legacyPrompt).toContain('Compress every beat');
+    expect(legacyPrompt).toContain('No beat may be dropped');
+    expect(legacyPrompt).toContain('Dual-arc threading');
+    expect(legacyPrompt).toMatch(/80.{0,5}150 words/);
   });
 
   it('triggers a repair pass when the coverage gate finds dropped beats', async () => {
@@ -137,6 +142,7 @@ describe('extractFromStory — new prompt requires beat-list-first compression',
     });
 
     const { llm, callLog } = makeMockLLM([
+      { systemContains: 'extract a complete beat list', response: EMPTY_BEATS }, // force fallback
       { systemContains: 'story-aware scene extraction', response: droppingScenes },
       { systemContains: 'audit scene summaries', response: auditFlagsDrop },
       { systemContains: 'REPAIR PASS', response: repairedScenes },
@@ -147,10 +153,10 @@ describe('extractFromStory — new prompt requires beat-list-first compression',
     expect(result?.scenes).toBeDefined();
     expect(result!.scenes![0]!.title).toBe('Refusal and Sponsorship');
 
-    // Three calls fired: initial → audit → repair
-    expect(callLog()).toHaveLength(3);
+    // Four calls fired: duration-first probe (empty) → legacy initial → audit → repair
+    expect(callLog()).toHaveLength(4);
     // Repair prompt was given the dropped-beat feedback.
-    expect(callLog()[2]!.system).toContain('magistrate secretly sponsors');
+    expect(callLog()[3]!.system).toContain('magistrate secretly sponsors');
   });
 
   it('triggers a repair pass when the coverage gate finds duplicated beats', async () => {
@@ -182,6 +188,7 @@ describe('extractFromStory — new prompt requires beat-list-first compression',
     });
 
     const { llm, callLog } = makeMockLLM([
+      { systemContains: 'extract a complete beat list', response: EMPTY_BEATS },
       { systemContains: 'story-aware scene extraction', response: duplicatingScenes },
       { systemContains: 'audit scene summaries', response: auditFlagsDup },
       { systemContains: 'REPAIR PASS', response: repairedScenes },
@@ -190,15 +197,12 @@ describe('extractFromStory — new prompt requires beat-list-first compression',
     const result = await extractCollectionItems(STORY_NODE, FIXTURE_STORY, llm, 60);
 
     expect(result?.scenes![3]!.title).toBe('Wilderness Hut and Union');
-    expect(callLog()).toHaveLength(3);
-    // Repair prompt was given the duplicate-beat feedback.
-    expect(callLog()[2]!.system).toContain('wilderness hut bandaging');
-    expect(callLog()[2]!.system).toContain('scenes 3, 4');
+    expect(callLog()).toHaveLength(4);
+    expect(callLog()[3]!.system).toContain('wilderness hut bandaging');
+    expect(callLog()[3]!.system).toContain('scenes 3, 4');
   });
 
-  it('skips the coverage gate for very short videos (≤30s)', async () => {
-    // No second call should be made — short videos are 1-2 scenes, compression
-    // failures don't matter the way they do for 60s+.
+  it('skips the audit gate for very short videos (≤30s)', async () => {
     const scenes = JSON.stringify({
       characters: ['Hero'],
       settings: ['Room'],
@@ -207,16 +211,18 @@ describe('extractFromStory — new prompt requires beat-list-first compression',
     });
 
     const { llm, callLog } = makeMockLLM([
+      { systemContains: 'extract a complete beat list', response: EMPTY_BEATS },
       { systemContains: 'story-aware scene extraction', response: scenes },
     ]);
 
     const result = await extractCollectionItems(STORY_NODE, 'short story', llm, 30);
 
     expect(result?.scenes).toHaveLength(1);
-    expect(callLog()).toHaveLength(1); // No audit call.
+    // duration-first probe (empty) + legacy extract; no audit because dur ≤ 30
+    expect(callLog()).toHaveLength(2);
   });
 
-  it('does not run repair when the coverage gate is clean', async () => {
+  it('legacy fallback does not run repair when coverage gate is clean', async () => {
     const goodScenes = JSON.stringify({
       characters: ['A'],
       settings: ['B'],
@@ -229,13 +235,14 @@ describe('extractFromStory — new prompt requires beat-list-first compression',
     const cleanAudit = JSON.stringify({ dropped: [], duplicated: [] });
 
     const { llm, callLog } = makeMockLLM([
+      { systemContains: 'extract a complete beat list', response: EMPTY_BEATS },
       { systemContains: 'story-aware scene extraction', response: goodScenes },
       { systemContains: 'audit scene summaries', response: cleanAudit },
     ]);
 
     await extractCollectionItems(STORY_NODE, FIXTURE_STORY, llm, 60);
 
-    expect(callLog()).toHaveLength(2); // Initial + audit, no repair.
+    expect(callLog()).toHaveLength(3); // duration-first probe + legacy initial + audit
   });
 });
 

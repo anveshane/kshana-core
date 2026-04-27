@@ -232,6 +232,10 @@ export class ExecutorAgent extends TypedEventEmitter {
   private stopReason: 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null = null;
   private vlmDisabled = process.env['DISABLE_VLM'] === 'true'; // Env flag or auto-disabled after first 404
   private sceneSummaries = new Map<string, string>(); // scene_1 → summary text
+  // scene_1 → on-screen duration in seconds, populated by the duration-first
+  // extractor (sum of beat durations). Used in lieu of `target/sceneCount`
+  // even-split when present. Persisted alongside scene_summaries.json.
+  private sceneEstimatedDurations = new Map<string, number>();
   private _initialized = false;
   private logPath: string;
   private lockFilePath: string;
@@ -2691,7 +2695,15 @@ export class ExecutorAgent extends TypedEventEmitter {
     const style = this.config.goal.preferences.style as string | undefined;
     const allNodes = this.executor.getAllNodes();
     const sceneCount = allNodes.filter(n => n.typeId === 'scene').length;
-    const perSceneDuration = duration && sceneCount > 0 ? Math.round(duration / sceneCount) : 0;
+    // Prefer the duration-first extractor's per-scene estimate over the
+    // legacy `target/sceneCount` even-split. Falls back to even-split
+    // when no estimate is recorded (e.g. legacy projects).
+    const perSceneDurationFromBeats = node.itemId
+      ? this.sceneEstimatedDurations.get(node.itemId) ?? 0
+      : 0;
+    const perSceneDuration = perSceneDurationFromBeats > 0
+      ? perSceneDurationFromBeats
+      : (duration && sceneCount > 0 ? Math.round(duration / sceneCount) : 0);
 
     let projectContext = '';
     const parts: string[] = [];
@@ -2706,8 +2718,26 @@ export class ExecutorAgent extends TypedEventEmitter {
     // Scene-level: inject this scene's duration allocation
     if (node.typeId === 'scene' || node.typeId === 'scene_video_prompt') {
       if (perSceneDuration > 0) {
-        parts.push(`**This scene's duration:** ~${perSceneDuration} seconds`);
-        parts.push(`**Shot planning:** Break this scene into shots that total ~${perSceneDuration}s. Each shot should be 3-10 seconds for action/atmosphere, up to 15 seconds for dialogue-heavy shots. Dialogue shots MUST size to fit the full spoken line (~2.5 words/sec + 1s buffer) — shorter and the video cuts off mid-sentence.`);
+        // HARD shot-count cap derived from the scene's duration budget. Each
+        // shot is at least 3s (LTX 2.3 minimum), so the maximum shot count
+        // that fits the budget is floor(budget / 3). Without this cap, the
+        // scene_video_prompt LLM creates one shot per visual beat in the
+        // prose — so a 12s scene with rich prose explodes to 18 shots ×
+        // 3s = 54s, blowing the duration-first plan back up to >130s
+        // total. This is a hard rule, not guidance.
+        const maxShots = Math.max(1, Math.floor(perSceneDuration / 3));
+        parts.push(`**This scene's duration budget:** ${perSceneDuration} seconds (HARD CAP)`);
+        parts.push(
+          `**Shot count:** AT MOST ${maxShots} shot${maxShots === 1 ? '' : 's'} ` +
+          `(every shot needs ≥3s). Sum of shot durations MUST be ≤ ${perSceneDuration}s. ` +
+          `If you have more beats than slots, MERGE related beats into one shot ` +
+          `(merge a reaction into its adjacent dialogue; merge atmosphere into the action that follows). ` +
+          `Do NOT exceed ${maxShots} shots — exceeding the shot count breaks the duration plan and the runtime ends up 2-4× the target.`
+        );
+        parts.push(
+          `**Shot durations:** 3s minimum, 15s maximum. Dialogue shots MUST fit ` +
+          `the full spoken line (~2.5 words/sec + 1s buffer) — shorter clips get cut off mid-sentence.`
+        );
       }
       if (sceneCount > 0) {
         // Figure out which scene number this is
@@ -3467,6 +3497,21 @@ Examples of common failure modes to avoid:
         } catch { /* ignore */ }
       }
     }
+    // Load saved per-scene estimated durations (duration-first extractor)
+    if (this.sceneEstimatedDurations.size === 0) {
+      const durPath = join(this.config.projectDir, 'prompts', 'scene_durations.json');
+      if (existsSync(durPath)) {
+        try {
+          const saved = JSON.parse(readFileSync(durPath, 'utf-8'));
+          for (const [k, v] of Object.entries(saved)) {
+            if (typeof v === 'number' && v > 0) {
+              this.sceneEstimatedDurations.set(k, v);
+            }
+          }
+          this.log(`  Loaded ${this.sceneEstimatedDurations.size} scene durations from disk`);
+        } catch { /* ignore */ }
+      }
+    }
 
     const allNodes = this.executor.getAllNodes();
     let expanded = true;
@@ -3810,6 +3855,35 @@ Examples of common failure modes to avoid:
                     itemId: `scene_${s.sceneNumber}`,
                     name: s.title || `Scene ${s.sceneNumber}`,
                   }));
+                  // Persist scene summaries + estimated durations from this
+                  // extraction. Strategy C used to skip this, so duration-first
+                  // values weren't reaching downstream.
+                  for (const s of extracted.scenes as Array<{
+                    sceneNumber: number; title?: string; summary?: string; estimatedDuration?: number;
+                  }>) {
+                    if (s.summary) {
+                      this.sceneSummaries.set(`scene_${s.sceneNumber}`, s.summary);
+                    }
+                    if (typeof s.estimatedDuration === 'number' && s.estimatedDuration > 0) {
+                      this.sceneEstimatedDurations.set(`scene_${s.sceneNumber}`, s.estimatedDuration);
+                    }
+                  }
+                  if (this.sceneSummaries.size > 0) {
+                    const promptsDir = join(this.config.projectDir, 'prompts');
+                    if (!existsSync(promptsDir)) mkdirSync(promptsDir, { recursive: true });
+                    writeFileSync(
+                      join(promptsDir, 'scene_summaries.json'),
+                      JSON.stringify(Object.fromEntries(this.sceneSummaries), null, 2),
+                    );
+                  }
+                  if (this.sceneEstimatedDurations.size > 0) {
+                    const promptsDir = join(this.config.projectDir, 'prompts');
+                    if (!existsSync(promptsDir)) mkdirSync(promptsDir, { recursive: true });
+                    writeFileSync(
+                      join(promptsDir, 'scene_durations.json'),
+                      JSON.stringify(Object.fromEntries(this.sceneEstimatedDurations), null, 2),
+                    );
+                  }
                 } else if (node.typeId === 'character' && extracted?.characters?.length) {
                   itemList = extracted.characters.map((c: string) => ({
                     itemId: c.toLowerCase().replace(/\s+/g, '_'),
@@ -4803,18 +4877,28 @@ Examples of common failure modes to avoid:
           itemId: `scene_${s.sceneNumber}`,
           name: s.title,
         }));
-        // Store scene summaries for injection into scene writer prompts
-        // Save to disk so they survive restarts
+        // Store scene summaries for injection into scene writer prompts.
+        // Save to disk so they survive restarts. Also capture per-scene
+        // estimatedDuration if the duration-first extractor populated it.
         for (const s of items.scenes ?? []) {
           if (s.summary) {
             this.sceneSummaries.set(`scene_${s.sceneNumber}`, s.summary);
             this.log(`  Stored summary for scene_${s.sceneNumber}: ${s.summary.substring(0, 60)}...`);
+          }
+          if (typeof s.estimatedDuration === 'number' && s.estimatedDuration > 0) {
+            this.sceneEstimatedDurations.set(`scene_${s.sceneNumber}`, s.estimatedDuration);
+            this.log(`  Stored estimatedDuration for scene_${s.sceneNumber}: ${s.estimatedDuration}s`);
           }
         }
         if (this.sceneSummaries.size > 0) {
           const summaryPath = join(this.config.projectDir, 'prompts', 'scene_summaries.json');
           if (!existsSync(join(this.config.projectDir, 'prompts'))) mkdirSync(join(this.config.projectDir, 'prompts'), { recursive: true });
           writeFileSync(summaryPath, JSON.stringify(Object.fromEntries(this.sceneSummaries), null, 2));
+        }
+        if (this.sceneEstimatedDurations.size > 0) {
+          const durPath = join(this.config.projectDir, 'prompts', 'scene_durations.json');
+          if (!existsSync(join(this.config.projectDir, 'prompts'))) mkdirSync(join(this.config.projectDir, 'prompts'), { recursive: true });
+          writeFileSync(durPath, JSON.stringify(Object.fromEntries(this.sceneEstimatedDurations), null, 2));
         }
       }
 

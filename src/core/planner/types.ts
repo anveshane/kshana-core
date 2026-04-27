@@ -425,8 +425,15 @@ export interface CollectionItems {
   /** Object/prop names found */
   objects?: string[];
 
-  /** Scene descriptions found */
-  scenes?: Array<{ sceneNumber: number; title: string; summary: string }>;
+  /** Scene descriptions found. `estimatedDuration` is populated by the
+   * duration-first extractor (sum of beat durations). Downstream uses it
+   * for `perSceneDuration` instead of `targetDuration / sceneCount`. */
+  scenes?: Array<{
+    sceneNumber: number;
+    title: string;
+    summary: string;
+    estimatedDuration?: number;
+  }>;
 
   /** Shots extracted from a scene video prompt (structured JSON) */
   shots?: Array<{
