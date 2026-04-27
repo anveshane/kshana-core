@@ -39,6 +39,9 @@ export interface AssemblyConfig {
   height?: number;
   preset?: string;
   timeoutMs?: number;
+  /** Watermark text drawn in the bottom-right corner. Defaults to env
+   * `KSHANA_WATERMARK` or `'kshana-ink'`. Pass an empty string to disable. */
+  watermark?: string;
 }
 
 export interface AssemblyResult {
@@ -306,6 +309,85 @@ export function buildVideoFilter(i: number, width: number, height: number): stri
 }
 
 /**
+ * FFmpeg encode args needed for the output to play on mobile (WhatsApp,
+ * iOS Safari, Android stock player) — pure, exported for testability.
+ *
+ * Diagnosed on 2026-04-27: a forwarded WhatsApp video showed a black
+ * thumbnail and refused to play because:
+ *  - overlay filter upgraded the pixel format to yuv444p
+ *  - libx264 then picked profile 'High 4:4:4 Predictive'
+ *  - moov atom landed at the end (no faststart)
+ *  - audio was 24 kHz (some Android players prefer ≥44.1)
+ *
+ * These args lock the encode to mobile-safe values:
+ *  - yuv420p / High@4.1 — universally decodable
+ *  - faststart — moov at the head so previews/streaming work
+ *  - 48 kHz stereo audio
+ */
+export function mobileCompatibleEncodeArgs(): string[] {
+  return [
+    '-pix_fmt', 'yuv420p',
+    '-profile:v', 'high',
+    '-level:v', '4.1',
+    '-ar', '48000',
+    '-ac', '2',
+    '-movflags', '+faststart',
+  ];
+}
+
+/**
+ * Watermark image candidates, in priority order. We use a pre-rendered
+ * PNG with `overlay` instead of `drawtext` because the standard
+ * Homebrew/system FFmpeg builds don't ship `drawtext` (it requires
+ * libfreetype, missing in many distributions). `overlay` is a core
+ * filter present in every FFmpeg build.
+ *
+ * Regenerate with `scripts/render-watermark.ts` if the asset is missing.
+ */
+const WATERMARK_PNG_CANDIDATES = [
+  'assets/watermark_kshana.png',
+  'assets/watermark.png',
+];
+
+/**
+ * Resolve the watermark PNG path (or `null` if none of the candidates
+ * exist). Paths are checked relative to the current working directory
+ * first, then the kshana-ink package root.
+ */
+export function resolveWatermarkPath(cwd: string = process.cwd()): string | null {
+  for (const rel of WATERMARK_PNG_CANDIDATES) {
+    const abs = join(cwd, rel);
+    if (existsSync(abs)) return abs;
+  }
+  return null;
+}
+
+/**
+ * Build the `overlay` filter chunk that composites a pre-rendered
+ * watermark PNG onto the bottom-right corner of the final output.
+ * Pure — extracted for tests.
+ *
+ * Parameters:
+ *  - inputLabel: the filter graph label feeding in (e.g. 'concated')
+ *  - watermarkInputIdx: the FFmpeg input index of the PNG (e.g. the
+ *    Nth `-i` argument, 0-based)
+ *  - outputLabel: where the watermarked stream is published (e.g. 'outv')
+ *
+ * The PNG carries its own translucency and font; this filter just
+ * positions it bottom-right with a 24-px margin.
+ */
+export function buildWatermarkOverlayFilter(
+  inputLabel: string,
+  watermarkInputIdx: number,
+  outputLabel: string,
+): string {
+  return (
+    `[${watermarkInputIdx}:v]format=rgba[wm];` +
+    `[${inputLabel}][wm]overlay=x=W-w-24:y=H-h-24:format=auto[${outputLabel}]`
+  );
+}
+
+/**
  * Compute the xfade transition duration for a given transition kind.
  *
  * Pure function — extracted for testability. The "cut" case used to be
@@ -515,7 +597,11 @@ export async function assembleVideos(
         tDur,
       );
 
-      const outVideoLabel = i < segments.length - 1 ? `vx${i}` : 'outv';
+      // The final video label is 'concated' — the watermark step (below)
+      // takes 'concated' → 'outv' so 'outv' always carries the watermarked
+      // stream. Skip the rename when there's no watermark.
+      const finalVideoLabel = config.watermark === '' ? 'outv' : 'concated';
+      const outVideoLabel = i < segments.length - 1 ? `vx${i}` : finalVideoLabel;
       const outAudioLabel = i < segments.length - 1 ? `ax${i}` : 'outa';
 
       const ffmpegTransition = transition === 'cut' ? 'fade' : (xfadeMap[transition] ?? 'fade');
@@ -536,9 +622,29 @@ export async function assembleVideos(
   } else {
     // No transitions — simple concat (original behavior)
     const concatInputs = segments.map((_, i) => `[v${i}][a${i}]`).join('');
+    const finalVideoLabel = config.watermark === '' ? 'outv' : 'concated';
     filterParts.push(
-      `${concatInputs}concat=n=${segments.length}:v=1:a=1[outv][outa]`
+      `${concatInputs}concat=n=${segments.length}:v=1:a=1[${finalVideoLabel}][outa]`
     );
+  }
+
+  // Watermark: composite a pre-rendered PNG (Apple Chancery 'kshana') onto
+  // the bottom-right. We use overlay (always available) instead of drawtext
+  // (often missing on Homebrew/system FFmpeg builds because libfreetype is
+  // not enabled by default). Set KSHANA_WATERMARK=off to disable, or supply
+  // `watermark: ''` in config.
+  const watermarkDisabled =
+    config.watermark === '' || process.env['KSHANA_WATERMARK'] === 'off';
+  const watermarkPath = watermarkDisabled ? null : resolveWatermarkPath();
+  if (watermarkPath) {
+    // Append PNG as an extra -i input; track its index for the filter.
+    const watermarkInputIdx = inputArgs.filter(a => a === '-i').length;
+    inputArgs.push('-i', watermarkPath);
+    filterParts.push(buildWatermarkOverlayFilter('concated', watermarkInputIdx, 'outv'));
+  } else if (config.watermark !== '' && process.env['KSHANA_WATERMARK'] !== 'off') {
+    // No watermark asset found — log a hint but don't fail the assembly.
+    // We still need to alias `concated` to `outv` if no watermark was applied.
+    filterParts.push(`[concated]copy[outv]`);
   }
 
   const filterComplex = filterParts.join('; ');
@@ -552,6 +658,7 @@ export async function assembleVideos(
     '-c:v', 'libx264',
     '-preset', preset,
     '-c:a', 'aac',
+    ...mobileCompatibleEncodeArgs(),
     outputPath,
   ];
 

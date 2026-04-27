@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   buildAudioFilter,
   buildVideoFilter,
+  buildWatermarkOverlayFilter,
   computeXfadeOffset,
+  mobileCompatibleEncodeArgs,
   xfadeTransitionDuration,
 } from '../../src/core/timeline/FFmpegAssembler.js';
 
@@ -89,6 +91,79 @@ describe('computeXfadeOffset (timeline-vs-actual duration regression)', () => {
     const s2 = computeXfadeOffset(acc, 3.04, 0.5);
     acc = s2.nextAccumulatedDuration;
     expect(acc).toBeCloseTo(8.12, 6);
+  });
+});
+
+describe('mobileCompatibleEncodeArgs — WhatsApp/iOS/Android playback', () => {
+  // Diagnosed on 2026-04-27: overlay+watermark path produced yuv444p +
+  // High 4:4:4 Predictive + moov-at-end. Played in VLC, refused on
+  // WhatsApp mobile. These args lock the encode to a profile every
+  // mobile decoder accepts.
+
+  const args = mobileCompatibleEncodeArgs();
+
+  it('forces yuv420p pixel format', () => {
+    expect(args).toContain('-pix_fmt');
+    const idx = args.indexOf('-pix_fmt');
+    expect(args[idx + 1]).toBe('yuv420p');
+  });
+
+  it('caps H.264 at High@4.1 (mobile-safe ceiling)', () => {
+    const profIdx = args.indexOf('-profile:v');
+    const levelIdx = args.indexOf('-level:v');
+    expect(args[profIdx + 1]).toBe('high');
+    expect(args[levelIdx + 1]).toBe('4.1');
+  });
+
+  it('locks audio to 48 kHz stereo (some Android players reject 24 kHz)', () => {
+    const arIdx = args.indexOf('-ar');
+    const acIdx = args.indexOf('-ac');
+    expect(args[arIdx + 1]).toBe('48000');
+    expect(args[acIdx + 1]).toBe('2');
+  });
+
+  it('moves the moov atom to the front (+faststart) for streaming previews', () => {
+    const idx = args.indexOf('-movflags');
+    expect(args[idx + 1]).toBe('+faststart');
+  });
+});
+
+describe('buildWatermarkOverlayFilter — bottom-right PNG overlay', () => {
+  // We use overlay (always-available core filter) instead of drawtext
+  // (often missing on Homebrew/system FFmpeg builds because libfreetype
+  // is not enabled by default — this exact issue cost us a final-video
+  // assembly on 2026-04-27 with "No such filter: 'drawtext'").
+
+  it('places the PNG bottom-right with a 24px margin (W/H, not w/h)', () => {
+    const f = buildWatermarkOverlayFilter('concated', 1, 'outv');
+    // overlay uses W/H = main width/height, w/h = overlay width/height
+    expect(f).toContain('overlay=x=W-w-24:y=H-h-24');
+  });
+
+  it('routes the watermark image through format=rgba so alpha is preserved', () => {
+    expect(buildWatermarkOverlayFilter('concated', 1, 'outv')).toContain(
+      '[1:v]format=rgba[wm]',
+    );
+  });
+
+  it('emits the chained filters separated by a semicolon', () => {
+    const f = buildWatermarkOverlayFilter('concated', 1, 'outv');
+    expect(f.split(';').length).toBe(2);
+  });
+
+  it('respects the input index for the watermark stream', () => {
+    expect(buildWatermarkOverlayFilter('concated', 5, 'outv')).toContain('[5:v]');
+    expect(buildWatermarkOverlayFilter('concated', 17, 'outv')).toContain('[17:v]');
+  });
+
+  it('publishes to the output label provided', () => {
+    expect(buildWatermarkOverlayFilter('concated', 1, 'finalv')).toContain('[finalv]');
+  });
+
+  it('uses format=auto on overlay to preserve the source pixel format', () => {
+    // `format=auto` keeps yuv420p output consistent with libx264
+    // expectations downstream.
+    expect(buildWatermarkOverlayFilter('a', 1, 'b')).toContain('format=auto');
   });
 });
 
