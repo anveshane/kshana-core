@@ -32,6 +32,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSy
 import { join, resolve } from 'path';
 import { ComfyUIClient } from '../src/services/comfyui/ComfyUIClient.js';
 import { parameterizeGeneric } from '../src/services/comfyui/WorkflowLoader.js';
+import { expandPromptRelayWorkflow } from '../src/services/providers/promptRelayWorkflowExpander.js';
 
 // ── Force local mode for this probe ──────────────────────────────────
 // The workflow references locally-downloaded LTX 2.3 models / VAE / Gemma
@@ -46,8 +47,9 @@ const flags = new Set(process.argv.slice(2).filter(a => a.startsWith('--')));
 const [projectArg, sceneArg, startShotArg, nsegArg] = positional;
 const useEqualSegments = flags.has('--equal');
 if (!projectArg || !sceneArg) {
-  console.error('Usage: pnpm tsx scripts/probe-ltx-promptrelay.ts <project> <scene> [startShot=1] [Nseg=4|9] [--equal]');
-  console.error('  --equal: ignore per-shot durations and use LTX-aligned equal segments (the old default)');
+  console.error('Usage: pnpm tsx scripts/probe-ltx-promptrelay.ts <project> <scene> [startShot=1] [Nseg=4] [--equal]');
+  console.error('  Nseg can be any integer 1..20 — the workflow is expanded in-memory.');
+  console.error('  --equal: ignore per-shot durations and use LTX-aligned equal segments.');
   process.exit(1);
 }
 const scene = parseInt(sceneArg, 10);
@@ -57,8 +59,8 @@ if (!Number.isFinite(scene) || !Number.isFinite(startShot) || !Number.isFinite(S
   console.error('scene, startShot, and Nseg must be integers');
   process.exit(1);
 }
-if (![4, 9].includes(SEGMENT_COUNT)) {
-  console.error(`Nseg must be 4 or 9 (got ${SEGMENT_COUNT}). To support other counts, generate a matching workflow + manifest.`);
+if (SEGMENT_COUNT < 1 || SEGMENT_COUNT > 20) {
+  console.error(`Nseg must be between 1 and 20 (got ${SEGMENT_COUNT}); kijai LTXVAddGuideMulti caps at 20.`);
   process.exit(1);
 }
 
@@ -74,22 +76,26 @@ if (!existsSync(projectRoot)) {
   process.exit(1);
 }
 
-// ── Load workflow + manifest ─────────────────────────────────────────
-const workflowBase = `ltx23_promptrelay_${SEGMENT_COUNT}seg_local`;
-const workflowPath = resolve(process.cwd(), `workflows/built-in/${workflowBase}.json`);
-const manifestPath = resolve(process.cwd(), `workflows/built-in/${workflowBase}.manifest.json`);
-const template = JSON.parse(readFileSync(workflowPath, 'utf-8'));
-const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+// ── Load 4-seg base workflow + expand to N segments ──────────────────
+// The 4-seg JSON is the structural reference (loaders, samplers, NAG,
+// video-combine wiring). expandPromptRelayWorkflow stamps out an
+// N-segment variant in memory and returns matching parameter mappings.
+const workflowBase = 'ltx23_promptrelay_4seg_local';
+const baseWorkflowPath = resolve(process.cwd(), `workflows/built-in/${workflowBase}.json`);
+const baseTemplate = JSON.parse(readFileSync(baseWorkflowPath, 'utf-8'));
 
 // Sanity-check the patched node is the right class (not the broken
 // "UNKNOWN" export). If someone re-copies the raw download over it, fail
 // loudly here rather than waiting for ComfyUI to reject the prompt.
-const relayNode = template['948'];
+const relayNode = baseTemplate['948'];
 if (relayNode?.class_type !== 'PromptRelayEncode') {
   console.error(`FAIL: workflow node 948 must be class_type='PromptRelayEncode' (found '${relayNode?.class_type}')`);
   console.error('      Re-apply the patch — the raw downloaded JSON has the class stripped.');
   process.exit(1);
 }
+
+const { workflow: template, parameterMappings } = expandPromptRelayWorkflow(baseTemplate, SEGMENT_COUNT);
+const manifest = { parameterMappings };
 
 // ── Pick first-frame image for each shot ────────────────────────────
 // Source of truth: assets/manifest.json. The manifest lists *every*
