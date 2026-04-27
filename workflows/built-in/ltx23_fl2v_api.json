@@ -854,6 +854,10 @@
       "num_images.image_1": [
         "31",
         0
+      ],
+      "num_images.image_2": [
+        "50",
+        0
       ]
     },
     "class_type": "LTXVImgToVideoInplaceKJ",
