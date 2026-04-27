@@ -75,6 +75,8 @@ import {
 import { getProviderRegistry } from '../../services/providers/index.js';
 import { getWorkflowModeRegistry } from '../../services/providers/WorkflowModeRegistry.js';
 import { shouldGenerateExtraFrame, isPromptRelayMode } from '../../services/providers/videoStrategy.js';
+import type { SceneBundleShot, SceneBundleResult } from './sceneBundleRenderer.js';
+import type { CharacterId } from '../../services/providers/promptRelayGlobalPrompt.js';
 import { addAsset } from '../../tasks/video/workflow/index.js';
 
 /**
@@ -244,6 +246,11 @@ export class ExecutorAgent extends TypedEventEmitter {
   private retriedNodes = new Set<string>();
   /** Pending media generation promises (parallel mode) */
   private pendingMedia = new Map<string, Promise<string | null>>();
+  /** prompt_relay mode: shot_video nodes for the same scene share one
+   *  bundle render. Map keyed by sceneNumber → resolved bundle path
+   *  (or null on failure). First shot_video to arrive fires the
+   *  render; later shots `await` the same promise. */
+  private sceneBundleLocks = new Map<number, Promise<string | null>>();
   /** Timeline state — populated during execution, saved to timeline.json */
   private timeline: Timeline | null = null;
   /** Tracks how many times a dependency was regenerated for a given parent node (loop protection) */
@@ -5993,6 +6000,20 @@ Examples of common failure modes to avoid:
   ): Promise<string | null> {
     const agentName = this.config.name ?? 'kshana-executor';
 
+    // ── prompt_relay mode: render the whole scene as one bundle mp4
+    // and return that path for every shot in the scene. The render
+    // fires once; concurrent shot_video nodes for the same scene
+    // share the in-flight promise via sceneBundleLocks. The
+    // assembler-side dedupe (collapseBundleSegments) collapses the N
+    // identical timeline segments back to one concat input.
+    if (isPromptRelayMode()) {
+      const bundlePath = await this.renderOrAwaitSceneBundle(node, toolCallId, agentName);
+      if (bundlePath) return bundlePath;
+      // Fallthrough to per-shot if bundle render failed — better to
+      // limp than to drop the scene.
+      this.log(`  prompt_relay bundle render failed; falling back to per-shot for ${node.id}`);
+    }
+
     // 1. Find the MATCHING shot image (same itemId)
     let shotImagePath: string | undefined;
     const matchingImageId = `shot_image:${node.itemId}`;
@@ -6291,6 +6312,220 @@ Examples of common failure modes to avoid:
       });
       return null;
     }
+  }
+
+  /**
+   * prompt_relay mode: render the whole scene as one bundle mp4. The
+   * first shot_video node to arrive in the executor fires the render;
+   * later nodes for the same scene `await` the same in-flight promise
+   * (sceneBundleLocks). The asset is registered once with
+   * metadata.isBundle=true; the FFmpegAssembler's tier-3.5 fallback
+   * resolves every shot in the scene to it.
+   */
+  private async renderOrAwaitSceneBundle(
+    node: ExecutionNode,
+    _toolCallId: string,
+    agentName: string,
+  ): Promise<string | null> {
+    const sceneMatch = node.itemId?.match(/scene_(\d+)/);
+    if (!sceneMatch) {
+      this.log(`  prompt_relay: cannot parse scene number from ${node.itemId}`);
+      return null;
+    }
+    const sceneNum = parseInt(sceneMatch[1]!, 10);
+
+    // Existing in-flight render for this scene? Share its promise.
+    const existing = this.sceneBundleLocks.get(sceneNum);
+    if (existing) {
+      this.log(`  prompt_relay: ${node.itemId} awaiting in-flight scene ${sceneNum} bundle render`);
+      return existing;
+    }
+
+    // Build the request and store the lock immediately so concurrent
+    // calls don't double-fire.
+    const promise = this.executeSceneBundle(sceneNum, agentName).catch(err => {
+      this.log(`  prompt_relay: scene ${sceneNum} bundle error: ${String(err)}`);
+      return null;
+    });
+    this.sceneBundleLocks.set(sceneNum, promise);
+    return promise;
+  }
+
+  /** Gather all shots in the scene + render the bundle. */
+  private async executeSceneBundle(sceneNum: number, agentName: string): Promise<string | null> {
+    const { renderSceneBundle } = await import('./sceneBundleRenderer.js');
+    void agentName; // reserved — could emit per-scene tool_call cards later
+
+    // 1. Find all shot_video nodes for this scene, ordered by shot number
+    const allNodes = this.executor.getAllNodes();
+    const sceneShotNodes = allNodes
+      .filter(n => n.typeId === 'shot_video' && n.itemId?.startsWith(`scene_${sceneNum}_shot_`))
+      .map(n => {
+        const m = n.itemId?.match(/shot_(\d+)$/);
+        const shotNumber = m?.[1] ? parseInt(m[1], 10) : 0;
+        return { node: n, shotNumber };
+      })
+      .filter(x => x.shotNumber > 0)
+      .sort((a, b) => a.shotNumber - b.shotNumber);
+
+    if (sceneShotNodes.length === 0) {
+      this.log(`  prompt_relay: scene ${sceneNum} has no shot_video nodes`);
+      return null;
+    }
+
+    // 2. For each shot: first_frame path, motion prompt, duration
+    const shots: SceneBundleShot[] = [];
+    let svpJson: { shots?: Array<{ shotNumber?: number; duration?: number; description?: string }> } | null = null;
+    const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
+    if (svpNode?.outputPath) {
+      try {
+        let c = readFileSync(join(this.config.projectDir, svpNode.outputPath), 'utf-8').trim();
+        if (c.startsWith('```')) c = c.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+        svpJson = JSON.parse(c);
+      } catch { /* ignore */ }
+    }
+
+    for (const { node, shotNumber } of sceneShotNodes) {
+      // first_frame from shot_image node
+      const imgNode = this.executor.getNode(`shot_image:${node.itemId}`);
+      const firstFrameRel = imgNode?.outputPaths?.['first_frame'] ?? imgNode?.outputPath;
+      if (!firstFrameRel) {
+        this.log(`  prompt_relay: scene ${sceneNum} shot ${shotNumber} has no first_frame yet — bundle waits`);
+        return null;
+      }
+      const firstFrameAbs = join(this.config.projectDir, firstFrameRel);
+      if (!existsSync(firstFrameAbs)) {
+        this.log(`  prompt_relay: first_frame missing on disk for scene ${sceneNum} shot ${shotNumber}: ${firstFrameAbs}`);
+        return null;
+      }
+
+      // motion prompt
+      let motionPrompt = '';
+      const mdNode = this.executor.getNode(`shot_motion_directive:${node.itemId}`);
+      if (mdNode?.outputPath) {
+        try {
+          let raw = readFileSync(join(this.config.projectDir, mdNode.outputPath), 'utf-8').trim();
+          if (raw.startsWith('```')) raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+          try {
+            const parsed = JSON.parse(raw);
+            motionPrompt = (typeof parsed?.motionDirective === 'string' ? parsed.motionDirective : raw).trim();
+          } catch {
+            motionPrompt = raw;
+          }
+        } catch { /* ignore */ }
+      }
+      if (!motionPrompt) motionPrompt = `Cinematic shot, scene ${sceneNum} shot ${shotNumber}.`;
+
+      // duration from scene_video_prompt
+      const shotMeta = svpJson?.shots?.find(s => s.shotNumber === shotNumber);
+      const duration = typeof shotMeta?.duration === 'number' && shotMeta.duration > 0 ? shotMeta.duration : 5;
+
+      shots.push({ shotNumber, firstFramePath: firstFrameAbs, motionPrompt, duration });
+    }
+
+    if (shots.length > 20) {
+      this.log(`  prompt_relay: scene ${sceneNum} has ${shots.length} shots (>20 cap); using per-shot fallback`);
+      return null;
+    }
+
+    // 3. Characters + scene description
+    const characters = this.collectCharacterIdentities();
+    const sceneDescription = this.collectSceneDescription(sceneNum, svpJson);
+
+    // 4. Render
+    const width = this.config.project.resolutionWidth ?? 848;
+    const height = this.config.project.resolutionHeight ?? 480;
+    const style = (this.config.project as { style?: string }).style || 'cinematic';
+
+    this.log(`  prompt_relay: scene ${sceneNum} rendering ${shots.length} shots as one bundle`);
+    let result: SceneBundleResult;
+    try {
+      result = await renderSceneBundle({
+        sceneNumber: sceneNum,
+        shots,
+        characters,
+        sceneDescription,
+        style,
+        projectDir: this.config.projectDir,
+        width,
+        height,
+        log: (m) => this.log(`  prompt_relay: ${m}`),
+      });
+    } catch (err) {
+      this.log(`  prompt_relay: scene ${sceneNum} render threw: ${String(err)}`);
+      return null;
+    }
+
+    // 5. Register the bundle as ONE scene_video asset with metadata
+    // marking it as a bundle so the FFmpegAssembler's tier-3.5
+    // fallback (resolverSceneBundleFallback) resolves every shot in
+    // this scene to it.
+    try {
+      addAsset({
+        id: `scenebundle_${sceneNum}_${Date.now()}`,
+        type: 'scene_video',
+        path: result.bundleRelativePath,
+        createdAt: Date.now(),
+        metadata: {
+          sceneNumber: sceneNum,
+          isBundle: true,
+          coversShots: shots.map(s => s.shotNumber),
+          generationStrategy: 'prompt_relay',
+          totalFrames: result.totalFrames,
+          segmentFrames: result.segmentFrames,
+          promptId: result.promptId,
+        },
+      });
+    } catch { /* non-fatal */ }
+
+    this.log(`  prompt_relay: scene ${sceneNum} bundle saved → ${result.bundleRelativePath}`);
+    return result.bundleRelativePath;
+  }
+
+  /** Read each character's "Physical Description" from characters/*.md
+   *  for the global-prompt builder. Conservative — only files listed
+   *  on the project's content registry, deduped by name. */
+  private collectCharacterIdentities(): CharacterId[] {
+    const out: CharacterId[] = [];
+    const items = (this.config.project as unknown as { content?: { characters?: { items?: string[]; itemFiles?: Record<string, string> } } }).content?.characters;
+    const itemFiles = items?.itemFiles ?? {};
+    const seen = new Set<string>();
+    for (const name of items?.items ?? []) {
+      const key = name.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const rel = itemFiles[name];
+      if (!rel) continue;
+      const abs = join(this.config.projectDir, rel);
+      if (!existsSync(abs)) continue;
+      try {
+        const md = readFileSync(abs, 'utf-8');
+        const m = md.match(/###\s*Physical Description\s*\n([\s\S]+?)(?:\n###|\n---|$)/i);
+        if (m) {
+          out.push({ name, description: m[1]!.replace(/\s+/g, ' ').trim() });
+        }
+      } catch { /* ignore */ }
+    }
+    return out;
+  }
+
+  /** Pull a brief, visual description for a scene from
+   *  prompts/scene_summaries.json or the SVP JSON, kept short to avoid
+   *  drowning the per-segment local prompts. */
+  private collectSceneDescription(
+    sceneNum: number,
+    svpJson: { shots?: Array<{ description?: string }> } | null,
+  ): string {
+    const summariesPath = join(this.config.projectDir, 'prompts/scene_summaries.json');
+    if (existsSync(summariesPath)) {
+      try {
+        const all = JSON.parse(readFileSync(summariesPath, 'utf-8')) as Record<string, string>;
+        const s = all[`scene_${sceneNum}`];
+        if (typeof s === 'string' && s.trim().length > 0) return s.trim();
+      } catch { /* ignore */ }
+    }
+    // Fall back to first shot's description
+    return svpJson?.shots?.[0]?.description?.trim() ?? '';
   }
 
   /**
