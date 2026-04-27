@@ -266,11 +266,14 @@ export class ExecutorAgent extends TypedEventEmitter {
   /** Pending media generation promises (parallel mode) */
   private pendingMedia = new Map<string, Promise<string | null>>();
   /** prompt_relay mode: shot_video nodes for the same scene share one
-   *  bundle render. First arrival fires the render; later arrivals
-   *  await the same promise. On null/throw the lock is cleared so the
-   *  next caller retries (handles the race where shot_video fires
-   *  before all sibling shot_images have completed). */
-  private sceneBundleLocks = new SceneBundleLockMap();
+   *  bundle-rendering pass. Lock value is a Map<shotNumber, path>
+   *  because long scenes split into multiple chunks — different shots
+   *  in the same scene may resolve to different bundle files. First
+   *  arrival fires the render; later arrivals await the same promise.
+   *  On null/throw the lock clears so the next caller retries (handles
+   *  the race where shot_video fires before sibling shot_images are
+   *  ready). */
+  private sceneBundleLocks = new SceneBundleLockMap<Map<number, string>>();
   /** prompt_relay: scenes we've already determined cannot be rendered
    *  as a bundle (e.g. > 20 shots, > 1000 frames). These never retry —
    *  the cap is structural, not transient. Subsequent shot_videos for
@@ -6374,12 +6377,15 @@ Examples of common failure modes to avoid:
   }
 
   /**
-   * prompt_relay mode: render the whole scene as one bundle mp4. The
-   * first shot_video node to arrive in the executor fires the render;
-   * later nodes for the same scene `await` the same in-flight promise
-   * (sceneBundleLocks). The asset is registered once with
-   * metadata.isBundle=true; the FFmpegAssembler's tier-3.5 fallback
-   * resolves every shot in the scene to it.
+   * prompt_relay mode: render the scene as one or more bundle mp4s.
+   * The first shot_video for a scene to arrive fires the render(s);
+   * concurrent shot_videos for the same scene await the same
+   * in-flight promise (sceneBundleLocks). Long scenes that exceed
+   * the LTX caps (>20 shots or >1000 frames) are split into multiple
+   * chunks via chunkSceneIntoBundles; each chunk is rendered as its
+   * own scene_video asset with metadata.coversShots listing which
+   * shots it covers. The FFmpegAssembler's tier-3.5 fallback uses
+   * coversShots to pick the right chunk per shot.
    */
   private async renderOrAwaitSceneBundle(
     node: ExecutionNode,
@@ -6387,23 +6393,27 @@ Examples of common failure modes to avoid:
     agentName: string,
   ): Promise<string | null> {
     const sceneMatch = node.itemId?.match(/scene_(\d+)/);
-    if (!sceneMatch) {
-      this.log(`  prompt_relay: cannot parse scene number from ${node.itemId}`);
+    const shotMatch = node.itemId?.match(/shot_(\d+)$/);
+    if (!sceneMatch || !shotMatch) {
+      this.log(`  prompt_relay: cannot parse scene/shot from ${node.itemId}`);
       return null;
     }
     const sceneNum = parseInt(sceneMatch[1]!, 10);
+    const shotNum = parseInt(shotMatch[1]!, 10);
     if (this.unbundleableScenes.has(sceneNum)) {
-      // Already determined this scene can't be bundled (structural cap).
-      // Skip the relay attempt — saves an upload+submit round-trip per shot.
       return null;
     }
-    return this.sceneBundleLocks.acquire(sceneNum, () => this.executeSceneBundle(sceneNum, agentName));
+    const chunkMap = await this.sceneBundleLocks.acquire(sceneNum, () => this.executeSceneBundle(sceneNum, agentName));
+    if (!chunkMap) return null;
+    return chunkMap.get(shotNum) ?? null;
   }
 
-  /** Gather all shots in the scene + render the bundle. */
-  private async executeSceneBundle(sceneNum: number, agentName: string): Promise<string | null> {
+  /** Gather all shots, split into chunks, render each. Returns a map
+   *  shotNumber → bundle relative path (the chunk covering that shot). */
+  private async executeSceneBundle(sceneNum: number, agentName: string): Promise<Map<number, string> | null> {
     const { renderSceneBundle } = await import('./sceneBundleRenderer.js');
-    void agentName; // reserved — could emit per-scene tool_call cards later
+    const { chunkSceneIntoBundles } = await import('./sceneBundleChunker.js');
+    void agentName;
 
     // 1. Find all shot_video nodes for this scene, ordered by shot number
     const allNodes = this.executor.getAllNodes();
@@ -6472,76 +6482,104 @@ Examples of common failure modes to avoid:
       shots.push({ shotNumber, firstFramePath: firstFrameAbs, motionPrompt, duration });
     }
 
-    // Eligibility gate. Both caps are structural — retrying with the
-    // same inputs cannot help. On `permanent: true` we add the scene
-    // to unbundleableScenes so subsequent shot_videos in the same
-    // scene skip the relay attempt entirely (no wasted upload+submit
-    // round-trip per shot).
-    const { alignDurationsToLTX } = await import('../../services/providers/promptRelayFrameAlignment.js');
-    const segmentFrames = alignDurationsToLTX(shots.map(s => s.duration), 24);
-    const totalFrames = segmentFrames.reduce((a, b) => a + b, 0);
-    const eligibility = checkSceneBundleEligibility({ shotCount: shots.length, totalFrames });
-    if (!eligibility.eligible) {
-      this.log(`  prompt_relay: scene ${sceneNum} not eligible — ${eligibility.reason}`);
-      if (eligibility.permanent) {
-        this.log(`  prompt_relay: marking scene ${sceneNum} as permanently unbundleable; falling back to per-shot for all shots`);
-        this.unbundleableScenes.add(sceneNum);
+    // 3. Split into chunks that fit LTX caps. The chunker honors both
+    // 20-shot and 1000-frame caps, re-aligning frame counts per chunk
+    // (each chunk's first segment gets +1 to keep the chunk's total
+    // ≡ 1 mod 8). Single-bundle scenes return one chunk; long scenes
+    // return multiple chunks rendered one after another.
+    const chunks = chunkSceneIntoBundles(
+      shots.map(s => ({ shotNumber: s.shotNumber, durationSec: s.duration })),
+      24,
+    );
+    if (chunks.length === 0) return null;
+
+    // Defensive: confirm every chunk passed eligibility. The chunker
+    // is supposed to guarantee this, but if a single shot is so long
+    // that even alone it exceeds 1000 frames, we land here. Mark the
+    // scene unbundleable rather than submit a doomed render.
+    for (const chunk of chunks) {
+      const elig = checkSceneBundleEligibility({ shotCount: chunk.shots.length, totalFrames: chunk.totalFrames });
+      if (!elig.eligible) {
+        this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex} ineligible — ${elig.reason}`);
+        if (elig.permanent) {
+          this.log(`  prompt_relay: marking scene ${sceneNum} unbundleable; falling back to per-shot`);
+          this.unbundleableScenes.add(sceneNum);
+        }
+        return null;
       }
-      return null;
     }
 
-    // 3. Characters + scene description
+    // 4. Render each chunk serially. Per-chunk output filename
+    // includes _chunk${index} so chunks for the same scene don't
+    // collide on disk.
     const characters = this.collectCharacterIdentities();
     const sceneDescription = this.collectSceneDescription(sceneNum, svpJson);
-
-    // 4. Render
     const width = this.config.project.resolutionWidth ?? 848;
     const height = this.config.project.resolutionHeight ?? 480;
     const style = (this.config.project as { style?: string }).style || 'cinematic';
 
-    this.log(`  prompt_relay: scene ${sceneNum} rendering ${shots.length} shots as one bundle (${totalFrames} frames)`);
-    let result: SceneBundleResult;
-    try {
-      result = await renderSceneBundle({
-        sceneNumber: sceneNum,
-        shots,
-        characters,
-        sceneDescription,
-        style,
-        projectDir: this.config.projectDir,
-        width,
-        height,
-        log: (m) => this.log(`  prompt_relay: ${m}`),
-      });
-    } catch (err) {
-      this.log(`  prompt_relay: scene ${sceneNum} render threw: ${String(err)}`);
-      return null;
+    this.log(`  prompt_relay: scene ${sceneNum} rendering ${shots.length} shots in ${chunks.length} chunk(s)`);
+
+    const chunkPathByShot = new Map<number, string>();
+
+    for (const chunk of chunks) {
+      // Map the chunker's shot list back to SceneBundleShot (carries
+      // the first_frame/motion data we already gathered).
+      const chunkShots: SceneBundleShot[] = chunk.shots
+        .map(c => shots.find(s => s.shotNumber === c.shotNumber))
+        .filter((s): s is SceneBundleShot => !!s);
+      if (chunkShots.length !== chunk.shots.length) {
+        this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex} missing shot data — abort`);
+        return null;
+      }
+
+      this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex + 1}/${chunks.length} (${chunkShots.length} shots, ${chunk.totalFrames} frames)`);
+      let result: SceneBundleResult;
+      try {
+        result = await renderSceneBundle({
+          sceneNumber: sceneNum,
+          shots: chunkShots,
+          characters,
+          sceneDescription,
+          style,
+          projectDir: this.config.projectDir,
+          width,
+          height,
+          log: (m) => this.log(`  prompt_relay: ${m}`),
+          chunkIndex: chunks.length > 1 ? chunk.chunkIndex : undefined,
+        });
+      } catch (err) {
+        this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex} render threw: ${String(err)}`);
+        return null;
+      }
+
+      try {
+        addAsset({
+          id: `scenebundle_${sceneNum}_chunk${chunk.chunkIndex}_${Date.now()}`,
+          type: 'scene_video',
+          path: result.bundleRelativePath,
+          createdAt: Date.now(),
+          metadata: {
+            sceneNumber: sceneNum,
+            isBundle: true,
+            coversShots: chunkShots.map(s => s.shotNumber),
+            chunkIndex: chunk.chunkIndex,
+            totalChunks: chunks.length,
+            generationStrategy: 'prompt_relay',
+            totalFrames: result.totalFrames,
+            segmentFrames: result.segmentFrames,
+            promptId: result.promptId,
+          },
+        });
+      } catch { /* non-fatal */ }
+
+      for (const s of chunkShots) {
+        chunkPathByShot.set(s.shotNumber, result.bundleRelativePath);
+      }
+      this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex} saved → ${result.bundleRelativePath}`);
     }
 
-    // 5. Register the bundle as ONE scene_video asset with metadata
-    // marking it as a bundle so the FFmpegAssembler's tier-3.5
-    // fallback (resolverSceneBundleFallback) resolves every shot in
-    // this scene to it.
-    try {
-      addAsset({
-        id: `scenebundle_${sceneNum}_${Date.now()}`,
-        type: 'scene_video',
-        path: result.bundleRelativePath,
-        createdAt: Date.now(),
-        metadata: {
-          sceneNumber: sceneNum,
-          isBundle: true,
-          coversShots: shots.map(s => s.shotNumber),
-          generationStrategy: 'prompt_relay',
-          totalFrames: result.totalFrames,
-          segmentFrames: result.segmentFrames,
-          promptId: result.promptId,
-        },
-      });
-    } catch { /* non-fatal */ }
-
-    this.log(`  prompt_relay: scene ${sceneNum} bundle saved → ${result.bundleRelativePath}`);
-    return result.bundleRelativePath;
+    return chunkPathByShot;
   }
 
   /** Read each character's "Physical Description" from characters/*.md

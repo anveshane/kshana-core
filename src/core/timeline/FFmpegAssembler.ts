@@ -235,11 +235,22 @@ export function resolveSegmentFilePaths(
             return meta['isBundle'] === true && meta['sceneNumber'] === segmentNum;
           });
           if (bundles.length > 0) {
-            bundles.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
-            const best = bundles[0]!;
-            const candidate = best.path.startsWith('/')
-              ? best.path
-              : join(projectDir, best.path);
+            // Multi-chunk scenes: each chunk registers metadata.coversShots
+            // listing which shot numbers it covers. Pick the chunk that
+            // claims this shot. Single-bundle scenes (no coversShots
+            // metadata) implicitly cover everything in the scene.
+            const matchingChunk = bundles.find(a => {
+              if (shotNum === undefined) return true;
+              const meta = (a.metadata ?? {}) as Record<string, unknown>;
+              const covers = meta['coversShots'];
+              if (!Array.isArray(covers)) return true;
+              return covers.includes(shotNum);
+            });
+            const chosen = matchingChunk
+              ?? bundles.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0]!;
+            const candidate = chosen.path.startsWith('/')
+              ? chosen.path
+              : join(projectDir, chosen.path);
             if (existsSync(candidate)) {
               absolutePath = candidate;
               mediaType = detectMediaType(candidate);

@@ -128,6 +128,42 @@ describe('resolveSegmentFilePaths: scene-bundle fallback', () => {
     expect(errors.length).toBeGreaterThan(0);
   });
 
+  it('multi-chunk scenes: resolves each shot to the chunk whose coversShots contains it', () => {
+    const chunkA = 'assets/videos/scenes/scene_1_chunk0_promptrelay.mp4';
+    const chunkB = 'assets/videos/scenes/scene_1_chunk1_promptrelay.mp4';
+    writeFileSync(join(projectDir, chunkA), 'fake');
+    writeFileSync(join(projectDir, chunkB), 'fake');
+    const manifest = {
+      assets: [
+        {
+          id: 'scenebundle_1_0',
+          type: 'scene_video',
+          path: chunkA,
+          createdAt: 100,
+          metadata: { sceneNumber: 1, isBundle: true, coversShots: [1, 2, 3, 4, 5, 6, 7, 8], chunkIndex: 0, totalChunks: 2 },
+        },
+        {
+          id: 'scenebundle_1_1',
+          type: 'scene_video',
+          path: chunkB,
+          createdAt: 101,
+          metadata: { sceneNumber: 1, isBundle: true, coversShots: [9, 10, 11, 12], chunkIndex: 1, totalChunks: 2 },
+        },
+      ],
+    };
+    writeFileSync(join(projectDir, 'assets/manifest.json'), JSON.stringify(manifest));
+
+    const { resolved, errors } = resolveSegmentFilePaths(timelineForScene(1, 12), projectDir);
+    expect(errors).toEqual([]);
+    expect(resolved).toHaveLength(12);
+    for (let i = 0; i < 8; i++) {
+      expect(resolved[i]!.filePath, `shot ${i + 1}`).toBe(join(projectDir, chunkA));
+    }
+    for (let i = 8; i < 12; i++) {
+      expect(resolved[i]!.filePath, `shot ${i + 1}`).toBe(join(projectDir, chunkB));
+    }
+  });
+
   it('only matches bundles for the same sceneNumber', () => {
     const bundle2 = 'assets/videos/scenes/scene_2_promptrelay.mp4';
     writeFileSync(join(projectDir, bundle2), 'fake');

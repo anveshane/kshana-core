@@ -59,6 +59,10 @@ export interface SceneBundleRequest {
   onProgress?: (pct: number, msg: string) => void;
   /** Optional log sink for executor logs. */
   log?: (msg: string) => void;
+  /** Multi-chunk scenes: 0-based chunk index. When set, the output
+   *  filename includes `_chunk${chunkIndex}` so chunks for the same
+   *  scene don't collide. */
+  chunkIndex?: number;
 }
 
 export interface SceneBundleResult {
@@ -126,7 +130,8 @@ export async function renderSceneBundle(req: SceneBundleRequest): Promise<SceneB
     // ── 6. Parameterize ─────────────────────────────────────────────
     const seedPass1 = Math.floor(Math.random() * 0x7FFFFFFF);
     const seedPass2 = Math.floor(Math.random() * 0x7FFFFFFF);
-    const filenamePrefix = `scene_${req.sceneNumber}_promptrelay`;
+    const chunkSuffix = req.chunkIndex !== undefined ? `_chunk${req.chunkIndex}` : '';
+    const filenamePrefix = `scene_${req.sceneNumber}${chunkSuffix}_promptrelay`;
     const segmentParams: Record<string, unknown> = {};
     for (let i = 0; i < req.shots.length; i++) {
       segmentParams[`segment_${i + 1}_image`] = uploadedNames[i];
@@ -170,7 +175,7 @@ export async function renderSceneBundle(req: SceneBundleRequest): Promise<SceneB
       throw new Error(`scene ${req.sceneNumber}: no video output from ComfyUI (prompt_id=${promptId})`);
     }
     const item = allOutputs[0]!;
-    const targetName = `scene_${req.sceneNumber}_promptrelay_${promptId.slice(0, 8)}.mp4`;
+    const targetName = `scene_${req.sceneNumber}${chunkSuffix}_promptrelay_${promptId.slice(0, 8)}.mp4`;
     const absDownloaded = await client.downloadImage(
       item.filename,
       item.subfolder ?? '',
