@@ -129,6 +129,33 @@ export interface ContextUsageEvent {
   iteration: number;
 }
 
+export type UsageFactKind =
+  | 'llm'
+  | 'image_generation'
+  | 'image_edit'
+  | 'video_generation';
+
+/**
+ * Neutral usage telemetry emitted after successful billable work.
+ * This contains facts only; pricing and credit policy live outside core.
+ */
+export interface UsageFactEvent {
+  type: 'usage_fact';
+  eventId: string;
+  kind: UsageFactKind;
+  toolName?: string;
+  toolCallId?: string;
+  facts: {
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
+    imageCount?: number;
+    seconds?: number;
+    artifactId?: string;
+    filePath?: string;
+  };
+}
+
 /**
  * Option for multiple choice questions.
  */
@@ -196,6 +223,7 @@ export type AgentEvent =
   | ToolStreamingEvent
   | NotificationEvent
   | ContextUsageEvent
+  | UsageFactEvent
   | QuestionEvent
   | AgentStatusEvent
   | UserInputInjectedEvent
