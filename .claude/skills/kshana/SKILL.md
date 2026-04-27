@@ -38,8 +38,9 @@ invoke this skill — they probably want to edit source.
 ## The 8 commands
 
 ```bash
-# CREATE
-pnpm new <project> --input <file> [--style <style>] [--duration <sec>]
+# CREATE — input can come from stdin (default), --text, or --input <file>
+pnpm new <project> [--text "..." | --input <file>] [--style <style>] [--duration <sec>]
+echo "story text" | pnpm new <project>          # stdin form (most common from agents)
 
 # INSPECT
 pnpm status <project>                                    # phase + node rollup
@@ -88,7 +89,22 @@ Common stops:
 
 ## Common workflows
 
-**Create from input file and run end-to-end:**
+**Create from inline string (simplest — agents should use this form):**
+```bash
+pnpm new myproj --text "A woman refused her betrothal and fled into the night."
+pnpm run-to myproj
+```
+
+**Create from stdin (good for multi-line input you'd build up programmatically):**
+```bash
+cat <<EOF | pnpm new myproj --style anime --duration 60
+A woman in a medieval village refused her betrothal.
+She fled the village at dawn.
+EOF
+pnpm run-to myproj
+```
+
+**Create from a file (when the input is already on disk):**
 ```bash
 pnpm new myproj --input story.md --style anime --duration 60
 pnpm run-to myproj
@@ -96,7 +112,7 @@ pnpm run-to myproj
 
 **Stop before any image is generated, then continue:**
 ```bash
-pnpm new myproj --input story.md
+pnpm new myproj --text "..."
 pnpm run-to myproj scene_video_prompt    # all prompts, no media
 pnpm inspect myproj scene_2.svp          # check the LLM's plan
 pnpm run-to myproj                        # continue to final video

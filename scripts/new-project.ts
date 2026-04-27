@@ -1,27 +1,34 @@
 #!/usr/bin/env tsx
 /**
- * Create a new kshana-ink project from a text input file.
+ * Create a new kshana-ink project from a text input.
  *
- * Usage:
- *   pnpm new <project-name> --input <file> [--style <style>] [--duration <sec>] [--template <id>]
+ * Three input modes (pick one):
+ *   1. STDIN     pnpm new my_story <<EOF
+ *                A woman fled a betrothal...
+ *                EOF
  *
- * Examples:
- *   pnpm new my_story --input story.md
- *   pnpm new heist_60s --input idea.md --style cinematic_realism --duration 60
+ *                echo "She refused the lord." | pnpm new my_story
  *
- * Creates `<project-name>.kshana/` next to the cwd, copies the input file
- * to `original_input.md`, and writes a `project.json` with the right
+ *   2. INLINE    pnpm new my_story --text "A woman fled..."
+ *
+ *   3. FILE      pnpm new my_story --input story.md
+ *
+ * Optional flags: --style <style>, --duration <sec>, --template <id>.
+ *
+ * Creates `<project-name>.kshana/` next to the cwd, writes the input to
+ * `original_input.md`, and writes a `project.json` with the right
  * inputType detected from the content (story vs idea). After this you can
  * run `pnpm run-to <project-name> [stage]` to drive the pipeline forward.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'fs';
-import { join, basename, resolve } from 'path';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { join, resolve } from 'path';
 import { setActiveProjectDir } from '../src/tasks/video/workflow/activeProject.js';
 import { createProject } from '../src/tasks/video/workflow/ProjectManager.js';
 
 interface Args {
   projectName: string;
-  inputFile: string;
+  inputFile?: string;
+  inputText?: string;
   style?: string;
   duration?: number;
   templateId?: string;
@@ -35,6 +42,7 @@ function parseArgs(): Args {
 
   const projectName = argv[0]!;
   let inputFile: string | undefined;
+  let inputText: string | undefined;
   let style: string | undefined;
   let duration: number | undefined;
   let templateId: string | undefined;
@@ -46,6 +54,10 @@ function parseArgs(): Args {
       case '--input':
       case '-i':
         inputFile = next;
+        i += 1;
+        break;
+      case '--text':
+        inputText = next;
         i += 1;
         break;
       case '--style':
@@ -71,32 +83,67 @@ function parseArgs(): Args {
         printUsageAndExit();
     }
   }
+  return { projectName, inputFile, inputText, style, duration, templateId };
+}
 
-  if (!inputFile) {
-    console.error('Error: --input <file> is required');
-    printUsageAndExit();
+/** Read all of stdin as UTF-8. Returns empty string if stdin is a TTY (no pipe). */
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) return '';
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) {
+    chunks.push(chunk as Buffer);
   }
-  return { projectName, inputFile: inputFile!, style, duration, templateId };
+  return Buffer.concat(chunks).toString('utf-8');
 }
 
 function printUsageAndExit(code: number = 1): never {
-  console.error('Usage: pnpm new <project-name> --input <file> [--style <style>] [--duration <sec>] [--template <id>]');
+  console.error('Usage: pnpm new <project-name> [input-source] [options]');
   console.error('');
-  console.error('  <project-name>       folder name (without .kshana suffix)');
-  console.error('  --input, -i <file>   text file with the story idea or full screenplay');
-  console.error('  --style, -s <style>  cinematic_realism | anime | noir | ... (default: cinematic_realism)');
-  console.error('  --duration, -d <sec> target video duration in seconds (default: 60)');
-  console.error('  --template, -t <id>  template id (default: narrative)');
+  console.error('Input source (pick ONE):');
+  console.error('  (default)            read from stdin     `echo "..." | pnpm new myproj`');
+  console.error('  --text "..."         pass inline text');
+  console.error('  --input, -i <file>   read from a file');
+  console.error('');
+  console.error('Options:');
+  console.error('  --style, -s <style>   cinematic_realism | anime | noir | ... (default: cinematic_realism)');
+  console.error('  --duration, -d <sec>  target video duration in seconds (default: 60)');
+  console.error('  --template, -t <id>   template id (default: narrative)');
   process.exit(code);
 }
 
 async function main() {
   const args = parseArgs();
 
-  const inputPath = resolve(args.inputFile);
-  if (!existsSync(inputPath)) {
-    console.error(`Input file not found: ${inputPath}`);
-    process.exit(1);
+  // Resolve input content from one of: --input file, --text inline, or stdin.
+  // Exactly one must be set (or stdin must be piped).
+  let inputContent: string;
+  let inputSource: string;
+  if (args.inputFile && args.inputText !== undefined) {
+    console.error('Error: pass only one of --input or --text, not both.');
+    printUsageAndExit();
+  }
+  if (args.inputFile) {
+    const inputPath = resolve(args.inputFile);
+    if (!existsSync(inputPath)) {
+      console.error(`Input file not found: ${inputPath}`);
+      process.exit(1);
+    }
+    inputContent = readFileSync(inputPath, 'utf-8');
+    inputSource = inputPath;
+  } else if (args.inputText !== undefined) {
+    inputContent = args.inputText;
+    inputSource = '(--text inline)';
+  } else {
+    inputContent = await readStdin();
+    if (!inputContent.trim()) {
+      console.error('Error: no input provided. Pipe content via stdin, or use --text or --input.');
+      console.error('Examples:');
+      console.error('  echo "A woman fled..." | pnpm new myproj');
+      console.error('  pnpm new myproj --text "A woman fled..."');
+      console.error('  pnpm new myproj --input story.md');
+      process.exit(1);
+    }
+    inputSource = '(stdin)';
   }
 
   const projectDirName = `${args.projectName}.kshana`;
@@ -114,17 +161,13 @@ async function main() {
   // first; we need it to point at our chosen path.
   setActiveProjectDir(projectDir);
 
-  // Create the directory and copy the input file into it (canonical name
-  // `original_input.md`). The input file path stored in project.json is
-  // relative to the project dir.
+  // Create the directory and write the input to its canonical path.
   mkdirSync(projectDir, { recursive: true });
   const canonicalInputPath = join(projectDir, 'original_input.md');
-  copyFileSync(inputPath, canonicalInputPath);
-
-  const inputContent = readFileSync(canonicalInputPath, 'utf-8');
+  writeFileSync(canonicalInputPath, inputContent);
 
   console.log(`Creating project: ${projectDirName}`);
-  console.log(`  Input file: ${basename(inputPath)} → ${canonicalInputPath}`);
+  console.log(`  Source:     ${inputSource} (${inputContent.length} bytes)`);
   console.log(`  Style:      ${args.style ?? 'cinematic_realism'}`);
   console.log(`  Duration:   ${args.duration ?? 60}s`);
   console.log(`  Template:   ${args.templateId ?? 'narrative'}`);
