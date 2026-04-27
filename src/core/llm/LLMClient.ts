@@ -287,11 +287,30 @@ export class LLMClient {
 
     // Accumulate for final logging
     let fullContent = '';
+    let fullReasoning = '';
+    const reasoningDetails: unknown[] = [];
     const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> =
       new Map();
 
     for await (const chunk of stream) {
       const delta = chunk.choices[0]?.delta;
+      const providerDelta = delta as
+        | (typeof delta & {
+            reasoning?: string;
+            reasoning_content?: string;
+            reasoning_details?: unknown[];
+          })
+        | undefined;
+
+      const reasoningDelta =
+        providerDelta?.reasoning ?? providerDelta?.reasoning_content ?? '';
+      if (reasoningDelta) {
+        fullReasoning += reasoningDelta;
+      }
+
+      if (Array.isArray(providerDelta?.reasoning_details)) {
+        reasoningDetails.push(...providerDelta.reasoning_details);
+      }
 
       if (delta?.content) {
         fullContent += delta.content;
@@ -360,7 +379,12 @@ export class LLMClient {
             }
           : undefined;
 
-        yield { done: true, usage };
+        yield {
+          done: true,
+          usage,
+          reasoning: fullReasoning || undefined,
+          reasoningDetails: reasoningDetails.length > 0 ? reasoningDetails : undefined,
+        };
       }
     }
   }
@@ -405,6 +429,14 @@ export class LLMClient {
             },
           }));
         }
+        const providerAssistantMsg = assistantMsg as unknown as Record<string, unknown>;
+        if (msg.reasoningDetails && msg.reasoningDetails.length > 0) {
+          providerAssistantMsg['reasoning_details'] = msg.reasoningDetails;
+        } else if (msg.reasoning) {
+          // OpenRouter accepts reasoning_content as an alias for reasoning, and
+          // DeepSeek's native API requires this exact field during thinking-mode tool calls.
+          providerAssistantMsg['reasoning_content'] = msg.reasoning;
+        }
         result.push(assistantMsg);
       } else if (msg.role === 'tool') {
         result.push({
@@ -442,6 +474,11 @@ export class LLMClient {
     if (!choice) {
       return { content: null, toolCalls: [], finishReason: null };
     }
+    const providerMessage = choice.message as typeof choice.message & {
+      reasoning?: string;
+      reasoning_content?: string;
+      reasoning_details?: unknown[];
+    };
 
     const toolCalls: ToolCall[] = (choice.message.tool_calls ?? []).map(tc => ({
       id: tc.id,
@@ -453,6 +490,10 @@ export class LLMClient {
       content: this.cleanContent(choice.message.content),
       toolCalls,
       finishReason: choice.finish_reason,
+      reasoning: providerMessage.reasoning ?? providerMessage.reasoning_content ?? undefined,
+      reasoningDetails: Array.isArray(providerMessage.reasoning_details)
+        ? providerMessage.reasoning_details
+        : undefined,
       usage: response.usage
         ? {
             promptTokens: response.usage.prompt_tokens,

@@ -1147,6 +1147,8 @@ export class GenericAgent extends TypedEventEmitter {
       const toolCalls: ToolCall[] = [];
       const toolCallAccumulators: Map<number, { id: string; name: string; arguments: string }> =
         new Map();
+      let reasoning = '';
+      const reasoningDetails: unknown[] = [];
       let usage:
         | { promptTokens: number; completionTokens: number; totalTokens: number }
         | undefined;
@@ -1159,6 +1161,13 @@ export class GenericAgent extends TypedEventEmitter {
 
       try {
         for await (const chunk of this.llm.generateStream({ messages, tools, temperature: 0.7 })) {
+          if (chunk.reasoning) {
+            reasoning += chunk.reasoning;
+          }
+          if (chunk.reasoningDetails && chunk.reasoningDetails.length > 0) {
+            reasoningDetails.push(...chunk.reasoningDetails);
+          }
+
           // Check for abort
           if (this.aborted) {
             if (hasImplicitThinking) {
@@ -1278,6 +1287,8 @@ export class GenericAgent extends TypedEventEmitter {
           content: cleanedContent,
           toolCalls,
           finishReason: 'stop',
+          reasoning: reasoning || undefined,
+          reasoningDetails: reasoningDetails.length > 0 ? reasoningDetails : undefined,
           usage,
         };
       } catch (error) {
@@ -1650,6 +1661,8 @@ export class GenericAgent extends TypedEventEmitter {
         role: 'assistant',
         content: response.content,
         toolCalls: response.toolCalls,
+        reasoning: response.reasoning,
+        reasoningDetails: response.reasoningDetails,
       });
 
       // If no tool calls, check if we should really stop
@@ -3031,6 +3044,8 @@ export class GenericAgent extends TypedEventEmitter {
     try {
       // Generate or refine the plan with streaming
       let planContent = '';
+      let planReasoning = '';
+      const planReasoningDetails: unknown[] = [];
       let isFirstChunk = true;
       debugLog(
         `[GenericAgent] continuePlanningLoop starting generation, toolCallId=${this.planningState.toolCallId}`
@@ -3043,6 +3058,12 @@ export class GenericAgent extends TypedEventEmitter {
         messages: this.planningState.messages,
         temperature: 0.7,
       })) {
+        if (chunk.reasoning) {
+          planReasoning += chunk.reasoning;
+        }
+        if (chunk.reasoningDetails && chunk.reasoningDetails.length > 0) {
+          planReasoningDetails.push(...chunk.reasoningDetails);
+        }
         if (chunk.content) {
           planContent += chunk.content;
           debugLog(
@@ -3081,6 +3102,8 @@ export class GenericAgent extends TypedEventEmitter {
       this.planningState.messages.push({
         role: 'assistant',
         content: this.planningState.currentPlan,
+        reasoning: planReasoning || undefined,
+        reasoningDetails: planReasoningDetails.length > 0 ? planReasoningDetails : undefined,
       });
 
       // Note: Plan is displayed via ToolCallDisplay when the tool result is rendered
@@ -3683,6 +3706,8 @@ Respond in JSON format:
               role: 'assistant',
               content: response.content,
               toolCalls: response.toolCalls,
+              reasoning: response.reasoning,
+              reasoningDetails: response.reasoningDetails,
             });
 
             // Execute each tool call and add results
@@ -3730,6 +3755,8 @@ Respond in JSON format:
 
         // Content generation phase - use streaming for real-time display
         let content = '';
+        let contentReasoning = '';
+        const contentReasoningDetails: unknown[] = [];
         let isFirstChunk = true;
         const shouldReset = this.contentState.iterations > 1;
 
@@ -3746,6 +3773,13 @@ Respond in JSON format:
         }
 
         for await (const chunk of this.llm.generateStream(streamOptions)) {
+          if (chunk.reasoning) {
+            contentReasoning += chunk.reasoning;
+          }
+          if (chunk.reasoningDetails && chunk.reasoningDetails.length > 0) {
+            contentReasoningDetails.push(...chunk.reasoningDetails);
+          }
+
           // Handle content chunks
           if (chunk.content) {
             content += chunk.content;
@@ -3867,6 +3901,8 @@ Respond in JSON format:
         this.contentState.messages.push({
           role: 'assistant',
           content: this.contentState.currentContent,
+          reasoning: contentReasoning || undefined,
+          reasoningDetails: contentReasoningDetails.length > 0 ? contentReasoningDetails : undefined,
         });
 
         break; // Exit the loop - content generated
@@ -4143,6 +4179,8 @@ Respond in JSON format:
     try {
       // Generate or refine the prompt with streaming
       let promptContent = '';
+      let promptReasoning = '';
+      const promptReasoningDetails: unknown[] = [];
       let isFirstChunk = true;
 
       // If this is a subsequent iteration (after feedback), we need to reset the streaming display
@@ -4152,6 +4190,12 @@ Respond in JSON format:
         messages: this.imageGenState.messages,
         temperature: 0.7,
       })) {
+        if (chunk.reasoning) {
+          promptReasoning += chunk.reasoning;
+        }
+        if (chunk.reasoningDetails && chunk.reasoningDetails.length > 0) {
+          promptReasoningDetails.push(...chunk.reasoningDetails);
+        }
         if (chunk.content) {
           promptContent += chunk.content;
           // Emit tool_streaming to show content inside the ToolCallDisplay
@@ -4188,6 +4232,8 @@ Respond in JSON format:
       this.imageGenState.messages.push({
         role: 'assistant',
         content: promptContent,
+        reasoning: promptReasoning || undefined,
+        reasoningDetails: promptReasoningDetails.length > 0 ? promptReasoningDetails : undefined,
       });
 
       // Return status indicating we need user approval
