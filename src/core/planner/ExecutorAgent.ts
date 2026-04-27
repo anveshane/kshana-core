@@ -79,6 +79,7 @@ import { shouldGenerateExtraFrame, isPromptRelayMode } from '../../services/prov
 import type { SceneBundleShot, SceneBundleResult } from './sceneBundleRenderer.js';
 import type { CharacterId } from '../../services/providers/promptRelayGlobalPrompt.js';
 import { SceneBundleLockMap } from './sceneBundleLockMap.js';
+import { checkSceneBundleEligibility } from './sceneBundleEligibility.js';
 import { addAsset } from '../../tasks/video/workflow/index.js';
 
 /**
@@ -270,6 +271,11 @@ export class ExecutorAgent extends TypedEventEmitter {
    *  next caller retries (handles the race where shot_video fires
    *  before all sibling shot_images have completed). */
   private sceneBundleLocks = new SceneBundleLockMap();
+  /** prompt_relay: scenes we've already determined cannot be rendered
+   *  as a bundle (e.g. > 20 shots, > 1000 frames). These never retry —
+   *  the cap is structural, not transient. Subsequent shot_videos for
+   *  the scene skip the relay path entirely and go per-shot. */
+  private unbundleableScenes = new Set<number>();
   /** Timeline state — populated during execution, saved to timeline.json */
   private timeline: Timeline | null = null;
   /** Tracks how many times a dependency was regenerated for a given parent node (loop protection) */
@@ -6386,6 +6392,11 @@ Examples of common failure modes to avoid:
       return null;
     }
     const sceneNum = parseInt(sceneMatch[1]!, 10);
+    if (this.unbundleableScenes.has(sceneNum)) {
+      // Already determined this scene can't be bundled (structural cap).
+      // Skip the relay attempt — saves an upload+submit round-trip per shot.
+      return null;
+    }
     return this.sceneBundleLocks.acquire(sceneNum, () => this.executeSceneBundle(sceneNum, agentName));
   }
 
@@ -6461,8 +6472,21 @@ Examples of common failure modes to avoid:
       shots.push({ shotNumber, firstFramePath: firstFrameAbs, motionPrompt, duration });
     }
 
-    if (shots.length > 20) {
-      this.log(`  prompt_relay: scene ${sceneNum} has ${shots.length} shots (>20 cap); using per-shot fallback`);
+    // Eligibility gate. Both caps are structural — retrying with the
+    // same inputs cannot help. On `permanent: true` we add the scene
+    // to unbundleableScenes so subsequent shot_videos in the same
+    // scene skip the relay attempt entirely (no wasted upload+submit
+    // round-trip per shot).
+    const { alignDurationsToLTX } = await import('../../services/providers/promptRelayFrameAlignment.js');
+    const segmentFrames = alignDurationsToLTX(shots.map(s => s.duration), 24);
+    const totalFrames = segmentFrames.reduce((a, b) => a + b, 0);
+    const eligibility = checkSceneBundleEligibility({ shotCount: shots.length, totalFrames });
+    if (!eligibility.eligible) {
+      this.log(`  prompt_relay: scene ${sceneNum} not eligible — ${eligibility.reason}`);
+      if (eligibility.permanent) {
+        this.log(`  prompt_relay: marking scene ${sceneNum} as permanently unbundleable; falling back to per-shot for all shots`);
+        this.unbundleableScenes.add(sceneNum);
+      }
       return null;
     }
 
@@ -6475,7 +6499,7 @@ Examples of common failure modes to avoid:
     const height = this.config.project.resolutionHeight ?? 480;
     const style = (this.config.project as { style?: string }).style || 'cinematic';
 
-    this.log(`  prompt_relay: scene ${sceneNum} rendering ${shots.length} shots as one bundle`);
+    this.log(`  prompt_relay: scene ${sceneNum} rendering ${shots.length} shots as one bundle (${totalFrames} frames)`);
     let result: SceneBundleResult;
     try {
       result = await renderSceneBundle({
