@@ -74,6 +74,7 @@ import {
 } from './continuityValidator.js';
 import { getProviderRegistry } from '../../services/providers/index.js';
 import { getWorkflowModeRegistry } from '../../services/providers/WorkflowModeRegistry.js';
+import { shouldGenerateExtraFrame, isPromptRelayMode } from '../../services/providers/videoStrategy.js';
 import { addAsset } from '../../tasks/video/workflow/index.js';
 
 /**
@@ -5196,8 +5197,17 @@ Examples of common failure modes to avoid:
         if (!firstFramePath) return null;
       }
 
-      // Generate additional frames
-      const additionalFrames = Object.keys(parsedJson.frames).filter(k => k !== 'first_frame');
+      // Generate additional frames. In prompt_relay mode (default),
+      // last/mid frames are skipped — the relay renders the whole scene
+      // as one mp4 driven only by per-segment first_frames, so any
+      // extra frames burn image-gen budget for nothing.
+      const additionalFrames = Object.keys(parsedJson.frames)
+        .filter(k => k !== 'first_frame')
+        .filter(k => shouldGenerateExtraFrame(k));
+      if (isPromptRelayMode() && additionalFrames.length === 0) {
+        const skipped = Object.keys(parsedJson.frames).filter(k => k !== 'first_frame');
+        if (skipped.length > 0) this.log(`  prompt_relay mode: skipping extra frames ${skipped.join(', ')}`);
+      }
       if (additionalFrames.length > 0) {
         node.outputPaths = { ...node.outputPaths, first_frame: firstFramePath };
 
@@ -5353,7 +5363,7 @@ Examples of common failure modes to avoid:
       if (mode) {
         const frameInputs = mode.inputRequirements.filter(
           r => r.type === 'image' && r.source === 'shot_image' && r.id !== 'first_frame'
-        );
+        ).filter(r => shouldGenerateExtraFrame(r.id));
 
         if (frameInputs.length > 0) {
           node.outputPaths = { first_frame: firstFramePath };
