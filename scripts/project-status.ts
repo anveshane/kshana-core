@@ -11,6 +11,7 @@
  *   - failed nodes with their error messages
  *   - per-typeId rollup so you can see "5/7 scene_video_prompts done"
  */
+import { execSync } from 'child_process';
 import { loadProjectStrict, type ExecutionNode } from './cli-helpers.js';
 
 function main() {
@@ -20,7 +21,8 @@ function main() {
     process.exit(args[0] === '--help' || args[0] === '-h' ? 0 : 1);
   }
 
-  const { project, projectDir } = loadProjectStrict(args[0]!);
+  const projectName = args[0]!;
+  const { project, projectDir } = loadProjectStrict(projectName);
   const state = project.executorState;
 
   console.log(`Project: ${project.title}`);
@@ -29,6 +31,20 @@ function main() {
   console.log(`  Duration:    ${project.targetDuration ?? '(default 60s)'}s`);
   console.log(`  Input type:  ${project.inputType ?? '(unknown)'}`);
   console.log(`  Phase:       ${project.currentPhase ?? '(none)'}`);
+  console.log('');
+
+  // Timing — three flavors that answer different questions:
+  //   1. Live process elapsed: how long the current `pnpm run-to` has been
+  //      running (from ps). Tells you if the user accidentally left a stuck
+  //      process running.
+  //   2. Project wall-clock: now − productionStartedAt. Total real time
+  //      spent on this project, including all idle gaps between runs.
+  //   3. Executor time: sum(completedAt − startedAt) over all nodes that
+  //      have both timestamps. Excludes idle/stuck time naturally —
+  //      a stuck node has startedAt but never gets completedAt, so it
+  //      contributes 0. This is the metric to use when asking "how much
+  //      compute time did this project take, end to end?"
+  printTiming(projectName, project);
   console.log('');
 
   if (project.phases) {
@@ -110,4 +126,115 @@ function countBy<T>(items: T[], key: (item: T) => string): Record<string, number
   return out;
 }
 
-main();
+/** Find a currently-running `pnpm run-to <project>` process and its elapsed seconds.
+ * Returns null when no live process is found. */
+export function findLiveRunPid(projectName: string): { pid: number; elapsedSec: number } | null {
+  try {
+    const out = execSync('ps -eo pid,etime,command', { encoding: 'utf-8', timeout: 3000 });
+    for (const line of out.split('\n')) {
+      // Match either "scripts/run-to.ts <project>" exactly, or with extra args after.
+      if (!line.includes('scripts/run-to.ts')) continue;
+      if (!new RegExp(`run-to\\.ts ${projectName}(\\b| |$)`).test(line)) continue;
+      // line: "  PID    ETIME  COMMAND..."
+      const m = line.trim().match(/^(\d+)\s+(\S+)\s+/);
+      if (!m) continue;
+      const pid = parseInt(m[1]!, 10);
+      const elapsedSec = parsePsETime(m[2]!);
+      return { pid, elapsedSec };
+    }
+  } catch { /* ps unavailable or timed out — return null */ }
+  return null;
+}
+
+/** Parse the output of `ps -o etime` into seconds.
+ *
+ * Format variants (per POSIX):
+ *   "MM:SS"          → e.g. "45:39" = 45m 39s
+ *   "HH:MM:SS"       → e.g. "01:23:45" = 1h 23m 45s
+ *   "D-HH:MM:SS"     → e.g. "2-03:04:05" = 2 days 3h 4m 5s
+ */
+export function parsePsETime(s: string): number {
+  let days = 0;
+  let rest = s;
+  const dashIdx = s.indexOf('-');
+  if (dashIdx > 0) {
+    days = parseInt(s.slice(0, dashIdx), 10);
+    rest = s.slice(dashIdx + 1);
+  }
+  const parts = rest.split(':').map(p => parseInt(p, 10));
+  let h = 0, m = 0, sec = 0;
+  if (parts.length === 3) [h, m, sec] = parts as [number, number, number];
+  else if (parts.length === 2) [m, sec] = parts as [number, number];
+  else if (parts.length === 1) [sec] = parts as [number];
+  return days * 86400 + h * 3600 + m * 60 + sec;
+}
+
+/** Sum (completedAt − startedAt) over all completed nodes that have both fields.
+ * Stuck nodes (startedAt but no completedAt) contribute 0 → metric naturally excludes
+ * idle/stuck time. */
+export function executorTimeMs(nodes: ExecutionNode[]): number {
+  let total = 0;
+  for (const n of nodes) {
+    if (typeof n.startedAt === 'number' && typeof n.completedAt === 'number') {
+      total += n.completedAt - n.startedAt;
+    }
+  }
+  return total;
+}
+
+/** Find any in-flight nodes (started but not completed). For the live UI.
+ * If empty AND a live process is running, it usually means we're between
+ * nodes (graph traversal, prompt building, LLM thinking). */
+export function inFlightNodes(nodes: ExecutionNode[]): ExecutionNode[] {
+  return nodes.filter(n =>
+    typeof n.startedAt === 'number' && typeof n.completedAt !== 'number',
+  );
+}
+
+/** Format a millisecond duration as "1h 23m 45s" / "12m 03s" / "45s". */
+export function formatDuration(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m.toString().padStart(2, '0')}m ${sec.toString().padStart(2, '0')}s`;
+  if (m > 0) return `${m}m ${sec.toString().padStart(2, '0')}s`;
+  return `${sec}s`;
+}
+
+function printTiming(projectName: string, project: { productionStartedAt?: number; executorState?: { nodes: Record<string, ExecutionNode> } }) {
+  const live = findLiveRunPid(projectName);
+  const startedMs = project.productionStartedAt;
+  const wallMs = startedMs ? Date.now() - startedMs : 0;
+  const allNodes = Object.values(project.executorState?.nodes ?? {});
+  const execMs = executorTimeMs(allNodes);
+  const inFlight = inFlightNodes(allNodes);
+
+  console.log('Timing:');
+  if (live) {
+    console.log(`  Live process:    PID ${live.pid}, running for ${formatDuration(live.elapsedSec * 1000)}`);
+    if (inFlight.length > 0) {
+      console.log(`  Currently in:    ${inFlight.map(n => n.id).join(', ')}`);
+    } else {
+      console.log(`  Currently in:    (between nodes — LLM call or graph traversal)`);
+    }
+  } else {
+    console.log(`  Live process:    (no run-to currently running for this project)`);
+  }
+  if (startedMs) {
+    console.log(`  Wall clock:      ${formatDuration(wallMs)} since project creation`);
+  }
+  console.log(
+    `  Executor time:   ${formatDuration(execMs)}` +
+    (allNodes.length === 0
+      ? '   (no executor state persisted yet)'
+      : `   (sum across ${allNodes.length} node(s); excludes stuck/idle)`),
+  );
+}
+
+// Only run the script when invoked directly (not when imported by tests).
+const isDirectExecution = process.argv[1]?.endsWith('project-status.ts')
+  || process.argv[1]?.endsWith('project-status.js');
+if (isDirectExecution) {
+  main();
+}
