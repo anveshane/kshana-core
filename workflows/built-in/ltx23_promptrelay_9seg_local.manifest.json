@@ -1,0 +1,348 @@
+{
+  "id": "ltx23_promptrelay_9seg_local",
+  "displayName": "LTX 2.3 Prompt-Relay 9-Segment (Local, experimental)",
+  "pipeline": "video_generation",
+  "llmDescription": "Local LTX 2.3 image-to-video using kijai/ComfyUI-PromptRelay with a fixed 9-segment timeline. Each segment is anchored by an image guide and a per-segment prompt, with a single global prompt patched across the model. Designed for longer multi-shot sequences in a single render.",
+  "selectionCriteria": "Multi-shot sequence rendered as one video. Use to test prompt-relay coherence across 9 consecutive shots.",
+  "outputType": "video",
+  "priority": 1,
+  "strategies": [
+    "i2v",
+    "prompt_relay"
+  ],
+  "inputRequirements": [
+    {
+      "id": "global_prompt",
+      "type": "text",
+      "source": "llm",
+      "required": true
+    },
+    {
+      "id": "local_prompts",
+      "type": "text",
+      "source": "llm",
+      "required": true,
+      "description": "Pipe-separated per-segment prompts (4 entries)"
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "system",
+      "required": false,
+      "description": "Overrides node 818's negative prompt; useful for suppressing audio narration"
+    },
+    {
+      "id": "total_frames",
+      "type": "number",
+      "source": "system",
+      "required": false,
+      "description": "Sum of segment_lengths; sets the empty latent length"
+    },
+    {
+      "id": "seed_pass1",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "seed_pass2",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "width",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "height",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "fps",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "image_strength",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "segment_1_image",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "segment_2_image",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "segment_3_image",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "segment_4_image",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "segment_5_image",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "segment_6_image",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "segment_7_image",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "segment_8_image",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "segment_9_image",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "segment_1_frames",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "segment_2_frames",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "segment_3_frames",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "segment_4_frames",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "segment_5_frames",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "segment_6_frames",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "segment_7_frames",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "segment_8_frames",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "segment_9_frames",
+      "type": "number",
+      "source": "system",
+      "required": false
+    }
+  ],
+  "workflowFile": "ltx23_promptrelay_9seg_local.json",
+  "format": "api",
+  "parameterMappings": [
+    {
+      "input": "global_prompt",
+      "nodeId": "948",
+      "field": "global_prompt"
+    },
+    {
+      "input": "local_prompts",
+      "nodeId": "948",
+      "field": "local_prompts"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "818",
+      "field": "text"
+    },
+    {
+      "input": "total_frames",
+      "nodeId": "1136",
+      "field": "length"
+    },
+    {
+      "input": "total_frames",
+      "nodeId": "1137",
+      "field": "frames_number"
+    },
+    {
+      "input": "seed_pass1",
+      "nodeId": "774",
+      "field": "noise_seed"
+    },
+    {
+      "input": "seed_pass2",
+      "nodeId": "773",
+      "field": "noise_seed"
+    },
+    {
+      "input": "width",
+      "nodeId": "699",
+      "field": "value"
+    },
+    {
+      "input": "height",
+      "nodeId": "701",
+      "field": "value"
+    },
+    {
+      "input": "fps",
+      "nodeId": "697",
+      "field": "value"
+    },
+    {
+      "input": "image_strength",
+      "nodeId": "1118",
+      "field": "value"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "757",
+      "field": "filename_prefix"
+    },
+    {
+      "input": "segment_1_image",
+      "nodeId": "820",
+      "field": "image"
+    },
+    {
+      "input": "segment_1_frames",
+      "nodeId": "950",
+      "field": "value"
+    },
+    {
+      "input": "segment_2_image",
+      "nodeId": "1072",
+      "field": "image"
+    },
+    {
+      "input": "segment_2_frames",
+      "nodeId": "1074",
+      "field": "value"
+    },
+    {
+      "input": "segment_3_image",
+      "nodeId": "1082",
+      "field": "image"
+    },
+    {
+      "input": "segment_3_frames",
+      "nodeId": "1084",
+      "field": "value"
+    },
+    {
+      "input": "segment_4_image",
+      "nodeId": "1092",
+      "field": "image"
+    },
+    {
+      "input": "segment_4_frames",
+      "nodeId": "1094",
+      "field": "value"
+    },
+    {
+      "input": "segment_5_image",
+      "nodeId": "2010",
+      "field": "image"
+    },
+    {
+      "input": "segment_5_frames",
+      "nodeId": "2020",
+      "field": "value"
+    },
+    {
+      "input": "segment_6_image",
+      "nodeId": "2011",
+      "field": "image"
+    },
+    {
+      "input": "segment_6_frames",
+      "nodeId": "2021",
+      "field": "value"
+    },
+    {
+      "input": "segment_7_image",
+      "nodeId": "2012",
+      "field": "image"
+    },
+    {
+      "input": "segment_7_frames",
+      "nodeId": "2022",
+      "field": "value"
+    },
+    {
+      "input": "segment_8_image",
+      "nodeId": "2013",
+      "field": "image"
+    },
+    {
+      "input": "segment_8_frames",
+      "nodeId": "2023",
+      "field": "value"
+    },
+    {
+      "input": "segment_9_image",
+      "nodeId": "2014",
+      "field": "image"
+    },
+    {
+      "input": "segment_9_frames",
+      "nodeId": "2024",
+      "field": "value"
+    }
+  ],
+  "builtIn": true,
+  "active": false
+}
