@@ -19,7 +19,7 @@ import {
   createTimelineTools,
   type TimelineToolContext,
 } from '../../core/timeline/index.js';
-import { BackwardPlanner, AssetScanner } from '../../core/planner/index.js';
+import { BackwardPlanner, AssetScanner, ExecutorAgent } from '../../core/planner/index.js';
 import type { UserGoal, ExecutionPlan, AssetRegistry } from '../../core/planner/types.js';
 import { getVideoGenerationTools, getGraphicNovelTools, VIDEO_COMPLEX_TOOLS } from './tools.js';
 import { getFakeVideoGenerationTools } from './fakeTools.js';
@@ -806,6 +806,79 @@ export function createAgentForProject(options: CreateAgentForProjectOptions): Ag
     customPrompt,
     agentName: 'kshana-video',
   };
+}
+
+/**
+ * Options for creating an ExecutorAgent (code-driven dependency graph execution).
+ */
+export interface CreateExecutorAgentOptions {
+  templateId: string;
+  style: string;
+  duration: number;
+  llmConfig: LLMClientConfig;
+  /** Target artifacts the user wants (e.g., ['final_video'], ['story']) */
+  targetArtifacts: string[];
+  /** Description of the user's goal */
+  goalDescription: string;
+  /** Custom project description from user */
+  customProjectDescription?: string;
+  /**
+   * Run media generation (images/videos via ComfyUI) in parallel with LLM prompt generation.
+   * Enable when the image/video provider is on a separate server from the LLM.
+   * Default: false (serial — suitable when LLM and ComfyUI share the same machine).
+   */
+  parallelMediaGeneration?: boolean;
+}
+
+/**
+ * Create an ExecutorAgent that drives the workflow deterministically.
+ *
+ * Unlike createAgentForProject (which returns tools + prompt for a GenericAgent),
+ * this creates a self-contained ExecutorAgent that owns the execution loop.
+ * The LLM is called as a pure content generator — no tools, no agent decisions.
+ */
+export function createExecutorAgent(options: CreateExecutorAgentOptions): ExecutorAgent {
+  const {
+    templateId, style, duration, llmConfig,
+    targetArtifacts, goalDescription,
+  } = options;
+
+  // Initialize templates and get the template
+  initializeTemplates();
+  const template = getTemplateOrThrow(templateId);
+
+  // Create or load project
+  const projectManager = createProjectManager();
+  const project = projectManager.projectExistsSync()
+    ? projectManager.loadProjectQuick()
+    : projectManager.createEmptyProject(templateId);
+
+  // Ensure project has required fields (old format projects may lack them)
+  const proj = project as unknown as Record<string, unknown>;
+  if (!proj['artifacts']) proj['artifacts'] = {};
+  if (!proj['contextStore']) proj['contextStore'] = {};
+  if (!proj['assets']) proj['assets'] = [];
+
+  const projectDir = getProjectDir();
+
+  // Build user goal
+  const goal: UserGoal = {
+    targetArtifacts,
+    preferences: { style, duration },
+    description: goalDescription,
+  };
+
+  // Create LLM client
+  const llm = new LLMClient(llmConfig);
+
+  return new ExecutorAgent(llm, {
+    template,
+    project: project as unknown as GenericProjectFile,
+    projectDir,
+    goal,
+    name: 'kshana-executor',
+    parallelMediaGeneration: options.parallelMediaGeneration,
+  });
 }
 
 /**

@@ -1,0 +1,31 @@
+{
+  "id": "seedream4_cloud",
+  "displayName": "ByteDance Seedream 4.0 (Cloud)",
+  "pipeline": "image_editing",
+  "llmDescription": "API-based image edit/composition using ByteDance's seedream-4-0 model on ComfyUI Cloud. Single-call, takes up to 4 reference images batched + a text prompt. Built for character composition with multi-ref disambiguation.",
+  "selectionCriteria": "Multi-character shot composition, especially when Klein's role-swap or feature-blending failure modes are an issue.",
+  "outputType": "image",
+  "priority": 3,
+  "inputRequirements": [
+    { "id": "prompt", "type": "text", "source": "llm", "required": true },
+    { "id": "base_image", "type": "image", "source": "shot_image", "required": true },
+    { "id": "reference_image_1", "type": "image", "source": "shot_image", "required": false },
+    { "id": "reference_image_2", "type": "image", "source": "shot_image", "required": false },
+    { "id": "reference_image_3", "type": "image", "source": "shot_image", "required": false },
+    { "id": "seed", "type": "number", "source": "system", "required": false },
+    { "id": "filenamePrefix", "type": "text", "source": "system", "required": false }
+  ],
+  "workflowFile": "seedream4_cloud.json",
+  "format": "api",
+  "parameterMappings": [
+    { "input": "prompt", "nodeId": "1", "field": "prompt" },
+    { "input": "seed", "nodeId": "1", "field": "seed" },
+    { "input": "base_image", "nodeId": "11", "field": "image" },
+    { "input": "reference_image_1", "nodeId": "24", "field": "image" },
+    { "input": "reference_image_2", "nodeId": "25", "field": "image" },
+    { "input": "reference_image_3", "nodeId": "26", "field": "image" },
+    { "input": "filenamePrefix", "nodeId": "12", "field": "filename_prefix" }
+  ],
+  "builtIn": true,
+  "active": false
+}

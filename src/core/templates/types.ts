@@ -5,7 +5,7 @@
  * that can support any type of AI-generated video through configurable templates.
  */
 
-import type { PersistedGoal } from '../planner/types.js';
+import type { PersistedGoal, ExecutorState } from '../planner/types.js';
 
 // =============================================================================
 // ARTIFACT CATEGORIES
@@ -586,6 +586,18 @@ export interface GenericProjectFile {
   /** Current chapter being worked on */
   currentChapter?: string;
 
+  /** Video resolution preset (e.g., '480p', '720p', '1080p', '4k') */
+  resolution?: string;
+
+  /** Video width in pixels */
+  resolutionWidth?: number;
+
+  /** Video height in pixels */
+  resolutionHeight?: number;
+
+  /** Enable V2V extend for continuation shots (default: true). Set to false to use FL2V for all shots. */
+  useV2V?: boolean;
+
   /** Original user input */
   originalInput?: string;
 
@@ -603,6 +615,9 @@ export interface GenericProjectFile {
 
   /** Persisted user goal for session resumption */
   goal?: PersistedGoal;
+
+  /** Dependency graph executor state for session resume */
+  executorState?: ExecutorState;
 }
 
 /**

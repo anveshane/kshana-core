@@ -1,0 +1,54 @@
+{
+  "name": "Scene Narrative Binary",
+  "description": "Binary evaluation of scene narrative descriptions. Focus: boundaries, no repetition, prose quality.",
+  "format": "binary",
+  "phase": "scenes",
+  "promptType": "scene",
+  "context": ["story", "scene_summary", "all_scene_summaries"],
+  "questions": [
+    {
+      "id": "BOUNDARY_RESPECTED",
+      "question": "Does the scene ONLY cover narrative beats described in its assigned summary? It should NOT include events from other scenes — not even as setup or foreshadowing."
+    },
+    {
+      "id": "NO_REPETITION",
+      "question": "Comparing to other scene summaries: does this scene avoid repeating dramatic moments, deaths, dialogue, or climactic beats that belong to OTHER scenes?"
+    },
+    {
+      "id": "DIALOGUE_PLACEMENT",
+      "question": "Does dialogue appear ONLY where this scene's summary indicates? Lines from other scenes' summaries should NOT appear here."
+    },
+    {
+      "id": "ENDS_BEFORE_NEXT",
+      "question": "Does the scene end BEFORE the next scene's first event? If the next scene starts with 'character dies', this scene must end with the character still alive."
+    },
+    {
+      "id": "NARRATIVE_PROSE",
+      "question": "Is the output written as narrative prose (like a short story or screenplay treatment) — NOT as a shot list with durations, camera directions, or SHOT 1/SHOT 2 labels?"
+    },
+    {
+      "id": "PHYSICAL_ACTIONS",
+      "question": "Are character actions described as concrete physical movements ('her jaw tightens', 'he grips the railing') — not vague emotions ('she reacts with sadness')?"
+    },
+    {
+      "id": "SENSORY_DETAIL",
+      "question": "Does the scene include sensory details — what is seen, heard, smelled, felt? Fire, rain, silence, screaming, texture of surfaces?"
+    },
+    {
+      "id": "EMOTIONAL_ARC",
+      "question": "Does the scene have progression? The emotional state at the end differs from the beginning — tension builds, something shifts."
+    },
+    {
+      "id": "STORY_FAITHFUL",
+      "question": "Does the scene accurately represent events from the story without inventing major new elements or contradicting established facts?"
+    },
+    {
+      "id": "PROPORTIONAL_LENGTH",
+      "question": "Is the scene proportional to its share of the video? For a 60s video with 4 scenes, each scene should be 3-6 paragraphs — not a 15-paragraph epic or a 1-paragraph stub."
+    },
+    {
+      "id": "CLIFFHANGER_ENDING",
+      "question": "Does the scene end on tension or anticipation — not a resolved conclusion? The audience should want to see what happens next."
+    }
+  ]
+}

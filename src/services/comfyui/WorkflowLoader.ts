@@ -521,26 +521,23 @@ export function parameterizeLtx23Workflow(
         `[Ltx23] Set positive prompt (node ${bindings.positivePromptNodeId}): "${(params.prompt || '').substring(0, 50)}..."`
       );
     }
-    else if (
-      bindings.negativePromptNodeId != null &&
-      nodeId === bindings.negativePromptNodeId &&
-      node.widgets_values &&
-      params.negativePrompt
-    ) {
-      node.widgets_values[0] = params.negativePrompt;
-      debugLog(`[Ltx23] Set negative prompt (node ${bindings.negativePromptNodeId})`);
+    // Node 110: Negative prompt — leave as-is (workflow has good built-in defaults)
+
+    // Node 165: ImageResizeKJv2 — fix interpolation method for quality downscaling
+    else if (nodeId === 165 && node.widgets_values) {
+      // widgets_values: [width, height, upscale_method, keep_proportion, pad_color, crop_position, divisible_by, device]
+      node.widgets_values[2] = 'lanczos';  // was 'nearest-exact' — lanczos is best for downscaling
+      debugLog(`[Ltx23] Set resize method (node 165) to lanczos`);
     }
-    else if (
-      nodeId === bindings.inputImageNodeId &&
-      node.widgets_values &&
-      params.inputImageFilename
-    ) {
+    // Node 167: Input image
+    else if (nodeId === 167 && node.widgets_values && params.inputImageFilename) {
       node.widgets_values[0] = params.inputImageFilename;
       debugLog(
         `[Ltx23] Set input image (node ${bindings.inputImageNodeId}) to: ${params.inputImageFilename}`
       );
     }
-    else if (nodeId === bindings.t2vModeNodeId && node.widgets_values) {
+    // Node 290: T2V mode toggle (controls start frame bypass via node 160)
+    else if (nodeId === 290 && node.widgets_values) {
       node.widgets_values[0] = t2vMode;
       debugLog(`[Ltx23] Set T2V mode (node ${bindings.t2vModeNodeId}) to: ${t2vMode}`);
     }
@@ -580,7 +577,26 @@ export function parameterizeLtx23Workflow(
     setApiInput(bindings.negativePromptNodeId, 'text', params.negativePrompt);
   }
   if (params.inputImageFilename) {
-    setApiInput(bindings.inputImageNodeId, 'image', params.inputImageFilename);
+    const node167 = apiWorkflow['167'] as { inputs?: Record<string, unknown> } | undefined;
+    if (node167) {
+      node167.inputs = node167.inputs || {};
+      node167.inputs['image'] = params.inputImageFilename;
+    }
+  }
+  const node290 = apiWorkflow['290'] as { inputs?: Record<string, unknown> } | undefined;
+  if (node290) {
+    node290.inputs = node290.inputs || {};
+    node290.inputs['value'] = t2vMode;
+  }
+  // In I2V mode, both node 160 and 161 must be active:
+  // Node 161 injects the image into pass 1 (initial generation)
+  // Node 160 injects the image into pass 2 (upscale/refine)
+  // Both use the same source image as the start frame reference.
+  // The t2v_mode boolean already controls bypass for both nodes.
+  const node140 = apiWorkflow['140'] as { inputs?: Record<string, unknown> } | undefined;
+  if (node140) {
+    node140.inputs = node140.inputs || {};
+    node140.inputs['filename_prefix'] = params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23';
   }
   setApiInput(bindings.t2vModeNodeId, 'value', t2vMode);
   setApiInput(
@@ -588,6 +604,21 @@ export function parameterizeLtx23Workflow(
     'filename_prefix',
     params.filenamePrefix ? `video/${params.filenamePrefix}` : 'video/LTX23'
   );
+
+  // Explicitly set bypass on I2V nodes based on t2v mode.
+  // The node-format links (GetNode → bypass) don't propagate in API format,
+  // so we must set them directly.
+  const node160api = apiWorkflow['160'] as { inputs?: Record<string, unknown> } | undefined;
+  const node161api = apiWorkflow['161'] as { inputs?: Record<string, unknown> } | undefined;
+  if (t2vMode) {
+    if (node160api) { node160api.inputs = node160api.inputs || {}; node160api.inputs['bypass'] = true; }
+    if (node161api) { node161api.inputs = node161api.inputs || {}; node161api.inputs['bypass'] = true; }
+    debugLog(`[Ltx23] T2V mode — bypassing both I2V nodes (160, 161)`);
+  }
+
+  // Debug: log start/end frame node state
+  debugLog(`[Ltx23] Node 160 (start frame): ${JSON.stringify(node160api?.inputs)}`);
+  debugLog(`[Ltx23] Node 161 (end frame): ${JSON.stringify(node161api?.inputs)}`);
 
   // Remove non-essential nodes
   const nodesToRemove = ['Note', 'MarkdownNote'];
@@ -599,18 +630,34 @@ export function parameterizeLtx23Workflow(
     }
   }
 
-  // Bypass LoraLoaderModelOnly nodes with lora_name "None" (ComfyUI rejects "None")
+  // Remove ALL LoRA nodes — the base GGUF model is already distilled, no LoRAs needed.
+  // Rewire: node 330 (UnetLoaderGGUF) → node 303 (SetNode 'model_with_lora')
+  // Chain was: 330 → 134 (LoraLoaderModelOnly) → 301 (Power Lora Loader) → 303
+  const node303 = apiWorkflow['303'] as { inputs?: Record<string, unknown> } | undefined;
+  if (node303 && apiWorkflow['134']) {
+    // Point SetNode directly to the base model loader
+    node303.inputs = node303.inputs || {};
+    node303.inputs['value'] = ['330', 0];
+    // Remove LoRA nodes
+    delete apiWorkflow['134'];
+    delete apiWorkflow['301'];
+    debugLog(`[Ltx23] Removed LoRA nodes 134, 301 — wired model 330 → 303 directly`);
+  }
+
+  // Bypass any remaining LoraLoaderModelOnly nodes with lora_name "None"
   bypassLoraLoaderNodesWithNone(apiWorkflow);
 
   return apiWorkflow;
 }
 
 /**
- * Parameterize an API-format workflow using declarative parameter mappings.
- * Iterates over each mapping and sets the corresponding node input field.
- * Skips entries where the provided value is undefined or null (optional inputs).
+ * Apply a flat list of parameter mappings directly to an API-format workflow.
+ * Lower-level helper than `parameterizeGeneric` (below): expects the workflow
+ * to already be in API format and the mappings to be a plain array, with no
+ * promptKeywords / template-format handling. Used by the cloud-format
+ * fast paths (e.g. ltx23_fl2v_cloud) where the manifest is read inline.
  */
-export function parameterizeGeneric(
+export function applyParameterMappings(
   apiWorkflow: Record<string, unknown>,
   mappings: Array<{ input: string; nodeId: string; field: string }>,
   params: Record<string, unknown>
@@ -621,13 +668,13 @@ export function parameterizeGeneric(
 
     const node = apiWorkflow[mapping.nodeId] as { inputs?: Record<string, unknown> } | undefined;
     if (!node) {
-      debugLog(`[parameterizeGeneric] Warning: node ${mapping.nodeId} not found in workflow`);
+      debugLog(`[applyParameterMappings] Warning: node ${mapping.nodeId} not found in workflow`);
       continue;
     }
     node.inputs = node.inputs || {};
     node.inputs[mapping.field] = value;
     debugLog(
-      `[parameterizeGeneric] Set node ${mapping.nodeId}.inputs.${mapping.field} = ${JSON.stringify(value)}`
+      `[applyParameterMappings] Set node ${mapping.nodeId}.inputs.${mapping.field} = ${JSON.stringify(value)}`
     );
   }
   return apiWorkflow;
@@ -644,6 +691,10 @@ export function parameterizeWorkflowByName(
     prompt: string;
     negativePrompt?: string;
     aspectRatio?: string;
+    /** Override width in pixels (takes precedence over aspectRatio) */
+    width?: number;
+    /** Override height in pixels (takes precedence over aspectRatio) */
+    height?: number;
     style?: string;
     seed?: number;
     inputImageFilename?: string;
@@ -658,11 +709,15 @@ export function parameterizeWorkflowByName(
   const filenamePrefix = params.filenamePrefix || `Scene${params.sceneNumber}`;
 
   if (workflowName === 'chroma_radiance') {
-    let [width, height] = [1024, 1024];
-    if (aspectRatio === '16:9') [width, height] = [1536, 864];
-    else if (aspectRatio === '9:16') [width, height] = [864, 1536];
-    else if (aspectRatio === '4:3') [width, height] = [1366, 1024];
-    else if (aspectRatio === '3:4') [width, height] = [1024, 1366];
+    let [width, height] = params.width && params.height
+      ? [params.width, params.height]
+      : [1024, 1024];
+    if (!params.width) {
+      if (aspectRatio === '16:9') [width, height] = [1536, 864];
+      else if (aspectRatio === '9:16') [width, height] = [864, 1536];
+      else if (aspectRatio === '4:3') [width, height] = [1366, 1024];
+      else if (aspectRatio === '3:4') [width, height] = [1024, 1366];
+    }
 
     return parameterizeChromaRadianceWorkflow(template, {
       prompt: params.prompt,
@@ -673,11 +728,15 @@ export function parameterizeWorkflowByName(
       filenamePrefix,
     });
   } else if (workflowName === 'zimage') {
-    let [width, height] = [1024, 1024];
-    if (aspectRatio === '16:9') [width, height] = [1536, 864];
-    else if (aspectRatio === '9:16') [width, height] = [864, 1536];
-    else if (aspectRatio === '4:3') [width, height] = [1366, 1024];
-    else if (aspectRatio === '3:4') [width, height] = [1024, 1366];
+    let [width, height] = params.width && params.height
+      ? [params.width, params.height]
+      : [1024, 1024];
+    if (!params.width) {
+      if (aspectRatio === '16:9') [width, height] = [1536, 864];
+      else if (aspectRatio === '9:16') [width, height] = [864, 1536];
+      else if (aspectRatio === '4:3') [width, height] = [1366, 1024];
+      else if (aspectRatio === '3:4') [width, height] = [1024, 1366];
+    }
 
     return parameterizeZImageWorkflow(template, {
       prompt: params.prompt,
@@ -725,7 +784,7 @@ export function parameterizeWorkflowByName(
     // Cloud workflow is already in API format — use template directly as the API workflow
     const apiWorkflow = template as unknown as Record<string, unknown>;
 
-    return parameterizeGeneric(apiWorkflow, manifest.parameterMappings, {
+    return applyParameterMappings(apiWorkflow, manifest.parameterMappings, {
       prompt: params.prompt,
       negative_prompt: params.negativePrompt,
       first_frame: params.inputImageFilename,
@@ -739,8 +798,170 @@ export function parameterizeWorkflowByName(
     });
   }
 
-  // Default: return template as-is
+  // Fallback: try generic manifest-driven parameterization
+  try {
+    const { getWorkflowModeRegistry } = require('../providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    const mode = registry.getMode(workflowName);
+    if (mode && mode.parameterMappings.length > 0) {
+      return parameterizeGeneric(template, mode, params);
+    }
+  } catch { /* registry not available */ }
+
+  // Last resort: return template as-is
   return template;
+}
+
+/**
+ * Generic parameterizer: applies declarative parameter mappings from a manifest
+ * to a workflow template. Works with both LiteGraph and API format workflows.
+ *
+ * Used for user-uploaded workflows that have no hardcoded parameterize function.
+ */
+export function parameterizeGeneric(
+  template: WorkflowTemplate | Record<string, unknown>,
+  manifest: {
+    parameterMappings: Array<{ input: string; nodeId: string; field: string; defaultValue?: unknown }>;
+    promptKeywords?: { prepend?: string; append?: string; negativeAppend?: string };
+  },
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  // Deep copy
+  const raw = JSON.parse(JSON.stringify(template));
+
+  // Detect format: LiteGraph has 'nodes' array, API format is a flat node map
+  const isLiteGraph = Array.isArray(raw.nodes);
+  const apiWorkflow: Record<string, unknown> = isLiteGraph
+    ? workflowToPrompt(raw as WorkflowTemplate)
+    : raw;
+
+  for (const mapping of manifest.parameterMappings) {
+    // Use runtime value if provided, otherwise use default from manifest
+    const value = params[mapping.input] ?? (mapping as { defaultValue?: unknown }).defaultValue;
+    if (value === undefined) continue;
+
+    const node = apiWorkflow[mapping.nodeId] as { inputs?: Record<string, unknown> } | undefined;
+    if (node) {
+      node.inputs = node.inputs || {};
+      node.inputs[mapping.field] = value;
+    }
+  }
+
+  // Inject LoRA trigger keywords into prompt nodes if configured
+  if (manifest.promptKeywords) {
+    const kw = manifest.promptKeywords;
+    for (const mapping of manifest.parameterMappings) {
+      if (mapping.input === 'prompt' || mapping.input === 'edit_prompt') {
+        const node = apiWorkflow[mapping.nodeId] as { inputs?: Record<string, unknown> } | undefined;
+        if (node?.inputs?.[mapping.field] && typeof node.inputs[mapping.field] === 'string') {
+          const original = node.inputs[mapping.field] as string;
+          node.inputs[mapping.field] =
+            (kw.prepend ? kw.prepend + ', ' : '') +
+            original +
+            (kw.append ? ', ' + kw.append : '');
+        }
+      }
+      if (mapping.input === 'negative_prompt' && kw.negativeAppend) {
+        const node = apiWorkflow[mapping.nodeId] as { inputs?: Record<string, unknown> } | undefined;
+        if (node?.inputs?.[mapping.field] && typeof node.inputs[mapping.field] === 'string') {
+          node.inputs[mapping.field] = (node.inputs[mapping.field] as string) + ', ' + kw.negativeAppend;
+        }
+      }
+    }
+  }
+
+  // Resolve "Anything Everywhere" implicit connections.
+  // These extension nodes broadcast an output to all nodes that need a matching input type.
+  // In the API format, these connections are implicit — we must make them explicit.
+  resolveAnythingEverywhere(apiWorkflow);
+
+  // Remove non-essential nodes (notes, "Anything Everywhere" after resolution)
+  for (const [nodeId, node] of Object.entries(apiWorkflow)) {
+    const nodeData = node as { class_type?: string };
+    if (nodeData.class_type === 'Note' || nodeData.class_type === 'MarkdownNote' ||
+        nodeData.class_type === 'Anything Everywhere' || nodeData.class_type === 'Anything Everywhere3') {
+      delete apiWorkflow[nodeId];
+    }
+  }
+
+  return apiWorkflow;
+}
+
+/**
+ * Resolve "Anything Everywhere" implicit connections in API-format workflows.
+ *
+ * The "Anything Everywhere" ComfyUI extension broadcasts a node's output to
+ * all nodes that have a matching unconnected input type. In the UI this works
+ * automatically, but in API format the connections must be explicit.
+ *
+ * Strategy: for each "Anything Everywhere" node, find which output it broadcasts.
+ * Then find all nodes with unconnected inputs that match that output type and
+ * wire them up.
+ */
+function resolveAnythingEverywhere(workflow: Record<string, unknown>): void {
+  // Known input type → class_type mappings for auto-connection
+  const INPUT_TYPE_MAP: Record<string, string[]> = {
+    'CLIPTextEncode': ['clip'],
+    'CLIPTextEncodeFlux': ['clip'],
+    'TextEncodeQwenImageEditPlus': ['clip'],
+    'KSampler': ['model'],
+    'SamplerCustomAdvanced': ['model'],
+    'VAEDecode': ['vae'],
+    'VAEDecodeTiled': ['vae'],
+    'VAEEncode': ['vae'],
+    'LTXVImgToVideoInplace': ['vae'],
+  };
+
+  // Find all "Anything Everywhere" nodes and what they broadcast
+  const broadcasts: Array<{ sourceNodeId: string; outputIndex: number }> = [];
+  for (const [nodeId, nodeData] of Object.entries(workflow)) {
+    const node = nodeData as { class_type?: string; inputs?: Record<string, unknown> };
+    if (!node.class_type?.includes('Anything Everywhere')) continue;
+
+    const inputs = node.inputs || {};
+    for (const [, value] of Object.entries(inputs)) {
+      if (Array.isArray(value) && value.length === 2 && typeof value[0] === 'string') {
+        broadcasts.push({ sourceNodeId: value[0], outputIndex: value[1] as number });
+      }
+    }
+  }
+
+  if (broadcasts.length === 0) return;
+
+  // For each broadcast, find unconnected matching inputs and wire them
+  for (const broadcast of broadcasts) {
+    const sourceNode = workflow[broadcast.sourceNodeId] as { class_type?: string } | undefined;
+    if (!sourceNode) continue;
+
+    // Determine what type this node outputs based on class_type
+    const sourceClass = sourceNode.class_type || '';
+
+    for (const [nodeId, nodeData] of Object.entries(workflow)) {
+      const node = nodeData as { class_type?: string; inputs?: Record<string, unknown> };
+      if (!node.class_type || !node.inputs) continue;
+
+      const requiredInputs = INPUT_TYPE_MAP[node.class_type];
+      if (!requiredInputs) continue;
+
+      for (const inputName of requiredInputs) {
+        // Only connect if the input is not already connected
+        const currentValue = node.inputs[inputName];
+        if (currentValue !== undefined) continue; // already has a value or connection
+
+        // Check if this broadcast source could provide this input type
+        // CLIP loaders → clip inputs, model loaders → model inputs, VAE loaders → vae inputs
+        const isClipSource = sourceClass.includes('CLIP') || sourceClass.includes('Clip');
+        const isModelSource = sourceClass.includes('Model') || sourceClass.includes('UNET') || sourceClass.includes('Unet');
+        const isVaeSource = sourceClass.includes('VAE') || sourceClass.includes('Vae');
+
+        if ((inputName === 'clip' && isClipSource) ||
+            (inputName === 'model' && isModelSource) ||
+            (inputName === 'vae' && isVaeSource)) {
+          node.inputs[inputName] = [broadcast.sourceNodeId, broadcast.outputIndex];
+        }
+      }
+    }
+  }
 }
 
 /**

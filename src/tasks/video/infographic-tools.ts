@@ -9,7 +9,7 @@ import * as path from 'node:path';
 import { nanoid } from 'nanoid';
 import { createTool } from '../../core/tools/index.js';
 import type { ToolDefinition } from '../../core/llm/index.js';
-import { LLMClient, getLLMConfig } from '../../core/llm/index.js';
+import { LLMClient, getLLMConfig, buildRouterFromEnv } from '../../core/llm/index.js';
 import { loadRemotionSkillsForInfographicType } from '../../core/prompts/loader.js';
 import { getPhaseLogger } from '../../utils/phaseLogger.js';
 import { RemotionRenderer } from '../../services/remotion/index.js';
@@ -190,7 +190,10 @@ ONLY available in documentary template projects.`,
 
       // 3. Generate component code per placement
       const llmConfig = getLLMConfig();
-      const llm = new LLMClient(llmConfig);
+      const router = buildRouterFromEnv(process.cwd());
+      const llm = router.isEnabled()
+        ? router.getClient('content.remotion_code')
+        : new LLMClient(llmConfig);
       const componentCodes = new Map<number, string>();
       const errors: Array<{ placementNumber: number; error: string }> = [];
 

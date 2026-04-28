@@ -1,0 +1,27 @@
+{
+  "id": "zimage",
+  "displayName": "Z-Image Standard",
+  "pipeline": "image_generation",
+  "llmDescription": "Fast text-to-image generation with high quality. Default image generation workflow.",
+  "selectionCriteria": "Standard image generation from text prompts. Character reference images, setting images, shot frames.",
+  "outputType": "image",
+  "priority": 10,
+  
+  "inputRequirements": [
+    { "id": "prompt", "type": "text", "source": "llm", "description": "Image generation prompt", "required": true },
+    { "id": "negative_prompt", "type": "text", "source": "llm", "description": "Negative prompt", "required": false }
+  ],
+
+  "workflowFile": "../zimage_standard.json",
+  "format": "litegraph",
+  "parameterMappings": [
+    { "input": "prompt", "nodeId": "*CLIPTextEncode:positive", "field": "text" },
+    { "input": "negative_prompt", "nodeId": "*CLIPTextEncode:negative", "field": "text" },
+    { "input": "seed", "nodeId": "*KSampler", "field": "seed" },
+    { "input": "width", "nodeId": "*EmptySD3LatentImage", "field": "width" },
+    { "input": "height", "nodeId": "*EmptySD3LatentImage", "field": "height" },
+    { "input": "filenamePrefix", "nodeId": "*SaveImage", "field": "filename_prefix" }
+  ],
+  "builtIn": true,
+  "active": true
+}

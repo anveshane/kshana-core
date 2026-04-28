@@ -502,35 +502,10 @@ The timeline is saved to timeline.json in the project directory and persists acr
             metadata: l.metadata,
           }));
 
-          let downgradePrevention:
-            | {
-                preservedIndexes: number[];
-                reasons: Array<{ index: number; reason: string }>;
-              }
-            | undefined;
-          let pathCorrections:
-            | Array<{
-                index: number;
-                artifactId: string;
-                previousFilePath?: string;
-                canonicalFilePath: string;
-              }>
-            | undefined;
+          let updateResult;
           try {
-            const manifestPathMap = loadManifestPathMap(context.getProjectDir());
-            timeline = updateSegmentLayers(
-              timeline,
-              segmentId,
-              layers,
-              fillStatus,
-              undefined,
-              versionNote,
-              {
-                resolveArtifactPath: (artifactId) => manifestPathMap.get(artifactId),
-              }
-            );
-            downgradePrevention = timeline.downgradePrevention;
-            pathCorrections = timeline.pathCorrections;
+            updateResult = updateSegmentLayers(timeline, segmentId, layers, fillStatus, undefined, versionNote);
+            timeline = updateResult;
           } catch (e) {
             return { success: false, error: String(e) };
           }
@@ -549,15 +524,10 @@ The timeline is saved to timeline.json in the project directory and persists acr
               hasAlternatives: (segment.versionInfo?.totalVersions ?? 1) > 1,
             },
             validation: timeline.validation,
-            repair: buildRepairPayload(repairResult),
-            downgrade_prevention: downgradePrevention,
-            path_corrections: pathCorrections,
+            downgrade_prevention: updateResult?.downgradePrevention,
             message: `Segment "${segment.label}" updated with ${layers.length} layer(s), status: ${segment.fillStatus}` +
-              (downgradePrevention
-                ? ` (${downgradePrevention.preservedIndexes.length} weaker layer update(s) ignored)`
-                : '') +
-              (pathCorrections
-                ? ` (${pathCorrections.length} artifact path(s) canonicalized from manifest)`
+              (updateResult?.downgradePrevention
+                ? ` (${updateResult.downgradePrevention.preservedIndexes.length} weak layer overwrite(s) ignored)`
                 : '') +
               (segment.versionInfo && segment.versionInfo.totalVersions > 1
                 ? ` (version ${segment.versionInfo.activeVersion} of ${segment.versionInfo.totalVersions})`

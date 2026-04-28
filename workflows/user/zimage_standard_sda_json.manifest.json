@@ -1,0 +1,84 @@
+{
+  "id": "zimage_standard_sda_json",
+  "displayName": "Z Image SDA",
+  "pipeline": "image_generation",
+  "llmDescription": "A text-to-image generation workflow using Stable Diffusion 3 (SD3) architecture with AuraFlow sampling adjustments and LoRA support. It takes positive and negative text prompts, generates an image from an empty latent, and supports LoRA fine-tuning for style or content customization.",
+  "selectionCriteria": "Choose this workflow for high-quality text-to-image generation when using SD3-based or AuraFlow models. Ideal when LoRA customization is needed for specific styles, characters, or concepts. Not suitable for image editing, video generation, or image preprocessing tasks.",
+  "outputType": "image",
+  "priority": 10,
+  "inputRequirements": [
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "system",
+      "description": "negative_prompt",
+      "required": true
+    },
+    {
+      "id": "width",
+      "type": "text",
+      "source": "system",
+      "description": "width",
+      "required": true
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "description": "filenamePrefix",
+      "required": true
+    },
+    {
+      "id": "seed",
+      "type": "text",
+      "source": "system",
+      "description": "seed",
+      "required": true
+    },
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "shot_motion_directive",
+      "description": "prompt",
+      "required": true
+    }
+  ],
+  "workflowFile": "zimage_standard_sda_json.json",
+  "format": "litegraph",
+  "parameterMappings": [
+    {
+      "input": "negative_prompt",
+      "nodeId": "7",
+      "field": "text"
+    },
+    {
+      "input": "width",
+      "nodeId": "13",
+      "field": "width"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "9",
+      "field": "filename_prefix"
+    },
+    {
+      "input": "seed",
+      "nodeId": "3",
+      "field": "seed"
+    },
+    {
+      "input": "prompt",
+      "nodeId": "6",
+      "field": "text"
+    },
+    {
+      "input": "height",
+      "nodeId": "13",
+      "field": "height"
+    }
+  ],
+  "builtIn": false,
+  "active": true,
+  "isOverride": true,
+  "mode": "local"
+}

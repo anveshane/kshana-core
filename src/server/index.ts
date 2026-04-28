@@ -86,16 +86,17 @@ export async function createServer(
   const { conversationManager, wsHandler } = await registerRoutes(app, routeOptions);
 
   // Graceful shutdown handler
-  const shutdown = async (): Promise<void> => {
+  const shutdown = async (signal?: string): Promise<void> => {
     console.log('\nShutting down...');
     wsHandler.shutdown();
     conversationManager.shutdown();
     await app.close();
+    process.exit(signal === 'SIGINT' ? 130 : 143);
   };
 
   // Handle process signals
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   return {
     app,

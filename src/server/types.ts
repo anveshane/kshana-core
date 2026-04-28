@@ -18,6 +18,7 @@ export type ServerMessageType =
   | 'context_usage'       // Context window usage stats
   | 'usage_fact'          // Neutral usage facts for external metering
   | 'phase_transition'    // Workflow phase change
+  | 'timeline_update'     // Full timeline state update
   | 'notification'        // User-facing notification
   | 'error'               // Error message
   // Remote file system messages (server → client)
@@ -35,6 +36,7 @@ export type ServerMessageType =
   | 'batch_write_command'      // Server tells client to write multiple files
   | 'session_timer'            // Production timer updates
   | 'asset_transfer'           // Server sends generated asset to client
+  | 'assets_refresh'           // Server pushes full asset list (e.g. after reset)
   | 'timeline_assembly_request'; // Server asks desktop to assemble final video
 
 /**
@@ -56,7 +58,10 @@ export type ClientMessageType =
   | 'file_stat_response'      // Client sends file stats
   | 'file_buffer_response'    // Client sends binary file content
   | 'set_autonomous'          // Toggle autonomous mode at runtime
+  | 'set_parallel_media'      // Toggle parallel media generation at runtime
   | 'project_state_sync'      // Client sends full project snapshot
+  | 'redo_node'               // Redo a specific node (invalidate + re-execute)
+  | 'reset_project'           // Reset project to a specific stage
   | 'timeline_assembly_progress' // Desktop reports assembly progress
   | 'timeline_assembly_result'; // Desktop reports assembly result
 
@@ -83,12 +88,18 @@ export interface ClientMessage<T = unknown> {
  * Status message data.
  */
 export interface StatusData {
-  status: 'connected' | 'ready' | 'busy' | 'completed' | 'error';
+  status: 'connected' | 'ready' | 'busy' | 'completed' | 'error' | 'paused';
   message?: string;
   /** Tool names available to the agent (included with 'ready' status after project selection) */
   tools?: string[];
   /** Project name (included after create_project to auto-select in UI) */
   projectName?: string;
+  /**
+   * Set when status='paused' to tell the UI which `/run-to <stage>` gate
+   * fired. UI can show a "paused — send /run-to <next> to continue"
+   * affordance keyed off this field.
+   */
+  pausedAtStage?: string;
 }
 
 /**
@@ -202,6 +213,13 @@ export interface PhaseTransitionData {
   toPhase: string;
   displayName?: string;
   description?: string;
+}
+
+/**
+ * Timeline update message data.
+ */
+export interface TimelineUpdateData {
+  timeline: unknown;
 }
 
 /**
@@ -340,6 +358,12 @@ export interface CreateProjectData {
   style: string;
   duration: number;
   content: string;
+  /** Video resolution preset (e.g., '480p', '720p', '1080p', '4k') */
+  resolution?: string;
+  /** Video width in pixels */
+  resolutionWidth?: number;
+  /** Video height in pixels */
+  resolutionHeight?: number;
   /** Optional per-capability provider configuration */
   providerConfig?: {
     imageGeneration?: string;
@@ -359,6 +383,36 @@ export interface StartTaskData {
     maxIterations?: number;
     temperature?: number;
   };
+  /**
+   * When set, the executor runs until every node of the given stage is
+   * terminal, then pauses. Stage names are the same canonical set used
+   * by `/reset` — see `src/core/planner/stages.ts` STAGE_ALIASES.
+   * Unknown stage names cause the handler to reject the message.
+   */
+  stopAtStage?: string;
+}
+
+/**
+ * Redo node client message data.
+ */
+export interface RedoNodeData {
+  /** The node ID to invalidate and re-execute (e.g., "character:alice", "shot_video:scene_1_shot_2") */
+  nodeId: string;
+  /** Optional edited prompt — if provided, saved to disk before redo */
+  editedPrompt?: Record<string, unknown>;
+  /**
+   * Optional frame key for multi-frame shot_image nodes (first_frame | last_frame | mid_frame).
+   * When set, only that frame is invalidated — the other frames keep their existing outputs
+   * and will be skipped by the executor's incremental retry check.
+   */
+  frame?: string;
+  /**
+   * Optional scope hint. When set to 'prompt' and nodeId is a shot_image node,
+   * the backend invalidates both the shot_image_prompt and the shot_image — so
+   * the LLM re-writes the prompt AND the image regenerates. Does NOT cascade
+   * to shot_video/final so downstream stays put.
+   */
+  scope?: 'prompt';
 }
 
 /**
@@ -413,6 +467,21 @@ export function isConfigureProjectMessage(
 
 export function isCreateProjectMessage(msg: ClientMessage): msg is ClientMessage<CreateProjectData> {
   return msg.type === 'create_project';
+}
+
+export function isRedoNodeMessage(msg: ClientMessage): msg is ClientMessage<RedoNodeData> {
+  return msg.type === 'redo_node';
+}
+
+export interface ResetProjectData {
+  /** Project name (without .kshana suffix) */
+  projectName: string;
+  /** Stage to reset to (e.g., "characters", "shot_image_prompt") */
+  stage: string;
+}
+
+export function isResetProjectMessage(msg: ClientMessage): msg is ClientMessage<ResetProjectData> {
+  return msg.type === 'reset_project';
 }
 
 export function isTimelineAssemblyProgressMessage(

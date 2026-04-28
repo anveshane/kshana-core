@@ -1,0 +1,77 @@
+{
+  "id": "ltx23_v2v_extend_cloud",
+  "displayName": "LTX 2.3 V2V Extend (Cloud)",
+  "pipeline": "video_generation",
+  "llmDescription": "Extends a previous video with seamless visual continuity. Uses last 3 seconds as guidance.",
+  "selectionCriteria": "Video continuation from a previous shot. Maintains character, lighting, and motion continuity.",
+  "outputType": "video",
+  "priority": 3,
+  "strategies": [
+    "v2v_extend"
+  ],
+  "inputRequirements": [
+    {
+      "id": "source_video",
+      "type": "video",
+      "source": "shot_video",
+      "description": "Previous shot video to extend from",
+      "required": true
+    },
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "llm",
+      "description": "Motion prompt for the new segment",
+      "required": true
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "llm",
+      "description": "Negative prompt",
+      "required": false
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "required": false
+    }
+  ],
+  "workflowFile": "ltx23_v2v_extend_cloud.json",
+  "format": "api",
+  "parameterMappings": [
+    {
+      "input": "source_video",
+      "nodeId": "319",
+      "field": "video"
+    },
+    {
+      "input": "prompt",
+      "nodeId": "592",
+      "field": "text"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "110",
+      "field": "text"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "578",
+      "field": "filename_prefix"
+    },
+    {
+      "input": "seed",
+      "nodeId": "115",
+      "field": "noise_seed"
+    },
+    {
+      "input": "seed",
+      "nodeId": "243",
+      "field": "noise_seed"
+    }
+  ],
+  "builtIn": true,
+  "active": true
+}

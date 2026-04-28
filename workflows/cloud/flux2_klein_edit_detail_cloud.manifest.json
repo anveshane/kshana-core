@@ -1,0 +1,94 @@
+{
+  "id": "flux2_klein_edit_detail_cloud",
+  "displayName": "FLUX 2 Klein Edit + Enhanced Details LoRA (Cloud)",
+  "pipeline": "image_editing",
+  "llmDescription": "Cloud Klein Edit with the Flux2-Klein-9B-Enhanced-Details LoRA wired into sampling. Same input shape as the consistency variant but tuned for detail preservation rather than character consistency. Output res auto-derived from base.",
+  "selectionCriteria": "Shot image generation with character/setting references on ComfyUI Cloud, prioritized when character-feature consistency matters (multi-character shots, OTS framings).",
+  "outputType": "image",
+  "priority": 3,
+  "inputRequirements": [
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "llm",
+      "required": true
+    },
+    {
+      "id": "base_image",
+      "type": "image",
+      "source": "shot_image",
+      "required": true
+    },
+    {
+      "id": "reference_image_1",
+      "type": "image",
+      "source": "shot_image",
+      "required": false
+    },
+    {
+      "id": "reference_image_2",
+      "type": "image",
+      "source": "shot_image",
+      "required": false
+    },
+    {
+      "id": "reference_image_3",
+      "type": "image",
+      "source": "shot_image",
+      "required": false
+    },
+    {
+      "id": "seed",
+      "type": "number",
+      "source": "system",
+      "required": false
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "required": false
+    }
+  ],
+  "workflowFile": "flux2_klein_edit_detail_cloud.json",
+  "format": "api",
+  "parameterMappings": [
+    {
+      "input": "prompt",
+      "nodeId": "109",
+      "field": "text"
+    },
+    {
+      "input": "base_image",
+      "nodeId": "76",
+      "field": "image"
+    },
+    {
+      "input": "reference_image_1",
+      "nodeId": "81",
+      "field": "image"
+    },
+    {
+      "input": "reference_image_2",
+      "nodeId": "82",
+      "field": "image"
+    },
+    {
+      "input": "reference_image_3",
+      "nodeId": "83",
+      "field": "image"
+    },
+    {
+      "input": "seed",
+      "nodeId": "92:73",
+      "field": "noise_seed"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "94",
+      "field": "filename_prefix"
+    }
+  ],
+  "builtIn": true,
+  "active": false
+}

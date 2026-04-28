@@ -2,3 +2,4 @@
 - When creating prompts for agents, create the prompt in a different file and import the prompt
 - Always check logs when debugging an issue
 - when debugging issues always look in the logs folder to see detailed recent debug logs
+- Never write tests that grep/search for text strings in source code files. Tests must exercise actual behavior — call functions, render components, check outputs. If you need to verify a feature exists, test it by using it, not by reading the source.

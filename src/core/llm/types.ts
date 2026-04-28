@@ -79,8 +79,8 @@ export interface ToolDefinition {
  */
 export interface StreamChunk {
   content?: string;
-  reasoning?: string;
-  reasoningDetails?: unknown[];
+  /** Reasoning/thinking content from models with reasoning_content (llama.cpp extension) */
+  thinking?: string;
   toolCallDelta?: {
     index: number;
     id?: string;
@@ -103,6 +103,8 @@ export interface GenerateOptions {
   tools?: ToolDefinition[];
   temperature?: number;
   maxTokens?: number;
+  /** Penalize repeated tokens (0.0 = no penalty, 2.0 = strong). Prevents repetition loops. */
+  frequencyPenalty?: number;
   stream?: boolean;
   responseFormat?:
     | { type: 'json_object' }

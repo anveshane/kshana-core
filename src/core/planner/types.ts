@@ -255,3 +255,187 @@ export interface PlanValidation {
   /** Validation warnings */
   warnings: string[];
 }
+
+// ============================================================================
+// Dependency Graph Executor Types
+// ============================================================================
+
+/**
+ * Status of a node in the execution graph.
+ */
+export type NodeStatus = 'pending' | 'ready' | 'in_progress' | 'completed' | 'failed' | 'skipped';
+
+/**
+ * A node in the dependency execution graph.
+ * Represents a single artifact (or collection item) to be created.
+ */
+export interface ExecutionNode {
+  /** Unique node ID: "{typeId}" or "{typeId}:{itemId}" */
+  id: string;
+
+  /** Artifact type (e.g., "character", "scene_image") */
+  typeId: string;
+
+  /** For collection items: the specific item (e.g., "alice", "scene_1") */
+  itemId?: string;
+
+  /** Current status */
+  status: NodeStatus;
+
+  /** Human-readable name */
+  displayName: string;
+
+  /** Whether this is an expensive operation (image/video generation) */
+  isExpensive: boolean;
+
+  /** Whether this is a type-level placeholder for a collection (not yet expanded) */
+  isCollection: boolean;
+
+  /** Node IDs this depends on */
+  dependencies: string[];
+
+  /** Node IDs that depend on this */
+  dependents: string[];
+
+  /** Error message if status is 'failed' */
+  error?: string;
+
+  /** Timestamp when generation completed */
+  completedAt?: number;
+
+  /** Timestamp when generation started */
+  startedAt?: number;
+
+  /** Path where output was written */
+  outputPath?: string;
+
+  /** Multiple output paths keyed by frame requirement ID (for multi-frame modes) */
+  outputPaths?: Record<string, string>;
+
+  /**
+   * Path where the intermediate prompt JSON was written — for two-stage
+   * media nodes where the LLM first produces a prompt JSON (step 1) and
+   * then ComfyUI renders an image/video from it (step 2).
+   *
+   * Tracked separately from `outputPath` (which holds the final image/video
+   * path) so the executor can distinguish "prompt already generated, only
+   * re-render the image" from "everything's fresh."
+   *
+   * CRITICAL: project.json is the source of truth — if `promptPath` is
+   * undefined, any JSON file at the expected disk location is an ORPHAN
+   * from a prior run and must NOT short-circuit LLM regeneration. This
+   * is what makes `/reset <stage>` actually regenerate prompts on the
+   * next `/run-to`.
+   */
+  promptPath?: string;
+
+  /** Artifact instance ID after creation */
+  artifactId?: string;
+}
+
+/**
+ * Serializable state of the executor for persistence across sessions.
+ */
+export interface ExecutorState {
+  /** All nodes keyed by node ID */
+  nodes: Record<string, ExecutionNode>;
+
+  /** Target artifact types requested by the user */
+  targetArtifacts: string[];
+
+  /** Description of the user's goal */
+  goalDescription: string;
+
+  /** When the executor was created */
+  createdAt: number;
+
+  /** Last state update */
+  updatedAt: number;
+
+  /** When all targets were completed */
+  completedAt?: number;
+}
+
+/**
+ * Resolved inputs for a node — all dependency content pre-loaded by code.
+ */
+export interface ResolvedInputs {
+  /** Formatted context block with all dependency content */
+  contextBlock: string;
+
+  /** Individual dependency contents keyed by typeId (or typeId:itemId) */
+  dependencies: Record<string, string>;
+
+  /** Reference image paths (verified to exist on disk) */
+  referenceImages: Array<{
+    name: string;
+    path: string;
+    type: 'character' | 'setting';
+  }>;
+
+  /** Files that were read (for logging/debugging) */
+  filesRead: string[];
+}
+
+/**
+ * Progress summary of the executor.
+ */
+export interface ExecutorProgress {
+  total: number;
+  completed: number;
+  inProgress: number;
+  pending: number;
+  failed: number;
+  skipped: number;
+}
+
+/**
+ * Callbacks for the executor to communicate with the UI layer.
+ */
+export interface ExecutorCallbacks {
+  /** Called when a node starts processing */
+  onNodeStarted(node: ExecutionNode): void;
+
+  /** Called for expensive ops — return true to proceed, false to skip */
+  onApprovalNeeded(node: ExecutionNode, inputs: ResolvedInputs): Promise<boolean>;
+
+  /** Called when a node completes */
+  onNodeCompleted(node: ExecutionNode, outputPath: string): void;
+
+  /** Called when a node fails — return true to retry */
+  onNodeFailed(node: ExecutionNode, error: unknown): Promise<boolean>;
+
+  /** Called when all nodes complete */
+  onComplete(progress: ExecutorProgress): void;
+
+  /** Called to stream content to UI during generation */
+  onContentStreaming(node: ExecutionNode, chunk: string): void;
+}
+
+/**
+ * Items extracted from a collection node's output.
+ */
+export interface CollectionItems {
+  /** Character names found */
+  characters?: string[];
+
+  /** Setting/location names found */
+  settings?: string[];
+
+  /** Object/prop names found */
+  objects?: string[];
+
+  /** Scene descriptions found */
+  scenes?: Array<{ sceneNumber: number; title: string; summary: string }>;
+
+  /** Shots extracted from a scene video prompt (structured JSON) */
+  shots?: Array<{
+    shotNumber: number;
+    shotType: string;
+    duration: number;
+    description: string;
+    cameraWork?: string;
+    characters?: string[];
+    setting?: string | null;
+  }>;
+}

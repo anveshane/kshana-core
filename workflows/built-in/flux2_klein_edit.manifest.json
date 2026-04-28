@@ -1,0 +1,111 @@
+{
+  "id": "flux2_klein_edit",
+  "displayName": "FLUX 2 Klein Edit",
+  "pipeline": "image_editing",
+  "llmDescription": "Fast image editing using FLUX 2 Klein 9B model. Supports up to 4 reference images for style-consistent editing, combining, or transforming visuals based on text instructions. Uses 'image 1', 'image 2' reference format in prompts.",
+  "selectionCriteria": "Use for generating shot images with character and setting reference images for visual consistency. Best for scene generation with multiple reference inputs.",
+  "outputType": "image",
+  "priority": 5,
+  "inputRequirements": [
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "llm",
+      "description": "Edit instruction prompt using 'image 1', 'image 2' reference format",
+      "required": true
+    },
+    {
+      "id": "base_image",
+      "type": "image",
+      "source": "shot_image",
+      "description": "Base image to edit",
+      "required": true
+    },
+    {
+      "id": "reference_image_1",
+      "type": "image",
+      "source": "shot_image",
+      "description": "First reference image (character or setting)",
+      "required": false
+    },
+    {
+      "id": "reference_image_2",
+      "type": "image",
+      "source": "shot_image",
+      "description": "Second reference image",
+      "required": false
+    },
+    {
+      "id": "reference_image_3",
+      "type": "image",
+      "source": "shot_image",
+      "description": "Third reference image",
+      "required": false
+    },
+    {
+      "id": "seed",
+      "type": "number",
+      "source": "system",
+      "description": "Random seed",
+      "required": false
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "description": "Output filename prefix",
+      "required": false
+    }
+  ],
+  "workflowFile": "../flux2_klein_edit.json",
+  "format": "api",
+  "parameterMappings": [
+    {
+      "input": "prompt",
+      "nodeId": "109",
+      "field": "text"
+    },
+    {
+      "input": "base_image",
+      "nodeId": "76",
+      "field": "image"
+    },
+    {
+      "input": "reference_image_1",
+      "nodeId": "81",
+      "field": "image"
+    },
+    {
+      "input": "reference_image_2",
+      "nodeId": "82",
+      "field": "image"
+    },
+    {
+      "input": "reference_image_3",
+      "nodeId": "83",
+      "field": "image"
+    },
+    {
+      "input": "seed",
+      "nodeId": "114",
+      "field": "seed"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "94",
+      "field": "filename_prefix"
+    },
+    {
+      "input": "width",
+      "nodeId": "76",
+      "field": "width"
+    },
+    {
+      "input": "height",
+      "nodeId": "76",
+      "field": "height"
+    }
+  ],
+  "builtIn": true,
+  "active": false
+}

@@ -23,11 +23,13 @@ import {
   type ContextUsageData,
   type UsageFactData,
   type PhaseTransitionData,
+  type TimelineUpdateData,
   type NotificationData,
   type SessionTimerData,
   type ErrorData,
   type StartTaskData,
   type UserResponseData,
+  type RedoNodeData,
   createServerMessage,
   isStartTaskMessage,
   isUserResponseMessage,
@@ -36,10 +38,13 @@ import {
   isConfigureProjectMessage,
   isSelectProjectMessage,
   isCreateProjectMessage,
+  isRedoNodeMessage,
+  isResetProjectMessage,
   isTimelineAssemblyProgressMessage,
   isTimelineAssemblyResultMessage,
   type ConfigureProjectData,
   type CreateProjectData,
+  type ResetProjectData,
 } from './types.js';
 import {
   getDisconnectionCategory,
@@ -236,6 +241,8 @@ export class WebSocketHandler {
       return;
     }
 
+    console.log(`[WS] Received: type=${message.type} session=${sessionId.substring(0,8)}`);
+
     // Handle different message types
     if (isPingMessage(message)) {
       // Respond with pong (status message)
@@ -276,6 +283,16 @@ export class WebSocketHandler {
       return;
     }
 
+    if (isRedoNodeMessage(message)) {
+      await this.handleRedoNode(sessionId, socket, message.data);
+      return;
+    }
+
+    if (isResetProjectMessage(message)) {
+      await this.handleResetProject(sessionId, socket, message.data);
+      return;
+    }
+
     if (isTimelineAssemblyProgressMessage(message)) {
       desktopAssemblyBroker.handleTimelineAssemblyProgress(sessionId, message.data);
       return;
@@ -290,6 +307,13 @@ export class WebSocketHandler {
     if (message.type === 'set_autonomous') {
       const enabled = (message.data as { enabled: boolean }).enabled;
       this.conversationManager.setAutonomousMode(sessionId, enabled);
+      return;
+    }
+
+    // Handle parallel media generation toggle
+    if (message.type === 'set_parallel_media') {
+      const enabled = (message.data as { enabled: boolean }).enabled;
+      this.conversationManager.setParallelMediaGeneration(sessionId, enabled);
       return;
     }
 
@@ -368,7 +392,12 @@ export class WebSocketHandler {
     this.sendTimerUpdate(socket, sessionId, true);
 
     try {
-      const result = await this.conversationManager.runTask(sessionId, data.task, events);
+      const result = await this.conversationManager.runTask(
+        sessionId,
+        data.task,
+        events,
+        { stopAtStage: data.stopAtStage },
+      );
 
       // Notify UI that timer stopped
       this.sendTimerUpdate(socket, sessionId, false);
@@ -379,11 +408,17 @@ export class WebSocketHandler {
         status: mapAgentStatus(result.status),
       }));
 
-      // Send completed status if not awaiting input
+      // Distinguish "paused at stage" from "completed" so the UI can show
+      // an inspect-and-continue affordance instead of the usual finished state.
       if (result.status !== 'waiting_for_user') {
+        const stopReason = this.conversationManager.getAgentStopReason(sessionId);
+        const paused = stopReason === 'paused_at_stage' && !!data.stopAtStage;
         this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
-          status: 'completed',
-          message: 'Task completed',
+          status: paused ? 'paused' : 'completed',
+          message: paused
+            ? `Paused at stage '${data.stopAtStage}'`
+            : 'Task completed',
+          ...(paused && data.stopAtStage ? { pausedAtStage: data.stopAtStage } : {}),
         }));
       }
     } catch (error) {
@@ -458,6 +493,139 @@ export class WebSocketHandler {
   }
 
   /**
+   * Handle redo_node message — invalidate a node and resume execution.
+   */
+  private async handleRedoNode(
+    sessionId: string,
+    socket: WebSocket,
+    data: RedoNodeData
+  ): Promise<void> {
+    // Send busy status
+    this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+      status: 'busy',
+      message: `Redoing node: ${data.nodeId}`,
+    }));
+
+    // Create event handlers
+    const events = this.createEventHandlers(sessionId, socket);
+
+    // Notify UI that timer is running
+    this.sendTimerUpdate(socket, sessionId, true);
+
+    try {
+      const result = await this.conversationManager.redoNode(sessionId, data.nodeId, events, data.editedPrompt, data.frame, data.scope);
+
+      // Notify UI that timer stopped
+      this.sendTimerUpdate(socket, sessionId, false);
+
+      // Send final response
+      this.sendMessage(socket, createServerMessage<AgentResponseData>('agent_response', sessionId, {
+        output: result.output,
+        status: mapAgentStatus(result.status),
+      }));
+
+      // Send completed status if not awaiting input
+      if (result.status !== 'waiting_for_user') {
+        this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+          status: 'completed',
+          message: 'Redo completed',
+        }));
+      }
+    } catch (error) {
+      // Notify UI that timer stopped on error
+      this.sendTimerUpdate(socket, sessionId, false);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.sendError(socket, sessionId, 'redo_error', errorMessage);
+    }
+  }
+
+  /**
+   * Handle reset_project message — runs the reset script as subprocess.
+   */
+  private async handleResetProject(
+    sessionId: string,
+    socket: WebSocket,
+    data: ResetProjectData
+  ): Promise<void> {
+    const { projectName, stage } = data;
+
+    this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+      status: 'busy',
+      message: `Resetting ${projectName} to ${stage}...`,
+    }));
+
+    try {
+      const { execSync } = await import('child_process');
+      const { join } = await import('path');
+      const tsxPath = join(process.cwd(), 'node_modules', '.bin', 'tsx');
+      const scriptPath = join(process.cwd(), 'scripts', 'reset-project.ts');
+
+      console.log(`[Reset] Running: ${tsxPath} ${scriptPath} ${projectName} ${stage}`);
+      const output = execSync(
+        `"${tsxPath}" "${scriptPath}" "${projectName}" "${stage}"`,
+        { cwd: process.cwd(), encoding: 'utf-8', timeout: 30000, stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+      console.log(`[Reset] Output: ${output.trim().split('\n').slice(-2).join(' | ')}`);
+
+      // Send the reset output as a notification
+      this.sendMessage(socket, createServerMessage('notification', sessionId, {
+        level: 'info',
+        message: output.trim().split('\n').slice(-3).join('\n'),
+      }));
+
+      // Auto-reselect the project to reload executor state
+      await this.handleSelectProject(sessionId, socket, projectName);
+
+      // Send fresh todos from the reset project.json so UI updates immediately
+      try {
+        const { readFileSync, existsSync } = await import('fs');
+        const projectPath = join(process.cwd(), `${projectName}.kshana`, 'project.json');
+        const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
+        const nodes = project.executorState?.nodes ?? {};
+        const todos = Object.values(nodes).map((n: any) => ({
+          id: n.id,
+          text: n.displayName || n.id,
+          status: n.status === 'completed' ? 'done' : n.status === 'failed' ? 'error' : n.status === 'in_progress' ? 'in_progress' : 'pending',
+        }));
+        this.sendMessage(socket, createServerMessage('todo_update', sessionId, {
+          todos,
+        }));
+
+        // Push fresh assets so the storyboard clears anything cleared by reset.
+        // The reset script clears each cleared node's `outputPath` but leaves the
+        // file on disk; filterLiveAssets drops those stale entries.
+        const manifestPath = join(process.cwd(), `${projectName}.kshana`, 'assets', 'manifest.json');
+        if (existsSync(manifestPath)) {
+          try {
+            const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+            const { filterLiveAssets } = await import('./assetFilter.js');
+            const liveAssets = filterLiveAssets(manifest.assets ?? [], nodes);
+
+            this.sendMessage(socket, createServerMessage('assets_refresh', sessionId, {
+              projectName,
+              assets: liveAssets,
+            }));
+          } catch { /* non-fatal */ }
+        }
+      } catch { /* best effort */ }
+
+      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+        status: 'completed',
+        message: `Reset to ${stage} complete`,
+      }));
+    } catch (error) {
+      const err = error as { stderr?: string; message?: string };
+      const errorMessage = err.stderr?.trim() || err.message || 'Reset failed';
+      console.error(`[Reset] Error:`, errorMessage);
+      this.sendError(socket, sessionId, 'reset_error', errorMessage);
+      this.sendMessage(socket, createServerMessage<StatusData>('status', sessionId, {
+        status: 'completed',
+        message: 'Reset failed',
+      }));
+    }
+  }
+
+  /**
    * Handle select_project message.
    * Reads project.json using LocalFileSystem (async) and configures the session.
    */
@@ -468,6 +636,7 @@ export class WebSocketHandler {
   ): Promise<void> {
     const projectDirName = `${projectName}.kshana`;
     const projectFile = join(process.cwd(), projectDirName, 'project.json');
+    const timelineFile = join(process.cwd(), projectDirName, 'timeline.json');
 
     // Read project.json to get templateId, style, duration, and timing
     let templateId = 'narrative';
@@ -509,6 +678,18 @@ export class WebSocketHandler {
       message: `Project set to ${projectName}`,
       tools: toolNames,
     }));
+
+    if (await localFs.exists(timelineFile)) {
+      try {
+        const timelineContent = await localFs.readFile(timelineFile);
+        const timeline = JSON.parse(timelineContent);
+        this.sendMessage(socket, createServerMessage<TimelineUpdateData>('timeline_update', sessionId, {
+          timeline,
+        }));
+      } catch {
+        // Ignore malformed timeline.json and leave timeline empty on the client
+      }
+    }
 
     // Send session timer — recover elapsed time from project
     if (projectData) {
@@ -564,6 +745,20 @@ export class WebSocketHandler {
 
       // Create the project on disk
       createProject(data.content, data.style, undefined, data.duration, data.templateId);
+
+      // Store resolution in project.json
+      if (data.resolution || data.resolutionWidth) {
+        const { join } = await import('path');
+        const { readFileSync, writeFileSync } = await import('fs');
+        const projFile = join(process.cwd(), projectDirName, 'project.json');
+        try {
+          const projData = JSON.parse(readFileSync(projFile, 'utf-8'));
+          projData.resolution = data.resolution || '480p';
+          projData.resolutionWidth = data.resolutionWidth || 848;
+          projData.resolutionHeight = data.resolutionHeight || 480;
+          writeFileSync(projFile, JSON.stringify(projData, null, 2));
+        } catch { /* non-fatal */ }
+      }
 
       // Configure the session agent for this project
       this.conversationManager.configureSessionForProject(
@@ -685,7 +880,7 @@ export class WebSocketHandler {
         }
 
         // Check if production completed (final video stitched) and send timer update
-        if (toolName === 'assemble_from_timeline') {
+        if (toolName === 'assemble_from_timeline' || toolName === 'assemble_final_video') {
           try {
             import('../tasks/video/workflow/ProjectManager.js').then(({ getElapsedMs, loadProject }) => {
               const project = loadProject();
@@ -771,6 +966,10 @@ export class WebSocketHandler {
             }
           });
         } catch { /* ignore */ }
+      },
+
+      onTimelineUpdate: (sid, data) => {
+        this.sendMessage(socket, createServerMessage<TimelineUpdateData>('timeline_update', sid, data));
       },
 
       onNotification: (sid, data) => {

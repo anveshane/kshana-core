@@ -1,0 +1,66 @@
+{
+  "name": "Motion Directive Binary",
+  "description": "Binary yes/no evaluation of shot_motion_directive quality — the text prompt sent directly to LTX video generation. Evaluates whether the prompt will produce coherent, visually consistent AI video.",
+  "format": "binary",
+  "phase": "shot_motion_directive",
+  "promptType": "shot_motion_directive",
+  "context": ["scene_video_prompt", "character", "setting", "world_style"],
+  "questions": [
+    {
+      "id": "CHARACTER_ANCHOR",
+      "question": "If the shot contains a character: does the motion directive include a consistent, specific physical description of that character (hair color, skin tone, clothing, distinguishing features) that matches the character profile? An AI video generator cannot infer appearance — every detail must be explicit in the prompt. Answer YES if the description is specific enough that a different AI system reading only this prompt would draw the same person. Answer YES if no characters are in the shot."
+    },
+    {
+      "id": "NO_ABSTRACT_CONCEPTS",
+      "question": "Is the motion directive free of abstract or metaphorical language that an AI video model cannot render? Examples of BAD: 'a monument to humanity's failure', 'sense of dread', 'weight of responsibility', 'haunted by his past', 'grey-goo', 'sentient debris'. Examples of GOOD: 'liquid mercury mixed with black ash', 'metallic dust particles suspended in air', 'dark empty windows in concrete towers'. Every noun and adjective must describe something physically visible. Answer NO if any phrase requires human interpretation to visualize."
+    },
+    {
+      "id": "CONCRETE_TEXTURES",
+      "question": "Does the motion directive use concrete material/texture references rather than vague visual terms? Good examples: 'brushed steel', 'wet concrete', 'cracked leather', 'frosted glass', 'rust-red paint peeling in strips'. Bad examples: 'dark surface', 'some kind of metal', 'strange material', 'glowing energy'. Are at least 3 specific material/texture references present?"
+    },
+    {
+      "id": "SOUND_TO_VISUAL",
+      "question": "If the shot's soundCue describes impactful audio (explosions, machinery, wind, electrical crackling): does the motion directive translate that sound into visible physical effects? Examples: wind → 'coat fabric whipping violently, hair streaming sideways'; electricity → 'blue-white sparks arcing between fingertips, air shimmering with static discharge'; grinding → 'visible vibration on metal surfaces, dust shaking loose from rivets'. Sound-only descriptions that have no visual translation are invisible to the video model. Answer YES if sound effects are represented visually, or if the shot has only ambient/quiet sound cues."
+    },
+    {
+      "id": "ENTRY_EXIT_STATE",
+      "question": "Does the motion directive clearly establish what the viewer sees at the START of the shot and what has changed by the END? An AI video generator needs explicit start and end states to produce coherent motion. At minimum, the opening sentence should describe the initial visual state, and the closing sentences should describe the final state. Answer NO if the prompt describes a static scene with no progression, or if the end state is ambiguous."
+    },
+    {
+      "id": "SINGLE_PARAGRAPH",
+      "question": "Is the motion directive a single continuous paragraph (no bullet points, no headers, no line breaks, no labeled sections)? AI video models read flowing prose, not structured documents."
+    },
+    {
+      "id": "WORD_COUNT",
+      "question": "Is the motion directive between 80 and 250 words? Too short (<80) lacks detail for coherent generation. Too long (>250) confuses the model with competing instructions. Count the words — answer YES only if within range."
+    },
+    {
+      "id": "PRESENT_TENSE",
+      "question": "Is the entire motion directive written in present tense ('a man walks', 'light falls', 'the camera holds')? No past tense ('walked', 'fell') and no gerunds used as main verbs ('walking', 'falling'). A few gerunds as descriptors are fine ('flickering light', 'rising steam')."
+    },
+    {
+      "id": "CAMERA_SPECIFIED",
+      "question": "Does the motion directive explicitly describe the camera's behavior — angle (low, high, eye-level), movement (static, push-in, tracking, dolly), and framing (close-up, wide, medium)? The video model needs camera direction to produce stable, intentional footage. Answer NO if the camera is never mentioned or only vaguely implied."
+    },
+    {
+      "id": "LIGHTING_SPECIFIED",
+      "question": "Does the motion directive describe the lighting — at minimum the direction and quality (harsh/soft, warm/cool, natural/artificial)? Examples: 'harsh overhead fluorescent', 'warm golden light from the left', 'dim blue sodium lamps casting long shadows'. Answer NO if lighting is never mentioned."
+    },
+    {
+      "id": "NO_NARRATIVE_LABELS",
+      "question": "Is the motion directive free of character names, narrative labels, or story context that the video model cannot understand? BAD: 'Johnathan, the detective', 'O'Hare takes control', 'the Lazarus Drive device'. GOOD: 'a man in a grey trench coat', 'his expression shifts', 'a small metallic device'. The AI model does not know who these characters are — it only sees visual descriptions. Named characters should be described by appearance, not by name."
+    },
+    {
+      "id": "MOTION_DESCRIBED",
+      "question": "Does the motion directive describe at least one specific physical movement or change that occurs during the shot? Static establishing shots still need atmospheric motion (wind, rain, light shifting, smoke drifting). A prompt with zero motion will produce a static image, not a video. Answer NO if nothing moves or changes."
+    },
+    {
+      "id": "FAITHFUL_TO_SHOT",
+      "question": "Does the motion directive accurately represent the visual content described in the corresponding shot from the scene_video_prompt? No invented elements, no contradictions, no missing key visual details from the shot's firstFrame/lastFrame/description. The motion directive should be a faithful translation, not a creative reinterpretation."
+    },
+    {
+      "id": "DURATION_APPROPRIATE",
+      "question": "Is the amount of described action appropriate for the shot's duration? A 2-3 second shot should describe ONE focused action or moment. A 4-5 second shot can have 2-3 sequential actions. A 6-8 second shot can describe a brief sequence. Answer NO if the prompt describes more action than could physically occur in the given duration, or if it describes so little that the video would be essentially static."
+    }
+  ]
+}

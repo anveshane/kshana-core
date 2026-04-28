@@ -9,6 +9,10 @@ dist/
 .env.local
 .env.*.local
 
+# Per-machine LLM routing (e.g., points at local LM Studio for VLM eval).
+# Copy from .llm-routing.example.json and edit. Not for git.
+.llm-routing.json
+
 # IDE
 .idea/
 .vscode/
@@ -39,6 +43,16 @@ prompt-optimizer/
 
 # Local outputs (generated images/videos)
 outputs/
+test-output/
+
+# Claude Code local config
+.claude/
+
+# Uploaded files
+uploads/
+
+# Workflow runs
+workflows/runs/
 
 # Packed release artifacts
 *.tgz

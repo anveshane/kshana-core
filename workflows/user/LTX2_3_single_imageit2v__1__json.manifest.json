@@ -1,0 +1,130 @@
+{
+  "id": "LTX2_3_single_imageit2v__1__json",
+  "displayName": "LTX-Video Dual-Stage with Audio Generation",
+  "pipeline": "video_generation",
+  "llmDescription": "Generates video with synchronized audio from either a text prompt or a first-frame image using the LTX-Video model. It employs a two-stage pipeline: the first pass generates a base video latent, and the second pass upsamples it via a latent upscaler for higher quality output. It uses NAG (Noise-Aware Guidance), SageAttention optimization, and a LoRA for enhanced results.",
+  "selectionCriteria": "Choose this workflow when you need high-quality LTX-Video generation with audio, particularly when a dual-pass upscaled output is desired. It supports both text-to-video and image-to-video modes, making it versatile for various video generation tasks.",
+  "outputType": "video",
+  "priority": 10,
+  "strategies": [
+    "i2v",
+    "t2v"
+  ],
+  "inputRequirements": [
+    {
+      "id": "first_frame",
+      "type": "image",
+      "source": "shot_image",
+      "description": "First frame image (optional for t2v mode)",
+      "required": false
+    },
+    {
+      "id": "seed",
+      "type": "text",
+      "source": "system",
+      "description": "seed",
+      "required": true
+    },
+    {
+      "id": "first_frame",
+      "type": "text",
+      "source": "system",
+      "description": "first_frame",
+      "required": true
+    },
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "shot_motion_directive",
+      "description": "prompt",
+      "required": true
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "system",
+      "description": "negative_prompt",
+      "required": true
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "description": "filenamePrefix",
+      "required": true
+    },
+    {
+      "id": "seed",
+      "type": "text",
+      "source": "system",
+      "description": "seed",
+      "required": true
+    },
+    {
+      "id": "width",
+      "type": "number",
+      "source": "system",
+      "description": "Video width",
+      "required": false
+    },
+    {
+      "id": "height",
+      "type": "number",
+      "source": "system",
+      "description": "Video height",
+      "required": false
+    }
+  ],
+  "workflowFile": "LTX2_3_single_imageit2v__1__json.json",
+  "format": "litegraph",
+  "parameterMappings": [
+    {
+      "input": "first_frame",
+      "nodeId": "269",
+      "field": "image"
+    },
+    {
+      "input": "seed",
+      "nodeId": "275",
+      "field": "noise_seed"
+    },
+    {
+      "input": "prompt",
+      "nodeId": "304",
+      "field": "text"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "315",
+      "field": "text"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "377",
+      "field": "filename_prefix"
+    },
+    {
+      "input": "seed",
+      "nodeId": "386",
+      "field": "noise_seed"
+    },
+    {
+      "input": "width",
+      "nodeId": "314",
+      "field": "value"
+    },
+    {
+      "input": "height",
+      "nodeId": "299",
+      "field": "value"
+    }
+  ],
+  "promptKeywords": {
+    "prepend": "Make this image come alive with cinematic motion, smooth animation.",
+    "negativeAppend": "static, blurry, low quality, distorted"
+  },
+  "builtIn": false,
+  "active": true,
+  "isOverride": true,
+  "mode": "local"
+}

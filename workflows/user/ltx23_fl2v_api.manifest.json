@@ -1,0 +1,103 @@
+{
+  "id": "ltx23_fl2v_api",
+  "displayName": "LTX 2.3 FL2V (API format)",
+  "pipeline": "video_generation",
+  "llmDescription": "First-Last frame video generation using LTX 2.3. Anchors both start and end frames for temporally consistent interpolation with two-pass upscaling.",
+  "selectionCriteria": "Use when first and last frame images are available for maximum temporal consistency.",
+  "outputType": "video",
+  "priority": 10,
+  "strategies": [
+    "flfv"
+  ],
+  "inputRequirements": [
+    {
+      "id": "prompt",
+      "type": "text",
+      "source": "shot_motion_directive",
+      "description": "Motion prompt",
+      "required": true
+    },
+    {
+      "id": "negative_prompt",
+      "type": "text",
+      "source": "system",
+      "description": "Negative prompt",
+      "required": true
+    },
+    {
+      "id": "first_frame",
+      "type": "image",
+      "source": "shot_image",
+      "description": "First frame image",
+      "required": true
+    },
+    {
+      "id": "last_frame",
+      "type": "image",
+      "source": "shot_image",
+      "description": "Last frame image",
+      "required": true
+    },
+    {
+      "id": "seed",
+      "type": "number",
+      "source": "system",
+      "description": "Random seed",
+      "required": false
+    },
+    {
+      "id": "filenamePrefix",
+      "type": "text",
+      "source": "system",
+      "description": "Output filename prefix",
+      "required": false
+    }
+  ],
+  "workflowFile": "ltx23_fl2v_api.json",
+  "format": "api",
+  "parameterMappings": [
+    {
+      "input": "prompt",
+      "nodeId": "16",
+      "field": "text"
+    },
+    {
+      "input": "negative_prompt",
+      "nodeId": "11",
+      "field": "text"
+    },
+    {
+      "input": "first_frame",
+      "nodeId": "45",
+      "field": "image"
+    },
+    {
+      "input": "last_frame",
+      "nodeId": "47",
+      "field": "image"
+    },
+    {
+      "input": "seed",
+      "nodeId": "15",
+      "field": "noise_seed"
+    },
+    {
+      "input": "seed",
+      "nodeId": "14",
+      "field": "noise_seed"
+    },
+    {
+      "input": "filenamePrefix",
+      "nodeId": "43",
+      "field": "filename_prefix"
+    }
+  ],
+  "promptKeywords": {
+    "prepend": "Make this image come alive with cinematic motion, smooth animation.",
+    "negativeAppend": "static, blurry, low quality, distorted"
+  },
+  "builtIn": false,
+  "active": true,
+  "isOverride": true,
+  "mode": "local"
+}

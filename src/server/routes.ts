@@ -211,6 +211,348 @@ export async function registerRoutes(
     return reply.send({ status: 'ok', config: registry.getConfig() });
   });
 
+  // ── Workflow management endpoints ──────────────────────────────────────────
+
+  // List all workflows grouped by pipeline
+  app.get(`${apiPrefix}/workflows`, async (_request: FastifyRequest, reply: FastifyReply) => {
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    // Only show ComfyUI workflows — API provider modes belong in Provider Settings
+    // Filter out API provider modes (Google, xAI) but keep API-format ComfyUI workflows
+    const all = registry.listAll().filter(m => m.workflowFile);
+
+    const grouped: Record<string, typeof all> = {};
+    for (const mode of all) {
+      const key = mode.pipeline;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key]!.push(mode);
+    }
+
+    return reply.send({ workflows: grouped });
+  });
+
+  // Upload a workflow JSON — returns parsed nodes + LLM analysis for the integration wizard
+  app.post(`${apiPrefix}/workflows/upload`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { parseWorkflow, analyzeWorkflowWithLLM } = await import('../services/comfyui/WorkflowParser.js');
+    const body = request.body as { filename: string; content: string };
+    if (!body.content) {
+      return reply.status(400).send({ error: 'Missing workflow content' });
+    }
+
+    try {
+      const parsed = parseWorkflow(body.content);
+
+      // Save the workflow JSON to workflows/user/
+      const fs = await import('fs');
+      const path = await import('path');
+      const userDir = path.join(process.cwd(), 'workflows', 'user');
+      if (!fs.existsSync(userDir)) fs.mkdirSync(userDir, { recursive: true });
+
+      const baseName = (body.filename || 'workflow').replace(/[^a-zA-Z0-9_-]/g, '_').replace(/\.json$/, '');
+      // Append short timestamp to avoid collisions between different workflows with same filename
+      let safeName = baseName;
+      let filePath = path.join(userDir, `${safeName}.json`);
+      if (fs.existsSync(filePath)) {
+        safeName = `${baseName}_${Date.now().toString(36)}`;
+        filePath = path.join(userDir, `${safeName}.json`);
+      }
+      fs.writeFileSync(filePath, body.content);
+
+      // Run LLM analysis for intelligent suggestions
+      let analysis = null;
+      try {
+        const { LLMClient, buildRouterFromEnv } = await import('../core/llm/index.js');
+        const router = buildRouterFromEnv(process.cwd());
+        const llmClient = router.isEnabled()
+          ? router.getClient('structured.workflow_analysis')
+          : new LLMClient(llmConfig);
+        analysis = await analyzeWorkflowWithLLM(body.content, parsed, llmClient);
+
+        // Merge LLM suggestions into parsed nodes
+        if (analysis.suggestedMappings) {
+          for (const suggestion of analysis.suggestedMappings) {
+            const node = parsed.inputNodes.find(n => n.nodeId === suggestion.nodeId);
+            if (node) {
+              node.suggestedInput = suggestion.suggestedInput;
+            }
+          }
+        }
+
+        // Override pipeline detection if LLM is more confident
+        if (analysis.pipeline && parsed.detectedPipeline === 'unknown') {
+          parsed.detectedPipeline = analysis.pipeline as any;
+        }
+      } catch (llmErr) {
+        // LLM analysis failed — non-fatal, wizard still works with heuristic suggestions
+        console.warn('[WorkflowUpload] LLM analysis failed:', llmErr);
+      }
+
+      return reply.send({
+        status: 'uploaded',
+        filename: `${safeName}.json`,
+        parsed,
+        analysis,
+      });
+    } catch (err) {
+      return reply.status(400).send({ error: `Failed to parse workflow: ${err}` });
+    }
+  });
+
+  // Re-parse an existing workflow file (for editing an already-configured workflow)
+  app.post(`${apiPrefix}/workflows/reparse`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as { workflowFile?: string };
+    if (!body.workflowFile) {
+      return reply.status(400).send({ error: 'Missing workflowFile' });
+    }
+
+    const fs = await import('fs');
+    const path = await import('path');
+
+    // Search for the workflow file in user and built-in directories
+    const searchDirs = ['workflows/user', 'workflows/built-in', 'workflows'];
+    let content: string | null = null;
+    for (const dir of searchDirs) {
+      const filePath = path.join(process.cwd(), dir, body.workflowFile);
+      if (fs.existsSync(filePath)) {
+        content = fs.readFileSync(filePath, 'utf-8');
+        break;
+      }
+    }
+
+    if (!content) {
+      return reply.status(404).send({ error: `Workflow file not found: ${body.workflowFile}` });
+    }
+
+    try {
+      const { parseWorkflow: parse } = await import('../services/comfyui/WorkflowParser.js');
+      const parsed = parse(content);
+      return reply.send({ parsed });
+    } catch (err) {
+      return reply.status(400).send({ error: `Failed to parse workflow: ${err}` });
+    }
+  });
+
+  // Save manifest (configure) for an uploaded workflow
+  app.post(`${apiPrefix}/workflows/configure`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as Record<string, unknown>;
+    if (!body['id'] || !body['workflowFile']) {
+      return reply.status(400).send({ error: 'Missing id or workflowFile' });
+    }
+
+    const id = String(body['id']);
+
+    // Reject IDs that conflict with built-in workflows
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    if (registry.isBuiltInId(id)) {
+      return reply.status(409).send({ error: `ID '${id}' conflicts with a built-in workflow. Choose a different ID.` });
+    }
+
+    const fs = await import('fs');
+    const path = await import('path');
+    const userDir = path.join(process.cwd(), 'workflows', 'user');
+    if (!fs.existsSync(userDir)) fs.mkdirSync(userDir, { recursive: true });
+
+    const manifestPath = path.join(userDir, `${id}.manifest.json`);
+    fs.writeFileSync(manifestPath, JSON.stringify(body, null, 2));
+
+    // Refresh registry
+    registry.refresh();
+
+    return reply.send({ status: 'configured', manifestPath });
+  });
+
+  // Set a workflow as the active override for its pipeline
+  app.put(`${apiPrefix}/workflows/:id/override`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    const success = registry.setOverride(id);
+    if (!success) return reply.status(404).send({ error: 'Workflow not found or is built-in' });
+    return reply.send({ status: 'ok', activeOverride: id });
+  });
+
+  // Deactivate a specific user workflow
+  app.put(`${apiPrefix}/workflows/:id/deactivate`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    const mode = registry.getMode(id);
+    if (!mode) return reply.status(404).send({ error: 'Workflow not found' });
+    registry.clearOverride(mode.pipeline, id);
+    return reply.send({ status: 'ok', deactivated: id });
+  });
+
+  // Clear override for a pipeline (revert to built-in) — legacy endpoint
+  app.delete(`${apiPrefix}/workflows/override/:pipeline`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { pipeline } = request.params as { pipeline: string };
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    getWorkflowModeRegistry().clearOverride(pipeline as any);
+    return reply.send({ status: 'ok', reverted: pipeline });
+  });
+
+  // Delete a user-uploaded workflow
+  app.delete(`${apiPrefix}/workflows/:id`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const { id } = request.params as { id: string };
+    const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+    const registry = getWorkflowModeRegistry();
+    const mode = registry.getMode(id);
+    if (!mode) return reply.status(404).send({ error: 'Workflow not found' });
+    if (mode.builtIn) return reply.status(403).send({ error: 'Cannot delete built-in workflows' });
+
+    // Remove files
+    const fs = await import('fs');
+    const path = await import('path');
+    const userDir = path.join(process.cwd(), 'workflows', 'user');
+    try {
+      const manifestPath = path.join(userDir, `${id}.manifest.json`);
+      if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath);
+      if (mode.workflowFile) {
+        const wfPath = path.join(userDir, mode.workflowFile);
+        if (fs.existsSync(wfPath)) fs.unlinkSync(wfPath);
+      }
+    } catch { /* best effort */ }
+
+    registry.removeMode(id);
+    return reply.send({ status: 'deleted', id });
+  });
+
+  // ── Workflow test endpoint ────────────────────────────────────────────────
+
+  // Track running tests: promptId → { status, outputPath, error }
+  const testResults = new Map<string, { status: string; outputPath?: string; outputUrl?: string; error?: string; message?: string; percentage?: number }>();
+
+  app.post(`${apiPrefix}/workflows/test`, async (request: FastifyRequest, reply: FastifyReply) => {
+    const body = request.body as { workflowId: string; params: Record<string, string> };
+    if (!body.workflowId || !body.params) {
+      return reply.status(400).send({ error: 'Missing workflowId or params' });
+    }
+
+    try {
+      const { getWorkflowModeRegistry } = await import('../services/providers/WorkflowModeRegistry.js');
+      const registry = getWorkflowModeRegistry();
+      const mode = registry.getMode(body.workflowId);
+      if (!mode) {
+        return reply.status(404).send({ error: `Workflow '${body.workflowId}' not found` });
+      }
+
+      const workflowPath = registry.getWorkflowPath(mode);
+      if (!workflowPath) {
+        return reply.status(404).send({ error: `Workflow file not found for '${body.workflowId}'` });
+      }
+
+      // Load and parameterize workflow
+      const { parameterizeGeneric } = await import('../services/comfyui/WorkflowLoader.js');
+      const { ComfyUIClient } = await import('../services/comfyui/ComfyUIClient.js');
+      const fs = await import('fs');
+      const path = await import('path');
+
+      const outputDir = path.join(process.cwd(), 'test-output', 'workflow-tests');
+      if (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir, { recursive: true });
+
+      // Upload image files to ComfyUI if needed
+      const client = new ComfyUIClient({ outputDir });
+      const resolvedParams: Record<string, unknown> = { ...body.params };
+
+      for (const req of mode.inputRequirements) {
+        if (req.type === 'image' && body.params[req.id]) {
+          const imgPath = body.params[req.id]!;
+          if (fs.existsSync(imgPath)) {
+            const uploaded = await client.uploadImage(imgPath);
+            resolvedParams[req.id] = uploaded.name;
+          }
+        }
+      }
+
+      // Randomize seed if not provided or default
+      if (!resolvedParams['seed'] || resolvedParams['seed'] === '0') {
+        resolvedParams['seed'] = Math.floor(Math.random() * 999999);
+      }
+
+      // Load workflow directly from the resolved path (works for both built-in and user workflows)
+      const templateContent = fs.readFileSync(workflowPath, 'utf-8');
+      const template = JSON.parse(templateContent);
+      const workflow = parameterizeGeneric(template, mode, resolvedParams);
+
+      // Queue workflow
+      const result = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
+      const promptId = result.promptId;
+
+      // Track this test
+      testResults.set(promptId, { status: 'running', message: 'Queued...', percentage: 5 });
+
+      // Wait for completion in background
+      (async () => {
+        try {
+          await client.waitForCompletionWS(promptId, result.clientId, (info) => {
+            testResults.set(promptId, {
+              status: 'running',
+              message: info.message,
+              percentage: info.percentage,
+            });
+          });
+
+          const outputs = await client.getOutputImages(promptId);
+          if (outputs.length === 0) {
+            testResults.set(promptId, { status: 'error', error: 'No output files from ComfyUI' });
+            return;
+          }
+
+          const savedPath = await client.downloadImage(
+            outputs[0]!.filename,
+            outputs[0]!.subfolder,
+            outputs[0]!.type,
+            `test_${Date.now()}_${outputs[0]!.filename}`,
+          );
+
+          // Make it accessible via URL
+          const relPath = path.relative(process.cwd(), savedPath);
+          testResults.set(promptId, {
+            status: 'completed',
+            outputPath: savedPath,
+            outputUrl: `/api/v1/test-output/${path.basename(savedPath)}`,
+            percentage: 100,
+          });
+        } catch (err) {
+          testResults.set(promptId, { status: 'error', error: String(err) });
+        }
+      })();
+
+      return reply.send({ status: 'queued', promptId });
+    } catch (err) {
+      return reply.status(500).send({ error: `Test failed: ${err}` });
+    }
+  });
+
+  // Poll test status
+  app.get<{ Params: { promptId: string } }>(
+    `${apiPrefix}/workflows/test/:promptId/status`,
+    async (request: FastifyRequest<{ Params: { promptId: string } }>, reply: FastifyReply) => {
+      const { promptId } = request.params;
+      const result = testResults.get(promptId);
+      if (!result) return reply.status(404).send({ error: 'Test not found' });
+      return reply.send(result);
+    },
+  );
+
+  // Serve test output files
+  app.get<{ Params: { '*': string } }>(
+    `${apiPrefix}/test-output/*`,
+    async (request: FastifyRequest<{ Params: { '*': string } }>, reply: FastifyReply) => {
+      const filePath = request.params['*'];
+      if (filePath.includes('..')) return reply.status(400).send({ error: 'Invalid path' });
+      const { join, extname } = await import('path');
+      const { existsSync, readFileSync, statSync } = await import('fs');
+      const fullPath = join(process.cwd(), 'test-output', 'workflow-tests', filePath);
+      if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
+        return reply.status(404).send({ error: 'Not found' });
+      }
+      const ext = extname(fullPath).toLowerCase();
+      const MIME: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.mp4': 'video/mp4', '.webm': 'video/webm' };
+      return reply.type(MIME[ext] || 'application/octet-stream').send(readFileSync(fullPath));
+    },
+  );
+
   // Register web UI routes (SPA + project/asset endpoints)
   await registerWebUIRoutes(app);
 

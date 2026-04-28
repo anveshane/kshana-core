@@ -11,6 +11,7 @@ import { loadAndRenderMarkdown, renderTemplate } from '../core/prompts/loader.js
 import type { Message, LLMResponse, GenerateOptions } from '../core/llm/types.js';
 import { LLMClient } from '../core/llm/LLMClient.js';
 import { getLLMConfig, getLLMProvider } from '../core/llm/config.js';
+import { buildRouterFromEnv } from '../core/llm/router.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -142,8 +143,16 @@ export class PromptEvaluator {
   private evalsDir: string;
 
   constructor(client?: EvalLLMClient, evalsDir?: string) {
-    // Use provider-aware config when no client is specified
-    this.client = client ?? new LLMClient(getLLMConfig());
+    // Use provider-aware config when no client is specified.
+    // When LLM_ROUTING_ENABLED=true, eval scoring runs on the light-tier client.
+    if (client) {
+      this.client = client;
+    } else {
+      const router = buildRouterFromEnv(process.cwd());
+      this.client = router.isEnabled()
+        ? router.getClient('utility.prompt_evaluation')
+        : new LLMClient(getLLMConfig());
+    }
     this.evalsDir = evalsDir ?? join(__dirname, '..', '..', 'tests', 'evals');
   }
 
