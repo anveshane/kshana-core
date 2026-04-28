@@ -21,6 +21,7 @@ import {
   type TodoUpdateData,
   type StreamChunkData,
   type ContextUsageData,
+  type UsageFactData,
   type PhaseTransitionData,
   type NotificationData,
   type SessionTimerData,
@@ -749,6 +750,10 @@ export class WebSocketHandler {
 
       onContextUsage: (sid, data) => {
         this.sendMessage(socket, createServerMessage<ContextUsageData>('context_usage', sid, data));
+      },
+
+      onUsageFact: (sid, data) => {
+        this.sendMessage(socket, createServerMessage<UsageFactData>('usage_fact', sid, data));
       },
 
       onPhaseTransition: (sid, data) => {
