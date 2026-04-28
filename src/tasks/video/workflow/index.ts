@@ -76,8 +76,6 @@ export {
   getProjectStyleConfig,
   setProjectInputType,
   updatePhaseStatus,
-  updatePlannerStage,
-  transitionToNextPhase,
   planFileHasContent,
   readProjectFile,
   writeProjectFile,
@@ -94,7 +92,6 @@ export {
   getAssets,
   // Utility functions
   getProjectSummary,
-  getStateTransitionPrompt,
   isProjectCompatible,
   // Content Registry functions
   createDefaultContentRegistry,

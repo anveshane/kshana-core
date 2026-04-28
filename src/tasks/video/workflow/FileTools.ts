@@ -25,7 +25,6 @@ import {
   loadProject,
   writeProjectFile,
   getProjectSummary,
-  getStateTransitionPrompt,
   projectExists,
   updateContentStatus,
   generateFileSummary,
@@ -482,9 +481,10 @@ Use this at the start of each turn to understand the project state and what acti
       result['summary'] = getProjectSummary();
     }
 
-    if (includeTransitionPrompt) {
-      result['next_action'] = getStateTransitionPrompt();
-    }
+    // Legacy `getStateTransitionPrompt` removed — phase transitions
+    // are now driven by the dependency graph executor's deps[], not
+    // by a string prompt threaded into the agent's system message.
+    void includeTransitionPrompt;
 
     return result;
   }
