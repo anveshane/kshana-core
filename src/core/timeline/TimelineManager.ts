@@ -95,7 +95,7 @@ const DEFAULT_CONSTRAINTS: DurationConstraints = {
 
 const TIMELINE_FILENAME = 'timeline.json';
 
-function isVisualLikeLayer(layer: TimelineLayerEntry | undefined): boolean {
+function isVisualLikeLayer(layer: TimelineLayerEntry | undefined): layer is TimelineLayerEntry {
   return layer?.type === 'visual' || layer?.type === 'narration_video';
 }
 

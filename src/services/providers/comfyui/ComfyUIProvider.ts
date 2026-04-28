@@ -343,10 +343,10 @@ export class ComfyUIProvider implements GenerationProvider {
       let placeholderCount = 0;
       for (const [nid, node] of Object.entries(workflow)) {
         const n = node as { class_type?: string; inputs?: Record<string, unknown> };
-        if (n.class_type === 'LoadImage' && typeof n.inputs?.image === 'string') {
-          if (n.inputs.image.startsWith('ref_image_')) {
-            console.log(`[FLUX Klein] Replacing placeholder on node ${nid}: ${n.inputs.image} → ${uploadResult.name}`);
-            n.inputs.image = uploadResult.name;
+        if (n.class_type === 'LoadImage' && typeof n.inputs?.['image'] === 'string') {
+          if ((n.inputs['image'] as string).startsWith('ref_image_')) {
+            console.log(`[FLUX Klein] Replacing placeholder on node ${nid}: ${n.inputs['image']} → ${uploadResult.name}`);
+            n.inputs['image'] = uploadResult.name;
             placeholderCount++;
           }
         }

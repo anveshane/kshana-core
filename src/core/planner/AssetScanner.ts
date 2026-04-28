@@ -252,30 +252,30 @@ export class AssetScanner {
 
     this.scanTrackedFiles(
       projectDir,
-      Array.isArray(workflowProject.files)
-        ? (workflowProject.files as Array<Record<string, unknown>>)
+      Array.isArray(workflowProject['files'])
+        ? (workflowProject['files'] as Array<Record<string, unknown>>)
         : [],
       registry
     );
 
     this.scanPromptMetadata(
       projectDir,
-      Array.isArray(workflowProject.characters)
-        ? (workflowProject.characters as Array<Record<string, unknown>>)
+      Array.isArray(workflowProject['characters'])
+        ? (workflowProject['characters'] as Array<Record<string, unknown>>)
         : [],
       'character',
       registry
     );
     this.scanPromptMetadata(
       projectDir,
-      Array.isArray(workflowProject.settings)
-        ? (workflowProject.settings as Array<Record<string, unknown>>)
+      Array.isArray(workflowProject['settings'])
+        ? (workflowProject['settings'] as Array<Record<string, unknown>>)
         : [],
       'setting',
       registry
     );
 
-    const content = workflowProject.content;
+    const content = workflowProject['content'];
     if (content && typeof content === 'object') {
       const images = (content as Record<string, unknown>)['images'];
       const videos = (content as Record<string, unknown>)['videos'];
@@ -701,8 +701,8 @@ export class AssetScanner {
     kind: 'image' | 'video'
   ): string | null {
     if (kind === 'image') {
-      const characters = Array.isArray(project.characters)
-        ? (project.characters as Array<Record<string, unknown>>)
+      const characters = Array.isArray(project['characters'])
+        ? (project['characters'] as Array<Record<string, unknown>>)
         : [];
       for (const character of characters) {
         if (
@@ -713,8 +713,8 @@ export class AssetScanner {
         }
       }
 
-      const settings = Array.isArray(project.settings)
-        ? (project.settings as Array<Record<string, unknown>>)
+      const settings = Array.isArray(project['settings'])
+        ? (project['settings'] as Array<Record<string, unknown>>)
         : [];
       for (const setting of settings) {
         if (
@@ -725,8 +725,8 @@ export class AssetScanner {
         }
       }
 
-      const scenes = Array.isArray(project.scenes)
-        ? (project.scenes as Array<Record<string, unknown>>)
+      const scenes = Array.isArray(project['scenes'])
+        ? (project['scenes'] as Array<Record<string, unknown>>)
         : [];
       for (const scene of scenes) {
         if (scene['imageArtifactId'] === assetId || scene['imagePath'] === relativePath) {
@@ -740,8 +740,8 @@ export class AssetScanner {
       return 'scene_image';
     }
 
-    const scenes = Array.isArray(project.scenes)
-      ? (project.scenes as Array<Record<string, unknown>>)
+    const scenes = Array.isArray(project['scenes'])
+      ? (project['scenes'] as Array<Record<string, unknown>>)
       : [];
     for (const scene of scenes) {
       if (scene['videoArtifactId'] === assetId || scene['videoPath'] === relativePath) {

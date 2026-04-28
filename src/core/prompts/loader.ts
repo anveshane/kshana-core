@@ -29,7 +29,7 @@ function resolvePromptsDir(): string {
   ];
 
   const resolved = candidates.find((candidate) => existsSync(candidate));
-  return resolved ?? candidates[0];
+  return resolved ?? candidates[0]!;
 }
 
 const PROMPTS_DIR = resolvePromptsDir();

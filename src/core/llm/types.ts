@@ -87,6 +87,15 @@ export interface StreamChunk {
   content?: string;
   /** Reasoning/thinking content from models with reasoning_content (llama.cpp extension) */
   thinking?: string;
+  /** OpenRouter-style reasoning text emitted alongside content. Surfaced
+   *  on the final chunk (done=true) by LLMClient — see GenericAgent's
+   *  reasoning accumulation for usage. Per-chunk on streams that
+   *  intersperse reasoning with content. */
+  reasoning?: string;
+  /** Structured reasoning records (e.g. OpenRouter's `reasoning_details`
+   *  with redacted/encrypted payloads). Stored verbatim so we can replay
+   *  them back to the provider on subsequent calls. */
+  reasoningDetails?: unknown[];
   toolCallDelta?: {
     index: number;
     id?: string;
