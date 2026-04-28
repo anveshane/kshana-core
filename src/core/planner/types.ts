@@ -331,6 +331,35 @@ export interface ExecutionNode {
 
   /** Artifact instance ID after creation */
   artifactId?: string;
+
+  /**
+   * Per-item user-facing metadata that used to live on parallel flat
+   * arrays (`project.characters[i].approvalStatus` etc.). Living here
+   * makes the graph node the single source of truth for everything
+   * about this artifact — content + execution state + approval —
+   * which is the goal of the
+   * `refactor/unify-graph-as-source-of-truth` branch.
+   *
+   * All fields optional. New fields are added here, not on a separate
+   * entity, so we don't recreate the dual-state mess.
+   */
+  metadata?: ExecutionNodeMetadata;
+}
+
+export interface ExecutionNodeMetadata {
+  /** User-facing name when distinct from `displayName` (which carries
+   *  the typeDef prefix, e.g. "Character: Jan"). */
+  name?: string;
+  /** A 1-line summary surfaced in agent-context tools / UI. */
+  summary?: string;
+  /** Approval lifecycle for the artifact this node produces. */
+  approvalStatus?: 'pending' | 'approved' | 'rejected' | 'regenerating';
+  approvedAt?: number;
+  /** How many times this node has been re-run after rejection. */
+  regenerationCount?: number;
+  /** Last user feedback captured on rejection — fed back into the next
+   *  generation prompt. */
+  feedback?: string;
 }
 
 /**

@@ -35,6 +35,25 @@ export class DependencyGraphExecutor {
   private updatedAt: number;
   private completedAt?: number;
 
+  /**
+   * Fires after every public mutation (markStarted, markCompleted,
+   * markFailed, invalidateNode, expandCollection, addNode). The
+   * callback is responsible for persisting state to disk.
+   *
+   * Why this exists: prior to this hook, individual mutation sites in
+   * ExecutorAgent had to remember to call persistState(). The
+   * `expandCollection()` site forgot — a kill between expansion and
+   * the first per-item completion lost the per-item nodes from disk,
+   * causing non-deterministic re-extraction on restart. Centralising
+   * the persist-after-mutate contract here means future mutations
+   * cannot forget.
+   *
+   * Set via `setOnMutation`; pass `undefined` to disable. Errors thrown
+   * by the callback are NOT swallowed — they propagate to the caller
+   * so persistence failures are visible.
+   */
+  private onMutation?: () => void;
+
   private constructor(
     template: VideoTemplate,
     nodes: Map<string, ExecutionNode>,
@@ -163,6 +182,15 @@ export class DependencyGraphExecutor {
   }
 
   /**
+   * Register a persistence callback that fires after every public
+   * mutation. Pass `undefined` to disable. See `onMutation` field
+   * docs for rationale.
+   */
+  setOnMutation(fn: (() => void) | undefined): void {
+    this.onMutation = fn;
+  }
+
+  /**
    * Mark a node as started (in_progress).
    */
   markStarted(nodeId: string): void {
@@ -171,6 +199,7 @@ export class DependencyGraphExecutor {
     node.status = 'in_progress';
     node.startedAt = Date.now();
     this.updatedAt = Date.now();
+    this.onMutation?.();
   }
 
   /**
@@ -191,6 +220,8 @@ export class DependencyGraphExecutor {
       this.completedAt = Date.now();
     }
 
+    this.onMutation?.();
+
     // Return newly ready dependents
     return this.getNewlyReady(node.dependents);
   }
@@ -204,6 +235,7 @@ export class DependencyGraphExecutor {
     node.status = 'failed';
     node.error = error;
     this.updatedAt = Date.now();
+    this.onMutation?.();
   }
 
   /**
@@ -291,6 +323,7 @@ export class DependencyGraphExecutor {
 
     this.completedAt = undefined;
     this.updatedAt = Date.now();
+    this.onMutation?.();
     return invalidated;
   }
 
@@ -454,6 +487,7 @@ export class DependencyGraphExecutor {
     this.nodes.delete(nodeId);
     this.updatedAt = Date.now();
 
+    this.onMutation?.();
     return newNodes;
   }
 
@@ -667,6 +701,7 @@ export class DependencyGraphExecutor {
   addNode(node: ExecutionNode): void {
     this.nodes.set(node.id, node);
     this.updatedAt = Date.now();
+    this.onMutation?.();
   }
 
   /**

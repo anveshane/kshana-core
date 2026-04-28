@@ -385,6 +385,16 @@ export class ExecutorAgent extends TypedEventEmitter {
       const plan = planner.buildPlan(config.goal, scanResult.registry);
       this.executor = DependencyGraphExecutor.fromPlan(plan, config.template);
     }
+
+    // Wire the persistence callback so every public mutation on the
+    // executor flushes to project.json. This kills the desync class of
+    // bug where a kill between an in-memory mutation (e.g.
+    // expandCollection) and the next persistState() call would leave
+    // the executor's persisted state behind. The 22 manual
+    // persistState() calls scattered through this file remain as
+    // belt-and-suspenders but new mutation sites no longer have to
+    // remember to persist.
+    this.executor.setOnMutation(() => this.persistState());
   }
 
   /**
@@ -1710,6 +1720,9 @@ export class ExecutorAgent extends TypedEventEmitter {
           this.config.project = project;
           if (project.executorState) {
             this.executor = DependencyGraphExecutor.fromState(project.executorState, this.config.template);
+            // Re-wire the persistence callback on the freshly rebuilt
+            // executor — `fromState` returns a new instance.
+            this.executor.setOnMutation(() => this.persistState());
           }
         }
         // Reload timeline
