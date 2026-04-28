@@ -40,9 +40,6 @@ import {
   transitionToNextPhase,
   updateCharacter,
   updateSetting,
-  updateCharacterApproval,
-  updateSettingApproval,
-  updateSceneApproval,
   updateScene,
   setProjectInputType,
   updateContentStatus,
@@ -802,44 +799,6 @@ export const updateProjectTool: ToolDefinition = createTool(
           return { status: 'success', message: `Character "${name}" updated` };
         }
 
-        case 'update_character_approval': {
-          const name = data['name'] as string;
-          const approvalStatus = data['status'] as ItemApprovalStatus;
-          const approvalType = (data['approval_type'] as 'content' | 'image') || 'content';
-          if (!name || !approvalStatus) {
-            return {
-              status: 'error',
-              error: 'name and status are required for update_character_approval',
-            };
-          }
-          if (!projectExists()) {
-            return { status: 'error', error: 'No project found' };
-          }
-          // Also update character with artifact IDs if provided
-          const artifactUpdates: Partial<CharacterData> = {};
-          if (data['contentArtifactId']) {
-            artifactUpdates.contentArtifactId = data['contentArtifactId'] as string;
-          }
-          if (data['referenceImageId']) {
-            artifactUpdates.referenceImageId = data['referenceImageId'] as string;
-          }
-          if (data['referenceImagePath']) {
-            artifactUpdates.referenceImagePath = data['referenceImagePath'] as string;
-          }
-          if (Object.keys(artifactUpdates).length > 0) {
-            updateCharacter(name, artifactUpdates);
-          }
-          const success = updateCharacterApproval(name, approvalStatus, approvalType);
-          if (!success) {
-            return { status: 'error', error: `Character "${name}" not found` };
-          }
-          const typeLabel = approvalType === 'image' ? 'reference image' : 'content';
-          return {
-            status: 'success',
-            message: `Character "${name}" ${typeLabel} approval updated to ${approvalStatus}`,
-          };
-        }
-
         case 'add_setting': {
           const name = data['name'] as string;
           if (!name) {
@@ -872,44 +831,6 @@ export const updateProjectTool: ToolDefinition = createTool(
             return { status: 'error', error: `Setting "${name}" not found` };
           }
           return { status: 'success', message: `Setting "${name}" updated` };
-        }
-
-        case 'update_setting_approval': {
-          const name = data['name'] as string;
-          const approvalStatus = data['status'] as ItemApprovalStatus;
-          const approvalType = (data['approval_type'] as 'content' | 'image') || 'content';
-          if (!name || !approvalStatus) {
-            return {
-              status: 'error',
-              error: 'name and status are required for update_setting_approval',
-            };
-          }
-          if (!projectExists()) {
-            return { status: 'error', error: 'No project found' };
-          }
-          // Also update setting with artifact IDs if provided
-          const artifactUpdates: Partial<SettingData> = {};
-          if (data['contentArtifactId']) {
-            artifactUpdates.contentArtifactId = data['contentArtifactId'] as string;
-          }
-          if (data['referenceImageId']) {
-            artifactUpdates.referenceImageId = data['referenceImageId'] as string;
-          }
-          if (data['referenceImagePath']) {
-            artifactUpdates.referenceImagePath = data['referenceImagePath'] as string;
-          }
-          if (Object.keys(artifactUpdates).length > 0) {
-            updateSetting(name, artifactUpdates);
-          }
-          const success = updateSettingApproval(name, approvalStatus, approvalType);
-          if (!success) {
-            return { status: 'error', error: `Setting "${name}" not found` };
-          }
-          const typeLabel = approvalType === 'image' ? 'reference image' : 'content';
-          return {
-            status: 'success',
-            message: `Setting "${name}" ${typeLabel} approval updated to ${approvalStatus}`,
-          };
         }
 
         case 'add_scene': {
@@ -954,45 +875,6 @@ export const updateProjectTool: ToolDefinition = createTool(
           }
 
           return { status: 'success', message: `Scene ${sceneRef.sceneNumber} reference added` };
-        }
-
-        case 'update_scene_approval': {
-          const sceneNumber = data['scene_number'] as number;
-          const approvalType = data['approval_type'] as 'content' | 'image' | 'video';
-          const approvalStatus = data['status'] as ItemApprovalStatus;
-          if (sceneNumber === undefined || !approvalType || !approvalStatus) {
-            return {
-              status: 'error',
-              error:
-                'scene_number, approval_type, and status are required for update_scene_approval',
-            };
-          }
-          if (!projectExists()) {
-            return { status: 'error', error: 'No project found' };
-          }
-          // Update scene with artifact/prompt info if provided
-          const sceneUpdates: Partial<SceneRef> = {};
-          if (data['artifactId']) {
-            if (approvalType === 'image') {
-              sceneUpdates.imageArtifactId = data['artifactId'] as string;
-            } else if (approvalType === 'video') {
-              sceneUpdates.videoArtifactId = data['artifactId'] as string;
-            }
-          }
-          if (data['prompt']) {
-            sceneUpdates.imagePrompt = data['prompt'] as string;
-          }
-          if (Object.keys(sceneUpdates).length > 0) {
-            updateScene(sceneNumber, sceneUpdates);
-          }
-          const success = updateSceneApproval(sceneNumber, approvalType, approvalStatus);
-          if (!success) {
-            return { status: 'error', error: `Scene ${sceneNumber} not found` };
-          }
-          return {
-            status: 'success',
-            message: `Scene ${sceneNumber} ${approvalType} approval updated to ${approvalStatus}`,
-          };
         }
 
         case 'add_asset': {

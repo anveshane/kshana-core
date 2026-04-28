@@ -1955,44 +1955,6 @@ export function updateCharacter(
  * Update a character's approval status.
  * @param approvalType - 'content' for description approval (CHARACTERS_SETTINGS phase), 'image' for reference image approval (CHARACTER_SETTING_IMAGES phase)
  */
-export function updateCharacterApproval(
-  name: string,
-  status: ItemApprovalStatus,
-  approvalType: 'content' | 'image' = 'content',
-  feedback?: string,
-  basePath: string = process.cwd()
-): CharacterData | null {
-  const project = loadProject(basePath);
-  if (!project) return null;
-
-  const index = project.characters.findIndex(c => c.name === name);
-  if (index < 0) return null;
-
-  const character = project.characters[index];
-  if (!character) return null;
-
-  if (approvalType === 'image') {
-    // Update reference image approval status
-    character.referenceImageApprovalStatus = status;
-    if (status === 'approved') {
-      character.referenceImageApprovedAt = Date.now();
-    }
-  } else {
-    // Update content approval status
-    character.approvalStatus = status;
-    if (status === 'approved') {
-      character.approvedAt = Date.now();
-    }
-  }
-
-  if (status === 'regenerating') {
-    character.regenerationCount++;
-  }
-
-  saveProject(project, basePath);
-  return character;
-}
-
 /**
  * Load character markdown from characters/[name].md.
  * Returns the raw markdown content (parsing not needed for index-only approach).
@@ -2101,44 +2063,6 @@ export function updateSetting(
  * Update a setting's approval status.
  * @param approvalType - 'content' for description approval (CHARACTERS_SETTINGS phase), 'image' for reference image approval (CHARACTER_SETTING_IMAGES phase)
  */
-export function updateSettingApproval(
-  name: string,
-  status: ItemApprovalStatus,
-  approvalType: 'content' | 'image' = 'content',
-  feedback?: string,
-  basePath: string = process.cwd()
-): SettingData | null {
-  const project = loadProject(basePath);
-  if (!project) return null;
-
-  const index = project.settings.findIndex(s => s.name === name);
-  if (index < 0) return null;
-
-  const setting = project.settings[index];
-  if (!setting) return null;
-
-  if (approvalType === 'image') {
-    // Update reference image approval status
-    setting.referenceImageApprovalStatus = status;
-    if (status === 'approved') {
-      setting.referenceImageApprovedAt = Date.now();
-    }
-  } else {
-    // Update content approval status
-    setting.approvalStatus = status;
-    if (status === 'approved') {
-      setting.approvedAt = Date.now();
-    }
-  }
-
-  if (status === 'regenerating') {
-    setting.regenerationCount++;
-  }
-
-  saveProject(project, basePath);
-  return setting;
-}
-
 /**
  * Load setting markdown from settings/[name].md.
  * Returns the raw markdown content.
@@ -2240,54 +2164,6 @@ export function updateScene(
 /**
  * Update a scene's approval status for a specific phase.
  */
-export function updateSceneApproval(
-  sceneNumber: number,
-  phase: 'content' | 'image' | 'video',
-  status: ItemApprovalStatus,
-  feedback?: string,
-  basePath: string = process.cwd()
-): SceneRef | null {
-  const project = loadProject(basePath);
-  if (!project) return null;
-
-  const index = project.scenes.findIndex(s => s.sceneNumber === sceneNumber);
-  if (index < 0) return null;
-
-  const scene = project.scenes[index];
-  if (!scene) return null;
-
-  switch (phase) {
-    case 'content':
-      scene.contentApprovalStatus = status;
-      if (status === 'approved') {
-        scene.contentApprovedAt = Date.now();
-      }
-      break;
-    case 'image':
-      scene.imageApprovalStatus = status;
-      if (status === 'approved') {
-        scene.imageApprovedAt = Date.now();
-      }
-      break;
-    case 'video':
-      scene.videoApprovalStatus = status;
-      if (status === 'approved') {
-        scene.videoApprovedAt = Date.now();
-      }
-      break;
-  }
-
-  if (status === 'regenerating') {
-    scene.regenerationCount++;
-  }
-  if (feedback) {
-    scene.feedback = feedback;
-  }
-
-  saveProject(project, basePath);
-  return scene;
-}
-
 /**
  * Add an asset to the manifest.
  */
@@ -3350,69 +3226,6 @@ export function loadVideoPrompt(
 /**
  * Update the image prompt approval status for a character, setting, or scene.
  */
-export function updateImagePromptApproval(
-  type: PromptType,
-  name: string,
-  status: ItemApprovalStatus,
-  basePath: string = process.cwd()
-): boolean {
-  const project = loadProject(basePath);
-  if (!project) return false;
-
-  const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-
-  if (type === 'character') {
-    const character = project.characters.find(
-      c => c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
-    );
-    if (character) {
-      character.imagePromptApprovalStatus = status;
-      saveProject(project, basePath);
-      return true;
-    }
-  } else if (type === 'setting') {
-    const setting = project.settings.find(
-      s => s.name.toLowerCase().replace(/[^a-z0-9]+/g, '-') === safeName
-    );
-    if (setting) {
-      setting.imagePromptApprovalStatus = status;
-      saveProject(project, basePath);
-      return true;
-    }
-  } else if (type === 'scene') {
-    const sceneNumber = parseInt(name, 10);
-    const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
-    if (scene) {
-      scene.imagePromptApprovalStatus = status;
-      saveProject(project, basePath);
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Update the video prompt approval status for a scene.
- */
-export function updateVideoPromptApproval(
-  sceneNumber: number,
-  status: ItemApprovalStatus,
-  basePath: string = process.cwd()
-): boolean {
-  const project = loadProject(basePath);
-  if (!project) return false;
-
-  const scene = project.scenes.find(s => s.sceneNumber === sceneNumber);
-  if (scene) {
-    scene.videoPromptApprovalStatus = status;
-    saveProject(project, basePath);
-    return true;
-  }
-
-  return false;
-}
-
 // ============================================================================
 // Todo Persistence Functions
 // ============================================================================
