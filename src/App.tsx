@@ -7,12 +7,9 @@ import { AgentView } from './components/AgentView.js';
 import { UnifiedInput, type InputMode } from './components/UnifiedInput.js';
 import { Banner } from './components/Banner.js';
 import { useAgent } from './hooks/useAgent.js';
-import { createDefaultToolRegistry } from './core/tools/index.js';
 import {
   loadProject,
   createProject,
-  loadProjectFilesAsContexts,
-  createAgentForProject,
   createExecutorAgent,
   type ProjectStyle,
   // Template system imports
@@ -145,44 +142,31 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
     }
   }, [taskType, started]);
 
-  // Load project files into context store when in video mode with existing project
-  // This ensures $story, $plot, etc. are available for fetch_context calls
-  const contextsLoadedRef = React.useRef(false);
-  React.useEffect(() => {
-    if (taskType === 'video' && existingProject && !contextsLoadedRef.current) {
-      contextsLoadedRef.current = true;
-      loadProjectFilesAsContexts();
-    }
-  }, [taskType, existingProject]);
+  // Legacy `loadProjectFilesAsContexts()` call removed — the
+  // ExecutorAgent reads project files via the dependency graph,
+  // not via a parallel `contextStore`. This effect was a no-op
+  // on the modern path.
 
-  // Create tools/prompt for generic mode, or an executor agent for video mode
+  // Build the ExecutorAgent for the project. Video mode is the only
+  // mode now — the legacy `'generic'` task type and its sibling
+  // GenericAgent are gone. `tools` and `customPrompt` are passed
+  // along as empty/undefined for useAgent compatibility but no
+  // longer load-bearing (the agent is the executor).
   const { tools, customPrompt, executorAgent } = React.useMemo(() => {
-    if (taskType === 'video') {
-      // Create ExecutorAgent for video projects — deterministic dependency graph execution
-      const agent = createExecutorAgent({
-        templateId: selectedTemplateId,
-        style: selectedStyle,
-        duration: selectedDuration,
-        llmConfig: llmConfig!,
-        targetArtifacts: ['final_video'],
-        goalDescription: customProjectDescription ?? 'Create a video project',
-      });
-      // Still need tools for generic fallback; executor doesn't use them
-      const result = createAgentForProject({
-        templateId: selectedTemplateId,
-        style: selectedStyle,
-        duration: selectedDuration,
-        llmConfig: llmConfig!,
-        customProjectDescription,
-      });
-      return { tools: result.tools, customPrompt: result.customPrompt, executorAgent: agent };
-    }
+    const agent = createExecutorAgent({
+      templateId: selectedTemplateId,
+      style: selectedStyle,
+      duration: selectedDuration,
+      llmConfig: llmConfig!,
+      targetArtifacts: ['final_video'],
+      goalDescription: customProjectDescription ?? 'Create a video project',
+    });
     return {
-      tools: createDefaultToolRegistry().getAll(),
+      tools: new Map<string, never>(),
       customPrompt: agentConfig?.customPrompt,
-      executorAgent: undefined,
+      executorAgent: agent,
     };
-  }, [taskType, agentConfig?.customPrompt, selectedTemplateId, selectedStyle, selectedDuration, customProjectDescription, llmConfig]);
+  }, [agentConfig?.customPrompt, selectedTemplateId, selectedStyle, selectedDuration, customProjectDescription, llmConfig]);
 
   // Compute effective agent name based on task type
   const agentName = agentConfig?.name ?? (taskType === 'video' ? 'kshana-video' : 'kshana-ink');
