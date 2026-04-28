@@ -6533,7 +6533,20 @@ Examples of common failure modes to avoid:
         return null;
       }
 
-      this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex + 1}/${chunks.length} (${chunkShots.length} shots, ${chunk.totalFrames} frames)`);
+      this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex + 1}/${chunks.length} (${chunkShots.length} shots, ${chunk.totalFrames} frames, ~${Math.round(chunk.totalFrames * 1.4 / 60)}min expected)`);
+      // Throttled progress logging so the user can see the chunk
+      // render is alive during its 10-25 minute window. Without this,
+      // executor.log goes silent between "uploaded N first frames"
+      // and the eventual completion — easy to mistake for a hang.
+      let lastProgressLog = 0;
+      const renderStart = Date.now();
+      const onProgress = (pct: number, msg: string) => {
+        const now = Date.now();
+        if (now - lastProgressLog < 15000) return;  // throttle to every 15s
+        lastProgressLog = now;
+        const elapsedSec = Math.round((now - renderStart) / 1000);
+        this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex} [${pct.toFixed(0)}% / ${elapsedSec}s elapsed] ${msg}`);
+      };
       let result: SceneBundleResult;
       try {
         result = await renderSceneBundle({
@@ -6546,6 +6559,7 @@ Examples of common failure modes to avoid:
           width,
           height,
           log: (m) => this.log(`  prompt_relay: ${m}`),
+          onProgress,
           chunkIndex: chunks.length > 1 ? chunk.chunkIndex : undefined,
         });
       } catch (err) {
