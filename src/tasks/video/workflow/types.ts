@@ -631,6 +631,23 @@ export interface ProjectFile {
   /** Persisted user goal for session resumption */
   goal?: PersistedGoal;
 
+  /**
+   * Dependency-graph executor state — the canonical source of truth
+   * for what the executor has run and what's left to run. Written by
+   * `ExecutorAgent.persistState()` after every public mutation on
+   * the underlying `DependencyGraphExecutor`.
+   *
+   * The legacy flat fields above (`characters[]`, `settings[]`,
+   * `scenes[]`, `phases{}`, `content{}`, `files[]`, `artifacts{}`)
+   * are scheduled for removal — `executorState.nodes` already
+   * encodes everything they hold. Until those PRs land, both
+   * representations are written.
+   *
+   * Typed as `unknown` here to keep this types module independent
+   * of the planner; readers narrow via the
+   * `src/core/planner/projectView.ts` helpers.
+   */
+  executorState?: unknown;
 }
 
 /**
