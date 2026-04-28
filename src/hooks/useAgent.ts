@@ -5,7 +5,7 @@
 import React from 'react';
 import * as fs from 'fs';
 import * as path from 'path';
-import { GenericAgent, type AgentConfig, type GenericAgentResult } from '../core/agent/index.js';
+import { type AgentConfig, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig, type ToolDefinition } from '../core/llm/index.js';
 import type { TypedEventEmitter } from '../events/EventEmitter.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -676,7 +676,10 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
 
   // Create agent
   const createAgent = React.useCallback(() => {
-    const agent: AgentLike = prebuiltAgent ?? new GenericAgent(tools, getLLM(), agentConfig);
+    if (!prebuiltAgent) {
+      throw new Error('useAgent now requires `prebuiltAgent` (an ExecutorAgent). The legacy GenericAgent fallback was removed in the graph-as-source-of-truth refactor.');
+    }
+    const agent: AgentLike = prebuiltAgent;
 
     // Subscribe to events
     agent.on('agent_status', event => {

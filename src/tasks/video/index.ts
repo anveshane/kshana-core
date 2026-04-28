@@ -5,7 +5,6 @@
  */
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
-import { GenericAgent } from '../../core/agent/index.js';
 import { LLMClient, type LLMClientConfig } from '../../core/llm/index.js';
 import { ToolRegistry, createDefaultToolRegistry } from '../../core/tools/index.js';
 import { registerComplexTool } from '../../core/tools/ToolCategories.js';
@@ -116,40 +115,6 @@ export function createVideoToolRegistry(): ToolRegistry {
   }
 
   return registry;
-}
-
-/**
- * Create a GenericAgent configured for video creation tasks.
- * This injects the video-specific prompt and tools into the generic agent.
- */
-export function createVideoAgent(config: VideoAgentConfig): GenericAgent {
-  const {
-    llmConfig,
-    maxIterations = 100,
-    includeCharacterGuidelines,
-    includeStoryboardGuidelines,
-  } = config;
-
-  // Create tool registry with video tools
-  const registry = createVideoToolRegistry();
-
-  // Create LLM client
-  const llm = new LLMClient(llmConfig);
-
-  // Get the video-specific prompt
-  const customPrompt = getVideoCreationPrompt({
-    includeCharacterGuidelines,
-    includeStoryboardGuidelines,
-  });
-
-  // Create the generic agent with video customization
-  const agent = new GenericAgent(registry.getAll(), llm, {
-    maxIterations,
-    customPrompt,
-    name: 'video-agent',
-  });
-
-  return agent;
 }
 
 /**
@@ -345,136 +310,6 @@ export function loadProjectFilesAsContexts(_basePath: string = process.cwd()): s
   return [];
 }
 
-/**
- * Create a GenericAgent configured for workflow-based video creation.
- * Uses state-based approach with project files in .kshana/ directory.
- */
-export function createWorkflowVideoAgent(config: WorkflowVideoAgentConfig): GenericAgent {
-  const { llmConfig, maxIterations = 100, originalInput = '', basePath = process.cwd() } = config;
-
-  // Initialize or load project
-  const project = getOrCreateProject(originalInput, undefined, basePath);
-  const currentPhase = getCurrentPhase(project);
-  const phaseConfig = PHASE_CONFIGS[currentPhase as WorkflowPhase];
-
-  // Load existing project files into context store
-  // This makes them available to dispatch_agent and dispatch_content_agent
-  const loadedContexts = loadProjectFilesAsContexts(basePath);
-
-  // Create tool registry with workflow tools
-  const registry = createWorkflowToolRegistry();
-
-  // Create LLM client
-  const llm = new LLMClient(llmConfig);
-
-  // Build custom prompt with workflow context (include loaded contexts info)
-  const customPrompt = buildWorkflowAgentPrompt(project, currentPhase as WorkflowPhase, loadedContexts);
-
-  // Create the generic agent with workflow customization
-  const agent = new GenericAgent(registry.getAll(), llm, {
-    maxIterations,
-    customPrompt,
-    name: `workflow-video-agent-${currentPhase}`,
-  });
-
-  return agent;
-}
-
-/**
- * Build the custom prompt for the workflow agent.
- * Uses the skill-based architecture - the orchestrator prompt handles workflow logic.
- * Includes full project context so the LLM knows the project type, style, and user's intent.
- */
-function buildWorkflowAgentPrompt(
-  project: ReturnType<typeof loadProject>,
-  currentPhase: WorkflowPhase,
-  loadedContexts: string[] = []
-): string {
-  const phaseConfig = PHASE_CONFIGS[currentPhase];
-
-  // Get style and input type display names
-  const styleDisplay = project?.style
-    ? (STYLE_CONFIGS[project.style]?.displayName ?? project.style)
-    : 'Not set';
-  const inputTypeDisplay = project?.inputType
-    ? (INPUT_TYPE_CONFIGS[project.inputType]?.displayName ?? project.inputType)
-    : 'Not set';
-
-  // Build loaded contexts section
-  let loadedContextsSection = '';
-  if (loadedContexts.length > 0) {
-    loadedContextsSection = `
-## Available Contexts
-The following project files have been loaded as contexts:
-${loadedContexts.map(c => `- ${c}`).join('\n')}
-`;
-  }
-
-  // Build project type description based on template/workflow
-  const projectTypeDescription = `
-## Project Type: Narrative Story Video
-This is a **Narrative Story Video** project. The user wants to create a video from a story or narrative content.
-
-**Visual Style**: ${styleDisplay}
-All generated images should follow this visual style.
-
-**Input Type**: ${inputTypeDisplay}
-${project?.inputType === 'story' ? 'The user has provided complete story/chapter content. Extract and organize this content.' : 'The user has provided a story idea. Develop it into full content.'}
-
-## What This Means For You
-When the user provides content (story, chapter, text):
-1. **DO NOT ask what they want to do** - they want to create a video from this content
-2. **Process the content** according to the current phase
-3. **Follow the workflow**: story → characters/settings → scenes → images → video
-
-The user has already chosen "Narrative Story Video" and "${styleDisplay}" style. Honor these choices.
-`;
-
-  // Build sub-agent info section
-  const subAgentSection = `
-## Available Sub-Agents
-
-You can delegate work using these dispatch tools:
-
-### dispatch_explore(query)
-Research agent that reads documentation and returns focused summaries.
-Use for: Understanding workflows, finding patterns, checking documentation.
-
-### dispatch_skill(skill_name, task)
-Specialized skill agents for creative work.
-
-| skill_name | Use For |
-|------------|---------|
-| content-writing | Plots, stories, characters, settings, scenes, narration |
-| image-prompting | Visual descriptions for image generation |
-| video-direction | Motion/camera descriptions for video clips |
-| research-synthesis | Documentary research and fact-gathering |
-| narration-scripting | Voice-over scripts with delivery marks |
-
-### Direct Tools (no dispatch needed)
-- \`read_project\` - Read project.json with file summaries
-- \`update_project\` - Update project state, phase transitions
-- \`AskUserQuestion\` - Ask user for input with options
-- \`generate_content\` - Generate content (auto-injects context)
-`;
-
-  // Build project state section
-  const projectSection = `
-${projectTypeDescription}
-
-## Current Project State
-- **Project ID**: ${project?.id ?? 'new'}
-- **Project Title**: ${project?.title || '(not set)'}
-- **Visual Style**: ${styleDisplay}
-- **Input Type**: ${inputTypeDisplay}
-- **Current Phase**: ${phaseConfig.displayName}
-${phaseConfig.isExpensive ? '\n**Note**: This phase involves expensive operations. Get user approval before generation.' : ''}
-${loadedContextsSection}
-${subAgentSection}
-`;
-
-  return projectSection.trim();
-}
 
 /**
  * Get a list of all workflow tool names.
@@ -571,89 +406,9 @@ export function detectVideoTemplate(content: string): TemplateDetectionResult | 
 }
 
 /**
- * Create a GenericAgent configured for template-based video creation.
- * This is the v3.0 template-aware workflow.
- */
-export async function createTemplateVideoAgent(config: TemplateVideoAgentConfig): Promise<{
-  agent: GenericAgent;
-  projectManager: GenericProjectManager;
-  template: VideoTemplate;
-}> {
-  const {
-    llmConfig,
-    maxIterations = 100,
-    templateId,
-    originalInput = '',
-    title = 'Untitled Project',
-    style,
-    basePath = process.cwd(),
-  } = config;
-
-  // Initialize templates
-  initializeTemplates();
-
-  // Determine template
-  let finalTemplateId = templateId;
-  let inputTypeId: string | undefined;
-
-  if (!finalTemplateId && originalInput) {
-    // Auto-detect template
-    const detection = detectTemplate(originalInput);
-    if (detection) {
-      finalTemplateId = detection.templateId;
-      inputTypeId = detection.inputTypeId;
-    }
-  }
-
-  // Default to narrative if no template detected
-  finalTemplateId = finalTemplateId || TEMPLATE_IDS.NARRATIVE;
-  const template = getTemplateOrThrow(finalTemplateId);
-
-  // Create project manager
-  const projectManager = createProjectManager(basePath);
-
-  // Create or load project
-  let project;
-  if (await projectManager.projectExists()) {
-    project = await projectManager.loadProject();
-  } else {
-    project = await projectManager.createProject({
-      title,
-      templateId: finalTemplateId,
-      style: style || template.defaultStyle,
-      inputType: inputTypeId,
-      inputContent: originalInput,
-    });
-  }
-
-  // Get current phase info
-  const currentPhase = projectManager.getCurrentPhase();
-  const phaseInfo = template.phases?.find((p: { id: string }) => p.id === currentPhase);
-
-  // Load contexts from disk
-  const contexts = loadProjectFilesAsContexts(basePath);
-
-  // Create tool registry
-  const registry = createWorkflowToolRegistry();
-
-  // Create LLM client
-  const llm = new LLMClient(llmConfig);
-
-  // Build template-aware prompt
-  const customPrompt = buildTemplateAgentPrompt(template, project, phaseInfo, contexts);
-
-  // Create the agent
-  const agent = new GenericAgent(registry.getAll(), llm, {
-    maxIterations,
-    customPrompt,
-    name: `template-video-agent-${finalTemplateId}`,
-  });
-
-  return { agent, projectManager, template };
-}
-
-/**
- * Build the custom prompt for a template-based agent.
+ * @deprecated Removed in graph-as-source-of-truth refactor. Stub
+ * kept so old callers fail loudly instead of silently building an
+ * agent that no longer exists.
  */
 function buildTemplateAgentPrompt(
   template: VideoTemplate,
