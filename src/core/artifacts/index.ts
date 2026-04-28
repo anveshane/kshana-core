@@ -1,10 +1,9 @@
 /**
- * Artifact Engine
- *
- * This module provides the core artifact management functionality:
- * - ArtifactGraph: Dependency resolution and graph operations
- * - ArtifactResolver: Intent parsing and action resolution
- * - ArtifactManager: CRUD operations for artifacts
+ * Artifact graph helper used by the dependency-graph executor for
+ * dependency traversal during planning. The fine-grained
+ * ArtifactManager / ArtifactResolver lifecycle layer was removed in
+ * the graph-as-source-of-truth refactor (PR6) — `executorState.nodes`
+ * is the only artifact registry now.
  */
 
 export { ArtifactGraph } from './ArtifactGraph.js';
@@ -17,17 +16,3 @@ export type {
   CreationPlan,
   CreationStep,
 } from './ArtifactGraph.js';
-
-export { ArtifactResolver } from './ArtifactResolver.js';
-export type {
-  UserIntent,
-  NextActionRecommendation,
-} from './ArtifactResolver.js';
-
-export { ArtifactManager } from './ArtifactManager.js';
-export type {
-  CreateArtifactOptions,
-  UpdateArtifactOptions,
-  ArtifactOperationResult,
-  ArtifactQuery,
-} from './ArtifactManager.js';

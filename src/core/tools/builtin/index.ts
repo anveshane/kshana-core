@@ -41,21 +41,10 @@ export {
 } from './plannerTools.js';
 export type { PlannerToolContext } from './plannerTools.js';
 
-// Artifact tools - fine-grained control
-export {
-  regenerateArtifactTool,
-  replaceArtifactTool,
-  editPromptTool,
-  comparePromptsTool,
-  restorePromptTool,
-  jumpToArtifactTool,
-  listArtifactsTool,
-  getArtifactStatusTool,
-} from './artifactTools.js';
-
-// External asset tools
-export {
-  uploadExternalAssetTool,
-  listExternalAssetsTool,
-  deleteExternalAssetTool,
-} from './assetTools.js';
+// Artifact tools (regenerateArtifact / replaceArtifact / editPrompt /
+// comparePrompts / restorePrompt / jumpToArtifact / listArtifacts /
+// getArtifactStatus / uploadExternalAsset / listExternalAssets /
+// deleteExternalAsset) deleted in the graph-as-source-of-truth
+// refactor — they were fine-grained controls on the legacy
+// `project.artifacts{}` registry which the dependency-graph executor
+// now subsumes via `executorState.nodes`.

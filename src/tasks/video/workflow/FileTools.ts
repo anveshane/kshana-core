@@ -5,21 +5,6 @@
 
 import { createTool } from '../../../core/tools/index.js';
 import type { ToolDefinition } from '../../../core/llm/index.js';
-import {
-  regenerateArtifactTool,
-  replaceArtifactTool,
-  editPromptTool,
-  comparePromptsTool,
-  restorePromptTool,
-  jumpToArtifactTool,
-  listArtifactsTool,
-  getArtifactStatusTool,
-} from '../../../core/tools/builtin/artifactTools.js';
-import {
-  uploadExternalAssetTool,
-  listExternalAssetsTool,
-  deleteExternalAssetTool,
-} from '../../../core/tools/builtin/assetTools.js';
 import { getPhaseLogger } from '../../../utils/phaseLogger.js';
 import {
   loadProject,
@@ -506,21 +491,3 @@ export function getAllFileTools(): ToolDefinition[] {
   return [listProjectFilesTool, readFileTool, importFileTool, readProjectTool];
 }
 
-/**
- * Get all artifact tools for fine-grained control.
- */
-export function getAllArtifactTools(): ToolDefinition[] {
-  return [
-    regenerateArtifactTool,
-    replaceArtifactTool,
-    editPromptTool,
-    comparePromptsTool,
-    restorePromptTool,
-    jumpToArtifactTool,
-    listArtifactsTool,
-    getArtifactStatusTool,
-    uploadExternalAssetTool,
-    listExternalAssetsTool,
-    deleteExternalAssetTool,
-  ];
-}

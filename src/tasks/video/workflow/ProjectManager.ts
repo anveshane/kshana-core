@@ -48,7 +48,9 @@ import {
   createDefaultSceneRef,
 } from './types.js';
 import { generateProjectTitle, contextStore } from '../../../core/context/index.js';
-import { initializeArtifactsFromFiles, createArtifactFromFile } from './ArtifactManager.js';
+// Legacy `initializeArtifactsFromFiles` / `createArtifactFromFile`
+// removed with the artifact tools layer. Project state is now the
+// dependency-graph executor's `executorState`.
 import { TemplateRegistry } from '../../../core/templates/TemplateRegistry.js';
 import type { PhaseDefinition } from '../../../core/templates/types.js';
 import { getActiveProjectDir, setActiveProjectDir } from './activeProject.js';
@@ -647,13 +649,12 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
       return null;
     }
 
-    // Legacy `syncContentRegistry` + `recomputeNarrativePhaseState`
-    // calls removed — both rebuilt project.content / project.phases /
-    // project.characters from disk on every load. The dependency
-    // graph (project.executorState) is the source of truth now and
-    // doesn't need this rehydration step.
-    initializeArtifactsFromFiles(project, basePath);
-
+    // Legacy `syncContentRegistry` + `recomputeNarrativePhaseState` +
+    // `initializeArtifactsFromFiles` calls removed — all three
+    // rebuilt parallel state (project.content / project.phases /
+    // project.characters / project.artifacts) from disk on every
+    // load. The dependency graph (project.executorState) is the
+    // source of truth now and doesn't need this rehydration step.
     return project as ProjectFile;
   } catch {
     return null;

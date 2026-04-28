@@ -23,10 +23,12 @@ import {
   getArtifactFilePath,
 } from '../../../core/templates/types.js';
 import { TemplateRegistry } from '../../../core/templates/TemplateRegistry.js';
+// ArtifactManager + ArtifactResolver removed in PR6 — they were the
+// fine-grained artifact lifecycle layer that the dependency-graph
+// executor (DependencyGraphExecutor + executorState.nodes) replaces.
+// ArtifactGraph kept because the executor still uses it for
+// dependency traversal.
 import { ArtifactGraph } from '../../../core/artifacts/ArtifactGraph.js';
-import type { CreateArtifactOptions } from '../../../core/artifacts/ArtifactManager.js';
-import { ArtifactManager } from '../../../core/artifacts/ArtifactManager.js';
-import { ArtifactResolver } from '../../../core/artifacts/ArtifactResolver.js';
 import { getActiveProjectDir } from './activeProject.js';
 import { getSessionFs } from '../../../core/fs/index.js';
 
@@ -70,8 +72,6 @@ export class GenericProjectManager {
   private project: GenericProjectFile | null = null;
   private template: VideoTemplate | null = null;
   private graph: ArtifactGraph | null = null;
-  private artifactManager: ArtifactManager | null = null;
-  private resolver: ArtifactResolver | null = null;
 
   constructor(basePath: string) {
     const activeProjectDir = getActiveProjectDir();
@@ -240,21 +240,10 @@ export class GenericProjectManager {
   }
 
   /**
-   * Get the artifact manager
-   */
-  getArtifactManager(): ArtifactManager | null {
-    return this.artifactManager;
-  }
-
-  /**
-   * Get the artifact resolver
-   */
-  getResolver(): ArtifactResolver | null {
-    return this.resolver;
-  }
-
-  /**
-   * Get the artifact graph
+   * Get the artifact graph (used by the dependency-graph executor
+   * for dep traversal). The legacy `getArtifactManager()` /
+   * `getResolver()` accessors were removed with the artifact
+   * lifecycle layer in PR6.
    */
   getGraph(): ArtifactGraph | null {
     return this.graph;
@@ -308,14 +297,13 @@ export class GenericProjectManager {
   }
 
   /**
-   * Initialize artifact managers
+   * Initialize the dependency-graph helper used for traversal during
+   * planning. The legacy ArtifactManager / ArtifactResolver pair was
+   * removed in PR6.
    */
   private initializeManagers(): void {
     if (!this.project || !this.template) return;
-
     this.graph = new ArtifactGraph(this.template);
-    this.artifactManager = new ArtifactManager(this.template, this.project, this.graph);
-    this.resolver = new ArtifactResolver(this.template, this.graph);
   }
 
   /**
@@ -356,120 +344,6 @@ export class GenericProjectManager {
     }
   }
 
-  // ==========================================================================
-  // ARTIFACT OPERATIONS
-  // ==========================================================================
-
-  /**
-   * Create an artifact
-   */
-  async createArtifact(
-    typeId: string,
-    options: CreateArtifactOptions
-  ): Promise<ArtifactInstance | null> {
-    if (!this.artifactManager) {
-      throw new Error('Project not loaded');
-    }
-
-    const result = this.artifactManager.create(typeId, options);
-    if (result.success && result.artifact) {
-      await this.saveProject();
-      return result.artifact;
-    }
-
-    throw new Error(result.error || 'Failed to create artifact');
-  }
-
-  /**
-   * Update an artifact
-   */
-  async updateArtifact(
-    instanceId: string,
-    updates: {
-      name?: string;
-      status?: ArtifactApprovalStatus;
-      content?: string;
-      assetPath?: string;
-      metadata?: Record<string, unknown>;
-    }
-  ): Promise<ArtifactInstance | null> {
-    if (!this.artifactManager) {
-      throw new Error('Project not loaded');
-    }
-
-    const result = this.artifactManager.update(instanceId, updates);
-    if (result.success && result.artifact) {
-      await this.saveProject();
-      return result.artifact;
-    }
-
-    throw new Error(result.error || 'Failed to update artifact');
-  }
-
-  /**
-   * Approve an artifact
-   */
-  async approveArtifact(instanceId: string): Promise<ArtifactInstance | null> {
-    if (!this.artifactManager) {
-      throw new Error('Project not loaded');
-    }
-
-    const result = this.artifactManager.approve(instanceId);
-    if (result.success && result.artifact) {
-      await this.saveProject();
-      return result.artifact;
-    }
-
-    throw new Error(result.error || 'Failed to approve artifact');
-  }
-
-  /**
-   * Reject an artifact
-   */
-  async rejectArtifact(instanceId: string): Promise<ArtifactInstance | null> {
-    if (!this.artifactManager) {
-      throw new Error('Project not loaded');
-    }
-
-    const result = this.artifactManager.reject(instanceId);
-    if (result.success && result.artifact) {
-      await this.saveProject();
-      return result.artifact;
-    }
-
-    throw new Error(result.error || 'Failed to reject artifact');
-  }
-
-  /**
-   * Delete an artifact
-   */
-  async deleteArtifact(instanceId: string, cascade: boolean = false): Promise<void> {
-    if (!this.artifactManager) {
-      throw new Error('Project not loaded');
-    }
-
-    const result = this.artifactManager.delete(instanceId, cascade);
-    if (result.success) {
-      await this.saveProject();
-      return;
-    }
-
-    throw new Error(result.error || 'Failed to delete artifact');
-  }
-
-  /**
-   * Get artifacts by type
-   */
-  getArtifactsByType(typeId: string): ArtifactInstance[] {
-    return this.artifactManager?.getByType(typeId) || [];
-  }
-
-  /**
-   * Get pending artifacts
-   */
-  getPendingArtifacts(): ArtifactInstance[] {
-    return this.artifactManager?.getPending() || [];
-  }
 
   // ==========================================================================
   // PHASE OPERATIONS
@@ -562,59 +436,12 @@ export class GenericProjectManager {
     const phase = this.template.phases.find((p: PhaseDefinition) => p.id === currentPhaseId);
     if (!phase) return false;
 
-    // Check all artifact types in this phase are complete
-    for (const typeId of phase.artifactTypes) {
-      if (!this.artifactManager?.isTypeComplete(typeId)) {
-        return false;
-      }
-    }
-
-    return true;
-  }
-
-  // ==========================================================================
-  // CONTEXT OPERATIONS
-  // ==========================================================================
-
-  /**
-   * Get context content by variable name
-   */
-  getContext(varName: string): string | undefined {
-    return this.artifactManager?.getContext(varName);
-  }
-
-  /**
-   * Set context content
-   */
-  async setContext(
-    varName: string,
-    content: string,
-    saveToFile?: string
-  ): Promise<void> {
-    if (!this.project) {
-      throw new Error('Project not loaded');
-    }
-
-    this.artifactManager?.setContext(varName, content);
-
-    if (saveToFile) {
-      const fullPath = path.join(this.projectPath, saveToFile);
-      await getSessionFs().writeFile(fullPath, content);
-      this.project.contextStore[varName] = {
-        content,
-        filePath: saveToFile,
-        updatedAt: Date.now(),
-      };
-    }
-
-    await this.saveProject();
-  }
-
-  /**
-   * Get all context for generating an artifact type
-   */
-  getContextForType(typeId: string): Record<string, string> {
-    return this.artifactManager?.getContextForType(typeId) || {};
+    // Legacy `artifactManager.isTypeComplete` removed in PR6 — phase
+    // completion is no longer derived from per-type artifact-instance
+    // scans. Returns false (conservative) for any caller that still
+    // hits this path; in practice nobody live calls this now.
+    void phase;
+    return false;
   }
 
   // ==========================================================================
@@ -749,55 +576,11 @@ export class GenericProjectManager {
   // STATUS & PROGRESS
   // ==========================================================================
 
-  /**
-   * Get project progress summary
-   */
-  getProgressSummary(): {
-    totalArtifactTypes: number;
-    completedTypes: number;
-    inProgressTypes: number;
-    pendingTypes: number;
-    currentPhase: string | undefined;
-    phaseProgress: Record<string, { status: string; completedAt?: number }>;
-  } | null {
-    if (!this.resolver || !this.project) {
-      return null;
-    }
-
-    const progress = this.resolver.getProgressSummary(this.project);
-    const phaseProgress: Record<string, { status: string; completedAt?: number }> = {};
-
-    if (this.project.phases) {
-      for (const [id, info] of Object.entries(this.project.phases) as [string, PhaseInfo][]) {
-        phaseProgress[id] = {
-          status: info.status,
-          completedAt: info.completedAt,
-        };
-      }
-    }
-
-    return {
-      ...progress,
-      currentPhase: this.project.currentPhase,
-      phaseProgress,
-    };
-  }
-
-  /**
-   * Get next recommended actions
-   */
-  getNextActions(): Array<{
-    action: string;
-    artifactType?: string;
-    description: string;
-    priority: number;
-  }> {
-    if (!this.resolver || !this.project) {
-      return [];
-    }
-
-    return this.resolver.getNextActions(this.project);
-  }
+  // `getProgressSummary()` and `getNextActions()` removed in PR6 with
+  // ArtifactResolver. The dependency-graph executor surfaces progress
+  // via `executor.getProgress()` and ready nodes via
+  // `executor.getNextReady()`; both are reachable from
+  // ExecutorAgent — no per-project-manager wrapper needed.
 
   // ==========================================================================
   // CHAPTER OPERATIONS
