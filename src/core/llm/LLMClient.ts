@@ -15,6 +15,7 @@ import type {
   LLMClientConfig,
 } from './types.js';
 import { getLLMLogger } from './LLMLogger.js';
+import { resolveOpenRouterProvider, type OpenRouterProviderPref } from './openrouterProvider.js';
 
 /**
  * Known context lengths for common model families.
@@ -434,7 +435,10 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
     // makes the final stream chunk's `usage` carry `cost`, `prompt_tokens_details.cached_tokens`,
     // and `cache_discount`. Harmless on other OpenAI-compatible endpoints (extra body
     // fields are ignored). See https://openrouter.ai/docs/use-cases/usage-accounting.
-    const request: OpenAI.ChatCompletionCreateParamsStreaming & { usage?: { include: boolean } } = {
+    const request: OpenAI.ChatCompletionCreateParamsStreaming & {
+      usage?: { include: boolean };
+      provider?: OpenRouterProviderPref;
+    } = {
       model: this.model,
       messages: this.convertMessages(messages),
       tools: tools ? this.convertTools(tools) : undefined,
@@ -448,6 +452,14 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
     }
     if (maxTokens) {
       request.max_tokens = maxTokens;
+    }
+    // Pin upstream providers for models that need it (today: DeepSeek
+    // family, where the default OpenRouter pool routes to slow/flaky
+    // upstreams that stall pipelines or return empty 0-char responses).
+    // Helper returns undefined when not on OpenRouter or no rules apply.
+    const providerPref = resolveOpenRouterProvider({ baseUrl: this.baseUrl, model: this.model });
+    if (providerPref) {
+      request.provider = providerPref;
     }
 
     // Total wall-clock timeout for the entire streaming call (including thinking)
