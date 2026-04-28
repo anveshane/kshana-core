@@ -180,33 +180,28 @@ describe('DependencyGraphExecutor.setOnMutation', () => {
 });
 
 describe('ExecutionNode.metadata — round-trip', () => {
-  it('persists a metadata bag (approval, regeneration count, name, summary, feedback) through getState/fromState', () => {
+  it('persists name + summary metadata through getState/fromState', () => {
     const executor = buildExecutor();
     executor.markStarted('plot');
     executor.markCompleted('plot', 'plot.md');
 
     // Mutate metadata directly on the node — the executor exposes a node
     // accessor; metadata is just a property on the ExecutionNode shape.
+    // Note: approval / regeneration / feedback fields are intentionally
+    // NOT in the ExecutionNodeMetadata shape; pi-agent owns the
+    // approval domain, not kshana-core. Don't reintroduce them here.
     const node = executor.getNode('plot')!;
     node.metadata = {
-      approvalStatus: 'approved',
-      approvedAt: 1234567890,
-      regenerationCount: 2,
-      feedback: 'looks good',
-      summary: 'a one-line plot summary',
       name: 'My Plot',
+      summary: 'a one-line plot summary',
     };
 
     const state = executor.getState();
     const restored = DependencyGraphExecutor.fromState(state, minimalTemplate());
     const restoredNode = restored.getNode('plot')!;
     expect(restoredNode.metadata).toEqual({
-      approvalStatus: 'approved',
-      approvedAt: 1234567890,
-      regenerationCount: 2,
-      feedback: 'looks good',
-      summary: 'a one-line plot summary',
       name: 'My Plot',
+      summary: 'a one-line plot summary',
     });
   });
 

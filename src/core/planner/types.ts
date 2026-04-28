@@ -352,14 +352,10 @@ export interface ExecutionNodeMetadata {
   name?: string;
   /** A 1-line summary surfaced in agent-context tools / UI. */
   summary?: string;
-  /** Approval lifecycle for the artifact this node produces. */
-  approvalStatus?: 'pending' | 'approved' | 'rejected' | 'regenerating';
-  approvedAt?: number;
-  /** How many times this node has been re-run after rejection. */
-  regenerationCount?: number;
-  /** Last user feedback captured on rejection — fed back into the next
-   *  generation prompt. */
-  feedback?: string;
+  // NOTE: approval / regeneration / feedback state is intentionally
+  // NOT modeled here. Approval lives in pi-agent (the external
+  // orchestrator); kshana-core just runs the executor. Don't
+  // reintroduce approval fields without explicit direction.
 }
 
 /**
