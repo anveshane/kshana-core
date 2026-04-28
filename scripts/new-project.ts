@@ -33,6 +33,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join, resolve } from 'path';
 import { setActiveProjectDir } from '../src/tasks/video/workflow/activeProject.js';
 import { createProject } from '../src/tasks/video/workflow/ProjectManager.js';
+import { initializeTemplates } from '../src/templates/index.js';
 
 interface Args {
   projectName: string;
@@ -151,6 +152,14 @@ export function resolveStyle(input: string): string | null {
 
 async function main() {
   const args = parseArgs();
+
+  // Populate the TemplateRegistry before createProject runs — without this
+  // the registry is empty, `TemplateRegistry.get('narrative')` returns
+  // undefined, the inputType classifier in ProjectManager.createProject
+  // never runs, and every project created via `pnpm new` silently
+  // defaults to inputType: 'idea' (which makes the LLM regenerate plot
+  // and story instead of using the source content as the script).
+  initializeTemplates();
 
   // Required: style + duration. No silent defaults.
   if (!args.style) {
