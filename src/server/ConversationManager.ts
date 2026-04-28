@@ -73,22 +73,6 @@ export interface ConversationEvents {
   onToolStreaming?: (sessionId: string, toolCallId: string, chunk: string, done: boolean, agentName?: string, toolName?: string, reset?: boolean) => void;
   /** Context window usage stats */
   onContextUsage?: (sessionId: string, data: { promptTokens: number; maxTokens: number; percentage: number; wasCompressed: boolean; iteration: number }) => void;
-  /** Neutral usage facts for external metering */
-  onUsageFact?: (sessionId: string, data: {
-    eventId: string;
-    kind: 'llm' | 'image_generation' | 'image_edit' | 'video_generation';
-    toolName?: string;
-    toolCallId?: string;
-    facts: {
-      promptTokens?: number;
-      completionTokens?: number;
-      totalTokens?: number;
-      imageCount?: number;
-      seconds?: number;
-      artifactId?: string;
-      filePath?: string;
-    };
-  }) => void;
   /** Workflow phase transition */
   onPhaseTransition?: (sessionId: string, data: { fromPhase: string; toPhase: string; displayName?: string; description?: string }) => void;
   /** Full timeline state update */
@@ -699,12 +683,6 @@ export class ConversationManager {
     if (events.onContextUsage) {
       agent.on('context_usage', (data) => {
         events.onContextUsage!(sessionId, data);
-      });
-    }
-
-    if (events.onUsageFact) {
-      agent.on('usage_fact', (data) => {
-        events.onUsageFact!(sessionId, data);
       });
     }
 

@@ -10,7 +10,7 @@
 import { nanoid } from 'nanoid';
 import * as fs from 'fs';
 import * as path from 'path';
-import { TypedEventEmitter, type UsageFactEvent } from '../../events/index.js';
+import { TypedEventEmitter } from '../../events/index.js';
 import type { LLMClient, Message, ToolCall, ToolDefinition, LLMResponse } from '../llm/index.js';
 import { buildRouterFromEnv, type LLMRouter, type LLMPurpose } from '../llm/index.js';
 import { ExpandableTodoManager, type ExpandableTodoItem } from '../todo/index.js';
@@ -721,115 +721,6 @@ export class GenericAgent extends TypedEventEmitter {
     this.analyticsSessionId = `${this.name}_${Date.now()}_${nanoid(6)}`;
   }
 
-  private emitLlmUsageFact(usage: {
-    promptTokens: number;
-    completionTokens: number;
-    totalTokens: number;
-  }): void {
-    this.emit({
-      type: 'usage_fact',
-      eventId: [
-        'llm',
-        this.analyticsSessionId,
-        this.iteration,
-        usage.promptTokens,
-        usage.completionTokens,
-        usage.totalTokens,
-      ].join(':'),
-      kind: 'llm',
-      facts: {
-        promptTokens: usage.promptTokens,
-        completionTokens: usage.completionTokens,
-        totalTokens: usage.totalTokens,
-      },
-    });
-  }
-
-  private emitToolUsageFact(toolCall: ToolCall, result: unknown): void {
-    const usageFact = this.buildToolUsageFact(toolCall, result);
-    if (usageFact) {
-      this.emit(usageFact);
-    }
-  }
-
-  private buildToolUsageFact(toolCall: ToolCall, result: unknown): UsageFactEvent | null {
-    if (!result || typeof result !== 'object') {
-      return null;
-    }
-
-    const resultObj = result as Record<string, unknown>;
-    if (resultObj['status'] !== 'completed') {
-      return null;
-    }
-
-    const artifactId =
-      typeof resultObj['artifact_id'] === 'string' ? resultObj['artifact_id'] : undefined;
-    const filePath =
-      typeof resultObj['file_path'] === 'string' ? resultObj['file_path'] : undefined;
-    const idBase = toolCall.id || `${toolCall.name}:${this.analyticsSessionId}:${this.iteration}`;
-
-    if (toolCall.name === 'generate_image') {
-      return {
-        type: 'usage_fact',
-        eventId: ['tool', idBase, toolCall.name, artifactId ?? filePath ?? 'image'].join(':'),
-        kind: 'image_generation',
-        toolName: toolCall.name,
-        toolCallId: toolCall.id,
-        facts: {
-          imageCount: 1,
-          artifactId,
-          filePath,
-        },
-      };
-    }
-
-    if (toolCall.name === 'edit_image') {
-      return {
-        type: 'usage_fact',
-        eventId: ['tool', idBase, toolCall.name, artifactId ?? filePath ?? 'edit'].join(':'),
-        kind: 'image_edit',
-        toolName: toolCall.name,
-        toolCallId: toolCall.id,
-        facts: {
-          imageCount: 1,
-          artifactId,
-          filePath,
-        },
-      };
-    }
-
-    if (toolCall.name === 'generate_video_from_image' || toolCall.name === 'generate_video') {
-      const params =
-        resultObj['params'] && typeof resultObj['params'] === 'object'
-          ? (resultObj['params'] as Record<string, unknown>)
-          : {};
-      const durationValue =
-        typeof params['duration'] === 'number'
-          ? params['duration']
-          : typeof resultObj['duration'] === 'number'
-            ? resultObj['duration']
-            : typeof toolCall.arguments['duration'] === 'number'
-              ? toolCall.arguments['duration']
-              : 10;
-      const seconds = Math.max(1, Math.ceil(durationValue));
-
-      return {
-        type: 'usage_fact',
-        eventId: ['tool', idBase, toolCall.name, artifactId ?? filePath ?? seconds].join(':'),
-        kind: 'video_generation',
-        toolName: toolCall.name,
-        toolCallId: toolCall.id,
-        facts: {
-          seconds,
-          artifactId,
-          filePath,
-        },
-      };
-    }
-
-    return null;
-  }
-
   /**
    * Get the LLMClient configured for a given call purpose. Pass-through to
    * `this.llm` when routing is disabled.
@@ -889,8 +780,6 @@ export class GenericAgent extends TypedEventEmitter {
     subAgent.on('agent_text', event => this.emit(event));
     subAgent.on('notification', event => this.emit(event));
     subAgent.on('context_usage', event => this.emit(event));
-    subAgent.on('usage_fact', event => this.emit(event));
-
     // Track sub-agent context for flow recording
     if (config.parentToolCallId) {
       FlowRecorder.getSession()?.enterSubAgent(config.name, config.parentToolCallId);
@@ -1750,8 +1639,6 @@ export class GenericAgent extends TypedEventEmitter {
         debugLog(
           `[GenericAgent] Token usage: prompt=${response.usage.promptTokens}, completion=${response.usage.completionTokens}, total=${response.usage.totalTokens}`
         );
-
-        this.emitLlmUsageFact(response.usage);
 
         // Log context usage for phase-aware monitoring
         phaseLogger.contextUsage(
@@ -2724,8 +2611,6 @@ export class GenericAgent extends TypedEventEmitter {
 
     try {
       const result = await Promise.resolve(tool.handler(toolCall.arguments));
-
-      this.emitToolUsageFact(toolCall, result);
 
       // Check for phase transition info in result and emit event
       const resultObj = result as Record<string, unknown> | null;
@@ -4580,13 +4465,6 @@ Respond in JSON format:
 
       const isError = genResultObj['status'] === 'error' || genResultObj['status'] === 'failed';
 
-      if (!isError) {
-        this.emitToolUsageFact(
-          { id: toolCallId, name: 'generate_image', arguments: generateArgs },
-          genResult,
-        );
-      }
-
       this.emit({
         type: 'tool_result',
         toolCallId,
@@ -4862,13 +4740,6 @@ Respond in JSON format:
       this.currentMode = 'orchestrator';
 
       const isError = genResultObj['status'] === 'error' || genResultObj['status'] === 'failed';
-
-      if (!isError) {
-        this.emitToolUsageFact(
-          { id: toolCallId, name: 'generate_video', arguments: generateArgs },
-          genResult,
-        );
-      }
 
       this.emit({
         type: 'tool_result',
