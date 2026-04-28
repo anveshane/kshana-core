@@ -55,6 +55,7 @@ describe('ComfyUIClient request behavior', () => {
       baseUrl: 'https://cloud.comfy.org',
       outputDir: '/tmp',
       timeout: 300,
+      apiKey: 'cloud-key',
     });
 
     await client.queueWorkflow({ '1': { class_type: 'Test', inputs: {} } });
@@ -76,6 +77,7 @@ describe('ComfyUIClient request behavior', () => {
       baseUrl: 'http://localhost:8188',
       outputDir: '/tmp',
       timeout: 300,
+      apiKey: undefined,
     });
 
     await client.queueWorkflow({ '1': { class_type: 'Test', inputs: {} } });
@@ -85,6 +87,31 @@ describe('ComfyUIClient request behavior', () => {
     expect(new Headers(init.headers).get('X-API-Key')).toBeNull();
   });
 
+  it('hits /api/prompt when COMFY_CLOUD_URL has trailing /api (regression)', async () => {
+    // Regression: stripping `/api` from baseUrl in the constructor (commit ad042ef)
+    // accidentally broke queueWorkflow, which built `${baseUrl}/prompt` directly
+    // without going through getPath(). Result: every cloud submit hit
+    // `https://cloud.comfy.org/prompt` (404), the WS got "status" then closed,
+    // and reference image gen reported `→ error` for every node.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ prompt_id: 'p' }),
+    });
+    global.fetch = fetchMock as typeof fetch;
+
+    const client = new ComfyUIClient({
+      baseUrl: 'https://cloud.comfy.org/api',
+      outputDir: '/tmp',
+      timeout: 300,
+      apiKey: 'cloud-key',
+    });
+
+    await client.queueWorkflow({ '1': { class_type: 'Test', inputs: {} } });
+
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe('https://cloud.comfy.org/api/prompt');
+  });
+
   it('requires COMFY_CLOUD_API_KEY for Comfy Cloud urls', () => {
     expect(
       () =>
@@ -92,6 +119,7 @@ describe('ComfyUIClient request behavior', () => {
           baseUrl: 'https://cloud.comfy.org',
           outputDir: '/tmp',
           timeout: 300,
+          apiKey: undefined,
         }),
     ).toThrow(/COMFY_CLOUD_API_KEY/);
   });
@@ -108,6 +136,7 @@ describe('ComfyUIClient request behavior', () => {
       baseUrl: 'https://cloud.comfy.org',
       outputDir: '/tmp',
       timeout: 300,
+      apiKey: 'cloud-key',
     });
 
     await client.getOutputImages('prompt-1');
@@ -129,6 +158,7 @@ describe('ComfyUIClient request behavior', () => {
       baseUrl: 'https://cloud.comfy.org',
       outputDir: '/tmp',
       timeout: 300,
+      apiKey: 'cloud-key',
     });
 
     await client.downloadOutput('output.png', '', 'output');
@@ -144,6 +174,7 @@ describe('ComfyUIClient request behavior', () => {
       baseUrl: 'https://cloud.comfy.org',
       outputDir: '/tmp',
       timeout: 300,
+      apiKey: 'cloud-key',
     });
 
     const waitPromise = client.waitForCompletionWS('prompt-1', 'client-1');
@@ -169,6 +200,7 @@ describe('ComfyUIClient request behavior', () => {
       baseUrl: 'https://cloud.comfy.org',
       outputDir: '/tmp',
       timeout: 300,
+      apiKey: 'cloud-key',
     });
 
     const waitPromise = client.waitForCompletionWS('prompt-1', 'client-1');

@@ -47,7 +47,7 @@
     "inputs": {
       "cfg": 1,
       "model": [
-        "187",
+        "197",
         0
       ],
       "positive": [
@@ -355,7 +355,7 @@
     "inputs": {
       "cfg": 1,
       "model": [
-        "187",
+        "197",
         0
       ],
       "positive": [
@@ -793,6 +793,47 @@
     "class_type": "DualCLIPLoader",
     "_meta": {
       "title": "DualCLIPLoader"
+    }
+  },
+  "197": {
+    "inputs": {
+      "nag_scale": 11,
+      "nag_alpha": 0.25,
+      "nag_tau": 2.5,
+      "inplace": true,
+      "model": [
+        "198",
+        0
+      ],
+      "nag_cond_video": [
+        "10",
+        1
+      ],
+      "nag_cond_audio": [
+        "10",
+        1
+      ]
+    },
+    "class_type": "LTX2_NAG",
+    "_meta": {
+      "title": "LTX2 NAG"
+    }
+  },
+  "198": {
+    "inputs": {
+      "preview_rate": 8,
+      "model": [
+        "187",
+        0
+      ],
+      "vae": [
+        "180",
+        0
+      ]
+    },
+    "class_type": "LTX2SamplingPreviewOverride",
+    "_meta": {
+      "title": "LTX2 Sampling Preview Override"
     }
   },
   "210": {

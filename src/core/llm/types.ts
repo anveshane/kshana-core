@@ -29,6 +29,12 @@ export interface LLMResponse {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    /** USD cost for this call. Populated by OpenRouter when usage.include=true. */
+    cost?: number;
+    /** Of `promptTokens`, how many were served from prefix cache. */
+    cachedPromptTokens?: number;
+    /** USD discount applied due to prefix-cache hits. */
+    cacheDiscount?: number;
   };
 }
 
@@ -92,6 +98,12 @@ export interface StreamChunk {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    /** USD cost for this call. Populated by OpenRouter when usage.include=true. */
+    cost?: number;
+    /** Of `promptTokens`, how many were served from prefix cache. */
+    cachedPromptTokens?: number;
+    /** USD discount applied due to prefix-cache hits. */
+    cacheDiscount?: number;
   };
 }
 

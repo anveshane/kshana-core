@@ -10,7 +10,7 @@
  * writing, and progress tracking happens in deterministic code.
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, statSync, renameSync } from 'fs';
 import { join, dirname, relative } from 'path';
 import { TypedEventEmitter } from '../../events/EventEmitter.js';
 import { LLMClient } from '../llm/index.js';
@@ -65,7 +65,7 @@ import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timelin
 import type { TodoNodeInfo } from '../../events/events.js';
 import { fitShotDurations } from './shotDurationFit.js';
 import { scanMultiSpeakerShots, scanAmbiguousSpeakerTag } from './dialogueValidation.js';
-import { validateWithSchema, normalizeSceneVideoPrompt, getPromptSchema } from './schemas.js';
+import { validateWithSchema, normalizeSceneVideoPrompt, getPromptSchema, maxTokensForJsonNode } from './schemas.js';
 import {
   validateContinuitySequence,
   checkPositionContinuity,
@@ -232,6 +232,10 @@ export class ExecutorAgent extends TypedEventEmitter {
   private stopReason: 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null = null;
   private vlmDisabled = process.env['DISABLE_VLM'] === 'true'; // Env flag or auto-disabled after first 404
   private sceneSummaries = new Map<string, string>(); // scene_1 → summary text
+  // scene_1 → on-screen duration in seconds, populated by the duration-first
+  // extractor (sum of beat durations). Used in lieu of `target/sceneCount`
+  // even-split when present. Persisted alongside scene_summaries.json.
+  private sceneEstimatedDurations = new Map<string, number>();
   private _initialized = false;
   private logPath: string;
   private lockFilePath: string;
@@ -305,6 +309,12 @@ export class ExecutorAgent extends TypedEventEmitter {
     }
     this.logPath = join(logsDir, 'executor.log');
     this.lockFilePath = join(config.projectDir, '.executor.lock');
+    // Roll over the log if the existing file has crossed the size cap.
+    // The executor.log is append-only across runs; without this, a
+    // single deadlock-and-spin episode can grow it to GBs (we hit 5 GB
+    // on story_begins_girl_sprinting-2 today). Keep the last 3 rolled
+    // files so recent runs are still inspectable.
+    this.rotateLogIfNeeded(this.logPath, 50 * 1024 * 1024, 3);
     this.log('=== ExecutorAgent initialized ===');
     this.log(`Template: ${config.template.id}, Goal: ${config.goal.description}`);
     this.log(`Target artifacts: ${config.goal.targetArtifacts.join(', ')}`);
@@ -442,6 +452,46 @@ export class ExecutorAgent extends TypedEventEmitter {
       appendFileSync(this.logPath, `[${timestamp}] ${message}\n`);
     } catch {
       // Ignore logging errors
+    }
+  }
+
+  /**
+   * If the log file is at/above `maxBytes`, rotate it:
+   *   executor.log.{keep} is dropped (if it exists),
+   *   executor.log.{keep-1} → .{keep},
+   *   ...
+   *   executor.log.1 → .2,
+   *   executor.log → .1
+   * The next append creates a fresh executor.log.
+   *
+   * Best-effort: any fs error is swallowed so a permissions glitch
+   * doesn't take down the executor at startup.
+   */
+  private rotateLogIfNeeded(logPath: string, maxBytes: number, keep: number): void {
+    try {
+      if (!existsSync(logPath)) return;
+      const size = statSync(logPath).size;
+      if (size < maxBytes) return;
+
+      // Drop the oldest if we already have `keep` rolled files.
+      const oldest = `${logPath}.${keep}`;
+      if (existsSync(oldest)) {
+        try { unlinkSync(oldest); } catch { /* ignore */ }
+      }
+
+      // Shift the existing rolled files: .{N-1} → .{N}, etc.
+      for (let i = keep - 1; i >= 1; i--) {
+        const from = `${logPath}.${i}`;
+        const to = `${logPath}.${i + 1}`;
+        if (existsSync(from)) {
+          try { renameSync(from, to); } catch { /* ignore */ }
+        }
+      }
+
+      // Rotate the current file to .1
+      try { renameSync(logPath, `${logPath}.1`); } catch { /* ignore */ }
+    } catch {
+      // Best-effort — never fail the executor for a log issue.
     }
   }
 
@@ -1729,8 +1779,28 @@ export class ExecutorAgent extends TypedEventEmitter {
       }
 
       // Handle input type — if user provided a full story, skip plot and story stages
-      // and use the original input directly as the story artifact
+      // and use the original input directly as the story artifact.
+      //
+      // IMPORTANT: the file copy and graph-marking are decoupled. The
+      // BackwardPlanner sometimes subtracts `story` from the graph when the
+      // legacy `files` registry says it's already satisfied — but if the
+      // canonical `chapters/chapter_1/plans/story.md` doesn't actually exist,
+      // downstream Strategy C (LLM scene extraction) will fail and the
+      // pipeline deadlocks. So we always ensure the canonical story file
+      // exists when inputType === 'story', regardless of graph state.
       if (this.config.project.inputType === 'story') {
+        const inputFile = join(this.config.projectDir, 'original_input.md');
+        const storyDir = join(this.config.projectDir, 'chapters', 'chapter_1', 'plans');
+        const canonicalStoryPath = join(storyDir, 'story.md');
+        const canonicalRelPath = 'chapters/chapter_1/plans/story.md';
+
+        if (existsSync(inputFile) && !existsSync(canonicalStoryPath)) {
+          if (!existsSync(storyDir)) mkdirSync(storyDir, { recursive: true });
+          const { copyFileSync } = await import('fs');
+          copyFileSync(inputFile, canonicalStoryPath);
+          this.log(`  Input type 'story': copied original input → ${canonicalRelPath}`);
+        }
+
         const inputConfig = this.config.template.inputTypes?.find(
           (t: { id: string }) => t.id === 'story',
         );
@@ -1738,19 +1808,9 @@ export class ExecutorAgent extends TypedEventEmitter {
         for (const skipTypeId of skips) {
           const node = this.executor.getNode(skipTypeId);
           if (node && node.status === 'pending') {
-            // Copy original input to the story output path if this is the story node
             if (skipTypeId === 'story') {
-              const inputFile = join(this.config.projectDir, 'original_input.md');
-              const storyDir = join(this.config.projectDir, 'chapters', 'chapter_1', 'plans');
-              if (existsSync(inputFile)) {
-                if (!existsSync(storyDir)) mkdirSync(storyDir, { recursive: true });
-                const storyPath = join(storyDir, 'story.md');
-                const { copyFileSync } = await import('fs');
-                copyFileSync(inputFile, storyPath);
-                const relPath = 'chapters/chapter_1/plans/story.md';
-                this.executor.markCompleted(node.id, relPath);
-                this.log(`  Input type 'story': copied original input → ${relPath}`);
-              }
+              this.executor.markCompleted(node.id, canonicalRelPath);
+              this.log(`  Input type 'story': marked story node completed → ${canonicalRelPath}`);
             } else {
               // Skip plot — mark as completed with a placeholder
               this.executor.markCompleted(node.id, 'skipped-input-is-story');
@@ -1789,6 +1849,17 @@ export class ExecutorAgent extends TypedEventEmitter {
       // Main execution loop
       let selfRepairCount = 0;
       const MAX_SELF_REPAIRS = 3;
+
+      // Deadlock detection for serial mode: when content is pending elsewhere
+      // in the graph but only media nodes are ready, the loop suppresses the
+      // ready batch and goes around again. If nothing else advances (e.g. a
+      // failed scene_video_prompt blocking just one shot's downstream chain),
+      // we'd spin forever — historically this has eaten gigabytes of disk in
+      // log output and starved the HTTP server. We bail out after N
+      // consecutive ticks where no progress was made AND no media is in
+      // flight to wait on.
+      let serialModeIdleTicks = 0;
+      const MAX_SERIAL_IDLE = 25;
 
       while (!this.executor.isComplete() && !this.stopped) {
         // Expand any type-level collections before checking for ready nodes
@@ -1921,9 +1992,39 @@ export class ExecutorAgent extends TypedEventEmitter {
           );
 
           if (pendingContentExists && mediaNodes.length > 0 && contentNodes.length === 0) {
-            // Media nodes are ready but content is still pending elsewhere — skip this round
-            this.log(`  Serial mode: waiting for all content to finish before media (${allNodes.filter(n => !isMediaNode(n) && n.status === 'pending').length} content pending)`);
+            // Media nodes are ready but content is still pending elsewhere — skip this round.
+            // Track consecutive idle ticks: if we keep arriving here without
+            // any in-flight media to wait on, the pending content is
+            // permanently blocked (typically because its dep failed or its
+            // type-level collection never expanded) and we'd spin forever.
+            const pendingContent = allNodes.filter(n => !isMediaNode(n) && n.status === 'pending').length;
+            this.log(`  Serial mode: waiting for all content to finish before media (${pendingContent} content pending)`);
             readyNodes.length = 0;
+
+            const inflightMedia = this.pendingMedia.size;
+            if (inflightMedia > 0) {
+              // We have media still working — that's legitimate progress
+              // potential, so don't count this tick as idle.
+              serialModeIdleTicks = 0;
+            } else {
+              serialModeIdleTicks += 1;
+              if (serialModeIdleTicks >= MAX_SERIAL_IDLE) {
+                const stuckIds = allNodes
+                  .filter(n => !isMediaNode(n) && (n.status === 'pending' || n.status === 'in_progress'))
+                  .map(n => n.id);
+                this.log(`STUCK: serial-mode deadlock — ${pendingContent} content node(s) pending with no in-flight media after ${MAX_SERIAL_IDLE} ticks. Stuck nodes: ${stuckIds.slice(0, 8).join(', ')}${stuckIds.length > 8 ? '...' : ''}`);
+                this.emit({
+                  type: 'notification',
+                  level: 'error',
+                  message: `Pipeline deadlocked: ${pendingContent} content node(s) blocked. Likely a failed dependency upstream — check logs and retry.`,
+                });
+                this.stopReason = 'failed';
+                break;
+              }
+              // Brief sleep so we don't spin the CPU and flood the log.
+              // 250ms × MAX_SERIAL_IDLE = ~6s grace before bailing.
+              await new Promise(resolve => setTimeout(resolve, 250));
+            }
           } else {
             // Within content nodes, prioritize compositions over motion directives
             const compositionNodes = contentNodes.filter(n => n.typeId !== 'shot_motion_directive');
@@ -1933,6 +2034,9 @@ export class ExecutorAgent extends TypedEventEmitter {
             // Only process media nodes if no content nodes remain anywhere
             readyNodes.length = 0;
             readyNodes.push(...(prioritizedContent.length > 0 ? prioritizedContent : mediaNodes));
+
+            // Real progress — reset the deadlock counter.
+            serialModeIdleTicks = 0;
           }
         }
 
@@ -2591,7 +2695,15 @@ export class ExecutorAgent extends TypedEventEmitter {
     const style = this.config.goal.preferences.style as string | undefined;
     const allNodes = this.executor.getAllNodes();
     const sceneCount = allNodes.filter(n => n.typeId === 'scene').length;
-    const perSceneDuration = duration && sceneCount > 0 ? Math.round(duration / sceneCount) : 0;
+    // Prefer the duration-first extractor's per-scene estimate over the
+    // legacy `target/sceneCount` even-split. Falls back to even-split
+    // when no estimate is recorded (e.g. legacy projects).
+    const perSceneDurationFromBeats = node.itemId
+      ? this.sceneEstimatedDurations.get(node.itemId) ?? 0
+      : 0;
+    const perSceneDuration = perSceneDurationFromBeats > 0
+      ? perSceneDurationFromBeats
+      : (duration && sceneCount > 0 ? Math.round(duration / sceneCount) : 0);
 
     let projectContext = '';
     const parts: string[] = [];
@@ -2606,8 +2718,26 @@ export class ExecutorAgent extends TypedEventEmitter {
     // Scene-level: inject this scene's duration allocation
     if (node.typeId === 'scene' || node.typeId === 'scene_video_prompt') {
       if (perSceneDuration > 0) {
-        parts.push(`**This scene's duration:** ~${perSceneDuration} seconds`);
-        parts.push(`**Shot planning:** Break this scene into shots that total ~${perSceneDuration}s. Each shot should be 3-10 seconds for action/atmosphere, up to 15 seconds for dialogue-heavy shots. Dialogue shots MUST size to fit the full spoken line (~2.5 words/sec + 1s buffer) — shorter and the video cuts off mid-sentence.`);
+        // HARD shot-count cap derived from the scene's duration budget. Each
+        // shot is at least 3s (LTX 2.3 minimum), so the maximum shot count
+        // that fits the budget is floor(budget / 3). Without this cap, the
+        // scene_video_prompt LLM creates one shot per visual beat in the
+        // prose — so a 12s scene with rich prose explodes to 18 shots ×
+        // 3s = 54s, blowing the duration-first plan back up to >130s
+        // total. This is a hard rule, not guidance.
+        const maxShots = Math.max(1, Math.floor(perSceneDuration / 3));
+        parts.push(`**This scene's duration budget:** ${perSceneDuration} seconds (HARD CAP)`);
+        parts.push(
+          `**Shot count:** AT MOST ${maxShots} shot${maxShots === 1 ? '' : 's'} ` +
+          `(every shot needs ≥3s). Sum of shot durations MUST be ≤ ${perSceneDuration}s. ` +
+          `If you have more beats than slots, MERGE related beats into one shot ` +
+          `(merge a reaction into its adjacent dialogue; merge atmosphere into the action that follows). ` +
+          `Do NOT exceed ${maxShots} shots — exceeding the shot count breaks the duration plan and the runtime ends up 2-4× the target.`
+        );
+        parts.push(
+          `**Shot durations:** 3s minimum, 15s maximum. Dialogue shots MUST fit ` +
+          `the full spoken line (~2.5 words/sec + 1s buffer) — shorter clips get cut off mid-sentence.`
+        );
       }
       if (sceneCount > 0) {
         // Figure out which scene number this is
@@ -3367,6 +3497,21 @@ Examples of common failure modes to avoid:
         } catch { /* ignore */ }
       }
     }
+    // Load saved per-scene estimated durations (duration-first extractor)
+    if (this.sceneEstimatedDurations.size === 0) {
+      const durPath = join(this.config.projectDir, 'prompts', 'scene_durations.json');
+      if (existsSync(durPath)) {
+        try {
+          const saved = JSON.parse(readFileSync(durPath, 'utf-8'));
+          for (const [k, v] of Object.entries(saved)) {
+            if (typeof v === 'number' && v > 0) {
+              this.sceneEstimatedDurations.set(k, v);
+            }
+          }
+          this.log(`  Loaded ${this.sceneEstimatedDurations.size} scene durations from disk`);
+        } catch { /* ignore */ }
+      }
+    }
 
     const allNodes = this.executor.getAllNodes();
     let expanded = true;
@@ -3659,17 +3804,50 @@ Examples of common failure modes to avoid:
         // Strategy C: For collections that depend on 'story' (scene, character, setting),
         // run extractCollectionItems on the story output to determine items.
         // This handles post-reset state where story is completed but per-item nodes don't exist.
-        if (!didExpand) {
-          const storyNode = allNodes.find(n => n.typeId === 'story' && n.status === 'completed' && n.outputPath);
-          if (storyNode?.outputPath && typeDef.dependencies.some(d => d.artifactTypeId === 'story')) {
-            const storyPath = join(this.config.projectDir, storyNode.outputPath);
-            if (existsSync(storyPath)) {
-              try {
-                const storyContent = readFileSync(storyPath, 'utf-8');
-                const extracted = await extractCollectionItems(
-                  storyNode, storyContent, this.llmFor('structured.collection_extraction'),
-                  this.config.goal.preferences.duration as number | undefined,
-                );
+        //
+        // We try multiple sources for the story content (in order):
+        //   1. The story node's own outputPath (normal path).
+        //   2. The template's canonical story filePattern on disk
+        //      (covers cases where BackwardPlanner subtracted story from the
+        //      graph because the legacy `files` registry said it was
+        //      satisfied — story node may be absent but the file is present).
+        //   3. `original_input.md` for inputType === 'story' projects
+        //      (last-resort fallback if neither of the above is found).
+        if (!didExpand && typeDef.dependencies.some(d => d.artifactTypeId === 'story')) {
+          let storyContent: string | null = null;
+          let storyContextNode = allNodes.find(n => n.typeId === 'story' && n.status === 'completed' && n.outputPath);
+          if (storyContextNode?.outputPath) {
+            const p = join(this.config.projectDir, storyContextNode.outputPath);
+            if (existsSync(p)) {
+              try { storyContent = readFileSync(p, 'utf-8'); } catch { /* fall through */ }
+            }
+          }
+          if (!storyContent) {
+            const storyTypeDef = this.config.template.artifactTypes['story'];
+            const canonical = storyTypeDef?.filePattern?.replace(/\{\{chapter\}\}/g, 'chapter_1');
+            if (canonical) {
+              const p = join(this.config.projectDir, canonical);
+              if (existsSync(p)) {
+                try { storyContent = readFileSync(p, 'utf-8'); } catch { /* fall through */ }
+              }
+            }
+          }
+          if (!storyContent && this.config.project.inputType === 'story') {
+            const p = join(this.config.projectDir, 'original_input.md');
+            if (existsSync(p)) {
+              try { storyContent = readFileSync(p, 'utf-8'); } catch { /* fall through */ }
+            }
+          }
+
+          if (storyContent) {
+            // Synthesize a context node for the extractor — it only reads
+            // typeId off this object to dispatch.
+            const ctxNode = storyContextNode ?? ({ typeId: 'story' } as ExecutionNode);
+            try {
+              const extracted = await extractCollectionItems(
+                ctxNode, storyContent, this.llmFor('structured.collection_extraction'),
+                this.config.goal.preferences.duration as number | undefined,
+              );
                 let itemList: Array<{ itemId: string; name: string }> = [];
 
                 if (node.typeId === 'scene' && extracted?.scenes?.length) {
@@ -3677,6 +3855,35 @@ Examples of common failure modes to avoid:
                     itemId: `scene_${s.sceneNumber}`,
                     name: s.title || `Scene ${s.sceneNumber}`,
                   }));
+                  // Persist scene summaries + estimated durations from this
+                  // extraction. Strategy C used to skip this, so duration-first
+                  // values weren't reaching downstream.
+                  for (const s of extracted.scenes as Array<{
+                    sceneNumber: number; title?: string; summary?: string; estimatedDuration?: number;
+                  }>) {
+                    if (s.summary) {
+                      this.sceneSummaries.set(`scene_${s.sceneNumber}`, s.summary);
+                    }
+                    if (typeof s.estimatedDuration === 'number' && s.estimatedDuration > 0) {
+                      this.sceneEstimatedDurations.set(`scene_${s.sceneNumber}`, s.estimatedDuration);
+                    }
+                  }
+                  if (this.sceneSummaries.size > 0) {
+                    const promptsDir = join(this.config.projectDir, 'prompts');
+                    if (!existsSync(promptsDir)) mkdirSync(promptsDir, { recursive: true });
+                    writeFileSync(
+                      join(promptsDir, 'scene_summaries.json'),
+                      JSON.stringify(Object.fromEntries(this.sceneSummaries), null, 2),
+                    );
+                  }
+                  if (this.sceneEstimatedDurations.size > 0) {
+                    const promptsDir = join(this.config.projectDir, 'prompts');
+                    if (!existsSync(promptsDir)) mkdirSync(promptsDir, { recursive: true });
+                    writeFileSync(
+                      join(promptsDir, 'scene_durations.json'),
+                      JSON.stringify(Object.fromEntries(this.sceneEstimatedDurations), null, 2),
+                    );
+                  }
                 } else if (node.typeId === 'character' && extracted?.characters?.length) {
                   itemList = extracted.characters.map((c: string) => ({
                     itemId: c.toLowerCase().replace(/\s+/g, '_'),
@@ -3707,9 +3914,8 @@ Examples of common failure modes to avoid:
                 } else {
                   this.log(`  Strategy C: no ${node.typeId} items found in story`);
                 }
-              } catch (err) {
-                this.log(`  Strategy C failed: ${err}`);
-              }
+            } catch (err) {
+              this.log(`  Strategy C failed: ${err}`);
             }
           }
         }
@@ -4418,7 +4624,7 @@ Examples of common failure modes to avoid:
     const isJsonNode = jsonNodeTypes.includes(node.typeId) || typeDef?.outputFormat === 'json';
     if (isJsonNode) {
       options.responseFormat = { type: 'json_object' };
-      options.maxTokens = 5000;
+      options.maxTokens = maxTokensForJsonNode(node.typeId);
     }
 
     // Inject JSON schema into the system prompt so the LLM sees the exact expected structure.
@@ -4671,18 +4877,28 @@ Examples of common failure modes to avoid:
           itemId: `scene_${s.sceneNumber}`,
           name: s.title,
         }));
-        // Store scene summaries for injection into scene writer prompts
-        // Save to disk so they survive restarts
+        // Store scene summaries for injection into scene writer prompts.
+        // Save to disk so they survive restarts. Also capture per-scene
+        // estimatedDuration if the duration-first extractor populated it.
         for (const s of items.scenes ?? []) {
           if (s.summary) {
             this.sceneSummaries.set(`scene_${s.sceneNumber}`, s.summary);
             this.log(`  Stored summary for scene_${s.sceneNumber}: ${s.summary.substring(0, 60)}...`);
+          }
+          if (typeof s.estimatedDuration === 'number' && s.estimatedDuration > 0) {
+            this.sceneEstimatedDurations.set(`scene_${s.sceneNumber}`, s.estimatedDuration);
+            this.log(`  Stored estimatedDuration for scene_${s.sceneNumber}: ${s.estimatedDuration}s`);
           }
         }
         if (this.sceneSummaries.size > 0) {
           const summaryPath = join(this.config.projectDir, 'prompts', 'scene_summaries.json');
           if (!existsSync(join(this.config.projectDir, 'prompts'))) mkdirSync(join(this.config.projectDir, 'prompts'), { recursive: true });
           writeFileSync(summaryPath, JSON.stringify(Object.fromEntries(this.sceneSummaries), null, 2));
+        }
+        if (this.sceneEstimatedDurations.size > 0) {
+          const durPath = join(this.config.projectDir, 'prompts', 'scene_durations.json');
+          if (!existsSync(join(this.config.projectDir, 'prompts'))) mkdirSync(join(this.config.projectDir, 'prompts'), { recursive: true });
+          writeFileSync(durPath, JSON.stringify(Object.fromEntries(this.sceneEstimatedDurations), null, 2));
         }
       }
 
@@ -5891,7 +6107,12 @@ Examples of common failure modes to avoid:
       } catch { return ''; }
     })();
 
-    const v2vEnabled = this.config.project.useV2V !== false; // default: enabled
+    // Default OFF so each shot's generated first/last frames actually appear
+    // in the final video. Opt-in via `useV2V: true` in project.json. See
+    // ProjectManager.ts:382 — that comment captures the original intent;
+    // the runtime previously defaulted ON, so projects without the flag
+    // (legacy or hand-edited) were silently running v2v_extend.
+    const v2vEnabled = this.config.project.useV2V === true;
     const videoStrategy = v2vEnabled
       ? getVideoStrategy(node.itemId ?? '', shotPurpose)
       : 'flfv';

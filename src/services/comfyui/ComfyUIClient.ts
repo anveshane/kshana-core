@@ -116,7 +116,12 @@ export class ComfyUIClient {
 
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
     const merged = { ...DEFAULT_CONFIG, ...config };
-    this.baseUrl = merged.baseUrl.replace(/\/$/, '');
+    // Normalize baseUrl: strip trailing slash AND a trailing `/api` segment
+    // so `getPath` (which prepends `/api` in cloud mode) doesn't produce
+    // a double `/api/api/...` path. Users routinely set
+    // `COMFY_CLOUD_URL=https://cloud.comfy.org/api` thinking that's the
+    // canonical base — and the `/upload/image` endpoint then 401s.
+    this.baseUrl = merged.baseUrl.replace(/\/$/, '').replace(/\/api$/, '');
     this.outputDir = merged.outputDir;
     this.timeout = merged.timeout;
     this.apiKey = merged.apiKey;
@@ -191,7 +196,7 @@ export class ComfyUIClient {
    */
   async interrupt(): Promise<void> {
     try {
-      await fetch(`${this.baseUrl}/interrupt`, { method: 'POST', headers: this.buildHeaders() });
+      await fetch(this.buildUrl('/interrupt'), { method: 'POST', headers: this.buildHeaders() });
     } catch {
       // Best effort — ComfyUI may not be reachable
     }
@@ -258,7 +263,7 @@ export class ComfyUIClient {
       payload['extra_data'] = { api_key_comfy_org: this.apiKey };
     }
 
-    const response = await fetch(`${this.baseUrl}/prompt`, {
+    const response = await fetch(this.buildUrl('/prompt'), {
       method: 'POST',
       headers: this.buildHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
@@ -845,7 +850,7 @@ export class ComfyUIClient {
       params.append('subfolder', subfolder);
     }
 
-    const url = `${this.baseUrl}/view?${params.toString()}`;
+    const url = this.buildUrl('/view', params);
 
     const response = await fetch(url, { headers: this.buildHeaders() });
     if (!response.ok) {

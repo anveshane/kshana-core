@@ -93,11 +93,22 @@ interface ExecutionNode {
 export { computeResetTypes, TEMPLATE_DEPS, STAGE_ALIASES };
 
 function main() {
-  const args = process.argv.slice(2);
+  const rawArgs = process.argv.slice(2);
+  // --clean wipes executorState entirely (the persisted graph blob in
+  // project.json) before computing the reset. This is the nuclear option for
+  // when stale per-item nodes from previous runs (e.g. shot_image:scene_6_shot_10
+  // from a 4→7-scene-restructure) leak into the new run because incremental
+  // reset doesn't see them as anything to remove. With --clean the graph
+  // rebuilds from scratch on the next run-to.
+  const cleanFlag = rawArgs.includes('--clean');
+  const args = rawArgs.filter(a => a !== '--clean');
   if (args.length < 2) {
-    console.error('Usage: pnpm tsx scripts/reset-project.ts <project-name> <stage>');
+    console.error('Usage: pnpm tsx scripts/reset-project.ts <project-name> <stage> [--clean]');
     console.error('');
     console.error('Stages:', Object.keys(STAGE_ALIASES).join(', '));
+    console.error('');
+    console.error('--clean  wipe executorState entirely so the dependency graph rebuilds on next run.');
+    console.error('         Use when prior runs left stale per-item nodes (4→7 scene restructure, etc.)');
     process.exit(1);
   }
 
@@ -397,6 +408,17 @@ function main() {
     project.executorState.updatedAt = Date.now();
   }
   project.currentPhase = undefined;
+
+  // Phase 10 (--clean): blow away executorState entirely so the graph
+  // rebuilds from scratch on next run-to. Stale per-item nodes from
+  // previous structures (4→7 scene restructure) get dropped this way.
+  // Stage-targeted resets above won't see them as anything to remove
+  // because their typeIds match recreated items but the IDs differ.
+  if (cleanFlag) {
+    const beforeNodeCount = Object.keys(project.executorState?.nodes ?? {}).length;
+    delete (project as unknown as { executorState?: unknown }).executorState;
+    console.log(`  --clean: wiped ${beforeNodeCount} nodes from executorState (graph rebuilds on next run)`);
+  }
 
   // Save
   writeFileSync(projectPath, JSON.stringify(project, null, 2));
