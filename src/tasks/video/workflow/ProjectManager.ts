@@ -38,11 +38,6 @@ import {
   INPUT_TYPE_CONFIGS,
   PROJECT_FILE,
   PROJECT_VERSION,
-  determineNextPhase,
-  getPhaseItems,
-  getNextUnapprovedItem,
-  areAllItemsApproved,
-  countApprovedItems,
   createDefaultCharacterData,
   createDefaultSettingData,
   createDefaultSceneRef,
@@ -640,13 +635,26 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
     }
     const project = JSON.parse(content);
 
-    // Check version - must match the current workflow format
-    if (!project.version || project.version !== PROJECT_VERSION) {
+    // Version handling. v3.0 dropped the legacy parallel state layers
+    // (project.characters[], settings[], scenes[], content{}, files[],
+    // artifacts{}, phases{}) — see todos/unify-project-state.md. v2.0
+    // projects load fine since all those fields are now optional, but
+    // we strip the legacy fields silently so the project file isn't
+    // confusingly bloated on the next save.
+    if (project.version === '2.0') {
+      delete project.characters;
+      delete project.settings;
+      delete project.scenes;
+      delete project.content;
+      delete project.files;
+      delete project.artifacts;
+      delete project.phases;
+      delete project.currentPhase;
+      project.version = PROJECT_VERSION;
+    } else if (project.version !== PROJECT_VERSION) {
       console.warn(
-        `[ProjectManager] Incompatible project version: ${project.version ?? 'unknown'}. Expected: ${PROJECT_VERSION}`
+        `[ProjectManager] Unknown project version: ${project.version ?? 'unknown'}. Expected: ${PROJECT_VERSION}. Loading anyway.`,
       );
-      console.warn('[ProjectManager] Please delete the .kshana directory and start a new project.');
-      return null;
     }
 
     // Legacy `syncContentRegistry` + `recomputeNarrativePhaseState` +
@@ -1123,12 +1131,10 @@ export function getProjectSummary(basePath: string = process.cwd()): string {
   const characterNames = project.characters.map(c => c.name);
   const settingNames = project.settings.map(s => s.name);
 
-  // Get per-item approval status for current phase if applicable
-  let itemProgress = '';
-  if (phaseConfig?.requiresPerItemApproval) {
-    const { approved, total } = countApprovedItems(project, currentPhase as WorkflowPhase);
-    itemProgress = `\nItem Progress: ${approved}/${total} approved`;
-  }
+  // Per-item approval progress display removed in PR8 — approvals
+  // live in pi-agent now, not in core. The dependency-graph executor
+  // tracks per-item state via `executor.getProgress()` instead.
+  const itemProgress = '';
 
   // Get style display name
   const styleConfig = STYLE_CONFIGS[project.style];
