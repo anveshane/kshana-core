@@ -40,6 +40,7 @@ import { LLMClient } from '../src/core/llm/index.js';
 import { getVideoTemplate } from '../src/tasks/video/index.js';
 import { VALID_STAGES } from '../src/core/planner/stages.js';
 import { setActiveProjectDir } from '../src/tasks/video/workflow/activeProject.js';
+import { resolveProjectDuration } from '../src/core/project/projectTypes.js';
 import type { GenericProjectFile } from '../src/core/templates/types.js';
 
 function usage(exitCode = 1): never {
@@ -183,7 +184,7 @@ async function main() {
       targetArtifacts: ['final_video'],
       preferences: {
         style: project.style || 'cinematic_realism',
-        duration: (project as unknown as { duration?: number }).duration ?? 60,
+        duration: resolveProjectDuration(project),
       },
       description: stopAtStage
         ? `Run pipeline up to stage ${stopAtStage}`

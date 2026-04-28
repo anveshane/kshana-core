@@ -50,6 +50,37 @@ export function projectDirFor(name: string, basePath: string = process.cwd()): s
 }
 
 /**
+ * Pull the target video duration off a project file.
+ *
+ * Canonical field is `targetDuration` (set by `pnpm new --duration`).
+ * Some older code paths read `duration` instead, which silently
+ * fell back to the 60s default whenever a project was created with
+ * a non-default value (e.g. 120). One shared resolver kills the
+ * skew so executor goal preferences match what the user picked.
+ *
+ * Order of precedence:
+ *   1. project.targetDuration  — the canonical, schema-defined field
+ *   2. project.duration        — legacy / external callers
+ *   3. fallback                — caller's default (60 if omitted)
+ *
+ * Accepts any object — both `ProjectFile` and `GenericProjectFile`
+ * have these fields, but their full types diverge on unrelated
+ * fields (`phases.completedAt` shape, etc.) so a structural input
+ * keeps both call sites happy.
+ */
+export function resolveProjectDuration(
+  project: object,
+  fallback: number = 60,
+): number {
+  const p = project as Record<string, unknown>;
+  const target = p['targetDuration'];
+  if (typeof target === 'number' && Number.isFinite(target) && target > 0) return target;
+  const legacy = p['duration'];
+  if (typeof legacy === 'number' && Number.isFinite(legacy) && legacy > 0) return legacy;
+  return fallback;
+}
+
+/**
  * Resolve a project name (or full folder name) to its directory and
  * the parsed contents of `project.json`. Returns null when the project
  * doesn't exist; callers decide how to surface that (CLI exits, HTTP

@@ -17,6 +17,7 @@ import { LLMClient } from '../core/llm/index.js';
 import { ExecutorAgent } from '../core/planner/ExecutorAgent.js';
 import { getVideoTemplate } from '../tasks/video/index.js';
 import { setActiveProjectDir } from '../tasks/video/workflow/activeProject.js';
+import { resolveProjectDuration } from '../core/project/projectTypes.js';
 import type { GenericProjectFile } from '../core/templates/types.js';
 import type { AgentRunner, RunnerContext } from './agentRoutes.js';
 import type { RunFnResult } from './jobManager.js';
@@ -45,7 +46,7 @@ export function createExecutorRunner(): AgentRunner {
         targetArtifacts: ['final_video'],
         preferences: {
           style: project.style || 'cinematic_realism',
-          duration: (project as unknown as { duration?: number }).duration ?? 60,
+          duration: resolveProjectDuration(project),
         },
         description: stopAtStage
           ? `Run pipeline up to stage ${stopAtStage}`
