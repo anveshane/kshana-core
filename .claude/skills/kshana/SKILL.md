@@ -35,7 +35,41 @@ Invoke it when the user asks for any of these:
 If the user is asking a code question (not asking to drive kshana), don't
 invoke this skill — they probably want to edit source.
 
-## The 8 commands
+## Decision tree — what to run for what intent
+
+Use this to translate fuzzy user requests into the right command.
+
+| User says | What to run | Why |
+|---|---|---|
+| "make a video about X" / "create a kshana project" | `pnpm new` + `pnpm run-to` | bootstrap from scratch |
+| "what's going on?" / "is it stuck?" | `pnpm status` first, then `pnpm inspect <node>` on anything failed | always probe before changing |
+| "show me [thing]" | `pnpm inspect <project> <alias>` | reads the artifact + metadata |
+| "do shot 2 next" / "I want to do shot by shot" | `pnpm run-to <project> shot_image:scene_N_shot_M` then `shot_video:scene_N_shot_M` | per-node gate pauses after that one |
+| "this prompt is wrong, redo it" | `pnpm regen <node>` (no cascade — preview the redo) | regenerate without auto-cascading downstream |
+| "change scene 2's plot — the rest must follow" | `pnpm override` then `pnpm regen <node> --cascade` | edit + cascade so dependents also redo |
+| "I'll write this myself" | `pnpm override <project> <alias> --from <file>` | injects user content, marks node completed |
+| "back up to <stage> and redo from there" | `pnpm reset <project> <stage>` | rolls state back; next `run-to` regenerates |
+| "stop! I changed my mind" | `pnpm stop <project>` | clean cancel; safe to resume |
+| "the structure is wrong / start over" | `pnpm reset <project> <stage> --clean` | wipes executorState entirely; graph rebuilds |
+
+## Two-phase contract for cascading edits
+
+When the user changes semantic content (prompt, scene prose, character
+description), the cascade pattern is always the same:
+
+```
+1. inspect    — read the current content
+2. override   — write the new content
+3. regen --cascade  — invalidate this node + every downstream consumer
+4. run-to     — re-execute from there
+```
+
+`override` alone marks the node `completed` but does NOT invalidate
+downstream — that's intentional, so an agent can stage several edits
+before kicking off cascades. `regen --cascade` is what triggers the
+re-run wave.
+
+## The 9 commands
 
 ```bash
 # CREATE — --style and --duration are REQUIRED. Input via stdin (default), --text, or --input <file>.
@@ -48,8 +82,9 @@ pnpm nodes <project> [--type X] [--status Y] [--grep R]  # filtered list
 pnpm inspect <project> <alias> [--full]                  # one node + its content
 
 # DRIVE
-pnpm run-to <project> [stage] [--skip-media]             # run forward to a stage
+pnpm run-to <project> [stage|node|alias] [--skip-media]  # run forward to a stage OR a specific node
 pnpm reset <project> <stage> [--clean]                   # roll back to a stage
+pnpm stop <project>                                      # cancel a running executor (drops .executor.stop)
 
 # EDIT
 pnpm regen <project> <alias> [--cascade] [--no-run]      # rerun one node
@@ -86,6 +121,14 @@ Common stops:
 - `pnpm run-to myproj scene` — write scene prose, stop before shot planning
 - `pnpm run-to myproj scene_video_prompt` — plan all shots, stop before any image
 - `pnpm run-to myproj` — go all the way to the final video
+
+`run-to` also accepts a **specific node id or alias** as the gate. The
+executor pauses the moment that one node terminates, before its
+siblings run. Drives the per-shot iteration loop:
+
+- `pnpm run-to myproj shot_image:scene_1_shot_1` — generate just THAT image, then stop
+- `pnpm run-to myproj scene_2_shot_3.image` — alias form, same idea
+- `pnpm run-to myproj scene_2_shot_3.video` — render just one shot's video
 
 ## Common workflows
 
@@ -134,6 +177,49 @@ pnpm regen myproj scene_2.scene --cascade   # cascade ensures downstream redoes
 ```bash
 pnpm regen myproj scene_2_shot_3.prompt --cascade
 ```
+
+**Per-shot iteration — review one shot at a time, edit if needed, advance:**
+
+This is the high-leverage "user wants control" workflow. For each shot in
+the scene, generate just the image, pause for review, edit/regen if
+needed, then generate just the video for that shot.
+
+```bash
+# 1. Generate just shot 1's image, pause
+pnpm run-to myproj shot_image:scene_1_shot_1
+
+# 2. Look at it: pnpm inspect myproj scene_1_shot_1.image
+#    Don't like the framing? Edit the prompt and re-render the image:
+pnpm inspect myproj scene_1_shot_1.prompt > /tmp/p.json
+# (user / agent edits /tmp/p.json — change framing, lighting, etc.)
+pnpm override myproj scene_1_shot_1.prompt --from /tmp/p.json
+pnpm regen myproj scene_1_shot_1.image      # default = no cascade; just this image
+# loop until happy with the image
+
+# 3. Generate just shot 1's video
+pnpm run-to myproj shot_video:scene_1_shot_1
+
+# 4. Approve and advance to shot 2
+pnpm run-to myproj shot_image:scene_1_shot_2
+# ...repeat
+```
+
+The default behavior of `regen` is "no cascade" — useful here so editing
+shot 1's prompt re-renders only its image, not its video (you'll do
+that explicitly in step 3). When the user is changing semantics that
+SHOULD propagate, add `--cascade`.
+
+**Cancel a running executor without killing the terminal:**
+```bash
+# In one terminal: pnpm run-to myproj
+# In another: signal the running executor to stop cleanly
+pnpm stop myproj
+```
+
+`stop` drops `.executor.stop` in the project dir; the running executor
+notices on its next tick (~250ms), interrupts any in-flight ComfyUI
+work, and exits with stopReason='cancelled'. State is persisted; safe
+to resume with another `pnpm run-to`.
 
 **Something failed — debug:**
 ```bash

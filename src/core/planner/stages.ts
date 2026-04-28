@@ -97,6 +97,10 @@ export function resolveStageToTypeIds(stage: string): string[] | null {
 export interface GateNode {
   typeId: string;
   status: string;
+  /** Full node id (`typeId:itemId` or just `typeId` for singletons).
+   *  Optional so existing call sites that only checked typeId-level
+   *  gates keep compiling; required when the per-node gate is in use. */
+  id?: string;
 }
 
 /**
@@ -129,4 +133,33 @@ export function isStageGateSatisfied(
   if (inGate.length === 0) return false;
   const TERMINAL = new Set(['completed', 'skipped', 'failed']);
   return inGate.every(n => TERMINAL.has(n.status));
+}
+
+/**
+ * Single-node sister of `isStageGateSatisfied`. Fires the moment a
+ * specific node id reaches a terminal status — without waiting for
+ * the rest of its stage. Drives `pnpm run-to <project> <node-id>`
+ * so the pi agent can pause after one shot's image generates,
+ * before its sibling shots run.
+ *
+ * Semantics:
+ *   - No gate set (`null`) → false.
+ *   - Redo-isolation active → false (matches stage gate; redos must
+ *     not trip pauses).
+ *   - Target id not in the graph (pre-expansion) → false; let the
+ *     loop run and expand.
+ *   - Otherwise → true iff that node is in a terminal status
+ *     (`completed`, `skipped`, or `failed`).
+ */
+export function isNodeGateSatisfied(
+  nodes: GateNode[],
+  stopAfterNodeId: string | null,
+  hasRedoIsolation: boolean,
+): boolean {
+  if (!stopAfterNodeId) return false;
+  if (hasRedoIsolation) return false;
+  const target = nodes.find(n => n.id === stopAfterNodeId);
+  if (!target) return false;
+  const TERMINAL = new Set(['completed', 'skipped', 'failed']);
+  return TERMINAL.has(target.status);
 }

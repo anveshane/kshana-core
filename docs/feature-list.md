@@ -111,3 +111,5 @@
 - **Workflow Management** — List, upload, test, activate, and delete workflows via API. _REST endpoints for workflow CRUD._
 - **Asset Serving** — Access any generated image or video by project and path. _`GET /api/v1/assets/:project/:path`_
 - **Real-Time Communication** — Full bidirectional streaming between the UI and the server. _WebSocket at `/api/v1/ws/chat`._
+- **Agent-Control Endpoints** — External agents (pi-agent, openclaw, anything that can hit HTTP) can drive a project end-to-end without spawning child processes or having Node installed. _`POST /api/v1/projects/:name/run-to`, `POST .../stop`, `GET .../status`, `GET .../nodes/:alias`, `POST .../regen`, `POST .../override`._
+- **Server Discovery File** — Server writes `~/.kshana/server.json` (mode 0600) with its URL, port, and pid on launch so external agents can find it without knowing the random port the desktop allocated. Removed on graceful shutdown; clients verify pid is alive to detect stale files. _`KSHANA_DISCOVERY_FILE` env var to override path._

@@ -41,7 +41,8 @@ import {
 } from './shotImagePromptNormalizer.js';
 import { extractCollectionItems } from './collectionExtractor.js';
 import { healStaleMatchingDeps } from './stateHeal.js';
-import { isStageGateSatisfied, resolveStageToTypeIds } from './stages.js';
+import { isStageGateSatisfied, isNodeGateSatisfied, resolveStageToTypeIds } from './stages.js';
+import { consumeStopFile } from './stopFile.js';
 import type { ArtifactCategory } from '../templates/types.js';
 import { resolveGuide, loadContentTypeSkills, type SkillResolutionContext } from '../prompts/loader.js';
 // Media generation imports
@@ -114,6 +115,15 @@ export interface ExecutorAgentConfig {
    * the canonical alias table.
    */
   stopAtStage?: string;
+  /**
+   * Pause execution as soon as a SPECIFIC node id terminates. Sister
+   * of `stopAtStage` but on a single node — drives the per-shot
+   * interactive flow (`pnpm run-to <project> shot_image:scene_1_shot_1`):
+   * generate one image, pause for review, edit/regen if needed, then
+   * `pnpm run-to <project> shot_video:scene_1_shot_1` for that shot's
+   * video. Without this, run-to could only target an entire stage.
+   */
+  stopAfterNode?: string;
   /**
    * Skip media generation (ComfyUI calls). Only generates LLM prompts.
    * Used for testing — validates prompt structure without calling image/video providers.
@@ -224,6 +234,13 @@ export class ExecutorAgent extends TypedEventEmitter {
    */
   private stopAtStageTypeIds: Set<string> | null = null;
   /**
+   * Single-node pause target. Set from config.stopAfterNode at
+   * construction time and from `setStopAfterNode(id | null)` at
+   * runtime. Sister of stopAtStageTypeIds; both gates run in parallel
+   * — whichever fires first wins.
+   */
+  private stopAfterNodeId: string | null = null;
+  /**
    * Why the executor last stopped. Reset at the top of each run().
    * Read by ConversationManager/WebSocketHandler to distinguish
    * "paused at stage gate" from "completed" / "cancelled" / "failed"
@@ -291,6 +308,9 @@ export class ExecutorAgent extends TypedEventEmitter {
         );
       }
       this.stopAtStageTypeIds = new Set(resolved);
+    }
+    if (config.stopAfterNode) {
+      this.stopAfterNodeId = config.stopAfterNode;
     }
     // Build per-call router. When LLM_ROUTING_ENABLED=false (default), every
     // purpose resolves to the default client so behavior is unchanged.
@@ -766,11 +786,11 @@ export class ExecutorAgent extends TypedEventEmitter {
    * it without passing graph state around.
    */
   private shouldStopForStageGate(): boolean {
-    return isStageGateSatisfied(
-      this.executor.getAllNodes().map(n => ({ typeId: n.typeId, status: n.status })),
-      this.stopAtStageTypeIds,
-      this.redoOnlyNodes !== null,
-    );
+    const nodes = this.executor.getAllNodes().map(n => ({ typeId: n.typeId, status: n.status, id: n.id }));
+    const hasRedoIsolation = this.redoOnlyNodes !== null;
+    if (isStageGateSatisfied(nodes, this.stopAtStageTypeIds, hasRedoIsolation)) return true;
+    if (isNodeGateSatisfied(nodes, this.stopAfterNodeId, hasRedoIsolation)) return true;
+    return false;
   }
 
   /**
@@ -793,6 +813,15 @@ export class ExecutorAgent extends TypedEventEmitter {
    * pick up a per-invocation `stopAtStage` without being reconstructed.
    * Throws on unknown stage names — fail fast on bad input.
    */
+  /**
+   * Set or clear the per-node pause target at runtime. Sister of
+   * `setStopAtStage`. Pass a node id (e.g. `'shot_image:scene_1_shot_1'`)
+   * to arm; pass `null` to clear.
+   */
+  setStopAfterNode(nodeId: string | null): void {
+    this.stopAfterNodeId = nodeId;
+  }
+
   setStopAtStage(stage: string | null): void {
     if (stage === null) {
       this.stopAtStageTypeIds = null;
@@ -1862,6 +1891,15 @@ export class ExecutorAgent extends TypedEventEmitter {
       const MAX_SERIAL_IDLE = 25;
 
       while (!this.executor.isComplete() && !this.stopped) {
+        // Out-of-process cancel: pnpm stop <project> drops a sentinel
+        // file in the project dir. Consume it here on every tick so
+        // the pi agent (or any external caller) can kill an in-flight
+        // run cleanly via filesystem instead of IPC.
+        if (consumeStopFile(this.config.projectDir)) {
+          this.log('stop signal received via .executor.stop file — cancelling');
+          this.stop();
+          break;
+        }
         // Expand any type-level collections before checking for ready nodes
         await this.expandPendingCollections();
         this.ensureTimelineInitialized();
