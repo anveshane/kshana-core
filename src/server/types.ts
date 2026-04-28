@@ -16,7 +16,6 @@ export type ServerMessageType =
   | 'stream_chunk'        // Streaming text chunk
   | 'stream_end'          // End of streaming
   | 'context_usage'       // Context window usage stats
-  | 'usage_fact'          // Neutral usage facts for external metering
   | 'phase_transition'    // Workflow phase change
   | 'timeline_update'     // Full timeline state update
   | 'notification'        // User-facing notification
@@ -187,22 +186,6 @@ export interface ContextUsageData {
   percentage: number;
   wasCompressed: boolean;
   iteration: number;
-}
-
-export interface UsageFactData {
-  eventId: string;
-  kind: 'llm' | 'image_generation' | 'image_edit' | 'video_generation';
-  toolName?: string;
-  toolCallId?: string;
-  facts: {
-    promptTokens?: number;
-    completionTokens?: number;
-    totalTokens?: number;
-    imageCount?: number;
-    seconds?: number;
-    artifactId?: string;
-    filePath?: string;
-  };
 }
 
 /**

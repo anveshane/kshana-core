@@ -12,8 +12,6 @@ export type {
   ToolStreamingEvent,
   NotificationEvent,
   ContextUsageEvent,
-  UsageFactEvent,
-  UsageFactKind,
   QuestionEvent,
   QuestionOption,
   AgentStatusEvent,
