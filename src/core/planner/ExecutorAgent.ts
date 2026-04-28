@@ -42,6 +42,7 @@ import {
 import { extractCollectionItems } from './collectionExtractor.js';
 import { healStaleMatchingDeps } from './stateHeal.js';
 import { isStageGateSatisfied, isNodeGateSatisfied, resolveStageToTypeIds } from './stages.js';
+import { consumeStopFile } from './stopFile.js';
 import type { ArtifactCategory } from '../templates/types.js';
 import { resolveGuide, loadContentTypeSkills, type SkillResolutionContext } from '../prompts/loader.js';
 // Media generation imports
@@ -1890,6 +1891,15 @@ export class ExecutorAgent extends TypedEventEmitter {
       const MAX_SERIAL_IDLE = 25;
 
       while (!this.executor.isComplete() && !this.stopped) {
+        // Out-of-process cancel: pnpm stop <project> drops a sentinel
+        // file in the project dir. Consume it here on every tick so
+        // the pi agent (or any external caller) can kill an in-flight
+        // run cleanly via filesystem instead of IPC.
+        if (consumeStopFile(this.config.projectDir)) {
+          this.log('stop signal received via .executor.stop file — cancelling');
+          this.stop();
+          break;
+        }
         // Expand any type-level collections before checking for ready nodes
         await this.expandPendingCollections();
         this.ensureTimelineInitialized();

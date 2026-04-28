@@ -52,7 +52,8 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "remotion:studio": "cd remotion-infographics && remotion studio src/index.tsx",
-    "analytics:backfill:posthog": "tsx scripts/backfill-posthog-from-sqlite.ts"
+    "analytics:backfill:posthog": "tsx scripts/backfill-posthog-from-sqlite.ts",
+    "stop": "tsx scripts/stop-executor.ts"
   },
   "keywords": [
     "cli",
