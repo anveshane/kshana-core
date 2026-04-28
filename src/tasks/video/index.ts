@@ -28,21 +28,12 @@ import { getPhaseLogger } from '../../utils/phaseLogger.js';
 
 // Workflow imports
 import {
-  getWorkflowFileTools,
   getAllFileTools,
-  getOrCreateProject,
   loadProject,
   saveProject,
-  getCurrentPhase,
-  WorkflowPhase,
-  PHASE_CONFIGS,
   getProjectDir,
   getProjectStyle,
   addAsset,
-  updatePhaseStatus,
-  // Style and input type configs
-  STYLE_CONFIGS,
-  INPUT_TYPE_CONFIGS,
   // Generic template-aware imports
   GenericProjectManager,
   createProjectManager,
@@ -256,7 +247,11 @@ export function createGoalDrivenToolRegistry(
     };
     proj.productionCompletedAt = Date.now();
     saveProject(proj, basePath);
-    updatePhaseStatus(proj, WorkflowPhase.VIDEO_COMBINE, 'completed', basePath);
+    // Legacy `updatePhaseStatus(proj, WorkflowPhase.VIDEO_COMBINE,
+    // 'completed')` removed — the executor's `final_video` node
+    // status (completed once outputPath is written) is the canonical
+    // signal that the project is done. The agent loop, the run-to
+    // CLI, and the agent-control HTTP endpoints all consume that.
   };
 
   // Add timeline tools — use getter so project dir is resolved at execution time

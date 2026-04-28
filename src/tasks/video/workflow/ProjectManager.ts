@@ -980,42 +980,6 @@ export function getProjectStyleConfig(basePath: string = process.cwd()): StyleCo
 }
 
 /**
- * Update a phase's status.
- * Ensures status and plannerStage stay synchronized.
- */
-export function updatePhaseStatus(
-  project: ProjectFile,
-  phase: string,
-  status: PhaseStatus,
-  basePath: string = process.cwd()
-): ProjectFile {
-  const phaseInfo = project.phases[phase];
-  if (!phaseInfo) {
-    throw new Error(`Phase '${phase}' does not exist in project`);
-  }
-  phaseInfo.status = status;
-
-  if (status === 'completed') {
-    phaseInfo.completedAt = Date.now();
-    phaseInfo.plannerStage = PlannerStage.COMPLETE;
-  } else if (status === 'in_progress') {
-    // Ensure plannerStage is set when status becomes in_progress
-    if (!phaseInfo.plannerStage || phaseInfo.plannerStage === PlannerStage.COMPLETE) {
-      // If plannerStage is not set or is already complete (shouldn't happen),
-      // reset to PLANNING for consistency
-      phaseInfo.plannerStage = PlannerStage.PLANNING;
-    }
-    // Set startedAt if not already set
-    if (!phaseInfo.startedAt) {
-      phaseInfo.startedAt = Date.now();
-    }
-  }
-
-  saveProject(project, basePath);
-  return project;
-}
-
-/**
  * Update a phase's planner stage.
  */
 

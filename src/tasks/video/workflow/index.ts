@@ -75,7 +75,6 @@ export {
   getProjectStyle,
   getProjectStyleConfig,
   setProjectInputType,
-  updatePhaseStatus,
   planFileHasContent,
   readProjectFile,
   writeProjectFile,
