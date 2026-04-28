@@ -1,0 +1,31 @@
+{
+  "id": "flux2_klein_edit_consistency_cloud",
+  "displayName": "FLUX 2 Klein Edit + Consistency LoRA (Cloud)",
+  "pipeline": "image_editing",
+  "llmDescription": "Cloud Klein Edit with the Klein-9b-consistency LoRA wired into the sampling path. Same 4-image-slot interface as the standard Klein workflow, but with stronger character-feature preservation across multi-ref compositions. Output resolution is auto-derived from the base image (no manual width/height needed).",
+  "selectionCriteria": "Shot image generation with character/setting references on ComfyUI Cloud, prioritized when character-feature consistency matters (multi-character shots, OTS framings).",
+  "outputType": "image",
+  "priority": 3,
+  "inputRequirements": [
+    { "id": "prompt", "type": "text", "source": "llm", "required": true },
+    { "id": "base_image", "type": "image", "source": "shot_image", "required": true },
+    { "id": "reference_image_1", "type": "image", "source": "shot_image", "required": false },
+    { "id": "reference_image_2", "type": "image", "source": "shot_image", "required": false },
+    { "id": "reference_image_3", "type": "image", "source": "shot_image", "required": false },
+    { "id": "seed", "type": "number", "source": "system", "required": false },
+    { "id": "filenamePrefix", "type": "text", "source": "system", "required": false }
+  ],
+  "workflowFile": "flux2_klein_edit_consistency_cloud.json",
+  "format": "api",
+  "parameterMappings": [
+    { "input": "prompt", "nodeId": "109", "field": "text" },
+    { "input": "base_image", "nodeId": "76", "field": "image" },
+    { "input": "reference_image_1", "nodeId": "81", "field": "image" },
+    { "input": "reference_image_2", "nodeId": "82", "field": "image" },
+    { "input": "reference_image_3", "nodeId": "83", "field": "image" },
+    { "input": "seed", "nodeId": "92:73", "field": "noise_seed" },
+    { "input": "filenamePrefix", "nodeId": "94", "field": "filename_prefix" }
+  ],
+  "builtIn": true,
+  "active": false
+}

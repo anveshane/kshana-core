@@ -18,6 +18,8 @@ export type {
 
 export { ProviderRegistry, type ProviderConfig } from './ProviderRegistry.js';
 export { ComfyUIProvider } from './comfyui/ComfyUIProvider.js';
+export { WorkflowModeRegistry, getWorkflowModeRegistry } from './WorkflowModeRegistry.js';
+export type { WorkflowManifest, WorkflowPipeline, InputRequirement, ParameterMapping } from './types.js';
 
 import { ProviderRegistry } from './ProviderRegistry.js';
 import { ComfyUIProvider } from './comfyui/ComfyUIProvider.js';

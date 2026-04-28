@@ -1,0 +1,29 @@
+{
+  "name": "Shot Last Frame Binary",
+  "description": "Binary evaluation of call 3 output — last frame delta prompt quality.",
+  "format": "binary",
+  "phase": "shot_image_prompt",
+  "promptType": "shot_last_frame",
+  "questions": [
+    {
+      "id": "DELTA_ONLY",
+      "question": "Does the prompt describe ONLY what changed from the first frame? It should NOT re-describe the full scene, setting, lighting, or characters that haven't moved. The image editor already has the first frame."
+    },
+    {
+      "id": "DRAMATIC_CHANGE",
+      "question": "Are the described changes DRAMATIC and clearly visible? Character moved significantly (not 'slightly to the left'), new element appeared or disappeared, lighting shifted drastically. Not vague qualifiers like 'more intense', 'more pronounced', 'now fully', 'denser'."
+    },
+    {
+      "id": "NO_REFS",
+      "question": "Does the prompt contain NO 'from image N' references? The last frame edits the first frame — no numbered image references should appear."
+    },
+    {
+      "id": "FROZEN_INSTANT",
+      "question": "Does the prompt describe a frozen instant? No motion verbs: running, walking, falling, turning, dissolving, collapsing, flickering, dashing, erupting. Uses static equivalents."
+    },
+    {
+      "id": "COVER_TEST",
+      "question": "Reading ONLY this last frame text (without seeing the first frame): can you tell what is DIFFERENT? If the text could describe the first frame equally well, it fails."
+    }
+  ]
+}

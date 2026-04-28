@@ -1,0 +1,74 @@
+{
+  "name": "Shot Composition Binary",
+  "description": "Binary evaluation of shot_image_prompt JSON — multi-frame composition with reference image handling, lighting, and visual continuity.",
+  "format": "binary",
+  "phase": "shot_image_prompt",
+  "promptType": "shot_image_prompt",
+  "context": ["scene_video_prompt", "scene", "story", "scene_state", "available_references"],
+  "questions": [
+    {
+      "id": "REFERENCE_USAGE",
+      "question": "Does the imagePrompt use 'from image N' phrasing to reference characters and settings that are visible in the shot? Every character/setting present in the shot description should be referenced by their image number. No shot with visible characters should omit references."
+    },
+    {
+      "id": "REFID_MATCH",
+      "question": "Does every entry in the references array have a refId that exactly matches one of the provided available_references? No fabricated, misspelled, or non-existent refIds? Every referenced 'image N' in the prompt should have a corresponding entry in the references array."
+    },
+    {
+      "id": "FIRST_FRAME_COMPLETE",
+      "question": "Is the first_frame imagePrompt a complete, standalone scene description? It should describe the full visual scene independently — not a delta or continuation. A reader seeing only this prompt should understand the entire frame."
+    },
+    {
+      "id": "LAST_FRAME_DELTA",
+      "question": "Is the last_frame imagePrompt a delta description that describes ONLY what changed from first_frame? It should NOT re-describe the entire scene. If nothing visually changes, it should say so explicitly or copy the first_frame."
+    },
+    {
+      "id": "LIGHTING_COMPLETE",
+      "question": "Does the first_frame imagePrompt include lighting description with at least 3 of these 4 components: source (where light comes from), direction (overhead/behind/side), quality (harsh/soft/dappled), temperature (warm/cool/neutral)?"
+    },
+    {
+      "id": "FROZEN_INSTANT",
+      "question": "Does the imagePrompt describe a single frozen instant? No motion verbs like 'running', 'falling', 'turning', 'walking'. Instead uses static equivalents: 'mid-stride', 'captured in free-fall', 'head angled toward'. Motion is for the video prompt, not the image prompt."
+    },
+    {
+      "id": "PROSE_QUALITY",
+      "question": "Is the imagePrompt written as flowing prose — a single paragraph that a cinematographer could visualize? Not comma-separated keywords, not bullet points, not a list of attributes. Should read like a description of a photograph."
+    },
+    {
+      "id": "STATE_CONSISTENT",
+      "question": "If scene_state was provided, is the shot consistent with character positions and states? Characters should not teleport or change pose without the shot describing that transition. If no state was provided, answer YES."
+    },
+    {
+      "id": "SHOT_FAITHFUL",
+      "question": "Does the shot match the scene_video_prompt description for this shot? The visual content should reflect the described action, characters, and setting from the shot breakdown — no invented major elements or missing key events."
+    },
+    {
+      "id": "COMPOSITION_MATCH",
+      "question": "Does the framing described in the prompt match the shot's camera work from the scene breakdown? A wide shot should describe an environment-dominated frame, a close-up should fill the frame with a face or detail, etc."
+    },
+    {
+      "id": "STRATEGY_APPROPRIATE",
+      "question": "Is the generationStrategy appropriate? 'flfv' (first + last frame) for most shots. 'fmlfv' (first + mid + last) only for complex VFX, transformations, morphing, or shots where the midpoint looks very different from a simple blend."
+    },
+    {
+      "id": "NO_FABRICATED_REFS",
+      "question": "Are there zero references to image numbers NOT listed in available_references? No hallucinated 'from image N' where N exceeds the number of available references. The LLM must not invent image numbers."
+    },
+    {
+      "id": "OTS_REQUIRES_TWO_CHARS",
+      "question": "If the imagePrompt uses 'over-the-shoulder', 'OTS', or any other two-character framing language, does the references array contain TWO OR MORE character entries? OTS is inherently a two-character composition (foreground anchor blurred + focal subject sharp). Using it with one character causes the image model to invent a phantom second character. For single-character close-ups, the prompt should use 'insert', 'extreme_close_up', or 'close_up' framing instead. Answer YES if the prompt either avoids OTS or has two-plus character refs; NO if OTS phrasing is used with fewer than two character refs."
+    },
+    {
+      "id": "NO_PHANTOM_CHARACTER",
+      "question": "Does the imagePrompt avoid naming any character that is NOT present in the references array? Every character mentioned by name in the prose must have a corresponding entry in the references[] array for that frame. If the prose names someone whose refId is missing from references[], the image model has no anchor for that character's appearance and will invent or blend features. Answer YES if every named character is in references[]; NO if any named character is absent."
+    },
+    {
+      "id": "NO_ORPHAN_REFS",
+      "question": "Is every entry in the references[] array tagged at least once in the prose with 'from image N'? An entry that's uploaded but never named in the prose contributes no signal to the image model and may confuse its attention. Answer YES if every imageNumber in references[] appears at least once as 'from image N' in the prose; NO if any reference is orphaned. (Note: for last_frame delta prompts, the setting reference must still be tagged at least once even if the focus is on character changes.)"
+    },
+    {
+      "id": "VALID_JSON",
+      "question": "Is the output valid JSON with all required fields? Must have: frames (with first_frame containing imagePrompt, generationMode, references), negativePrompt, and aspectRatio. generationStrategy should be present."
+    }
+  ]
+}

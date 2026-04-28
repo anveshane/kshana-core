@@ -1,0 +1,41 @@
+{
+  "name": "Shot Video Fidelity Binary",
+  "description": "Binary evaluation of a shot video — judge applies the rubric to a SINGLE keyframe at a time. The audit tool aggregates across keyframes and adds the cross-frame motion checks (MOTION_PROGRESSED, STATIC_DRIFT, KEYFRAME_CONSISTENCY, DIRECTED_BEAT_REACHED) post-hoc by comparing first vs last frames. Per-keyframe score = (count YES) / 8 * 100.",
+  "format": "binary",
+  "phase": "shot_video_eval",
+  "promptType": "shot_video_keyframe",
+  "questions": [
+    {
+      "id": "SUBJECT_PRESENT",
+      "question": "Is the primary subject named in the motion directive (or implied by the originating shot prompt) clearly visible and identifiable in this keyframe?"
+    },
+    {
+      "id": "SUBJECT_FIDELITY",
+      "question": "Does the primary subject match the original character description — age bracket, ethnicity, build, distinguishing features? Allow minor variation; fail only on identity-altering mismatches."
+    },
+    {
+      "id": "SETTING_MATCH",
+      "question": "Does the visible setting match what the directive (or shot prompt) describes — interior/exterior, named location, atmospheric setting elements?"
+    },
+    {
+      "id": "COMPOSITION",
+      "question": "Does the composition broadly match what was directed — framing (wide / medium / close-up), camera angle, depth of field?"
+    },
+    {
+      "id": "DIRECTED_ACTION_VISIBLE",
+      "question": "Is some recognizable trace of the directed action visible in this frame? E.g. if the directive says 'chrome flecks erupt from coat', do you see flecks/sparks/swirling debris around the character at this moment? Allow partial — the action need not be at climax in every frame."
+    },
+    {
+      "id": "NO_DRIFT_TO_UNRELATED_SUBJECT",
+      "question": "Has the video NOT drifted to a totally unrelated subject? E.g. the directive says 'Johnathan striding' and the frame is a static extreme close-up of a chromed face — that's drift, fail. The frame should depict the directive's scene, not invent a different one."
+    },
+    {
+      "id": "NO_HALLUCINATED_CHARACTERS",
+      "question": "Are there NO unintended characters in the frame — no extra people, no duplicates of the main character, no cat where no cat was specified?"
+    },
+    {
+      "id": "LIGHTING_MOOD",
+      "question": "Does the lighting and atmospheric mood match what was directed — time of day, colour temperature, key-light direction or quality when specified?"
+    }
+  ]
+}

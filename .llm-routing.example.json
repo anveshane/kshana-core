@@ -1,0 +1,42 @@
+{
+  "_README": "Copy this file to .llm-routing.json and edit. Enable routing with LLM_ROUTING_ENABLED=true. Env vars LLM_TIER_<TIER>_PROVIDER / API_KEY / MODEL / BASE_URL and LLM_PURPOSE__<SLUG>_PROVIDER etc. override file values.",
+
+  "default": {
+    "provider": "anthropic",
+    "apiKey": "sk-ant-your-default-key",
+    "model": "claude-sonnet-4-6"
+  },
+
+  "tiers": {
+    "heavy": {
+      "provider": "anthropic",
+      "apiKey": "sk-ant-your-heavy-key",
+      "model": "claude-opus-4-7"
+    },
+    "medium": {
+      "provider": "anthropic",
+      "apiKey": "sk-ant-your-medium-key",
+      "model": "claude-sonnet-4-6"
+    },
+    "light": {
+      "provider": "groq",
+      "apiKey": "gsk_your-groq-key",
+      "model": "llama-3.3-70b-versatile"
+    }
+  },
+
+  "purposes": {
+    "utility.image_review": {
+      "_comment_local": "Route VLM image-review to a local LM Studio instance running Qwen3-VL. Used by reviewImage() during generation AND by the fidelity audit tools (`pnpm calibrate-vlm`, `pnpm audit-fidelity`). Set LLM_ROUTING_ENABLED=true. Backup model ids loaded in LM Studio: minicpm-v-4_5, huihui-minicpm-v-4_5-abliterated.",
+      "provider": "openai",
+      "apiKey": "lm-studio",
+      "baseUrl": "http://127.0.0.1:1234/v1",
+      "model": "huihui-qwen3-vl-8b-instruct-abliterated"
+    },
+    "content.remotion_code": {
+      "provider": "anthropic",
+      "apiKey": "sk-ant-code-key",
+      "model": "claude-sonnet-4-6"
+    }
+  }
+}

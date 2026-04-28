@@ -1,0 +1,49 @@
+{
+  "name": "Shot Image Binary",
+  "description": "Binary yes/no evaluation of shot image prompt quality — does it create a prompt for one specific shot matching framing and narrative beat?",
+  "format": "binary",
+  "phase": "img_prompts",
+  "promptType": "shot_image",
+  "questions": [
+    {
+      "id": "SHOT_TYPE_MATCH",
+      "question": "Does the composition match the shot type from the motion JSON (close-up = face fills frame, wide = full environment)?"
+    },
+    {
+      "id": "NARRATIVE_MOMENT",
+      "question": "Does it depict the specific story beat described in the shot's motion description — not a generic composition?"
+    },
+    {
+      "id": "CHARACTER_FOCUS",
+      "question": "Are only the characters relevant to this specific shot described (not all scene characters)?"
+    },
+    {
+      "id": "SPATIAL_FRAMING",
+      "question": "Does the prompt describe camera distance, angle, and depth of field consistent with the shot type?"
+    },
+    {
+      "id": "REF_IMAGES_SCOPED",
+      "question": "Are only shot-relevant reference images included (close-up of Alice → only Alice's ref)?"
+    },
+    {
+      "id": "APPEARANCE_CHANGES",
+      "question": "If the shot requires a character to look different from their reference image (different clothing, injuries, disguise, wet/dirty/undressed), does the prompt describe those specific differences? If no changes are needed, does it avoid redundantly re-describing what the reference already shows?"
+    },
+    {
+      "id": "LIGHTING",
+      "question": "Lighting specified with source, direction, and quality?"
+    },
+    {
+      "id": "CONTINUITY",
+      "question": "Could this shot plausibly sit in sequence with adjacent shots from the same scene?"
+    },
+    {
+      "id": "PROSE_QUALITY",
+      "question": "Flowing prose, not keyword lists?"
+    },
+    {
+      "id": "STORY_ACCURATE",
+      "question": "Does the shot depict details consistent with the source scene description (correct location, correct character state, no invented elements that contradict the story)?"
+    }
+  ]
+}

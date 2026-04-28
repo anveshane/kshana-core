@@ -1,0 +1,65 @@
+{
+  "name": "Character Image Binary",
+  "description": "Binary yes/no evaluation of character image prompt quality — does it establish a unique, recognizable visual identity?",
+  "format": "binary",
+  "phase": "img_prompts",
+  "promptType": "character_image",
+  "questions": [
+    {
+      "id": "ETHNICITY",
+      "question": "Does the prompt specify or clearly imply the character's ethnicity/race/skin tone?"
+    },
+    {
+      "id": "AGE",
+      "question": "Does the prompt mention or imply the character's approximate age or age range?"
+    },
+    {
+      "id": "BUILD",
+      "question": "Does the prompt describe body type, height, or build (e.g., tall, stocky, lean, petite)?"
+    },
+    {
+      "id": "HAIR",
+      "question": "Does the prompt specify hair color, length, and style?"
+    },
+    {
+      "id": "FACE",
+      "question": "Does the prompt include at least one distinguishing facial feature (e.g., jaw shape, eye shape, scars, freckles, nose)?"
+    },
+    {
+      "id": "CLOTHING",
+      "question": "Does the prompt describe specific clothing with colors and materials — not vague ('casual clothes') but concrete ('worn brown leather jacket')?"
+    },
+    {
+      "id": "SIMPLE_POSE",
+      "question": "Does the prompt describe a simple, front-facing or slightly angled pose where all physical features are clearly visible? (Not dramatic/action poses that obscure features)"
+    },
+    {
+      "id": "SIMPLE_LIGHTING",
+      "question": "Is the lighting described as simple, even, and feature-revealing — like studio lighting? (Soft key light, fill light — NOT dramatic shadows, colored gels, or moody backlighting)"
+    },
+    {
+      "id": "SOLO_SUBJECT",
+      "question": "Is ONLY one character depicted — no other people, animals, or scene elements?"
+    },
+    {
+      "id": "NEUTRAL_BG",
+      "question": "Is the background plain/neutral/studio — no environments, furniture, or settings?"
+    },
+    {
+      "id": "FULL_BODY_OR_SPECIFIED",
+      "question": "Does the prompt specify the shot type (full-body, three-quarter, bust) so the framing is intentional?"
+    },
+    {
+      "id": "UNIQUENESS",
+      "question": "Based on the description, would this character be visually distinguishable from a generic stock photo person?"
+    },
+    {
+      "id": "PERIOD_CONTEXT",
+      "question": "If the character profile or world style indicates a specific historical period, culture, or era (e.g., ancient India, medieval Europe, cyberpunk future, 1920s America), does the image prompt include this context? The image generator defaults to modern/contemporary without explicit period cues. Clothing, accessories, hairstyle, and materials should all be period-appropriate. Answer YES if period context is included or if the story is set in modern times. Answer NO if the character is from a historical or fantasy setting but the prompt reads as contemporary."
+    },
+    {
+      "id": "WORLD_STYLE_CONSISTENCY",
+      "question": "If a world style bible is provided as context, does the image prompt reflect its visual direction — color palette, material choices, lighting mood, and aesthetic? For example, if the world style specifies 'warm amber and charcoal tones' the character shouldn't be described in bright neon colors. Answer YES if consistent or if no world style is provided."
+    }
+  ]
+}

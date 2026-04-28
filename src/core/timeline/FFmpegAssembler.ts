@@ -23,6 +23,10 @@ export interface ResolvedSegment {
   duration: number;
   filePath: string;
   mediaType: 'video' | 'image';
+  /** Transition from the previous segment (default: 'cut') */
+  transition?: string;
+  /** Transition duration in seconds (default: 0.5) */
+  transitionDuration?: number;
 }
 
 export interface ResolutionResult {
@@ -35,6 +39,9 @@ export interface AssemblyConfig {
   height?: number;
   preset?: string;
   timeoutMs?: number;
+  /** Watermark text drawn in the bottom-right corner. Defaults to env
+   * `KSHANA_WATERMARK` or `'kshana-ink'`. Pass an empty string to disable. */
+  watermark?: string;
 }
 
 export interface AssemblyResult {
@@ -241,6 +248,8 @@ export function resolveSegmentFilePaths(
       duration: segment.duration,
       filePath: absolutePath,
       mediaType,
+      transition: segment.transition?.type,
+      transitionDuration: segment.transition ? segment.transition.durationMs / 1000 : undefined,
     });
   }
 
@@ -289,6 +298,162 @@ export async function convertImageToVideo(
 // ---------------------------------------------------------------------------
 
 /**
+ * Build the per-segment video filter chunk: scale → pad → reset PTS.
+ * Pure function — extracted for testability.
+ */
+export function buildVideoFilter(i: number, width: number, height: number): string {
+  return (
+    `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
+    `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[v${i}]`
+  );
+}
+
+/**
+ * FFmpeg encode args needed for the output to play on mobile (WhatsApp,
+ * iOS Safari, Android stock player) — pure, exported for testability.
+ *
+ * Diagnosed on 2026-04-27: a forwarded WhatsApp video showed a black
+ * thumbnail and refused to play because:
+ *  - overlay filter upgraded the pixel format to yuv444p
+ *  - libx264 then picked profile 'High 4:4:4 Predictive'
+ *  - moov atom landed at the end (no faststart)
+ *  - audio was 24 kHz (some Android players prefer ≥44.1)
+ *
+ * These args lock the encode to mobile-safe values:
+ *  - yuv420p / High@4.1 — universally decodable
+ *  - faststart — moov at the head so previews/streaming work
+ *  - 48 kHz stereo audio
+ */
+export function mobileCompatibleEncodeArgs(): string[] {
+  return [
+    '-pix_fmt', 'yuv420p',
+    '-profile:v', 'high',
+    '-level:v', '4.1',
+    '-ar', '48000',
+    '-ac', '2',
+    '-movflags', '+faststart',
+  ];
+}
+
+/**
+ * Watermark image candidates, in priority order. We use a pre-rendered
+ * PNG with `overlay` instead of `drawtext` because the standard
+ * Homebrew/system FFmpeg builds don't ship `drawtext` (it requires
+ * libfreetype, missing in many distributions). `overlay` is a core
+ * filter present in every FFmpeg build.
+ *
+ * Regenerate with `scripts/render-watermark.ts` if the asset is missing.
+ */
+const WATERMARK_PNG_CANDIDATES = [
+  'assets/watermark_kshana.png',
+  'assets/watermark.png',
+];
+
+/**
+ * Resolve the watermark PNG path (or `null` if none of the candidates
+ * exist). Paths are checked relative to the current working directory
+ * first, then the kshana-ink package root.
+ */
+export function resolveWatermarkPath(cwd: string = process.cwd()): string | null {
+  for (const rel of WATERMARK_PNG_CANDIDATES) {
+    const abs = join(cwd, rel);
+    if (existsSync(abs)) return abs;
+  }
+  return null;
+}
+
+/**
+ * Build the `overlay` filter chunk that composites a pre-rendered
+ * watermark PNG onto the bottom-right corner of the final output.
+ * Pure — extracted for tests.
+ *
+ * Parameters:
+ *  - inputLabel: the filter graph label feeding in (e.g. 'concated')
+ *  - watermarkInputIdx: the FFmpeg input index of the PNG (e.g. the
+ *    Nth `-i` argument, 0-based)
+ *  - outputLabel: where the watermarked stream is published (e.g. 'outv')
+ *
+ * The PNG carries its own translucency and font; this filter just
+ * positions it bottom-right with a 24-px margin.
+ */
+export function buildWatermarkOverlayFilter(
+  inputLabel: string,
+  watermarkInputIdx: number,
+  outputLabel: string,
+): string {
+  return (
+    `[${watermarkInputIdx}:v]format=rgba[wm];` +
+    `[${inputLabel}][wm]overlay=x=W-w-24:y=H-h-24:format=auto[${outputLabel}]`
+  );
+}
+
+/**
+ * Compute the xfade transition duration for a given transition kind.
+ *
+ * Pure function — extracted for testability. The "cut" case used to be
+ * 0.01 s, but FFmpeg's xfade silently produces broken/truncated output
+ * when `duration` is shorter than 1 frame at the input framerate. At
+ * 24 fps that's ~0.042 s, so 0.01 s breaks the whole chain. We use
+ * 0.083 s (~2 frames at 24 fps) which is visually indistinguishable
+ * from a hard cut and safe for any reasonable framerate ≥ 24.
+ */
+export function xfadeTransitionDuration(
+  transition: string,
+  configuredDuration: number | undefined,
+): number {
+  if (transition === 'cut') return 0.083;
+  if (transition === 'flash_to_white') {
+    return Math.min(configuredDuration ?? 0.2, 0.3);
+  }
+  return configuredDuration ?? 0.5;
+}
+
+/**
+ * Compute the xfade offset and updated accumulator for one transition step.
+ *
+ * Pure function — extracted for testability. The cumulative accumulator must
+ * use ACTUAL clip durations (videoDurations[i]) rather than the timeline's
+ * planned segment.duration. Mismatch was the AV-sync bug on
+ * woman_medieval_village_betrothed/final_video.mp4 — the planner declared
+ * shorter shots than LTX 2.3 actually produced, so xfade truncated the
+ * video to the planner's number while audio played in full.
+ */
+export function computeXfadeOffset(
+  prevAccumulatedDuration: number,
+  thisClipVideoDuration: number,
+  transitionDuration: number,
+): { offset: number; nextAccumulatedDuration: number } {
+  const offset = Math.max(0, prevAccumulatedDuration - transitionDuration);
+  const nextAccumulatedDuration =
+    prevAccumulatedDuration + thisClipVideoDuration - transitionDuration;
+  return { offset, nextAccumulatedDuration };
+}
+
+/**
+ * Build the per-segment audio filter chunk.
+ *
+ * Pads (apad) then trims (atrim) the audio stream to exactly `videoDuration`
+ * seconds. LTX 2.3 clips usually have audio ~10–30 ms shorter than video;
+ * concatenating without this fix lets drift compound across N clips so the
+ * final assembly's voice ends up hundreds of ms ahead of lip movements.
+ *
+ * When the segment has no audio, slices a silence stream to the same length.
+ *
+ * Pure function — extracted for testability.
+ */
+export function buildAudioFilter(
+  i: number,
+  hasAudio: boolean,
+  videoDuration: number,
+  silenceInputIdx: number,
+): string {
+  if (hasAudio) {
+    return `[${i}:a]asetpts=PTS-STARTPTS,apad,atrim=duration=${videoDuration}[a${i}]`;
+  }
+  return `[${silenceInputIdx}:a]atrim=duration=${videoDuration},asetpts=PTS-STARTPTS[a${i}]`;
+}
+
+/**
  * Assemble resolved segments into a single video using FFmpeg concat filter.
  */
 export async function assembleVideos(
@@ -326,6 +491,25 @@ export async function assembleVideos(
     }
   });
 
+  // Probe each input for VIDEO duration. LTX 2.3 outputs typically have
+  // audio ~10–30 ms shorter than video per clip; without padding, that drift
+  // accumulates across N concatenated clips and the final assembly's voice
+  // leads its lip movements by hundreds of ms by the end. We pad audio to
+  // exactly the video duration before concat to keep each clip's [v][a]
+  // pair length-matched.
+  const videoDurations: number[] = segments.map(seg => {
+    try {
+      const probe = execSync(
+        `ffprobe -v error -select_streams v:0 -show_entries stream=duration -of default=nw=1:nk=1 "${seg.filePath}"`,
+        { encoding: 'utf-8', timeout: 5000 }
+      );
+      const dur = parseFloat(probe.trim());
+      return Number.isFinite(dur) && dur > 0 ? dur : seg.duration;
+    } catch {
+      return seg.duration;
+    }
+  });
+
   // Build FFmpeg command args
   const inputArgs: string[] = [];
   const filterParts: string[] = [];
@@ -355,28 +539,113 @@ export async function assembleVideos(
   }
 
   for (let i = 0; i < segments.length; i++) {
-    // Scale each input to target resolution and normalize timestamps
     filterParts.push(
-      `[${i}:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,` +
-      `pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,setpts=PTS-STARTPTS[v${i}]`
+      buildVideoFilter(i, width, height),
+      buildAudioFilter(i, hasAudio[i]!, videoDurations[i]!, silenceInputIdx),
     );
-    // Use actual audio if present, otherwise use the silence source
-    if (hasAudio[i]) {
-      filterParts.push(
-        `[${i}:a]asetpts=PTS-STARTPTS[a${i}]`
-      );
-    } else {
-      filterParts.push(
-        `[${silenceInputIdx}:a]atrim=duration=${segments[i]!.duration},asetpts=PTS-STARTPTS[a${i}]`
-      );
-    }
   }
 
-  // Concat all streams — interleave video+audio per segment as FFmpeg requires
-  const concatInputs = segments.map((_, i) => `[v${i}][a${i}]`).join('');
-  filterParts.push(
-    `${concatInputs}concat=n=${segments.length}:v=1:a=1[outv][outa]`
-  );
+  // Check if any segment has a non-cut transition
+  const hasTransitions = segments.some((s, i) => i > 0 && s.transition && s.transition !== 'cut');
+
+  if (hasTransitions) {
+    // Build xfade chain for video, acrossfade chain for audio.
+    // xfade works pairwise: [v0][v1]xfade=...[vx0]; [vx0][v2]xfade=...[vx1]; ...
+    //
+    // CRITICAL: offset = time in the ACCUMULATED output where transition begins.
+    // After each xfade, accumulated duration = prev_accumulated + next_duration - transition_overlap.
+    let prevVideoLabel = 'v0';
+    let prevAudioLabel = 'a0';
+    // Use ACTUAL clip duration, not segment.duration. Timeline durations
+    // are PLANNED values — the actual LTX 2.3 outputs round to integer
+    // frame counts at 24 fps, so a planned 2.14 s shot lands as a 3.04 s
+    // clip. Using the planned 2.14 s as the xfade offset truncates the
+    // video to its first 2 s of frames (only ~half the content), while
+    // the audio chain plays in full — this is the AV-sync drift on the
+    // first run of woman_medieval_village_betrothed (final_video.mp4 was
+    // 44.7 s of video against 82.9 s of audio).
+    let accumulatedDuration = videoDurations[0]!;
+
+    // Map our transition names to FFmpeg xfade transition names
+    const xfadeMap: Record<string, string> = {
+      crossfade: 'fade',
+      fade: 'fadeblack',
+      dissolve: 'fade',
+      dip_to_black: 'fadeblack',
+      flash_to_white: 'fadewhite',
+      wipe_left: 'wipeleft',
+      wipe_right: 'wiperight',
+      wipe_up: 'wipeup',
+      wipe_down: 'wipedown',
+      circle_open: 'circleopen',
+      circle_close: 'circleclose',
+      radial: 'radial',
+      slide_left: 'slideleft',
+      slide_right: 'slideright',
+    };
+
+    for (let i = 1; i < segments.length; i++) {
+      const seg = segments[i]!;
+      const transition = seg.transition ?? 'cut';
+      const tDur = xfadeTransitionDuration(transition, seg.transitionDuration);
+
+      // Offset = end of accumulated output minus transition overlap.
+      // Uses videoDurations (actual) — see computeXfadeOffset doc.
+      const { offset, nextAccumulatedDuration } = computeXfadeOffset(
+        accumulatedDuration,
+        videoDurations[i]!,
+        tDur,
+      );
+
+      // The final video label is 'concated' — the watermark step (below)
+      // takes 'concated' → 'outv' so 'outv' always carries the watermarked
+      // stream. Skip the rename when there's no watermark.
+      const finalVideoLabel = config.watermark === '' ? 'outv' : 'concated';
+      const outVideoLabel = i < segments.length - 1 ? `vx${i}` : finalVideoLabel;
+      const outAudioLabel = i < segments.length - 1 ? `ax${i}` : 'outa';
+
+      const ffmpegTransition = transition === 'cut' ? 'fade' : (xfadeMap[transition] ?? 'fade');
+      filterParts.push(
+        `[${prevVideoLabel}][v${i}]xfade=transition=${ffmpegTransition}:duration=${tDur}:offset=${offset}[${outVideoLabel}]`
+      );
+
+      // Audio crossfade
+      filterParts.push(
+        `[${prevAudioLabel}][a${i}]acrossfade=d=${tDur}:c1=tri:c2=tri[${outAudioLabel}]`
+      );
+
+      accumulatedDuration = nextAccumulatedDuration;
+
+      prevVideoLabel = outVideoLabel;
+      prevAudioLabel = outAudioLabel;
+    }
+  } else {
+    // No transitions — simple concat (original behavior)
+    const concatInputs = segments.map((_, i) => `[v${i}][a${i}]`).join('');
+    const finalVideoLabel = config.watermark === '' ? 'outv' : 'concated';
+    filterParts.push(
+      `${concatInputs}concat=n=${segments.length}:v=1:a=1[${finalVideoLabel}][outa]`
+    );
+  }
+
+  // Watermark: composite a pre-rendered PNG (Apple Chancery 'kshana') onto
+  // the bottom-right. We use overlay (always available) instead of drawtext
+  // (often missing on Homebrew/system FFmpeg builds because libfreetype is
+  // not enabled by default). Set KSHANA_WATERMARK=off to disable, or supply
+  // `watermark: ''` in config.
+  const watermarkDisabled =
+    config.watermark === '' || process.env['KSHANA_WATERMARK'] === 'off';
+  const watermarkPath = watermarkDisabled ? null : resolveWatermarkPath();
+  if (watermarkPath) {
+    // Append PNG as an extra -i input; track its index for the filter.
+    const watermarkInputIdx = inputArgs.filter(a => a === '-i').length;
+    inputArgs.push('-i', watermarkPath);
+    filterParts.push(buildWatermarkOverlayFilter('concated', watermarkInputIdx, 'outv'));
+  } else if (config.watermark !== '' && process.env['KSHANA_WATERMARK'] !== 'off') {
+    // No watermark asset found — log a hint but don't fail the assembly.
+    // We still need to alias `concated` to `outv` if no watermark was applied.
+    filterParts.push(`[concated]copy[outv]`);
+  }
 
   const filterComplex = filterParts.join('; ');
 
@@ -389,6 +658,7 @@ export async function assembleVideos(
     '-c:v', 'libx264',
     '-preset', preset,
     '-c:a', 'aac',
+    ...mobileCompatibleEncodeArgs(),
     outputPath,
   ];
 
@@ -396,7 +666,7 @@ export async function assembleVideos(
 
   // Get output file stats
   const stats = statSync(outputPath);
-  const totalDuration = segments.reduce((sum, s) => sum + s.duration, 0);
+  const totalDuration = videoDurations.reduce((sum, d) => sum + d, 0);
 
   return {
     success: true,

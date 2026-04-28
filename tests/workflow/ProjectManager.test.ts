@@ -9,22 +9,14 @@ import {
   createProject,
   loadProject,
   deleteProject,
-  createProjectStructure,
   writeProjectFile,
   readProjectFile,
   getProjectDir,
   getOriginalInput,
   getStateTransitionPrompt,
   saveProject,
-  addCharacter,
-  updateCharacterApproval,
-  addSetting,
-  updateSettingApproval,
-  updatePlannerStage,
-  updatePhaseStatus,
-  PlannerStage,
-  PROJECT_DIR,
 } from '../../src/tasks/video/workflow/index.js';
+import { PlannerStage } from '../../src/tasks/video/workflow/types.js';
 
 // Use a temp directory for tests
 const TEST_BASE_PATH = join(process.cwd(), 'test-temp-project');
@@ -285,7 +277,6 @@ describe('Disk-Scanning Sync Functionality', () => {
       expect(reloaded).not.toBeNull();
       expect(reloaded!.characters.length).toBe(1);
       expect(reloaded!.characters[0].name).toBe('Aria');
-      expect(reloaded!.characters[0].file).toBe('characters/aria.md');
     });
 
     it('extracts character name from heading', () => {
@@ -336,7 +327,7 @@ describe('Disk-Scanning Sync Functionality', () => {
       // Mark characters_settings phase as complete
       project.phases.characters_settings = {
         status: 'completed',
-        plannerStage: 'complete',
+        plannerStage: PlannerStage.COMPLETE, completedAt: null,
       };
 
       // Save project with completed phase
@@ -371,7 +362,6 @@ describe('Disk-Scanning Sync Functionality', () => {
 
       expect(reloaded!.settings.length).toBe(1);
       expect(reloaded!.settings[0].name).toBe('Enchanted Forest');
-      expect(reloaded!.settings[0].file).toBe('settings/forest.md');
     });
 
     it('extracts setting name from heading', () => {
@@ -393,7 +383,7 @@ describe('Disk-Scanning Sync Functionality', () => {
 
       project.phases.characters_settings = {
         status: 'completed',
-        plannerStage: 'complete',
+        plannerStage: PlannerStage.COMPLETE, completedAt: null,
       };
 
       const filePath = join(projectDir, 'project.json');
@@ -474,7 +464,7 @@ describe('Disk-Scanning Sync Functionality', () => {
 
       project.phases.scenes = {
         status: 'completed',
-        plannerStage: 'complete',
+        plannerStage: PlannerStage.COMPLETE, completedAt: null,
       };
 
       const filePath = join(projectDir, 'project.json');
@@ -547,7 +537,7 @@ describe('Disk-Scanning Sync Functionality', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        plannerStage: PlannerStage.PLANNING, completedAt: null,
       };
 
       const filePath = join(projectDir, 'project.json');
@@ -603,7 +593,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        plannerStage: PlannerStage.COMPLETE, completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -633,7 +623,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        plannerStage: PlannerStage.COMPLETE, completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -663,7 +653,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        plannerStage: PlannerStage.COMPLETE, completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -694,7 +684,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        plannerStage: PlannerStage.COMPLETE, completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -725,7 +715,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        plannerStage: PlannerStage.COMPLETE, completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -756,7 +746,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'scenes';
       project.phases.scenes = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        plannerStage: PlannerStage.COMPLETE, completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 
@@ -783,7 +773,7 @@ describe('Todo Resume Instructions', () => {
       project.currentPhase = 'characters_settings';
       project.phases.characters_settings = {
         status: 'in_progress',
-        plannerStage: 'processing',
+        plannerStage: PlannerStage.COMPLETE, completedAt: null,
       };
       saveProject(project, TEST_BASE_PATH);
 

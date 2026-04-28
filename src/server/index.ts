@@ -10,6 +10,11 @@ import { registerRoutes, type RouteOptions } from './routes.js';
 import { resetLLMLogger } from '../core/llm/index.js';
 import type { ConversationManager } from './ConversationManager.js';
 import type { WebSocketHandler } from './WebSocketHandler.js';
+import {
+  defaultDiscoveryPath,
+  removeDiscoveryFile,
+  writeDiscoveryFile,
+} from './discovery.js';
 
 const runtimeRequire =
   typeof require === 'function' ? require : createRequire(import.meta.url);
@@ -41,6 +46,16 @@ export interface ServerConfig {
     origin?: string | string[] | boolean;
     methods?: string[];
   };
+  /**
+   * Write a discovery file (`~/.kshana/server.json` by default) on
+   * start so external agents (pi-agent, openclaw) can locate the
+   * server without knowing the random port the desktop allocated.
+   * Defaults to true; set to false for tests or when running
+   * multiple servers on the same machine.
+   */
+  discovery?: boolean | { path?: string };
+  /** Surfaced in the discovery file's `version` field. */
+  version?: string;
 }
 
 export interface KshanaServer {
@@ -61,8 +76,14 @@ export async function createServer(
   const {
     host = '127.0.0.1',
     port = 3000,
-    cors = { origin: true, methods: ['GET', 'POST', 'DELETE'] },
+    cors = { origin: true, methods: ['GET', 'POST', 'PUT', 'DELETE'] },
+    discovery = true,
+    version,
   } = serverConfig;
+  const discoveryPath = typeof discovery === 'object' && discovery.path
+    ? discovery.path
+    : defaultDiscoveryPath();
+  const discoveryEnabled = discovery !== false;
 
   // Reset LLM logger (creates fresh log file for this session)
   resetLLMLogger();
@@ -86,16 +107,18 @@ export async function createServer(
   const { conversationManager, wsHandler } = await registerRoutes(app, routeOptions);
 
   // Graceful shutdown handler
-  const shutdown = async (): Promise<void> => {
+  const shutdown = async (signal?: string): Promise<void> => {
     console.log('\nShutting down...');
+    if (discoveryEnabled) removeDiscoveryFile(discoveryPath);
     wsHandler.shutdown();
     conversationManager.shutdown();
     await app.close();
+    process.exit(signal === 'SIGINT' ? 130 : 143);
   };
 
   // Handle process signals
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   return {
     app,
@@ -107,6 +130,24 @@ export async function createServer(
       console.log(`Server listening at ${address}`);
       console.log(`Web UI: ${address}`);
       console.log(`WebSocket: ws://${host}:${port}/api/v1/ws/chat`);
+
+      if (discoveryEnabled) {
+        // Resolve the actual bound port (might be random when port=0).
+        const addressInfo = app.server.address();
+        const boundPort = typeof addressInfo === 'object' && addressInfo
+          ? addressInfo.port
+          : port;
+        const written = writeDiscoveryFile({
+          path: discoveryPath,
+          host,
+          port: boundPort,
+          pid: process.pid,
+          mode: routeOptions.serverMode ?? 'auto',
+          ...(version ? { version } : {}),
+        });
+        console.log(`Discovery file: ${written}`);
+      }
+
       return address;
     },
 

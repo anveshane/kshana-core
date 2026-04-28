@@ -1,0 +1,41 @@
+{
+  "name": "Video Prompt Quality",
+  "description": "Evaluates the quality of video/motion prompts from the video prompt phase.",
+  "phase": "vid_prompts",
+  "weight": 0.10,
+  "dimensions": [
+    {
+      "name": "motion_description",
+      "weight": 0.35,
+      "criteria": "Do video prompts describe specific, filmable motion? Are camera movements and subject actions clearly specified?",
+      "scoringGuide": {
+        "excellent": "Clear, specific motion descriptions with camera movements, subject actions, and timing. Ready for video generation.",
+        "good": "Good motion descriptions for most clips. Some lack specificity.",
+        "adequate": "Basic motion described but mostly static or vague.",
+        "poor": "No meaningful motion description. Would produce essentially static video."
+      }
+    },
+    {
+      "name": "continuity",
+      "weight": 0.30,
+      "criteria": "Do video prompts maintain visual continuity between clips? Would sequential clips feel connected?",
+      "scoringGuide": {
+        "excellent": "Perfect continuity. Each clip leads naturally into the next.",
+        "good": "Good continuity for most transitions. Minor visual jumps.",
+        "adequate": "Some continuity breaks but overall watchable.",
+        "poor": "Clips feel disconnected. No sense of visual continuity."
+      }
+    },
+    {
+      "name": "pacing",
+      "weight": 0.35,
+      "criteria": "Is the pacing appropriate? Do video prompts suggest appropriate durations and rhythm for the narrative?",
+      "scoringGuide": {
+        "excellent": "Pacing matches the narrative perfectly. Action scenes feel dynamic, quiet moments feel contemplative.",
+        "good": "Mostly appropriate pacing. Minor rhythm issues.",
+        "adequate": "Functional pacing but feels uniform or mismatched to narrative.",
+        "poor": "Pacing is off. All clips same length or mismatched to content."
+      }
+    }
+  ]
+}

@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { GenericAgent, type AgentConfig, type GenericAgentResult } from '../core/agent/index.js';
 import { LLMClient, type LLMClientConfig, type ToolDefinition } from '../core/llm/index.js';
+import type { TypedEventEmitter } from '../events/EventEmitter.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { AgentEvent } from '../events/index.js';
 
@@ -41,11 +42,27 @@ function debugLog(message: string) {
 
 type AgentStatus = 'idle' | 'thinking' | 'waiting' | 'completed' | 'error';
 
+/**
+ * Common interface for agents that can be used with useAgent.
+ * Both GenericAgent and ExecutorAgent satisfy this.
+ */
+interface AgentLike extends TypedEventEmitter {
+  initialize(): Promise<void>;
+  run(task: string, userResponse?: string): Promise<GenericAgentResult>;
+  stop(): void;
+  isRunning(): boolean;
+  getToolNames(): string[];
+  setAutonomousMode(enabled: boolean): void;
+  injectInput?(input: string): void;
+}
+
 interface UseAgentOptions {
   tools: Map<string, ToolDefinition>;
   llmConfig?: LLMClientConfig;
   agentConfig?: AgentConfig;
   onEvent?: (event: AgentEvent) => void;
+  /** Pre-built agent to use instead of creating a GenericAgent */
+  prebuiltAgent?: AgentLike;
 }
 
 export interface ToolCallHistoryItem {
@@ -643,10 +660,10 @@ interface UseAgentReturn {
 }
 
 export function useAgent(options: UseAgentOptions): UseAgentReturn {
-  const { tools, llmConfig, agentConfig, onEvent } = options;
+  const { tools, llmConfig, agentConfig, onEvent, prebuiltAgent } = options;
 
   const [state, dispatch] = React.useReducer(agentReducer, initialState);
-  const agentRef = React.useRef<GenericAgent | null>(null);
+  const agentRef = React.useRef<AgentLike | null>(null);
   const llmRef = React.useRef<LLMClient | null>(null);
 
   // Initialize LLM client
@@ -659,8 +676,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
 
   // Create agent
   const createAgent = React.useCallback(() => {
-    const llm = getLLM();
-    const agent = new GenericAgent(tools, llm, agentConfig);
+    const agent: AgentLike = prebuiltAgent ?? new GenericAgent(tools, getLLM(), agentConfig);
 
     // Subscribe to events
     agent.on('agent_status', event => {
@@ -818,7 +834,7 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
 
     agentRef.current = agent;
     return agent;
-  }, [tools, agentConfig, getLLM, onEvent]);
+  }, [tools, agentConfig, getLLM, onEvent, prebuiltAgent]);
 
   // Run agent on a task
   const run = React.useCallback(
@@ -930,8 +946,9 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
 
   // Inject user input during execution
   const injectInput = React.useCallback((input: string) => {
-    if (agentRef.current) {
-      agentRef.current.injectInput(input);
+    const agent = agentRef.current;
+    if (agent && agent.injectInput) {
+      agent.injectInput(input);
     }
   }, []);
 

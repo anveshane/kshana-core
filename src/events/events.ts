@@ -36,11 +36,36 @@ export interface ToolResultEvent {
 }
 
 /**
+ * Node info that travels alongside `todos` on the same event. Only the
+ * fields the frontend Storyboard needs to render shot frames/videos
+ * without parsing filenames. Keyed by the same `id` as the
+ * corresponding todo; the frontend merges it into a separate
+ * node-state map.
+ */
+export interface TodoNodeInfo {
+  id: string;
+  typeId: string;
+  itemId?: string;
+  status: string;
+  /** Single-output node (shot_video, most content nodes). */
+  outputPath?: string;
+  /** Multi-frame output node (shot_image → first/last/mid). */
+  outputPaths?: Record<string, string>;
+}
+
+/**
  * Todo update event when todo list changes.
+ *
+ * `nodes` is a parallel array carrying extra per-node metadata the
+ * frontend Storyboard needs (typeId + itemId + outputPath(s)). It sits
+ * next to `todos` rather than inside each todo because
+ * `ExpandableTodoItem` has a strict shape and this metadata doesn't
+ * belong to the todo semantic. Optional — older emitters may skip it.
  */
 export interface TodoUpdateEvent {
   type: 'todo_update';
   todos: ExpandableTodoItem[];
+  nodes?: TodoNodeInfo[];
   agentName?: string;
 }
 
@@ -129,33 +154,6 @@ export interface ContextUsageEvent {
   iteration: number;
 }
 
-export type UsageFactKind =
-  | 'llm'
-  | 'image_generation'
-  | 'image_edit'
-  | 'video_generation';
-
-/**
- * Neutral usage telemetry emitted after successful billable work.
- * This contains facts only; pricing and credit policy live outside core.
- */
-export interface UsageFactEvent {
-  type: 'usage_fact';
-  eventId: string;
-  kind: UsageFactKind;
-  toolName?: string;
-  toolCallId?: string;
-  facts: {
-    promptTokens?: number;
-    completionTokens?: number;
-    totalTokens?: number;
-    imageCount?: number;
-    seconds?: number;
-    artifactId?: string;
-    filePath?: string;
-  };
-}
-
 /**
  * Option for multiple choice questions.
  */
@@ -210,6 +208,14 @@ export interface PhaseTransitionEvent {
 }
 
 /**
+ * Timeline update event — sends full timeline state to frontend.
+ */
+export interface TimelineUpdateEvent {
+  type: 'timeline_update';
+  timeline: unknown; // Timeline type from timeline/types.ts — kept as unknown to avoid circular deps
+}
+
+/**
  * Union of all agent events.
  */
 export type AgentEvent =
@@ -223,11 +229,11 @@ export type AgentEvent =
   | ToolStreamingEvent
   | NotificationEvent
   | ContextUsageEvent
-  | UsageFactEvent
   | QuestionEvent
   | AgentStatusEvent
   | UserInputInjectedEvent
-  | PhaseTransitionEvent;
+  | PhaseTransitionEvent
+  | TimelineUpdateEvent;
 
 /**
  * Event type names for type-safe event handling.

@@ -29,6 +29,12 @@ export interface LLMResponse {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    /** USD cost for this call. Populated by OpenRouter when usage.include=true. */
+    cost?: number;
+    /** Of `promptTokens`, how many were served from prefix cache. */
+    cachedPromptTokens?: number;
+    /** USD discount applied due to prefix-cache hits. */
+    cacheDiscount?: number;
   };
 }
 
@@ -79,8 +85,8 @@ export interface ToolDefinition {
  */
 export interface StreamChunk {
   content?: string;
-  reasoning?: string;
-  reasoningDetails?: unknown[];
+  /** Reasoning/thinking content from models with reasoning_content (llama.cpp extension) */
+  thinking?: string;
   toolCallDelta?: {
     index: number;
     id?: string;
@@ -92,6 +98,12 @@ export interface StreamChunk {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+    /** USD cost for this call. Populated by OpenRouter when usage.include=true. */
+    cost?: number;
+    /** Of `promptTokens`, how many were served from prefix cache. */
+    cachedPromptTokens?: number;
+    /** USD discount applied due to prefix-cache hits. */
+    cacheDiscount?: number;
   };
 }
 
@@ -103,6 +115,8 @@ export interface GenerateOptions {
   tools?: ToolDefinition[];
   temperature?: number;
   maxTokens?: number;
+  /** Penalize repeated tokens (0.0 = no penalty, 2.0 = strong). Prevents repetition loops. */
+  frequencyPenalty?: number;
   stream?: boolean;
   responseFormat?:
     | { type: 'json_object' }

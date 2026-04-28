@@ -1,0 +1,33 @@
+{
+  "name": "Shot Mode Decision Binary",
+  "description": "Binary evaluation of call 1 output — mode selection and reference handling for shot_image_prompt pipeline.",
+  "format": "binary",
+  "phase": "shot_image_prompt",
+  "promptType": "shot_mode_decision",
+  "questions": [
+    {
+      "id": "MODE_CORRECT",
+      "question": "Is the chosen mode correct? Shot 1 must use 'image_text_to_image' or 'text_to_image'. Shot 2+ should DEFAULT to 'edit_previous_shot' unless the composition changes drastically (wide→extreme close-up on detail, entirely new location). Detail/mood shots with no characters should use 'text_to_image'."
+    },
+    {
+      "id": "NEW_REFS_ONLY",
+      "question": "For edit_previous_shot: does newCharacterRefs include ONLY characters NOT visible in the previous shot? Characters already in the previous shot must NOT be listed. If mode is not edit_previous_shot, answer YES."
+    },
+    {
+      "id": "ALL_REFS_FRESH",
+      "question": "For image_text_to_image: does newCharacterRefs include ALL characters and settings visible in this shot? Every visible subject must have a reference. If mode is not image_text_to_image, answer YES."
+    },
+    {
+      "id": "REFID_MATCH",
+      "question": "Does every refId in newCharacterRefs exactly match one of the available_references? No fabricated, misspelled, or non-existent refIds."
+    },
+    {
+      "id": "EXISTING_SUBJECTS",
+      "question": "Does existingSubjects correctly list characters/settings already visible in the previous shot? These should be described by name in the prompt, not by image number. If shot 1 or text_to_image, answer YES."
+    },
+    {
+      "id": "VALID_JSON",
+      "question": "Is the output valid JSON with required fields: mode, newCharacterRefs (array), existingSubjects (array)?"
+    }
+  ]
+}

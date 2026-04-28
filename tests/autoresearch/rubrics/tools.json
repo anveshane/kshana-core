@@ -1,0 +1,52 @@
+{
+  "name": "Tool Usage Correctness",
+  "description": "Evaluates correct usage of tools throughout the pipeline. This rubric scores structural correctness and is partially automated via existing eval fixtures.",
+  "phase": "tools",
+  "weight": 0.15,
+  "dimensions": [
+    {
+      "name": "tool_selection",
+      "weight": 0.30,
+      "criteria": "Are the correct tools called at the right pipeline phases? No unnecessary or missing tool calls?",
+      "scoringGuide": {
+        "excellent": "All required tools called at appropriate phases. No extraneous calls.",
+        "good": "Most tool calls correct. Minor unnecessary calls but no missing critical ones.",
+        "adequate": "Some wrong or missing tool calls but pipeline still functions.",
+        "poor": "Significant tool misuse. Critical calls missing or wrong tools used."
+      }
+    },
+    {
+      "name": "argument_quality",
+      "weight": 0.30,
+      "criteria": "Are tool call arguments well-formed and complete? Do they contain all required fields with appropriate values?",
+      "scoringGuide": {
+        "excellent": "All arguments well-formed, complete, and semantically correct.",
+        "good": "Arguments mostly correct. Minor issues that don't break functionality.",
+        "adequate": "Some arguments missing or malformed but tools still usable.",
+        "poor": "Frequent argument errors. Tools would fail or produce wrong results."
+      }
+    },
+    {
+      "name": "phase_completion",
+      "weight": 0.20,
+      "criteria": "Does each phase complete properly with the correct completion signal/tool call?",
+      "scoringGuide": {
+        "excellent": "All phases complete correctly with proper signals.",
+        "good": "Most phases complete correctly. Minor signal issues.",
+        "adequate": "Some phases don't complete properly.",
+        "poor": "Phases frequently hang or complete incorrectly."
+      }
+    },
+    {
+      "name": "context_usage",
+      "weight": 0.20,
+      "criteria": "Are context references used correctly? Does the agent properly reference previous phase outputs?",
+      "scoringGuide": {
+        "excellent": "All context references correct. Previous outputs properly utilized.",
+        "good": "Most context usage correct. Minor reference errors.",
+        "adequate": "Some context ignored or incorrectly referenced.",
+        "poor": "Context barely used. Agent operates in isolation from previous phases."
+      }
+    }
+  ]
+}

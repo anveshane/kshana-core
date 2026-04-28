@@ -31,7 +31,9 @@ ${getStyles()}
         <div id="context-bar"><div id="context-fill"></div></div>
         <span id="context-label">CTX 0%</span>
       </div>
+      <button id="parallel-media-btn" title="Toggle parallel media generation (for remote ComfyUI)" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:13px;">&#9655; Serial</button>
       <button id="provider-settings-btn" title="Provider Settings" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:13px;">&#9881; Providers</button>
+      <button id="workflows-btn" title="Manage Workflows" style="background:none;border:1px solid #444;color:#aaa;cursor:pointer;padding:4px 8px;border-radius:4px;font-size:13px;">&#9881; Workflows</button>
       <span id="conn-status" class="conn-dot disconnected" title="Disconnected"></span>
     </div>
   </header>
@@ -60,6 +62,27 @@ ${getStyles()}
       <div style="display:flex;gap:8px;justify-content:flex-end;">
         <button id="prov-cancel" style="padding:6px 16px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;cursor:pointer;">Cancel</button>
         <button id="prov-save" style="padding:6px 16px;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;">Save</button>
+      </div>
+    </div>
+  </div>
+  <!-- Workflow Management Modal -->
+  <div id="workflow-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:1000;align-items:center;justify-content:center;overflow-y:auto;">
+    <div style="background:#1e1e2e;border:1px solid #444;border-radius:8px;padding:24px;min-width:500px;max-width:700px;margin:40px auto;max-height:90vh;overflow-y:auto;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <h3 style="margin:0;color:#e0e0e0;">Workflow Management</h3>
+        <div style="display:flex;gap:8px;">
+          <label id="wf-upload-label" style="padding:6px 16px;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;">
+            Upload Workflow
+            <input type="file" id="wf-upload-input" accept=".json" style="display:none;">
+          </label>
+          <button id="wf-close" style="padding:6px 16px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;cursor:pointer;">Close</button>
+        </div>
+      </div>
+      <div id="wf-list" style="color:#ccc;font-size:13px;"></div>
+      <!-- Integration wizard (hidden until upload) -->
+      <div id="wf-wizard" style="display:none;margin-top:16px;border-top:1px solid #444;padding-top:16px;">
+        <h4 style="margin:0 0 12px;color:#e0e0e0;" id="wf-wizard-title">Configure Workflow</h4>
+        <div id="wf-wizard-content"></div>
       </div>
     </div>
   </div>
@@ -218,6 +241,15 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .tool-name.cat-system { color: var(--text-muted); background: rgba(139,148,158,0.08); }
 .tool-name.cat-default { color: var(--code-green); background: rgba(126,231,135,0.08); }
 .tool-params-summary { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; opacity: 0.7; }
+.tool-args-clean { font-size: 12px; color: var(--text-muted); padding: 4px 8px; margin-bottom: 4px; opacity: 0.8; }
+.tool-args-clean b { color: var(--text-secondary); }
+.tool-arg-images { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.tool-arg-img-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.tool-arg-thumb { max-height: 140px; border-radius: 6px; cursor: pointer; border: 1px solid var(--border); }
+.tool-arg-thumb:hover { border-color: var(--accent); }
+.tool-arg-img-label { font-size: 10px; color: var(--text-muted); text-transform: capitalize; }
+.tool-args-text { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.tool-arg-prompt { font-size: 12px; color: var(--text-secondary); line-height: 1.5; padding: 6px 8px; background: var(--bg-tertiary); border-radius: 4px; border-left: 2px solid var(--accent); }
 .tool-status { font-size: 10px; padding: 1px 5px; border-radius: 3px; flex-shrink: 0; }
 .tool-status.started { color: var(--accent); }
 .tool-status.completed { color: var(--green-bright); opacity: 0.6; }
@@ -270,6 +302,8 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .tool-md-result pre { background: #0d1117; padding: 8px; border-radius: 4px; margin: 4px 0; font-size: 11px; }
 
 /* Phase transition */
+.reconnect-separator { text-align: center; padding: 8px 0; margin: 12px 0; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 11px; }
+.reconnect-separator span { background: var(--bg); padding: 0 12px; position: relative; top: -1px; }
 .phase-transition { display: flex; align-items: center; gap: 8px; padding: 8px 16px; margin: 4px 0; background: linear-gradient(90deg, rgba(88,166,255,0.1) 0%, transparent 100%); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; }
 .phase-transition .phase-icon { font-size: 14px; }
 .phase-transition .phase-text { font-size: 13px; color: var(--accent); font-weight: 600; }
@@ -359,6 +393,7 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 .wizard-duration-cards { display: flex; flex-wrap: wrap; gap: 8px; }
 .wizard-duration-btn { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 16px; cursor: pointer; font-size: 13px; color: var(--text); transition: all 0.15s; }
 .wizard-duration-btn:hover { border-color: var(--accent); background: #1c3a5c; }
+.wizard-duration-btn.selected { border-color: var(--accent); background: #1c3a5c; }
 .wizard-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
 .wizard-summary-tag { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 11px; color: var(--accent); }
 
@@ -374,6 +409,18 @@ header { display: flex; justify-content: space-between; align-items: center; pad
 
 function getScript(): string {
   return `
+// ===== Regex patterns (injected from TypeScript to avoid template literal escaping) =====
+var _comfyProgressRe = ${'/^(?:Step\\s+(\\d+)\\/(\\d+)\\s+)?\\(?(\\d+)%\\)?$/'};
+var _pctStatusRe = ${'/(\\d+)%/'};
+var _mediaPatternRe = ${'/([\\w\\/\\-_.]+\\.(png|jpg|jpeg|webp|gif|mp4|webm|mov))/gi'};
+var _looksLikeMdRe = ${'/^#{1,3} |\\n#{1,3} |\\*\\*[^*]+\\*\\*|^- /'};
+var _resultPrefixRe = ${'/^Result\\s*/'};
+var _codeBlockRe = ${'/```(\\w*?)\\n([\\s\\S]*?)```/g'};
+var _olListRe = ${'/^\\d+\\. (.+)$/gm'};
+var _ulWrapRe = ${'/((?:<li>.*?<\\/li>\\s*)+)/g'};
+var _doubleNewlineRe = ${'/\\n\\n/g'};
+var _singleNewlineRe = ${'/\\n/g'};
+
 // ===== State =====
 let ws = null;
 let sessionId = null;
@@ -399,6 +446,7 @@ let questionTimerInterval = null; // auto-approve countdown interval
 var newProjectState = null; // { step, templateId, templateName, style, styleName, duration, durationLabel, templates, durationPresets }
 var pendingAutoTask = null; // task string to send once select_project completes
 var autonomousModeActive = false; // autonomous mode flag
+var parallelMediaActive = false; // parallel media generation flag
 var sessionTimerInterval = null; // session timer update interval
 var sessionElapsedMs = 0; // accumulated elapsed ms from server
 var sessionTimerLocalStart = null; // Date.now() when local ticking started
@@ -415,7 +463,29 @@ function connect() {
   ws.onopen = () => {
     setConnStatus('connected');
     reconnectDelay = 1000;
-    addSystemMessage('Connected to server');
+
+    // Auto-resume: if we had an active project before disconnect,
+    // re-select it to restore UI state. Don't send a new task —
+    // the executor is already running from the previous connection.
+    // Suppress noisy "Connected/Resuming" messages on reconnect.
+    if (selectedProject) {
+      // Add visual separator in chat
+      closeAgentGroup();
+      var sep = document.createElement('div');
+      sep.className = 'reconnect-separator';
+      sep.innerHTML = '<span>Reconnected</span>';
+      chatMessages.appendChild(sep);
+      maybeScroll();
+
+      wsSend({ type: 'select_project', sessionId, data: { projectName: selectedProject } });
+      // Resume execution if server restarted. If executor is already running
+      // (WebSocket-only reconnect), the server will reject the duplicate task.
+      pendingAutoTask = 'Continue working on the existing project.';
+      // Refresh sidebar state on reconnect
+      loadProjectAssets(selectedProject);
+      loadProjectDetails(selectedProject);
+      loadArtifactCache(selectedProject);
+    }
   };
 
   ws.onmessage = (e) => {
@@ -846,18 +916,50 @@ function handleToolCall(data) {
     card.dataset.toolId = genId;
     card.dataset.toolName = toolName;
 
+    // Executor tool cards (generate_*, gen_*, extract_*) start expanded with clean arg display
+    const isExecutorTool = /^(generate_|gen_|extract_)/.test(toolName);
+    const chevronClass = isExecutorTool ? 'tool-chevron open' : 'tool-chevron';
+    const bodyClass = isExecutorTool ? 'tool-body open' : 'tool-body';
+
+    // Format arguments: executor tools get clean display, others get JSON
+    let argsHtml;
+    if (isExecutorTool) {
+      const args = data.arguments || {};
+      var images = [];
+      var textParts = [];
+      var promptText = '';
+      Object.entries(args).forEach(function(kv) {
+        var key = kv[0], val = String(kv[1]);
+        if (/\.(png|jpg|jpeg|webp)$/i.test(val) && selectedProject) {
+          var imgUrl = '/api/v1/assets/' + selectedProject + '/' + val;
+          var label = key.replace(/^ref_\d+_/, '').replace(/_/g, ' ');
+          images.push('<div class="tool-arg-img-wrap"><img src="' + imgUrl + '" class="tool-arg-thumb" onclick="openLightbox(this.src)" onerror="this.remove()"><div class="tool-arg-img-label">' + escHtml(label) + '</div></div>');
+        } else if (key === 'prompt') {
+          promptText = val;
+        } else {
+          textParts.push('<b>' + escHtml(key) + ':</b> ' + escHtml(val));
+        }
+      });
+      var sections = [];
+      if (images.length > 0) sections.push('<div class="tool-arg-images">' + images.join('') + '</div>');
+      if (textParts.length > 0) sections.push('<div class="tool-args-text">' + textParts.join(' &middot; ') + '</div>');
+      if (promptText) sections.push('<div class="tool-arg-prompt">' + escHtml(promptText) + '</div>');
+      argsHtml = sections.length > 0 ? '<div class="tool-args-clean">' + sections.join('') + '</div>' : '';
+    } else {
+      argsHtml = '<div class="tool-section-label">Arguments</div><pre>' + escHtml(JSON.stringify(data.arguments || {}, null, 2)) + '</pre>';
+    }
+
     card.innerHTML =
       '<div class="tool-header" onclick="toggleToolBody(this)">' +
-        '<span class="tool-chevron">&#9654;</span>' +
+        '<span class="' + chevronClass + '">&#9654;</span>' +
         '<span class="tool-name cat-' + cat + '">' + escHtml(toolName) + '</span>' +
         (paramSummary ? '<span class="tool-params-summary">' + paramSummary + '</span>' : '') +
         '<span class="tool-duration"></span>' +
         '<button class="tool-copy-btn" onclick="copyCardText(this, event)">Copy</button>' +
         '<span class="tool-status started">&#9679;</span>' +
       '</div>' +
-      '<div class="tool-body">' +
-        '<div class="tool-section-label">Arguments</div>' +
-        '<pre>' + escHtml(JSON.stringify(data.arguments || {}, null, 2)) + '</pre>' +
+      '<div class="' + bodyClass + '">' +
+        argsHtml +
         '<div class="tool-streaming-content"></div>' +
         '<div class="tool-result-section" style="display:none"></div>' +
       '</div>';
@@ -1008,7 +1110,7 @@ function renderToolResult(container, toolName, result) {
   var resultStr = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
 
   // Check if result is markdown-like (from read_file on .md files, or has markdown headers)
-  var looksLikeMd = /^#{1,3} |\\n#{1,3} |\\*\\*[^*]+\\*\\*|^- /.test(resultStr);
+  var looksLikeMd = _looksLikeMdRe.test(resultStr);
   // Check if result is JSON
   var looksLikeJson = resultStr.trimStart().startsWith('{') || resultStr.trimStart().startsWith('[');
   // Check if result is very long
@@ -1078,9 +1180,9 @@ function handleToolStreaming(entry, data) {
   if (!streamEl) return;
 
   // Detect ComfyUI progress pattern: "Step N/M (P%)" or just "P%"
-  var progressMatch = data.content && data.content.match(/^(?:Step\\s+(\\d+)\\/(\\d+)\\s+)?\\(?(\\d+)%\\)?$/);
+  var progressMatch = data.content && data.content.match(_comfyProgressRe);
   // Also detect status messages: "Processing node X (0%)", "Loading workflow...", etc.
-  var pctFromStatus = !progressMatch && data.content && data.content.match(/(\\d+)%/);
+  var pctFromStatus = !progressMatch && data.content && data.content.match(_pctStatusRe);
 
   if (data.reset && (progressMatch || pctFromStatus || data.content)) {
     // Ensure progress wrapper exists
@@ -1102,8 +1204,26 @@ function handleToolStreaming(entry, data) {
       if (text) text.textContent = data.content;
     }
   } else {
-    if (data.reset) streamEl.textContent = '';
-    if (data.content) streamEl.textContent += data.content;
+    // Accumulate raw text for markdown rendering
+    if (data.reset) { streamEl.textContent = ''; streamEl._rawText = ''; }
+    if (data.content) {
+      if (!streamEl._rawText) streamEl._rawText = '';
+      streamEl._rawText += data.content;
+      // Render as markdown for executor tools, plain text for others
+      var isExec = entry.toolName && /^(generate_|gen_|extract_)/.test(entry.toolName);
+      if (isExec) {
+        streamEl.innerHTML = renderMarkdown(streamEl._rawText) + '<span class="streaming-cursor-inline"></span>';
+      } else {
+        streamEl.textContent = streamEl._rawText;
+      }
+    }
+    if (data.done && streamEl._rawText) {
+      // Final render without cursor
+      var isExecFinal = entry.toolName && /^(generate_|gen_|extract_)/.test(entry.toolName);
+      if (isExecFinal) {
+        streamEl.innerHTML = renderMarkdown(streamEl._rawText);
+      }
+    }
   }
 
   // Auto-open tool body (gen-cards are always open via CSS, but regular tool cards need the class)
@@ -1140,7 +1260,7 @@ function copyCardText(btn, event) {
   var resultEl = card.querySelector('.tool-result-section');
   if (resultEl && resultEl.style.display !== 'none') {
     var resultText = resultEl.textContent || '';
-    resultText = resultText.replace(/^Result\\s*/, '').trim();
+    resultText = resultText.replace(_resultPrefixRe, '').trim();
     if (resultText) parts.push('Result:\\n' + resultText);
   }
   // Think card body (md content)
@@ -1174,7 +1294,7 @@ function copyCardText(btn, event) {
 
 // ===== Media in Results =====
 function renderImagesInResult(container, text) {
-  const mediaPattern = /([\\w\\/\\-_.]+\\.(png|jpg|jpeg|webp|gif|mp4|webm|mov))/gi;
+  const mediaPattern = _mediaPatternRe;
   const matches = text.match(mediaPattern);
   if (!matches || !selectedProject) return;
 
@@ -1538,6 +1658,8 @@ function showToast(message, level) {
 
 // ===== Error =====
 function handleError(data) {
+  // Suppress "already running" error from auto-resume on reconnect
+  if (data.message && data.message.includes('already has a running task')) return;
   const el = document.createElement('div');
   el.className = 'msg error';
   el.innerHTML = '<div class="msg-content"><strong>Error:</strong> ' + escHtml(data.message) + '</div>';
@@ -1571,6 +1693,9 @@ function sendMessage() {
         templateId: newProjectState.templateId,
         style: newProjectState.style,
         duration: newProjectState.duration,
+        resolution: newProjectState.resolution || '480p',
+        resolutionWidth: newProjectState.resolutionWidth || 848,
+        resolutionHeight: newProjectState.resolutionHeight || 480,
         content: text,
         autonomousMode: newProjectState.autonomousMode || false,
       },
@@ -1780,7 +1905,21 @@ async function loadProjectDetails(name) {
     const res = await fetch('/api/v1/projects/' + name);
     if (!res.ok) return;
     const data = await res.json();
-    document.getElementById('phase-display').textContent = (data.currentPhase || 'unknown').replace(/_/g, ' ');
+    // Derive phase: use currentPhase, or infer from executor state
+    var phase = data.currentPhase;
+    if (!phase && data.executorState && data.executorState.nodes) {
+      var nodes = data.executorState.nodes;
+      // Find the last in-progress or most recent pending type
+      var inProgress = Object.values(nodes).find(function(n) { return n.status === 'in_progress'; });
+      if (inProgress) {
+        phase = inProgress.typeId;
+      } else {
+        // Find first pending node to show what's next
+        var firstPending = Object.values(nodes).find(function(n) { return n.status === 'pending'; });
+        if (firstPending) phase = firstPending.typeId;
+      }
+    }
+    document.getElementById('phase-display').textContent = (phase || '-').replace(/_/g, ' ');
     if (data.todos && data.todos.length > 0) {
       const list = document.getElementById('todo-list');
       list.innerHTML = data.todos.map(function(t) {
@@ -1902,7 +2041,7 @@ function renderMarkdown(text) {
   let html = escHtml(text);
 
   // Code blocks
-  html = html.replace(/\`\`\`(\\w*?)\\n([\\s\\S]*?)\`\`\`/g, function(m, lang, code) {
+  html = html.replace(_codeBlockRe, function(m, lang, code) {
     return '<pre><code>' + code + '</code></pre>';
   });
 
@@ -1925,10 +2064,10 @@ function renderMarkdown(text) {
   // Unordered lists
   html = html.replace(/^[\\-\\*] (.+)$/gm, '<li>$1</li>');
   // Wrap consecutive li in ul
-  html = html.replace(/((?:<li>.*?<\\/li>\\s*)+)/g, '<ul>$1</ul>');
+  html = html.replace(_ulWrapRe, '<ul>$1</ul>');
 
   // Ordered lists
-  html = html.replace(/^\\d+\\. (.+)$/gm, '<li>$1</li>');
+  html = html.replace(_olListRe, '<li>$1</li>');
 
   // Links
   html = html.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
@@ -1937,8 +2076,8 @@ function renderMarkdown(text) {
   html = html.replace(/!\\[([^\\]]*?)\\]\\(([^)]+)\\)/g, '<img src="$2" alt="$1">');
 
   // Paragraphs
-  html = html.replace(/\\n\\n/g, '</p><p>');
-  html = html.replace(/\\n/g, '<br>');
+  html = html.replace(_doubleNewlineRe, '</p><p>');
+  html = html.replace(_singleNewlineRe, '<br>');
   html = '<p>' + html + '</p>';
 
   // Clean up
@@ -2009,7 +2148,15 @@ function removeWizardStepsFrom(stepOrder) {
   inputBox.placeholder = 'Type a task...';
 }
 
-var WIZARD_STEP_ORDER = { template: 1, style: 2, duration: 3, autonomous: 4, content: 5 };
+var WIZARD_STEP_ORDER = { template: 1, style: 2, duration: 3, resolution: 4, autonomous: 5, content: 6 };
+
+var RESOLUTION_PRESETS = [
+  { id: '480p', label: '480p', width: 848, height: 480, desc: 'Fast preview' },
+  { id: '720p', label: '720p', width: 1280, height: 720, desc: 'Standard' },
+  { id: '1080p', label: '1080p', width: 1920, height: 1080, desc: 'Full HD' },
+  { id: '2k', label: '2K', width: 2560, height: 1440, desc: 'High quality' },
+  { id: '4k', label: '4K', width: 3840, height: 2160, desc: 'Ultra HD' },
+];
 
 function showWizardStep(step) {
   if (!newProjectState) return;
@@ -2108,12 +2255,14 @@ function showWizardStep(step) {
 
     presets.forEach(function(p) {
       var btn = document.createElement('button');
-      btn.className = 'wizard-duration-btn';
+      btn.className = 'wizard-duration-btn' + (newProjectState.duration === p.seconds ? ' selected' : '');
       btn.textContent = p.label;
       btn.onclick = function() {
         newProjectState.duration = p.seconds;
         newProjectState.durationLabel = p.label;
-        showWizardStep('autonomous');
+        btnRow.querySelectorAll('.wizard-duration-btn').forEach(function(c) { c.classList.remove('selected'); });
+        btn.classList.add('selected');
+        showWizardStep('resolution');
       };
       btnRow.appendChild(btn);
     });
@@ -2133,7 +2282,7 @@ function showWizardStep(step) {
       if (val > 0) {
         newProjectState.duration = val;
         newProjectState.durationLabel = val + ' seconds';
-        showWizardStep('autonomous');
+        showWizardStep('resolution');
       }
     };
     customInput.addEventListener('keydown', function(e) {
@@ -2143,15 +2292,50 @@ function showWizardStep(step) {
     customWrap.appendChild(customOk);
     btnRow.appendChild(customWrap);
 
+  } else if (step === 'resolution') {
+    if (!newProjectState.resolution) {
+      newProjectState.resolution = '480p';
+      newProjectState.resolutionWidth = 848;
+      newProjectState.resolutionHeight = 480;
+    }
+    card.innerHTML =
+      '<div class="wizard-step-label">Step 4 of 6</div>' +
+      '<div class="wizard-step-title">Choose Resolution</div>' +
+      '<div class="wizard-summary">' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.durationLabel) + '</span>' +
+      '</div>' +
+      '<div class="wizard-duration-cards"></div>';
+    var resBtnRow = card.querySelector('.wizard-duration-cards');
+    RESOLUTION_PRESETS.forEach(function(r) {
+      var btn = document.createElement('button');
+      btn.className = 'wizard-duration-btn' + (newProjectState.resolution === r.id ? ' selected' : '');
+      btn.innerHTML = '<b>' + r.label + '</b><br><span style="font-size:10px;opacity:0.7">' + r.width + '×' + r.height + ' · ' + r.desc + '</span>';
+      btn.onclick = function() {
+        newProjectState.resolution = r.id;
+        newProjectState.resolutionWidth = r.width;
+        newProjectState.resolutionHeight = r.height;
+        resBtnRow.querySelectorAll('.wizard-duration-btn').forEach(function(c) { c.classList.remove('selected'); });
+        btn.classList.add('selected');
+        showWizardStep('autonomous');
+      };
+      resBtnRow.appendChild(btn);
+    });
+    chatMessages.appendChild(card);
+    maybeScroll();
+    return;
+
   } else if (step === 'autonomous') {
     newProjectState.autonomousMode = false;
     card.innerHTML =
-      '<div class="wizard-step-label">Step 4 of 5</div>' +
+      '<div class="wizard-step-label">Step 5 of 6</div>' +
       '<div class="wizard-step-title">Autonomous Mode</div>' +
       '<div class="wizard-summary">' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.styleName) + '</span>' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.durationLabel) + '</span>' +
+        '<span class="wizard-summary-tag">' + escHtml(newProjectState.resolution) + '</span>' +
       '</div>' +
       '<div style="margin:12px 0;display:flex;align-items:center;gap:12px;">' +
         '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:14px;color:var(--text);">' +
@@ -2174,7 +2358,7 @@ function showWizardStep(step) {
 
   } else if (step === 'content') {
     card.innerHTML =
-      '<div class="wizard-step-label">Step 5 of 5</div>' +
+      '<div class="wizard-step-label">Step 6 of 6</div>' +
       '<div class="wizard-step-title">Describe Your Project</div>' +
       '<div class="wizard-summary">' +
         '<span class="wizard-summary-tag">' + escHtml(newProjectState.templateName) + '</span>' +
@@ -2211,6 +2395,26 @@ autoBtn.addEventListener('click', function() {
   updateAutoBtnStyle();
   wsSend({ type: 'set_autonomous', sessionId: sessionId, data: { enabled: autonomousModeActive } });
   showToast('Autonomous mode ' + (autonomousModeActive ? 'enabled' : 'disabled'), 'info');
+});
+
+// ===== Parallel Media Toggle =====
+var parallelBtn = document.getElementById('parallel-media-btn');
+function updateParallelBtnStyle() {
+  if (parallelMediaActive) {
+    parallelBtn.textContent = '⇉ Parallel';
+    parallelBtn.style.color = '#58a6ff';
+    parallelBtn.style.borderColor = '#58a6ff';
+  } else {
+    parallelBtn.textContent = '▷ Serial';
+    parallelBtn.style.color = '#aaa';
+    parallelBtn.style.borderColor = '#444';
+  }
+}
+parallelBtn.addEventListener('click', function() {
+  parallelMediaActive = !parallelMediaActive;
+  updateParallelBtnStyle();
+  wsSend({ type: 'set_parallel_media', sessionId: sessionId, data: { enabled: parallelMediaActive } });
+  showToast('Media generation: ' + (parallelMediaActive ? 'parallel (remote server)' : 'serial (local)'), 'info');
 });
 
 // ===== Provider Settings =====
@@ -2265,6 +2469,319 @@ provSave.addEventListener('click', async () => {
     console.error('Failed to save provider config:', e);
   }
 });
+
+// ===== Workflow Management =====
+var wfModal = document.getElementById('workflow-modal');
+var wfBtn = document.getElementById('workflows-btn');
+var wfClose = document.getElementById('wf-close');
+var wfList = document.getElementById('wf-list');
+var wfWizard = document.getElementById('wf-wizard');
+var wfWizardContent = document.getElementById('wf-wizard-content');
+var wfUploadInput = document.getElementById('wf-upload-input');
+
+var PIPELINE_LABELS = {
+  image_generation: 'Image Generation',
+  image_editing: 'Image Editing',
+  image_processing: 'Image Processing',
+  video_generation: 'Video Generation',
+};
+
+async function loadWorkflows() {
+  try {
+    var res = await fetch('/api/v1/workflows');
+    var data = await res.json();
+    renderWorkflowList(data.workflows, data.active);
+  } catch (e) {
+    wfList.innerHTML = '<div style="color:#f87171;">Failed to load workflows</div>';
+  }
+}
+
+function renderWorkflowList(grouped, active) {
+  var html = '';
+  var pipelines = ['image_generation', 'image_editing', 'video_generation', 'image_processing'];
+  for (var p of pipelines) {
+    var label = PIPELINE_LABELS[p] || p;
+    var items = grouped[p] || [];
+    var activeId = active[p];
+    html += '<div style="margin-bottom:16px;">';
+    html += '<div style="font-weight:600;color:#8b9dc3;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;">' + escHtml(label) + '</div>';
+    if (items.length === 0) {
+      html += '<div style="color:#666;font-size:12px;padding:4px 0;">No workflows installed</div>';
+    } else {
+      for (var wf of items) {
+        var isActive = wf.id === activeId;
+        var isBuiltIn = wf.builtIn;
+        var borderColor = isActive ? '#3b82f6' : '#333';
+        html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;margin-bottom:4px;border:1px solid ' + borderColor + ';border-radius:6px;background:#252538;">';
+        html += '<div>';
+        if (isActive) html += '<span style="color:#3b82f6;margin-right:6px;" title="Active">★</span>';
+        html += '<span style="color:#e0e0e0;">' + escHtml(wf.displayName) + '</span>';
+        if (isBuiltIn) html += ' <span style="color:#666;font-size:11px;">(built-in)</span>';
+        else html += ' <span style="color:#86efac;font-size:11px;">(user)</span>';
+        html += '<div style="color:#777;font-size:11px;margin-top:2px;">' + escHtml(wf.llmDescription || '').substring(0, 100) + '</div>';
+        html += '</div>';
+        html += '<div style="display:flex;gap:6px;flex-shrink:0;">';
+        if (!isBuiltIn && !isActive) {
+          html += '<button data-wf-action="override" data-wf-id="' + wf.id + '" style="padding:3px 10px;background:#2563eb;color:white;border:none;border-radius:3px;cursor:pointer;font-size:11px;">Set Active</button>';
+        }
+        if (!isBuiltIn && isActive) {
+          html += '<button data-wf-action="revert" data-wf-pipeline="' + p + '" style="padding:3px 10px;background:#444;color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;font-size:11px;">Revert</button>';
+        }
+        if (!isBuiltIn) {
+          html += '<button onclick="deleteWorkflow(\'' + wf.id + '\')" style="padding:3px 10px;background:#7f1d1d;color:#fca5a5;border:none;border-radius:3px;cursor:pointer;font-size:11px;">Delete</button>';
+        }
+        html += '</div></div>';
+      }
+    }
+    html += '</div>';
+  }
+  wfList.innerHTML = html;
+}
+
+window.setWorkflowOverride = async function(id) {
+  await fetch('/api/v1/workflows/' + id + '/override', { method: 'PUT' });
+  loadWorkflows();
+  showToast('Workflow set as active override', 'info');
+};
+
+window.clearWorkflowOverride = async function(pipeline) {
+  await fetch('/api/v1/workflows/override/' + pipeline, { method: 'DELETE' });
+  loadWorkflows();
+  showToast('Reverted to built-in default', 'info');
+};
+
+window.deleteWorkflow = async function(id) {
+  if (!confirm('Delete this workflow? This cannot be undone.')) return;
+  await fetch('/api/v1/workflows/' + id, { method: 'DELETE' });
+  loadWorkflows();
+  showToast('Workflow deleted', 'info');
+};
+
+wfBtn.addEventListener('click', function() {
+  wfModal.style.display = 'flex';
+  wfWizard.style.display = 'none';
+  loadWorkflows();
+});
+wfClose.addEventListener('click', function() { wfModal.style.display = 'none'; });
+wfModal.addEventListener('click', function(e) { if (e.target === wfModal) wfModal.style.display = 'none'; });
+
+// Upload handler
+wfUploadInput.addEventListener('change', async function(e) {
+  var file = e.target.files[0];
+  if (!file) return;
+  var content = await file.text();
+  try {
+    showToast('Uploading and analyzing workflow...', 'info');
+    var res = await fetch('/api/v1/workflows/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename: file.name, content: content }),
+    });
+    var data = await res.json();
+    if (data.error) { showToast('Upload failed: ' + data.error, 'error'); return; }
+    showWizard(data.filename, data.parsed, content, data.analysis);
+  } catch (err) {
+    showToast('Upload failed: ' + err, 'error');
+  }
+  wfUploadInput.value = '';
+});
+
+function showWizard(filename, parsed, rawContent, analysis) {
+  wfWizard.style.display = 'block';
+  var safeName = filename.replace(/\.json$/, '');
+  // Use LLM analysis to pre-fill fields if available
+  var llmName = analysis ? analysis.displayName : safeName.replace(/_/g, ' ');
+  var llmPipeline = analysis ? analysis.pipeline : parsed.detectedPipeline;
+  var llmDesc = analysis ? analysis.llmDescription : '';
+  var llmCriteria = analysis ? analysis.selectionCriteria : '';
+  var llmExplanation = analysis ? analysis.explanation : '';
+
+  var STANDARD_INPUTS = {
+    image_generation: ['prompt', 'negative_prompt', 'seed', 'width', 'height', 'filenamePrefix'],
+    image_editing: ['base_image', 'prompt', 'negative_prompt', 'reference_image_1', 'reference_image_2', 'seed', 'filenamePrefix'],
+    video_generation: ['first_frame', 'last_frame', 'mid_frame', 'prompt', 'seed', 'durationSeconds', 'width', 'height', 'filenamePrefix'],
+    image_processing: ['base_image', 'edit_prompt', 'mask', 'seed', 'filenamePrefix'],
+  };
+
+  var html = '';
+
+  // LLM analysis summary (if available)
+  if (llmExplanation) {
+    html += '<div style="margin-bottom:16px;padding:12px;background:#1a2332;border:1px solid #2563eb33;border-radius:6px;">';
+    html += '<div style="color:#3b82f6;font-size:11px;font-weight:600;margin-bottom:4px;">AI Analysis</div>';
+    html += '<div style="color:#94a3b8;font-size:12px;">' + escHtml(llmExplanation) + '</div>';
+    html += '</div>';
+  }
+
+  // Step 1: Name & Type
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Workflow ID</label>';
+  html += '<input id="wiz-id" value="' + escHtml(safeName) + '" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;">';
+  html += '</div>';
+
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Display Name</label>';
+  html += '<input id="wiz-name" value="' + escHtml(llmName) + '" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;">';
+  html += '</div>';
+
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Pipeline Type</label>';
+  html += '<select id="wiz-pipeline" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;" onchange="updateWizardMappings()">';
+  var pipelines = ['image_generation', 'image_editing', 'video_generation', 'image_processing'];
+  for (var p of pipelines) {
+    var sel = p === llmPipeline ? ' selected' : '';
+    html += '<option value="' + p + '"' + sel + '>' + (PIPELINE_LABELS[p] || p) + '</option>';
+  }
+  html += '</select>';
+  if (parsed.detectedPipeline !== 'unknown') {
+    html += '<div style="color:#86efac;font-size:11px;margin-top:4px;">Auto-detected: ' + (PIPELINE_LABELS[parsed.detectedPipeline] || parsed.detectedPipeline) + '</div>';
+  }
+  html += '</div>';
+
+  // Step 2: Map inputs
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:8px;">Map Input Nodes (' + parsed.inputNodes.length + ' found)</label>';
+  html += '<div id="wiz-mappings">';
+  for (var i = 0; i < parsed.inputNodes.length; i++) {
+    var node = parsed.inputNodes[i];
+    html += renderMappingRow(node, i, parsed.detectedPipeline, STANDARD_INPUTS);
+  }
+  html += '</div></div>';
+
+  // Step 3: LLM Description
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Description (for LLM — what does this workflow do?)</label>';
+  html += '<textarea id="wiz-desc" rows="3" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;resize:vertical;" placeholder="Generates video by interpolating between first and last frame...">' + escHtml(llmDesc) + '</textarea>';
+  html += '</div>';
+
+  html += '<div style="margin-bottom:16px;">';
+  html += '<label style="display:block;color:#aaa;font-size:12px;margin-bottom:4px;">Selection Criteria (when should LLM pick this?)</label>';
+  html += '<textarea id="wiz-criteria" rows="2" style="width:100%;padding:6px 8px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:4px;box-sizing:border-box;resize:vertical;" placeholder="Shot has clear visual start and end difference...">' + escHtml(llmCriteria) + '</textarea>';
+  html += '</div>';
+
+  // Save button
+  html += '<div style="display:flex;gap:8px;justify-content:flex-end;">';
+  html += '<button onclick="cancelWizard()" style="padding:6px 16px;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;cursor:pointer;">Cancel</button>';
+  html += '<button onclick="saveWizard(\'' + escHtml(filename) + '\')" style="padding:6px 16px;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;">Save Workflow</button>';
+  html += '</div>';
+
+  wfWizardContent.innerHTML = html;
+
+  // Store parsed data for later
+  window._wizParsed = parsed;
+  window._wizFilename = filename;
+}
+
+function renderMappingRow(node, idx, pipeline, standardInputs) {
+  var options = standardInputs[pipeline] || [];
+  var html = '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;padding:6px;background:#1a1a2e;border-radius:4px;">';
+  html += '<span style="color:#666;font-size:11px;min-width:40px;">Node ' + node.nodeId + '</span>';
+  html += '<span style="color:#8b9dc3;font-size:12px;min-width:140px;">' + escHtml(node.title || node.classType) + '</span>';
+  html += '<span style="color:#555;font-size:11px;">→</span>';
+  html += '<select id="wiz-map-' + idx + '" data-node-id="' + node.nodeId + '" data-class="' + node.classType + '" style="flex:1;padding:4px 6px;background:#2a2a3e;color:#e0e0e0;border:1px solid #555;border-radius:3px;font-size:12px;">';
+  html += '<option value="">(leave as default)</option>';
+  for (var opt of options) {
+    var sel = node.suggestedInput === opt ? ' selected' : '';
+    html += '<option value="' + opt + '"' + sel + '>' + opt + '</option>';
+  }
+  html += '</select></div>';
+  return html;
+}
+
+window.updateWizardMappings = function() {
+  // Re-render mapping dropdowns when pipeline type changes — for now, just reload
+  var pipeline = document.getElementById('wiz-pipeline').value;
+  var STANDARD_INPUTS = {
+    image_generation: ['prompt', 'negative_prompt', 'seed', 'width', 'height', 'filenamePrefix'],
+    image_editing: ['base_image', 'prompt', 'negative_prompt', 'reference_image_1', 'reference_image_2', 'seed', 'filenamePrefix'],
+    video_generation: ['first_frame', 'last_frame', 'mid_frame', 'prompt', 'seed', 'durationSeconds', 'width', 'height', 'filenamePrefix'],
+    image_processing: ['base_image', 'edit_prompt', 'mask', 'seed', 'filenamePrefix'],
+  };
+  var mappingsEl = document.getElementById('wiz-mappings');
+  var html = '';
+  for (var i = 0; i < window._wizParsed.inputNodes.length; i++) {
+    html += renderMappingRow(window._wizParsed.inputNodes[i], i, pipeline, STANDARD_INPUTS);
+  }
+  mappingsEl.innerHTML = html;
+};
+
+window.cancelWizard = function() {
+  wfWizard.style.display = 'none';
+};
+
+window.saveWizard = async function(filename) {
+  var id = document.getElementById('wiz-id').value.trim();
+  var displayName = document.getElementById('wiz-name').value.trim();
+  var pipeline = document.getElementById('wiz-pipeline').value;
+  var llmDescription = document.getElementById('wiz-desc').value.trim();
+  var selectionCriteria = document.getElementById('wiz-criteria').value.trim();
+
+  if (!id || !displayName) { showToast('ID and display name are required', 'error'); return; }
+
+  // Collect parameter mappings
+  var mappings = [];
+  var inputReqs = [];
+  var parsed = window._wizParsed;
+  for (var i = 0; i < parsed.inputNodes.length; i++) {
+    var sel = document.getElementById('wiz-map-' + i);
+    if (sel && sel.value) {
+      mappings.push({ input: sel.value, nodeId: sel.dataset.nodeId, field: getFieldForClass(sel.dataset.class) });
+      // Build input requirement
+      var isImage = sel.dataset.class === 'LoadImage';
+      var source = isImage ? 'shot_image' : (sel.value === 'prompt' || sel.value === 'edit_prompt' ? 'shot_motion_directive' : 'system');
+      inputReqs.push({ id: sel.value, type: isImage ? 'image' : 'text', source: source, description: sel.value, required: true });
+    }
+  }
+
+  var outputType = pipeline === 'video_generation' ? 'video' : 'image';
+
+  var manifest = {
+    id: id,
+    displayName: displayName,
+    pipeline: pipeline,
+    llmDescription: llmDescription,
+    selectionCriteria: selectionCriteria,
+    outputType: outputType,
+    priority: 10,
+    inputRequirements: inputReqs,
+    workflowFile: filename,
+    format: 'litegraph',
+    parameterMappings: mappings,
+    builtIn: false,
+    active: true,
+  };
+
+  try {
+    var res = await fetch('/api/v1/workflows/configure', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(manifest),
+    });
+    var data = await res.json();
+    if (data.error) { showToast('Save failed: ' + data.error, 'error'); return; }
+    showToast('Workflow configured: ' + displayName, 'info');
+    wfWizard.style.display = 'none';
+    loadWorkflows();
+  } catch (err) {
+    showToast('Save failed: ' + err, 'error');
+  }
+};
+
+function getFieldForClass(classType) {
+  var map = {
+    'LoadImage': 'image',
+    'CLIPTextEncode': 'text',
+    'TextEncodeQwenImageEditPlus': 'text',
+    'INTConstant': 'value',
+    'KSampler': 'seed',
+    'RandomNoise': 'noise_seed',
+    'EmptySD3LatentImage': 'width',
+    'EmptyLatentImage': 'width',
+    'SaveImage': 'filename_prefix',
+    'VHS_VideoCombine': 'filename_prefix',
+  };
+  return map[classType] || 'value';
+}
 
 // ===== Init =====
 loadProjects();

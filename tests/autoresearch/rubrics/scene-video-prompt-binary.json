@@ -1,0 +1,74 @@
+{
+  "name": "Scene Video Prompt Binary",
+  "description": "Binary yes/no evaluation of scene_video_prompt JSON quality — the slim shot breakdown that drives downstream image and video generation.",
+  "format": "binary",
+  "phase": "scene_video_prompt",
+  "promptType": "scene_video_prompt",
+  "context": ["scene", "story"],
+  "questions": [
+    {
+      "id": "SCENE_COVERAGE",
+      "question": "Do the shots collectively cover the full scene description — every key action, event, dialogue moment, and beat from the scene is represented in at least one shot? No significant moments are skipped."
+    },
+    {
+      "id": "DURATION_SUM",
+      "question": "Do the individual shot durations sum approximately to the totalDuration field (within ±20%)? No wildly mismatched totals. Each shot should be 3-15 seconds (the upper bound is reserved for dialogue-heavy shots)."
+    },
+    {
+      "id": "DIALOGUE_DURATION_FIT",
+      "question": "For every shot whose audio field contains dialogue (a NAME: pattern — e.g. 'PARVATI:', 'Mrs. Singh:'), is the declared duration long enough to deliver the full line at conversational pace? Rule of thumb: ~2.5 words/sec plus a 1-second buffer. A shot with 20 words of dialogue needs duration >= 9s; a shot with 5 words needs >= 3s. Count dialogue words only — ambient audio descriptions don't count. If the shot has no dialogue (pure ambient/action), answer YES by default."
+    },
+    {
+      "id": "SHOT_DESCRIPTIONS",
+      "question": "Does every shot have a 'description' field with specific, concrete visual details — what a camera physically captures in this shot? No vague descriptions like 'the scene continues' or 'characters interact'. Each description should be 1-2 sentences that a cinematographer could act on."
+    },
+    {
+      "id": "CAMERA_WORK",
+      "question": "Does every shot include a 'cameraWork' field with specific camera direction — angle, movement, framing, depth of field? Not just 'medium shot' but behavior like 'static medium, slight push-in as tension builds'. No empty or generic entries."
+    },
+    {
+      "id": "AUDIO",
+      "question": "Does every shot include an 'audio' field that captures what is heard? This should include: dialogue lines (prefixed with character name), ambient sounds, effects, or explicit silence. If the scene has spoken dialogue, every line must appear in the correct shot's audio field."
+    },
+    {
+      "id": "SHOT_FLOW",
+      "question": "Do the shots flow logically from one to the next — is there a clear visual sequence that a video editor could assemble without confusion? No random jumps in location, time, or character position without motivation."
+    },
+    {
+      "id": "EMOTIONAL_ARC",
+      "question": "Do the shots collectively build an emotional arc across the scene — tension rises, mood shifts, pacing varies, something changes from the first shot to the last? Not a flat sequence of similar shots."
+    },
+    {
+      "id": "INSERT_SHOTS",
+      "question": "Does the shot breakdown include at least one character-free shot — an insert, cutaway, or establishing shot showing environment, objects, or atmosphere? Answer YES if present, or if the scene's rapid pacing genuinely wouldn't benefit from one."
+    },
+    {
+      "id": "SCENE_FAITHFUL",
+      "question": "Comparing to the provided scene description: do the shots accurately represent the scene's events, characters, and details without inventing major new elements or contradicting the scene?"
+    },
+    {
+      "id": "TRANSITIONS",
+      "question": "Does every shot have a 'transition' field specifying how it cuts from the previous shot? Valid values include 'cut', 'crossfade', 'fade', 'dip_to_black', 'flash_to_white'. The first shot should use 'cut' or 'fade'. Most mid-scene cuts should be 'cut' — transitions are seasoning, not the main course."
+    },
+    {
+      "id": "REQUIRED_FIELDS",
+      "question": "Does every shot have ALL 7 required fields: shotNumber, purpose, duration, description, cameraWork, audio, transition? Every single shot must have all fields present and non-empty."
+    },
+    {
+      "id": "PURPOSE_VALID",
+      "question": "Does every shot have a valid 'purpose' field from the allowed values: set_the_world, set_the_mood, meet_character, show_tension, show_action, show_reaction, show_dialogue, show_clue, show_passage, hold_emotion, show_change, punctuate? No made-up values."
+    },
+    {
+      "id": "PURPOSE_SEQUENCE",
+      "question": "If the scene opens with set_the_world or set_the_mood (no characters), is the next shot with characters marked as meet_character? Characters should not appear without being introduced. Answer YES if no establishing shot or if characters are introduced correctly."
+    },
+    {
+      "id": "PACING",
+      "question": "Is the pacing varied and appropriate? Quick cuts (3-4s) for action/tension, longer holds (6-8s) for emotional moments, establishing shots at scene openings? Not all the same duration."
+    },
+    {
+      "id": "TOKEN_EFFICIENCY",
+      "question": "Is the output concise and token-efficient? Descriptions should be 1-2 sentences max (not paragraphs). CameraWork should be a short phrase (not a full sentence). Audio should list sounds/dialogue concisely. No redundant words, no flowery prose, no repetition across shots. The entire JSON for a 10-shot scene should be under 800 tokens. Answer NO if any field is unnecessarily verbose or if the total output is bloated."
+    }
+  ]
+}

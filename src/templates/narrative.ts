@@ -4,7 +4,7 @@
  * Template for creating narrative/story-based videos.
  * This is a refactoring of the original 8-phase workflow into the generic template system.
  *
- * Flow: plot → story → characters/settings → scenes → ref_images → scene_images → videos → final
+ * Flow: plot → story → characters/settings → scenes → ref_images → shot_breakdown → shot_images → shot_videos → final
  */
 
 import type {
@@ -115,6 +115,64 @@ const settingArtifact: ArtifactTypeDefinition = {
   },
 };
 
+const objectArtifact: ArtifactTypeDefinition = {
+  id: 'object',
+  displayName: 'Objects/Props',
+  category: 'entity',
+  description: 'Distinctive objects, props, vehicles, or items that need visual consistency across shots',
+  scope: 'project',
+  isCollection: true,
+  itemName: 'object',
+  maxItems: 10,
+  outputFormat: 'markdown',
+  filePattern: 'objects/{{name}}.md',
+  agentType: 'content',
+  promptFile: 'narrative/object.md',
+  isExpensive: false,
+  requiresPerItemApproval: true,
+  dependencies: [
+    {
+      artifactTypeId: 'story',
+      required: true,
+      usage: 'context',
+    },
+  ],
+  metadataSchema: {
+    objectType: { type: 'string', required: false, description: 'Type of object (vehicle, weapon, artifact, prop)' },
+  },
+};
+
+const objectImageArtifact: ArtifactTypeDefinition = {
+  id: 'object_image',
+  displayName: 'Object Reference Images',
+  category: 'visual_ref',
+  description: 'Reference images for distinctive objects/props for visual consistency',
+  scope: 'project',
+  isCollection: true,
+  itemName: 'object_image',
+  maxItems: 10,
+  outputFormat: 'image',
+  filePattern: 'assets/images/objects/{{name}}.png',
+  agentType: 'image',
+  promptFile: 'narrative/object_image.md',
+  isExpensive: true,
+  requiresPerItemApproval: true,
+  dependencies: [
+    {
+      artifactTypeId: 'object',
+      required: true,
+      usage: 'input',
+      scope: 'matching',
+    },
+    {
+      artifactTypeId: 'world_style',
+      required: true,
+      usage: 'context',
+      scope: 'all',
+    },
+  ],
+};
+
 const sceneArtifact: ArtifactTypeDefinition = {
   id: 'scene',
   displayName: 'Scenes',
@@ -177,6 +235,12 @@ const characterImageArtifact: ArtifactTypeDefinition = {
       usage: 'context',
       scope: 'matching',
     },
+    {
+      artifactTypeId: 'world_style',
+      required: true,
+      usage: 'context',
+      scope: 'all',
+    },
   ],
   metadataSchema: {
     characterId: { type: 'string', required: true, description: 'ID of the source character' },
@@ -205,6 +269,12 @@ const settingImageArtifact: ArtifactTypeDefinition = {
       usage: 'context',
       scope: 'matching',
     },
+    {
+      artifactTypeId: 'world_style',
+      required: true,
+      usage: 'context',
+      scope: 'all',
+    },
   ],
   metadataSchema: {
     settingId: { type: 'string', required: true, description: 'ID of the source setting' },
@@ -212,9 +282,32 @@ const settingImageArtifact: ArtifactTypeDefinition = {
   },
 };
 
+// world_style: defines the visual/auditory style bible for the entire project
+// Generated once, injected as context into all downstream prompts
+const worldStyleArtifact: ArtifactTypeDefinition = {
+  id: 'world_style',
+  displayName: 'World Style Bible',
+  category: 'structure',
+  description: 'Visual and auditory style guide ensuring consistency across all shots — color palette, lighting, atmosphere, sound world',
+  scope: 'chapter',
+  isCollection: false,
+  outputFormat: 'markdown',
+  filePattern: 'plans/world_style.md',
+  agentType: 'content',
+  promptFile: 'narrative/world-style.md',
+  isExpensive: false,
+  requiresPerItemApproval: false,
+  dependencies: [
+    { artifactTypeId: 'story', required: true, usage: 'context', scope: 'matching' },
+    { artifactTypeId: 'scene', required: true, usage: 'context', scope: 'all' },
+    { artifactTypeId: 'setting', required: true, usage: 'context', scope: 'all' },
+  ],
+  metadataSchema: {},
+};
+
 const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
   id: 'scene_video_prompt',
-  displayName: 'Multi-Shot Motion Prompts',
+  displayName: 'Scene Breakdown',
   category: 'structure',
   description: 'Multi-shot breakdown of each scene into 2-4 cinematic shots with motion/camera direction',
   scope: 'chapter',
@@ -228,112 +321,124 @@ const sceneVideoPromptArtifact: ArtifactTypeDefinition = {
   requiresPerItemApproval: true,
   dependencies: [
     { artifactTypeId: 'scene', required: true, usage: 'context', scope: 'matching' },
-    { artifactTypeId: 'character_image', required: false, usage: 'reference', scope: 'matching' },
-    { artifactTypeId: 'setting_image', required: false, usage: 'reference', scope: 'matching' },
+    { artifactTypeId: 'world_style', required: true, usage: 'context', scope: 'matching' },
+    // character_image and setting_image REMOVED — scene breakdown only needs
+    // scene text + world style. Having media deps here caused serial mode deadlock:
+    // content (scene_video_prompt) waited for media (character_image) which waited
+    // for all content to finish.
   ],
 };
 
 const shotImagePromptArtifact: ArtifactTypeDefinition = {
   id: 'shot_image_prompt',
-  displayName: 'Shot Image Prompts',
+  displayName: 'Shot Composition',
   category: 'structure',
   description: 'Per-shot image generation prompts with reference image integration for visual consistency',
   scope: 'chapter',
   isCollection: true,
   itemName: 'shot prompt',
   outputFormat: 'markdown',
-  filePattern: 'prompts/images/shots/scene-{{index}}-shot-{{subindex}}.prompt.md',
+  filePattern: 'prompts/images/shots/scene-{{index}}-shot-{{subindex}}.json',
   agentType: 'content',
   promptFile: 'narrative/shot-image-prompt.md',
   isExpensive: false,
   requiresPerItemApproval: false,
   dependencies: [
+    // Only depends on scene_video_prompt for the shot structure + character/setting IDs.
+    // Reference images (character_image, setting_image) are resolved by refId at
+    // ComfyUI generation time, NOT at prompt generation time. This allows shot prompts
+    // to be generated in parallel with image generation.
     { artifactTypeId: 'scene_video_prompt', required: true, usage: 'context', scope: 'matching' },
-    { artifactTypeId: 'character_image', required: false, usage: 'reference', scope: 'matching' },
-    { artifactTypeId: 'setting_image', required: false, usage: 'reference', scope: 'matching' },
+    { artifactTypeId: 'world_style', required: true, usage: 'context', scope: 'matching' },
   ],
 };
 
-const sceneImageArtifact: ArtifactTypeDefinition = {
-  id: 'scene_image',
-  displayName: 'Scene Images',
-  category: 'visual_ref',
-  description: 'Generated images for each scene using character and setting references',
+// shot_motion_directive: rewrites shot description into concise LTX-optimized motion prompt
+// Separate LLM call per shot — produces 1-2 sentences focused on camera movement and physical action
+const shotMotionDirectiveArtifact: ArtifactTypeDefinition = {
+  id: 'shot_motion_directive',
+  displayName: 'Shot Motion Directives',
+  category: 'structure',
+  description: 'Concise, LTX-optimized motion prompts per shot — camera movement, subject action, atmosphere',
   scope: 'chapter',
   isCollection: true,
-  itemName: 'scene image',
-  outputFormat: 'image',
-  filePattern: 'chapters/{{chapter}}/assets/images/scenes/scene_{{index}}.png',
-  agentType: 'image',
-  promptFile: 'narrative/scene-image.md',
-  isExpensive: true,
-  requiresPerItemApproval: true,
+  itemName: 'motion directive',
+  outputFormat: 'markdown',
+  filePattern: 'prompts/motion/scene-{{index}}-shot-{{subindex}}.txt',
+  agentType: 'content',
+  promptFile: 'narrative/shot-motion-directive.md',
+  isExpensive: false,
+  requiresPerItemApproval: false,
   dependencies: [
-    {
-      artifactTypeId: 'scene',
-      required: true,
-      usage: 'context',
-      scope: 'matching',
-    },
-    {
-      artifactTypeId: 'shot_image_prompt',
-      required: true,
-      usage: 'context',
-      scope: 'matching',
-    },
-    {
-      artifactTypeId: 'character_image',
-      required: true,
-      usage: 'reference',
-      scope: 'matching',
-    },
-    {
-      artifactTypeId: 'setting_image',
-      required: true,
-      usage: 'reference',
-      scope: 'matching',
-    },
+    { artifactTypeId: 'scene_video_prompt', required: true, usage: 'context', scope: 'matching' },
+    { artifactTypeId: 'shot_image_prompt', required: true, usage: 'context', scope: 'matching' },
+    { artifactTypeId: 'world_style', required: true, usage: 'context', scope: 'matching' },
+  ],
+  metadataSchema: {},
+};
+
+// shot_image: generates the actual shot image from the prompt JSON + reference images via ComfyUI
+// This is the ComfyUI execution step — it needs the actual .png reference images
+const shotImageArtifact: ArtifactTypeDefinition = {
+  id: 'shot_image',
+  displayName: 'Shot Images',
+  category: 'visual_ref',
+  description: 'Generated shot images from prompts with reference image compositing via FLUX Klein',
+  scope: 'chapter',
+  isCollection: true,
+  itemName: 'shot image',
+  outputFormat: 'image',
+  filePattern: 'assets/images/shots/scene-{{index}}-shot-{{subindex}}.png',
+  agentType: 'image',
+  promptFile: 'narrative/shot-image.md',
+  isExpensive: true,
+  requiresPerItemApproval: false,
+  dependencies: [
+    // The prompt JSON tells us what to generate and which refs to use
+    { artifactTypeId: 'shot_image_prompt', required: true, usage: 'input', scope: 'matching' },
+    // Actual .png files needed for FLUX Klein image-to-image compositing
+    { artifactTypeId: 'character_image', required: true, usage: 'reference', scope: 'all' },
+    { artifactTypeId: 'setting_image', required: true, usage: 'reference', scope: 'all' },
+    { artifactTypeId: 'object_image', required: false, usage: 'reference', scope: 'all' },
   ],
   metadataSchema: {
-    sceneId: { type: 'string', required: true, description: 'ID of the source scene' },
-    characterRefs: { type: 'array', required: false, description: 'Character image IDs used' },
-    settingRef: { type: 'string', required: false, description: 'Setting image ID used' },
-    seed: { type: 'number', required: false, description: 'Generation seed for reproducibility' },
+    shotNumber: { type: 'number', required: true, description: 'Shot number within the scene' },
   },
 };
 
-const sceneVideoArtifact: ArtifactTypeDefinition = {
-  id: 'scene_video',
-  displayName: 'Scene Videos',
+// shot_video: generates a video clip from each shot image using the motion prompt
+// A scene is an array of shots — each shot starts with a shot image
+const shotVideoArtifact: ArtifactTypeDefinition = {
+  id: 'shot_video',
+  displayName: 'Shot Videos',
   category: 'clip',
-  description: 'Video clips for each scene generated from scene images',
+  description: 'Video clips for each shot, generated from shot images with motion prompts',
   scope: 'chapter',
   isCollection: true,
-  itemName: 'scene video',
+  itemName: 'shot video',
   outputFormat: 'video',
-  filePattern: 'chapters/{{chapter}}/assets/videos/scenes/scene_{{index}}.mp4',
+  filePattern: 'assets/videos/shots/scene-{{index}}-shot-{{subindex}}.mp4',
   agentType: 'video',
-  promptFile: 'common/scene-video.md',
+  promptFile: 'common/shot-video.md',
   isExpensive: true,
   requiresPerItemApproval: true,
   dependencies: [
     {
-      artifactTypeId: 'scene',
-      required: true,
-      usage: 'context',
-      scope: 'matching',
-    },
-    {
-      artifactTypeId: 'scene_image',
+      artifactTypeId: 'shot_image',
       required: true,
       usage: 'input',
       scope: 'matching',
     },
+    {
+      artifactTypeId: 'shot_motion_directive',
+      required: true,
+      usage: 'context',
+      scope: 'matching',
+    },
   ],
   metadataSchema: {
-    sceneId: { type: 'string', required: true, description: 'ID of the source scene' },
-    imageId: { type: 'string', required: true, description: 'Source scene image ID' },
-    duration: { type: 'number', required: false, description: 'Video duration in seconds' },
+    shotNumber: { type: 'number', required: true, description: 'Shot number within the scene' },
+    duration: { type: 'number', required: false, description: 'Shot duration in seconds' },
   },
 };
 
@@ -352,7 +457,7 @@ const finalVideoArtifact: ArtifactTypeDefinition = {
   requiresPerItemApproval: false,
   dependencies: [
     {
-      artifactTypeId: 'scene_video',
+      artifactTypeId: 'shot_video',
       required: true,
       usage: 'input',
       scope: 'all',
@@ -475,16 +580,25 @@ const phases: PhaseDefinition[] = [
     displayName: 'Story Breakdown',
     description: 'Break down the story into characters, settings, and scenes',
     order: 3,
-    artifactTypes: ['character', 'setting', 'scene'],
+    artifactTypes: ['character', 'setting', 'object', 'scene'],
     requiresConfirmation: false,
     promptFile: 'narrative/phases/breakdown.md',
+  },
+  {
+    id: 'world_style',
+    displayName: 'World Style',
+    description: 'Define the visual and auditory style bible for the project',
+    order: 3.5,
+    artifactTypes: ['world_style'],
+    requiresConfirmation: false,
+    promptFile: 'narrative/phases/world-style.md',
   },
   {
     id: 'reference_images',
     displayName: 'Reference Image Generation',
     description: 'Generate reference images for characters and settings',
     order: 4,
-    artifactTypes: ['character_image', 'setting_image'],
+    artifactTypes: ['character_image', 'setting_image', 'object_image'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/reference-images.md',
   },
@@ -493,33 +607,24 @@ const phases: PhaseDefinition[] = [
     displayName: 'Shot Breakdown',
     description: 'Break scenes into cinematic shots and generate per-shot image prompts',
     order: 5,
-    artifactTypes: ['scene_video_prompt', 'shot_image_prompt'],
+    artifactTypes: ['scene_video_prompt', 'shot_image_prompt', 'shot_motion_directive', 'shot_image'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/shot-breakdown.md',
   },
   {
-    id: 'scene_images',
-    displayName: 'Scene Image Generation',
-    description: 'Generate images for each scene using reference images',
+    id: 'shot_videos',
+    displayName: 'Shot Video Generation',
+    description: 'Generate video clips for each shot from shot images',
     order: 6,
-    artifactTypes: ['scene_image'],
+    artifactTypes: ['shot_video'],
     requiresConfirmation: true,
-    promptFile: 'narrative/phases/scene-images.md',
-  },
-  {
-    id: 'video_generation',
-    displayName: 'Video Generation',
-    description: 'Generate video clips for each scene',
-    order: 7,
-    artifactTypes: ['scene_video'],
-    requiresConfirmation: true,
-    promptFile: 'narrative/phases/video-generation.md',
+    promptFile: 'narrative/phases/shot-videos.md',
   },
   {
     id: 'final_assembly',
     displayName: 'Final Assembly',
-    description: 'Assemble all scene videos into the final video',
-    order: 8,
+    description: 'Assemble all shot videos into the final video',
+    order: 7,
     artifactTypes: ['final_video'],
     requiresConfirmation: true,
     promptFile: 'narrative/phases/final-assembly.md',
@@ -663,13 +768,17 @@ export const narrativeTemplate: VideoTemplate = {
     story: storyArtifact,
     character: characterArtifact,
     setting: settingArtifact,
+    object: objectArtifact,
     scene: sceneArtifact,
+    world_style: worldStyleArtifact,
     character_image: characterImageArtifact,
     setting_image: settingImageArtifact,
+    object_image: objectImageArtifact,
     scene_video_prompt: sceneVideoPromptArtifact,
     shot_image_prompt: shotImagePromptArtifact,
-    scene_image: sceneImageArtifact,
-    scene_video: sceneVideoArtifact,
+    shot_motion_directive: shotMotionDirectiveArtifact,
+    shot_image: shotImageArtifact,
+    shot_video: shotVideoArtifact,
     final_video: finalVideoArtifact,
   },
   phases,

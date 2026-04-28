@@ -1,0 +1,207 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+/*
+ * Kshana-Ink Design Tokens
+ * Derived from kshana-website design system.
+ * Dark-first, cyan + green accents, glassmorphic depth.
+ */
+
+:root {
+  /* ── Core palette ──────────────────────────────────────── */
+  --background: #030508;
+  --foreground: #f0f4f8;
+  --signal-cyan: #6bb3e8;
+  --kshana-green: #4ae8b0;
+
+  /* ── Surfaces (glassmorphic) ───────────────────────────── */
+  --panel: rgba(10, 13, 19, 0.72);
+  --panel-strong: rgba(13, 17, 24, 0.92);
+  --surface-overlay: rgba(255, 255, 255, 0.05);
+
+  /* ── Borders ───────────────────────────────────────────── */
+  --line-soft: rgba(255, 255, 255, 0.10);
+  --line-strong: rgba(255, 255, 255, 0.20);
+
+  /* ── Graphite neutral scale (boosted contrast) ─────────── */
+  --graphite-050: #cdd6e0;
+  --graphite-100: #9ca8b6;
+  --graphite-150: #7d8a98;
+  --graphite-200: #5e6b7a;
+  --graphite-250: #3a4350;
+  --graphite-300: #272e38;
+  --graphite-350: #1c2230;
+  --graphite-400: #131924;
+  --graphite-450: #0a0e16;
+
+  /* ── Semantic colors ───────────────────────────────────── */
+  --success: #4ae8b0;
+  --warning: #f5a255;
+  --error: #ef5350;
+  --info: #6bb3e8;
+
+  /* ── Typography ────────────────────────────────────────── */
+  --font-display: 'Cormorant Garamond', serif;
+  --font-body: 'Manrope', sans-serif;
+  --font-code: 'JetBrains Mono', monospace;
+
+  /* ── Shadows ───────────────────────────────────────────── */
+  --surface-shadow: 0 30px 80px rgba(0, 0, 0, 0.36);
+  --button-shadow: 0 20px 38px rgba(0, 0, 0, 0.28);
+  --card-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+
+  /* ── Radii ─────────────────────────────────────────────── */
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1.25rem;
+  --radius-xl: 1.8rem;
+  --radius-pill: 999px;
+
+  /* ── Aurora / Gradient system ───────────────────────────── */
+  --shell-background:
+    radial-gradient(circle at 12% 10%, rgba(86, 158, 214, 0.14), transparent 28%),
+    radial-gradient(circle at 85% 14%, rgba(52, 211, 153, 0.09), transparent 24%),
+    linear-gradient(180deg, #020407 0%, #04070b 35%, #020406 100%);
+  --shell-aurora-left: rgba(86, 158, 214, 0.7);
+  --shell-aurora-right: rgba(52, 211, 153, 0.5);
+  --shell-grid-line: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Tailwind theme mapping ──────────────────────────────── */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-cyan: var(--signal-cyan);
+  --color-green: var(--kshana-green);
+  --color-panel: var(--panel);
+  --color-panel-strong: var(--panel-strong);
+  --color-line-soft: var(--line-soft);
+  --color-line-strong: var(--line-strong);
+  --color-surface: var(--surface-overlay);
+  --color-graphite-50: var(--graphite-050);
+  --color-graphite-100: var(--graphite-100);
+  --color-graphite-200: var(--graphite-200);
+  --color-graphite-300: var(--graphite-300);
+  --color-graphite-400: var(--graphite-400);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+  --color-info: var(--info);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-code);
+  --font-display: var(--font-display);
+}
+
+/* ── Base styles ─────────────────────────────────────────── */
+html {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body);
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  font-weight: 420;
+  letter-spacing: 0.01em;
+}
+
+/* ── App shell with gradient background ──────────────────── */
+.app-shell {
+  background: var(--shell-background);
+  position: relative;
+}
+
+/* Subtle grid overlay */
+.app-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.06;
+  background-image:
+    linear-gradient(var(--shell-grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--shell-grid-line) 1px, transparent 1px);
+  background-size: 4rem 4rem;
+  mask-image: radial-gradient(circle at center, black, transparent 78%);
+}
+
+/* Aurora glow blobs */
+.aurora {
+  position: fixed;
+  width: 28rem;
+  height: 28rem;
+  border-radius: 999px;
+  filter: blur(90px);
+  opacity: 0.15;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.aurora--left {
+  left: -8rem;
+  top: 10rem;
+  background: var(--shell-aurora-left);
+  animation: drift 18s ease-in-out infinite;
+}
+
+.aurora--right {
+  right: -6rem;
+  top: 20rem;
+  background: var(--shell-aurora-right);
+  animation: drift 18s ease-in-out infinite;
+  animation-delay: -6s;
+}
+
+@keyframes drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(12px, -18px) scale(1.04); }
+  66% { transform: translate(-8px, 14px) scale(0.97); }
+}
+
+/* ── Scrollbar ───────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--graphite-250);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--graphite-200);
+}
+
+/* ── Selection ───────────────────────────────────────────── */
+::selection {
+  background: rgba(86, 158, 214, 0.28);
+}
+
+/* ── Glassmorphic panel utility ──────────────────────────── */
+.glass-panel {
+  background:
+    radial-gradient(circle at 20% 10%, rgba(86, 158, 214, 0.06), transparent 35%),
+    var(--panel);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-lg);
+}
+
+.glass-panel-strong {
+  background:
+    radial-gradient(circle at 15% 5%, rgba(86, 158, 214, 0.08), transparent 40%),
+    radial-gradient(circle at 90% 90%, rgba(52, 211, 153, 0.05), transparent 35%),
+    var(--panel-strong);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--surface-shadow);
+}

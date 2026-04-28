@@ -50,6 +50,10 @@ export interface ImageGenerationInput {
   prompt: string;
   negativePrompt?: string;
   aspectRatio?: string;
+  /** Override width in pixels (takes precedence over aspectRatio) */
+  width?: number;
+  /** Override height in pixels (takes precedence over aspectRatio) */
+  height?: number;
   seed?: number;
   /** Directory where the output file should be saved */
   outputDir: string;
@@ -81,7 +85,7 @@ export interface ImageEditInput {
  * Input for video generation from an image.
  */
 export interface VideoGenerationInput {
-  /** Absolute path to the source image */
+  /** Absolute path to the source image (backward compat — first frame) */
   sourceImagePath: string;
   /** Motion/animation prompt */
   prompt: string;
@@ -94,7 +98,126 @@ export interface VideoGenerationInput {
   outputDir: string;
   /** Optional filename prefix */
   filenamePrefix?: string;
+  /** Additional frame images keyed by input requirement ID (e.g., { last_frame: "/path/to/last.png" }) */
+  frameImages?: Record<string, string>;
+  /** Workflow mode ID for routing to the correct workflow */
+  modeId?: string;
+  /** Absolute path to source video for V2V extend (previous shot's video) */
+  sourceVideoPath?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Workflow Mode types — capability-based routing
+// ---------------------------------------------------------------------------
+
+/** Which pipeline stage a workflow belongs to */
+export type WorkflowPipeline = 'image_generation' | 'image_editing' | 'image_processing' | 'video_generation';
+
+/** Where an input comes from at runtime */
+export type InputSource =
+  | 'shot_image'            // from generated shot image(s)
+  | 'shot_video'            // from previous shot video (v2v extend)
+  | 'shot_motion_directive' // from motion directive text
+  | 'image_processing'      // from stage 4 output (chaining)
+  | 'llm'                   // LLM generates at runtime
+  | 'user'                  // user provides at project setup
+  | 'system';               // system params (seed, width, height, duration, prefix)
+
+/** A single input that a workflow requires */
+export interface InputRequirement {
+  /** Identifier matching parameterMappings (e.g., 'first_frame', 'prompt') */
+  id: string;
+  /** Data type */
+  type: 'image' | 'video' | 'text' | 'number' | 'mask' | 'depth_map';
+  /** Where the executor should resolve this input from */
+  source: InputSource;
+  /** Human-readable description (shown in wizard + used by LLM) */
+  description: string;
+  /** Whether this input is required or optional */
+  required: boolean;
+}
+
+/** Maps an input requirement to a specific ComfyUI node */
+export interface ParameterMapping {
+  /** Input requirement ID (must match an inputRequirement.id or a system param) */
+  input: string;
+  /** ComfyUI node ID in the workflow */
+  nodeId: string;
+  /** Field name on the node's inputs/widgets */
+  field: string;
+  /** Default value to use when the input is not provided at runtime */
+  defaultValue?: unknown;
+}
+
+/**
+ * Unified workflow manifest — describes what a workflow does,
+ * what it needs, and how to parameterize it.
+ * Lives as a `*.manifest.json` sidecar next to the workflow JSON.
+ */
+export interface WorkflowManifest {
+  /** Unique mode ID (e.g., 'i2v', 'flfv', 'sam_inpaint') */
+  id: string;
+  /** Human-readable name */
+  displayName: string;
+  /** Which pipeline stage: video_generation or image_processing */
+  pipeline: WorkflowPipeline;
+  /** 2-3 sentence description for the LLM to understand what this mode does */
+  llmDescription: string;
+  /** When the LLM should choose this mode (selection guidance) */
+  selectionCriteria: string;
+  /** What the workflow produces */
+  outputType: 'video' | 'image';
+  /** Priority for tie-breaking (lower = preferred) */
+  priority: number;
+
+  /** What inputs the workflow needs */
+  inputRequirements: InputRequirement[];
+
+  /** ComfyUI workflow filename (relative to same directory) */
+  workflowFile: string;
+  /** Workflow format: 'litegraph' (node editor) or 'api' (API format) */
+  format: 'litegraph' | 'api';
+  /** Maps inputs to ComfyUI node IDs */
+  parameterMappings: ParameterMapping[];
+
+  /** Keywords to inject into prompts for LoRA activation or style triggers */
+  promptKeywords?: {
+    /** Keywords prepended to the prompt (e.g., "GHIBSKY style, ") */
+    prepend?: string;
+    /** Keywords appended to the prompt (e.g., ", in the style of ohwx") */
+    append?: string;
+    /** Keywords added to negative prompt */
+    negativeAppend?: string;
+  };
+
+  /**
+   * Generation strategies this workflow supports (e.g., ['i2v', 't2v', 'flfv']).
+   * Used for routing: when the LLM picks a strategy per shot, the system finds
+   * the best workflow that supports that strategy.
+   *
+   * Inferred from inputRequirements if not explicitly set:
+   * - Has shot_image inputs → supports 'i2v'
+   * - Has no shot_image inputs → supports 't2v'
+   * - Has 'last_frame' input → also supports 'flfv'
+   * - Has 'mid_frame' input → also supports 'fmlfv'
+   */
+  strategies?: string[];
+
+  /** Whether this is a built-in workflow (immutable, always present, cannot be removed) */
+  builtIn?: boolean;
+  /** Whether this mode is currently active (built-ins are always active) */
+  active?: boolean;
+  /** Whether this is a user-selected override for its pipeline (overrides the built-in default) */
+  isOverride?: boolean;
+  /** Which ComfyUI mode this workflow is for: "local", "cloud", or "both" (default) */
+  mode?: 'local' | 'cloud' | 'both';
+}
+
+/**
+ * A manifest file can contain a single mode or an array of modes
+ * (when one workflow supports multiple generation strategies).
+ */
+export type WorkflowManifestFile = WorkflowManifest | WorkflowManifest[];
 
 /**
  * Progress callback type.

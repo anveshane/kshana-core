@@ -1,0 +1,37 @@
+{
+  "name": "Shot First Frame Binary",
+  "description": "Binary evaluation of call 2 output — first frame image prompt quality.",
+  "format": "binary",
+  "phase": "shot_image_prompt",
+  "promptType": "shot_first_frame",
+  "questions": [
+    {
+      "id": "FROZEN_INSTANT",
+      "question": "Does the prompt describe a single frozen instant? No motion verbs: running, walking, falling, turning, spinning, dissolving, collapsing, flickering, dashing, sprinting, erupting, crumbling, dodging, tracking, scrambling. Uses static equivalents: 'mid-stride', 'suspended mid-air', 'body angled', 'positioned at'."
+    },
+    {
+      "id": "LIGHTING_COMPLETE",
+      "question": "Does the prompt include lighting with at least 3 of 4 components: source (fire, sunlight, neon), direction (overhead, camera-left), quality (harsh, soft), temperature (warm golden, cool blue)? For edit_previous_shot mode, lighting is optional (already in base image) — answer YES."
+    },
+    {
+      "id": "COMPOSITION_MATCH",
+      "question": "Does the framing match the shot's camera work? A wide shot describes an environment-dominated frame. A close-up fills the frame with a face or detail. Depth of field matches the shot type."
+    },
+    {
+      "id": "SHOT_FAITHFUL",
+      "question": "Does the prompt match the shot description? Visual content reflects described action, characters, and setting. No invented major elements. No missing key events."
+    },
+    {
+      "id": "EDIT_DELTA_ONLY",
+      "question": "For edit_previous_shot mode: does the prompt describe ONLY what changed from the previous shot? It should NOT re-describe setting, lighting, atmosphere, or characters already in the base image. For other modes, answer YES."
+    },
+    {
+      "id": "REFS_IN_PROMPT",
+      "question": "For image_text_to_image: does the prompt use 'from image N' for every referenced character/setting? For edit_previous_shot: 'from image N' used ONLY for NEW characters in refs? For text_to_image: no 'from image N' at all?"
+    },
+    {
+      "id": "PROSE_QUALITY",
+      "question": "Is the prompt written as flowing prose — a single paragraph a cinematographer could visualize? Not comma-separated keywords, not bullet points, not a list."
+    }
+  ]
+}

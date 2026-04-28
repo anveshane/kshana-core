@@ -91,11 +91,39 @@ read_file() may ONLY be called with paths that were returned by list_project_fil
 - **scene_image_prompt**: Comprehensive image generation prompt for scene with references
 - **scene_video_prompt**: Comprehensive motion/animation prompt for video generation
 
+## Duration-Aware Content Scoping
+
+When `<duration_constraints>` is present in your task, scope content to fit the target duration:
+
+| Target Duration | Plot Scope | Story Length | Scene Range |
+|----------------|-----------|-------------|-------------|
+| ≤30 seconds | Single moment/beat | 1-2 paragraphs | 2-3 scenes |
+| 31-60 seconds | Core dramatic arc | 3-5 paragraphs | 3-5 scenes |
+| 61-120 seconds | Full short narrative | 6-10 paragraphs | 5-8 scenes |
+| 121-180 seconds | Expanded narrative | 10-15 paragraphs | 8-12 scenes |
+
+These are RANGES, not targets. The narrative determines the exact count within the range. Each scene gets 1-3 shots based on complexity — simple moments need 1 shot, complex dialogue/action needs 2-3.
+
+### Rules:
+- **Plot**: Only enough story beats to fill the narrative — not a full novel outline
+- **Story**: Proportional to duration — a 30s video needs a vignette, not a chapter
+- **Scene breakdown**: Break into scenes based on narrative beats within the suggested range
+- **Narration**: ~2.5 words per second of target duration
+- **When source material exceeds what fits**: Condense and select the most visual/dramatic moments. Do NOT try to cover everything.
+
 ## IMPORTANT: Output Format
 
-After gathering context, output ONLY the content itself - no tool calls, no JSON, no code blocks.
+After gathering context, wrap your final content in <generated_content> tags:
 
-Just write the creative content directly. The system will handle presenting it to the user for approval.
+<generated_content>
+[Your content here — markdown, prose, JSON, etc.]
+</generated_content>
+
+Rules:
+- Do NOT include thinking, analysis, or planning outside the tags
+- Do NOT explain what you're about to write — just write it inside the tags
+- No tool calls, no code blocks wrapping the content
+- The system extracts ONLY what's inside <generated_content> tags
 
 ## Content Generation Guidelines
 
@@ -142,283 +170,40 @@ Include:
 - Match the emotional tone of the scene
 - Avoid overly complex vocabulary
 
+{{#if character_image_guide}}
 ### For Character Image Prompts (character_image_prompt)
 
-**PURPOSE**: Establish the visual IDENTITY of the character ONLY. This image will be used as a reference when compositing scenes. It must contain ONLY the character — no settings, backgrounds, other people, or scene context.
+{{character_image_guide}}
+{{/if}}
 
-**ALL of these details are MANDATORY** - infer if not provided in source:
-
-1. **Physical Attributes**: Age, ethnicity, height, weight/build, skin tone
-2. **Facial Features**: Face shape, hair (color/texture/length/style), eyes, nose, mouth, distinguishing features
-3. **Attire**: Primary outfit with colors, color palette, accessories, style keywords
-4. **Pose**: Position (3/4 view or front-facing), neutral expression, hands visible
-5. **Technical**: Aspect ratio 1:1, plain solid-color background (white, light gray, or neutral), soft even studio lighting
-
-**STRICT RULES:**
-- ONLY the character — no other people, no animals, no props beyond what the character carries
-- ONLY a plain neutral background — no environments, no buildings, no landscapes, no furniture
-- Focus on what makes this character visually UNIQUE and recognizable
-- The goal is a clean identity reference that won't bleed setting details into scenes
-
-**Output format:**
-```
-**Image Prompt:**
-[Single detailed paragraph describing ONLY the character against a plain background]
-
-**Negative Prompt:**
-background scene, environment, landscape, buildings, furniture, multiple people, busy background, motion blur, cropped face, text, watermarks
-
-**Aspect Ratio:**
-1:1
-```
-
+{{#if setting_image_guide}}
 ### For Setting Image Prompts (setting_image_prompt)
 
-**PURPOSE**: Establish the visual IDENTITY of the location ONLY. This image will be used as a reference when compositing scenes. It must contain ONLY the environment — no characters, people, or figures.
+{{setting_image_guide}}
+{{/if}}
 
-**ALL of these details are MANDATORY** - infer if not provided in source:
-
-1. **Environment**: Location category, specific type, time period, scale
-2. **Atmosphere**: Time of day (specific), weather, lighting direction/quality, color temperature
-3. **Architecture**: Key structures, materials, scale indicators, depth layers
-4. **Mood**: Emotional tone, color palette (3-5 colors), textures, condition
-5. **Technical**: Aspect ratio 1:1, wide establishing shot, deep focus
-
-**STRICT RULES:**
-- ONLY the environment — no people, no characters, no human figures, no silhouettes
-- Focus on what makes this location visually UNIQUE and recognizable
-- The goal is a clean setting reference that won't bleed character details into scenes
-
-**Output format:**
-```
-**Image Prompt:**
-[Single detailed paragraph describing ONLY the environment with NO people present]
-
-**Negative Prompt:**
-people, person, human, character, figure, silhouette, crowd, text, watermarks
-
-**Aspect Ratio:**
-1:1
-```
-
+{{#if scene_image_guide}}
 ### For Scene Image Prompts (scene_image_prompt)
 
-**IMPORTANT: Check the project templateId first.** The generation mode depends on whether character/setting reference images exist.
+{{scene_image_guide}}
+{{/if}}
 
-#### When reference images EXIST (narrative template with characters/settings)
-
-Use `read_project()` to find each character's `referenceImagePath` and each setting's `referenceImagePath`. Only use paths where `referenceImageStatus` is `"exists"` — paths with `null` value or `"missing"` status do NOT exist on disk. Call `list_project_files()` if you need to verify.
-
-**ALL of these details are MANDATORY:**
-
-1. **References**: Character ref IDs to use, setting ref ID
-2. **Composition**: Shot type, camera angle, focal point, character positions, depth of field
-3. **Action**: Captured moment, character expressions, body language, interactions
-4. **Lighting**: Primary source, quality, shadows, mood contribution, color grading
-5. **Technical**: Aspect ratio 1:1, mode: image_text_to_image
-
-Scene images are generated using the Qwen Edit workflow which takes up to 3 input images. In the prompt text, these are referenced as **image1**, **image2**, **image3**. The image numbering is determined by the order you list them in the **Reference Images** section:
-- The FIRST reference listed → becomes **image1**
-- The SECOND reference listed → becomes **image2**
-- The THIRD reference listed → becomes **image3**
-
-The prompt text MUST reference every character and setting using "from imageN" phrasing.
-
-**Output format:**
-```
-**Image Prompt:**
-[Single detailed paragraph using "from image1", "from image2", "from image3" to reference characters/settings]
-
-**Reference Images:**
-- Character: [name]
-- Character: [name]
-- Setting: [name]
-
-**Negative Prompt:**
-[Style-appropriate negatives + inconsistent appearance, wrong features]
-
-**Aspect Ratio:**
-1:1
-
-**Generation Mode:**
-image_text_to_image
-```
-
-#### When NO reference images exist (documentary, short, or other templates)
-
-For documentaries and other non-narrative templates, scene images are **standalone** — they do NOT reference character or setting images. Use `text_to_image` mode.
-
-**ALL of these details are MANDATORY:**
-
-1. **Composition**: Shot type, camera angle, focal point, depth of field
-2. **Subject**: What is shown — people, objects, landscapes, abstract visuals, b-roll
-3. **Lighting**: Primary source, quality, shadows, mood, color grading
-4. **Atmosphere**: Emotional tone, color palette, textures
-5. **Technical**: Aspect ratio 1:1, mode: text_to_image
-
-**STRICT RULES:**
-- NEVER reference "image1", "image2", etc. — there are no input reference images
-- NEVER include a **Reference Images** section
-- Describe the complete scene in the prompt itself — all visual details must be self-contained
-
-**Output format:**
-```
-**Image Prompt:**
-[Single detailed paragraph describing the complete scene with all visual details]
-
-**Negative Prompt:**
-[Style-appropriate negatives]
-
-**Aspect Ratio:**
-1:1
-
-**Generation Mode:**
-text_to_image
-```
-
+{{#if scene_video_guide}}
 ### For Scene Video Prompts (scene_video_prompt)
 
-**PURPOSE**: Break a scene into 2-4 cinematic shots, each optimized for the LTX-2 video generation model. LTX-2 generates 4-8 second clips effectively, so each shot must describe focused motion for a single clip. Real video production uses multiple shots per scene — establishing, close-up, medium, reaction, etc.
+{{scene_video_guide}}
+{{/if}}
 
-**Multi-Shot Breakdown Rules:**
-
-1. **2-4 shots per scene**: Break the scene action into distinct cinematic shots. Each shot must map to a **specific narrative moment** from the scene description — not generic framing
-2. **4-8 seconds each**: Each shot's motion must be achievable in this window
-3. **Shot type vocabulary**:
-   - **By distance**: extreme_wide, wide, medium_wide, medium, medium_close_up, close_up, extreme_close_up
-   - **By angle**: eye_level, low_angle, high_angle, dutch_angle, birds_eye, worms_eye
-   - **By purpose**: establishing, reaction, over_the_shoulder, two_shot, pov, insert, cutaway, tracking
-4. **Shot sequencing**: Start with establishing/wide shots, move to medium/close-ups for key moments, use reaction shots for emotional beats
-5. **Per-shot referenceImages**: Only include references relevant to that specific shot (e.g., close-up of Alice → only Alice's reference)
-
-**Model-Specific Prompt Rules:** If a `<model_skills>` section is present in the system prompt, apply those rules to EACH shot's prompt. Otherwise, use these defaults for each shot:
-
-1. **Single flowing paragraph**: Each shot prompt is ONE continuous paragraph
-2. **Present tense, descriptive language**: "a woman walks" not "a woman walking"
-3. **Show, don't label emotions**: "tears stream down her face" not "she is sad"
-4. **Explicit camera work in cameraWork field**: Define the camera motion separately
-
-**Dialogue Support:**
-- If the scene description includes character dialogue, distribute the lines across the appropriate shots
-- Set the `dialogue` field to the character's spoken line for that shot (LTX-2 generates with audio)
-- Set `dialogue` to `null` if the shot has no spoken dialogue
-
-**Output format:**
-
-Output ONLY a JSON object (no markdown fences).
-
-**NOTE:** The example below uses illustrative paths. You MUST replace them with actual verified paths from `read_project()` (where `referenceImageStatus` is `"exists"`) or `list_project_files()`. If no reference images exist, use empty arrays `[]`.
-
-```
-{
-  "sceneNumber": 3,
-  "sceneTitle": "The Confrontation",
-  "shots": [
-    {
-      "shotNumber": 1,
-      "shotType": "establishing",
-      "duration": 5,
-      "prompt": "A wide view of the dimly lit study as two figures stand facing each other across a mahogany desk, candlelight flickering across leather-bound books on tall shelves, dust motes drifting through a shaft of golden afternoon light from the tall window.",
-      "dialogue": null,
-      "cameraWork": "slow push-in from wide to medium",
-      "referenceImages": ["<verified path from read_project>", "<verified path from read_project>"]
-    },
-    {
-      "shotNumber": 2,
-      "shotType": "close-up",
-      "duration": 6,
-      "prompt": "Sarah's face fills the frame, her jaw tightens and her eyes narrow with controlled fury, a subtle tremor passes through her crossed arms, the warm candlelight catches a glint of moisture at the corner of her eye as she draws a slow breath.",
-      "dialogue": "You had no right to make that decision alone.",
-      "cameraWork": "static close-up with subtle drift right",
-      "referenceImages": ["<verified path for sarah>"]
-    },
-    {
-      "shotNumber": 3,
-      "shotType": "reaction",
-      "duration": 5,
-      "prompt": "Marcus shifts his weight from one foot to the other, his jaw set firm while his fingers curl and uncurl at his sides, a faint twitch tugs at the corner of his mouth as he absorbs her words, the shadows from the flickering candles play across his tense expression.",
-      "dialogue": null,
-      "cameraWork": "medium shot, slight pan left",
-      "referenceImages": ["<verified path for marcus>"]
-    }
-  ],
-  "totalSceneDuration": 16,
-  "referenceImages": ["<all verified paths used across shots>"]
-}
-```
-
-**CRITICAL — Reference Image Path Rules:**
-- **ONLY** use paths that `read_project()` returns with `referenceImageStatus: "exists"`, or that appear in `list_project_files()` output
-- **NEVER** fabricate, guess, or invent image paths like `assets/images/characters/name.png` — these will be stripped by the validator
-- If `referenceImagePath` is `null` or `referenceImageStatus` is `"missing"` for a character/setting, do NOT include any path for it
-- If NO valid reference images exist, set `referenceImages` to an empty array `[]`
-- When in doubt, call `list_project_files()` to see what files actually exist on disk
-
-**referenceImages** (top-level): List ALL verified `referenceImagePath` values from `read_project()` for every character and setting in the scene (only those with `referenceImageStatus: "exists"`). Per-shot `referenceImages` should only include refs relevant to that specific shot.
-
+{{#if shot_image_guide}}
 ### For Shot Image Prompts (shot_image_prompt)
 
-**PURPOSE**: Generate an image prompt for a specific shot within a multi-shot scene. Each shot has its own framing (establishing wide, close-up, medium, reaction) and uses only the reference images relevant to that shot. The resulting image will be used as the source frame for video generation of that shot.
-
-**This works like `scene_image_prompt` but tailored to a specific shot's framing.**
-
-**The instruction will include shot details**: shot number, shot type, camera work, and which characters/settings appear. Use this information to compose the image appropriately.
-
-**CRITICAL — Narrative Content from Scene Description:**
-The scene description is the **narrative source** — it contains the story beats, character actions, emotions, and dramatic context. Each shot must depict a **specific story moment** from the scene description. The motion JSON provides framing and composition guidance, but the scene description provides **what is actually happening**. Do NOT generate generic compositions like "wide interior shot" or "close-up on hands" — include the specific narrative details (who is doing what, why, and the emotional tone).
-
-**Shot-specific composition rules:**
-
-| Shot Type | Composition |
-|-----------|-------------|
-| **extreme_wide** | Vast environment, character tiny or absent, establishes scale |
-| **wide / establishing** | Full environment with characters head-to-toe, establishes location and context |
-| **medium_wide** | Character from knees up, some environment visible, good for physical action |
-| **medium** | Waist-up of character(s), conversational distance, balanced environment context |
-| **medium_close_up** | Chest and head, intimate but not intense, captures expression and gesture |
-| **close_up** | Face fills frame, maximum emotional impact, shallow depth of field |
-| **extreme_close_up** | Single feature (eyes, hands, object), very intense, reveals key details |
-| **low_angle** | Camera looking up at subject — appears powerful, dominant, imposing |
-| **high_angle** | Camera looking down at subject — appears smaller, vulnerable |
-| **dutch_angle** | Tilted frame, creates unease and tension |
-| **birds_eye** | Directly above, unusual perspective, abstract/removed feel |
-| **reaction** | Character responding — focus on facial expression and body language |
-| **over_the_shoulder** | From behind one character looking at another, foreground character blurred |
-| **two_shot** | Two characters in frame together, showing their spatial relationship |
-| **pov** | Point-of-view — what a character sees, subjective perspective |
-| **insert** | Detail shot of object or action (hands, letter, clock, weapon) |
-| **cutaway** | Brief shot of related element outside the main action |
-| **tracking** | Camera follows moving subject, dynamic composition |
-
-**Reference image handling:**
-- Use ONLY the character/setting references listed for this specific shot
-- For close-ups: only the featured character's reference
-- For establishing: all character + setting references
-- Use the same "from image1", "from image2", "from image3" referencing as scene_image_prompt
-
-**Output format** (same as scene_image_prompt):
-```
-**Image Prompt:**
-[Single detailed paragraph matching the shot's framing. Reference characters/settings with "from imageN" phrasing.]
-
-**Reference Images:**
-- Character: [name] (only if in this shot)
-- Setting: [name] (only if in this shot)
-
-**Negative Prompt:**
-[Style-appropriate negatives + inconsistent appearance, wrong features]
-
-**Aspect Ratio:**
-1:1
-
-**Generation Mode:**
-image_text_to_image
-```
-
-If NO reference images are available (documentary/non-narrative), use `text_to_image` mode with no "from imageN" references, same as scene_image_prompt.
+{{shot_image_guide}}
+{{/if}}
 
 ## What You Do NOT Do
 
 - Output tool calls after you've gathered context - just write the content directly
 - Wrap content in code blocks unless it's actual code
 - Skip mandatory fields in image/video prompts - ALL fields are required
+- Output thinking, reasoning, or analysis text before the content
+- Write anything outside of <generated_content> tags

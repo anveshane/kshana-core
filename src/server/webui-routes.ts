@@ -51,14 +51,79 @@ const MIME_TYPES: Record<string, string> = {
   '.mp4': 'video/mp4',
   '.webm': 'video/webm',
   '.json': 'application/json',
+  '.js': 'application/javascript',
+  '.css': 'text/css',
+  '.html': 'text/html',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
 };
 
 /**
  * Register web UI routes on the Fastify instance.
+ * Serves the React frontend build from frontend/dist/ if available,
+ * otherwise falls back to the inline SPA from webui.ts.
  */
 export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
-  // Serve the SPA at both / and /web
+  // Check for React frontend build
+  const reactDistDir = join(process.cwd(), 'frontend', 'dist');
+  const reactIndexPath = join(reactDistDir, 'index.html');
+  const hasReactBuild = existsSync(reactIndexPath);
+
+  if (hasReactBuild) {
+    // Serve React frontend static assets (JS, CSS, etc.)
+    const assetsDir = join(reactDistDir, 'assets');
+    if (existsSync(assetsDir)) {
+      app.get<{ Params: { '*': string } }>(
+        '/assets/*',
+        async (request: FastifyRequest<{ Params: { '*': string } }>, reply: FastifyReply) => {
+          const filePath = request.params['*'];
+          if (filePath.includes('..')) return reply.status(400).send({ error: 'Invalid path' });
+          const fullPath = join(assetsDir, filePath);
+          if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
+            return reply.status(404).send({ error: 'Not found' });
+          }
+          const ext = extname(fullPath).toLowerCase();
+          const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
+          return reply.type(contentType).send(readFileSync(fullPath));
+        },
+      );
+    }
+
+    // Serve previews and other static directories from dist/
+    const previewsDir = join(reactDistDir, 'previews');
+    if (existsSync(previewsDir)) {
+      app.get<{ Params: { '*': string } }>(
+        '/previews/*',
+        async (request: FastifyRequest<{ Params: { '*': string } }>, reply: FastifyReply) => {
+          const filePath = request.params['*'];
+          if (filePath.includes('..')) return reply.status(400).send({ error: 'Invalid path' });
+          const fullPath = join(previewsDir, filePath);
+          if (!existsSync(fullPath) || !statSync(fullPath).isFile()) {
+            return reply.status(404).send({ error: 'Not found' });
+          }
+          const ext = extname(fullPath).toLowerCase();
+          const contentType = MIME_TYPES[ext] ?? 'application/octet-stream';
+          return reply.type(contentType).send(readFileSync(fullPath));
+        },
+      );
+    }
+
+    // Serve favicon and other root-level static files
+    app.get('/favicon.svg', async (_request: FastifyRequest, reply: FastifyReply) => {
+      const faviconPath = join(reactDistDir, 'favicon.svg');
+      if (existsSync(faviconPath)) {
+        return reply.type('image/svg+xml').send(readFileSync(faviconPath));
+      }
+      return reply.status(404).send();
+    });
+  }
+
+  // SPA fallback: serve React index.html or inline SPA
   const serveSPA = async (_request: FastifyRequest, reply: FastifyReply) => {
+    if (hasReactBuild) {
+      return reply.type('text/html').send(readFileSync(reactIndexPath, 'utf-8'));
+    }
     return reply.type('text/html').send(getWebUIHtml());
   };
   app.get('/', serveSPA);
@@ -104,9 +169,86 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
 
       try {
         const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
-        return reply.send({ assets: manifest.assets ?? [] });
+        const allAssets = manifest.assets ?? [];
+
+        // Filter + enrich: drop assets whose `path` is no longer referenced
+        // by any node's outputPath/outputPaths (e.g. cleared by a reset), and
+        // attach `nodeId`/`frame` for storyboard grouping + redo. See
+        // `filterLiveAssets` for the full rationale.
+        const projectPath = join(process.cwd(), `${name}.kshana`, 'project.json');
+        let assets = allAssets;
+        if (existsSync(projectPath)) {
+          try {
+            const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
+            const nodes = project.executorState?.nodes ?? {};
+            const { filterLiveAssets } = await import('./assetFilter.js');
+            assets = filterLiveAssets(allAssets, nodes);
+          } catch { /* non-fatal */ }
+        }
+
+        return reply.send({ assets });
       } catch {
         return reply.send({ assets: [] });
+      }
+    }
+  );
+
+  // Load prompt data for a node (for Edit & Redo modal)
+  app.get<{ Params: { name: string; nodeId: string } }>(
+    '/api/v1/projects/:name/node-prompt/:nodeId',
+    async (request: FastifyRequest<{ Params: { name: string; nodeId: string } }>, reply: FastifyReply) => {
+      const { name, nodeId } = request.params;
+      const projectPath = join(process.cwd(), `${name}.kshana`, 'project.json');
+
+      if (!existsSync(projectPath)) {
+        return reply.status(404).send({ error: 'Project not found' });
+      }
+
+      try {
+        const { resolveNodePromptPath, getAvailableReferences, stripMarkdownFences } = await import('./editAndRedo.js');
+        const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
+        const nodes = project.executorState?.nodes ?? {};
+        const node = nodes[nodeId];
+
+        if (!node) {
+          return reply.status(404).send({ error: `Node not found: ${nodeId}` });
+        }
+
+        const promptPath = resolveNodePromptPath(nodeId, nodes);
+        let prompt: Record<string, unknown> = {};
+
+        if (promptPath) {
+          const absPath = join(process.cwd(), `${name}.kshana`, promptPath);
+          if (existsSync(absPath)) {
+            try {
+              const raw = readFileSync(absPath, 'utf-8');
+              prompt = JSON.parse(stripMarkdownFences(raw));
+            } catch { /* empty */ }
+          }
+        }
+
+        const response: Record<string, unknown> = {
+          nodeId,
+          nodeType: node.typeId,
+          prompt,
+        };
+
+        // For shot images: include available references
+        if (node.typeId === 'shot_image') {
+          response['availableReferences'] = getAvailableReferences(nodes, name);
+        }
+
+        // For shot videos: include first frame URL for preview
+        if (node.typeId === 'shot_video') {
+          const shotImageNode = nodes[`shot_image:${node.itemId}`];
+          if (shotImageNode?.outputPath) {
+            response['firstFrameUrl'] = `/api/v1/assets/${name}/${shotImageNode.outputPath}`;
+          }
+        }
+
+        return reply.send(response);
+      } catch (err) {
+        return reply.status(500).send({ error: (err as Error).message });
       }
     }
   );

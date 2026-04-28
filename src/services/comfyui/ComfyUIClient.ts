@@ -28,6 +28,29 @@ export interface ComfyUIClientConfig {
   baseUrl: string;
   outputDir: string;
   timeout: number; // seconds
+  apiKey?: string; // ComfyUI Cloud API key (X-API-Key header)
+}
+
+/**
+ * Build ComfyUI config from environment variables.
+ * Supports two modes: local (default) and cloud.
+ *
+ * Local: uses COMFYUI_BASE_URL (default localhost:8188)
+ * Cloud: uses COMFY_CLOUD_URL + COMFY_CLOUD_API_KEY
+ */
+export function getComfyConfig(env: Record<string, string | undefined> = process.env as any): Partial<ComfyUIClientConfig> {
+  const mode = env['COMFY_MODE'] || 'local';
+  if (mode === 'cloud') {
+    return {
+      baseUrl: env['COMFY_CLOUD_URL'] || 'https://cloud.comfy.org/api',
+      apiKey: env['COMFY_CLOUD_API_KEY'],
+      timeout: parseInt(env['COMFYUI_TIMEOUT'] || '300', 10),
+    };
+  }
+  return {
+    baseUrl: env['COMFYUI_BASE_URL'] || 'http://localhost:8188',
+    timeout: parseInt(env['COMFYUI_TIMEOUT'] || '300', 10),
+  };
 }
 
 export interface ImageInfo {
@@ -61,6 +84,7 @@ export interface CompletionResult {
   prompt_id: string;
 }
 
+const envConfig = getComfyConfig();
 const COMFY_CLOUD_HOST = 'cloud.comfy.org';
 
 export function isComfyCloudUrl(value: string): boolean {
@@ -72,11 +96,10 @@ export function isComfyCloudUrl(value: string): boolean {
 }
 
 const DEFAULT_CONFIG: ComfyUIClientConfig = {
-  baseUrl: process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188',
-  // outputDir should be explicitly provided by caller (project-specific)
-  // This default is only used if not specified
+  baseUrl: envConfig.baseUrl || 'http://localhost:8188',
   outputDir: './outputs',
-  timeout: parseInt(process.env['COMFYUI_TIMEOUT'] || '300', 10),
+  timeout: envConfig.timeout || 300,
+  apiKey: envConfig.apiKey,
 };
 
 /**
@@ -86,17 +109,24 @@ export class ComfyUIClient {
   private baseUrl: string;
   private outputDir: string;
   private timeout: number;
+  private apiKey?: string;
   private isCloud: boolean;
   private cloudApiKey?: string;
   private cloudOutputs = new Map<string, Record<string, unknown>>();
 
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
     const merged = { ...DEFAULT_CONFIG, ...config };
-    this.baseUrl = merged.baseUrl.replace(/\/$/, '');
+    // Normalize baseUrl: strip trailing slash AND a trailing `/api` segment
+    // so `getPath` (which prepends `/api` in cloud mode) doesn't produce
+    // a double `/api/api/...` path. Users routinely set
+    // `COMFY_CLOUD_URL=https://cloud.comfy.org/api` thinking that's the
+    // canonical base — and the `/upload/image` endpoint then 401s.
+    this.baseUrl = merged.baseUrl.replace(/\/$/, '').replace(/\/api$/, '');
     this.outputDir = merged.outputDir;
     this.timeout = merged.timeout;
+    this.apiKey = merged.apiKey;
     this.isCloud = isComfyCloudUrl(this.baseUrl);
-    this.cloudApiKey = process.env['COMFY_CLOUD_API_KEY']?.trim() || undefined;
+    this.cloudApiKey = merged.apiKey;
 
     if (this.isCloud && !this.cloudApiKey) {
       throw new Error(
@@ -118,14 +148,24 @@ export class ComfyUIClient {
     return url.toString();
   }
 
-  private buildHeaders(headers?: RequestInit['headers']): Headers {
-    const built = new Headers(headers);
-    if (this.isCloud && this.cloudApiKey) {
-      built.set('X-API-Key', this.cloudApiKey);
+  /**
+   * Build HTTP headers with API key auth if configured (cloud mode).
+   * Returns Record<string, string> shape (callers spread it into fetch's
+   * headers init). Driven by `this.apiKey` from config — does NOT read
+   * env directly so tests can set up clean instances.
+   */
+  private buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    const headers: Record<string, string> = { ...extra };
+    if (this.apiKey) {
+      headers['X-API-Key'] = this.apiKey;
     }
-    return built;
+    return headers;
   }
 
+  /**
+   * Cloud-aware request wrapper that prepends baseUrl, applies search
+   * params, and attaches auth headers.
+   */
   private async request(
     pathname: string,
     init: RequestInit = {},
@@ -133,18 +173,33 @@ export class ComfyUIClient {
   ): Promise<Response> {
     return fetch(this.buildUrl(pathname, searchParams), {
       ...init,
-      headers: this.buildHeaders(init.headers),
+      headers: { ...this.buildHeaders(), ...(init.headers as Record<string, string> | undefined) },
     });
   }
 
-  private getWebSocketUrl(clientId: string): string {
-    const wsBase = this.baseUrl.replace(/^http/, 'ws');
-    const url = new URL('/ws', wsBase);
-    url.searchParams.set('clientId', clientId);
-    if (this.isCloud && this.cloudApiKey) {
-      url.searchParams.set('token', this.cloudApiKey);
+  /**
+   * Build WebSocket URL with token param if configured (cloud mode).
+   */
+  private buildWsUrl(clientId: string): string {
+    // Strip /api suffix for WebSocket (cloud WS is at /ws, not /api/ws)
+    const wsBase = this.baseUrl.replace(/\/api\/?$/, '').replace(/^http/, 'ws');
+    let url = `${wsBase}/ws?clientId=${clientId}`;
+    if (this.apiKey) {
+      url += `&token=${this.apiKey}`;
     }
-    return url.toString();
+    return url;
+  }
+
+  /**
+   * Interrupt the currently running ComfyUI generation.
+   * Calls POST /interrupt to stop the active prompt immediately.
+   */
+  async interrupt(): Promise<void> {
+    try {
+      await fetch(this.buildUrl('/interrupt'), { method: 'POST', headers: this.buildHeaders() });
+    } catch {
+      // Best effort — ComfyUI may not be reachable
+    }
   }
 
   /**
@@ -169,6 +224,7 @@ export class ComfyUIClient {
 
     const response = await this.request('/upload/image', {
       method: 'POST',
+      headers: this.buildHeaders(),
       body: formData,
     });
 
@@ -193,14 +249,23 @@ export class ComfyUIClient {
       promptPayload = this.workflowToPrompt(workflowJson as unknown as WorkflowFormat);
     }
 
-    const payload = {
+    const payload: Record<string, unknown> = {
       prompt: promptPayload,
       client_id: clientId,
     };
 
-    const response = await this.request('/prompt', {
+    // ComfyUI Cloud vendor nodes (GrokImageEditNode, etc.) check the
+    // service key from `extra_data.api_key_comfy_org` for billing. Without
+    // it, vendor-backed jobs submit cleanly but never execute — silent
+    // timeout, no execution_error. Non-vendor nodes (Klein, LTX) ignore
+    // the field, so it's safe to always include it on cloud runs.
+    if (this.apiKey) {
+      payload['extra_data'] = { api_key_comfy_org: this.apiKey };
+    }
+
+    const response = await fetch(this.buildUrl('/prompt'), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: this.buildHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(payload),
     });
 
@@ -330,6 +395,173 @@ export class ComfyUIClient {
   }
 
   /**
+   * Queue a workflow AND wait for completion via WebSocket.
+   * Connects WS first, then submits prompt inside onOpen — prevents missing
+   * fast cloud execution events that fire before WS connects.
+   */
+  async queueAndWaitWS(
+    workflowJson: Record<string, unknown>,
+    progressCallback?: (info: WSProgressInfo) => void,
+  ): Promise<{ result: CompletionResult; promptId: string; clientId: string; outputs: ImageInfo[] }> {
+    const clientId = nanoid();
+    const wsUrl = this.buildWsUrl(clientId);
+    debugLog(`[queueAndWaitWS] Connecting WS first: ${wsUrl}`);
+
+    return new Promise((resolve, reject) => {
+      let promptId = '';
+      let resolved = false;
+      let lastActivityTime = Date.now();
+      const collectedOutputs: ImageInfo[] = [];
+      const isCloud = !!this.apiKey;
+      // Inactivity timeout — seconds from env COMFYUI_TIMEOUT (default 300).
+      // Cloud queue status messages arrive in bursts separated by 80–120 s of
+      // silence while other jobs execute, so the old 120s tripped false
+      // timeouts mid-queue. Bumping to match the env the rest of the code
+      // already honors.
+      const INACTIVITY_TIMEOUT_MS =
+        Math.max(60, parseInt(process.env['COMFYUI_TIMEOUT'] || '300', 10)) * 1000;
+      let ws: WebSocket;
+
+      const inactivityCheck = setInterval(() => {
+        if (resolved) return;
+        const inactiveSec = Math.round((Date.now() - lastActivityTime) / 1000);
+        if (inactiveSec > INACTIVITY_TIMEOUT_MS / 1000) {
+          clearInterval(inactivityCheck);
+          if (!resolved) {
+            resolved = true;
+            try { ws?.close(); } catch { /* */ }
+            if (isCloud) {
+              debugLog(`[queueAndWaitWS] Timeout after ${inactiveSec}s on cloud`);
+              resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId, outputs: collectedOutputs });
+            } else {
+              debugLog(`[queueAndWaitWS] Timeout — falling back to HTTP polling`);
+              this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+                .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
+                .catch(reject);
+            }
+          }
+        }
+      }, 10_000);
+
+      const cleanup = () => { clearInterval(inactivityCheck); try { ws?.close(); } catch { /* */ } };
+      const finish = (result: CompletionResult) => {
+        if (resolved) return;
+        resolved = true;
+        cleanup();
+        resolve({ result, promptId, clientId, outputs: collectedOutputs });
+      };
+
+      try {
+        ws = new WebSocket(wsUrl);
+      } catch (err) {
+        debugLog(`[queueAndWaitWS] WS failed: ${err}`);
+        // Fall back: submit then poll
+        this.queueWorkflow(workflowJson, clientId, true)
+          .then(meta => {
+            promptId = meta.promptId;
+            return this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined);
+          })
+          .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
+          .catch(reject);
+        return;
+      }
+
+      ws.on('open', async () => {
+        debugLog(`[queueAndWaitWS] WS connected — now submitting prompt`);
+        try {
+          const meta = await this.queueWorkflow(workflowJson, clientId, true);
+          promptId = meta.promptId;
+          debugLog(`[queueAndWaitWS] Prompt submitted: ${promptId}`);
+        } catch (err) {
+          cleanup();
+          reject(err);
+        }
+      });
+
+      ws.on('close', () => {
+        if (!resolved) {
+          resolved = true;
+          if (isCloud) {
+            resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId, outputs: collectedOutputs });
+          } else {
+            this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+              .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
+              .catch(reject);
+          }
+        }
+      });
+
+      ws.on('error', (err) => {
+        debugLog(`[queueAndWaitWS] WS error: ${err}`);
+      });
+
+      ws.on('message', (raw: Buffer | string) => {
+        // Skip binary messages (preview images)
+        if (Buffer.isBuffer(raw) && raw.length > 0 && raw[0] !== 0x7b) {
+          lastActivityTime = Date.now();
+          return;
+        }
+        try {
+          const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
+          lastActivityTime = Date.now();
+          const msgType: string = data.type;
+
+          debugLog(`[queueAndWaitWS] WS msg: ${msgType} prompt=${data.data?.prompt_id || 'n/a'}`);
+
+          if (msgType === 'progress' && data.data) {
+            const d = data.data as { value: number; max: number };
+            const pct = d.max > 0 ? Math.round((d.value / d.max) * 100) : 0;
+            progressCallback?.({ percentage: pct, message: `Step ${d.value}/${d.max}`, step: d.value, maxSteps: d.max });
+          } else if (msgType === 'executing' && data.data?.node) {
+            progressCallback?.({ percentage: 0, message: `Node: ${data.data.node}`, currentNode: data.data.node });
+          } else if (msgType === 'executed' && data.data?.output) {
+            // Capture output filenames from executed events (needed for cloud where /history is blocked).
+            // Guard: only capture events for OUR prompt_id. Without this, cached
+            // results broadcast by ComfyUI Cloud from OTHER concurrent jobs can
+            // leak into our outputs list — we'd download a stranger's video.
+            // (Noir S1.1 "potter" bug, 2026-04-22: our submit was 3748c3b5 but
+            // execution_success arrived for 869d0484, and we captured its
+            // outputs because no prompt_id check existed.)
+            const eventPromptId: string | undefined = data.data.prompt_id;
+            if (promptId && eventPromptId && eventPromptId !== promptId) {
+              debugLog(`[queueAndWaitWS] Ignoring output from foreign prompt ${eventPromptId} (ours=${promptId})`);
+            } else {
+              const output = data.data.output;
+              const nodeId = data.data.node;
+              for (const key of ['images', 'gifs', 'videos']) {
+                const items = output[key];
+                if (Array.isArray(items)) {
+                  for (const item of items) {
+                    if (item.filename) {
+                      collectedOutputs.push({ filename: item.filename, subfolder: item.subfolder || '', type: item.type || 'output', node_id: nodeId });
+                      debugLog(`[queueAndWaitWS] Captured output: ${item.filename} from node ${nodeId}`);
+                    }
+                  }
+                }
+              }
+            }
+          } else if (msgType === 'execution_success') {
+            const eventPromptId: string | undefined = data.data?.prompt_id;
+            if (promptId && eventPromptId && eventPromptId !== promptId) {
+              debugLog(`[queueAndWaitWS] Ignoring execution_success from foreign prompt ${eventPromptId} (ours=${promptId})`);
+            } else {
+              finish({ status: 'completed', prompt_id: promptId });
+            }
+          } else if (msgType === 'execution_error') {
+            debugLog(`[queueAndWaitWS] Execution error: ${JSON.stringify(data.data)}`);
+            finish({ status: 'error', prompt_id: promptId });
+          } else if (msgType === 'status') {
+            const qr = data.data?.status?.exec_info?.queue_remaining;
+            if (qr !== undefined && qr > 0) {
+              progressCallback?.({ percentage: 0, message: `Queued (${qr} ahead)` });
+            }
+          }
+        } catch { /* non-JSON or binary */ }
+      });
+    });
+  }
+
+  /**
    * Wait for workflow completion using ComfyUI's WebSocket API.
    * Provides real-time step-by-step progress. Falls back to HTTP polling on WS failure.
    */
@@ -338,15 +570,50 @@ export class ComfyUIClient {
     clientId: string,
     progressCallback?: (info: WSProgressInfo) => void,
   ): Promise<CompletionResult> {
-    const wsUrl = this.getWebSocketUrl(clientId);
+    const wsUrl = this.buildWsUrl(clientId);
     debugLog(`[waitForCompletionWS] Connecting to ${wsUrl} for prompt=${promptId}`);
 
     return new Promise<CompletionResult>((resolve, reject) => {
       let resolved = false;
       let currentNode: string | undefined;
       let ws: WebSocket;
+      let lastActivityTime = Date.now();
+
+      // Inactivity timeout: if no progress, handle based on mode
+      // Cloud: /history doesn't work, so fail instead of falling back to HTTP polling
+      const isCloud = !!this.apiKey;
+      // Inactivity timeout — seconds from env COMFYUI_TIMEOUT (default 300).
+      // Cloud queue status messages arrive in bursts separated by 80–120 s of
+      // silence while other jobs execute, so the old 120s tripped false
+      // timeouts mid-queue. Bumping to match the env the rest of the code
+      // already honors.
+      const INACTIVITY_TIMEOUT_MS =
+        Math.max(60, parseInt(process.env['COMFYUI_TIMEOUT'] || '300', 10)) * 1000;
+      const inactivityCheck = setInterval(() => {
+        if (resolved) return;
+        const inactiveSec = Math.round((Date.now() - lastActivityTime) / 1000);
+        if (inactiveSec > INACTIVITY_TIMEOUT_MS / 1000) {
+          clearInterval(inactivityCheck);
+          if (!resolved) {
+            resolved = true;
+            try { ws?.close(); } catch { /* ignore */ }
+            if (isCloud) {
+              // Cloud: /history doesn't work with API key — report timeout error
+              debugLog(`[waitForCompletionWS] No progress for ${inactiveSec}s on cloud — cannot fall back to HTTP polling`);
+              resolve({ status: 'error', prompt_id: promptId });
+            } else {
+              // Local: fall back to HTTP polling
+              debugLog(`[waitForCompletionWS] No progress for ${inactiveSec}s — falling back to HTTP polling`);
+              this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+                .then(resolve)
+                .catch(reject);
+            }
+          }
+        }
+      }, 10_000);
 
       const cleanup = () => {
+        clearInterval(inactivityCheck);
         try { ws?.close(); } catch { /* ignore */ }
       };
 
@@ -381,12 +648,18 @@ export class ComfyUIClient {
 
       ws.on('close', () => {
         debugLog(`[waitForCompletionWS] WebSocket closed for prompt=${promptId}`);
-        // If not yet resolved, fall back to polling
         if (!resolved) {
           resolved = true;
-          this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
-            .then(resolve)
-            .catch(reject);
+          if (isCloud) {
+            // Cloud: can't fall back to HTTP polling — report error
+            debugLog(`[waitForCompletionWS] Cloud WS closed unexpectedly — no HTTP fallback`);
+            resolve({ status: 'error', prompt_id: promptId });
+          } else {
+            // Local: fall back to HTTP polling
+            this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+              .then(resolve)
+              .catch(reject);
+          }
         }
       });
 
@@ -401,6 +674,7 @@ export class ComfyUIClient {
           }
 
           const data = JSON.parse(trimmed.slice(jsonStart));
+          lastActivityTime = Date.now(); // Reset inactivity timer on valid message
           const msgType: string = data.type;
 
           if (msgType === 'status' && data.data) {
@@ -576,7 +850,9 @@ export class ComfyUIClient {
       params.append('subfolder', subfolder);
     }
 
-    const response = await this.request('/view', {}, params);
+    const url = this.buildUrl('/view', params);
+
+    const response = await fetch(url, { headers: this.buildHeaders() });
     if (!response.ok) {
       throw new Error(`Failed to download image: ${response.statusText}`);
     }

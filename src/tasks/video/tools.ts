@@ -247,6 +247,10 @@ export interface ImageGenerationParams {
   prompt: string;
   negative_prompt?: string;
   aspect_ratio?: string;
+  /** Override width in pixels (takes precedence over aspect_ratio) */
+  width?: number;
+  /** Override height in pixels (takes precedence over aspect_ratio) */
+  height?: number;
   seed?: number;
   shot_number?: number;
   image_type?: 'scene' | 'character_ref' | 'setting_ref';
@@ -256,6 +260,8 @@ export interface ImageGenerationParams {
   reference_images?: ReferenceImage[];
   /** Generation mode: text-to-image or image+text-to-image */
   generation_mode?: 'text_to_image' | 'image_text_to_image';
+  /** Frame identifier within the shot (first_frame, mid_frame, last_frame) — included in saved filename so it's scannable in Finder */
+  frame_id?: string;
   /** Timeline segment to auto-link for shot images */
   segment_id?: string;
 }
@@ -326,7 +332,7 @@ function persistProjectBinaryOutput(
  * Submit an image generation job.
  * Uses the provider registry to route to the configured provider (ComfyUI, Google, xAI).
  */
-async function submitImageGeneration(params: ImageGenerationParams): Promise<{
+export async function submitImageGeneration(params: ImageGenerationParams): Promise<{
   jobId: string;
   status: string;
   error?: string;
@@ -358,7 +364,13 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
     const cleanName = setting_name.replace(/[^a-zA-Z0-9]/g, '');
     filenamePrefix = `SettingRef_${cleanName}`;
   } else {
-    filenamePrefix = `Scene${scene_number}`;
+    // Shot scene images: carry full scene/shot/frame identity into the filename
+    // so Finder listings stay scannable. ComfyUIProvider.shortenPrefix will
+    // compress `scene_N_shot_M` → `sNshotM` in the saved filename.
+    const parts = [`scene_${scene_number}`];
+    if (params.shot_number !== undefined) parts.push(`shot_${params.shot_number}`);
+    if (params.frame_id) parts.push(params.frame_id);
+    filenamePrefix = parts.join('_');
   }
 
   // Determine context for linking artifact to project
@@ -410,16 +422,15 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
 
     const useQwenEdit = generation_mode === 'image_text_to_image' && reference_images.length > 0;
 
-    // If qwen_edit mode with references, prepend image mapping context
-    let basePrompt = prompt;
-    if (useQwenEdit && reference_images.length > 0) {
-      const imageContext = reference_images
-        .map((ref, i) => `image${i + 1} is a ${ref.type} reference for "${ref.name}"`)
-        .join('. ');
-      basePrompt = `${imageContext}. ${prompt}`;
-    }
-
-    const enhancedPrompt = `${basePrompt}, ${styleConfig.promptModifier}`;
+    // Legacy pre-amble like `image1 is a character reference for "vikram".
+    // image2 is a character reference for "laila". …` was injected here
+    // on every edit call. The shot_image_prompt already uses "from image N"
+    // phrasing in its prose, so the pre-amble is redundant noise — and
+    // often inaccurate (it lists images that weren't actually uploaded
+    // when the upload cap trimmed the tail of the ref array). Dropped
+    // 2026-04-22. If the model needs image-index context, it should come
+    // from the prompt itself, not a synthetic prefix.
+    const enhancedPrompt = `${prompt}, ${styleConfig.promptModifier}`;
     const enhancedNegativePrompt = negative_prompt
       ? `${negative_prompt}, ${styleConfig.negativePromptModifier}`
       : styleConfig.negativePromptModifier;
@@ -503,6 +514,8 @@ async function submitImageGeneration(params: ImageGenerationParams): Promise<{
           prompt: enhancedPrompt,
           negativePrompt: enhancedNegativePrompt,
           aspectRatio: aspect_ratio,
+          width: params.width,
+          height: params.height,
           seed,
           outputDir: getAssetsDir(),
           filenamePrefix,
@@ -1093,7 +1106,7 @@ This tool blocks until generation is complete and returns the result directly (a
 /**
  * Parsed metadata from a prompt file.
  */
-interface PromptFileMetadata {
+export interface PromptFileMetadata {
   /** The actual prompt text */
   prompt: string;
   /** Generation mode (text_to_image or image_text_to_image) */
@@ -1120,7 +1133,7 @@ interface PromptFileMetadata {
  *
  * The actual prompt is typically the first paragraph after the header.
  */
-function extractPromptFromMarkdown(content: string): string {
+export function extractPromptFromMarkdown(content: string): string {
   // Try structured prompt headers first (used by .motion.md and .prompt.md)
   const motionMatch = content.match(
     /\*\*Motion Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
@@ -1184,15 +1197,16 @@ function extractPromptFromMarkdown(content: string): string {
  * 16:9
  * ```
  */
-function parsePromptFile(content: string): PromptFileMetadata {
+export function parsePromptFile(content: string): PromptFileMetadata {
   const result: PromptFileMetadata = {
     prompt: '',
     references: [],
   };
 
   // Check for structured prompt format (scene prompts)
+  // Handles both: "**Image Prompt:**\n content" AND "**Image Prompt:** content on same line"
   const imagePromptMatch = content.match(
-    /\*\*Image Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
+    /\*\*Image Prompt:\*\*\s*\n?([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
   );
   if (imagePromptMatch && imagePromptMatch[1]) {
     result.prompt = imagePromptMatch[1].trim();
@@ -1272,14 +1286,14 @@ function parsePromptFile(content: string): PromptFileMetadata {
 
   // Parse negative prompt
   const negativeMatch = content.match(
-    /\*\*Negative Prompt:\*\*\s*\n([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
+    /\*\*Negative Prompt:\*\*\s*\n?([\s\S]*?)(?=\n\*\*[A-Z]|\n##|\n$)/i
   );
   if (negativeMatch && negativeMatch[1]) {
     result.negativePrompt = negativeMatch[1].trim();
   }
 
   // Parse aspect ratio
-  const aspectMatch = content.match(/\*\*Aspect Ratio:\*\*\s*\n\s*([\d:]+)/i);
+  const aspectMatch = content.match(/\*\*Aspect Ratio:\*\*\s*\n?\s*([\d:]+)/i);
   if (aspectMatch && aspectMatch[1]) {
     result.aspectRatio = aspectMatch[1].trim();
   }
@@ -1290,7 +1304,7 @@ function parsePromptFile(content: string): PromptFileMetadata {
 /**
  * Resolve reference names to actual image paths from project state.
  */
-function resolveReferencesToPaths(
+export function resolveReferencesToPaths(
   references: PromptFileMetadata['references']
 ): Array<{ image_id: string; type: 'character' | 'setting'; name: string }> | null {
   const project = loadProject();
@@ -1483,7 +1497,7 @@ function resolveScenePromptFile(
 /**
  * Helper function to find image path from artifact ID.
  */
-function findImagePathFromArtifactId(artifactId: string): string | undefined {
+export function findImagePathFromArtifactId(artifactId: string): string | undefined {
   // If the input is already an existing absolute file path, return it directly
   if (path.isAbsolute(artifactId) && (fs.existsSync(artifactId) || projectPathExists(artifactId))) {
     return artifactId;

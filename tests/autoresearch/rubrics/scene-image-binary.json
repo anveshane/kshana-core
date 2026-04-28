@@ -1,0 +1,53 @@
+{
+  "name": "Scene Image Binary",
+  "description": "Binary yes/no evaluation of scene image prompt quality — does it compose characters and settings into a narrative moment with correct spatial relationships?",
+  "format": "binary",
+  "phase": "img_prompts",
+  "promptType": "scene_image",
+  "questions": [
+    {
+      "id": "CHARACTERS_PRESENT",
+      "question": "Are all characters specified in the scene description present in the prompt?"
+    },
+    {
+      "id": "CHARACTER_ACTIONS",
+      "question": "Does the prompt describe what each character is physically doing (pose, gesture, gaze direction)?"
+    },
+    {
+      "id": "SPATIAL_ARRANGEMENT",
+      "question": "Does the prompt describe where characters are relative to each other and the setting (foreground/background, left/right, distance)?"
+    },
+    {
+      "id": "SETTING_GROUNDED",
+      "question": "Is the scene anchored in a specific physical location from the story (not a vague/generic environment)?"
+    },
+    {
+      "id": "REF_IMAGES_USED",
+      "question": "If reference images exist, does the prompt reference every one using 'image N' notation?"
+    },
+    {
+      "id": "APPEARANCE_CHANGES",
+      "question": "If the scene requires a character to look different from their reference image (different clothing, injuries, disguise, age, wet/dirty/undressed), does the prompt describe those specific differences? If no appearance changes are needed, does the prompt avoid redundantly re-describing what the reference already shows?"
+    },
+    {
+      "id": "LIGHTING",
+      "question": "Does the prompt specify lighting with source, direction, and quality?"
+    },
+    {
+      "id": "PROSE_QUALITY",
+      "question": "Is it flowing prose (not comma-separated keywords, not bullet points)?"
+    },
+    {
+      "id": "SCENE_FAITHFUL",
+      "question": "Does the composition depict a recognizable moment from the source scene description?"
+    },
+    {
+      "id": "CHARACTERS_ACCURATE",
+      "question": "Are only characters who actually appear in this scene described (no invented characters, no omitted characters who should be present according to the source)?"
+    },
+    {
+      "id": "EMOTION_FAITHFUL",
+      "question": "Do character emotions and actions match what the scene description says they are feeling and doing (not generic poses, not contradicting the source material)?"
+    }
+  ]
+}

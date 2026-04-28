@@ -14,6 +14,7 @@ import {
   getAllInputs,
   hasInputs,
   getInputsByStatus,
+  getProjectDir,
 } from '../../../src/tasks/video/workflow/ProjectManager.js';
 import type { ProjectInput } from '../../../src/tasks/video/workflow/types.js';
 
@@ -71,7 +72,7 @@ describe('ProjectManager Input Functions', () => {
 
       addProjectInput(input, TEST_BASE_PATH);
 
-      const inputsDir = path.join(TEST_BASE_PATH, '.kshana', 'inputs');
+      const inputsDir = path.join(getProjectDir(TEST_BASE_PATH), 'inputs');
       expect(fs.existsSync(inputsDir)).toBe(true);
       expect(fs.existsSync(path.join(inputsDir, 'local'))).toBe(true);
       expect(fs.existsSync(path.join(inputsDir, 'remote'))).toBe(true);

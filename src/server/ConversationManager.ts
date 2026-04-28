@@ -4,9 +4,10 @@
  * Agent is created lazily when a project is selected via configureSessionForProject().
  */
 import { v4 as uuidv4 } from 'uuid';
-import { GenericAgent, type GenericAgentResult } from '../core/agent/index.js';
-import { LLMClient, type LLMClientConfig } from '../core/llm/index.js';
-import { createAgentForProject, updateProjectConfiguration } from '../tasks/video/index.js';
+import type { GenericAgentResult } from '../core/agent/index.js';
+import type { LLMClientConfig } from '../core/llm/index.js';
+import { createExecutorAgent } from '../tasks/video/index.js';
+import type { TypedEventEmitter } from '../events/EventEmitter.js';
 import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -24,6 +25,7 @@ import {
   stopTimer,
   checkpointTimer,
   updateProjectAutonomousMode,
+  updateProjectConfiguration,
   getElapsedMs,
   loadProject,
 } from '../tasks/video/workflow/ProjectManager.js';
@@ -71,31 +73,31 @@ export interface ConversationEvents {
   onToolStreaming?: (sessionId: string, toolCallId: string, chunk: string, done: boolean, agentName?: string, toolName?: string, reset?: boolean) => void;
   /** Context window usage stats */
   onContextUsage?: (sessionId: string, data: { promptTokens: number; maxTokens: number; percentage: number; wasCompressed: boolean; iteration: number }) => void;
-  /** Neutral usage facts for external metering */
-  onUsageFact?: (sessionId: string, data: {
-    eventId: string;
-    kind: 'llm' | 'image_generation' | 'image_edit' | 'video_generation';
-    toolName?: string;
-    toolCallId?: string;
-    facts: {
-      promptTokens?: number;
-      completionTokens?: number;
-      totalTokens?: number;
-      imageCount?: number;
-      seconds?: number;
-      artifactId?: string;
-      filePath?: string;
-    };
-  }) => void;
   /** Workflow phase transition */
   onPhaseTransition?: (sessionId: string, data: { fromPhase: string; toPhase: string; displayName?: string; description?: string }) => void;
+  /** Full timeline state update */
+  onTimelineUpdate?: (sessionId: string, data: { timeline: unknown }) => void;
   /** User-facing notification */
   onNotification?: (sessionId: string, data: { level: 'info' | 'warning' | 'error'; message: string }) => void;
 }
 
+/**
+ * Common interface for agents that can be used in sessions.
+ * Both GenericAgent and ExecutorAgent satisfy this.
+ */
+interface SessionAgent extends TypedEventEmitter {
+  initialize(): Promise<void>;
+  run(task: string, userResponse?: string): Promise<GenericAgentResult>;
+  stop(): void;
+  isRunning(): boolean;
+  getToolNames(): string[];
+  setAutonomousMode(enabled: boolean): void;
+  injectInput?(input: string): void;
+}
+
 interface ActiveSession {
   state: SessionState;
-  agent?: GenericAgent;
+  agent?: SessionAgent;
   abortController?: AbortController;
   initialized?: boolean;
   /** Per-session context for file system and project isolation */
@@ -191,24 +193,15 @@ export class ConversationManager {
       getProviderRegistry().setConfig(providerConfig);
     }
 
-    const effectiveMaxIterations = autonomousMode ? Number.MAX_SAFE_INTEGER : this.maxIterations;
-
-    // Create agent inside the session context so tools see the right project dir
+    // Create executor agent inside the session context so tools see the right project dir
     runInSession(session.sessionContext, () => {
-      const { tools, customPrompt, agentName } = createAgentForProject({
+      session.agent = createExecutorAgent({
         templateId,
         style,
         duration,
         llmConfig: this.llmConfig,
-        maxIterations: effectiveMaxIterations,
-      });
-
-      const llm = new LLMClient(this.llmConfig);
-      session.agent = new GenericAgent(tools, llm, {
-        maxIterations: effectiveMaxIterations,
-        customPrompt,
-        name: agentName,
-        autonomousMode,
+        targetArtifacts: ['final_video'],
+        goalDescription: 'Create a video project',
       });
       session.initialized = false;
     });
@@ -388,14 +381,31 @@ export class ConversationManager {
   }
 
   /**
+   * Toggle parallel media generation on a running session.
+   */
+  setParallelMediaGeneration(sessionId: string, enabled: boolean): void {
+    const session = this.sessions.get(sessionId);
+    if (!session?.agent) return;
+    // ExecutorAgent exposes setParallelMediaGeneration
+    if ('setParallelMediaGeneration' in session.agent) {
+      (session.agent as { setParallelMediaGeneration(e: boolean): void }).setParallelMediaGeneration(enabled);
+    }
+  }
+
+  /**
    * Run a task in a session.
    * Wraps execution in the session's context so all tool/file operations
    * see the correct project directory and filesystem.
+   *
+   * `opts.stopAtStage` arms the executor's `/run-to <stage>` gate for
+   * THIS invocation only — it's cleared in the finally block so the
+   * long-lived agent instance doesn't carry state between tasks.
    */
   async runTask(
     sessionId: string,
     task: string,
-    events?: ConversationEvents
+    events?: ConversationEvents,
+    opts?: { stopAtStage?: string },
   ): Promise<GenericAgentResult> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -438,6 +448,14 @@ export class ConversationManager {
       session.timerCheckpointInterval = setInterval(() => {
         try { checkpointTimer(); } catch { /* ignore */ }
       }, TIMER_CHECKPOINT_INTERVAL_MS);
+
+      // Arm the `/run-to <stage>` gate for this invocation. Guard with a
+      // capability check so non-executor agents (if any) don't break.
+      const agent = session.agent!;
+      const hasStageGate = typeof (agent as { setStopAtStage?: unknown }).setStopAtStage === 'function';
+      if (opts?.stopAtStage && hasStageGate) {
+        (agent as unknown as { setStopAtStage(s: string | null): void }).setStopAtStage(opts.stopAtStage);
+      }
 
       const workflowName = this.getWorkflowName(session);
       const workflowStartedAt = Date.now();
@@ -484,11 +502,29 @@ export class ConversationManager {
         });
         throw error;
       } finally {
+        // Always clear the stage gate — per-invocation, never persists across tasks.
+        if (hasStageGate) {
+          (agent as unknown as { setStopAtStage(s: string | null): void }).setStopAtStage(null);
+        }
         // Clean up event listeners
         session.agent!.removeAllListeners();
         session.abortController = undefined;
       }
     });
+  }
+
+  /**
+   * Read the agent's last stop reason. Used by WebSocketHandler to
+   * distinguish "paused at stage" from "completed" when emitting the
+   * final status message.
+   */
+  getAgentStopReason(sessionId: string): 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null {
+    const session = this.sessions.get(sessionId);
+    const agent = session?.agent;
+    if (agent && typeof (agent as { getStopReason?: unknown }).getStopReason === 'function') {
+      return (agent as unknown as { getStopReason(): 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null }).getStopReason();
+    }
+    return null;
   }
 
   /**
@@ -572,7 +608,7 @@ export class ConversationManager {
    */
   private setupEventListeners(
     sessionId: string,
-    agent: GenericAgent,
+    agent: SessionAgent,
     events?: ConversationEvents
   ): void {
     if (!events) return;
@@ -650,15 +686,15 @@ export class ConversationManager {
       });
     }
 
-    if (events.onUsageFact) {
-      agent.on('usage_fact', (data) => {
-        events.onUsageFact!(sessionId, data);
-      });
-    }
-
     if (events.onPhaseTransition) {
       agent.on('phase_transition', (data) => {
         events.onPhaseTransition!(sessionId, data);
+      });
+    }
+
+    if (events.onTimelineUpdate) {
+      agent.on('timeline_update', (data) => {
+        events.onTimelineUpdate!(sessionId, { timeline: data.timeline });
       });
     }
 
@@ -690,6 +726,68 @@ export class ConversationManager {
     session.state.status = 'idle';
     session.state.lastActivity = Date.now();
     return !!(session.agent || session.abortController);
+  }
+
+  /**
+   * Redo a specific node: invalidate it + dependents, then resume execution.
+   */
+  async redoNode(
+    sessionId: string,
+    nodeId: string,
+    events?: ConversationEvents,
+    editedPrompt?: Record<string, unknown>,
+    frame?: string,
+    scope?: 'prompt',
+  ): Promise<GenericAgentResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    if (!session.agent) {
+      throw new Error('Session agent not configured. Select a project first.');
+    }
+    if (session.state.status === 'running') {
+      throw new Error('Session already has a running task — cannot redo while executing');
+    }
+    if (!session.sessionContext) {
+      throw new Error('Session context not initialized. Configure project first.');
+    }
+
+    // If user edited the prompt, save it to disk BEFORE invalidation
+    const hasEdits = !!(editedPrompt && Object.keys(editedPrompt).length > 0);
+    if (hasEdits) {
+      const { saveEditedPrompt } = await import('./editAndRedo.js');
+      const projectDir = session.sessionContext.projectDir;
+      await saveEditedPrompt(projectDir, nodeId, editedPrompt);
+    }
+
+    // Edit-prompt special case: if user edited a shot_image_prompt, we MUST
+    // NOT invalidate that prompt node (invalidation → re-run LLM → overwrite
+    // the user's edits). Instead, keep the prompt as-is and invalidate only
+    // the dependent shot_image so the image regenerates from the edited prompt.
+    // Downstream video/final stay put — user can redo them manually if needed.
+    let redoTargetNodeId = nodeId;
+    let redoOpts: { frame?: string; scope?: 'prompt' | 'image_only' } = { frame, scope };
+    if (hasEdits && nodeId.startsWith('shot_image_prompt:')) {
+      redoTargetNodeId = nodeId.replace('shot_image_prompt:', 'shot_image:');
+      // Preserve the frame so only that frame regenerates (not the whole shot)
+      redoOpts = { scope: 'image_only', frame };
+    }
+
+    // Call redoNode on the agent (invalidates + persists + emits todo update)
+    if ('redoNode' in session.agent) {
+      const invalidated = (session.agent as {
+        redoNode(id: string, opts?: { frame?: string; scope?: 'prompt' | 'image_only' }): unknown[];
+      }).redoNode(redoTargetNodeId, redoOpts);
+      if (invalidated.length === 0) {
+        throw new Error(`Node '${redoTargetNodeId}' not found in execution graph`);
+      }
+    } else {
+      throw new Error('Agent does not support redo');
+    }
+
+    // Resume execution — reuse runTask flow with empty task (executor picks up invalidated nodes)
+    return this.runTask(sessionId, '', events);
   }
 
   /**
