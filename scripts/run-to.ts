@@ -61,13 +61,16 @@ Examples:
 }
 
 /**
- * Parse argv into { projectName, stage, skipMedia }.
+ * Parse argv into { projectName, target, skipMedia }.
+ * `target` is either a stage typeId (`shot_image`), a full node id
+ * (`shot_image:scene_1_shot_1`), or null (no gate).
+ *
  * Exported so the unit test can exercise the parsing independently of
- * actually spawning the executor (which requires a real LLM + project).
+ * actually spawning the executor.
  */
 export function parseArgs(argv: string[]): {
   projectName: string;
-  stage: string | null;
+  target: string | null;
   skipMedia: boolean;
 } {
   // Accept `--skip-media` or `-s` as a flag anywhere after positional args.
@@ -75,17 +78,21 @@ export function parseArgs(argv: string[]): {
   const positional = argv.filter(a => !a.startsWith('-'));
 
   if (positional.length < 1 || positional.length > 2) {
-    throw new Error(`Expected 1 or 2 positional args (project [stage]); got ${positional.length}`);
+    throw new Error(`Expected 1 or 2 positional args (project [stage|node]); got ${positional.length}`);
   }
 
   const projectName = positional[0]!;
-  const stage = positional[1] ?? null;
+  const target = positional[1] ?? null;
 
-  if (stage !== null && !VALID_STAGES.includes(stage)) {
-    throw new Error(`Unknown stage: '${stage}'. Valid: ${VALID_STAGES.join(', ')}`);
+  // Validation deferred to main(): a stage typeId is checked here, but
+  // a node-id/alias needs the project's executorState to resolve.
+  if (target !== null && !VALID_STAGES.includes(target) && !target.includes(':') && !target.includes('.')) {
+    throw new Error(
+      `Unknown target: '${target}'. Expected a stage (${VALID_STAGES.join(', ')}) or a node id like 'shot_image:scene_1_shot_1' or alias like 'scene_1_shot_1.image'.`,
+    );
   }
 
-  return { projectName, stage, skipMedia };
+  return { projectName, target, skipMedia };
 }
 
 async function main() {
@@ -102,7 +109,7 @@ async function main() {
     usage(1);
   }
 
-  const { projectName, stage, skipMedia } = parsed;
+  const { projectName, target, skipMedia } = parsed;
   const projectDir = resolve(`${projectName}.kshana`);
   if (!existsSync(projectDir)) {
     console.error(`Project not found: ${projectDir}`);
@@ -122,10 +129,40 @@ async function main() {
     readFileSync(join(projectDir, 'project.json'), 'utf-8'),
   );
 
+  // Classify the target: stage typeId vs single node id / alias. Stage
+  // typeIds are valid up-front; node ids/aliases need the project's
+  // executorState to resolve (e.g. `scene_1_shot_2.image` →
+  // `shot_image:scene_1_shot_2`).
+  let stopAtStage: string | null = null;
+  let stopAfterNode: string | null = null;
+  if (target !== null) {
+    if (VALID_STAGES.includes(target)) {
+      stopAtStage = target;
+    } else {
+      const { resolveNodeId } = await import('./cli-helpers.js');
+      const state = (project as unknown as { executorState?: { nodes: Record<string, unknown> } }).executorState;
+      if (!state) {
+        console.error(`Cannot resolve node target '${target}' — project has no executorState yet. Run 'pnpm run-to <project>' first to bootstrap, then target a specific node.`);
+        process.exit(1);
+      }
+      const resolved = resolveNodeId(state as never, target);
+      if (!resolved) {
+        console.error(`Unknown target: '${target}'. Not a stage typeId, and no matching node id/alias in this project's graph.`);
+        process.exit(1);
+      }
+      stopAfterNode = resolved;
+    }
+  }
+
+  const gateLabel = stopAtStage
+    ? `stage=${stopAtStage}`
+    : stopAfterNode
+      ? `node=${stopAfterNode}`
+      : '(none — run to final_video)';
   const banner = [
     `=== run-to ===`,
     `  Project:     ${projectName} (${project.title || project.id})`,
-    `  Stage gate:  ${stage ?? '(none — run to final_video)'}`,
+    `  Pause after: ${gateLabel}`,
     `  Skip media:  ${skipMedia}`,
     ``,
   ].join('\n');
@@ -148,10 +185,15 @@ async function main() {
         style: project.style || 'cinematic_realism',
         duration: (project as unknown as { duration?: number }).duration ?? 60,
       },
-      description: stage ? `Run pipeline up to ${stage}` : 'Run pipeline to completion',
+      description: stopAtStage
+        ? `Run pipeline up to stage ${stopAtStage}`
+        : stopAfterNode
+          ? `Run pipeline up to node ${stopAfterNode}`
+          : 'Run pipeline to completion',
     },
     name: 'run-to-cli',
-    ...(stage ? { stopAtStage: stage } : {}),
+    ...(stopAtStage ? { stopAtStage } : {}),
+    ...(stopAfterNode ? { stopAfterNode } : {}),
     ...(skipMedia ? { skipMediaGeneration: true } : {}),
   });
 
@@ -183,7 +225,13 @@ async function main() {
   // tool_streaming intentionally muted — too noisy for CLI
 
   try {
-    const result = await agent.run(stage ? `Run pipeline up to ${stage}` : 'Run pipeline');
+    const result = await agent.run(
+      stopAtStage
+        ? `Run pipeline up to stage ${stopAtStage}`
+        : stopAfterNode
+          ? `Run pipeline up to node ${stopAfterNode}`
+          : 'Run pipeline',
+    );
     // Read the stop reason if available (added with /run-to feature).
     // Older agents without getStopReason fall through the normal result path.
     const stopReason = typeof (agent as unknown as { getStopReason?: () => unknown }).getStopReason === 'function'
