@@ -11,6 +11,8 @@ import {
   registerPostHogShutdownHandlers,
   setCommonProperties,
 } from './posthog.js';
+import { JobManager } from './jobManager.js';
+import { createExecutorRunner } from './executorRunner.js';
 
 import type { ServerMode } from './WebSocketHandler.js';
 
@@ -165,9 +167,19 @@ async function main(): Promise<void> {
   console.log('');
 
   try {
+    // Wire the agent-control endpoints. JobManager serializes one
+    // run-to per project; ExecutorRunner is the production runFn that
+    // calls into a real ExecutorAgent.
+    const jobs = new JobManager();
+    const runner = createExecutorRunner();
+
     const server = await createServer(
-      { llmConfig, serverMode: mode },
-      { host, port }
+      {
+        llmConfig,
+        serverMode: mode,
+        agentRoutes: { jobs, runner },
+      },
+      { host, port, version: appVersion },
     );
 
     await server.start();

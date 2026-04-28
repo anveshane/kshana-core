@@ -26,11 +26,27 @@ interface ChatResponse {
 
 import type { ServerMode } from './WebSocketHandler.js';
 import { ApiKeyAuth } from './auth.js';
+import { registerAgentRoutes } from './agentRoutes.js';
+import type { JobManager } from './jobManager.js';
+import type { AgentRunner } from './agentRoutes.js';
 
 export interface RouteOptions {
   llmConfig: LLMClientConfig;
   apiPrefix?: string;
   serverMode?: ServerMode;
+  /**
+   * Wire up the agent-control endpoints (run-to, status, regen,
+   * override, stop, inspect). Required for pi-agent and other
+   * external agents to drive the project pipeline over HTTP.
+   * Omit only for tests/contexts where you want the legacy
+   * surface only.
+   */
+  agentRoutes?: {
+    jobs: JobManager;
+    runner: AgentRunner;
+    /** Defaults to process.cwd(). */
+    basePath?: string;
+  };
 }
 
 /**
@@ -555,6 +571,16 @@ export async function registerRoutes(
 
   // Register web UI routes (SPA + project/asset endpoints)
   await registerWebUIRoutes(app);
+
+  // Register agent-control routes (pi-agent, openclaw, etc.) when wired.
+  if (options.agentRoutes) {
+    await registerAgentRoutes(app, {
+      apiPrefix,
+      jobs: options.agentRoutes.jobs,
+      runner: options.agentRoutes.runner,
+      ...(options.agentRoutes.basePath !== undefined ? { basePath: options.agentRoutes.basePath } : {}),
+    });
+  }
 
   // WebSocket endpoint for real-time communication
   app.get(
