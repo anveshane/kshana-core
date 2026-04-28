@@ -16,7 +16,6 @@ import type {
   PersistedGoal,
 } from '../../planner/types.js';
 import type { VideoTemplate, GenericProjectFile } from '../../templates/types.js';
-import { registerFile } from '../../../tasks/video/workflow/ProjectManager.js';
 import { writeProjectText } from '../../../tasks/video/workflow/projectFileIO.js';
 
 /**
@@ -382,11 +381,9 @@ ${Object.keys(context.template.artifactTypes).join(', ')}`,
             : `plans/${artifactType}.md`;
           writeProjectText(fileName, content);
           persistedPath = fileName;
-          // Register in project.json files array so other tools can discover it
-          registerFile(fileName, artifactType, {
-            name: typeDef?.displayName ?? artifactType,
-            summary: content.slice(0, 200).trim(),
-          });
+          // Legacy `registerFile` write to project.files[] removed —
+          // file discovery is now via the executor's outputPath on
+          // each per-item node, not the flat manifest array.
         } catch {
           // Non-fatal — content is still in memory registry
         }

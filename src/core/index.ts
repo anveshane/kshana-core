@@ -1,5 +1,5 @@
-// Agent
-export { GenericAgent, SIMPLE_TOOLS, COMPLEX_TOOLS, isComplexTool } from './agent/index.js';
+// Agent — GenericAgent deleted in graph-as-source-of-truth refactor.
+// ExecutorAgent (src/core/planner/ExecutorAgent.ts) is the only agent.
 export type { AgentConfig, AgentStatus, GenericAgentResult } from './agent/index.js';
 
 // LLM

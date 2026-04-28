@@ -38,12 +38,6 @@ export {
   AUTO_APPROVE_TIMEOUT_MS,
   STYLE_CONFIGS,
   INPUT_TYPE_CONFIGS,
-  determineNextPhase,
-  canTransitionToNextPhase,
-  getPhaseItems,
-  getNextUnapprovedItem,
-  areAllItemsApproved,
-  countApprovedItems,
   createDefaultCharacterData,
   createDefaultSettingData,
   createDefaultSceneRef,
@@ -75,46 +69,26 @@ export {
   getProjectStyle,
   getProjectStyleConfig,
   setProjectInputType,
-  updatePhaseStatus,
-  updatePlannerStage,
-  transitionToNextPhase,
   planFileHasContent,
   readProjectFile,
   writeProjectFile,
   // Character functions
-  saveCharacter,
   loadCharacterMarkdown,
-  addCharacter,
-  updateCharacter,
-  updateCharacterApproval,
   // Setting functions
-  saveSetting,
   loadSettingMarkdown,
-  addSetting,
-  updateSetting,
-  updateSettingApproval,
-  // Scene functions
-  addScene,
-  addNewScene,
-  updateScene,
-  updateSceneApproval,
   saveImagePrompt,
   loadImagePrompt,
   saveVideoPrompt,
   loadVideoPrompt,
-  updateImagePromptApproval,
-  updateVideoPromptApproval,
   // Asset functions
   addAsset,
   getAssets,
   // Utility functions
   getProjectSummary,
-  getStateTransitionPrompt,
   isProjectCompatible,
   // Content Registry functions
   createDefaultContentRegistry,
   updateContentStatus,
-  addContentItem,
   getContentContext,
   getContentRegistryJson,
   hasRequiredContent,
@@ -124,7 +98,6 @@ export {
   loadTodos,
   clearPersistedTodos,
   // File registration functions
-  registerFile,
   generateFileSummary,
 } from './ProjectManager.js';
 
@@ -133,10 +106,8 @@ export {
   readFileTool,
   importFileTool,
   readProjectTool,
-  updateProjectTool,
   getWorkflowFileTools,
   getAllFileTools,
-  getAllArtifactTools,
 } from './FileTools.js';
 
 // Workflow Logger

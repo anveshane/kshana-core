@@ -36,9 +36,6 @@ import {
   getProjectDir,
   addAsset,
   loadProject,
-  updateCharacter,
-  updateSetting,
-  updateScene,
   getProjectStyleConfig,
 } from './workflow/index.js';
 import {
@@ -48,6 +45,11 @@ import {
   readProjectText,
   writeProjectBufferAtPath,
 } from './workflow/projectFileIO.js';
+import {
+  getReferenceImagePath as getRefPathFromGraph,
+  getNodeByItemId,
+} from '../../core/planner/projectView.js';
+import type { ExecutorState } from '../../core/planner/types.js';
 
 /**
  * A single shot within a multi-shot scene breakdown.
@@ -616,30 +618,21 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
 }
 
 /**
- * Link an artifact to its project entity (character, setting, or scene).
+ * Legacy no-op preserved so existing call sites compile. The
+ * referenceImageId / referenceImagePath / imageArtifactId /
+ * videoArtifactId fields it used to write live on the flat
+ * `project.characters[]` / `project.settings[]` / `project.scenes[]`
+ * arrays — both the fields and the arrays are being deleted.
+ *
+ * The graph (via `executor.markCompleted(nodeId, outputPath,
+ * artifactId)`) is the canonical store for these now. Reads have
+ * already migrated to `getReferenceImagePath` in projectView.ts (PR2).
+ *
+ * Will be removed in a subsequent commit once the call sites at lines
+ * 575, ~2000, ~2289 are confirmed dead.
  */
-function linkArtifactToProject(context: ArtifactContext, artifactId: string, relativePath: string): void {
-  try {
-    if (context.entityType === 'character' && context.characterName) {
-      updateCharacter(context.characterName, {
-        referenceImageId: artifactId,
-        referenceImagePath: relativePath,
-      });
-    } else if (context.entityType === 'setting' && context.settingName) {
-      updateSetting(context.settingName, {
-        referenceImageId: artifactId,
-        referenceImagePath: relativePath,
-      });
-    } else if (context.entityType === 'scene' && context.sceneNumber !== undefined) {
-      if (context.artifactType === 'video') {
-        updateScene(context.sceneNumber, { videoArtifactId: artifactId });
-      } else {
-        updateScene(context.sceneNumber, { imageArtifactId: artifactId });
-      }
-    }
-  } catch (e) {
-    console.warn(`Failed to link artifact to project entity: ${e}`);
-  }
+function linkArtifactToProject(_context: ArtifactContext, _artifactId: string, _relativePath: string): void {
+  // no-op
 }
 
 /**
@@ -788,34 +781,9 @@ async function waitForComfyUIJob(
       // Project may not exist yet, that's OK
     }
 
-    // Link artifact to project entity (character, setting, or scene)
-    if (job.context) {
-      try {
-        if (job.context.entityType === 'character' && job.context.characterName) {
-          updateCharacter(job.context.characterName, {
-            referenceImageId: artifactId,
-            referenceImagePath: relativePath,
-          });
-        } else if (job.context.entityType === 'setting' && job.context.settingName) {
-          updateSetting(job.context.settingName, {
-            referenceImageId: artifactId,
-            referenceImagePath: relativePath,
-          });
-        } else if (job.context.entityType === 'scene' && job.context.sceneNumber !== undefined) {
-          if (job.context.artifactType === 'video') {
-            updateScene(job.context.sceneNumber, {
-              videoArtifactId: artifactId,
-            });
-          } else {
-            updateScene(job.context.sceneNumber, {
-              imageArtifactId: artifactId,
-            });
-          }
-        }
-      } catch (e) {
-        console.warn(`Failed to link artifact to project entity: ${e}`);
-      }
-    }
+    // Legacy `linkArtifactToProject`-style flat-array writes here have
+    // been removed — the graph (via executor.markCompleted) is the
+    // canonical store for outputPath / artifactId now.
 
     // Update job
     job.status = 'completed';
@@ -1333,7 +1301,35 @@ export function resolveReferencesToPaths(
       );
     }
 
-    // Priority 2: Lookup from project.characters / project.settings arrays
+    // Priority 2 (preferred): graph lookup. The dependency-graph
+    // executor's per-item nodes (`character_image:jan`,
+    // `setting_image:village`) carry `outputPath` once the image has
+    // rendered. This is the unified read path and survives once the
+    // legacy flat arrays go away (PR4).
+    {
+      const execState = project.executorState as ExecutorState | undefined;
+      const itemId = ref.name.toLowerCase().replace(/\s+/g, '_');
+      const graphPath = getRefPathFromGraph(execState, ref.type, itemId);
+      if (graphPath) {
+        const node = getNodeByItemId(
+          execState,
+          ref.type === 'character' ? 'character_image' : 'setting_image',
+          itemId,
+        );
+        const display = node?.metadata?.name
+          ?? node?.displayName?.split(': ').pop()
+          ?? ref.name;
+        resolved.push({
+          image_id: path.isAbsolute(graphPath) ? graphPath : path.join(projectDir, graphPath),
+          type: ref.type,
+          name: display,
+        });
+        continue;
+      }
+    }
+
+    // Priority 2 (legacy fallback): project.characters / project.settings arrays.
+    // Will be deleted in PR4 once all projects on disk have executorState.
     if (ref.type === 'character') {
       const character = project.characters.find(
         c =>
@@ -1523,6 +1519,23 @@ export function findImagePathFromArtifactId(artifactId: string): string | undefi
   const project = loadProject();
   if (!project) return undefined;
 
+  // Graph lookup first — this is the unified read path. `artifactId`
+  // here might be a name ("Jan"), an itemId ("jan"), or a node-id
+  // fragment; the projectView lookup is case-insensitive on itemId.
+  {
+    const execState = project.executorState as ExecutorState | undefined;
+    const itemIdGuess = artifactId.toLowerCase().replace(/\s+/g, '_');
+    const graphChar = getRefPathFromGraph(execState, 'character', itemIdGuess);
+    if (graphChar) {
+      return path.isAbsolute(graphChar) ? graphChar : path.join(getProjectDir(), graphChar);
+    }
+    const graphSetting = getRefPathFromGraph(execState, 'setting', itemIdGuess);
+    if (graphSetting) {
+      return path.isAbsolute(graphSetting) ? graphSetting : path.join(getProjectDir(), graphSetting);
+    }
+  }
+
+  // Legacy fallback (deleted in PR4)
   const projectImagePath = project.content?.images?.itemFiles?.[artifactId];
   if (projectImagePath) {
     return path.isAbsolute(projectImagePath)
