@@ -128,7 +128,6 @@ export {
   readFileTool,
   importFileTool,
   readProjectTool,
-  updateProjectTool,
   getWorkflowFileTools,
   getAllFileTools,
   getAllArtifactTools,
