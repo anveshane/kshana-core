@@ -82,19 +82,9 @@ export {
   readProjectFile,
   writeProjectFile,
   // Character functions
-  saveCharacter,
   loadCharacterMarkdown,
-  addCharacter,
-  updateCharacter,
   // Setting functions
-  saveSetting,
   loadSettingMarkdown,
-  addSetting,
-  updateSetting,
-  // Scene functions
-  addScene,
-  addNewScene,
-  updateScene,
   saveImagePrompt,
   loadImagePrompt,
   saveVideoPrompt,
@@ -109,7 +99,6 @@ export {
   // Content Registry functions
   createDefaultContentRegistry,
   updateContentStatus,
-  addContentItem,
   getContentContext,
   getContentRegistryJson,
   hasRequiredContent,
@@ -119,7 +108,6 @@ export {
   loadTodos,
   clearPersistedTodos,
   // File registration functions
-  registerFile,
   generateFileSummary,
 } from './ProjectManager.js';
 

@@ -36,9 +36,6 @@ import {
   getProjectDir,
   addAsset,
   loadProject,
-  updateCharacter,
-  updateSetting,
-  updateScene,
   getProjectStyleConfig,
 } from './workflow/index.js';
 import {
@@ -621,30 +618,21 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
 }
 
 /**
- * Link an artifact to its project entity (character, setting, or scene).
+ * Legacy no-op preserved so existing call sites compile. The
+ * referenceImageId / referenceImagePath / imageArtifactId /
+ * videoArtifactId fields it used to write live on the flat
+ * `project.characters[]` / `project.settings[]` / `project.scenes[]`
+ * arrays — both the fields and the arrays are being deleted.
+ *
+ * The graph (via `executor.markCompleted(nodeId, outputPath,
+ * artifactId)`) is the canonical store for these now. Reads have
+ * already migrated to `getReferenceImagePath` in projectView.ts (PR2).
+ *
+ * Will be removed in a subsequent commit once the call sites at lines
+ * 575, ~2000, ~2289 are confirmed dead.
  */
-function linkArtifactToProject(context: ArtifactContext, artifactId: string, relativePath: string): void {
-  try {
-    if (context.entityType === 'character' && context.characterName) {
-      updateCharacter(context.characterName, {
-        referenceImageId: artifactId,
-        referenceImagePath: relativePath,
-      });
-    } else if (context.entityType === 'setting' && context.settingName) {
-      updateSetting(context.settingName, {
-        referenceImageId: artifactId,
-        referenceImagePath: relativePath,
-      });
-    } else if (context.entityType === 'scene' && context.sceneNumber !== undefined) {
-      if (context.artifactType === 'video') {
-        updateScene(context.sceneNumber, { videoArtifactId: artifactId });
-      } else {
-        updateScene(context.sceneNumber, { imageArtifactId: artifactId });
-      }
-    }
-  } catch (e) {
-    console.warn(`Failed to link artifact to project entity: ${e}`);
-  }
+function linkArtifactToProject(_context: ArtifactContext, _artifactId: string, _relativePath: string): void {
+  // no-op
 }
 
 /**
@@ -793,34 +781,9 @@ async function waitForComfyUIJob(
       // Project may not exist yet, that's OK
     }
 
-    // Link artifact to project entity (character, setting, or scene)
-    if (job.context) {
-      try {
-        if (job.context.entityType === 'character' && job.context.characterName) {
-          updateCharacter(job.context.characterName, {
-            referenceImageId: artifactId,
-            referenceImagePath: relativePath,
-          });
-        } else if (job.context.entityType === 'setting' && job.context.settingName) {
-          updateSetting(job.context.settingName, {
-            referenceImageId: artifactId,
-            referenceImagePath: relativePath,
-          });
-        } else if (job.context.entityType === 'scene' && job.context.sceneNumber !== undefined) {
-          if (job.context.artifactType === 'video') {
-            updateScene(job.context.sceneNumber, {
-              videoArtifactId: artifactId,
-            });
-          } else {
-            updateScene(job.context.sceneNumber, {
-              imageArtifactId: artifactId,
-            });
-          }
-        }
-      } catch (e) {
-        console.warn(`Failed to link artifact to project entity: ${e}`);
-      }
-    }
+    // Legacy `linkArtifactToProject`-style flat-array writes here have
+    // been removed — the graph (via executor.markCompleted) is the
+    // canonical store for outputPath / artifactId now.
 
     // Update job
     job.status = 'completed';

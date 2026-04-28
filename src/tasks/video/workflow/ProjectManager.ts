@@ -1584,48 +1584,6 @@ export function getElapsedMs(basePath: string = process.cwd()): number {
 }
 
 /**
- * Register a file in the project's files array with an optional summary.
- * If the file already exists in the array, updates it.
- */
-export function registerFile(
-  filePath: string,
-  fileType: string,
-  options: { name?: string; summary?: string } = {},
-  basePath: string = process.cwd()
-): void {
-  const project = loadProject(basePath);
-  if (!project) return;
-
-  // Initialize files array if needed
-  if (!project.files) {
-    project.files = [];
-  }
-
-  // Check if file already registered
-  const existingIndex = project.files.findIndex(f => f.path === filePath);
-
-  const fileEntry = {
-    type: fileType,
-    path: filePath,
-    ...(options.name && { name: options.name }),
-    ...(options.summary && { summary: options.summary }),
-  };
-
-  if (existingIndex >= 0) {
-    // Update existing entry
-    project.files[existingIndex] = fileEntry;
-  } else {
-    // Add new entry
-    project.files.push(fileEntry);
-
-    // Also create an artifact for the new file
-    createArtifactFromFile(project, filePath, fileType, options.name, options.summary, basePath);
-  }
-
-  saveProject(project, basePath);
-}
-
-/**
  * Generate a brief summary of file content (first 1-2 sentences or key info).
  */
 export function generateFileSummary(content: string, fileType: string): string {
@@ -1860,102 +1818,6 @@ export function writeProjectFile(
 }
 
 /**
- * Format character data as markdown.
- */
-function formatCharacterMarkdown(character: CharacterData): string {
-  let md = `# ${character.name}\n\n`;
-  md += `## Description\n\n${character.description}\n\n`;
-  md += `## Visual Description\n\n${character.visualDescription}\n`;
-  if (character.referenceImageId) {
-    md += `\n## Reference Image\n\n- Image ID: ${character.referenceImageId}\n`;
-    if (character.referenceImagePath) {
-      md += `- Path: ${character.referenceImagePath}\n`;
-    }
-  }
-  return md;
-}
-
-/**
- * Save character data to characters/[name].md and update project.
- */
-export function saveCharacter(character: CharacterData, basePath: string = process.cwd()): void {
-  const safeName = character.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const filePath = `characters/${safeName}.md`;
-  writeProjectFile(filePath, formatCharacterMarkdown(character), basePath);
-
-  // Update project file's character list (now CharacterData[])
-  const project = loadProject(basePath);
-  if (project) {
-    const existingIndex = project.characters.findIndex(c => c.name === character.name);
-    if (existingIndex >= 0) {
-      project.characters[existingIndex] = character;
-    } else {
-      project.characters.push(character);
-    }
-    // Also track in content registry for persistence across restarts
-    addContentItem(project, 'characters', character.name, filePath, basePath);
-    // Track in files array for simplified project overview
-    addProjectFile(project, 'character', filePath, character.name, basePath);
-  }
-}
-
-/**
- * Add a character to the project (creates default entry if only name provided).
- */
-export function addCharacter(name: string, basePath: string = process.cwd()): CharacterData {
-  const project = loadProject(basePath);
-  if (!project) {
-    throw new Error('No project found');
-  }
-
-  // Check if character already exists
-  const existing = project.characters.find(c => c.name === name);
-  if (existing) {
-    return existing;
-  }
-
-  // Create new character with default values
-  const character = createDefaultCharacterData(name);
-  project.characters.push(character);
-  saveProject(project, basePath);
-
-  return character;
-}
-
-/**
- * Update a character's data.
- */
-export function updateCharacter(
-  name: string,
-  updates: Partial<CharacterData>,
-  basePath: string = process.cwd()
-): CharacterData | null {
-  const project = loadProject(basePath);
-  if (!project) return null;
-
-  const index = project.characters.findIndex(c => c.name === name);
-  if (index < 0) return null;
-
-  const existing = project.characters[index];
-  if (!existing) return null;
-
-  const updated: CharacterData = { ...existing, ...updates };
-  project.characters[index] = updated;
-  saveProject(project, basePath);
-
-  // Also save to markdown file if description changed
-  if (updates.description || updates.visualDescription) {
-    saveCharacter(updated, basePath);
-  }
-
-  return updated;
-}
-
-/**
- * Update a character's approval status.
- * @param approvalType - 'content' for description approval (CHARACTERS_SETTINGS phase), 'image' for reference image approval (CHARACTER_SETTING_IMAGES phase)
- */
-/**
  * Load character markdown from characters/[name].md.
  * Returns the raw markdown content (parsing not needed for index-only approach).
  */
@@ -1968,102 +1830,6 @@ export function loadCharacterMarkdown(
 }
 
 /**
- * Format setting data as markdown.
- */
-function formatSettingMarkdown(setting: SettingData): string {
-  let md = `# ${setting.name}\n\n`;
-  md += `## Description\n\n${setting.description}\n\n`;
-  md += `## Visual Description\n\n${setting.visualDescription}\n`;
-  if (setting.referenceImageId) {
-    md += `\n## Reference Image\n\n- Image ID: ${setting.referenceImageId}\n`;
-    if (setting.referenceImagePath) {
-      md += `- Path: ${setting.referenceImagePath}\n`;
-    }
-  }
-  return md;
-}
-
-/**
- * Save setting data to settings/[name].md and update project.
- */
-export function saveSetting(setting: SettingData, basePath: string = process.cwd()): void {
-  const safeName = setting.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const filePath = `settings/${safeName}.md`;
-  writeProjectFile(filePath, formatSettingMarkdown(setting), basePath);
-
-  // Update project file's setting list (now SettingData[])
-  const project = loadProject(basePath);
-  if (project) {
-    const existingIndex = project.settings.findIndex(s => s.name === setting.name);
-    if (existingIndex >= 0) {
-      project.settings[existingIndex] = setting;
-    } else {
-      project.settings.push(setting);
-    }
-    // Also track in content registry for persistence across restarts
-    addContentItem(project, 'settings', setting.name, filePath, basePath);
-    // Track in files array for simplified project overview
-    addProjectFile(project, 'setting', filePath, setting.name, basePath);
-  }
-}
-
-/**
- * Add a setting to the project (creates default entry if only name provided).
- */
-export function addSetting(name: string, basePath: string = process.cwd()): SettingData {
-  const project = loadProject(basePath);
-  if (!project) {
-    throw new Error('No project found');
-  }
-
-  // Check if setting already exists
-  const existing = project.settings.find(s => s.name === name);
-  if (existing) {
-    return existing;
-  }
-
-  // Create new setting with default values
-  const setting = createDefaultSettingData(name);
-  project.settings.push(setting);
-  saveProject(project, basePath);
-
-  return setting;
-}
-
-/**
- * Update a setting's data.
- */
-export function updateSetting(
-  name: string,
-  updates: Partial<SettingData>,
-  basePath: string = process.cwd()
-): SettingData | null {
-  const project = loadProject(basePath);
-  if (!project) return null;
-
-  const index = project.settings.findIndex(s => s.name === name);
-  if (index < 0) return null;
-
-  const existing = project.settings[index];
-  if (!existing) return null;
-
-  const updated: SettingData = { ...existing, ...updates };
-  project.settings[index] = updated;
-  saveProject(project, basePath);
-
-  // Also save to markdown file if description changed
-  if (updates.description || updates.visualDescription) {
-    saveSetting(updated, basePath);
-  }
-
-  return updated;
-}
-
-/**
- * Update a setting's approval status.
- * @param approvalType - 'content' for description approval (CHARACTERS_SETTINGS phase), 'image' for reference image approval (CHARACTER_SETTING_IMAGES phase)
- */
-/**
  * Load setting markdown from settings/[name].md.
  * Returns the raw markdown content.
  */
@@ -2073,93 +1839,11 @@ export function loadSettingMarkdown(name: string, basePath: string = process.cwd
 }
 
 /**
- * Add a scene reference to the project.
- * Scene content is stored in plans/scenes.md or individual scene files.
- */
-export function addScene(sceneRef: SceneRef, basePath: string = process.cwd()): void {
-  const project = loadProject(basePath);
-  if (!project) return;
-
-  // Check if scene already exists
-  const existingIndex = project.scenes.findIndex(s => s.sceneNumber === sceneRef.sceneNumber);
-  if (existingIndex >= 0) {
-    project.scenes[existingIndex] = sceneRef;
-  } else {
-    project.scenes.push(sceneRef);
-    project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
-  }
-
-  // Also track in content registry for persistence across restarts
-  const sceneName = sceneRef.title || `Scene ${sceneRef.sceneNumber}`;
-  addContentItem(project, 'scenes', sceneName, undefined, basePath);
-  // Note: addContentItem calls saveProject internally
-}
-
-/**
  * Maximum number of scenes allowed per project.
- * This is a hard limit to prevent infinite loops.
+ * Hard limit to prevent runaway scene creation in older code paths
+ * that haven't migrated to the executor's collection-expansion logic.
  */
 export const MAX_SCENES = 12;
-
-/**
- * Add a new scene to the project (creates default entry).
- * Throws an error if the scene limit is exceeded.
- */
-export function addNewScene(
-  sceneNumber: number,
-  title?: string,
-  basePath: string = process.cwd()
-): SceneRef {
-  const project = loadProject(basePath);
-  if (!project) {
-    throw new Error('No project found');
-  }
-
-  // HARD LIMIT: Prevent infinite scene creation
-  if (sceneNumber > MAX_SCENES) {
-    throw new Error(
-      `⛔ SCENE LIMIT EXCEEDED: Maximum ${MAX_SCENES} scenes allowed. Scene ${sceneNumber} cannot be created.`
-    );
-  }
-
-  // Check if scene already exists
-  const existing = project.scenes.find(s => s.sceneNumber === sceneNumber);
-  if (existing) {
-    return existing;
-  }
-
-  // Create new scene with default values
-  const scene = createDefaultSceneRef(sceneNumber, title);
-  project.scenes.push(scene);
-  project.scenes.sort((a, b) => a.sceneNumber - b.sceneNumber);
-  saveProject(project, basePath);
-
-  return scene;
-}
-
-/**
- * Update a scene's data.
- */
-export function updateScene(
-  sceneNumber: number,
-  updates: Partial<SceneRef>,
-  basePath: string = process.cwd()
-): SceneRef | null {
-  const project = loadProject(basePath);
-  if (!project) return null;
-
-  const index = project.scenes.findIndex(s => s.sceneNumber === sceneNumber);
-  if (index < 0) return null;
-
-  const existing = project.scenes[index];
-  if (!existing) return null;
-
-  const updated: SceneRef = { ...existing, ...updates };
-  project.scenes[index] = updated;
-  saveProject(project, basePath);
-
-  return updated;
-}
 
 /**
  * Update a scene's approval status for a specific phase.
@@ -2193,20 +1877,11 @@ export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): vo
   if (project && !project.assets.includes(asset.id)) {
     project.assets.push(asset.id);
 
-    // Also track in content registry for persistence across restarts
-    // Map asset types to content types
-    const contentType: ContentTypeName | null =
-      asset.type === 'scene_image' || asset.type === 'character_ref' || asset.type === 'setting_ref'
-        ? 'images'
-        : asset.type === 'scene_video' || asset.type === 'final_video'
-          ? 'videos'
-          : null;
-
-    if (contentType) {
-      addContentItem(project, contentType, asset.id, asset.path, basePath);
-    } else {
-      saveProject(project, basePath);
-    }
+    // Legacy `addContentItem(project, 'images'/'videos', asset.id, ...)`
+    // call removed — the executor's per-item nodes already track
+    // outputPath, and the assets/manifest.json (written above) is the
+    // canonical asset registry.
+    saveProject(project, basePath);
   }
 }
 
@@ -2838,82 +2513,6 @@ export function updateContentStatus(
   return project;
 }
 
-/**
- * Add an item to an itemized content type (characters, settings, scenes, images, videos).
- */
-export function addContentItem(
-  project: ProjectFile,
-  contentType: ContentTypeName,
-  itemName: string,
-  itemFile?: string,
-  basePath: string = process.cwd()
-): ProjectFile {
-  // Ensure content registry exists
-  if (!project.content) {
-    project.content = createDefaultContentRegistry();
-  }
-
-  const entry = project.content[contentType];
-
-  // Initialize items array if needed
-  if (!entry.items) {
-    entry.items = [];
-  }
-
-  // Add item if not already present
-  if (!entry.items.includes(itemName)) {
-    entry.items.push(itemName);
-  }
-
-  // Add item file path if provided
-  if (itemFile) {
-    if (!entry.itemFiles) {
-      entry.itemFiles = {};
-    }
-    entry.itemFiles[itemName] = itemFile;
-  }
-
-  // Update status: at least partial if we have items
-  if (entry.status === 'missing' && entry.items.length > 0) {
-    entry.status = 'partial';
-  }
-
-  saveProject(project, basePath);
-  return project;
-}
-
-/**
- * Add a file to the project's files tracking array.
- * This helps agents understand what content exists without parsing the full structure.
- */
-export function addProjectFile(
-  project: ProjectFile,
-  fileType: string,
-  filePath: string,
-  name?: string,
-  basePath: string = process.cwd()
-): ProjectFile {
-  // Initialize files array if needed
-  if (!project.files) {
-    project.files = [];
-  }
-
-  // Check if file already exists in the array
-  const existingIndex = project.files.findIndex(
-    f => f.path === filePath || (f.type === fileType && f.name === name)
-  );
-
-  if (existingIndex >= 0) {
-    // Update existing entry
-    project.files[existingIndex] = { type: fileType, path: filePath, name };
-  } else {
-    // Add new entry
-    project.files.push({ type: fileType, path: filePath, name });
-  }
-
-  saveProject(project, basePath);
-  return project;
-}
 
 /**
  * Get the files summary string for use in prompts.

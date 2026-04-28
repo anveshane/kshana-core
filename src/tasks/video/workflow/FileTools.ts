@@ -28,7 +28,6 @@ import {
   getStateTransitionPrompt,
   projectExists,
   updateContentStatus,
-  registerFile,
   generateFileSummary,
   getProjectDir,
 } from './ProjectManager.js';
@@ -379,17 +378,20 @@ generate_content provides user approval workflow and fetches proper context. imp
         name = match?.[1] ? `Scene ${match[1]}` : undefined;
       }
 
-      // Register file in project.json with summary
-      registerFile(filePath, fileType, { name, summary: fileSummary });
-
-      // Track plot/story content in the content registry for persistence
+      // Legacy `registerFile` (project.files[]) and `updateContentStatus`
+      // (project.content[<type>].status) writes removed — the dependency
+      // graph executor tracks file ownership via each node's `outputPath`.
+      // `name` and `fileSummary` remain available locally if a future
+      // need surfaces; they're not surfaced into project.json.
+      void name; void fileSummary; void fileType;
       const project = loadProject();
       if (project) {
-        const fileToContentType: Record<string, ContentTypeName> = {
-          'plans/plot.md': 'plot',
-          'plans/story.md': 'story',
-        };
-        const contentType = fileToContentType[filePath];
+        // Plot / story content used to be flagged as "available" in
+        // project.content here. The graph's `plot` / `story` per-node
+        // status (`completed` once outputPath is written) is the
+        // canonical signal now.
+        void project;
+        const contentType: ContentTypeName | undefined = undefined;
         if (contentType) {
           updateContentStatus(project, contentType, 'available');
         }
