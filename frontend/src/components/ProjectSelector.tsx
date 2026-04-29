@@ -50,79 +50,13 @@ export function ProjectSelector({ onSendWs, onNewProject, refreshToken = 0 }: Pr
     return () => document.removeEventListener('mousedown', handleClick)
   }, [open])
 
-  const loadProjectState = useCallback(async (dirName: string) => {
-    try {
-      const name = dirName.replace('.kshana', '')
-      const res = await fetch(`/api/v1/projects/${name}`)
-      if (!res.ok) return
-      const data = await res.json()
-
-      // Set phase
-      if (data.currentPhase) {
-        dispatch({ type: 'SET_PHASE', phase: data.currentPhase })
-      }
-
-      // Hydrate the full node map AND derive todos from it. The Storyboard
-      // reads shot_image / shot_video nodes out of this map; it's the
-      // canonical source of truth for "which files belong to which shot"
-      // (replaces the fragile filename-based parsing on manifest entries).
-      if (data.executorState?.nodes) {
-        const rawNodes = data.executorState.nodes as Record<string, {
-          id: string
-          displayName?: string
-          status?: string
-          typeId: string
-          itemId?: string
-          outputPath?: string
-          outputPaths?: Record<string, string>
-        }>
-        const nodeMap: Record<string, import('../lib/store').ExecutorNodeInfo> = {}
-        for (const [id, n] of Object.entries(rawNodes)) {
-          nodeMap[id] = {
-            id,
-            typeId: n.typeId,
-            itemId: n.itemId,
-            displayName: n.displayName,
-            status: (n.status ?? 'pending') as 'pending' | 'in_progress' | 'completed' | 'failed',
-            outputPath: n.outputPath,
-            outputPaths: n.outputPaths,
-          }
-        }
-        dispatch({ type: 'SET_NODES', nodes: nodeMap })
-
-        const todos = Object.values(nodeMap)
-          .filter(n => n.displayName && n.typeId !== 'final_video')
-          .map(n => ({
-            id: n.id,
-            text: n.displayName!,
-            status: (n.status === 'completed' ? 'completed' : n.status === 'failed' ? 'failed' : n.status === 'in_progress' ? 'in_progress' : 'pending') as 'completed' | 'failed' | 'in_progress' | 'pending',
-          }))
-        dispatch({ type: 'SET_TODOS', todos })
-      }
-    } catch { /* */ }
-  }, [dispatch])
-
-  const loadProjectAssets = useCallback(async (dirName: string) => {
-    try {
-      const name = dirName.replace('.kshana', '')
-      const res = await fetch(`/api/v1/projects/${name}/assets`)
-      if (!res.ok) return
-      const data = await res.json()
-      const assets = (data.assets || []).map((a: { id: string; path: string; type: string; nodeId?: string; frame?: string }) => ({
-        ...a,
-        url: `/api/v1/assets/${name}/${a.path}`,
-      }))
-      dispatch({ type: 'SET_ASSETS', assets })
-    } catch { /* */ }
-  }, [dispatch])
-
-  const handleSelectNow = useCallback((dirName: string) => {
+  const handleSelectNow = useCallback(async (dirName: string) => {
     const projectName = dirName.replace('.kshana', '')
-    // Store project name WITHOUT .kshana — asset URLs use this directly
-    dispatch({ type: 'SELECT_PROJECT', name: projectName })
-    onSendWs({ type: 'select_project', data: { projectName } })
-    loadProjectAssets(dirName)
-    loadProjectState(dirName)
+    // Use the shared selectProjectByName so dropdown and /project slash
+    // command share one hydration path. selectProjectByName prefers
+    // project.scenes (pi-era) over executorState (legacy) over manifest.
+    const { selectProjectByName } = await import('../lib/selectProjectAction.js')
+    await selectProjectByName(projectName, dispatch as never, onSendWs)
     dispatch({
       type: 'ADD_CHAT_MESSAGE',
       message: {
@@ -132,7 +66,7 @@ export function ProjectSelector({ onSendWs, onNewProject, refreshToken = 0 }: Pr
         timestamp: Date.now(),
       },
     })
-  }, [dispatch, loadProjectAssets, loadProjectState, onSendWs])
+  }, [dispatch, onSendWs])
 
   useEffect(() => {
     if (!queuedSelection || agentStatus === 'thinking') return
