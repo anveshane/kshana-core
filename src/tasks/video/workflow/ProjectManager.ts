@@ -42,6 +42,7 @@ import {
   createDefaultSettingData,
   createDefaultSceneRef,
 } from './types.js';
+import { setShotFrame, setShotVideo, setFinalVideo } from '../../../core/project/projectSchema.js';
 import { generateProjectTitle, contextStore } from '../../../core/context/index.js';
 // Legacy `initializeArtifactsFromFiles` / `createArtifactFromFile`
 // removed with the artifact tools layer. Project state is now the
@@ -1056,7 +1057,12 @@ export const MAX_SCENES = 12;
  * Update a scene's approval status for a specific phase.
  */
 /**
- * Add an asset to the manifest.
+ * Add an asset to the manifest AND mirror it into project.json's
+ * scenes/shots/frames tree (the new single-source-of-truth surface
+ * defined in src/core/project/projectSchema.ts).
+ *
+ * The manifest stays as the append-only ledger; project.json is the
+ * shape the Storyboard / kshana_show_* / reset paths read from.
  */
 export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): void {
   let manifest: { assets: AssetInfo[] } = { assets: [] };
@@ -1079,16 +1085,97 @@ export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): vo
 
   writeProjectText('assets/manifest.json', JSON.stringify(manifest, null, 2), basePath);
 
-  // Update project file's asset list
+  // Update project file's asset list and scenes/shots tree.
   const project = loadProject(basePath);
-  if (project && !project.assets.includes(asset.id)) {
-    project.assets.push(asset.id);
+  if (project) {
+    let dirty = false;
+    if (!project.assets.includes(asset.id)) {
+      project.assets.push(asset.id);
+      dirty = true;
+    }
+    dirty = applyAssetToProjectSchema(project as unknown as Record<string, unknown>, asset) || dirty;
+    if (dirty) saveProject(project, basePath);
+  }
+}
 
-    // Legacy `addContentItem(project, 'images'/'videos', asset.id, ...)`
-    // call removed — the executor's per-item nodes already track
-    // outputPath, and the assets/manifest.json (written above) is the
-    // canonical asset registry.
-    saveProject(project, basePath);
+/**
+ * Mirror an asset entry into project.scenes[].shots[].* using the
+ * helpers in src/core/project/projectSchema.ts. Returns true if anything
+ * changed so the caller can decide whether to flush project.json.
+ */
+function applyAssetToProjectSchema(
+  project: Record<string, unknown>,
+  asset: AssetInfo,
+): boolean {
+  const baseRef = {
+    path: asset.path,
+    createdAt: asset.createdAt,
+    ...(asset.metadata ? { metadata: asset.metadata } : {}),
+  };
+
+  switch (asset.type) {
+    case 'scene_image': {
+      const m = asset.nodeId?.match(/^shot_image:scene_(\d+)_shot_(\d+)$/);
+      if (!m) return false;
+      const sceneNum = parseInt(m[1]!, 10);
+      const shotNum = parseInt(m[2]!, 10);
+      const frame = asset.frame;
+      if (!frame) return false;
+      const frameKey = (
+        { first_frame: 'firstFrame', last_frame: 'lastFrame', mid_frame: 'midFrame' } as const
+      )[frame];
+      setShotFrame(project, sceneNum, shotNum, frameKey, baseRef);
+      return true;
+    }
+    case 'scene_video': {
+      const m = asset.nodeId?.match(/^shot_video:scene_(\d+)_shot_(\d+)$/);
+      if (!m) return false;
+      const sceneNum = parseInt(m[1]!, 10);
+      const shotNum = parseInt(m[2]!, 10);
+      setShotVideo(project, sceneNum, shotNum, baseRef);
+      return true;
+    }
+    case 'final_video': {
+      setFinalVideo(project, baseRef);
+      return true;
+    }
+    case 'character_ref': {
+      // character_image:<id> → upsert project.characters[].referenceImage
+      const m = asset.nodeId?.match(/^character_image:(.+)$/);
+      if (!m) return false;
+      const characterId = m[1]!;
+      const characters = (project['characters'] ??= []) as Array<{
+        id: string;
+        name?: string;
+        referenceImage?: typeof baseRef;
+      }>;
+      let entry = characters.find((c) => c.id === characterId);
+      if (!entry) {
+        entry = { id: characterId, name: characterId };
+        characters.push(entry);
+      }
+      entry.referenceImage = baseRef;
+      return true;
+    }
+    case 'setting_ref': {
+      const m = asset.nodeId?.match(/^setting_image:(.+)$/);
+      if (!m) return false;
+      const settingId = m[1]!;
+      const settings = (project['settings'] ??= []) as Array<{
+        id: string;
+        name?: string;
+        referenceImage?: typeof baseRef;
+      }>;
+      let entry = settings.find((s) => s.id === settingId);
+      if (!entry) {
+        entry = { id: settingId, name: settingId };
+        settings.push(entry);
+      }
+      entry.referenceImage = baseRef;
+      return true;
+    }
+    default:
+      return false;
   }
 }
 
