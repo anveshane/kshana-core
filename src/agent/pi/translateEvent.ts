@@ -111,9 +111,12 @@ export function translatePiEvent(
     case "message_end": {
       const text = extractAssistantText(event.message);
       if (!text) return { events: [], context: ctx };
+      // Frontend's stream_chunk handler uses `chunk` as the bubble's
+      // content when done:true (it doesn't read the streamingText
+      // accumulator). Send the full text here so the bubble renders.
       return {
         events: [
-          { type: "streaming_text", chunk: "", done: true },
+          { type: "streaming_text", chunk: text, done: true },
           { type: "agent_text", text, isFinal: true },
         ],
         context: { ...ctx, finalAssistantText: text },
@@ -154,7 +157,12 @@ export function flattenToolResult(result: unknown): unknown {
 
 export function extractAssistantText(message: unknown): string {
   if (!message || typeof message !== "object") return "";
-  const m = message as { content?: unknown };
+  const m = message as { role?: unknown; content?: unknown };
+  // pi's message_end fires for user / assistant / toolResult messages alike.
+  // Only assistant text should land in the chat as an agent bubble — echoing
+  // the user's own prompt back as an agent message is what produced the
+  // mysterious "(Active project: ...) show me ..." bubble in noir-3.
+  if (m.role !== undefined && m.role !== "assistant") return "";
   if (typeof m.content === "string") return m.content;
   if (!Array.isArray(m.content)) return "";
   return m.content

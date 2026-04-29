@@ -156,7 +156,7 @@ describe("translatePiEvent — assistant streaming", () => {
     expect(r.events).toEqual([]);
   });
 
-  it("emits streaming_text(done) and agent_text on message_end and updates context.finalAssistantText", () => {
+  it("emits streaming_text(done) carrying the full text on message_end (so frontend shows the bubble, not an empty one)", () => {
     const r = translatePiEvent(
       {
         type: "message_end",
@@ -165,7 +165,7 @@ describe("translatePiEvent — assistant streaming", () => {
       ctx0,
     );
     expect(r.events).toEqual([
-      { type: "streaming_text", chunk: "", done: true },
+      { type: "streaming_text", chunk: "Done.", done: true },
       { type: "agent_text", text: "Done.", isFinal: true },
     ]);
     expect(r.context.finalAssistantText).toBe("Done.");
@@ -181,6 +181,35 @@ describe("translatePiEvent — assistant streaming", () => {
     );
     expect(r.events).toHaveLength(0);
     expect(r.context.finalAssistantText).toBe("");
+  });
+
+  it("drops message_end for user-role messages so the user's own text isn't echoed as an agent bubble", () => {
+    const r = translatePiEvent(
+      {
+        type: "message_end",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "(Active project: X)\n\nshow me s2 shot 4" }],
+        },
+      } as never,
+      ctx0,
+    );
+    expect(r.events).toHaveLength(0);
+    expect(r.context.finalAssistantText).toBe("");
+  });
+
+  it("drops message_end for tool-result messages", () => {
+    const r = translatePiEvent(
+      {
+        type: "message_end",
+        message: {
+          role: "toolResult",
+          content: [{ type: "text", text: "tool stdout..." }],
+        },
+      } as never,
+      ctx0,
+    );
+    expect(r.events).toHaveLength(0);
   });
 });
 
