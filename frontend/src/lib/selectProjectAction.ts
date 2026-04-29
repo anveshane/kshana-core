@@ -5,6 +5,7 @@
  * panels populated as a click pick.
  */
 import type { ExecutorNodeInfo } from "./store";
+import { synthesizeNodesFromAssets, todosFromNodes, type ManifestAsset } from "./synthesizeNodesFromAssets";
 
 type Dispatch = (action: { type: string; [k: string]: unknown }) => void;
 type Send = (msg: Record<string, unknown>) => void;
@@ -19,6 +20,8 @@ export async function selectProjectByName(
 
   dispatch({ type: "SELECT_PROJECT", name: projectName });
   send({ type: "select_project", data: { projectName } });
+
+  let hydratedFromExecutorState = false;
 
   try {
     const stateRes = await fetch(`/api/v1/projects/${projectName}`);
@@ -54,24 +57,8 @@ export async function selectProjectByName(
           };
         }
         dispatch({ type: "SET_NODES", nodes: nodeMap });
-        const todos = Object.values(nodeMap)
-          .filter((n) => n.displayName && n.typeId !== "final_video")
-          .map((n) => ({
-            id: n.id,
-            text: n.displayName!,
-            status: (n.status === "completed"
-              ? "completed"
-              : n.status === "failed"
-                ? "failed"
-                : n.status === "in_progress"
-                  ? "in_progress"
-                  : "pending") as
-              | "completed"
-              | "failed"
-              | "in_progress"
-              | "pending",
-          }));
-        dispatch({ type: "SET_TODOS", todos });
+        dispatch({ type: "SET_TODOS", todos: todosFromNodes(nodeMap) });
+        hydratedFromExecutorState = true;
       }
     } else if (stateRes.status === 404) {
       return { ok: false, reason: `Project '${projectName}' not found.` };
@@ -84,13 +71,22 @@ export async function selectProjectByName(
     const assetsRes = await fetch(`/api/v1/projects/${projectName}/assets`);
     if (assetsRes.ok) {
       const data = await assetsRes.json();
-      const assets = (data.assets || []).map(
-        (a: { id: string; path: string; type: string; nodeId?: string; frame?: string }) => ({
-          ...a,
-          url: `/api/v1/assets/${projectName}/${a.path}`,
-        }),
-      );
+      const rawAssets = (data.assets || []) as ManifestAsset[];
+      const assets = rawAssets.map((a) => ({
+        ...a,
+        url: `/api/v1/assets/${projectName}/${a.path}`,
+      }));
       dispatch({ type: "SET_ASSETS", assets });
+
+      // Pi-era projects have no executorState — synthesize a node map from
+      // the asset manifest so the Storyboard / Todos panels populate.
+      if (!hydratedFromExecutorState) {
+        const synth = synthesizeNodesFromAssets(rawAssets);
+        if (Object.keys(synth).length > 0) {
+          dispatch({ type: "SET_NODES", nodes: synth });
+          dispatch({ type: "SET_TODOS", todos: todosFromNodes(synth) });
+        }
+      }
     }
   } catch {
     /* assets fetch is best-effort */
