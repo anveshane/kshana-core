@@ -4699,6 +4699,15 @@ Examples of common failure modes to avoid:
     const purpose = purposeOverride ?? this.purposeForNode(node);
     const client = this.llmFor(purpose);
     for await (const chunk of client.generateStream(options)) {
+      if (chunk.done && chunk.usage) {
+        this.emit({
+          type: 'context_usage',
+          promptTokens: chunk.usage.promptTokens,
+          completionTokens: chunk.usage.completionTokens,
+          totalTokens: chunk.usage.totalTokens,
+        });
+      }
+
       // Handle reasoning_content from llama.cpp (separate field, not in-band)
       if (chunk.thinking && toolCallId) {
         this.emit({

@@ -811,17 +811,19 @@ export function useAgent(options: UseAgentOptions): UseAgentReturn {
     });
 
     agent.on('context_usage', event => {
-      debugLog(`[useAgent] context_usage event: ${event.percentage}% (${event.promptTokens}/${event.maxTokens}), compressed=${event.wasCompressed}, iter=${event.iteration}`);
-      dispatch({
-        type: 'SET_CONTEXT_USAGE',
-        usage: {
-          promptTokens: event.promptTokens,
-          maxTokens: event.maxTokens,
-          percentage: event.percentage,
-          wasCompressed: event.wasCompressed,
-          iteration: event.iteration,
-        },
-      });
+      debugLog(`[useAgent] context_usage event: prompt=${event.promptTokens}, completion=${event.completionTokens ?? 'n/a'}, total=${event.totalTokens ?? 'n/a'}`);
+      if (typeof event.percentage === 'number' && typeof event.maxTokens === 'number') {
+        dispatch({
+          type: 'SET_CONTEXT_USAGE',
+          usage: {
+            promptTokens: event.promptTokens,
+            maxTokens: event.maxTokens,
+            percentage: event.percentage,
+            wasCompressed: event.wasCompressed ?? false,
+            iteration: event.iteration ?? 0,
+          },
+        });
+      }
       onEvent?.(event);
     });
 

@@ -221,14 +221,16 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
       }
 
       case 'context_usage': {
-        dispatch({
-          type: 'SET_CONTEXT_USAGE',
-          usage: {
-            percentage: data.percentage as number,
-            promptTokens: data.promptTokens as number,
-            maxTokens: data.maxTokens as number,
-          },
-        })
+        if (typeof data.percentage === 'number' && typeof data.maxTokens === 'number') {
+          dispatch({
+            type: 'SET_CONTEXT_USAGE',
+            usage: {
+              percentage: data.percentage,
+              promptTokens: data.promptTokens as number,
+              maxTokens: data.maxTokens,
+            },
+          })
+        }
         break
       }
 

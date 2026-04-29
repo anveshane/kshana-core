@@ -8,6 +8,7 @@ import type { GenericAgentResult } from '../core/agent/index.js';
 import type { LLMClientConfig } from '../core/llm/index.js';
 import { createExecutorAgent } from '../tasks/video/index.js';
 import type { TypedEventEmitter } from '../events/EventEmitter.js';
+import type { ContextUsageEvent } from '../events/events.js';
 import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -71,8 +72,8 @@ export interface ConversationEvents {
   onStreamingText?: (sessionId: string, chunk: string, done: boolean) => void;
   /** Tool streaming for sub-agent content generation */
   onToolStreaming?: (sessionId: string, toolCallId: string, chunk: string, done: boolean, agentName?: string, toolName?: string, reset?: boolean) => void;
-  /** Context window usage stats */
-  onContextUsage?: (sessionId: string, data: { promptTokens: number; maxTokens: number; percentage: number; wasCompressed: boolean; iteration: number }) => void;
+  /** Neutral LLM provider usage telemetry, with optional context-window display stats */
+  onContextUsage?: (sessionId: string, data: Omit<ContextUsageEvent, 'type'>) => void;
   /** Workflow phase transition */
   onPhaseTransition?: (sessionId: string, data: { fromPhase: string; toPhase: string; displayName?: string; description?: string }) => void;
   /** Full timeline state update */

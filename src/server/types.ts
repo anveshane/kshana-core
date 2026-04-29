@@ -182,10 +182,12 @@ export interface ErrorData {
  */
 export interface ContextUsageData {
   promptTokens: number;
-  maxTokens: number;
-  percentage: number;
-  wasCompressed: boolean;
-  iteration: number;
+  completionTokens?: number;
+  totalTokens?: number;
+  maxTokens?: number;
+  percentage?: number;
+  wasCompressed?: boolean;
+  iteration?: number;
 }
 
 /**

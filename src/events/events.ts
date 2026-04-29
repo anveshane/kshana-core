@@ -137,21 +137,25 @@ export interface NotificationEvent {
 }
 
 /**
- * Context usage event emitted after each LLM call.
- * Allows UI to display how much of the context window is being used.
+ * Neutral LLM provider usage telemetry emitted after a completed LLM call.
+ * UI-only context-window display fields remain optional for local clients.
  */
 export interface ContextUsageEvent {
   type: 'context_usage';
   /** Prompt tokens used in the last LLM call */
   promptTokens: number;
-  /** Maximum context tokens available */
-  maxTokens: number;
-  /** Usage percentage (0-100) */
-  percentage: number;
+  /** Completion tokens used in the last LLM call */
+  completionTokens?: number;
+  /** Total tokens reported by the provider */
+  totalTokens?: number;
+  /** Maximum context tokens available, when known */
+  maxTokens?: number;
+  /** Usage percentage (0-100), when maxTokens is known */
+  percentage?: number;
   /** Whether compression just occurred */
-  wasCompressed: boolean;
+  wasCompressed?: boolean;
   /** Current iteration number */
-  iteration: number;
+  iteration?: number;
 }
 
 /**

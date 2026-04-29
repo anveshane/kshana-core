@@ -200,7 +200,15 @@ export function App({ llmConfig, agentConfig, initialTask, taskType = 'generic' 
         uiLogger.logTodoUpdate(event.todos.map(t => ({ content: t.content, status: t.status })));
         break;
       case 'context_usage':
-        uiLogger.logContextUsage(event.percentage, event.promptTokens, event.maxTokens, event.iteration, event.wasCompressed);
+        if (typeof event.percentage === 'number' && typeof event.maxTokens === 'number') {
+          uiLogger.logContextUsage(
+            event.percentage,
+            event.promptTokens,
+            event.maxTokens,
+            event.iteration ?? 0,
+            event.wasCompressed ?? false,
+          );
+        }
         break;
     }
   }, []);
