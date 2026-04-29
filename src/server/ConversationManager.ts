@@ -203,6 +203,33 @@ export class ConversationManager {
   }
 
   /**
+   * Ensure the session has a SessionContext + PiSessionAgent so the user can
+   * chat before selecting a project. Uses default.kshana as the ambient
+   * working directory; tool calls take an explicit `project` parameter so the
+   * ambient context only matters for filesystem helpers that scope to a
+   * project dir.
+   */
+  private ensureAmbientSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    if (!session.sessionContext) {
+      const projectDir = 'default.kshana';
+      session.sessionContext =
+        session.mode === 'remote' && session.remoteFs
+          ? createRemoteSession(sessionId, projectDir, session.remoteFs)
+          : createLocalSession(sessionId, projectDir);
+    }
+
+    if (!session.agent) {
+      runInSession(session.sessionContext, () => {
+        session.agent = new PiSessionAgent();
+        session.initialized = false;
+      });
+    }
+  }
+
+  /**
    * Get an existing session.
    */
   getSession(sessionId: string): SessionState | undefined {
@@ -415,8 +442,14 @@ export class ConversationManager {
       throw new Error('Session already has a running task');
     }
 
-    if (!session.sessionContext) {
-      throw new Error('Session context not initialized. Configure project first.');
+    // Pi-orchestrator chat works without a project being selected — the user
+    // can ask "what projects are available?" before picking one. If no project
+    // is configured yet, set up an ambient context + agent on first message.
+    if (!session.sessionContext || !session.agent) {
+      this.ensureAmbientSession(sessionId);
+    }
+    if (!session.sessionContext || !session.agent) {
+      throw new Error('Failed to initialize session context');
     }
 
     // Run the entire agent execution inside the session context
