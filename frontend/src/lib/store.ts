@@ -106,7 +106,7 @@ export interface AppState {
 
   // Timeline
   timeline: Timeline | null
-  activeView: 'chat' | 'timeline'
+  activeView: 'chat' | 'storyboard' | 'timeline'
 
   // Settings
   autonomousMode: boolean
@@ -168,7 +168,7 @@ export type AppAction =
   | { type: 'SET_AUTONOMOUS'; enabled: boolean }
   | { type: 'SET_PARALLEL_MEDIA'; enabled: boolean }
   | { type: 'SET_TIMELINE'; timeline: Timeline | null }
-  | { type: 'SET_ACTIVE_VIEW'; view: 'chat' | 'timeline' }
+  | { type: 'SET_ACTIVE_VIEW'; view: 'chat' | 'storyboard' | 'timeline' }
   | { type: 'SET_TIMER'; timer: AppState['timer'] }
 
 // ── Reducer ────────────────────────────────────────────────

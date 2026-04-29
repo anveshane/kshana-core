@@ -175,29 +175,8 @@ export function App() {
                 }
               />
 
-              {/* CENTER: Storyboard (per scene → per shot → first+last frame) */}
-              <section className="flex-1 flex flex-col overflow-hidden border-r border-line-soft">
-                <div className="flex border-b border-line-soft flex-shrink-0 px-3 py-2">
-                  <h2 className="font-mono text-[11px] uppercase tracking-widest text-graphite-100">
-                    Storyboard
-                  </h2>
-                </div>
-                <Storyboard
-                  onRedoNode={(nodeId: string, frame?: string) =>
-                    send({ type: 'redo_node', data: frame ? { nodeId, frame } : { nodeId } })
-                  }
-                  onRedoPrompt={(nodeId: string) =>
-                    send({ type: 'redo_node', data: { nodeId, scope: 'prompt' } })
-                  }
-                  onRedoNodeWithPrompt={(nodeId: string, editedPrompt: Record<string, unknown>) =>
-                    send({ type: 'redo_node', data: { nodeId, editedPrompt } })
-                  }
-                />
-              </section>
-
-              {/* RIGHT: Chat + tab bar + task input */}
-              <main className="w-[420px] flex-shrink-0 flex flex-col overflow-hidden">
-                {/* Tab bar */}
+              {/* CENTER: Tabs (Chat default, Storyboard, Timeline) + content + task input */}
+              <main className="flex-1 flex flex-col overflow-hidden">
                 <div className="flex border-b border-line-soft flex-shrink-0">
                   <button
                     onClick={() => dispatch({ type: 'SET_ACTIVE_VIEW', view: 'chat' })}
@@ -208,6 +187,16 @@ export function App() {
                     }`}
                   >
                     Chat
+                  </button>
+                  <button
+                    onClick={() => dispatch({ type: 'SET_ACTIVE_VIEW', view: 'storyboard' })}
+                    className={`px-4 py-2 text-xs font-medium transition-colors ${
+                      state.activeView === 'storyboard'
+                        ? 'text-cyan border-b-2 border-cyan'
+                        : 'text-graphite-100 hover:text-foreground'
+                    }`}
+                  >
+                    Storyboard
                   </button>
                   <button
                     onClick={() => dispatch({ type: 'SET_ACTIVE_VIEW', view: 'timeline' })}
@@ -225,7 +214,21 @@ export function App() {
                     )}
                   </button>
                 </div>
-                {state.activeView === 'chat' ? <ChatTimeline onSendWs={send} /> : <TimelineView />}
+                {state.activeView === 'chat' && <ChatTimeline onSendWs={send} />}
+                {state.activeView === 'storyboard' && (
+                  <Storyboard
+                    onRedoNode={(nodeId: string, frame?: string) =>
+                      send({ type: 'redo_node', data: frame ? { nodeId, frame } : { nodeId } })
+                    }
+                    onRedoPrompt={(nodeId: string) =>
+                      send({ type: 'redo_node', data: { nodeId, scope: 'prompt' } })
+                    }
+                    onRedoNodeWithPrompt={(nodeId: string, editedPrompt: Record<string, unknown>) =>
+                      send({ type: 'redo_node', data: { nodeId, editedPrompt } })
+                    }
+                  />
+                )}
+                {state.activeView === 'timeline' && <TimelineView />}
                 {showNewProject && (
                   <NewProjectInline
                     onReady={(config) => {
