@@ -206,11 +206,26 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
 
       try {
         const { resolveNodePromptPath, getAvailableReferences, stripMarkdownFences } = await import('./editAndRedo.js');
+        const { resolveSchemaNodePrompt } = await import('./resolveSchemaNodePrompt.js');
         const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
         const nodes = project.executorState?.nodes ?? {};
         const node = nodes[nodeId];
 
         if (!node) {
+          // Pi-era fallback: synthesize the modal's expected shape from
+          // project.scenes when the legacy node graph isn't there.
+          const synthesized = resolveSchemaNodePrompt(project, nodeId);
+          if (synthesized) {
+            const response: Record<string, unknown> = {
+              nodeId: synthesized.nodeId,
+              nodeType: synthesized.nodeType,
+              prompt: synthesized.prompt,
+            };
+            if (synthesized.firstFramePath) {
+              response['firstFrameUrl'] = `/api/v1/assets/${name}/${synthesized.firstFramePath}`;
+            }
+            return reply.send(response);
+          }
           return reply.status(404).send({ error: `Node not found: ${nodeId}` });
         }
 
