@@ -737,11 +737,9 @@
   },
   "175": {
     "inputs": {
-      "vae_name": "LTX2_audio_vae_bf16.safetensors",
-      "device": "main_device",
-      "weight_dtype": "bf16"
+      "vae_name": "LTX2_audio_vae_bf16.safetensors"
     },
-    "class_type": "VAELoaderKJ",
+    "class_type": "VAELoader",
     "_meta": {
       "title": "VAELoader KJ"
     }
