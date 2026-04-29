@@ -6,6 +6,7 @@
  */
 import type { ExecutorNodeInfo } from "./store";
 import { synthesizeNodesFromAssets, todosFromNodes, type ManifestAsset } from "./synthesizeNodesFromAssets";
+import { synthesizeNodesFromScenes, type SceneLike } from "./synthesizeNodesFromScenes";
 
 type Dispatch = (action: { type: string; [k: string]: unknown }) => void;
 type Send = (msg: Record<string, unknown>) => void;
@@ -30,7 +31,17 @@ export async function selectProjectByName(
       if (data.currentPhase) {
         dispatch({ type: "SET_PHASE", phase: data.currentPhase });
       }
-      if (data.executorState?.nodes) {
+      // Hydration priority: project.scenes (new SoT) → executorState.nodes
+      // (legacy graph) → manifest synthesis (last resort, set up below).
+      if (Array.isArray(data.scenes) && data.scenes.length > 0) {
+        const scenesMap = synthesizeNodesFromScenes(data.scenes as SceneLike[]);
+        if (Object.keys(scenesMap).length > 0) {
+          dispatch({ type: "SET_NODES", nodes: scenesMap });
+          dispatch({ type: "SET_TODOS", todos: todosFromNodes(scenesMap) });
+          hydratedFromExecutorState = true;
+        }
+      }
+      if (!hydratedFromExecutorState && data.executorState?.nodes) {
         const rawNodes = data.executorState.nodes as Record<string, {
           id: string;
           displayName?: string;

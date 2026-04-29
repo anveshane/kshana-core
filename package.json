@@ -35,6 +35,7 @@
     "regen": "tsx scripts/regen-node.ts",
     "override": "tsx scripts/set-content.ts",
     "calibrate-vlm": "tsx scripts/calibrate-vlm.ts",
+    "backfill-schema": "tsx scripts/backfill-project-schema.ts",
     "audit-fidelity": "tsx scripts/audit-fidelity.ts",
     "build": "pnpm -C frontend run build && tsup",
     "build:frontend": "pnpm -C frontend run build",
