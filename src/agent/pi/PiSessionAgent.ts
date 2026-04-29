@@ -19,7 +19,9 @@ import { createAuditFidelityTool } from "./tools/auditFidelity.js";
 import { createShowShotTool } from "./tools/showShot.js";
 import { createRegenTool } from "./tools/regen.js";
 import { loadOrchestratorPrompt } from "./prompt.js";
-import { ensureDir, getKshanaConfigDir, getProjectsDir } from "./paths.js";
+import { ensureDir, getKshanaConfigDir, getProjectsDir, REPO_ROOT } from "./paths.js";
+
+const REPO_ROOT_PROMPTS = join(REPO_ROOT, "prompts");
 import { translatePiEvent, type TranslationContext } from "./translateEvent.js";
 import { join } from "node:path";
 
@@ -88,11 +90,13 @@ export class PiSessionAgent extends TypedEventEmitter {
     const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
     const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
     const settingsManager = SettingsManager.create(cwd, agentDir);
+    const skillsDir = join(REPO_ROOT_PROMPTS, "skills");
     const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir,
       settingsManager,
       systemPromptOverride: () => this.systemPrompt,
+      additionalSkillPaths: [skillsDir],
     });
     await resourceLoader.reload();
 
