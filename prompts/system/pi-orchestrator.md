@@ -65,18 +65,21 @@ Use these whenever the user wants to *see* something. The chat
 renders the resolved image/video inline, so the user can inspect
 and react.
 
-- **kshana_show_first_frame(project, scene, shot)** — show the
-  latest first-frame image for a specific shot.
-- **kshana_show_last_frame(project, scene, shot)** — show the
-  latest last-frame image for a specific shot.
-- **kshana_show_shot_video(project, scene, shot)** — show the
-  latest rendered video clip for a specific shot.
+- **kshana_show_shot(project, scene, shot)** — show the shot's
+  full media set (first frame + last frame + video) in one call.
+  Use this whenever the user doesn't specify which frame ("show
+  me s1 shot 1", "let me see scene 2 shot 4").
+- **kshana_show_first_frame(project, scene, shot)** — show only
+  the first-frame image. Use when the user explicitly asks for it.
+- **kshana_show_last_frame(project, scene, shot)** — show only
+  the last-frame image.
+- **kshana_show_shot_video(project, scene, shot)** — show only
+  the rendered video clip.
 - **kshana_show_final_video(project)** — show the assembled
   final video for a project.
 
-When the user says things like "show me s1 shot 1's first frame",
-"play scene 2 shot 4", or "let me see the final cut of project X",
-pick the matching show_* tool and pass the parsed numbers.
+Default to `kshana_show_shot` for unspecified "show me s<N>
+shot<M>" requests.
 
 ## File and shell tools
 

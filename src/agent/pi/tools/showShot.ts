@@ -1,0 +1,87 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { Type, type Static } from "typebox";
+import { defineTool, type ToolDefinition } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { getProjectsDir } from "../paths.js";
+import { findShot } from "../../../core/project/projectSchema.js";
+import type { MediaCallback } from "./runTo.js";
+
+const Params = Type.Object({
+  project: Type.String({ description: "Project name" }),
+  scene: Type.Number({ description: "Scene number, e.g. 1" }),
+  shot: Type.Number({ description: "Shot number within the scene, e.g. 2" }),
+});
+
+interface ShownDetails {
+  shown: { firstFrame?: string; lastFrame?: string; midFrame?: string; video?: string };
+  count: number;
+}
+
+async function loadProject(projectName: string): Promise<Record<string, unknown> | null> {
+  try {
+    const path = join(getProjectsDir(), `${projectName}.kshana`, "project.json");
+    const raw = await readFile(path, "utf8");
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export function createShowShotTool(opts: { onMedia?: MediaCallback }): ToolDefinition {
+  return defineTool({
+    name: "kshana_show_shot",
+    label: "kshana show shot",
+    description:
+      "Show all generated media for a specific shot — first frame, last frame, and rendered video — in one call. Each piece appears as its own media card in chat. Use this when the user says 'show me s1 shot 1', 'let me see scene 2 shot 4', or anything that doesn't specify which frame they want. Prefer kshana_show_first_frame / kshana_show_last_frame / kshana_show_shot_video when the user asks for a specific piece.",
+    parameters: Params,
+    async execute(_id, params: Static<typeof Params>): Promise<AgentToolResult<ShownDetails | { found: false }>> {
+      const project = await loadProject(params.project);
+      const shot = project ? findShot(project, params.scene, params.shot) : undefined;
+      if (!shot) {
+        return {
+          content: [{
+            type: "text",
+            text: `No shot found at scene ${params.scene} shot ${params.shot} in '${params.project}'.`,
+          }],
+          details: { found: false },
+        };
+      }
+
+      const shown: ShownDetails["shown"] = {};
+      const emit = (kind: "image" | "video", path: string) =>
+        opts.onMedia?.({ kind, project: params.project, path, source: "kshana_show_shot" });
+
+      if (shot.firstFrame?.path) {
+        emit("image", shot.firstFrame.path);
+        shown.firstFrame = shot.firstFrame.path;
+      }
+      if (shot.lastFrame?.path) {
+        emit("image", shot.lastFrame.path);
+        shown.lastFrame = shot.lastFrame.path;
+      }
+      if (shot.midFrame?.path) {
+        emit("image", shot.midFrame.path);
+        shown.midFrame = shot.midFrame.path;
+      }
+      if (shot.video?.path) {
+        emit("video", shot.video.path);
+        shown.video = shot.video.path;
+      }
+
+      const parts: string[] = [];
+      if (shown.firstFrame) parts.push("first frame");
+      if (shown.lastFrame) parts.push("last frame");
+      if (shown.midFrame) parts.push("mid frame");
+      if (shown.video) parts.push("video");
+      const summary = parts.length === 0
+        ? `Shot exists at scene ${params.scene} shot ${params.shot} but has no generated media yet.`
+        : `Showing ${parts.join(", ")} for scene ${params.scene} shot ${params.shot}.`;
+
+      return {
+        content: [{ type: "text", text: summary }],
+        details: { shown, count: parts.length },
+      };
+    },
+  });
+}

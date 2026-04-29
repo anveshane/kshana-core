@@ -16,6 +16,7 @@ import { kshanaTools } from "./tools/index.js";
 import { createFocusProjectTool, type FocusProjectCallback } from "./tools/focusProject.js";
 import { createRunToTool, type MediaCallback } from "./tools/runTo.js";
 import { createAuditFidelityTool } from "./tools/auditFidelity.js";
+import { createShowShotTool } from "./tools/showShot.js";
 import { loadOrchestratorPrompt } from "./prompt.js";
 import { ensureDir, getKshanaConfigDir, getProjectsDir } from "./paths.js";
 import { translatePiEvent, type TranslationContext } from "./translateEvent.js";
@@ -48,17 +49,21 @@ export class PiSessionAgent extends TypedEventEmitter {
   }) {
     super();
     let baseTools = opts?.tools ?? kshanaTools;
-    // When the caller wires onMedia, swap the static run_to / audit_fidelity
-    // entries for media-aware factory tools so the parsed asset events flow up
-    // to ConversationManager → WebSocket → frontend chat.
+    // Tools that need to surface inline media in chat are factory-built when
+    // an onMedia callback is wired. Without onMedia, kshana_show_shot still
+    // returns a text summary but won't render image/video cards in the UI.
     if (opts?.onMedia) {
       const mediaRunTo = createRunToTool({ onMedia: opts.onMedia });
       const mediaAudit = createAuditFidelityTool({ onMedia: opts.onMedia });
+      const mediaShowShot = createShowShotTool({ onMedia: opts.onMedia });
       baseTools = baseTools.map((t) => {
         if (t.name === "kshana_run_to") return mediaRunTo;
         if (t.name === "kshana_audit_fidelity") return mediaAudit;
         return t;
       });
+      baseTools = [...baseTools, mediaShowShot];
+    } else {
+      baseTools = [...baseTools, createShowShotTool({})];
     }
     this.tools = opts?.focusProject
       ? [...baseTools, createFocusProjectTool(opts.focusProject)]
