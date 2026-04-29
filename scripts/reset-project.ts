@@ -30,6 +30,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { STAGE_ALIASES, TEMPLATE_DEPS } from '../src/core/planner/stages.js';
+import { resetSchemaStage } from '../src/core/project/resetSchemaStage.js';
 
 /**
  * Compute the full set of types to reset by traversing the dependency graph downstream.
@@ -420,6 +421,11 @@ function main() {
     console.log(`  --clean: wiped ${beforeNodeCount} nodes from executorState (graph rebuilds on next run)`);
   }
 
+  // Phase 4: also clear the new project.scenes tree's slots for this
+  // stage, archiving the cleared values to shot.history with reason: 'reset'.
+  // No-op for projects that don't have a scenes tree yet.
+  const schemaResult = resetSchemaStage(project as unknown as Record<string, unknown>, stage);
+
   // Save
   writeFileSync(projectPath, JSON.stringify(project, null, 2));
 
@@ -434,6 +440,9 @@ function main() {
   console.log(`  Per-item nodes removed: ${removedCount}`);
   console.log(`  Output files preserved on disk (disconnected from graph)`);
   console.log(`  Final state: ${completed} completed, ${pending} pending, ${remaining.length} total`);
+  if (schemaResult && schemaResult.cleared > 0) {
+    console.log(`  Schema slots cleared: ${schemaResult.cleared} (across ${schemaResult.shotsAffected} shots, archived to shot.history)`);
+  }
 }
 
 // Only run when executed directly (not when imported for testing)
