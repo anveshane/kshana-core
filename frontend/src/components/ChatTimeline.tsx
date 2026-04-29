@@ -1,12 +1,15 @@
 import { useRef, useEffect } from 'react'
 import { useAppState, useAppDispatch } from '../lib/store'
 import { ToolCallCard } from './ToolCallCard'
+import { MediaWithOverlay } from './MediaWithOverlay'
 
 interface ChatTimelineProps {
   onSendWs?: (msg: Record<string, unknown>) => void
+  onEditPrompt?: (nodeId: string, frame: string | null) => void
+  onRedoNode?: (nodeId: string) => void
 }
 
-export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
+export function ChatTimeline({ onSendWs, onEditPrompt, onRedoNode }: ChatTimelineProps) {
   const { chatMessages, toolCalls, streamingText, agentStatus, selectedProject } = useAppState()
   const dispatch = useAppDispatch()
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -83,7 +86,6 @@ export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
 
           if (msg.type === 'media' && msg.media) {
             const { kind, path, project, source } = msg.media
-            const url = `/api/v1/assets/${project}/${path}`
             return (
               <div key={msg.id} className="flex justify-start">
                 <div className="max-w-[80%] rounded-lg border border-violet-500/20 bg-graphite-400/40 overflow-hidden">
@@ -93,16 +95,13 @@ export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
                     </span>
                     <span className="font-mono text-[10px] text-graphite-200 truncate ml-2">{path}</span>
                   </div>
-                  {kind === 'video' ? (
-                    <video src={url} controls loop muted className="w-full max-h-72" />
-                  ) : (
-                    <img
-                      src={url}
-                      alt={path}
-                      className="w-full max-h-72 object-contain"
-                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-                    />
-                  )}
+                  <MediaWithOverlay
+                    path={path}
+                    project={project}
+                    kind={kind}
+                    onEditPrompt={onEditPrompt}
+                    onRedoNode={onRedoNode}
+                  />
                 </div>
               </div>
             )
@@ -129,7 +128,14 @@ export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
             </div>
           )
         } else {
-          return <ToolCallCard key={item.data.id} toolCall={item.data} />
+          return (
+            <ToolCallCard
+              key={item.data.id}
+              toolCall={item.data}
+              onEditPrompt={onEditPrompt}
+              onRedoNode={onRedoNode}
+            />
+          )
         }
       })}
 

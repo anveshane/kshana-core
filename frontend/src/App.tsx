@@ -14,6 +14,7 @@ import { ProjectSelector } from './components/ProjectSelector'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { NewProjectInline, type NewProjectState } from './components/NewProjectInline'
 import { tryExecuteCommand } from './lib/commands'
+import { PromptEditModal } from './components/PromptEditModal'
 
 export function App() {
   const [state, dispatch] = useReducer(appReducer, initialState)
@@ -27,6 +28,10 @@ export function App() {
   // store the config and wait for user to type description in chat input
   const [pendingProject, setPendingProject] = useState<NewProjectState | null>(null)
   const [pendingAutoTask, setPendingAutoTask] = useState<string | null>(null)
+  // Chat-level edit-prompt modal (opened from MediaWithOverlay on any chat
+  // image/video). Mirrors the Storyboard's prompt-edit flow.
+  const [chatEditNodeId, setChatEditNodeId] = useState<string | null>(null)
+  const [chatEditFrame, setChatEditFrame] = useState<string | null>(null)
 
   // Stable refs for WebSocket callbacks
   const dispatchRef = useRef(dispatch)
@@ -214,7 +219,16 @@ export function App() {
                     )}
                   </button>
                 </div>
-                {state.activeView === 'chat' && <ChatTimeline onSendWs={send} />}
+                {state.activeView === 'chat' && (
+                  <ChatTimeline
+                    onSendWs={send}
+                    onEditPrompt={(nodeId, frame) => {
+                      setChatEditNodeId(nodeId)
+                      setChatEditFrame(frame)
+                    }}
+                    onRedoNode={(nodeId) => send({ type: 'redo_node', data: { nodeId } })}
+                  />
+                )}
                 {state.activeView === 'storyboard' && (
                   <Storyboard
                     onRedoNode={(nodeId: string, frame?: string) =>
@@ -268,6 +282,22 @@ export function App() {
 
             <WorkflowManager open={showWorkflows} onClose={() => setShowWorkflows(false)} />
             <ProviderSettings open={showProviders} onClose={() => setShowProviders(false)} />
+            {chatEditNodeId && state.selectedProject && (
+              <PromptEditModal
+                nodeId={chatEditNodeId}
+                frame={chatEditFrame ?? undefined}
+                projectName={state.selectedProject}
+                onSubmit={(nid, edited) => {
+                  send({ type: 'redo_node', data: { nodeId: nid, editedPrompt: edited } })
+                  setChatEditNodeId(null)
+                  setChatEditFrame(null)
+                }}
+                onCancel={() => {
+                  setChatEditNodeId(null)
+                  setChatEditFrame(null)
+                }}
+              />
+            )}
           </div>
         </ErrorBoundary>
       </AppDispatchContext.Provider>

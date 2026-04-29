@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { MediaWithOverlay } from './MediaWithOverlay'
 import ReactMarkdown from 'react-markdown'
 import type { ToolCall } from '../lib/store'
 import { useAppState } from '../lib/store'
@@ -7,6 +8,8 @@ import { ShotCompositionCard, SceneStateCard } from './ShotCompositionCard'
 
 interface ToolCallCardProps {
   toolCall: ToolCall
+  onEditPrompt?: (nodeId: string, frame: string | null) => void
+  onRedoNode?: (nodeId: string) => void
 }
 
 const TOOL_NAMES: Record<string, string> = {
@@ -560,7 +563,7 @@ function DefaultBody({ args, selectedProject }: { args: Record<string, string>; 
   )
 }
 
-export function ToolCallCard({ toolCall }: ToolCallCardProps) {
+export function ToolCallCard({ toolCall, onEditPrompt, onRedoNode }: ToolCallCardProps) {
   const { selectedProject } = useAppState()
   const { toolName, status, streamingContent, result, args, startTime } = toolCall
   const displayName = TOOL_NAMES[toolName] || toolName.replace(/_/g, ' ')
@@ -728,22 +731,16 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
 
       {/* Media preview — always visible, even when collapsed, so show-* tools
           deliver value at a glance without clicking through to expand. */}
-      {filePath && selectedProject && status === 'completed' && (
+      {filePath && selectedProject && status === 'completed' && (isVideo || isImage) && (
         <div className={`px-3 py-2 ${expanded ? 'border-t border-line-soft' : ''}`}>
-          {isVideo ? (
-            <video
-              src={`/api/v1/assets/${selectedProject}/${filePath}`}
-              controls autoPlay loop muted
-              className="w-full max-h-64 rounded-md"
-            />
-          ) : isImage ? (
-            <img
-              src={`/api/v1/assets/${selectedProject}/${filePath}`}
-              alt="Generated"
-              className="w-full max-h-64 rounded-md object-contain"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-            />
-          ) : null}
+          <MediaWithOverlay
+            path={filePath}
+            project={selectedProject}
+            kind={isVideo ? 'video' : 'image'}
+            maxHeight="max-h-64"
+            onEditPrompt={onEditPrompt}
+            onRedoNode={onRedoNode}
+          />
         </div>
       )}
     </div>
