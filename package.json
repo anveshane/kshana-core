@@ -21,10 +21,10 @@
     "kshana-ink-server": "./dist/server/cli.cjs"
   },
   "scripts": {
-    "start": "NODE_OPTIONS='--max-old-space-size=8192' tsx src/index.ts",
-    "server": "pnpm -C frontend run build && NODE_OPTIONS='--max-old-space-size=8192' tsx src/server/cli.ts",
-    "server:dev": "pnpm -C frontend run build && NODE_OPTIONS='--max-old-space-size=8192' tsx watch src/server/cli.ts",
-    "kill": "pkill -f 'tsx.*src/index.ts' || true; pkill -f 'tsx.*src/server/cli.ts' || true; echo 'All kshana processes killed'",
+    "start": "pnpm -C frontend run build && NODE_OPTIONS='--max-old-space-size=8192' tsx src/server/cli.ts",
+    "dev": "pnpm -C frontend run build && NODE_OPTIONS='--max-old-space-size=8192' tsx watch src/server/cli.ts",
+    "cli": "NODE_OPTIONS='--max-old-space-size=8192' tsx src/index.ts",
+    "kill": "pkill -f 'tsx.*src/server/cli.ts' || true; pkill -f 'tsx.*src/index.ts' || true; echo 'All kshana processes killed'",
     "test:client": "tsx src/server/testClient.ts",
     "reset": "tsx scripts/reset-project.ts",
     "run-to": "tsx scripts/run-to.ts",
