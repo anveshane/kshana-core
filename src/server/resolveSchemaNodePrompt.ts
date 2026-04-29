@@ -39,7 +39,11 @@ export function resolveSchemaNodePrompt(
   const shot: Shot | undefined = findShot(project, sceneNum, shotNum);
   if (!shot) return null;
 
-  const shotFile = `scene-${sceneNum}-shot-${shotNum}.json`;
+  // Two filename conventions live in repo today:
+  //   image  prompts: prompts/images/shots/scene-<N>-shot-<M>.json   (hyphens)
+  //   motion prompts: prompts/motion/scene_<N>_shot_<M>.json         (underscores)
+  const imageShotFile = `scene-${sceneNum}-shot-${shotNum}.json`;
+  const motionShotFile = `scene_${sceneNum}_shot_${shotNum}.json`;
   switch (typeId) {
     case "shot_image_prompt":
     case "shot_image":
@@ -47,21 +51,21 @@ export function resolveSchemaNodePrompt(
         nodeId,
         nodeType: typeId,
         prompt: { imagePrompt: shot.prompt ?? "" },
-        promptFilePath: `prompts/images/shots/${shotFile}`,
+        promptFilePath: `prompts/images/shots/${imageShotFile}`,
       };
     case "shot_motion_directive":
       return {
         nodeId,
         nodeType: typeId,
         prompt: { motionDirective: shot.motionDirective ?? "" },
-        promptFilePath: `prompts/motion/shots/${shotFile}`,
+        promptFilePath: `prompts/motion/${motionShotFile}`,
       };
     case "shot_video":
       return {
         nodeId,
         nodeType: typeId,
         prompt: { motionDirective: shot.motionDirective ?? "" },
-        promptFilePath: `prompts/motion/shots/${shotFile}`,
+        promptFilePath: `prompts/motion/${motionShotFile}`,
         ...(shot.firstFrame?.path ? { firstFramePath: shot.firstFrame.path } : {}),
       };
     default:

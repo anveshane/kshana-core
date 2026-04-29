@@ -95,10 +95,10 @@ describe("resolveSchemaNodePrompt", () => {
     expect(r!.promptFilePath).toBe("prompts/images/shots/scene-2-shot-3.json");
   });
 
-  it("returns the motion-directive file path for shot_motion_directive / shot_video", () => {
+  it("returns the motion-directive file path for shot_motion_directive / shot_video (underscores, no shots/ subfolder)", () => {
     const r1 = resolveSchemaNodePrompt(baseProject, "shot_motion_directive:scene_2_shot_3");
-    expect(r1!.promptFilePath).toBe("prompts/motion/shots/scene-2-shot-3.json");
+    expect(r1!.promptFilePath).toBe("prompts/motion/scene_2_shot_3.json");
     const r2 = resolveSchemaNodePrompt(baseProject, "shot_video:scene_2_shot_3");
-    expect(r2!.promptFilePath).toBe("prompts/motion/shots/scene-2-shot-3.json");
+    expect(r2!.promptFilePath).toBe("prompts/motion/scene_2_shot_3.json");
   });
 });
