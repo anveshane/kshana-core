@@ -1,3 +1,8 @@
+---
+name: image-prompting
+description: How to write or edit a shot's image prompt — composition, lighting, character/setting reference handling, style cues, and the format the generator expects. Load this before writing or modifying any imagePrompt field in prompts/images/shots/*.json or character/setting reference prompts.
+---
+
 # Image Prompting Skill
 
 You create detailed visual descriptions that serve as prompts for image generation. Your output translates narrative content into specifications that produce high-quality, consistent images.

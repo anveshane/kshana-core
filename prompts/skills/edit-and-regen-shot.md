@@ -12,7 +12,20 @@ shot or frame** — not for project-wide stylistic changes (those need
 
 ## Steps
 
-1. **Read the prompt file.** Use the `read` tool on:
+1. **Load the right craft skill BEFORE you write.** A bad prompt is
+   the leading cause of bad regens. Pull in:
+   - **image-prompting** — for any change to `imagePrompt` (rules
+     for composition, "from image N" reference markers, style cues,
+     what the generator needs).
+   - **video-direction** — for any change to `motionDirective`
+     (camera vs subject motion, timing, transition vocabulary).
+
+   These hold the same craft instructions the original generation
+   pipeline used. Without them you'll lose character continuity,
+   break reference markers, or produce prompts the generator
+   misinterprets.
+
+2. **Read the prompt file.** Use the `read` tool on:
    - `prompts/images/shots/scene-<N>-shot-<M>.json` — for image
      prompt changes (first/last/mid frames).
    - `prompts/motion/scene_<N>_shot_<M>.json` — for motion-directive
@@ -22,22 +35,25 @@ shot or frame** — not for project-wide stylistic changes (those need
    - **image prompts**: hyphens, in a `shots/` subfolder
    - **motion prompts**: underscores, no `shots/` subfolder
 
-2. **Modify the right field.** For image prompts, the structure is
+3. **Modify the right field.** For image prompts, the structure is
    ```
    { frames: { first_frame: { imagePrompt, references, ... },
                last_frame:  { imagePrompt, references, ... } } }
    ```
    Edit only `frames.<frame>.imagePrompt`. Keep `references`,
    `generationMode`, and other fields exactly as they are — they
-   pin the visual identity.
+   pin the visual identity. Apply the rules from `image-prompting`:
+   if the existing prompt names a character via "from image 1",
+   the edited prompt MUST keep the same reference and the same
+   image number.
 
    For motion prompts, the file is `{ motionDirective: "..." }`.
-   Replace the string.
+   Replace the string per `video-direction` guidance.
 
-3. **Write the file back** with `write` (or `edit` if it's a small
+4. **Write the file back** with `write` (or `edit` if it's a small
    targeted change). The new JSON must remain valid.
 
-4. **Trigger the regen** with `kshana_regen`:
+5. **Trigger the regen** with `kshana_regen`:
    - `node=shot_image:scene_<N>_shot_<M>` — regenerates the image
      (uses the new prompt; produces fresh first+last frames).
    - `node=shot_video:scene_<N>_shot_<M>` — regenerates the video
