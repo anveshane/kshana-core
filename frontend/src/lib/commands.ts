@@ -18,7 +18,7 @@ export interface CommandContext {
 interface CommandDef {
   description: string
   usage: string
-  handler: (args: string, ctx: CommandContext) => void
+  handler: (args: string, ctx: CommandContext) => void | Promise<void>
 }
 
 /**
@@ -210,35 +210,44 @@ const COMMANDS: Record<string, CommandDef> = {
     },
   },
 
-  select: {
-    description: 'Select a project',
-    usage: '/select [project-name]',
-    handler: (args, ctx) => {
+  project: {
+    description: 'Select a project (with picker)',
+    usage: '/project [project-name]',
+    handler: async (args, ctx) => {
       const name = args.trim()
       if (!name) {
-        // No name given — show a hint to use the dropdown
         ctx.dispatch({
           type: 'ADD_CHAT_MESSAGE',
           message: {
             id: `cmd_${Date.now()}`,
             type: 'system',
-            content: 'Use the project dropdown in the header to select a project, or type `/select <project-name>` with the exact directory name.',
+            content: 'Type `/project ` and start typing a name — a picker will appear. Or use the dropdown in the header.',
             timestamp: Date.now(),
           },
         })
         return
       }
-      ctx.dispatch({ type: 'SELECT_PROJECT', name })
-      ctx.send({ type: 'select_project', data: { projectDir: name } })
+      const { selectProjectByName } = await import('./selectProjectAction.js')
+      const r = await selectProjectByName(name, ctx.dispatch, ctx.send)
       ctx.dispatch({
         type: 'ADD_CHAT_MESSAGE',
         message: {
           id: `cmd_${Date.now()}`,
           type: 'system',
-          content: `Selected project: **${name}**`,
+          content: r.ok
+            ? `Project **${name.replace(/\.kshana$/, '')}** loaded.`
+            : (r.reason || 'Failed to select project'),
           timestamp: Date.now(),
         },
       })
+    },
+  },
+
+  select: {
+    description: 'Alias for /project',
+    usage: '/select [project-name]',
+    handler: async (args, ctx) => {
+      await COMMANDS.project!.handler(args, ctx)
     },
   },
 
