@@ -82,6 +82,8 @@ export interface ConversationEvents {
   onNotification?: (sessionId: string, data: { level: 'info' | 'warning' | 'error'; message: string }) => void;
   /** Agent (or user) focused a project — frontend should treat it as the active project. */
   onProjectFocused?: (sessionId: string, data: { projectName: string; templateId: string; style: string; duration: number; tools: string[] }) => void;
+  /** A long-running tool produced an asset (image / video) — surface it as a standalone chat event. */
+  onMediaGenerated?: (sessionId: string, data: { kind: 'image' | 'video'; project: string; path: string; source: string }) => void;
 }
 
 /**
@@ -215,6 +217,10 @@ export class ConversationManager {
       if (!session.agent) {
         session.agent = new PiSessionAgent({
           focusProject: (name) => this.focusSessionProject(sessionId, name),
+          onMedia: (event) => {
+            const s = this.sessions.get(sessionId);
+            s?.activeEvents?.onMediaGenerated?.(sessionId, event);
+          },
         });
         session.initialized = false;
       }
@@ -248,6 +254,10 @@ export class ConversationManager {
       runInSession(session.sessionContext, () => {
         session.agent = new PiSessionAgent({
           focusProject: (name) => this.focusSessionProject(sessionId, name),
+          onMedia: (event) => {
+            const s = this.sessions.get(sessionId);
+            s?.activeEvents?.onMediaGenerated?.(sessionId, event);
+          },
         });
         session.initialized = false;
       });

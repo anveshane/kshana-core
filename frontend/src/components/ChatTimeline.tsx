@@ -81,6 +81,33 @@ export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
             return <span key={msg.id} />
           }
 
+          if (msg.type === 'media' && msg.media) {
+            const { kind, path, project, source } = msg.media
+            const url = `/api/v1/assets/${project}/${path}`
+            return (
+              <div key={msg.id} className="flex justify-start">
+                <div className="max-w-[80%] rounded-lg border border-violet-500/20 bg-graphite-400/40 overflow-hidden">
+                  <div className="px-3 py-1.5 border-b border-line-soft flex items-center justify-between">
+                    <span className="font-mono text-[10px] text-violet-300 uppercase tracking-wider">
+                      {source ? `${source} · ` : ''}new {kind}
+                    </span>
+                    <span className="font-mono text-[10px] text-graphite-200 truncate ml-2">{path}</span>
+                  </div>
+                  {kind === 'video' ? (
+                    <video src={url} controls loop muted className="w-full max-h-72" />
+                  ) : (
+                    <img
+                      src={url}
+                      alt={path}
+                      className="w-full max-h-72 object-contain"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+                    />
+                  )}
+                </div>
+              </div>
+            )
+          }
+
           return (
             <div key={msg.id} className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div

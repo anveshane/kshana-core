@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { isAbsolute, join } from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
 import { getProjectsDir, REPO_ROOT } from "../paths.js";
+import { createAssetParser, feedChunk, type AssetEvent } from "./parseAssetLines.js";
 
 /**
  * NOTE: Shelling out to `pnpm exec tsx scripts/*.ts` only works in the
@@ -17,6 +18,13 @@ export interface RunScriptOptions {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback<RunScriptDetails>;
   cwd?: string;
+  /**
+   * Called every time a new asset path is observed in stdout
+   * (lines like `→ assets/images/...png`). Lets the caller surface
+   * generated images / videos as standalone events while the script is
+   * still running — distinct from the streaming text that goes to onUpdate.
+   */
+  onAsset?: (event: AssetEvent) => void;
 }
 
 export interface RunScriptDetails {
@@ -34,6 +42,9 @@ export async function runScript(opts: RunScriptOptions): Promise<AgentToolResult
   const tsxBin = join(REPO_ROOT, "node_modules", ".bin", "tsx");
   const fullArgs = [scriptPath, ...args];
   const command = `tsx ${script} ${args.join(" ")}`.trim();
+
+  const { onAsset } = opts;
+  const parserState = createAssetParser();
 
   return await new Promise((resolveP, rejectP) => {
     let stdout = "";
@@ -54,7 +65,11 @@ export async function runScript(opts: RunScriptOptions): Promise<AgentToolResult
     };
 
     child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString("utf8");
+      const text = chunk.toString("utf8");
+      stdout += text;
+      if (onAsset) {
+        for (const ev of feedChunk(parserState, text)) onAsset(ev);
+      }
       emitUpdate();
     });
     child.stderr.on("data", (chunk: Buffer) => {

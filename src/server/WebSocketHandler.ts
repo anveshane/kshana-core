@@ -981,6 +981,17 @@ export class WebSocketHandler {
           projectName: data.projectName,
         }));
       },
+
+      onMediaGenerated: (sid, data) => {
+        // Standalone event for newly-generated assets — frontend renders an
+        // image/video card inline in chat as it arrives, separate from the
+        // long-running tool's collapsed card.
+        this.sendMessage(socket, {
+          type: 'media_generated',
+          sessionId: sid,
+          data,
+        } as never);
+      },
     };
   }
 
