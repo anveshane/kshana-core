@@ -6,7 +6,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { GenericAgentResult } from '../core/agent/index.js';
 import type { LLMClientConfig } from '../core/llm/index.js';
-import { createExecutorAgent } from '../tasks/video/index.js';
 import type { TypedEventEmitter } from '../events/EventEmitter.js';
 import { PiSessionAgent } from '../agent/pi/PiSessionAgent.js';
 import { getProviderRegistry } from '../services/providers/index.js';
@@ -194,22 +193,11 @@ export class ConversationManager {
       getProviderRegistry().setConfig(providerConfig);
     }
 
-    // Create the agent inside the session context so tools see the right project dir.
-    // KSHANA_USE_PI=1 swaps the executor for a pi-coding-agent session that uses our
-    // kshana_* tools as its surface; the executor is then driven through those tools.
+    // Create the pi-coding-agent session inside the session context so tools see
+    // the right project dir. The legacy ExecutorAgent is no longer used at this
+    // layer — it's driven by the kshana_* tools.
     runInSession(session.sessionContext, () => {
-      if (usePiAgent()) {
-        session.agent = new PiSessionAgent();
-      } else {
-        session.agent = createExecutorAgent({
-          templateId,
-          style,
-          duration,
-          llmConfig: this.llmConfig,
-          targetArtifacts: ['final_video'],
-          goalDescription: 'Create a video project',
-        });
-      }
+      session.agent = new PiSessionAgent();
       session.initialized = false;
     });
   }
@@ -868,14 +856,4 @@ export class ConversationManager {
       this.deleteSession(sessionId);
     }
   }
-}
-
-/**
- * Whether the server should run conversations through pi-coding-agent
- * instead of the legacy ExecutorAgent. Defaults off so existing behavior
- * is unchanged; flip on with KSHANA_USE_PI=1.
- */
-function usePiAgent(): boolean {
-  const v = process.env['KSHANA_USE_PI'];
-  return v === '1' || v === 'true';
 }
