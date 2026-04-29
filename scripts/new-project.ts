@@ -41,6 +41,7 @@ interface Args {
   style?: string;
   duration?: number;
   templateId?: string;
+  inputType?: 'idea' | 'story';
 }
 
 function parseArgs(): Args {
@@ -55,6 +56,7 @@ function parseArgs(): Args {
   let style: string | undefined;
   let duration: number | undefined;
   let templateId: string | undefined;
+  let inputType: 'idea' | 'story' | undefined;
 
   for (let i = 1; i < argv.length; i++) {
     const a = argv[i]!;
@@ -84,6 +86,14 @@ function parseArgs(): Args {
         templateId = next;
         i += 1;
         break;
+      case '--type':
+        if (next !== 'idea' && next !== 'story') {
+          console.error(`--type must be 'idea' or 'story', got: ${next ?? '(missing)'}`);
+          printUsageAndExit();
+        }
+        inputType = next;
+        i += 1;
+        break;
       case '--help':
       case '-h':
         printUsageAndExit(0);
@@ -92,7 +102,7 @@ function parseArgs(): Args {
         printUsageAndExit();
     }
   }
-  return { projectName, inputFile, inputText, style, duration, templateId };
+  return { projectName, inputFile, inputText, style, duration, templateId, inputType };
 }
 
 /** Read all of stdin as UTF-8. Returns empty string if stdin is a TTY (no pipe). */
@@ -120,6 +130,8 @@ function printUsageAndExit(code: number = 1): never {
   console.error('');
   console.error('Optional:');
   console.error('  --template, -t <id>   template id (default: narrative)');
+  console.error('  --type <idea|story>   force input type (skip auto-detection).');
+  console.error('                        \'story\' skips plot generation — use when input is a full story.');
   console.error('');
   console.error('Examples:');
   console.error('  pnpm new noir_60s --style live --duration 60 --text "A noir detective..."');
@@ -232,13 +244,21 @@ async function main() {
   console.log(`  Template:   ${args.templateId ?? 'narrative'}`);
   console.log('');
 
-  const project = createProject(
+  let project = createProject(
     inputContent,
     canonicalStyle!,
     basePath,
     args.duration!,
     args.templateId,
   );
+
+  // Force the input type when the user passed --type. This fast-forwards
+  // phases the chosen type skips (story-typed input bypasses plot phase).
+  if (args.inputType && args.inputType !== project.inputType) {
+    const { setProjectInputType } = await import('../src/tasks/video/workflow/ProjectManager.js');
+    const updated = setProjectInputType(args.inputType, basePath);
+    if (updated) project = updated;
+  }
 
   // createProject infers a project dir from content if the active dir
   // wasn't absolute. Make sure project.json lives at the right place —
