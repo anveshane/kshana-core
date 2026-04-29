@@ -927,7 +927,7 @@ export class ConversationManager {
       redoOpts = { scope: 'image_only', frame };
     }
 
-    // Call redoNode on the agent (invalidates + persists + emits todo update)
+    // Legacy ExecutorAgent path: invalidate in-process and resume runTask.
     if ('redoNode' in session.agent) {
       const invalidated = (session.agent as {
         redoNode(id: string, opts?: { frame?: string; scope?: 'prompt' | 'image_only' }): unknown[];
@@ -935,12 +935,87 @@ export class ConversationManager {
       if (invalidated.length === 0) {
         throw new Error(`Node '${redoTargetNodeId}' not found in execution graph`);
       }
-    } else {
-      throw new Error('Agent does not support redo');
+      return this.runTask(sessionId, '', events);
     }
 
-    // Resume execution — reuse runTask flow with empty task (executor picks up invalidated nodes)
-    return this.runTask(sessionId, '', events);
+    // Pi-era fallback: PiSessionAgent has no in-process executor graph,
+    // so spawn scripts/regen-node.ts (same path kshana_regen uses).
+    // Stream stdout through onToolStreaming and surface generated assets
+    // as media_generated events.
+    const projectName = session.sessionContext.projectDir.replace(/\.kshana$/, '');
+    return await this.runRegenSubprocess(sessionId, projectName, redoTargetNodeId, events);
+  }
+
+  private async runRegenSubprocess(
+    sessionId: string,
+    projectName: string,
+    nodeId: string,
+    events?: ConversationEvents,
+  ): Promise<GenericAgentResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+    session.state.status = 'running';
+    session.state.lastActivity = Date.now();
+    session.activeEvents = events;
+
+    const { spawn } = await import('node:child_process');
+    const { join } = await import('node:path');
+    const { createAssetParser, feedChunk } = await import('../agent/pi/tools/parseAssetLines.js');
+    const tsxBin = join(process.cwd(), 'node_modules', '.bin', 'tsx');
+    const scriptPath = join(process.cwd(), 'scripts', 'regen-node.ts');
+
+    const parser = createAssetParser();
+    let stdout = '';
+    let stderr = '';
+    const startedAt = Date.now();
+    const toolCallId = `regen_${startedAt}`;
+
+    events?.onToolCall?.(sessionId, toolCallId, 'kshana_regen', { project: projectName, node: nodeId }, 'kshana');
+
+    return await new Promise<GenericAgentResult>((resolve) => {
+      const child = spawn(tsxBin, [scriptPath, projectName, nodeId], {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      child.stdout.on('data', (chunk: Buffer) => {
+        const text = chunk.toString('utf8');
+        stdout += text;
+        events?.onToolStreaming?.(sessionId, toolCallId, text, false, 'kshana', 'kshana_regen', false);
+        for (const ev of feedChunk(parser, text)) {
+          events?.onMediaGenerated?.(sessionId, {
+            kind: ev.kind,
+            project: projectName,
+            path: ev.path,
+            source: 'kshana_regen',
+          });
+        }
+      });
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+      child.on('error', (err) => {
+        events?.onToolResult?.(sessionId, toolCallId, 'kshana_regen', { error: err.message }, true, 'kshana');
+        session.state.status = 'error';
+        session.activeEvents = undefined;
+        resolve({ status: 'error', output: '', todos: [], error: err.message });
+      });
+      child.on('close', (code) => {
+        const ok = code === 0;
+        events?.onToolResult?.(sessionId, toolCallId, 'kshana_regen', {
+          exit_code: code,
+          stdout: stdout.slice(-500),
+          stderr: stderr.slice(-500),
+        }, !ok, 'kshana');
+        session.state.status = ok ? 'completed' : 'error';
+        session.activeEvents = undefined;
+        resolve({
+          status: ok ? 'completed' : 'error',
+          output: ok ? `Regenerated ${nodeId}` : `regen-node exited ${code}`,
+          todos: [],
+          ...(ok ? {} : { error: `regen-node exited ${code}: ${stderr.slice(-200)}` }),
+        });
+      });
+    });
   }
 
   /**
