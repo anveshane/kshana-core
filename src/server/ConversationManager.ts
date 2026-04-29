@@ -8,6 +8,7 @@ import type { GenericAgentResult } from '../core/agent/index.js';
 import type { LLMClientConfig } from '../core/llm/index.js';
 import type { TypedEventEmitter } from '../events/EventEmitter.js';
 import { PiSessionAgent } from '../agent/pi/PiSessionAgent.js';
+import { applyProjectAnnouncement } from './projectAnnouncement.js';
 import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -516,15 +517,11 @@ export class ConversationManager {
         workflowName,
       });
 
-      // Announce the focused project on the first turn after it changes so
-      // the agent knows which project the user is referring to without
-      // having to ask. Pi remembers this in its conversation context, so we
-      // only inject it when it actually changes.
-      let effectiveTask = task;
-      if (session.focusedProject && session.focusedProject !== session.announcedProject) {
-        effectiveTask = `(Active project: ${session.focusedProject}. Use this project for the user's request unless they specify a different one.)\n\n${task}`;
-        session.announcedProject = session.focusedProject;
-      }
+      // Announce the focused project on the first turn after it changes — pi
+      // remembers it in its conversation context, so we only inject once.
+      const announced = applyProjectAnnouncement(task, session.focusedProject, session.announcedProject);
+      session.announcedProject = announced.announcedProject;
+      const effectiveTask = announced.task;
 
       try {
         const result = await session.agent!.run(effectiveTask);
