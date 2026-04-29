@@ -13,6 +13,7 @@ import {
 import { getModel } from "@mariozechner/pi-ai";
 import type { GenericAgentResult } from "../../core/agent/AgentResult.js";
 import { kshanaTools } from "./tools/index.js";
+import { createFocusProjectTool, type FocusProjectCallback } from "./tools/focusProject.js";
 import { loadOrchestratorPrompt } from "./prompt.js";
 import { ensureDir, getKshanaConfigDir, getProjectsDir } from "./paths.js";
 import { join } from "node:path";
@@ -45,9 +46,17 @@ export class PiSessionAgent extends TypedEventEmitter {
   private readonly tools: ToolDefinition[];
   private readonly systemPrompt: string;
 
-  constructor(opts?: { tools?: ToolDefinition[]; systemPrompt?: string }) {
+  constructor(opts?: {
+    tools?: ToolDefinition[];
+    systemPrompt?: string;
+    /** Callback that lets the agent focus a project as the session's active project. */
+    focusProject?: FocusProjectCallback;
+  }) {
     super();
-    this.tools = opts?.tools ?? kshanaTools;
+    const baseTools = opts?.tools ?? kshanaTools;
+    this.tools = opts?.focusProject
+      ? [...baseTools, createFocusProjectTool(opts.focusProject)]
+      : baseTools;
     this.systemPrompt = opts?.systemPrompt ?? loadOrchestratorPrompt();
   }
 

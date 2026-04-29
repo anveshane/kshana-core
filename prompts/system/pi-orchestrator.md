@@ -29,6 +29,14 @@ X", you pass `"X"` (no extension, no path).
 - **kshana_list_projects()** — list every project in the projects
   directory with title/style/phase. Start here when the user asks
   "what do I have?" or doesn't name a specific project.
+- **kshana_focus_project(project)** — make a project the active one
+  for the session. The UI populates the storyboard / phase / timeline
+  panels for the focused project. Use this when the user picks a
+  project to work on ("let's open X", "switch to Y", "I want to work
+  on Z"). After focusing, you can usually drop the `project` arg
+  from follow-up tool calls if the user keeps the same context — but
+  always pass `project` explicitly when the user asks about a
+  *different* project than the currently focused one.
 - **kshana_status(project)** — quick snapshot of which stages are
   done, in progress, or failed for one project.
 - **kshana_list_items(project, type?, status?, grep?)** — list nodes

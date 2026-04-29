@@ -970,6 +970,17 @@ export class WebSocketHandler {
       onNotification: (sid, data) => {
         this.sendMessage(socket, createServerMessage<NotificationData>('notification', sid, data));
       },
+
+      onProjectFocused: (sid, data) => {
+        // Mirror the post-configure_project status message so the frontend
+        // treats agent-driven focus the same as a manual dropdown selection.
+        this.sendMessage(socket, createServerMessage<StatusData>('status', sid, {
+          status: 'ready',
+          message: `Focused project: ${data.projectName}`,
+          tools: data.tools,
+          projectName: data.projectName,
+        }));
+      },
     };
   }
 

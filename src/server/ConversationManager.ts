@@ -79,6 +79,8 @@ export interface ConversationEvents {
   onTimelineUpdate?: (sessionId: string, data: { timeline: unknown }) => void;
   /** User-facing notification */
   onNotification?: (sessionId: string, data: { level: 'info' | 'warning' | 'error'; message: string }) => void;
+  /** Agent (or user) focused a project — frontend should treat it as the active project. */
+  onProjectFocused?: (sessionId: string, data: { projectName: string; templateId: string; style: string; duration: number; tools: string[] }) => void;
 }
 
 /**
@@ -110,6 +112,10 @@ interface ActiveSession {
   desktopCapabilities?: DesktopSessionCapabilities;
   /** Periodic timer checkpoint interval (flushes elapsedMs to disk) */
   timerCheckpointInterval?: ReturnType<typeof setInterval>;
+  /** Events callbacks for the currently-running task (cleared after runTask). */
+  activeEvents?: ConversationEvents;
+  /** Currently-focused project name (no .kshana suffix), set by kshana_focus_project. */
+  focusedProject?: string;
 }
 
 export class ConversationManager {
@@ -197,7 +203,9 @@ export class ConversationManager {
     // the right project dir. The legacy ExecutorAgent is no longer used at this
     // layer — it's driven by the kshana_* tools.
     runInSession(session.sessionContext, () => {
-      session.agent = new PiSessionAgent();
+      session.agent = new PiSessionAgent({
+        focusProject: (name) => this.focusSessionProject(sessionId, name),
+      });
       session.initialized = false;
     });
   }
@@ -223,7 +231,9 @@ export class ConversationManager {
 
     if (!session.agent) {
       runInSession(session.sessionContext, () => {
-        session.agent = new PiSessionAgent();
+        session.agent = new PiSessionAgent({
+          focusProject: (name) => this.focusSessionProject(sessionId, name),
+        });
         session.initialized = false;
       });
     }
@@ -537,8 +547,83 @@ export class ConversationManager {
         // Clean up event listeners
         session.agent!.removeAllListeners();
         session.abortController = undefined;
+        session.activeEvents = undefined;
       }
     });
+  }
+
+  /**
+   * Focus a project as the active project for this session. Called from the
+   * kshana_focus_project tool so the agent can pick a project from the chat
+   * without the user needing to use the dropdown. Updates the session's
+   * filesystem context, persists the project's stored config, and notifies
+   * the frontend so panels (storyboard / phase / timeline) can populate.
+   */
+  async focusSessionProject(sessionId: string, projectName: string): Promise<{
+    projectName: string;
+    title?: string;
+    style?: string;
+    phase?: string;
+    templateId: string;
+  }> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    const projectDirName = `${projectName}.kshana`;
+    let project: NonNullable<ReturnType<typeof loadProject>>;
+    try {
+      const loaded = loadProject(projectDirName);
+      if (!loaded) {
+        throw new Error(`project.json not found or empty for '${projectName}'`);
+      }
+      project = loaded;
+    } catch (err) {
+      throw new Error(
+        `Project '${projectName}' not found or unreadable. ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    const templateId = project.templateId ?? 'narrative';
+    const style = project.style ?? 'cinematic_realism';
+    const duration = project.targetDuration ?? 60;
+
+    // Refresh the session context to point at the focused project so any
+    // file-system helpers that scope to a project (asset registry, etc.) see
+    // the right cwd. Preserve the existing agent — we don't want to recreate
+    // pi mid-conversation; pi tools already take an explicit project param.
+    if (session.mode === 'remote' && session.remoteFs) {
+      session.sessionContext = createRemoteSession(sessionId, projectDirName, session.remoteFs);
+    } else {
+      session.sessionContext = createLocalSession(sessionId, projectDirName);
+    }
+
+    session.focusedProject = projectName;
+
+    // Persist the configuration so a reconnect resumes on this project.
+    try {
+      this.persistProjectConfiguration(sessionId, { templateId, style, duration });
+    } catch {
+      /* persisting is best-effort — non-fatal if storage is unavailable */
+    }
+
+    const tools = session.agent?.getToolNames() ?? [];
+    session.activeEvents?.onProjectFocused?.(sessionId, {
+      projectName,
+      templateId,
+      style,
+      duration,
+      tools,
+    });
+
+    return {
+      projectName,
+      title: project.title,
+      style: project.style,
+      phase: project.currentPhase,
+      templateId,
+    };
   }
 
   /**
@@ -591,6 +676,7 @@ export class ConversationManager {
 
       // Set up event listeners
       this.setupEventListeners(sessionId, session.agent!, events);
+      session.activeEvents = events;
 
       // Start active timer + periodic checkpoint
       try { startTimer(); } catch { /* ignore */ }
@@ -627,6 +713,7 @@ export class ConversationManager {
         // Clean up event listeners
         session.agent!.removeAllListeners();
         session.abortController = undefined;
+        session.activeEvents = undefined;
       }
     });
   }
