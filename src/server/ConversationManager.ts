@@ -116,6 +116,8 @@ interface ActiveSession {
   activeEvents?: ConversationEvents;
   /** Currently-focused project name (no .kshana suffix), set by kshana_focus_project. */
   focusedProject?: string;
+  /** Last focused project we announced to the agent (for change detection in runTask). */
+  announcedProject?: string;
 }
 
 export class ConversationManager {
@@ -202,12 +204,24 @@ export class ConversationManager {
     // Create the pi-coding-agent session inside the session context so tools see
     // the right project dir. The legacy ExecutorAgent is no longer used at this
     // layer — it's driven by the kshana_* tools.
+    //
+    // Idempotent on the agent: pi sessions hold the user's chat history, so
+    // we MUST NOT recreate the agent when the user selects a different
+    // project mid-conversation. Only the SessionContext (filesystem scope)
+    // and the focusedProject marker change. The agent picks up the new
+    // project via runTask's prepended "Active project" announcement.
     runInSession(session.sessionContext, () => {
-      session.agent = new PiSessionAgent({
-        focusProject: (name) => this.focusSessionProject(sessionId, name),
-      });
-      session.initialized = false;
+      if (!session.agent) {
+        session.agent = new PiSessionAgent({
+          focusProject: (name) => this.focusSessionProject(sessionId, name),
+        });
+        session.initialized = false;
+      }
     });
+
+    if (projectDirName) {
+      session.focusedProject = projectDirName.replace(/\.kshana$/, '');
+    }
   }
 
   /**
@@ -502,8 +516,18 @@ export class ConversationManager {
         workflowName,
       });
 
+      // Announce the focused project on the first turn after it changes so
+      // the agent knows which project the user is referring to without
+      // having to ask. Pi remembers this in its conversation context, so we
+      // only inject it when it actually changes.
+      let effectiveTask = task;
+      if (session.focusedProject && session.focusedProject !== session.announcedProject) {
+        effectiveTask = `(Active project: ${session.focusedProject}. Use this project for the user's request unless they specify a different one.)\n\n${task}`;
+        session.announcedProject = session.focusedProject;
+      }
+
       try {
-        const result = await session.agent!.run(task);
+        const result = await session.agent!.run(effectiveTask);
 
         // Stop active timer + checkpoint interval
         if (session.timerCheckpointInterval) { clearInterval(session.timerCheckpointInterval); session.timerCheckpointInterval = undefined; }
@@ -600,6 +624,9 @@ export class ConversationManager {
     }
 
     session.focusedProject = projectName;
+    // Agent invoked this directly via the kshana_focus_project tool, so it
+    // already sees the focus in its tool result — skip the runTask prepend.
+    session.announcedProject = projectName;
 
     // Persist the configuration so a reconnect resumes on this project.
     try {
