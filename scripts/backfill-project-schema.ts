@@ -11,13 +11,31 @@
 import { readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { backfillProjectSchema } from "../src/core/project/backfillProjectSchema.js";
+import { backfillFromDisk } from "../src/core/project/backfillFromDisk.js";
+import { verifyShotPaths } from "../src/core/project/verifyShotPaths.js";
 
 function backfillOne(projectName: string): void {
   const dirName = projectName.endsWith(".kshana") ? projectName : `${projectName}.kshana`;
   const dir = resolve(dirName);
-  const result = backfillProjectSchema(dir);
+  // Phase A: walk manifest + executorState (cheap, gives history-aware
+  // metadata when present).
+  const m = backfillProjectSchema(dir);
+  // Phase B: disk authoritative scan — overwrites stale paths the manifest
+  // carried over from rename/cleanup runs and recovers shots whose only
+  // manifest entries point at content-hash files that no longer exist.
+  const d = backfillFromDisk(dir);
+  // Phase C: drop slots whose paths point at missing files (legacy
+  // hash-only entries the disk scan can't recover, etc.). Archived to
+  // shot.history with reason: 'missing_file'.
+  const v = verifyShotPaths(dir);
   console.log(
-    `[${projectName}] scenes+${result.scenesAdded}, shots+${result.shotsAdded}, frames+${result.framesAdded}, videos+${result.videosAdded}, finalVideo=${result.finalVideoSet}`,
+    `[${projectName}] manifest: scenes+${m.scenesAdded}, shots+${m.shotsAdded}, frames+${m.framesAdded}, videos+${m.videosAdded}, finalVideo=${m.finalVideoSet}`,
+  );
+  console.log(
+    `[${projectName}] disk:     frames+${d.framesAdded}, videos+${d.videosAdded}, finalVideo=${d.finalVideoSet}`,
+  );
+  console.log(
+    `[${projectName}] verify:   dropped=${v.dropped}`,
   );
 }
 
