@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { inferShotFromPath } from '../lib/inferShotFromPath'
 
 interface Props {
   /** Path relative to <project>.kshana/. URL is built as /api/v1/assets/<project>/<path>. */
@@ -13,36 +14,6 @@ interface Props {
   onRedoNode?: (nodeId: string) => void
   /** Optional max-height override; default 18rem (~288px). */
   maxHeight?: string
-}
-
-/**
- * The shot+frame embedded in a kshana-style filename:
- *   s<N>shot<M>_(first|last|mid)_frame_<provider>_<id>.png
- *   s<N>shot<M>_<provider>_<id>.mp4    (videos)
- * Returns null for paths that don't match (orphan/legacy entries) — overlay
- * still shows fullscreen but hides edit/redo since there's no node to operate on.
- */
-function inferShotFromPath(path: string): { scene: number; shot: number; frame: 'first_frame' | 'last_frame' | 'mid_frame' | null; isVideo: boolean } | null {
-  const file = path.split('/').pop() ?? path
-  let m = /^s(\d+)shot(\d+)_(first_frame|last_frame|mid_frame)_/.exec(file)
-  if (m) {
-    return {
-      scene: parseInt(m[1]!, 10),
-      shot: parseInt(m[2]!, 10),
-      frame: m[3] as 'first_frame' | 'last_frame' | 'mid_frame',
-      isVideo: false,
-    }
-  }
-  m = /^s(\d+)shot(\d+)_/.exec(file)
-  if (m && /\.(mp4|webm|mov)$/i.test(file)) {
-    return {
-      scene: parseInt(m[1]!, 10),
-      shot: parseInt(m[2]!, 10),
-      frame: null,
-      isVideo: true,
-    }
-  }
-  return null
 }
 
 export function MediaWithOverlay({ path, project, kind, onEditPrompt, onRedoNode, maxHeight = 'max-h-72' }: Props) {
