@@ -84,4 +84,21 @@ describe("resolveSchemaNodePrompt", () => {
     expect(r).not.toBeNull();
     expect((r!.prompt as { imagePrompt: string }).imagePrompt).toBe("");
   });
+
+  it("returns the deterministic on-disk prompt-file path for shot_image_prompt nodes", () => {
+    const r = resolveSchemaNodePrompt(baseProject, "shot_image_prompt:scene_2_shot_3");
+    expect(r!.promptFilePath).toBe("prompts/images/shots/scene-2-shot-3.json");
+  });
+
+  it("returns the same prompt-file path for shot_image (mirrors the prompt node)", () => {
+    const r = resolveSchemaNodePrompt(baseProject, "shot_image:scene_2_shot_3");
+    expect(r!.promptFilePath).toBe("prompts/images/shots/scene-2-shot-3.json");
+  });
+
+  it("returns the motion-directive file path for shot_motion_directive / shot_video", () => {
+    const r1 = resolveSchemaNodePrompt(baseProject, "shot_motion_directive:scene_2_shot_3");
+    expect(r1!.promptFilePath).toBe("prompts/motion/shots/scene-2-shot-3.json");
+    const r2 = resolveSchemaNodePrompt(baseProject, "shot_video:scene_2_shot_3");
+    expect(r2!.promptFilePath).toBe("prompts/motion/shots/scene-2-shot-3.json");
+  });
 });

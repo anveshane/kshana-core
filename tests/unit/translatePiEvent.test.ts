@@ -156,7 +156,7 @@ describe("translatePiEvent — assistant streaming", () => {
     expect(r.events).toEqual([]);
   });
 
-  it("emits streaming_text(done) carrying the full text on message_end (so frontend shows the bubble, not an empty one)", () => {
+  it("emits exactly one streaming_text(done) on message_end — never both streaming_text and agent_text (server's onAgentText would double-fire stream_chunk)", () => {
     const r = translatePiEvent(
       {
         type: "message_end",
@@ -166,7 +166,6 @@ describe("translatePiEvent — assistant streaming", () => {
     );
     expect(r.events).toEqual([
       { type: "streaming_text", chunk: "Done.", done: true },
-      { type: "agent_text", text: "Done.", isFinal: true },
     ]);
     expect(r.context.finalAssistantText).toBe("Done.");
   });

@@ -111,14 +111,12 @@ export function translatePiEvent(
     case "message_end": {
       const text = extractAssistantText(event.message);
       if (!text) return { events: [], context: ctx };
-      // Frontend's stream_chunk handler uses `chunk` as the bubble's
-      // content when done:true (it doesn't read the streamingText
-      // accumulator). Send the full text here so the bubble renders.
+      // Emit ONLY streaming_text(done:true) — not also agent_text. The
+      // server's onAgentText handler converts agent_text into another
+      // stream_chunk(done:true), which would double-fire and duplicate
+      // the bubble in chat. streaming_text alone covers the rendering.
       return {
-        events: [
-          { type: "streaming_text", chunk: text, done: true },
-          { type: "agent_text", text, isFinal: true },
-        ],
+        events: [{ type: "streaming_text", chunk: text, done: true }],
         context: { ...ctx, finalAssistantText: text },
       };
     }

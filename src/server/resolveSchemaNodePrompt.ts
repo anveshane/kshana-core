@@ -15,6 +15,13 @@ export interface SchemaNodePromptResponse {
   prompt: Record<string, unknown>;
   /** Path relative to <project>.kshana/, for shot_video preview. Caller turns this into a URL. */
   firstFramePath?: string;
+  /**
+   * Deterministic on-disk prompt-file path the caller should try to read.
+   * If present and the file exists, its contents (parsed JSON) supersede
+   * the synthesized `prompt` field — that gives us the original
+   * frames/references structure the Edit modal expects.
+   */
+  promptFilePath?: string;
 }
 
 const SHOT_NODE_RE = /^(shot_image_prompt|shot_motion_directive|shot_image|shot_video):scene_(\d+)_shot_(\d+)$/;
@@ -32,6 +39,7 @@ export function resolveSchemaNodePrompt(
   const shot: Shot | undefined = findShot(project, sceneNum, shotNum);
   if (!shot) return null;
 
+  const shotFile = `scene-${sceneNum}-shot-${shotNum}.json`;
   switch (typeId) {
     case "shot_image_prompt":
     case "shot_image":
@@ -39,18 +47,21 @@ export function resolveSchemaNodePrompt(
         nodeId,
         nodeType: typeId,
         prompt: { imagePrompt: shot.prompt ?? "" },
+        promptFilePath: `prompts/images/shots/${shotFile}`,
       };
     case "shot_motion_directive":
       return {
         nodeId,
         nodeType: typeId,
         prompt: { motionDirective: shot.motionDirective ?? "" },
+        promptFilePath: `prompts/motion/shots/${shotFile}`,
       };
     case "shot_video":
       return {
         nodeId,
         nodeType: typeId,
         prompt: { motionDirective: shot.motionDirective ?? "" },
+        promptFilePath: `prompts/motion/shots/${shotFile}`,
         ...(shot.firstFrame?.path ? { firstFramePath: shot.firstFrame.path } : {}),
       };
     default:
