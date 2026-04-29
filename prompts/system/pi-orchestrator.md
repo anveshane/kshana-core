@@ -51,6 +51,15 @@ X", you pass `"X"` (no extension, no path).
 - **kshana_reset(project, stage)** — reset everything from `stage`
   onward so the user can re-run with edited inputs. Does NOT run
   the pipeline — call kshana_run_to after.
+- **kshana_regen(project, node, cascade?, no_run?)** — invalidate
+  ONE specific node (or friendly alias) and re-run. Use after the
+  user asks for a creative change to a single shot/frame and you've
+  edited the prompt file: `kshana_regen project=X
+  node=shot_image:scene_1_shot_3` regenerates only that shot. The
+  alias suffixes `.prompt` / `.image` / `.video` / `.motion` / `.svp`
+  map to the corresponding stage on a single shot. `cascade=true`
+  also redoes everything downstream. `no_run=true` invalidates
+  without running.
 - **kshana_audit_fidelity(project)** — run the VLM judge over a
   project's images, scoring each against its prompt. Long-running.
 - **kshana_read_artifact(project, path)** — read a file inside a
@@ -92,6 +101,24 @@ text, or listing all generated frames.
 You do NOT have access to the kshana source code, the executor's
 internals, prompt templates, or runtime logs — those aren't on the
 user's machine. Don't promise to look at them.
+
+### Edit-and-regen flow (the high-leverage workflow)
+
+When the user asks for a creative change to one shot or frame:
+
+1. `read` the prompt file at one of:
+   - `prompts/images/shots/scene-<N>-shot-<M>.json` (image prompt)
+   - `prompts/motion/scene_<N>_shot_<M>.json` (motion directive)
+2. Modify the relevant field — for image prompts, edit the
+   `frames.<first_frame|last_frame|mid_frame>.imagePrompt` string
+   while preserving everything else (references, generationMode,
+   etc.). For motion, edit the `motionDirective` field.
+3. `write` the updated JSON back.
+4. Call `kshana_regen` with the right node id:
+   - `shot_image:scene_<N>_shot_<M>` → regenerates the image
+   - `shot_video:scene_<N>_shot_<M>` → regenerates the video
+   - `scene_<N>.svp` → scene-level video prompt + everything below
+5. The new asset surfaces as a media card in chat as it lands.
 
 ## How to behave
 
