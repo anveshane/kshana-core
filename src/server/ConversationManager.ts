@@ -505,6 +505,10 @@ export class ConversationManager {
 
       // Set up event listeners
       this.setupEventListeners(sessionId, session.agent!, events);
+      // Stash events on the session so non-agent-emitter callbacks
+      // (e.g. PiSessionAgent's onMedia closure firing onMediaGenerated)
+      // can reach the WS bridge while the run is in flight.
+      session.activeEvents = events;
 
       // Start active timer + periodic checkpoint
       try { startTimer(); } catch { /* ignore if no project yet */ }
