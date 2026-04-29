@@ -205,6 +205,8 @@ export interface ArtifactContext {
   settingName?: string;
   /** Whether this is an image or video artifact */
   artifactType: 'image' | 'video';
+  /** Frame slot for shot images. Carried so the async polling handler can populate the project.json scenes tree. */
+  frameId?: 'first_frame' | 'last_frame' | 'mid_frame';
 }
 
 /**
@@ -382,7 +384,19 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
   } else if (image_type === 'setting_ref' && setting_name) {
     context = { entityType: 'setting', settingName: setting_name, artifactType: 'image' };
   } else {
-    context = { entityType: 'scene', sceneNumber: scene_number, artifactType: 'image' };
+    const frameId =
+      params.frame_id === 'first_frame' ||
+      params.frame_id === 'last_frame' ||
+      params.frame_id === 'mid_frame'
+        ? (params.frame_id as 'first_frame' | 'last_frame' | 'mid_frame')
+        : undefined;
+    context = {
+      entityType: 'scene',
+      sceneNumber: scene_number,
+      ...(shot_number !== undefined ? { shotNumber: shot_number } : {}),
+      artifactType: 'image',
+      ...(frameId ? { frameId } : {}),
+    };
   }
 
   // Create job for tracking
@@ -551,6 +565,25 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
     else if (context.entityType === 'setting') assetType = 'setting_ref';
 
     try {
+      const nodeId = (() => {
+        if (assetType === 'scene_image' && scene_number !== undefined && shot_number !== undefined) {
+          return `shot_image:scene_${scene_number}_shot_${shot_number}`;
+        }
+        if (assetType === 'character_ref' && character_name) {
+          return `character_image:${character_name.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }
+        if (assetType === 'setting_ref' && setting_name) {
+          return `setting_image:${setting_name.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }
+        return undefined;
+      })();
+      const frame =
+        assetType === 'scene_image' &&
+        (params.frame_id === 'first_frame' ||
+          params.frame_id === 'last_frame' ||
+          params.frame_id === 'mid_frame')
+          ? (params.frame_id as 'first_frame' | 'last_frame' | 'mid_frame')
+          : undefined;
       addAsset({
         id: artifactId,
         type: assetType,
@@ -558,6 +591,8 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
         scene_number: assetType === 'scene_image' ? scene_number : undefined,
         version: 1,
         createdAt: Date.now(),
+        ...(nodeId ? { nodeId } : {}),
+        ...(frame ? { frame } : {}),
         metadata: buildPlacementMetadata(
           assetType === 'scene_image' ? scene_number : undefined,
           assetType === 'scene_image' ? shot_number : undefined,
@@ -763,6 +798,23 @@ async function waitForComfyUIJob(
 
     // Store artifact in project manifest
     try {
+      const ctx = job.context;
+      const nodeId = (() => {
+        if (assetType === 'scene_image' && ctx?.entityType === 'scene' && ctx.sceneNumber !== undefined && ctx.shotNumber !== undefined) {
+          return `shot_image:scene_${ctx.sceneNumber}_shot_${ctx.shotNumber}`;
+        }
+        if (assetType === 'scene_video' && ctx?.entityType === 'scene' && ctx.sceneNumber !== undefined && ctx.shotNumber !== undefined) {
+          return `shot_video:scene_${ctx.sceneNumber}_shot_${ctx.shotNumber}`;
+        }
+        if (assetType === 'character_ref' && ctx?.characterName) {
+          return `character_image:${ctx.characterName.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }
+        if (assetType === 'setting_ref' && ctx?.settingName) {
+          return `setting_image:${ctx.settingName.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }
+        return undefined;
+      })();
+      const frame = assetType === 'scene_image' ? ctx?.frameId : undefined;
       addAsset({
         id: artifactId,
         type: assetType,
@@ -771,6 +823,8 @@ async function waitForComfyUIJob(
           job.context?.entityType === 'scene' ? job.context.sceneNumber : undefined,
         version: 1,
         createdAt: Date.now(),
+        ...(nodeId ? { nodeId } : {}),
+        ...(frame ? { frame } : {}),
         metadata: buildPlacementMetadata(
           job.context?.entityType === 'scene' ? job.context.sceneNumber : undefined,
           job.context?.entityType === 'scene' ? job.context.shotNumber : undefined,
@@ -1950,6 +2004,7 @@ This tool blocks until video generation is complete and returns the result direc
           scene_number: sceneNumber,
           version: 1,
           createdAt: Date.now(),
+          nodeId: `shot_video:scene_${sceneNumber}_shot_${shotNumber}`,
           metadata: buildPlacementMetadata(sceneNumber, shotNumber, {
             jobId,
             provider: provider.id,
