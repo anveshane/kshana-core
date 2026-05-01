@@ -140,27 +140,10 @@ function printUsageAndExit(code: number = 1): never {
   process.exit(code);
 }
 
-/**
- * Normalize friendly style aliases to the canonical engine values.
- *  live / live_action / realism / realistic / cinematic / cinematic_realism → cinematic_realism
- *  anime / animation / animated / cartoon → anime
- *
- * Returns null for unknown values; caller prints usage and exits.
- */
-export function resolveStyle(input: string): string | null {
-  const lower = input.toLowerCase().trim();
-  const liveAction = new Set([
-    'live', 'live-action', 'live_action', 'liveaction',
-    'realism', 'realistic', 'cinematic', 'cinematic_realism',
-    'photorealistic', 'real',
-  ]);
-  const animation = new Set([
-    'anime', 'animation', 'animated', 'cartoon', '2d', 'illustrated',
-  ]);
-  if (liveAction.has(lower)) return 'cinematic_realism';
-  if (animation.has(lower)) return 'anime';
-  return null;
-}
+// resolveStyle lives in ./styleAlias so unit tests can import it without
+// triggering this script's CLI entry point (main() runs at import time).
+import { resolveStyle } from './styleAlias.js';
+export { resolveStyle };
 
 async function main() {
   const args = parseArgs();

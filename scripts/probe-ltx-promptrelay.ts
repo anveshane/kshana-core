@@ -33,6 +33,8 @@ import { join, resolve } from 'path';
 import { ComfyUIClient } from '../src/services/comfyui/ComfyUIClient.js';
 import { parameterizeGeneric } from '../src/services/comfyui/WorkflowLoader.js';
 import { expandPromptRelayWorkflow } from '../src/services/providers/promptRelayWorkflowExpander.js';
+import { stripSpeechVerbs } from '../src/services/providers/stripSpeechVerbs.js';
+import { buildPromptRelayGlobalPrompt } from '../src/services/providers/promptRelayGlobalPrompt.js';
 
 // ── Force local mode for this probe ──────────────────────────────────
 // The workflow references locally-downloaded LTX 2.3 models / VAE / Gemma
@@ -155,29 +157,32 @@ function readMotion(s: number, shot: number): string {
 // audio track. The relay's job is to keep the *character + style*
 // stable across segments, so we feed it identity + style tokens and
 // nothing narrative.
-function readCharacterIdentity(): string {
-  // Distill the project's main character file into a short visual
-  // descriptor. We grab the "Physical Description" body and add the
-  // project style. If the file isn't there, fall back to a generic
-  // anime + medieval anchor.
-  const candidates = ['elara.md', 'protagonist.md', 'the_woman.md', 'woman.md'];
-  for (const f of candidates) {
-    const p = join(projectRoot, 'characters', f);
-    if (!existsSync(p)) continue;
-    const md = readFileSync(p, 'utf-8');
-    const m = md.match(/###\s*Physical Description\s*\n([\s\S]+?)(?:\n###|\n---|$)/i);
-    if (m) {
-      // Compress: strip newlines, cap at ~500 chars (LTX prompts get
-      // diminishing returns past that and Gemma tokenization eats budget).
-      const body = m[1].replace(/\s+/g, ' ').trim();
-      return body.length > 500 ? body.slice(0, 497) + '...' : body;
-    }
-  }
-  return '';
+// Read prompts/scene_summaries.json["scene_<N>"] if available.
+function readSceneSummary(s: number): string {
+  const p = join(projectRoot, 'prompts/scene_summaries.json');
+  if (!existsSync(p)) return '';
+  try {
+    const d = JSON.parse(readFileSync(p, 'utf-8')) as Record<string, string>;
+    return d[`scene_${s}`] ?? '';
+  } catch { return ''; }
 }
 
 const firstFrames = shotNumbers.map(n => pickFirstFrame(scene, n));
-const localPrompts = shotNumbers.map(n => readMotion(scene, n));
+const rawLocalPrompts = shotNumbers.map(n => readMotion(scene, n));
+// Strip speech-verb clauses from each local_prompt so LTX 2.3's audio
+// head doesn't fire on words like "speaking"/"calls out"/"whispers".
+// `--keep-speech` env flag bypasses for A/B comparison.
+const stripSpeech = !process.env['KEEP_SPEECH'];
+const localPrompts = stripSpeech ? rawLocalPrompts.map(p => stripSpeechVerbs(p)) : rawLocalPrompts;
+if (stripSpeech) {
+  console.log('Speech-verb strip: ENABLED (set KEEP_SPEECH=1 to disable for A/B)');
+  for (let i = 0; i < shotNumbers.length; i++) {
+    if (rawLocalPrompts[i] !== localPrompts[i]) {
+      console.log(`  s${scene}shot${shotNumbers[i]} BEFORE: ${rawLocalPrompts[i].slice(0, 120)}...`);
+      console.log(`  s${scene}shot${shotNumbers[i]} AFTER:  ${localPrompts[i].slice(0, 120)}...`);
+    }
+  }
+}
 
 // Read the project's declared style (e.g. "anime") for the visual prefix.
 const projectStyle = (() => {
@@ -187,11 +192,15 @@ const projectStyle = (() => {
   } catch { return 'cinematic'; }
 })();
 
-const characterIdentity = readCharacterIdentity();
-const globalPrompt = [
-  `${projectStyle} style, cinematic continuity across shots, consistent character identity and lighting.`,
-  characterIdentity ? `Consistent character: ${characterIdentity}` : '',
-].filter(Boolean).join(' ').trim();
+// Global prompt = style + scene summary only. Character descriptions
+// are intentionally excluded — they didn't help in earlier probes and
+// added Gemma token pressure without changing identity stability.
+const sceneSummary = readSceneSummary(scene);
+const globalPrompt = buildPromptRelayGlobalPrompt({
+  style: projectStyle,
+  characters: [],
+  sceneDescription: sceneSummary,
+});
 
 // Override the workflow's baked-in negative prompt with one that also
 // suppresses generated speech/narration. LTX-2.3 produces audio along

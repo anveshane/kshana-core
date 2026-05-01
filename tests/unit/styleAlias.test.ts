@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveStyle } from '../../scripts/new-project.js';
+import { resolveStyle } from '../../scripts/styleAlias.js';
 
 describe('resolveStyle — friendly aliases for pnpm new --style', () => {
   it('canonicalizes live-action aliases to cinematic_realism', () => {

@@ -60,12 +60,22 @@ for (const r of orderedRefs) {
   console.log(`  ${r.refId} → ${u.name}`);
 }
 
-// `LORA_VARIANT` env: 'consistency' (default) or 'detail'.
-// Lets us swap which Klein LoRA is in the sampling path for the same shot.
+// `LORA_VARIANT` env: 'consistency' (default), 'detail', or 'off'.
+// 'off' uses the base flux2_klein_edit_cloud workflow (no LoRA at all) so
+// you can A/B against either LoRA at the same seed.
 const variant = (process.env['LORA_VARIANT'] ?? 'consistency').toLowerCase();
-const variantSlug = variant === 'detail' ? 'detail' : 'consistency';
-const workflowPath = resolve(process.cwd(), `workflows/cloud/flux2_klein_edit_${variantSlug}_cloud.json`);
-const manifestPath = resolve(process.cwd(), `workflows/cloud/flux2_klein_edit_${variantSlug}_cloud.manifest.json`);
+const variantSlug =
+  variant === 'detail' ? 'detail' :
+  variant === 'off' || variant === 'baseline' ? 'baseline' :
+  'consistency';
+const workflowFile = variantSlug === 'baseline'
+  ? 'flux2_klein_edit_cloud.json'
+  : `flux2_klein_edit_${variantSlug}_cloud.json`;
+const manifestFile = variantSlug === 'baseline'
+  ? 'flux2_klein_edit_cloud.manifest.json'
+  : `flux2_klein_edit_${variantSlug}_cloud.manifest.json`;
+const workflowPath = resolve(process.cwd(), `workflows/cloud/${workflowFile}`);
+const manifestPath = resolve(process.cwd(), `workflows/cloud/${manifestFile}`);
 console.log(`LoRA variant: ${variantSlug}`);
 const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
 const template = JSON.parse(readFileSync(workflowPath, 'utf-8'));
