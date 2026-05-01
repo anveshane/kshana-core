@@ -62,6 +62,37 @@ describe('TEMPLATE_DEPS', () => {
       expect.arrayContaining(['object', 'world_style'])
     );
   });
+
+  it('story_essence is its own typeId, depends on story only', () => {
+    // story_essence is a small focused artifact: read story → emit
+    // editorial-intent JSON. Used downstream by hierarchical extraction
+    // and scene prose to tune their prompts to the story's genre/tone.
+    expect(TEMPLATE_DEPS.story_essence).toBeDefined();
+    expect(TEMPLATE_DEPS.story_essence).toEqual(['story']);
+  });
+
+  it('character / setting / scene depend on story_essence so it runs first', () => {
+    // Adding story_essence to the dep tree means the executor runs it
+    // BEFORE the hierarchical extractor fires (during character/setting/scene
+    // expansion via Strategy C). The extractor reads prompts/story_essence.json
+    // and tunes its prompts accordingly.
+    expect(TEMPLATE_DEPS.character).toContain('story_essence');
+    expect(TEMPLATE_DEPS.setting).toContain('story_essence');
+    expect(TEMPLATE_DEPS.scene).toContain('story_essence');
+  });
+});
+
+describe('STAGE_ALIASES — story_essence', () => {
+  it('story_essence is registered as a single-type stage', () => {
+    // Lets users run `pnpm run-to <project> story_essence` to stop at
+    // essence detection, inspect prompts/story_essence.json, edit if
+    // needed, then continue with `pnpm run-to <project> scene`.
+    expect(STAGE_ALIASES.story_essence).toEqual(['story_essence']);
+  });
+
+  it('VALID_STAGES includes story_essence', () => {
+    expect(VALID_STAGES).toContain('story_essence');
+  });
 });
 
 describe('VALID_STAGES', () => {

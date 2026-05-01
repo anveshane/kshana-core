@@ -30,6 +30,7 @@ interface CommandDef {
 const STAGES: readonly string[] = [
   'plot',
   'story',
+  'story_essence',
   'characters',
   'character',
   'setting',

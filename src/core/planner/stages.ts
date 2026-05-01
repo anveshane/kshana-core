@@ -28,6 +28,7 @@
 export const STAGE_ALIASES: Record<string, string[]> = {
   plot: ['plot'],
   story: ['story'],
+  story_essence: ['story_essence'],         // editorial-intent JSON (genre / throughline / tonal notes)
   characters: ['character', 'setting'],     // both character + setting (siblings)
   character: ['character'],
   setting: ['setting'],
@@ -54,9 +55,10 @@ export const STAGE_ALIASES: Record<string, string[]> = {
 export const TEMPLATE_DEPS: Record<string, string[]> = {
   plot: [],
   story: ['plot'],
-  character: ['story'],
-  setting: ['story'],
-  scene: ['story', 'character', 'setting'],
+  story_essence: ['story'],
+  character: ['story', 'story_essence'],
+  setting: ['story', 'story_essence'],
+  scene: ['story', 'character', 'setting', 'story_essence'],
   world_style: ['story', 'scene', 'setting'],
   object: ['story'],
   character_image: ['character', 'world_style'],

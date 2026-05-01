@@ -6,7 +6,13 @@ import {
   checkDurationBand,
   parseBeatExtraction,
   parseSceneAssignments,
-  runDurationFirstExtraction,
+  // Tests in this file specifically exercise the legacy single-call
+  // flow (extractBeats → clusterBeatsIntoScenes → coverage / sprawling
+  // repair) and count LLM calls. Use the legacy entry point directly
+  // — `runDurationFirstExtraction` now tries the hierarchical path
+  // first, which would add an extra (failing-then-falling-back) call
+  // and break call-count assertions.
+  runLegacyDurationFirst as runDurationFirstExtraction,
   type Beat,
 } from '../../src/core/planner/durationFirstExtractor.js';
 

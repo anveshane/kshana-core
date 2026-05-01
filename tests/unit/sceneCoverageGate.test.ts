@@ -78,6 +78,16 @@ const STORY_NODE: ExecutionNode = {
 // empty beats list) so they exercise the legacy structural+audit fallback —
 // which is what these tests were originally written for and which still
 // matters as a regression net.
+//
+// As of the hierarchical refactor, runDurationFirstExtraction now tries
+// the hierarchical extractor (Stage A scene summaries → Stage B per-scene
+// beats) BEFORE the legacy single-call flow. To force the legacy path,
+// the scripted mocks below begin with a Stage A response that returns
+// malformed JSON — the hierarchical extractor throws, the cascade falls
+// through to legacy duration-first, which then returns EMPTY_BEATS,
+// which finally falls through to the legacy structural extractor we
+// actually want to test.
+const HIERARCHICAL_FAIL = '{not valid json';
 const EMPTY_BEATS = JSON.stringify({ beats: [], characters: [], settings: [], objects: [] });
 
 describe('extractFromStory legacy fallback — structural prompt + coverage gate', () => {
@@ -96,6 +106,7 @@ describe('extractFromStory legacy fallback — structural prompt + coverage gate
     const cleanAudit = JSON.stringify({ dropped: [], duplicated: [] });
 
     const { llm, callLog } = makeMockLLM([
+      { systemContains: 'SCENE-SUMMARY-EXTRACTOR-V1', response: HIERARCHICAL_FAIL }, // force hierarchical fallback
       { systemContains: 'extract a complete beat list', response: EMPTY_BEATS }, // force legacy fallback
       { systemContains: 'story-aware scene extraction tool', response: goodScenes },
       { systemContains: 'audit scene summaries', response: cleanAudit },
@@ -104,7 +115,7 @@ describe('extractFromStory legacy fallback — structural prompt + coverage gate
     const result = await extractCollectionItems(STORY_NODE, FIXTURE_STORY, llm, 60);
 
     expect(result?.scenes).toHaveLength(4);
-    const legacyPrompt = callLog()[1]!.system; // call 0 is duration-first beat extract
+    const legacyPrompt = callLog()[2]!.system; // calls 0-1 are hierarchical-A + duration-first beat extract
     expect(legacyPrompt).toContain('Beat list');
     expect(legacyPrompt).toContain('Compress every beat');
     expect(legacyPrompt).toContain('No beat may be dropped');
@@ -142,6 +153,7 @@ describe('extractFromStory legacy fallback — structural prompt + coverage gate
     });
 
     const { llm, callLog } = makeMockLLM([
+      { systemContains: 'SCENE-SUMMARY-EXTRACTOR-V1', response: HIERARCHICAL_FAIL }, // force hierarchical fallback
       { systemContains: 'extract a complete beat list', response: EMPTY_BEATS }, // force fallback
       { systemContains: 'story-aware scene extraction', response: droppingScenes },
       { systemContains: 'audit scene summaries', response: auditFlagsDrop },
@@ -153,10 +165,10 @@ describe('extractFromStory legacy fallback — structural prompt + coverage gate
     expect(result?.scenes).toBeDefined();
     expect(result!.scenes![0]!.title).toBe('Refusal and Sponsorship');
 
-    // Four calls fired: duration-first probe (empty) → legacy initial → audit → repair
-    expect(callLog()).toHaveLength(4);
+    // Five calls fired: hierarchical probe (malformed) → duration-first probe (empty) → legacy initial → audit → repair
+    expect(callLog()).toHaveLength(5);
     // Repair prompt was given the dropped-beat feedback.
-    expect(callLog()[3]!.system).toContain('magistrate secretly sponsors');
+    expect(callLog()[4]!.system).toContain('magistrate secretly sponsors');
   });
 
   it('triggers a repair pass when the coverage gate finds duplicated beats', async () => {
@@ -188,6 +200,7 @@ describe('extractFromStory legacy fallback — structural prompt + coverage gate
     });
 
     const { llm, callLog } = makeMockLLM([
+      { systemContains: 'SCENE-SUMMARY-EXTRACTOR-V1', response: HIERARCHICAL_FAIL },
       { systemContains: 'extract a complete beat list', response: EMPTY_BEATS },
       { systemContains: 'story-aware scene extraction', response: duplicatingScenes },
       { systemContains: 'audit scene summaries', response: auditFlagsDup },
@@ -197,9 +210,9 @@ describe('extractFromStory legacy fallback — structural prompt + coverage gate
     const result = await extractCollectionItems(STORY_NODE, FIXTURE_STORY, llm, 60);
 
     expect(result?.scenes![3]!.title).toBe('Wilderness Hut and Union');
-    expect(callLog()).toHaveLength(4);
-    expect(callLog()[3]!.system).toContain('wilderness hut bandaging');
-    expect(callLog()[3]!.system).toContain('scenes 3, 4');
+    expect(callLog()).toHaveLength(5);
+    expect(callLog()[4]!.system).toContain('wilderness hut bandaging');
+    expect(callLog()[4]!.system).toContain('scenes 3, 4');
   });
 
   it('skips the audit gate for very short videos (≤30s)', async () => {
@@ -211,6 +224,7 @@ describe('extractFromStory legacy fallback — structural prompt + coverage gate
     });
 
     const { llm, callLog } = makeMockLLM([
+      { systemContains: 'SCENE-SUMMARY-EXTRACTOR-V1', response: HIERARCHICAL_FAIL },
       { systemContains: 'extract a complete beat list', response: EMPTY_BEATS },
       { systemContains: 'story-aware scene extraction', response: scenes },
     ]);
@@ -218,8 +232,8 @@ describe('extractFromStory legacy fallback — structural prompt + coverage gate
     const result = await extractCollectionItems(STORY_NODE, 'short story', llm, 30);
 
     expect(result?.scenes).toHaveLength(1);
-    // duration-first probe (empty) + legacy extract; no audit because dur ≤ 30
-    expect(callLog()).toHaveLength(2);
+    // hierarchical probe (malformed) + duration-first probe (empty) + legacy extract; no audit because dur ≤ 30
+    expect(callLog()).toHaveLength(3);
   });
 
   it('legacy fallback does not run repair when coverage gate is clean', async () => {
@@ -235,6 +249,7 @@ describe('extractFromStory legacy fallback — structural prompt + coverage gate
     const cleanAudit = JSON.stringify({ dropped: [], duplicated: [] });
 
     const { llm, callLog } = makeMockLLM([
+      { systemContains: 'SCENE-SUMMARY-EXTRACTOR-V1', response: HIERARCHICAL_FAIL },
       { systemContains: 'extract a complete beat list', response: EMPTY_BEATS },
       { systemContains: 'story-aware scene extraction', response: goodScenes },
       { systemContains: 'audit scene summaries', response: cleanAudit },
@@ -242,7 +257,7 @@ describe('extractFromStory legacy fallback — structural prompt + coverage gate
 
     await extractCollectionItems(STORY_NODE, FIXTURE_STORY, llm, 60);
 
-    expect(callLog()).toHaveLength(3); // duration-first probe + legacy initial + audit
+    expect(callLog()).toHaveLength(4); // hierarchical probe + duration-first probe + legacy initial + audit
   });
 });
 

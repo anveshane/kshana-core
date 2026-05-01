@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { nanoid } from 'nanoid';
 import { createTool } from '../../core/tools/index.js';
+import { buildImageFilenamePrefix } from './buildImageFilenamePrefix.js';
 import type { ToolDefinition } from '../../core/llm/index.js';
 import { getCurrentSession, getSessionFs } from '../../core/fs/index.js';
 import {
@@ -257,9 +258,10 @@ export interface ImageGenerationParams {
   height?: number;
   seed?: number;
   shot_number?: number;
-  image_type?: 'scene' | 'character_ref' | 'setting_ref';
+  image_type?: 'scene' | 'character_ref' | 'setting_ref' | 'object_ref';
   character_name?: string;
   setting_name?: string;
+  object_name?: string;
   /** Reference images for consistency (used for scene generation) */
   reference_images?: ReferenceImage[];
   /** Generation mode: text-to-image or image+text-to-image */
@@ -358,24 +360,19 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
     segment_id,
   } = params;
 
-  // Determine filename prefix based on image type
-  let filenamePrefix: string;
-
-  if (image_type === 'character_ref' && character_name) {
-    const cleanName = character_name.replace(/[^a-zA-Z0-9]/g, '');
-    filenamePrefix = `CharRef_${cleanName}`;
-  } else if (image_type === 'setting_ref' && setting_name) {
-    const cleanName = setting_name.replace(/[^a-zA-Z0-9]/g, '');
-    filenamePrefix = `SettingRef_${cleanName}`;
-  } else {
-    // Shot scene images: carry full scene/shot/frame identity into the filename
-    // so Finder listings stay scannable. ComfyUIProvider.shortenPrefix will
-    // compress `scene_N_shot_M` → `sNshotM` in the saved filename.
-    const parts = [`scene_${scene_number}`];
-    if (params.shot_number !== undefined) parts.push(`shot_${params.shot_number}`);
-    if (params.frame_id) parts.push(params.frame_id);
-    filenamePrefix = parts.join('_');
-  }
+  // Determine filename prefix based on image type. The helper covers
+  // character/setting/object refs uniformly and falls through to scene
+  // for shot images. ComfyUIProvider.shortenPrefix compresses
+  // `scene_N_shot_M` → `sNshotM` later.
+  const filenamePrefix = buildImageFilenamePrefix({
+    image_type,
+    character_name,
+    setting_name,
+    object_name: params.object_name,
+    scene_number,
+    shot_number: params.shot_number,
+    frame_id: params.frame_id,
+  });
 
   // Determine context for linking artifact to project
   let context: ArtifactContext;
