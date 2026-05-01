@@ -59,8 +59,8 @@
   },
   "110": {
     "inputs": {
-      "lora_name": "Klein-9b-consistency.safetensors",
-      "strength_model": 1,
+      "lora_name": "Flux2-Klein-9B-consistency-V2.safetensors",
+      "strength_model": 0.5,
       "model": [
         "92:70",
         0
@@ -286,14 +286,8 @@
   "92:62": {
     "inputs": {
       "steps": 4,
-      "width": [
-        "92:81",
-        0
-      ],
-      "height": [
-        "92:81",
-        1
-      ]
+      "width": 848,
+      "height": 480
     },
     "class_type": "Flux2Scheduler",
     "_meta": {
@@ -302,14 +296,8 @@
   },
   "92:66": {
     "inputs": {
-      "width": [
-        "92:81",
-        0
-      ],
-      "height": [
-        "92:81",
-        1
-      ],
+      "width": 848,
+      "height": 480,
       "batch_size": 1
     },
     "class_type": "EmptyFlux2LatentImage",
