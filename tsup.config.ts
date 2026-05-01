@@ -27,7 +27,14 @@ export default defineConfig([
     format: ['cjs'],
     // Maps import.meta.url to a __filename-based URL in CJS output (avoids empty-import-meta warnings and broken paths).
     shims: true,
-    dts: false,
+    // Emit .d.ts for the CJS bundles so embedded consumers (Electron
+    // main process) get types when they require('kshana-ink/manager').
+    dts: { entry: {
+      'server/manager': 'src/server/manager.ts',
+      'server/runners/index': 'src/server/runners/index.ts',
+      'agent/pi/index': 'src/agent/pi/index.ts',
+      'core/llm/index': 'src/core/llm/index.ts',
+    }},
     clean: false,
     splitting: false,
     sourcemap: true,

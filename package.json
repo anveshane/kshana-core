@@ -8,10 +8,22 @@
     ".": "./dist/index.js",
     "./server": "./dist/server/index.cjs",
     "./server/cli": "./dist/server/cli.cjs",
-    "./core/llm": "./dist/core/llm/index.cjs",
-    "./manager": "./dist/server/manager.cjs",
-    "./runners": "./dist/server/runners/index.cjs",
-    "./agent/pi": "./dist/agent/pi/index.cjs"
+    "./core/llm": {
+      "types": "./dist/core/llm/index.d.cts",
+      "default": "./dist/core/llm/index.cjs"
+    },
+    "./manager": {
+      "types": "./dist/server/manager.d.cts",
+      "default": "./dist/server/manager.cjs"
+    },
+    "./runners": {
+      "types": "./dist/server/runners/index.d.cts",
+      "default": "./dist/server/runners/index.cjs"
+    },
+    "./agent/pi": {
+      "types": "./dist/agent/pi/index.d.cts",
+      "default": "./dist/agent/pi/index.cjs"
+    }
   },
   "files": [
     "dist",
