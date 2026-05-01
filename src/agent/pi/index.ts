@@ -75,3 +75,9 @@ export async function bootKshanaTUI(argv: string[] = []): Promise<void> {
 }
 
 export { kshanaTools };
+
+// Embed surface — hosts that want to drive a PiSessionAgent in-process
+// (e.g. the Electron desktop app) import these directly. Keep this
+// barrel in sync with the package.json `./agent/pi` export.
+export { PiSessionAgent } from "./PiSessionAgent.js";
+export type { MediaCallback, MediaEvent } from "./tools/runTo.js";

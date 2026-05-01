@@ -8,7 +8,10 @@
     ".": "./dist/index.js",
     "./server": "./dist/server/index.cjs",
     "./server/cli": "./dist/server/cli.cjs",
-    "./core/llm": "./dist/core/llm/index.cjs"
+    "./core/llm": "./dist/core/llm/index.cjs",
+    "./manager": "./dist/server/manager.cjs",
+    "./runners": "./dist/server/runners/index.cjs",
+    "./agent/pi": "./dist/agent/pi/index.cjs"
   },
   "files": [
     "dist",
