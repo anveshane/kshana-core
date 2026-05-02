@@ -1,8 +1,45 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const REPO_ROOT = resolve(new URL("../../..", import.meta.url).pathname);
+/**
+ * Walk up from `metaUrl` (typically `import.meta.url`) until we find
+ * the kshana-ink package's own `package.json`. Robust against being
+ * called from either `src/...` (vitest, tsx) or `dist/server/manager.js`
+ * (bundled CJS/ESM output) — the depth differs but the package
+ * boundary is unambiguous via `name === "kshana-ink"`.
+ *
+ * Used to resolve repo-relative resources (orchestrator prompt,
+ * subagent prompts, prompt-skill markdown). The previous hardcoded
+ * `../../..` worked from source but pointed one level too high
+ * when bundled, ENOENT'ing on the orchestrator prompt.
+ */
+export function findKshanaInkRoot(metaUrl: string): string {
+  let dir = dirname(fileURLToPath(metaUrl));
+  // Cap the walk at filesystem root — defensive guard, not a real loop bound.
+  for (let i = 0; i < 64; i += 1) {
+    const pkgPath = resolve(dir, "package.json");
+    if (existsSync(pkgPath)) {
+      try {
+        const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { name?: unknown };
+        if (pkg.name === "kshana-ink") {
+          return resolve(dir);
+        }
+      } catch {
+        // ignore unreadable / non-JSON package.json — keep walking
+      }
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error(
+    `findKshanaInkRoot: could not locate kshana-ink package.json walking up from ${metaUrl}`,
+  );
+}
+
+const REPO_ROOT = findKshanaInkRoot(import.meta.url);
 
 function isPackaged(): boolean {
   return process.env["KSHANA_PACKAGED"] === "1" || process.env["KSHANA_PACKAGED"] === "true";

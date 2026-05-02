@@ -22,3 +22,5 @@ export type {
   ServerMessageType,
   ClientMessage,
 } from './types.js';
+export { loadDevEnv } from './loadDevEnv.js';
+export type { LoadDevEnvResult } from './loadDevEnv.js';

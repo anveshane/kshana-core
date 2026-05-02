@@ -57,5 +57,9 @@ uploads/
 # Workflow runs
 workflows/runs/
 
+# Per-user workflow manifests + JSONs. Each dev pins their own
+# preferred workflows; not for git.
+workflows/user/
+
 # Packed release artifacts
 *.tgz

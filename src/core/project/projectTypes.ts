@@ -8,6 +8,7 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
+import { defaultBasePath } from '../../tasks/video/workflow/projectFileIO.js';
 
 export interface ExecutorState {
   nodes: Record<string, ExecutionNode>;
@@ -44,7 +45,7 @@ export interface ProjectFile {
   [key: string]: unknown;
 }
 
-export function projectDirFor(name: string, basePath: string = process.cwd()): string {
+export function projectDirFor(name: string, basePath: string = defaultBasePath()): string {
   const folder = name.endsWith('.kshana') ? name : `${name}.kshana`;
   return join(basePath, folder);
 }
@@ -86,7 +87,7 @@ export function resolveProjectDuration(
  * doesn't exist; callers decide how to surface that (CLI exits, HTTP
  * returns 404).
  */
-export function loadProject(name: string, basePath: string = process.cwd()): {
+export function loadProject(name: string, basePath: string = defaultBasePath()): {
   project: ProjectFile;
   projectDir: string;
 } | null {

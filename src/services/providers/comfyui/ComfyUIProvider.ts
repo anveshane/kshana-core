@@ -244,23 +244,59 @@ export class ComfyUIProvider implements GenerationProvider {
 
     const registry = getRegistry();
 
-    // Check for active image_editing workflow (FLUX Klein is the default)
-    let workflowName = 'flux2_klein_edit';
+    // Determine workflow: explicit user override (mode registry) wins,
+    // otherwise default to qwen_snofs_edit. Klein is no longer the
+    // auto-default — refs beyond the 3-slot encoder are silently
+    // dropped per project policy (2026-05-02).
+    let workflowName = 'klein_snofs_edit';
     let modeManifest: any = null;
+    let modeOverrideActive = false;
     try {
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
-      modeRegistry.refresh(); // Ensure manifests are loaded
+      modeRegistry.refresh();
       const activeMode = modeRegistry.getActiveForPipeline('image_editing', 'comfyui');
-      if (activeMode) {
+      if (activeMode?.isOverride) {
+        // User explicitly pinned a workflow — respect that.
         modeManifest = activeMode;
         workflowName = activeMode.id;
-        debugLog(`Using image_editing workflow: ${activeMode.displayName} (${activeMode.id})${activeMode.isOverride ? ' [user override]' : ''}`);
-      } else {
-        debugLog(`No active image_editing workflow found — using default: ${workflowName}`);
+        modeOverrideActive = true;
+        debugLog(`Using image_editing workflow (user override): ${activeMode.displayName} (${activeMode.id})`);
+      } else if (activeMode) {
+        modeManifest = activeMode;
+        workflowName = activeMode.id;
+        debugLog(`Default image_editing workflow from registry: ${activeMode.displayName} (${activeMode.id})`);
       }
     } catch (err) {
-      debugLog(`WorkflowModeRegistry error: ${(err as Error).message} — using default: ${workflowName}`);
+      debugLog(`WorkflowModeRegistry error: ${(err as Error).message}`);
+    }
+
+    if (!modeOverrideActive) {
+      // Default: qwen_snofs_edit for every image edit (no Klein
+      // fallback). chooseImageEditWorkflow encapsulates the policy.
+      const { chooseImageEditWorkflow } = await import('../../comfyui/chooseImageEditWorkflow.js');
+      const chosen = chooseImageEditWorkflow({
+        totalImages: 1 + referenceImages.length,
+        modeOverride: null,
+      });
+      if (chosen !== workflowName) {
+        debugLog(`Routing image_editing → ${chosen}`);
+        workflowName = chosen;
+        // Re-look up the manifest for the chosen workflow so the
+        // manifest-driven parameterizeGeneric path picks it up.
+        try {
+          const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
+          const modeRegistry = getWorkflowModeRegistry();
+          const chosenManifest = modeRegistry.getMode(chosen);
+          modeManifest = chosenManifest ?? null;
+          if (!chosenManifest) {
+            debugLog(`Chosen workflow '${chosen}' has no manifest registered — will fall back to built-in registry path`);
+          }
+        } catch (err) {
+          debugLog(`Manifest lookup for '${chosen}' failed: ${(err as Error).message}`);
+          modeManifest = null;
+        }
+      }
     }
 
     const hasManifestWorkflow = modeManifest && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0;

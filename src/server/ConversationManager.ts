@@ -3,7 +3,10 @@
  * Each WebSocket connection can have one active conversation session.
  * Agent is created lazily when a project is selected via configureSessionForProject().
  */
+import * as nodeFs from 'node:fs';
+import * as nodePath from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
+import { defaultBasePath } from '../tasks/video/workflow/projectFileIO.js';
 import type { GenericAgentResult } from '../core/agent/index.js';
 import type { LLMClientConfig } from '../core/llm/index.js';
 import type { TypedEventEmitter } from '../events/EventEmitter.js';
@@ -469,10 +472,6 @@ export class ConversationManager {
       throw new Error(`Session not found: ${sessionId}`);
     }
 
-    if (!session.agent) {
-      throw new Error('Session agent not configured. Select a project first.');
-    }
-
     if (session.state.status === 'running') {
       throw new Error('Session already has a running task');
     }
@@ -480,6 +479,11 @@ export class ConversationManager {
     // Pi-orchestrator chat works without a project being selected — the user
     // can ask "what projects are available?" before picking one. If no project
     // is configured yet, set up an ambient context + agent on first message.
+    // Run BEFORE the agent guard so a brand-new session (created via
+    // createSession() but never configured) can still chat. Without this
+    // ordering, the embedded desktop hits "Session agent not configured"
+    // because focusSessionProject doesn't create an agent — only
+    // configureSessionForProject and ensureAmbientSession do.
     if (!session.sessionContext || !session.agent) {
       this.ensureAmbientSession(sessionId);
     }
@@ -607,13 +611,21 @@ export class ConversationManager {
     }
 
     const projectDirName = `${projectName}.kshana`;
+    // Read project.json directly via the shared `defaultBasePath()`
+    // anchor (KSHANA_PROJECTS_DIR / cwd) instead of the brittle
+    // loadProject(basePath) path. The previous code passed
+    // `projectDirName` as basePath and relied on the standalone CLI's
+    // cwd + an already-set SessionContext to coincidentally line up.
+    // Embedded hosts have neither, so the call ENOENT'd.
     let project: NonNullable<ReturnType<typeof loadProject>>;
     try {
-      const loaded = loadProject(projectDirName);
-      if (!loaded) {
-        throw new Error(`project.json not found or empty for '${projectName}'`);
+      const projectsDir = defaultBasePath();
+      const projectJsonPath = nodePath.join(projectsDir, projectDirName, 'project.json');
+      if (!nodeFs.existsSync(projectJsonPath)) {
+        throw new Error(`project.json not found at ${projectJsonPath}`);
       }
-      project = loaded;
+      const raw = nodeFs.readFileSync(projectJsonPath, 'utf-8');
+      project = JSON.parse(raw) as NonNullable<ReturnType<typeof loadProject>>;
     } catch (err) {
       throw new Error(
         `Project '${projectName}' not found or unreadable. ${err instanceof Error ? err.message : String(err)}`,

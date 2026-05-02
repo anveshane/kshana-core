@@ -109,6 +109,34 @@ class WorkflowRegistry {
       qualityLevel: 'high',
     });
 
+    // 3a. Qwen Edit Native - Lightning + native 3-slot encoder.
+    // Empirically (2026-05-01..02 probes) cleaner identity preservation
+    // than the lrzjason 5-slot variant. Preferred for ≤3 ref scenes;
+    // see chooseImageEditWorkflow for routing.
+    this.register({
+      name: 'qwen_edit_native',
+      filename: 'qwen_edit_native.json',
+      workflowType: WorkflowType.IMAGE_EDITING,
+      description: 'Qwen image editing using the native ComfyUI TextEncodeQwenImageEditPlus node (3 image slots) plus the Lightning 4-step LoRA. Best for scenes with up to 3 reference images. Routes to Klein automatically when more refs are needed.',
+      capabilities: [
+        'image-to-image',
+        'multi-image-input',
+        'intelligent-editing',
+        'scene-variation',
+        'visual-modification',
+        'consistency-preservation',
+        'reference-based-generation',
+        'identity-preservation',
+      ],
+      displayName: 'Qwen Image Editor (Native + Lightning)',
+      requiresBaseImage: true,
+      supportsTextPrompts: true,
+      supportsImageToImage: true,
+      outputFormat: 'image',
+      estimatedTimeSeconds: 12,
+      qualityLevel: 'high',
+    });
+
     // 3b. Qwen Edit Simple - Slower but higher quality variant
     this.register({
       name: 'qwen_edit_hq',

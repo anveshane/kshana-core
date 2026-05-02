@@ -9,20 +9,20 @@
     "./server": "./dist/server/index.cjs",
     "./server/cli": "./dist/server/cli.cjs",
     "./core/llm": {
-      "types": "./dist/core/llm/index.d.cts",
-      "default": "./dist/core/llm/index.cjs"
+      "types": "./dist/core/llm/index.d.ts",
+      "default": "./dist/core/llm/index.js"
     },
     "./manager": {
-      "types": "./dist/server/manager.d.cts",
-      "default": "./dist/server/manager.cjs"
+      "types": "./dist/server/manager.d.ts",
+      "default": "./dist/server/manager.js"
     },
     "./runners": {
-      "types": "./dist/server/runners/index.d.cts",
-      "default": "./dist/server/runners/index.cjs"
+      "types": "./dist/server/runners/index.d.ts",
+      "default": "./dist/server/runners/index.js"
     },
     "./agent/pi": {
-      "types": "./dist/agent/pi/index.d.cts",
-      "default": "./dist/agent/pi/index.cjs"
+      "types": "./dist/agent/pi/index.d.ts",
+      "default": "./dist/agent/pi/index.js"
     }
   },
   "files": [

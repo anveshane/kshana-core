@@ -681,6 +681,84 @@ export function applyParameterMappings(
 }
 
 /**
+ * Parameterize the qwen_edit_native workflow (qwen_edit_native.json).
+ *
+ * Layout:
+ *   - Node 1: UNETLoader (Qwen-Image-Edit-2511 FP8)
+ *   - Node 5: LoraLoaderModelOnly (Lightning 4-step LoRA, strength 1.0)
+ *   - Node 4: LoadImage primary (base) — fed into ImageScale → image1 slot
+ *   - Node 21: LoadImage ref 1 → image2 slot
+ *   - Node 22: LoadImage ref 2 → image3 slot
+ *   - Node 11: TextEncodeQwenImageEditPlus (positive)
+ *   - Node 12: TextEncodeQwenImageEditPlus (negative)
+ *   - Node 13: KSampler (cfg=1, steps=8, euler/simple)
+ *   - Node 15: SaveImage
+ *
+ * 3 image slots only; caller must route to Klein when total > 3
+ * (see `chooseImageEditWorkflow`).
+ */
+export function parameterizeQwenEditNativeWorkflow(
+  template: WorkflowTemplate,
+  params: WorkflowParams
+): Record<string, unknown> {
+  const workflow: WorkflowTemplate = JSON.parse(JSON.stringify(template));
+  // Lightning LoRA is 4-step calibrated but performs well at 8 with cfg=1.
+  // Cap seed at int32 — ComfyUI Cloud's Grok variant rejects larger values.
+  const seed = params.seed ?? Math.floor(Math.random() * 0x7FFFFFFF);
+
+  // Slot order: [base, ref1, ref2] mapped to LoadImage IDs [4, 21, 22].
+  const allImages: string[] = [];
+  if (params.inputImageFilename) allImages.push(params.inputImageFilename);
+  if (params.referenceImageFilenames) {
+    allImages.push(...params.referenceImageFilenames);
+  }
+  const loadImageNodeIds = [4, 21, 22];
+  const nodesToRemove = new Set<number>();
+
+  for (const node of workflow.nodes || []) {
+    const nodeId = node.id;
+    const nodeType = node.type;
+
+    if (nodeType === 'LoadImage') {
+      const slot = loadImageNodeIds.indexOf(nodeId);
+      if (slot !== -1 && slot < allImages.length) {
+        const imageName = allImages[slot];
+        if (node.widgets_values && imageName) {
+          node.widgets_values[0] = imageName;
+          (node as { mode?: number }).mode = 0;
+        }
+      } else if (slot !== -1) {
+        nodesToRemove.add(nodeId);
+      }
+    }
+
+    if (nodeType === 'TextEncodeQwenImageEditPlus' && nodeId === 11) {
+      if (node.widgets_values) node.widgets_values[0] = params.prompt;
+    }
+    if (nodeType === 'TextEncodeQwenImageEditPlus' && nodeId === 12) {
+      if (node.widgets_values && params.negativePrompt) {
+        node.widgets_values[0] = params.negativePrompt;
+      }
+    }
+
+    if (nodeType === 'KSampler' && nodeId === 13) {
+      if (node.widgets_values) node.widgets_values[0] = seed;
+    }
+
+    if (nodeType === 'SaveImage' && nodeId === 15) {
+      if (node.widgets_values) {
+        node.widgets_values[0] = params.filenamePrefix || 'QwenEditNative';
+      }
+    }
+  }
+
+  workflow.nodes = (workflow.nodes || []).filter((n) => !nodesToRemove.has(n.id));
+  workflow.links = (workflow.links || []).filter((l) => !nodesToRemove.has(l[1]));
+
+  return workflowToPrompt(workflow);
+}
+
+/**
  * Route to the correct parameterization function based on workflow name.
  */
 export function parameterizeWorkflowByName(
@@ -754,6 +832,22 @@ export function parameterizeWorkflowByName(
       throw new Error('qwen_edit workflow requires inputImageFilename');
     }
     return parameterizeQwenEditWorkflow(template, {
+      prompt: params.prompt,
+      negativePrompt: params.negativePrompt,
+      seed: params.seed,
+      filenamePrefix,
+      inputImageFilename: params.inputImageFilename,
+      referenceImageFilenames: params.referenceImageFilenames,
+    });
+  } else if (workflowName === 'qwen_edit_native') {
+    // Qwen Edit native — uses the stock TextEncodeQwenImageEditPlus
+    // (3 image slots) + Lightning LoRA. Empirically cleaner identity
+    // preservation than the lrzjason 5-slot variant; preferred for
+    // ≤3 ref scenes per `chooseImageEditWorkflow`.
+    if (!params.inputImageFilename) {
+      throw new Error('qwen_edit_native workflow requires inputImageFilename');
+    }
+    return parameterizeQwenEditNativeWorkflow(template, {
       prompt: params.prompt,
       negativePrompt: params.negativePrompt,
       seed: params.seed,

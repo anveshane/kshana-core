@@ -3,7 +3,15 @@ import { defineConfig } from 'tsup';
 export default defineConfig([
   {
     entry: {
-      index: 'src/index.tsx',
+      index: 'src/index.ts',
+      // Embed entries — kshana-desktop (and other Electron hosts) load
+      // these as ESM via dynamic `import()`. They MUST be ESM because
+      // their transitive deps (`@mariozechner/pi-coding-agent`, `pi-ai`)
+      // are ESM-only packages with no CJS `require` exports.
+      'server/manager': 'src/server/manager.ts',
+      'server/runners/index': 'src/server/runners/index.ts',
+      'agent/pi/index': 'src/agent/pi/index.ts',
+      'core/llm/index': 'src/core/llm/index.ts',
     },
     format: ['esm'],
     dts: true,
@@ -12,29 +20,22 @@ export default defineConfig([
     sourcemap: true,
     target: 'node20',
     outDir: 'dist',
+    // Some transitive deps still use CommonJS-style `require()` even
+    // when the bundle is ESM. esbuild's ESM output replaces those with
+    // a "Dynamic require not supported" stub. The banner reinstates a
+    // working `require` via `createRequire(import.meta.url)`.
+    banner: {
+      js: "import { createRequire as __kshana_createRequire } from 'module'; const require = __kshana_createRequire(import.meta.url);",
+    },
   },
   {
     entry: {
       'server/cli': 'src/server/cli.ts',
       'server/index': 'src/server/index.ts',
-      'core/llm/index': 'src/core/llm/index.ts',
-      // Embed entries — let kshana-desktop (and other Electron hosts)
-      // require these CJS bundles directly without dragging in Fastify.
-      'server/manager': 'src/server/manager.ts',
-      'server/runners/index': 'src/server/runners/index.ts',
-      'agent/pi/index': 'src/agent/pi/index.ts',
     },
     format: ['cjs'],
     // Maps import.meta.url to a __filename-based URL in CJS output (avoids empty-import-meta warnings and broken paths).
     shims: true,
-    // Emit .d.ts for the CJS bundles so embedded consumers (Electron
-    // main process) get types when they require('kshana-ink/manager').
-    dts: { entry: {
-      'server/manager': 'src/server/manager.ts',
-      'server/runners/index': 'src/server/runners/index.ts',
-      'agent/pi/index': 'src/agent/pi/index.ts',
-      'core/llm/index': 'src/core/llm/index.ts',
-    }},
     clean: false,
     splitting: false,
     sourcemap: true,
