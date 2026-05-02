@@ -29,6 +29,25 @@ import { classifyExecutorAsset } from './classifyExecutorAsset.js';
 import { mapExecutorStatus } from './mapExecutorStatus.js';
 import { linkAbortSignalToAgent } from './linkAbortSignalToAgent.js';
 
+/**
+ * Minimal interface runExecutor requires from an agent. ExecutorAgent
+ * satisfies this; tests can supply a stub matching just this surface.
+ */
+export interface RunExecutorAgent {
+  on(event: 'tool_call' | 'tool_result' | 'notification', handler: (event: unknown) => void): unknown;
+  run(task: string): Promise<{ status: string; error?: string | undefined }>;
+  stop(): void;
+  getStopReason(): string | null;
+}
+
+export type RunExecutorAgentFactory = (
+  llm: LLMClient,
+  opts: ConstructorParameters<typeof ExecutorAgent>[1],
+) => RunExecutorAgent;
+
+const defaultAgentFactory: RunExecutorAgentFactory = (llm, opts) =>
+  new ExecutorAgent(llm, opts);
+
 export interface RunExecutorTarget {
   /** Stop after every node of this typeId has reached terminal state. */
   stage?: string;
@@ -65,6 +84,14 @@ export interface RunExecutorOpts {
 
   /** Custom name shown in executor logs. Default: 'in-process'. */
   name?: string | undefined;
+
+  /**
+   * Override agent construction. Production callers should leave this
+   * undefined (uses `new ExecutorAgent(llm, opts)`); tests inject a
+   * stub matching `RunExecutorAgent` to exercise the bridge wiring
+   * without booting the real planner.
+   */
+  agentFactory?: RunExecutorAgentFactory | undefined;
 }
 
 export interface RunExecutorResult {
@@ -107,7 +134,7 @@ export async function runExecutor(opts: RunExecutorOpts): Promise<RunExecutorRes
       ? `Run pipeline up to node ${stopAfterNode}`
       : 'Run pipeline to completion';
 
-  const agent = new ExecutorAgent(llm, {
+  const agent = (opts.agentFactory ?? defaultAgentFactory)(llm, {
     template,
     project,
     projectDir: opts.projectDir,
