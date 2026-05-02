@@ -6,7 +6,7 @@
  * the project DIR NAME (e.g. "chhaya_60s_anime.kshana") into
  * loadProject's `basePath` argument — semantically wrong. It only
  * happened to work in the standalone CLI when cwd was already
- * /Users/.../kshana-ink AND a session context was set up with
+ * /Users/.../kshana-core AND a session context was set up with
  * matching projectDir. Embedded in the desktop, neither held, and
  * focusSessionProject failed with
  *   "project.json not found or empty for 'chhaya_60s_anime'".

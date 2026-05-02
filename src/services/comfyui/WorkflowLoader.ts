@@ -29,7 +29,7 @@ const currentDir =
  * Priority:
  * 1. KSHANA_WORKFLOWS_DIR environment variable (set by desktop app)
  * 2. Check if kshana-desktop/workflows exists (sibling directory)
- * 3. Check if kshana-ink/workflows exists (current package)
+ * 3. Check if kshana-core/workflows exists (current package)
  * 4. Fall back to process.cwd()/workflows (for CLI usage)
  */
 function getWorkflowsDir(): string {
@@ -43,9 +43,9 @@ function getWorkflowsDir(): string {
   }
 
   // 2. Try to find kshana-desktop/workflows (sibling directory)
-  // This works when kshana-ink is a dependency of kshana-desktop
+  // This works when kshana-core is a dependency of kshana-desktop
   try {
-    // In node_modules, we might be at kshana-desktop/node_modules/kshana-ink
+    // In node_modules, we might be at kshana-desktop/node_modules/kshana-core
     // or in a monorepo structure
     let searchDir = currentDir;
     for (let i = 0; i < 5; i++) {
@@ -56,7 +56,7 @@ function getWorkflowsDir(): string {
           return resolved;
         }
       }
-      // Also check if we're in kshana-desktop/node_modules/kshana-ink
+      // Also check if we're in kshana-desktop/node_modules/kshana-core
       const altDesktopWorkflows = path.join(searchDir, '..', '..', '..', 'workflows');
       if (fs.existsSync(altDesktopWorkflows)) {
         const resolved = path.resolve(altDesktopWorkflows);
@@ -70,7 +70,7 @@ function getWorkflowsDir(): string {
     // Ignore errors during path resolution
   }
 
-  // 3. Try kshana-ink/workflows (current package)
+  // 3. Try kshana-core/workflows (current package)
   // When running from source: src/services/comfyui/WorkflowLoader.ts -> workflows/
   // When running from dist: dist/services/comfyui/WorkflowLoader.js -> workflows/
   const inkWorkflows = path.resolve(currentDir, '..', '..', 'workflows');

@@ -2,7 +2,7 @@
 name: test-loop
 version: 1.0.0
 description: |
-  Add tests for kshana-ink runners, pi-agent tools, or in-process ports.
+  Add tests for kshana-core runners, pi-agent tools, or in-process ports.
   Use when the user wants to "test X", "add coverage for Y", "pin the
   contract for Z", or "port script-N in-process and test it." Walks
   through the three established loops we use here: bridge-contract
@@ -18,7 +18,7 @@ allowed-tools:
   - Glob
 ---
 
-# kshana-ink test loop
+# kshana-core test loop
 
 This skill exists so future Claude doesn't reinvent the test patterns
 we already established. Read these notes BEFORE writing test code.

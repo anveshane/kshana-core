@@ -1,7 +1,7 @@
 {
-  "name": "kshana-ink",
+  "name": "kshana-core",
   "version": "0.1.0",
-  "description": "Generic CLI agent framework with React Ink",
+  "description": "AI video generation engine — story → screenplay → shots → keyframes → clips → final assembly.",
   "type": "module",
   "main": "./dist/index.js",
   "exports": {
@@ -32,8 +32,8 @@
     "README.md"
   ],
   "bin": {
-    "kshana-ink": "./dist/index.js",
-    "kshana-ink-server": "./dist/server/cli.cjs"
+    "kshana-core": "./dist/index.js",
+    "kshana-core-server": "./dist/server/cli.cjs"
   },
   "scripts": {
     "start": "pnpm -C frontend run build && NODE_OPTIONS='--max-old-space-size=8192' tsx src/server/cli.ts",

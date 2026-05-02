@@ -23,7 +23,7 @@ import 'dotenv/config';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ComfyUIClient } from '../src/services/comfyui/ComfyUIClient.js';
-import { findKshanaInkRoot } from '../src/agent/pi/paths.js';
+import { findKshanaCoreRoot } from '../src/agent/pi/paths.js';
 
 const COMFY_URL = process.env['COMFYUI_BASE_URL'] || 'http://127.0.0.1:8188';
 const PROJECT = 'noir_detective_story_setup-3';
@@ -45,7 +45,7 @@ const NEXT_SCENE_PROMPT = `<sks> right side view eye-level shot medium shot`;
 const NEGATIVE_PROMPT = `blurry, low resolution, deformed, ugly, mutated hands, extra limbs, poorly drawn face, bad anatomy, watermark, text, signature, cartoon, anime, painting, illustration`;
 
 async function main() {
-  const root = findKshanaInkRoot(import.meta.url);
+  const root = findKshanaCoreRoot(import.meta.url);
   const projectDir = join(root, `${PROJECT}.kshana`);
   const inputPath = join(projectDir, FIRST_FRAME_PATH);
   if (!existsSync(inputPath)) {

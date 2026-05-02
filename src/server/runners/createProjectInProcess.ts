@@ -82,7 +82,7 @@ export class CreateProjectError extends Error {
 
 /**
  * Create a kshana project on disk in-process. Mirrors `pnpm new` but
- * callable from any host that has the kshana-ink bundle loaded.
+ * callable from any host that has the kshana-core bundle loaded.
  *
  * Throws `CreateProjectError` for usage violations (unknown style,
  * non-positive duration, empty input, project already exists). Other

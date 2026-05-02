@@ -1,18 +1,18 @@
 /**
- * Regression: when kshana-ink runs embedded inside kshana-desktop's
+ * Regression: when kshana-core runs embedded inside kshana-desktop's
  * Electron main process, no `.env` is loaded — the embed entry
  * (`server/manager.ts`) deliberately avoids `dotenv/config` because
  * the desktop owns env management via AppSettings.
  *
  * But in development, the user's API keys, ComfyUI URL, and tier
- * routing config live in `kshana-ink/.env`. Without a way to load
+ * routing config live in `kshana-core/.env`. Without a way to load
  * them, the embedded core errors out with "No API key found for X"
  * even though the .env right next door has the key.
  *
  * `loadDevEnv()` is the bridge: kshana-desktop's main process calls
  * it in dev mode to surface the .env into process.env BEFORE
  * AppSettings overrides anything. It must:
- *   - read `.env` from the kshana-ink package root
+ *   - read `.env` from the kshana-core package root
  *   - NOT overwrite vars that are already set (so a packaged build's
  *     env, or AppSettings-derived vars, win)
  *   - return which vars it actually wrote (debug visibility)
@@ -33,10 +33,10 @@ describe("loadDevEnv", () => {
   const trackedKeys = ["__TEST_KEY_A", "__TEST_KEY_B", "__TEST_KEY_C", "__TEST_KEY_D"];
 
   beforeEach(() => {
-    fakeRoot = mkdtempSync(join(tmpdir(), "kshana-ink-loaddevenv-"));
+    fakeRoot = mkdtempSync(join(tmpdir(), "kshana-core-loaddevenv-"));
     writeFileSync(
       join(fakeRoot, "package.json"),
-      JSON.stringify({ name: "kshana-ink", version: "0.0.0" }),
+      JSON.stringify({ name: "kshana-core", version: "0.0.0" }),
     );
     for (const k of trackedKeys) delete process.env[k];
   });
@@ -135,7 +135,7 @@ describe("loadDevEnv", () => {
     }
   });
 
-  it("returns projectsDir = kshana-ink package root in dev mode (not packaged, no override)", () => {
+  it("returns projectsDir = kshana-core package root in dev mode (not packaged, no override)", () => {
     const originalPkg = process.env["KSHANA_PACKAGED"];
     const originalDir = process.env["KSHANA_PROJECTS_DIR"];
     delete process.env["KSHANA_PACKAGED"];
@@ -143,12 +143,12 @@ describe("loadDevEnv", () => {
     try {
       const result = loadDevEnv(fakeRoot);
       // In dev mode, getProjectsDir() returns the real REPO_ROOT (the
-      // kshana-ink package this module is loaded from), NOT the
+      // kshana-core package this module is loaded from), NOT the
       // fakeRoot we passed for .env reading. The test only asserts
       // that the returned path is a real directory containing
-      // kshana-ink's package.json — that's the contract.
+      // kshana-core's package.json — that's the contract.
       const pkg = JSON.parse(readFileSync(join(result.projectsDir, "package.json"), "utf8")) as { name?: string };
-      expect(pkg.name).toBe("kshana-ink");
+      expect(pkg.name).toBe("kshana-core");
     } finally {
       if (originalPkg !== undefined) process.env["KSHANA_PACKAGED"] = originalPkg;
       if (originalDir !== undefined) process.env["KSHANA_PROJECTS_DIR"] = originalDir;

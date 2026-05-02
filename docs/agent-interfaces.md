@@ -1,6 +1,6 @@
-# Driving kshana-ink from external agents
+# Driving kshana-core from external agents
 
-If you're building an agent that needs to talk to kshana-ink (Open Claw,
+If you're building an agent that needs to talk to kshana-core (Open Claw,
 a custom Claude Code plugin, a CI script, your own automation), pick
 the surface that matches your runtime and friction tolerance. Today
 there are three live interfaces, with a fourth (MCP) on the roadmap.
@@ -14,7 +14,7 @@ there are three live interfaces, with a fourth (MCP) on the roadmap.
 
 All four surfaces share the same in-process implementation under the
 hood (`src/server/runners/*.ts`). Choosing a different interface
-doesn't change *what* kshana-ink does — only how you talk to it.
+doesn't change *what* kshana-core does — only how you talk to it.
 
 ---
 
@@ -46,7 +46,7 @@ pnpm backfill-schema <project>
 ```
 
 **When to use:** simplest possible integration. If your agent is
-already happy shelling out and you have the kshana-ink repo on the
+already happy shelling out and you have the kshana-core repo on the
 same machine, CLI is the lowest-friction option. Output is text
 (usually structured logs you can grep); exit code 0 = success.
 
@@ -118,7 +118,7 @@ For richer streaming, open a WebSocket alongside and listen for
 the run progresses.
 
 **When to use:** any time the agent isn't on the same Node process as
-kshana-ink. Cross-machine, cross-language, hosted kshana-core, batch
+kshana-core. Cross-machine, cross-language, hosted kshana-core, batch
 automation that doesn't want to install dev deps.
 
 ---
@@ -126,7 +126,7 @@ automation that doesn't want to install dev deps.
 ## Library import
 
 If your agent IS in Node and you want zero overhead + full TypeScript
-types, link kshana-ink as a dependency and import the runners
+types, link kshana-core as a dependency and import the runners
 directly:
 
 ```ts
@@ -134,24 +134,24 @@ import {
   runExecutor,
   type RunExecutorOpts,
   type RunExecutorResult,
-} from 'kshana-ink/server/runners';
+} from 'kshana-core/server/runners';
 
 import {
   resetProjectStage,
   type ResetProjectStageOpts,
   type ResetProjectStageResult,
   ResetProjectError,
-} from 'kshana-ink/server/runners/resetProjectStage';
+} from 'kshana-core/server/runners/resetProjectStage';
 
 import {
   createProjectInProcess,
   resolveStyle,
   CreateProjectError,
-} from 'kshana-ink/server/runners/createProjectInProcess';
+} from 'kshana-core/server/runners/createProjectInProcess';
 
 import {
   ConversationManager,
-} from 'kshana-ink/server/manager';
+} from 'kshana-core/server/manager';
 ```
 
 Live entry points (the embed barrels — Fastify-free, safe to bundle
@@ -164,10 +164,10 @@ into Electron / a worker / etc.):
 - `src/agent/pi/index.ts` — pi-agent extension factory
 
 The kshana-desktop app is the canonical example consumer
-(`kshana-ink: file:../kshana-ink` in its package.json).
+(`kshana-core: file:../kshana-core` in its package.json).
 
 **When to use:** Node-native agents that want maximum performance and
-typed APIs. Tightly coupled hosts where shipping kshana-ink in the
+typed APIs. Tightly coupled hosts where shipping kshana-core in the
 same bundle makes sense.
 
 ---
@@ -176,7 +176,7 @@ same bundle makes sense.
 
 The roadmap is to expose the same operations as a Model Context
 Protocol server so any MCP-aware agent (Claude Code, Cursor, future
-agents) can drive kshana-ink without writing client code.
+agents) can drive kshana-core without writing client code.
 
 See `todos/mcp-server.md` for the scope, open questions, and
 estimated effort.

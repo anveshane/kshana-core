@@ -1,5 +1,5 @@
 /**
- * kshana-ink server entry point.
+ * kshana-core server entry point.
  * Creates a Fastify server with HTTP and WebSocket support.
  */
 import { createRequire } from 'module';

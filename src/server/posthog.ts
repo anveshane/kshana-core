@@ -265,7 +265,7 @@ function captureEvent(
       timestamp: toDate(timestamp),
       properties: {
         ...commonProperties,
-        app_component: 'kshana-ink',
+        app_component: 'kshana-core',
         ...(posthogSessionId ? { '$session_id': posthogSessionId } : {}),
         ...properties,
       },

@@ -40,7 +40,7 @@ export interface AssemblyConfig {
   preset?: string;
   timeoutMs?: number;
   /** Watermark text drawn in the bottom-right corner. Defaults to env
-   * `KSHANA_WATERMARK` or `'kshana-ink'`. Pass an empty string to disable. */
+   * `KSHANA_WATERMARK` or `'kshana-core'`. Pass an empty string to disable. */
   watermark?: string;
 }
 
@@ -421,7 +421,7 @@ const WATERMARK_PNG_CANDIDATES = [
 /**
  * Resolve the watermark PNG path (or `null` if none of the candidates
  * exist). Paths are checked relative to the current working directory
- * first, then the kshana-ink package root.
+ * first, then the kshana-core package root.
  */
 export function resolveWatermarkPath(cwd: string = process.cwd()): string | null {
   for (const rel of WATERMARK_PNG_CANDIDATES) {

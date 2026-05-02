@@ -1,10 +1,10 @@
-# MCP server for kshana-ink
+# MCP server for kshana-core
 
 ## Goal
 
-Expose kshana-ink's pipeline operations as Model Context Protocol (MCP)
+Expose kshana-core's pipeline operations as Model Context Protocol (MCP)
 tools so any MCP-compatible agent (Claude Code, Cursor, Open Claw,
-future agents) can drive kshana-ink natively without writing bespoke
+future agents) can drive kshana-core natively without writing bespoke
 HTTP / CLI integration code.
 
 Today, external agent integration requires picking one of:
@@ -14,8 +14,8 @@ Today, external agent integration requires picking one of:
 - **HTTP REST** (`POST /projects/:name/run-to`, etc. via
   `agentRoutes.ts`) — works across processes but requires a server
   running and bespoke client code per agent.
-- **Library import** (`import { resetProjectStage } from 'kshana-ink'`)
-  — typed and fast but couples the agent to Node + kshana-ink's
+- **Library import** (`import { resetProjectStage } from 'kshana-core'`)
+  — typed and fast but couples the agent to Node + kshana-core's
   runtime.
 
 MCP would be a fourth interface: **standardized, agent-protocol

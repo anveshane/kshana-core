@@ -20,11 +20,11 @@ import 'dotenv/config';
 import { existsSync, mkdirSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { ComfyUIClient } from '../src/services/comfyui/ComfyUIClient.js';
-import { findKshanaInkRoot } from '../src/agent/pi/paths.js';
+import { findKshanaCoreRoot } from '../src/agent/pi/paths.js';
 
 async function main() {
   const projectName = process.argv[2] ?? 'chhaya_60s_anime';
-  const root = findKshanaInkRoot(import.meta.url);
+  const root = findKshanaCoreRoot(import.meta.url);
   const projectDir = join(root, `${projectName}.kshana`);
   const imagesDir = join(projectDir, 'assets/images');
 

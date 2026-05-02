@@ -7,7 +7,7 @@ import { getActiveProjectDir } from './activeProject.js';
 /**
  * Default basePath for project filesystem helpers. Reads
  * `KSHANA_PROJECTS_DIR` first so embedded hosts (kshana-desktop's
- * Electron main process) can point kshana-ink at the right dir
+ * Electron main process) can point kshana-core at the right dir
  * without chdir-ing process-globally — that breaks unrelated
  * `process.cwd()` callers in the host. Falls back to process.cwd()
  * for the standalone CLI (where cwd IS the projects dir).

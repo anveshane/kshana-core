@@ -74,10 +74,10 @@ function printHelp(): void {
   const currentProvider = getLLMProvider();
 
   console.log(`
-kshana-ink Server - HTTP/WebSocket API for Generic Agent
+kshana-core Server - HTTP/WebSocket API for Generic Agent
 
 Usage:
-  kshana-ink-server [options]
+  kshana-core-server [options]
 
 Options:
   -h, --help            Show this help message
@@ -118,9 +118,9 @@ WebSocket Message Types (Server -> Client):
   error           Error message
 
 Examples:
-  kshana-ink-server                    # Start server on default port
-  kshana-ink-server --port 8080        # Start on port 8080
-  kshana-ink-server --host 0.0.0.0     # Listen on all interfaces
+  kshana-core-server                    # Start server on default port
+  kshana-core-server --port 8080        # Start on port 8080
+  kshana-core-server --host 0.0.0.0     # Listen on all interfaces
 `);
 }
 

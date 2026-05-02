@@ -1,10 +1,10 @@
 /**
  * Embed-friendly barrel for the in-process ConversationManager.
  *
- * Used by hosts that want to drive kshana-ink without booting the
+ * Used by hosts that want to drive kshana-core without booting the
  * Fastify HTTP/WebSocket server — e.g. the Electron desktop app
  * imports `ConversationManager` and `ConversationEvents` from
- * `kshana-ink/manager` directly and wires the events into IPC.
+ * `kshana-core/manager` directly and wires the events into IPC.
  *
  * IMPORTANT: this barrel must not import anything from `./index.ts`,
  * `./routes.ts`, `./WebSocketHandler.ts`, or any `fastify` /

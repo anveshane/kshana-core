@@ -1,7 +1,7 @@
 /**
- * Regression: kshana-ink's filesystem helpers (loadProject,
+ * Regression: kshana-core's filesystem helpers (loadProject,
  * projectExists, projectPath, …) default `basePath` to
- * `process.cwd()`. When kshana-ink is embedded inside Electron's
+ * `process.cwd()`. When kshana-core is embedded inside Electron's
  * main process, cwd points at the host's launch dir — typically
  * NOT where projects live.
  *

@@ -170,7 +170,7 @@ The proxy is **not** a cache for user content. Any caching is incidental (e.g., 
 
 ### Per-environment config in the core
 
-In `kshana-ink`, the upstream URLs are already configurable (see `COMFY_MODE` / `COMFYUI_BASE_URL` precedence in memory). We need:
+In `kshana-core`, the upstream URLs are already configurable (see `COMFY_MODE` / `COMFYUI_BASE_URL` precedence in memory). We need:
 - A `KSHANA_CLOUD=true` mode that sets both base URLs to the proxy and injects the bearer token on every request.
 - An auth client in the desktop app that handles login, token refresh, and surfaces 402 / 401 from the proxy as user-facing flows.
 

@@ -168,7 +168,7 @@ async function main() {
 
   await testWorkflow(
     'LTX 2.3 V2V Extend',
-    '/Users/ganaraj/Projects/kshana-ink/workflows/cloud/ltx23_v2v_extend_cloud.json',
+    '/Users/ganaraj/Projects/kshana-core/workflows/cloud/ltx23_v2v_extend_cloud.json',
     { '319': uploadedVideo },
     {},
   );
@@ -183,7 +183,7 @@ async function main() {
   console.log('\n--- Test: FLUX Klein with 1 reference ---');
   await testWorkflow(
     'FLUX Klein (1 ref)',
-    '/Users/ganaraj/Projects/kshana-ink/workflows/flux2_klein_edit.json',
+    '/Users/ganaraj/Projects/kshana-core/workflows/flux2_klein_edit.json',
     { '76': uploadedName, '81': uploadedName, '82': uploadedName, '83': uploadedName },
     { '109': kleinPrompt },
   );
@@ -194,7 +194,7 @@ async function main() {
   const uploadedSetting = await uploadImage(settingImage);
   await testWorkflow(
     'FLUX Klein (2 refs)',
-    '/Users/ganaraj/Projects/kshana-ink/workflows/flux2_klein_edit.json',
+    '/Users/ganaraj/Projects/kshana-core/workflows/flux2_klein_edit.json',
     { '76': uploadedName, '81': uploadedSetting, '82': uploadedName, '83': uploadedName },
     { '109': 'The girl from image 1 standing in the apocalyptic city from image 2, dramatic lighting, cinematic composition' },
   );
