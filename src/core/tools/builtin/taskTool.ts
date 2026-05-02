@@ -1,9 +1,18 @@
 /**
  * Task tool - launches specialized subagents.
  * Handled specially by GenericAgent (no handler here).
+ *
+ * @deprecated DELETE — entire file is dead. `GenericAgent` was deleted in the
+ * graph-as-source-of-truth refactor (see `src/core/index.ts:1`); the only live
+ * agent is `ExecutorAgent`, which does not dispatch via Task. The `taskTool`
+ * export is registered into `createDefaultToolRegistry()`, which itself has zero
+ * callers. The Plan / Explore / content-creator / image-generator / video-assembler
+ * sub-agents listed in the prompt below do not exist at runtime.
+ * Tracked in `todos/cleanup-deprecated-agent-architecture.md`.
  */
 import { createTool } from '../ToolRegistry.js';
 
+/** @deprecated DELETE — see file header. */
 export const taskTool = createTool(
   'Task',
   `Launch a specialized subagent to handle a specific task.

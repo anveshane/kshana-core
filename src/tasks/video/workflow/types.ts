@@ -298,12 +298,16 @@ export interface PhaseInfo {
 }
 
 /**
- * Approval status for an individual item (character, setting, scene, etc.).
+ * @deprecated DELETE — approval-fatigue artifact from the pre-graph-executor world.
+ * The dependency-graph executor does not gate per-item user approvals; it generates,
+ * cascades regenerations, and surfaces results. No code reads or writes this status.
+ * Tracked in `todos/cleanup-deprecated-agent-architecture.md`.
  */
 export type ItemApprovalStatus = 'pending' | 'in_review' | 'approved' | 'rejected' | 'regenerating';
 
 /**
- * Individual item tracking for per-item approval phases.
+ * @deprecated DELETE — see `ItemApprovalStatus`. Approval-fatigue artifact; no live readers/writers.
+ * Tracked in `todos/cleanup-deprecated-agent-architecture.md`.
  */
 export interface ItemApprovalEntry {
   /** Unique identifier for this item */

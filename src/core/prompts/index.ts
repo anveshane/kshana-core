@@ -254,6 +254,11 @@ function resolveSkillContext(contentType: ContentType): SkillResolutionContext |
  * Build the content creation sub-agent system prompt.
  * Used for creative writing tasks like stories, characters, and scene descriptions.
  *
+ * @deprecated DELETE — sub-agent dispatch was removed in the graph-as-source-of-truth
+ * refactor (see `src/core/index.ts:1`). Zero callers in src/. Loads
+ * `system/base.md`, `system/subagent.md`, and `subagents/content-creator.md`,
+ * all of which are also dead. Tracked in `todos/cleanup-deprecated-agent-architecture.md`.
+ *
  * @param task - The content creation task description
  * @param contentType - Type of content to generate (plot, story, character, etc.)
  * @param context - Optional background context (existing story elements, etc.)
@@ -298,6 +303,10 @@ export function wrapCustomPrompt(prompt: string): string {
  * Build the image generation sub-agent system prompt with task and context substitution.
  * Uses XML tags to wrap interpolated values for clear structure.
  *
+ * @deprecated DELETE — sub-agent dispatch was removed in the graph-as-source-of-truth
+ * refactor. Zero callers in src/. Loads `subagents/image-generator.md` which is also dead.
+ * Tracked in `todos/cleanup-deprecated-agent-architecture.md`.
+ *
  * @param task - Description of the image to generate
  * @param context - Optional context (character details, scene info, etc.)
  * @returns The complete image generation system prompt
@@ -313,6 +322,7 @@ export function buildImageGenerationPrompt(task: string, context?: string): stri
 
 /**
  * Video generation prompt options.
+ * @deprecated DELETE — only consumed by `buildVideoGenerationPrompt`, which is dead.
  */
 export interface VideoGenerationPromptOptions {
   task: string;
@@ -325,6 +335,10 @@ export interface VideoGenerationPromptOptions {
 /**
  * Build the video generation sub-agent system prompt with task and context substitution.
  * Used for animating scene images into video clips.
+ *
+ * @deprecated DELETE — sub-agent dispatch was removed in the graph-as-source-of-truth
+ * refactor. Zero callers in src/. Loads `subagents/video-assembler.md` which is also dead.
+ * Tracked in `todos/cleanup-deprecated-agent-architecture.md`.
  *
  * @param options - Video generation options including task, scene info, and motion description
  * @returns The complete video generation system prompt
