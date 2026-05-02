@@ -36,10 +36,19 @@ export interface ToolCall {
 
 export interface ChatMessage {
   id: string
-  type: 'agent' | 'user' | 'system'
+  type: 'agent' | 'user' | 'system' | 'media'
   content: string
   timestamp: number
   agentName?: string
+  /** Set on `type: 'media'` messages — frontend renders the image/video inline. */
+  media?: {
+    kind: 'image' | 'video'
+    /** Path relative to <project>.kshana/. URL is built as /api/v1/assets/<project>/<path>. */
+    path: string
+    project: string
+    /** Tool name that produced the asset, for the small caption above the media. */
+    source?: string
+  }
 }
 
 export interface MediaPreview {
@@ -106,7 +115,7 @@ export interface AppState {
 
   // Timeline
   timeline: Timeline | null
-  activeView: 'chat' | 'timeline'
+  activeView: 'chat' | 'storyboard' | 'timeline'
 
   // Settings
   autonomousMode: boolean
@@ -168,7 +177,7 @@ export type AppAction =
   | { type: 'SET_AUTONOMOUS'; enabled: boolean }
   | { type: 'SET_PARALLEL_MEDIA'; enabled: boolean }
   | { type: 'SET_TIMELINE'; timeline: Timeline | null }
-  | { type: 'SET_ACTIVE_VIEW'; view: 'chat' | 'timeline' }
+  | { type: 'SET_ACTIVE_VIEW'; view: 'chat' | 'storyboard' | 'timeline' }
   | { type: 'SET_TIMER'; timer: AppState['timer'] }
 
 // ── Reducer ────────────────────────────────────────────────

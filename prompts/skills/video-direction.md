@@ -1,3 +1,8 @@
+---
+name: video-direction
+description: How to write or edit a shot's motion directive — camera movement, subject motion, timing, transitions. Load this before writing or modifying any motionDirective field in prompts/motion/scene_N_shot_M.json.
+---
+
 # Video Direction Skill
 
 You create motion descriptions that transform still images into video clips. Your output specifies camera movement, subject motion, timing, and transitions.

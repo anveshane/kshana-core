@@ -11,7 +11,7 @@ if [[ -z "${SERVICE_NAME}" || -z "${IMAGE_URI}" || -z "${TARGET_ENV_FILE}" ]]; t
   exit 1
 fi
 
-if [[ "${SERVICE_NAME}" != "kshana-ink-prod" && "${SERVICE_NAME}" != "kshana-ink-dev" ]]; then
+if [[ "${SERVICE_NAME}" != "kshana-core-prod" && "${SERVICE_NAME}" != "kshana-core-dev" ]]; then
   echo "Unsupported service name: ${SERVICE_NAME}" >&2
   exit 1
 fi
@@ -26,7 +26,7 @@ if [[ ! -f ".env.prod" || ! -f ".env.dev" ]]; then
   exit 1
 fi
 
-if [[ "${SERVICE_NAME}" == "kshana-ink-prod" ]]; then
+if [[ "${SERVICE_NAME}" == "kshana-core-prod" ]]; then
   export PROD_IMAGE="${IMAGE_URI}"
 else
   export DEV_IMAGE="${IMAGE_URI}"

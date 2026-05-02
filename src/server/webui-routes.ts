@@ -206,11 +206,39 @@ export async function registerWebUIRoutes(app: FastifyInstance): Promise<void> {
 
       try {
         const { resolveNodePromptPath, getAvailableReferences, stripMarkdownFences } = await import('./editAndRedo.js');
+        const { resolveSchemaNodePrompt } = await import('./resolveSchemaNodePrompt.js');
         const project = JSON.parse(readFileSync(projectPath, 'utf-8'));
         const nodes = project.executorState?.nodes ?? {};
         const node = nodes[nodeId];
 
         if (!node) {
+          // Pi-era fallback: synthesize the modal's expected shape from
+          // project.scenes when the legacy node graph isn't there.
+          const synthesized = resolveSchemaNodePrompt(project, nodeId);
+          if (synthesized) {
+            // Prefer the on-disk prompt file when it exists — it carries the
+            // original frames + references structure the Edit modal expects.
+            // Fall back to the synthesized minimal shape otherwise.
+            let prompt: Record<string, unknown> = synthesized.prompt;
+            if (synthesized.promptFilePath) {
+              const absPath = join(process.cwd(), `${name}.kshana`, synthesized.promptFilePath);
+              if (existsSync(absPath)) {
+                try {
+                  const raw = readFileSync(absPath, 'utf-8');
+                  prompt = JSON.parse(stripMarkdownFences(raw)) as Record<string, unknown>;
+                } catch { /* fall back to synthesized */ }
+              }
+            }
+            const response: Record<string, unknown> = {
+              nodeId: synthesized.nodeId,
+              nodeType: synthesized.nodeType,
+              prompt,
+            };
+            if (synthesized.firstFramePath) {
+              response['firstFrameUrl'] = `/api/v1/assets/${name}/${synthesized.firstFramePath}`;
+            }
+            return reply.send(response);
+          }
           return reply.status(404).send({ error: `Node not found: ${nodeId}` });
         }
 

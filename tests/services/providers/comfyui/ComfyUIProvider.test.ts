@@ -24,6 +24,25 @@ vi.mock('../../../../src/services/comfyui/index.js', () => {
       return { status: 'completed', prompt_id: 'prompt-1' };
     }
 
+    async queueAndWaitWS() {
+      // Combined WS-first variant on the production client; avoids the
+      // cloud cache leak (foreign outputs captured when our prompt hash
+      // matches a stranger's earlier submission). Mock returns the same
+      // shape so the provider exercises the same path.
+      return {
+        result: { status: 'completed', prompt_id: 'prompt-1' },
+        promptId: 'prompt-1',
+        clientId: 'client-1',
+        outputs: [
+          {
+            filename: 'remote-image.png',
+            subfolder: '',
+            type: 'output',
+          },
+        ],
+      };
+    }
+
     async getOutputImages() {
       return [
         {

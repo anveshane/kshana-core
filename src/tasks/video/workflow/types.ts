@@ -460,6 +460,12 @@ export interface AssetInfo {
   metadata?: Record<string, unknown>;
   /** Executor node ID for redo support (e.g., "character_image:kai") */
   nodeId?: string;
+  /**
+   * For scene_image entries: which frame this asset represents. Phase-2
+   * dual-write into project.json relies on this to populate
+   * scenes[].shots[].firstFrame / lastFrame / midFrame.
+   */
+  frame?: 'first_frame' | 'last_frame' | 'mid_frame';
 }
 
 /**

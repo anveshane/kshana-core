@@ -143,7 +143,7 @@ The core pipeline is functional and generating real video output. Active daily d
 ## Repository Structure
 
 ```
-kshana-ink/
+kshana-core/
 ├── src/
 │   ├── App.tsx                 # Main CLI application
 │   ├── components/             # React Ink UI components

@@ -1,5 +1,5 @@
 /**
- * WebSocket message types for kshana-ink server.
+ * WebSocket message types for kshana-core server.
  * Follows the same pattern as the Python kshana project.
  */
 

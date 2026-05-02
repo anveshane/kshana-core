@@ -39,6 +39,7 @@ export const HEAVY_PURPOSES = [
 export const MEDIUM_PURPOSES = [
   'structured.scene_breakdown',
   'structured.collection_extraction',
+  'structured.story_essence',
   'structured.scene_state',
   'structured.shot_image_json',
   'structured.workflow_analysis',

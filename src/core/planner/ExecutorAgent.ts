@@ -40,6 +40,18 @@ import {
   type AvailableRefMinimal,
 } from './shotImagePromptNormalizer.js';
 import { extractCollectionItems } from './collectionExtractor.js';
+import { extractStoryEssence, type StoryEssence } from './storyEssenceExtractor.js';
+import { buildStoryEssenceBlock } from './storyEssenceContextBlock.js';
+import { canonicalShotVideoDeps, sanitizeShotVideoDeps } from './shotVideoCanonicalDeps.js';
+import { syncSceneArtifacts } from './syncSceneArtifacts.js';
+import { buildShotAudioBlock } from './buildShotAudioBlock.js';
+import { buildShotNarrationDirective } from './buildShotNarrationDirective.js';
+import { skipEmptyCollectionAndDependents } from './skipEmptyCollection.js';
+import {
+  expectedShotNumberFromItemId,
+  validateShotNumber,
+  validateRefMentions,
+} from './shotImagePromptValidation.js';
 import { healStaleMatchingDeps } from './stateHeal.js';
 import { isStageGateSatisfied, isNodeGateSatisfied, resolveStageToTypeIds } from './stages.js';
 import { consumeStopFile } from './stopFile.js';
@@ -75,6 +87,11 @@ import {
 } from './continuityValidator.js';
 import { getProviderRegistry } from '../../services/providers/index.js';
 import { getWorkflowModeRegistry } from '../../services/providers/WorkflowModeRegistry.js';
+import { shouldGenerateExtraFrame, isPromptRelayMode } from '../../services/providers/videoStrategy.js';
+import type { SceneBundleShot, SceneBundleResult } from './sceneBundleRenderer.js';
+import type { CharacterId } from '../../services/providers/promptRelayGlobalPrompt.js';
+import { SceneBundleLockMap } from './sceneBundleLockMap.js';
+import { checkSceneBundleEligibility } from './sceneBundleEligibility.js';
 import { addAsset } from '../../tasks/video/workflow/index.js';
 
 /**
@@ -248,6 +265,14 @@ export class ExecutorAgent extends TypedEventEmitter {
    */
   private stopReason: 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null = null;
   private vlmDisabled = process.env['DISABLE_VLM'] === 'true'; // Env flag or auto-disabled after first 404
+  /**
+   * Loaded from prompts/story_essence.json after the story_essence node
+   * completes (or at startup if the file already exists). Threaded into
+   * the hierarchical scene extractor and the scene-prose context block
+   * so every downstream prompt is tuned to the story's editorial intent.
+   * Null when essence hasn't been generated yet.
+   */
+  private storyEssence: StoryEssence | null = null;
   private sceneSummaries = new Map<string, string>(); // scene_1 → summary text
   // scene_1 → on-screen duration in seconds, populated by the duration-first
   // extractor (sum of beat durations). Used in lieu of `target/sceneCount`
@@ -260,6 +285,20 @@ export class ExecutorAgent extends TypedEventEmitter {
   private retriedNodes = new Set<string>();
   /** Pending media generation promises (parallel mode) */
   private pendingMedia = new Map<string, Promise<string | null>>();
+  /** prompt_relay mode: shot_video nodes for the same scene share one
+   *  bundle-rendering pass. Lock value is a Map<shotNumber, path>
+   *  because long scenes split into multiple chunks — different shots
+   *  in the same scene may resolve to different bundle files. First
+   *  arrival fires the render; later arrivals await the same promise.
+   *  On null/throw the lock clears so the next caller retries (handles
+   *  the race where shot_video fires before sibling shot_images are
+   *  ready). */
+  private sceneBundleLocks = new SceneBundleLockMap<Map<number, string>>();
+  /** prompt_relay: scenes we've already determined cannot be rendered
+   *  as a bundle (e.g. > 20 shots, > 1000 frames). These never retry —
+   *  the cap is structural, not transient. Subsequent shot_videos for
+   *  the scene skip the relay path entirely and go per-shot. */
+  private unbundleableScenes = new Set<number>();
   /** Timeline state — populated during execution, saved to timeline.json */
   private timeline: Timeline | null = null;
   /** Tracks how many times a dependency was regenerated for a given parent node (loop protection) */
@@ -1362,8 +1401,9 @@ export class ExecutorAgent extends TypedEventEmitter {
       }
 
       if (!this.executor.getNode(shotVideoId)) {
-        const shotVideoDeps = [shotImageId, motionId];
-        if (prevShotVideoId) shotVideoDeps.push(prevShotVideoId);
+        const shotVideoDeps = canonicalShotVideoDeps({
+          shotImageId, motionId, prevShotVideoId,
+        });
         this.executor.addNode({
           id: shotVideoId,
           typeId: 'shot_video',
@@ -1382,20 +1422,33 @@ export class ExecutorAgent extends TypedEventEmitter {
           }
         }
       } else {
+        // Defensive sanitize: the underlying expansion code occasionally
+        // leaves shot_video with corrupted deps — most commonly ALL of
+        // a scene's per-item motion directives instead of just this
+        // shot's, AND the shot_image dep missing entirely. The selective
+        // indexOf-replace approach used to live here but couldn't FIX
+        // the corruption (only handled bare typeId refs). We rebuild
+        // deps from the canonical triple and strip stray per-item refs
+        // for shot_image / shot_motion_directive that don't match this
+        // shot. Other deps are preserved.
+        // See todos/shot-video-dep-expansion-bug.md for the deeper bug.
         const existing = this.executor.getNode(shotVideoId)!;
-        const fixDeps: Array<[string, string]> = [
-          ['shot_motion_directive', motionId],
-          ['shot_image', shotImageId],
-        ];
-        for (const [stale, correct] of fixDeps) {
-          const idx = existing.dependencies.indexOf(stale);
-          if (idx >= 0) {
-            existing.dependencies[idx] = correct;
-            this.log(`  Rewired ${shotVideoId}: ${stale} → ${correct}`);
+        const before = existing.dependencies.slice();
+        existing.dependencies = sanitizeShotVideoDeps({
+          existingDeps: before,
+          shotImageId,
+          motionId,
+          prevShotVideoId,
+        });
+        // Wire reverse edges on any newly-added canonical deps.
+        for (const depId of existing.dependencies) {
+          const depNode = this.executor.getNode(depId);
+          if (depNode && !depNode.dependents.includes(shotVideoId)) {
+            depNode.dependents.push(shotVideoId);
           }
         }
-        if (prevShotVideoId && !existing.dependencies.includes(prevShotVideoId)) {
-          existing.dependencies.push(prevShotVideoId);
+        if (JSON.stringify(before) !== JSON.stringify(existing.dependencies)) {
+          this.log(`  Sanitized ${shotVideoId} deps: [${before.join(',')}] → [${existing.dependencies.join(',')}]`);
         }
       }
 
@@ -2223,6 +2276,15 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.persistState();
               this.emitTodoUpdate();
               return;
+            } else if (node.typeId === 'story_essence') {
+              const essenceResult = await this.executeStoryEssenceNode(node, toolCallId, agentName);
+              if (!essenceResult) {
+                this.executor.markFailed(node.id, 'Story essence extraction failed');
+                this.persistState();
+                this.emitTodoUpdate();
+                return;
+              }
+              finalOutputPath = essenceResult;
             } else {
               // Non-deterministic node — needs LLM (or skip-if-exists)
               // 1. Resolve inputs
@@ -3172,6 +3234,46 @@ Examples of common failure modes to avoid:
       } catch { /* state not available */ }
     }
 
+    // For shot_motion_directive: surface this shot's dialogue/ambient
+    // (from scene_video_prompt's per-shot `audio` field) directly into
+    // the user message so the LLM doesn't have to dig it out — earlier
+    // probes proved soft "if there's dialogue" guide-text was being
+    // ignored. Also inject the narration directive (from StoryEssence)
+    // so the LLM optionally adds narrator lines per the project's
+    // narration mode/voice.
+    let shotAudioBlock = '';
+    let shotNarrationBlock = '';
+    if (node.typeId === 'shot_motion_directive' && node.itemId) {
+      try {
+        const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
+        const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+        if (sceneId && shotNum > 0) {
+          const svpPath = join(this.config.projectDir, `prompts/videos/scenes/${sceneId}.json`);
+          if (existsSync(svpPath)) {
+            try {
+              const svp = JSON.parse(readFileSync(svpPath, 'utf-8'));
+              const shot = (svp.shots ?? []).find((s: { shotNumber?: number }) => s.shotNumber === shotNum);
+              if (shot && typeof shot.audio === 'string') {
+                shotAudioBlock = buildShotAudioBlock(shot.audio);
+                if (shotAudioBlock) {
+                  this.log(`  Motion directive: injected <shot_audio> block for shot ${shotNum}`);
+                }
+              }
+            } catch { /* svp unreadable — skip */ }
+          }
+        }
+      } catch { /* defensive */ }
+      if (this.storyEssence?.narration) {
+        shotNarrationBlock = buildShotNarrationDirective(this.storyEssence.narration);
+        if (shotNarrationBlock) {
+          this.log(`  Motion directive: injected <narration> directive (mode=${this.storyEssence.narration.mode})`);
+        }
+      }
+    }
+    const motionAudioContext = (shotAudioBlock || shotNarrationBlock)
+      ? `\n\n${[shotAudioBlock, shotNarrationBlock].filter(Boolean).join('\n\n')}`
+      : '';
+
     // For scene nodes: inject scene_assignment with summaries and boundaries
     let sceneAssignment = '';
     if (node.typeId === 'scene' && node.itemId && this.sceneSummaries.size > 0) {
@@ -3192,9 +3294,21 @@ Examples of common failure modes to avoid:
       this.log(`  Injected scene_assignment for ${mySceneId} (${mySummary.substring(0, 50)}...)`);
     }
 
+    // Inject the editorial-intent block for scene-prose generation so
+    // the LLM tunes voice / pacing / register to match the kind of
+    // story being told. Empty string when essence isn't loaded —
+    // additive only, never breaks existing prose generation.
+    let storyEssenceBlock = '';
+    if (node.typeId === 'scene' && this.storyEssence) {
+      storyEssenceBlock = buildStoryEssenceBlock(this.storyEssence);
+      if (storyEssenceBlock) {
+        this.log(`  Injected story-essence block (genre=${this.storyEssence.genre})`);
+      }
+    }
+
     const user = inputs.contextBlock
-      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}\n\n${inputs.contextBlock}`
-      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${sceneAssignment}`;
+      ? `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}\n\n${inputs.contextBlock}`
+      : `${task}${projectContext}${availableRefsBlock}${referenceImageContext}${sceneStateContext}${characterTagsBlock}${perspectiveContext}${focusContext}${shotContextHint}${storyEssenceBlock}${sceneAssignment}${motionAudioContext}`;
 
     return { system: systemPrompt, user, loadedSkills };
   }
@@ -3563,6 +3677,43 @@ Examples of common failure modes to avoid:
         } catch { /* ignore */ }
       }
     }
+    // Load saved story essence (story_essence node output) so re-runs
+    // and resumed sessions pick up the editorial intent without an extra
+    // LLM call. The hierarchical extractor and scene-prose context block
+    // both consume this.
+    if (this.storyEssence === null) {
+      const essencePath = join(this.config.projectDir, 'prompts', 'story_essence.json');
+      if (existsSync(essencePath)) {
+        try {
+          const parsed = JSON.parse(readFileSync(essencePath, 'utf-8')) as Partial<StoryEssence>;
+          if (
+            typeof parsed.genre === 'string' &&
+            typeof parsed.throughline === 'string' &&
+            typeof parsed.tonalNotes === 'string' &&
+            typeof parsed.dramaticEmphasis === 'string'
+          ) {
+            // narration is required on the StoryEssence type but may be
+            // missing on essence files written before it was added to
+            // the schema. Default to mode='none' so legacy projects keep
+            // working without re-running the essence stage.
+            const narration = (parsed.narration && typeof parsed.narration === 'object')
+              ? parsed.narration
+              : { mode: 'none' as const, voice: '' };
+            this.storyEssence = {
+              genre: parsed.genre,
+              throughline: parsed.throughline,
+              tonalNotes: parsed.tonalNotes,
+              dramaticEmphasis: parsed.dramaticEmphasis,
+              narration: {
+                mode: narration.mode ?? 'none',
+                voice: narration.voice ?? '',
+              },
+            };
+            this.log(`  Loaded story essence from disk (genre=${this.storyEssence.genre}, narration=${this.storyEssence.narration.mode})`);
+          }
+        } catch { /* ignore — essence is optional, hierarchical falls back to no-essence path */ }
+      }
+    }
 
     const allNodes = this.executor.getAllNodes();
     let expanded = true;
@@ -3898,6 +4049,7 @@ Examples of common failure modes to avoid:
               const extracted = await extractCollectionItems(
                 ctxNode, storyContent, this.llmFor('structured.collection_extraction'),
                 this.config.goal.preferences.duration as number | undefined,
+                this.storyEssence ?? undefined,
               );
                 let itemList: Array<{ itemId: string; name: string }> = [];
 
@@ -3908,17 +4060,17 @@ Examples of common failure modes to avoid:
                   }));
                   // Persist scene summaries + estimated durations from this
                   // extraction. Strategy C used to skip this, so duration-first
-                  // values weren't reaching downstream.
-                  for (const s of extracted.scenes as Array<{
-                    sceneNumber: number; title?: string; summary?: string; estimatedDuration?: number;
-                  }>) {
-                    if (s.summary) {
-                      this.sceneSummaries.set(`scene_${s.sceneNumber}`, s.summary);
-                    }
-                    if (typeof s.estimatedDuration === 'number' && s.estimatedDuration > 0) {
-                      this.sceneEstimatedDurations.set(`scene_${s.sceneNumber}`, s.estimatedDuration);
-                    }
-                  }
+                  // values weren't reaching downstream. Use syncSceneArtifacts
+                  // so a re-run with fewer scenes drops stale keys from the
+                  // prior run (otherwise scene_3/scene_4 from a 4-scene run
+                  // linger when the new extraction returns 2 scenes).
+                  syncSceneArtifacts(
+                    extracted.scenes as Array<{
+                      sceneNumber: number; summary?: string; estimatedDuration?: number;
+                    }>,
+                    this.sceneSummaries,
+                    this.sceneEstimatedDurations,
+                  );
                   if (this.sceneSummaries.size > 0) {
                     const promptsDir = join(this.config.projectDir, 'prompts');
                     if (!existsSync(promptsDir)) mkdirSync(promptsDir, { recursive: true });
@@ -3963,7 +4115,30 @@ Examples of common failure modes to avoid:
                   didExpand = true;
                   expanded = true;
                 } else {
-                  this.log(`  Strategy C: no ${node.typeId} items found in story`);
+                  // Extraction succeeded but produced zero items for this
+                  // collection (typical case: story has no plot-critical
+                  // objects). Mark this collection AND any matching-scope
+                  // dependent collections as skipped — otherwise they hang
+                  // pending forever and downstream non-collection nodes
+                  // wait on a dep that will never be satisfied.
+                  this.log(`  Strategy C: no ${node.typeId} items found — marking collection (and matching-scope dependents) skipped`);
+                  const artifactTypesIndex = Object.fromEntries(
+                    Object.entries(this.config.template.artifactTypes).map(([id, def]) => [
+                      id,
+                      { dependencies: def.dependencies },
+                    ]),
+                  );
+                  const skipped = skipEmptyCollectionAndDependents(
+                    node,
+                    (id) => this.executor.getNode(id),
+                    artifactTypesIndex,
+                  );
+                  if (skipped.length > 0) {
+                    this.log(`  Skipped (empty-collection cascade): ${skipped.join(', ')}`);
+                    this.persistState();
+                    this.emitTodoUpdate();
+                    expanded = true;
+                  }
                 }
             } catch (err) {
               this.log(`  Strategy C failed: ${err}`);
@@ -4004,6 +4179,50 @@ Examples of common failure modes to avoid:
           break;
         }
       }
+    }
+
+    // Post-expansion sweep: any pending collection whose matching-scope
+    // upstream type has ZERO nodes in the graph is unreachable — its
+    // upstream produced no items (e.g. story has no plot-critical
+    // objects → `object` collection never created → `object_image`
+    // collection sits forever waiting for items that won't come). Mark
+    // it skipped and cascade to its matching-scope dependent collections.
+    // Without this, downstream non-collection nodes (shot_image with a
+    // type-level ref to object_image) hang on a dep that's permanently
+    // unsatisfiable.
+    {
+      const allNodes = this.executor.getAllNodes();
+      const typeIdsPresent = new Set<string>();
+      for (const n of allNodes) typeIdsPresent.add(n.typeId);
+
+      const artifactTypesIndex = Object.fromEntries(
+        Object.entries(this.config.template.artifactTypes).map(([id, def]) => [
+          id,
+          { dependencies: def.dependencies },
+        ]),
+      );
+
+      for (const node of allNodes) {
+        if (node.status !== 'pending') continue;
+        if (!node.isCollection || node.itemId) continue;
+        const typeDef = this.config.template.artifactTypes[node.typeId];
+        if (!typeDef) continue;
+        const matchingMissing = typeDef.dependencies
+          .filter(d => d.scope === 'matching')
+          .some(d => !typeIdsPresent.has(d.artifactTypeId));
+        if (!matchingMissing) continue;
+
+        this.log(`  Unreachable collection ${node.id}: matching-scope dep type has no nodes — skipping`);
+        const skipped = skipEmptyCollectionAndDependents(
+          node,
+          (id) => this.executor.getNode(id),
+          artifactTypesIndex,
+        );
+        if (skipped.length > 0) {
+          this.log(`  Skipped (unreachable cascade): ${skipped.join(', ')}`);
+        }
+      }
+      this.persistState();
     }
 
     // Post-expansion: fix dangling dependencies (type-level refs to expanded nodes)
@@ -4336,6 +4555,21 @@ Examples of common failure modes to avoid:
             .map(i => `${i.frame}: ${i.reason}`)
             .join(' | ');
           return { valid: false, error: `OTS-with-single-character violation. ${detail}` };
+        }
+
+        // (5) Semantic guards: shotNumber and ref mentions. The
+        // existing JSON schema can't catch a model that hallucinates
+        // an entirely unrelated scene (deepseek emitted "Elena in
+        // apartment" for a Parvati/mudroom shot). These checks force
+        // a regen via the json_repair → full-retry flow.
+        const expectedShotNum = expectedShotNumberFromItemId(node.itemId);
+        const shotNumCheck = validateShotNumber(parsed as { shotNumber?: unknown }, expectedShotNum);
+        if (!shotNumCheck.valid) {
+          return { valid: false, error: shotNumCheck.error ?? 'shotNumber mismatch' };
+        }
+        const refCheck = validateRefMentions(parsed, availableRefs.map(r => r.refId));
+        if (!refCheck.valid) {
+          return { valid: false, error: refCheck.error ?? 'ref-mention check failed' };
         }
 
         mutated = true;
@@ -4931,16 +5165,9 @@ Examples of common failure modes to avoid:
         // Store scene summaries for injection into scene writer prompts.
         // Save to disk so they survive restarts. Also capture per-scene
         // estimatedDuration if the duration-first extractor populated it.
-        for (const s of items.scenes ?? []) {
-          if (s.summary) {
-            this.sceneSummaries.set(`scene_${s.sceneNumber}`, s.summary);
-            this.log(`  Stored summary for scene_${s.sceneNumber}: ${s.summary.substring(0, 60)}...`);
-          }
-          if (typeof s.estimatedDuration === 'number' && s.estimatedDuration > 0) {
-            this.sceneEstimatedDurations.set(`scene_${s.sceneNumber}`, s.estimatedDuration);
-            this.log(`  Stored estimatedDuration for scene_${s.sceneNumber}: ${s.estimatedDuration}s`);
-          }
-        }
+        // Use syncSceneArtifacts so re-runs with fewer scenes drop stale
+        // keys (scene_3/scene_4 leftover from a prior 4-scene run).
+        syncSceneArtifacts(items.scenes ?? [], this.sceneSummaries, this.sceneEstimatedDurations);
         if (this.sceneSummaries.size > 0) {
           const summaryPath = join(this.config.projectDir, 'prompts', 'scene_summaries.json');
           if (!existsSync(join(this.config.projectDir, 'prompts'))) mkdirSync(join(this.config.projectDir, 'prompts'), { recursive: true });
@@ -5247,8 +5474,17 @@ Examples of common failure modes to avoid:
         if (!firstFramePath) return null;
       }
 
-      // Generate additional frames
-      const additionalFrames = Object.keys(parsedJson.frames).filter(k => k !== 'first_frame');
+      // Generate additional frames. In prompt_relay mode (default),
+      // last/mid frames are skipped — the relay renders the whole scene
+      // as one mp4 driven only by per-segment first_frames, so any
+      // extra frames burn image-gen budget for nothing.
+      const additionalFrames = Object.keys(parsedJson.frames)
+        .filter(k => k !== 'first_frame')
+        .filter(k => shouldGenerateExtraFrame(k));
+      if (isPromptRelayMode() && additionalFrames.length === 0) {
+        const skipped = Object.keys(parsedJson.frames).filter(k => k !== 'first_frame');
+        if (skipped.length > 0) this.log(`  prompt_relay mode: skipping extra frames ${skipped.join(', ')}`);
+      }
       if (additionalFrames.length > 0) {
         node.outputPaths = { ...node.outputPaths, first_frame: firstFramePath };
 
@@ -5404,7 +5640,7 @@ Examples of common failure modes to avoid:
       if (mode) {
         const frameInputs = mode.inputRequirements.filter(
           r => r.type === 'image' && r.source === 'shot_image' && r.id !== 'first_frame'
-        );
+        ).filter(r => shouldGenerateExtraFrame(r.id));
 
         if (frameInputs.length > 0) {
           node.outputPaths = { first_frame: firstFramePath };
@@ -5919,9 +6155,10 @@ Examples of common failure modes to avoid:
       }
 
       // Determine image type from node type
-      let imageType: 'character_ref' | 'setting_ref' | 'scene' = 'scene';
+      let imageType: 'character_ref' | 'setting_ref' | 'object_ref' | 'scene' = 'scene';
       let characterName: string | undefined;
       let settingName: string | undefined;
+      let objectName: string | undefined;
       const sceneNumber = parseInt(node.itemId?.match(/(\d+)/)?.[1] ?? '1', 10);
 
       if (node.typeId === 'character_image') {
@@ -5930,6 +6167,12 @@ Examples of common failure modes to avoid:
       } else if (node.typeId === 'setting_image') {
         imageType = 'setting_ref';
         settingName = node.itemId;
+      } else if (node.typeId === 'object_image') {
+        // Without this branch, object_images fell into the 'scene'
+        // fallback and got saved as `scene_1_0002.png` etc, indistinguishable
+        // from shot images on the ComfyUI server.
+        imageType = 'object_ref';
+        objectName = node.itemId;
       }
       progressHandler = (event) => {
         // Use reset: true so each progress update REPLACES the previous one
@@ -5966,6 +6209,7 @@ Examples of common failure modes to avoid:
         image_type: imageType,
         character_name: characterName,
         setting_name: settingName,
+        object_name: objectName,
         generation_mode: 'text_to_image',
       });
 
@@ -6033,6 +6277,20 @@ Examples of common failure modes to avoid:
     toolCallId: string,
   ): Promise<string | null> {
     const agentName = this.config.name ?? 'kshana-executor';
+
+    // ── prompt_relay mode: render the whole scene as one bundle mp4
+    // and return that path for every shot in the scene. The render
+    // fires once; concurrent shot_video nodes for the same scene
+    // share the in-flight promise via sceneBundleLocks. The
+    // assembler-side dedupe (collapseBundleSegments) collapses the N
+    // identical timeline segments back to one concat input.
+    if (isPromptRelayMode()) {
+      const bundlePath = await this.renderOrAwaitSceneBundle(node, toolCallId, agentName);
+      if (bundlePath) return bundlePath;
+      // Fallthrough to per-shot if bundle render failed — better to
+      // limp than to drop the scene.
+      this.log(`  prompt_relay bundle render failed; falling back to per-shot for ${node.id}`);
+    }
 
     // 1. Find the MATCHING shot image (same itemId)
     let shotImagePath: string | undefined;
@@ -6332,6 +6590,360 @@ Examples of common failure modes to avoid:
       });
       return null;
     }
+  }
+
+  /**
+   * prompt_relay mode: render the scene as one or more bundle mp4s.
+   * The first shot_video for a scene to arrive fires the render(s);
+   * concurrent shot_videos for the same scene await the same
+   * in-flight promise (sceneBundleLocks). Long scenes that exceed
+   * the LTX caps (>20 shots or >1000 frames) are split into multiple
+   * chunks via chunkSceneIntoBundles; each chunk is rendered as its
+   * own scene_video asset with metadata.coversShots listing which
+   * shots it covers. The FFmpegAssembler's tier-3.5 fallback uses
+   * coversShots to pick the right chunk per shot.
+   */
+  private async renderOrAwaitSceneBundle(
+    node: ExecutionNode,
+    _toolCallId: string,
+    agentName: string,
+  ): Promise<string | null> {
+    const sceneMatch = node.itemId?.match(/scene_(\d+)/);
+    const shotMatch = node.itemId?.match(/shot_(\d+)$/);
+    if (!sceneMatch || !shotMatch) {
+      this.log(`  prompt_relay: cannot parse scene/shot from ${node.itemId}`);
+      return null;
+    }
+    const sceneNum = parseInt(sceneMatch[1]!, 10);
+    const shotNum = parseInt(shotMatch[1]!, 10);
+    if (this.unbundleableScenes.has(sceneNum)) {
+      return null;
+    }
+    const chunkMap = await this.sceneBundleLocks.acquire(sceneNum, () => this.executeSceneBundle(sceneNum, agentName));
+    if (!chunkMap) return null;
+    return chunkMap.get(shotNum) ?? null;
+  }
+
+  /** Gather all shots, split into chunks, render each. Returns a map
+   *  shotNumber → bundle relative path (the chunk covering that shot). */
+  private async executeSceneBundle(sceneNum: number, agentName: string): Promise<Map<number, string> | null> {
+    const { renderSceneBundle } = await import('./sceneBundleRenderer.js');
+    const { chunkSceneIntoBundles } = await import('./sceneBundleChunker.js');
+    void agentName;
+
+    // 1. Find all shot_video nodes for this scene, ordered by shot number
+    const allNodes = this.executor.getAllNodes();
+    const sceneShotNodes = allNodes
+      .filter(n => n.typeId === 'shot_video' && n.itemId?.startsWith(`scene_${sceneNum}_shot_`))
+      .map(n => {
+        const m = n.itemId?.match(/shot_(\d+)$/);
+        const shotNumber = m?.[1] ? parseInt(m[1], 10) : 0;
+        return { node: n, shotNumber };
+      })
+      .filter(x => x.shotNumber > 0)
+      .sort((a, b) => a.shotNumber - b.shotNumber);
+
+    if (sceneShotNodes.length === 0) {
+      this.log(`  prompt_relay: scene ${sceneNum} has no shot_video nodes`);
+      return null;
+    }
+
+    // 2. For each shot: first_frame path, motion prompt, duration
+    const shots: SceneBundleShot[] = [];
+    let svpJson: { shots?: Array<{ shotNumber?: number; duration?: number; description?: string }> } | null = null;
+    const svpNode = this.executor.getNode(`scene_video_prompt:scene_${sceneNum}`);
+    if (svpNode?.outputPath) {
+      try {
+        let c = readFileSync(join(this.config.projectDir, svpNode.outputPath), 'utf-8').trim();
+        if (c.startsWith('```')) c = c.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+        svpJson = JSON.parse(c);
+      } catch { /* ignore */ }
+    }
+
+    for (const { node, shotNumber } of sceneShotNodes) {
+      // first_frame from shot_image node
+      const imgNode = this.executor.getNode(`shot_image:${node.itemId}`);
+      const firstFrameRel = imgNode?.outputPaths?.['first_frame'] ?? imgNode?.outputPath;
+      if (!firstFrameRel) {
+        this.log(`  prompt_relay: scene ${sceneNum} shot ${shotNumber} has no first_frame yet — bundle waits`);
+        return null;
+      }
+      const firstFrameAbs = join(this.config.projectDir, firstFrameRel);
+      if (!existsSync(firstFrameAbs)) {
+        this.log(`  prompt_relay: first_frame missing on disk for scene ${sceneNum} shot ${shotNumber}: ${firstFrameAbs}`);
+        return null;
+      }
+
+      // motion prompt
+      let motionPrompt = '';
+      const mdNode = this.executor.getNode(`shot_motion_directive:${node.itemId}`);
+      if (mdNode?.outputPath) {
+        try {
+          let raw = readFileSync(join(this.config.projectDir, mdNode.outputPath), 'utf-8').trim();
+          if (raw.startsWith('```')) raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+          try {
+            const parsed = JSON.parse(raw);
+            motionPrompt = (typeof parsed?.motionDirective === 'string' ? parsed.motionDirective : raw).trim();
+          } catch {
+            motionPrompt = raw;
+          }
+        } catch { /* ignore */ }
+      }
+      if (!motionPrompt) motionPrompt = `Cinematic shot, scene ${sceneNum} shot ${shotNumber}.`;
+
+      // duration from scene_video_prompt
+      const shotMeta = svpJson?.shots?.find(s => s.shotNumber === shotNumber);
+      const duration = typeof shotMeta?.duration === 'number' && shotMeta.duration > 0 ? shotMeta.duration : 5;
+
+      shots.push({ shotNumber, firstFramePath: firstFrameAbs, motionPrompt, duration });
+    }
+
+    // 3. Split into chunks that fit LTX caps. The chunker honors both
+    // 20-shot and 1000-frame caps, re-aligning frame counts per chunk
+    // (each chunk's first segment gets +1 to keep the chunk's total
+    // ≡ 1 mod 8). Single-bundle scenes return one chunk; long scenes
+    // return multiple chunks rendered one after another.
+    const chunks = chunkSceneIntoBundles(
+      shots.map(s => ({ shotNumber: s.shotNumber, durationSec: s.duration })),
+      24,
+    );
+    if (chunks.length === 0) return null;
+
+    // Defensive: confirm every chunk passed eligibility. The chunker
+    // is supposed to guarantee this, but if a single shot is so long
+    // that even alone it exceeds 1000 frames, we land here. Mark the
+    // scene unbundleable rather than submit a doomed render.
+    for (const chunk of chunks) {
+      const elig = checkSceneBundleEligibility({ shotCount: chunk.shots.length, totalFrames: chunk.totalFrames });
+      if (!elig.eligible) {
+        this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex} ineligible — ${elig.reason}`);
+        if (elig.permanent) {
+          this.log(`  prompt_relay: marking scene ${sceneNum} unbundleable; falling back to per-shot`);
+          this.unbundleableScenes.add(sceneNum);
+        }
+        return null;
+      }
+    }
+
+    // 4. Render each chunk serially. Per-chunk output filename
+    // includes _chunk${index} so chunks for the same scene don't
+    // collide on disk.
+    const characters = this.collectCharacterIdentities();
+    const sceneDescription = this.collectSceneDescription(sceneNum, svpJson);
+    const width = this.config.project.resolutionWidth ?? 848;
+    const height = this.config.project.resolutionHeight ?? 480;
+    const style = (this.config.project as { style?: string }).style || 'cinematic';
+
+    this.log(`  prompt_relay: scene ${sceneNum} rendering ${shots.length} shots in ${chunks.length} chunk(s)`);
+
+    const chunkPathByShot = new Map<number, string>();
+
+    for (const chunk of chunks) {
+      // Map the chunker's shot list back to SceneBundleShot (carries
+      // the first_frame/motion data we already gathered).
+      const chunkShots: SceneBundleShot[] = chunk.shots
+        .map(c => shots.find(s => s.shotNumber === c.shotNumber))
+        .filter((s): s is SceneBundleShot => !!s);
+      if (chunkShots.length !== chunk.shots.length) {
+        this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex} missing shot data — abort`);
+        return null;
+      }
+
+      this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex + 1}/${chunks.length} (${chunkShots.length} shots, ${chunk.totalFrames} frames, ~${Math.round(chunk.totalFrames * 1.4 / 60)}min expected)`);
+      // Throttled progress logging so the user can see the chunk
+      // render is alive during its 10-25 minute window. Without this,
+      // executor.log goes silent between "uploaded N first frames"
+      // and the eventual completion — easy to mistake for a hang.
+      let lastProgressLog = 0;
+      const renderStart = Date.now();
+      const onProgress = (pct: number, msg: string) => {
+        const now = Date.now();
+        if (now - lastProgressLog < 15000) return;  // throttle to every 15s
+        lastProgressLog = now;
+        const elapsedSec = Math.round((now - renderStart) / 1000);
+        this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex} [${pct.toFixed(0)}% / ${elapsedSec}s elapsed] ${msg}`);
+      };
+      let result: SceneBundleResult;
+      try {
+        result = await renderSceneBundle({
+          sceneNumber: sceneNum,
+          shots: chunkShots,
+          characters,
+          sceneDescription,
+          style,
+          projectDir: this.config.projectDir,
+          width,
+          height,
+          log: (m) => this.log(`  prompt_relay: ${m}`),
+          onProgress,
+          chunkIndex: chunks.length > 1 ? chunk.chunkIndex : undefined,
+        });
+      } catch (err) {
+        this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex} render threw: ${String(err)}`);
+        return null;
+      }
+
+      try {
+        addAsset({
+          id: `scenebundle_${sceneNum}_chunk${chunk.chunkIndex}_${Date.now()}`,
+          type: 'scene_video',
+          path: result.bundleRelativePath,
+          createdAt: Date.now(),
+          metadata: {
+            sceneNumber: sceneNum,
+            isBundle: true,
+            coversShots: chunkShots.map(s => s.shotNumber),
+            chunkIndex: chunk.chunkIndex,
+            totalChunks: chunks.length,
+            generationStrategy: 'prompt_relay',
+            totalFrames: result.totalFrames,
+            segmentFrames: result.segmentFrames,
+            promptId: result.promptId,
+          },
+        });
+      } catch { /* non-fatal */ }
+
+      for (const s of chunkShots) {
+        chunkPathByShot.set(s.shotNumber, result.bundleRelativePath);
+      }
+      this.log(`  prompt_relay: scene ${sceneNum} chunk ${chunk.chunkIndex} saved → ${result.bundleRelativePath}`);
+    }
+
+    return chunkPathByShot;
+  }
+
+  /** Read each character's "Physical Description" from characters/*.md
+   *  for the global-prompt builder. Conservative — only files listed
+   *  on the project's content registry, deduped by name. */
+  private collectCharacterIdentities(): CharacterId[] {
+    const out: CharacterId[] = [];
+    const items = (this.config.project as unknown as { content?: { characters?: { items?: string[]; itemFiles?: Record<string, string> } } }).content?.characters;
+    const itemFiles = items?.itemFiles ?? {};
+    const seen = new Set<string>();
+    for (const name of items?.items ?? []) {
+      const key = name.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const rel = itemFiles[name];
+      if (!rel) continue;
+      const abs = join(this.config.projectDir, rel);
+      if (!existsSync(abs)) continue;
+      try {
+        const md = readFileSync(abs, 'utf-8');
+        const m = md.match(/###\s*Physical Description\s*\n([\s\S]+?)(?:\n###|\n---|$)/i);
+        if (m) {
+          out.push({ name, description: m[1]!.replace(/\s+/g, ' ').trim() });
+        }
+      } catch { /* ignore */ }
+    }
+    return out;
+  }
+
+  /** Pull a brief, visual description for a scene from
+   *  prompts/scene_summaries.json or the SVP JSON, kept short to avoid
+   *  drowning the per-segment local prompts. */
+  private collectSceneDescription(
+    sceneNum: number,
+    svpJson: { shots?: Array<{ description?: string }> } | null,
+  ): string {
+    const summariesPath = join(this.config.projectDir, 'prompts/scene_summaries.json');
+    if (existsSync(summariesPath)) {
+      try {
+        const all = JSON.parse(readFileSync(summariesPath, 'utf-8')) as Record<string, string>;
+        const s = all[`scene_${sceneNum}`];
+        if (typeof s === 'string' && s.trim().length > 0) return s.trim();
+      } catch { /* ignore */ }
+    }
+    // Fall back to first shot's description
+    return svpJson?.shots?.[0]?.description?.trim() ?? '';
+  }
+
+  /**
+   * Run the focused story-essence LLM call and persist the result.
+   *
+   * Reads the story node's outputPath, calls `extractStoryEssence`, writes
+   * `prompts/story_essence.json` (the artifact's filePattern), caches the
+   * result on `this.storyEssence` so downstream consumers (hierarchical
+   * scene extraction, scene-prose context builder) can use it without
+   * re-reading the file.
+   *
+   * Returns the relative output path on success, or null on failure
+   * (so the dispatch in the run loop can mark the node failed).
+   */
+  private async executeStoryEssenceNode(
+    node: ExecutionNode,
+    toolCallId: string,
+    agentName: string,
+  ): Promise<string | null> {
+    const storyNode = this.executor.getAllNodes().find(n => n.typeId === 'story' && n.status === 'completed');
+    if (!storyNode?.outputPath) {
+      this.log(`  story_essence: cannot find completed story node with outputPath`);
+      return null;
+    }
+    const storyAbs = join(this.config.projectDir, storyNode.outputPath);
+    if (!existsSync(storyAbs)) {
+      this.log(`  story_essence: story file missing on disk: ${storyAbs}`);
+      return null;
+    }
+
+    let storyContent: string;
+    try {
+      storyContent = readFileSync(storyAbs, 'utf-8');
+    } catch (err) {
+      this.log(`  story_essence: failed to read story: ${(err as Error).message}`);
+      return null;
+    }
+
+    const toolName = 'extract_story_essence';
+    this.emit({
+      type: 'tool_call',
+      toolCallId,
+      toolName,
+      arguments: { source: storyNode.outputPath, model: this.modelFor('structured.story_essence') },
+      agentName,
+    });
+
+    let essence: StoryEssence;
+    try {
+      const targetDurationSec = this.config.goal.preferences.duration as number | undefined;
+      essence = await extractStoryEssence(storyContent, this.llmFor('structured.story_essence'), {
+        ...(typeof targetDurationSec === 'number' ? { targetDurationSec } : {}),
+      });
+    } catch (err) {
+      this.log(`  story_essence: extraction failed: ${(err as Error).message}`);
+      this.emit({
+        type: 'tool_result',
+        toolCallId,
+        toolName,
+        result: { status: 'failed', error: (err as Error).message },
+        agentName,
+      });
+      return null;
+    }
+
+    const outputRel = node.outputPath ?? 'prompts/story_essence.json';
+    const outputAbs = join(this.config.projectDir, outputRel);
+    const outputDir = join(this.config.projectDir, 'prompts');
+    if (!existsSync(outputDir)) mkdirSync(outputDir, { recursive: true });
+    writeFileSync(outputAbs, JSON.stringify(essence, null, 2));
+
+    this.storyEssence = essence;
+    this.log(`  story_essence: wrote ${outputRel} (genre=${essence.genre})`);
+
+    this.emit({
+      type: 'tool_result',
+      toolCallId,
+      toolName,
+      result: { status: 'completed', file: outputRel, genre: essence.genre },
+      agentName,
+    });
+    this.emit({
+      type: 'agent_text',
+      text: `**Story Essence** → \`${outputRel}\` — genre: ${essence.genre}; throughline: ${essence.throughline}`,
+      isFinal: false,
+    });
+
+    return outputRel;
   }
 
   /**

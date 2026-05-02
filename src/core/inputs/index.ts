@@ -2,7 +2,7 @@
  * Multi-Input Support Module
  *
  * This module provides functionality for handling diverse input types
- * in the kshana-ink video generation workflow.
+ * in the kshana-core video generation workflow.
  *
  * Supported input sources:
  * - Local file paths

@@ -7,6 +7,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { nanoid } from 'nanoid';
 import { createTool } from '../../core/tools/index.js';
+import { buildImageFilenamePrefix } from './buildImageFilenamePrefix.js';
 import type { ToolDefinition } from '../../core/llm/index.js';
 import { getCurrentSession, getSessionFs } from '../../core/fs/index.js';
 import {
@@ -205,6 +206,8 @@ export interface ArtifactContext {
   settingName?: string;
   /** Whether this is an image or video artifact */
   artifactType: 'image' | 'video';
+  /** Frame slot for shot images. Carried so the async polling handler can populate the project.json scenes tree. */
+  frameId?: 'first_frame' | 'last_frame' | 'mid_frame';
 }
 
 /**
@@ -255,9 +258,10 @@ export interface ImageGenerationParams {
   height?: number;
   seed?: number;
   shot_number?: number;
-  image_type?: 'scene' | 'character_ref' | 'setting_ref';
+  image_type?: 'scene' | 'character_ref' | 'setting_ref' | 'object_ref';
   character_name?: string;
   setting_name?: string;
+  object_name?: string;
   /** Reference images for consistency (used for scene generation) */
   reference_images?: ReferenceImage[];
   /** Generation mode: text-to-image or image+text-to-image */
@@ -356,24 +360,19 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
     segment_id,
   } = params;
 
-  // Determine filename prefix based on image type
-  let filenamePrefix: string;
-
-  if (image_type === 'character_ref' && character_name) {
-    const cleanName = character_name.replace(/[^a-zA-Z0-9]/g, '');
-    filenamePrefix = `CharRef_${cleanName}`;
-  } else if (image_type === 'setting_ref' && setting_name) {
-    const cleanName = setting_name.replace(/[^a-zA-Z0-9]/g, '');
-    filenamePrefix = `SettingRef_${cleanName}`;
-  } else {
-    // Shot scene images: carry full scene/shot/frame identity into the filename
-    // so Finder listings stay scannable. ComfyUIProvider.shortenPrefix will
-    // compress `scene_N_shot_M` → `sNshotM` in the saved filename.
-    const parts = [`scene_${scene_number}`];
-    if (params.shot_number !== undefined) parts.push(`shot_${params.shot_number}`);
-    if (params.frame_id) parts.push(params.frame_id);
-    filenamePrefix = parts.join('_');
-  }
+  // Determine filename prefix based on image type. The helper covers
+  // character/setting/object refs uniformly and falls through to scene
+  // for shot images. ComfyUIProvider.shortenPrefix compresses
+  // `scene_N_shot_M` → `sNshotM` later.
+  const filenamePrefix = buildImageFilenamePrefix({
+    image_type,
+    character_name,
+    setting_name,
+    object_name: params.object_name,
+    scene_number,
+    shot_number: params.shot_number,
+    frame_id: params.frame_id,
+  });
 
   // Determine context for linking artifact to project
   let context: ArtifactContext;
@@ -382,7 +381,19 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
   } else if (image_type === 'setting_ref' && setting_name) {
     context = { entityType: 'setting', settingName: setting_name, artifactType: 'image' };
   } else {
-    context = { entityType: 'scene', sceneNumber: scene_number, artifactType: 'image' };
+    const frameId =
+      params.frame_id === 'first_frame' ||
+      params.frame_id === 'last_frame' ||
+      params.frame_id === 'mid_frame'
+        ? (params.frame_id as 'first_frame' | 'last_frame' | 'mid_frame')
+        : undefined;
+    context = {
+      entityType: 'scene',
+      sceneNumber: scene_number,
+      ...(shot_number !== undefined ? { shotNumber: shot_number } : {}),
+      artifactType: 'image',
+      ...(frameId ? { frameId } : {}),
+    };
   }
 
   // Create job for tracking
@@ -551,6 +562,25 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
     else if (context.entityType === 'setting') assetType = 'setting_ref';
 
     try {
+      const nodeId = (() => {
+        if (assetType === 'scene_image' && scene_number !== undefined && shot_number !== undefined) {
+          return `shot_image:scene_${scene_number}_shot_${shot_number}`;
+        }
+        if (assetType === 'character_ref' && character_name) {
+          return `character_image:${character_name.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }
+        if (assetType === 'setting_ref' && setting_name) {
+          return `setting_image:${setting_name.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }
+        return undefined;
+      })();
+      const frame =
+        assetType === 'scene_image' &&
+        (params.frame_id === 'first_frame' ||
+          params.frame_id === 'last_frame' ||
+          params.frame_id === 'mid_frame')
+          ? (params.frame_id as 'first_frame' | 'last_frame' | 'mid_frame')
+          : undefined;
       addAsset({
         id: artifactId,
         type: assetType,
@@ -558,6 +588,8 @@ export async function submitImageGeneration(params: ImageGenerationParams): Prom
         scene_number: assetType === 'scene_image' ? scene_number : undefined,
         version: 1,
         createdAt: Date.now(),
+        ...(nodeId ? { nodeId } : {}),
+        ...(frame ? { frame } : {}),
         metadata: buildPlacementMetadata(
           assetType === 'scene_image' ? scene_number : undefined,
           assetType === 'scene_image' ? shot_number : undefined,
@@ -763,6 +795,23 @@ async function waitForComfyUIJob(
 
     // Store artifact in project manifest
     try {
+      const ctx = job.context;
+      const nodeId = (() => {
+        if (assetType === 'scene_image' && ctx?.entityType === 'scene' && ctx.sceneNumber !== undefined && ctx.shotNumber !== undefined) {
+          return `shot_image:scene_${ctx.sceneNumber}_shot_${ctx.shotNumber}`;
+        }
+        if (assetType === 'scene_video' && ctx?.entityType === 'scene' && ctx.sceneNumber !== undefined && ctx.shotNumber !== undefined) {
+          return `shot_video:scene_${ctx.sceneNumber}_shot_${ctx.shotNumber}`;
+        }
+        if (assetType === 'character_ref' && ctx?.characterName) {
+          return `character_image:${ctx.characterName.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }
+        if (assetType === 'setting_ref' && ctx?.settingName) {
+          return `setting_image:${ctx.settingName.replace(/[^a-zA-Z0-9_]/g, '_')}`;
+        }
+        return undefined;
+      })();
+      const frame = assetType === 'scene_image' ? ctx?.frameId : undefined;
       addAsset({
         id: artifactId,
         type: assetType,
@@ -771,6 +820,8 @@ async function waitForComfyUIJob(
           job.context?.entityType === 'scene' ? job.context.sceneNumber : undefined,
         version: 1,
         createdAt: Date.now(),
+        ...(nodeId ? { nodeId } : {}),
+        ...(frame ? { frame } : {}),
         metadata: buildPlacementMetadata(
           job.context?.entityType === 'scene' ? job.context.sceneNumber : undefined,
           job.context?.entityType === 'scene' ? job.context.shotNumber : undefined,
@@ -1950,6 +2001,7 @@ This tool blocks until video generation is complete and returns the result direc
           scene_number: sceneNumber,
           version: 1,
           createdAt: Date.now(),
+          nodeId: `shot_video:scene_${sceneNumber}_shot_${shotNumber}`,
           metadata: buildPlacementMetadata(sceneNumber, shotNumber, {
             jobId,
             provider: provider.id,

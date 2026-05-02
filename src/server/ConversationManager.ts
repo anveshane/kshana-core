@@ -3,11 +3,15 @@
  * Each WebSocket connection can have one active conversation session.
  * Agent is created lazily when a project is selected via configureSessionForProject().
  */
+import * as nodeFs from 'node:fs';
+import * as nodePath from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
+import { defaultBasePath } from '../tasks/video/workflow/projectFileIO.js';
 import type { GenericAgentResult } from '../core/agent/index.js';
 import type { LLMClientConfig } from '../core/llm/index.js';
-import { createExecutorAgent } from '../tasks/video/index.js';
 import type { TypedEventEmitter } from '../events/EventEmitter.js';
+import { PiSessionAgent } from '../agent/pi/PiSessionAgent.js';
+import { applyProjectAnnouncement } from './projectAnnouncement.js';
 import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -79,6 +83,10 @@ export interface ConversationEvents {
   onTimelineUpdate?: (sessionId: string, data: { timeline: unknown }) => void;
   /** User-facing notification */
   onNotification?: (sessionId: string, data: { level: 'info' | 'warning' | 'error'; message: string }) => void;
+  /** Agent (or user) focused a project — frontend should treat it as the active project. */
+  onProjectFocused?: (sessionId: string, data: { projectName: string; templateId: string; style: string; duration: number; tools: string[] }) => void;
+  /** A long-running tool produced an asset (image / video) — surface it as a standalone chat event. */
+  onMediaGenerated?: (sessionId: string, data: { kind: 'image' | 'video'; project: string; path: string; source: string }) => void;
 }
 
 /**
@@ -110,6 +118,12 @@ interface ActiveSession {
   desktopCapabilities?: DesktopSessionCapabilities;
   /** Periodic timer checkpoint interval (flushes elapsedMs to disk) */
   timerCheckpointInterval?: ReturnType<typeof setInterval>;
+  /** Events callbacks for the currently-running task (cleared after runTask). */
+  activeEvents?: ConversationEvents;
+  /** Currently-focused project name (no .kshana suffix), set by kshana_focus_project. */
+  focusedProject?: string;
+  /** Last focused project we announced to the agent (for change detection in runTask). */
+  announcedProject?: string;
 }
 
 export class ConversationManager {
@@ -193,18 +207,64 @@ export class ConversationManager {
       getProviderRegistry().setConfig(providerConfig);
     }
 
-    // Create executor agent inside the session context so tools see the right project dir
+    // Create the pi-coding-agent session inside the session context so tools see
+    // the right project dir. The legacy ExecutorAgent is no longer used at this
+    // layer — it's driven by the kshana_* tools.
+    //
+    // Idempotent on the agent: pi sessions hold the user's chat history, so
+    // we MUST NOT recreate the agent when the user selects a different
+    // project mid-conversation. Only the SessionContext (filesystem scope)
+    // and the focusedProject marker change. The agent picks up the new
+    // project via runTask's prepended "Active project" announcement.
     runInSession(session.sessionContext, () => {
-      session.agent = createExecutorAgent({
-        templateId,
-        style,
-        duration,
-        llmConfig: this.llmConfig,
-        targetArtifacts: ['final_video'],
-        goalDescription: 'Create a video project',
-      });
-      session.initialized = false;
+      if (!session.agent) {
+        session.agent = new PiSessionAgent({
+          focusProject: (name) => this.focusSessionProject(sessionId, name),
+          onMedia: (event) => {
+            const s = this.sessions.get(sessionId);
+            s?.activeEvents?.onMediaGenerated?.(sessionId, event);
+          },
+        });
+        session.initialized = false;
+      }
     });
+
+    if (projectDirName) {
+      session.focusedProject = projectDirName.replace(/\.kshana$/, '');
+    }
+  }
+
+  /**
+   * Ensure the session has a SessionContext + PiSessionAgent so the user can
+   * chat before selecting a project. Uses default.kshana as the ambient
+   * working directory; tool calls take an explicit `project` parameter so the
+   * ambient context only matters for filesystem helpers that scope to a
+   * project dir.
+   */
+  private ensureAmbientSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    if (!session.sessionContext) {
+      const projectDir = 'default.kshana';
+      session.sessionContext =
+        session.mode === 'remote' && session.remoteFs
+          ? createRemoteSession(sessionId, projectDir, session.remoteFs)
+          : createLocalSession(sessionId, projectDir);
+    }
+
+    if (!session.agent) {
+      runInSession(session.sessionContext, () => {
+        session.agent = new PiSessionAgent({
+          focusProject: (name) => this.focusSessionProject(sessionId, name),
+          onMedia: (event) => {
+            const s = this.sessions.get(sessionId);
+            s?.activeEvents?.onMediaGenerated?.(sessionId, event);
+          },
+        });
+        session.initialized = false;
+      });
+    }
   }
 
   /**
@@ -412,16 +472,23 @@ export class ConversationManager {
       throw new Error(`Session not found: ${sessionId}`);
     }
 
-    if (!session.agent) {
-      throw new Error('Session agent not configured. Select a project first.');
-    }
-
     if (session.state.status === 'running') {
       throw new Error('Session already has a running task');
     }
 
-    if (!session.sessionContext) {
-      throw new Error('Session context not initialized. Configure project first.');
+    // Pi-orchestrator chat works without a project being selected — the user
+    // can ask "what projects are available?" before picking one. If no project
+    // is configured yet, set up an ambient context + agent on first message.
+    // Run BEFORE the agent guard so a brand-new session (created via
+    // createSession() but never configured) can still chat. Without this
+    // ordering, the embedded desktop hits "Session agent not configured"
+    // because focusSessionProject doesn't create an agent — only
+    // configureSessionForProject and ensureAmbientSession do.
+    if (!session.sessionContext || !session.agent) {
+      this.ensureAmbientSession(sessionId);
+    }
+    if (!session.sessionContext || !session.agent) {
+      throw new Error('Failed to initialize session context');
     }
 
     // Run the entire agent execution inside the session context
@@ -442,6 +509,10 @@ export class ConversationManager {
 
       // Set up event listeners
       this.setupEventListeners(sessionId, session.agent!, events);
+      // Stash events on the session so non-agent-emitter callbacks
+      // (e.g. PiSessionAgent's onMedia closure firing onMediaGenerated)
+      // can reach the WS bridge while the run is in flight.
+      session.activeEvents = events;
 
       // Start active timer + periodic checkpoint
       try { startTimer(); } catch { /* ignore if no project yet */ }
@@ -464,8 +535,14 @@ export class ConversationManager {
         workflowName,
       });
 
+      // Announce the focused project on the first turn after it changes — pi
+      // remembers it in its conversation context, so we only inject once.
+      const announced = applyProjectAnnouncement(task, session.focusedProject, session.announcedProject);
+      session.announcedProject = announced.announcedProject;
+      const effectiveTask = announced.task;
+
       try {
-        const result = await session.agent!.run(task);
+        const result = await session.agent!.run(effectiveTask);
 
         // Stop active timer + checkpoint interval
         if (session.timerCheckpointInterval) { clearInterval(session.timerCheckpointInterval); session.timerCheckpointInterval = undefined; }
@@ -509,8 +586,94 @@ export class ConversationManager {
         // Clean up event listeners
         session.agent!.removeAllListeners();
         session.abortController = undefined;
+        session.activeEvents = undefined;
       }
     });
+  }
+
+  /**
+   * Focus a project as the active project for this session. Called from the
+   * kshana_focus_project tool so the agent can pick a project from the chat
+   * without the user needing to use the dropdown. Updates the session's
+   * filesystem context, persists the project's stored config, and notifies
+   * the frontend so panels (storyboard / phase / timeline) can populate.
+   */
+  async focusSessionProject(sessionId: string, projectName: string): Promise<{
+    projectName: string;
+    title?: string;
+    style?: string;
+    phase?: string;
+    templateId: string;
+  }> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    const projectDirName = `${projectName}.kshana`;
+    // Read project.json directly via the shared `defaultBasePath()`
+    // anchor (KSHANA_PROJECTS_DIR / cwd) instead of the brittle
+    // loadProject(basePath) path. The previous code passed
+    // `projectDirName` as basePath and relied on the standalone CLI's
+    // cwd + an already-set SessionContext to coincidentally line up.
+    // Embedded hosts have neither, so the call ENOENT'd.
+    let project: NonNullable<ReturnType<typeof loadProject>>;
+    try {
+      const projectsDir = defaultBasePath();
+      const projectJsonPath = nodePath.join(projectsDir, projectDirName, 'project.json');
+      if (!nodeFs.existsSync(projectJsonPath)) {
+        throw new Error(`project.json not found at ${projectJsonPath}`);
+      }
+      const raw = nodeFs.readFileSync(projectJsonPath, 'utf-8');
+      project = JSON.parse(raw) as NonNullable<ReturnType<typeof loadProject>>;
+    } catch (err) {
+      throw new Error(
+        `Project '${projectName}' not found or unreadable. ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    const templateId = project.templateId ?? 'narrative';
+    const style = project.style ?? 'cinematic_realism';
+    const duration = project.targetDuration ?? 60;
+
+    // Refresh the session context to point at the focused project so any
+    // file-system helpers that scope to a project (asset registry, etc.) see
+    // the right cwd. Preserve the existing agent — we don't want to recreate
+    // pi mid-conversation; pi tools already take an explicit project param.
+    if (session.mode === 'remote' && session.remoteFs) {
+      session.sessionContext = createRemoteSession(sessionId, projectDirName, session.remoteFs);
+    } else {
+      session.sessionContext = createLocalSession(sessionId, projectDirName);
+    }
+
+    session.focusedProject = projectName;
+    // Agent invoked this directly via the kshana_focus_project tool, so it
+    // already sees the focus in its tool result — skip the runTask prepend.
+    session.announcedProject = projectName;
+
+    // Persist the configuration so a reconnect resumes on this project.
+    try {
+      this.persistProjectConfiguration(sessionId, { templateId, style, duration });
+    } catch {
+      /* persisting is best-effort — non-fatal if storage is unavailable */
+    }
+
+    const tools = session.agent?.getToolNames() ?? [];
+    session.activeEvents?.onProjectFocused?.(sessionId, {
+      projectName,
+      templateId,
+      style,
+      duration,
+      tools,
+    });
+
+    return {
+      projectName,
+      title: project.title,
+      style: project.style,
+      phase: project.currentPhase,
+      templateId,
+    };
   }
 
   /**
@@ -563,6 +726,7 @@ export class ConversationManager {
 
       // Set up event listeners
       this.setupEventListeners(sessionId, session.agent!, events);
+      session.activeEvents = events;
 
       // Start active timer + periodic checkpoint
       try { startTimer(); } catch { /* ignore */ }
@@ -599,6 +763,7 @@ export class ConversationManager {
         // Clean up event listeners
         session.agent!.removeAllListeners();
         session.abortController = undefined;
+        session.activeEvents = undefined;
       }
     });
   }
@@ -774,7 +939,7 @@ export class ConversationManager {
       redoOpts = { scope: 'image_only', frame };
     }
 
-    // Call redoNode on the agent (invalidates + persists + emits todo update)
+    // Legacy ExecutorAgent path: invalidate in-process and resume runTask.
     if ('redoNode' in session.agent) {
       const invalidated = (session.agent as {
         redoNode(id: string, opts?: { frame?: string; scope?: 'prompt' | 'image_only' }): unknown[];
@@ -782,12 +947,87 @@ export class ConversationManager {
       if (invalidated.length === 0) {
         throw new Error(`Node '${redoTargetNodeId}' not found in execution graph`);
       }
-    } else {
-      throw new Error('Agent does not support redo');
+      return this.runTask(sessionId, '', events);
     }
 
-    // Resume execution — reuse runTask flow with empty task (executor picks up invalidated nodes)
-    return this.runTask(sessionId, '', events);
+    // Pi-era fallback: PiSessionAgent has no in-process executor graph,
+    // so spawn scripts/regen-node.ts (same path kshana_regen uses).
+    // Stream stdout through onToolStreaming and surface generated assets
+    // as media_generated events.
+    const projectName = session.sessionContext.projectDir.replace(/\.kshana$/, '');
+    return await this.runRegenSubprocess(sessionId, projectName, redoTargetNodeId, events);
+  }
+
+  private async runRegenSubprocess(
+    sessionId: string,
+    projectName: string,
+    nodeId: string,
+    events?: ConversationEvents,
+  ): Promise<GenericAgentResult> {
+    const session = this.sessions.get(sessionId);
+    if (!session) throw new Error(`Session not found: ${sessionId}`);
+
+    session.state.status = 'running';
+    session.state.lastActivity = Date.now();
+    session.activeEvents = events;
+
+    const { spawn } = await import('node:child_process');
+    const { join } = await import('node:path');
+    const { createAssetParser, feedChunk } = await import('../agent/pi/tools/parseAssetLines.js');
+    const tsxBin = join(process.cwd(), 'node_modules', '.bin', 'tsx');
+    const scriptPath = join(process.cwd(), 'scripts', 'regen-node.ts');
+
+    const parser = createAssetParser();
+    let stdout = '';
+    let stderr = '';
+    const startedAt = Date.now();
+    const toolCallId = `regen_${startedAt}`;
+
+    events?.onToolCall?.(sessionId, toolCallId, 'kshana_regen', { project: projectName, node: nodeId }, 'kshana');
+
+    return await new Promise<GenericAgentResult>((resolve) => {
+      const child = spawn(tsxBin, [scriptPath, projectName, nodeId], {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      child.stdout.on('data', (chunk: Buffer) => {
+        const text = chunk.toString('utf8');
+        stdout += text;
+        events?.onToolStreaming?.(sessionId, toolCallId, text, false, 'kshana', 'kshana_regen', false);
+        for (const ev of feedChunk(parser, text)) {
+          events?.onMediaGenerated?.(sessionId, {
+            kind: ev.kind,
+            project: projectName,
+            path: ev.path,
+            source: 'kshana_regen',
+          });
+        }
+      });
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString('utf8'); });
+      child.on('error', (err) => {
+        events?.onToolResult?.(sessionId, toolCallId, 'kshana_regen', { error: err.message }, true, 'kshana');
+        session.state.status = 'error';
+        session.activeEvents = undefined;
+        resolve({ status: 'error', output: '', todos: [], error: err.message });
+      });
+      child.on('close', (code) => {
+        const ok = code === 0;
+        events?.onToolResult?.(sessionId, toolCallId, 'kshana_regen', {
+          exit_code: code,
+          stdout: stdout.slice(-500),
+          stderr: stderr.slice(-500),
+        }, !ok, 'kshana');
+        session.state.status = ok ? 'completed' : 'error';
+        session.activeEvents = undefined;
+        resolve({
+          status: ok ? 'completed' : 'error',
+          output: ok ? `Regenerated ${nodeId}` : `regen-node exited ${code}`,
+          todos: [],
+          ...(ok ? {} : { error: `regen-node exited ${code}: ${stderr.slice(-200)}` }),
+        });
+      });
+    });
   }
 
   /**

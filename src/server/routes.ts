@@ -1,5 +1,5 @@
 /**
- * HTTP and WebSocket routes for kshana-ink server.
+ * HTTP and WebSocket routes for kshana-core server.
  */
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { WebSocket } from '@fastify/websocket';
