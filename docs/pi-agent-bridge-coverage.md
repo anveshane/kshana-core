@@ -36,17 +36,17 @@ ops, host integration, etc.).
 
 | Tool file | Tool name | Why not in bridge suite |
 |---|---|---|
-| `status.ts` | `kshana_status` | Reads `project.json` + calls `computeStatus`. No executor invocation. |
-| `listItems.ts` | `kshana_list_items` | Reads `project.json` and filters node entries. No executor invocation. |
-| `listProjects.ts` | `kshana_list_projects` | Lists folders in `getProjectsDir()`. No executor invocation. |
-| `focusProject.ts` | `kshana_focus_project` | Invokes a host-supplied callback (Electron / TUI). Bridge target is the **host**, not ExecutorAgent. |
-| `newProject.ts` | `kshana_new` | Creates a project folder + bootstrap `project.json`. No executor invocation. |
-| `readArtifact.ts` | `kshana_read_artifact` | Reads a file from inside a project dir. No executor invocation. |
-| `renderSceneBundle.ts` | `kshana_render_scene_bundle` | Builds a scene bundle from existing manifest entries. No executor invocation. |
-| `reset.ts` | `kshana_reset` | Clears project state from a given stage onwards. Mutates `project.json` in place; no executor invocation. |
-| `showAsset.ts` | `kshana_show_first_frame` / etc | Reads manifest entries and emits media events directly. No executor invocation. |
-| `showShot.ts` | `kshana_show_shot` | Same as `showAsset` — manifest-only. |
-| `auditFidelity.ts` | `kshana_audit_fidelity` | Runs the VLM judge against a project's images. Calls into the calibration/audit pipeline, not the executor bridge. |
+| `status.ts` | `kshana_status` | Reads `project.json` + calls `computeStatus`. No executor invocation. **Tested in `tests/unit/piAgentReadTools.test.ts`** (read-tool suite). |
+| `listItems.ts` | `kshana_list_items` | Reads `project.json` and filters node entries. **Tested in `tests/unit/piAgentReadTools.test.ts`**. |
+| `listProjects.ts` | `kshana_list_projects` | Lists folders in `getProjectsDir()`. **Tested in `tests/unit/piAgentReadTools.test.ts`**. |
+| `focusProject.ts` | `kshana_focus_project` | Invokes a host-supplied callback (Electron / TUI). Bridge target is the **host**, not ExecutorAgent. Untested. |
+| `newProject.ts` | `kshana_new` | Creates a project folder + bootstrap `project.json`. No executor invocation. Untested. |
+| `readArtifact.ts` | `kshana_read_artifact` | Reads a file from inside a project dir; rejects path traversal. **Tested in `tests/unit/piAgentReadTools.test.ts`**. |
+| `renderSceneBundle.ts` | `kshana_render_scene_bundle` | Placeholder — NOT YET IMPLEMENTED. |
+| `reset.ts` | `kshana_reset` | Clears project state from a given stage onwards. Mutates `project.json` in place; no executor invocation. Untested. |
+| `showAsset.ts` | `kshana_show_first_frame` / etc | Reads manifest entries and emits media events directly. Tested in `tests/unit/showAssetFromSchema.test.ts` + `showAssetTools.test.ts`. |
+| `showShot.ts` | `kshana_show_shot` | Same as `showAsset` — manifest-only. Tested in `tests/unit/showShotTool.test.ts`. |
+| `auditFidelity.ts` | `kshana_audit_fidelity` | Runs the VLM judge against a project's images. Calls into the calibration/audit pipeline, not the executor bridge. Untested. |
 
 ## Tools that are dev-only
 
