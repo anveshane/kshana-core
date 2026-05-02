@@ -1,6 +1,11 @@
 import { Type, type Static } from "typebox";
 import { defineTool } from "@mariozechner/pi-coding-agent";
-import { runScript } from "./runScript.js";
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import {
+  createProjectInProcess,
+  CreateProjectError,
+} from "../../../server/runners/createProjectInProcess.js";
+import { getProjectsDir } from "../paths.js";
 
 const Params = Type.Object({
   name: Type.String({ description: "Project name (folder will be <name>.kshana)" }),
@@ -18,22 +23,86 @@ const Params = Type.Object({
   ),
 });
 
+export interface NewProjectDetails {
+  status: "completed" | "failed";
+  log: string;
+  projectDir?: string;
+  resolvedStyle?: string;
+  inputType?: string;
+  initialPhase?: string;
+}
+
+function failure(message: string): AgentToolResult<NewProjectDetails> {
+  return {
+    content: [{ type: "text", text: message }],
+    details: { status: "failed", log: message },
+  };
+}
+
 export const kshanaNew = defineTool({
   name: "kshana_new",
   label: "kshana new",
-  description: "Create a new kshana project from a story or idea. Sets up the project folder and seeds the dependency graph; does not run the pipeline.",
+  description:
+    "Create a new kshana project from a story or idea. Sets up the project folder and seeds the dependency graph; does not run the pipeline.",
   parameters: Params,
-  async execute(_id, params: Static<typeof Params>, signal, onUpdate) {
-    const args = [params.name];
-    if (params.style) args.push("--style", params.style);
-    if (params.duration !== undefined) args.push("--duration", String(params.duration));
-    if (params.template) args.push("--template", params.template);
-    if (params.input) args.push("--input", params.input);
-    return await runScript({
-      script: "scripts/new-project.ts",
-      args,
-      signal,
-      onUpdate,
-    });
+  async execute(_id, params: Static<typeof Params>): Promise<AgentToolResult<NewProjectDetails>> {
+    // CLI script accepted style/duration/input as optional flags but
+    // hard-required them. Mirror that contract here so callers get a
+    // structured failure instead of a thrown CreateProjectError.
+    if (!params.style) {
+      return failure(
+        "style is required. Pick one of: live (cinematic_realism), anime (animation), or a canonical name.",
+      );
+    }
+    if (params.duration === undefined) {
+      return failure(
+        "duration is required (target video length in seconds, e.g. 60).",
+      );
+    }
+    if (!params.input || !params.input.trim()) {
+      return failure(
+        "input is required — pass a story or idea via the input parameter.",
+      );
+    }
+
+    try {
+      const result = createProjectInProcess({
+        name: params.name,
+        input: params.input,
+        style: params.style,
+        duration: params.duration,
+        basePath: getProjectsDir(),
+        ...(params.template ? { templateId: params.template } : {}),
+      });
+
+      const lines = [
+        `Created project: ${params.name}.kshana`,
+        `  Style:        ${result.resolvedStyle} (from ${params.style})`,
+        `  Duration:     ${params.duration}s`,
+        `  Template:     ${params.template ?? "narrative"}`,
+        `  Input type:   ${result.project.inputType}`,
+        `  Initial phase: ${result.project.currentPhase}`,
+      ];
+      const text = lines.join("\n");
+      return {
+        content: [{ type: "text", text }],
+        details: {
+          status: "completed",
+          log: text,
+          projectDir: result.projectDir,
+          resolvedStyle: result.resolvedStyle,
+          inputType: result.project.inputType,
+          initialPhase: result.project.currentPhase,
+        },
+      };
+    } catch (err) {
+      const message =
+        err instanceof CreateProjectError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      return failure(`Failed to create project: ${message}`);
+    }
   },
 });
