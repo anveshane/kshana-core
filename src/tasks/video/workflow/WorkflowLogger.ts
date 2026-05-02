@@ -1,10 +1,17 @@
 /**
  * Workflow Logger - Logs workflow state changes and tool executions.
  * Writes to logs/workflow.log for debugging workflow issues.
+ *
+ * @deprecated DELETE — entire file is dead. `getWorkflowLogger`,
+ * `resetWorkflowLogger`, and `WorkflowLogger.logApprovalUpdate` have
+ * zero callers in src/. Approval-update logging belongs to the
+ * pre-graph-executor approval-gate flow, which no longer exists.
+ * Tracked in `todos/cleanup-deprecated-agent-architecture.md`.
  */
 import * as fs from 'fs';
 import * as path from 'path';
 
+/** @deprecated DELETE — see file header. */
 export interface WorkflowLoggerConfig {
   logPath?: string;
   enabled?: boolean;
@@ -102,6 +109,7 @@ class WorkflowLogger {
 
   /**
    * Log an approval update.
+   * @deprecated DELETE — approval-fatigue artifact, no callers.
    */
   logApprovalUpdate(
     itemType: 'character' | 'setting' | 'scene',
@@ -130,6 +138,7 @@ let loggerInstance: WorkflowLogger | null = null;
 
 /**
  * Get or create the workflow logger instance.
+ * @deprecated DELETE — see file header. Zero callers in src/.
  */
 export function getWorkflowLogger(config?: WorkflowLoggerConfig): WorkflowLogger {
   if (!loggerInstance) {
@@ -140,6 +149,7 @@ export function getWorkflowLogger(config?: WorkflowLoggerConfig): WorkflowLogger
 
 /**
  * Reset the workflow logger.
+ * @deprecated DELETE — see file header. Zero callers in src/.
  */
 export function resetWorkflowLogger(config?: WorkflowLoggerConfig): WorkflowLogger {
   loggerInstance = new WorkflowLogger(config);

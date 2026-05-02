@@ -1,4 +1,4 @@
-# Kshana-Ink Feature List
+# Kshana-Core Feature List
 
 ## Smart Video Creation Engine
 

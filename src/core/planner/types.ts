@@ -416,6 +416,16 @@ export interface ExecutorProgress {
 
 /**
  * Callbacks for the executor to communicate with the UI layer.
+ *
+ * @deprecated DELETE — entire interface and all members are dead. Zero
+ * implementations and zero callers in src/. The current `ExecutorAgent` does
+ * not consume an `ExecutorCallbacks` shape; UI streaming flows through the
+ * `ConversationManager` event bus, not through these callbacks. The
+ * `onApprovalNeeded` member in particular is an approval-fatigue artifact —
+ * see `todos/cleanup-deprecated-agent-architecture.md`. Note: a separate
+ * `todos/approval-gates.md` proposes a *new* structured-review feature that
+ * would reuse the name `onApprovalNeeded`, but it is not built — the existing
+ * declaration here is dead, not in flight.
  */
 export interface ExecutorCallbacks {
   /** Called when a node starts processing */
