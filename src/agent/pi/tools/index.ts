@@ -4,7 +4,6 @@ import { kshanaListProjects } from "./listProjects.js";
 import { kshanaNew } from "./newProject.js";
 import { kshanaRunTo } from "./runTo.js";
 import { kshanaReset } from "./reset.js";
-import { kshanaAuditFidelity } from "./auditFidelity.js";
 import { kshanaReadArtifact } from "./readArtifact.js";
 import { kshanaRenderSceneBundle } from "./renderSceneBundle.js";
 import {
@@ -21,7 +20,6 @@ export const kshanaTools = [
   kshanaNew,
   kshanaRunTo,
   kshanaReset,
-  kshanaAuditFidelity,
   kshanaReadArtifact,
   kshanaRenderSceneBundle,
   kshanaShowFirstFrame,
@@ -37,7 +35,6 @@ export {
   kshanaNew,
   kshanaRunTo,
   kshanaReset,
-  kshanaAuditFidelity,
   kshanaReadArtifact,
   kshanaRenderSceneBundle,
   kshanaShowFirstFrame,

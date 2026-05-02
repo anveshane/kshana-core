@@ -15,7 +15,6 @@ import type { GenericAgentResult } from "../../core/agent/AgentResult.js";
 import { kshanaTools } from "./tools/index.js";
 import { createFocusProjectTool, type FocusProjectCallback } from "./tools/focusProject.js";
 import { createRunToTool, type MediaCallback } from "./tools/runTo.js";
-import { createAuditFidelityTool } from "./tools/auditFidelity.js";
 import { createShowShotTool } from "./tools/showShot.js";
 import { createRegenTool } from "./tools/regen.js";
 import { loadOrchestratorPrompt } from "./prompt.js";
@@ -57,12 +56,10 @@ export class PiSessionAgent extends TypedEventEmitter {
     // returns a text summary but won't render image/video cards in the UI.
     if (opts?.onMedia) {
       const mediaRunTo = createRunToTool({ onMedia: opts.onMedia });
-      const mediaAudit = createAuditFidelityTool({ onMedia: opts.onMedia });
       const mediaShowShot = createShowShotTool({ onMedia: opts.onMedia });
       const mediaRegen = createRegenTool({ onMedia: opts.onMedia });
       baseTools = baseTools.map((t) => {
         if (t.name === "kshana_run_to") return mediaRunTo;
-        if (t.name === "kshana_audit_fidelity") return mediaAudit;
         return t;
       });
       baseTools = [...baseTools, mediaShowShot, mediaRegen];

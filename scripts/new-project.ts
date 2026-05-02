@@ -15,25 +15,20 @@
  *
  *   3. FILE      pnpm new my_story --input story.md --style live --duration 90
  *
- * Optional: --template <id> (default: narrative).
+ * Optional: --template <id> (default: narrative), --type <idea|story>.
  *
- * Creates `<project-name>.kshana/`, writes the input to
- * `original_input.md`, and writes a `project.json` with the right
- * inputType detected from the content (story vs idea). After this you can
- * run `pnpm run-to <project-name> [stage]` to drive the pipeline forward.
- *
- * Why these are required (not defaulted):
- *   - Style picks photorealistic vs animation, which colors every prompt
- *     downstream. A silent default makes accidental style mismatches easy.
- *   - Duration drives scene-count and shot-count budgets. Without an explicit
- *     value the pipeline silently aims for 60 s, which is wrong for short
- *     clips and very wrong for 3-minute pieces.
+ * The actual scaffolding logic lives in
+ * `src/server/runners/createProjectInProcess.ts` so the pi-agent /
+ * packaged desktop / library callers all share the same code path.
+ * This script is the CLI wrapper: arg parsing, stdin reading, error
+ * formatting, exit codes.
  */
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { join, resolve } from 'path';
-import { setActiveProjectDir } from '../src/tasks/video/workflow/activeProject.js';
-import { createProject } from '../src/tasks/video/workflow/ProjectManager.js';
-import { initializeTemplates } from '../src/templates/index.js';
+import { existsSync, readFileSync } from 'fs';
+import { resolve } from 'path';
+import {
+  createProjectInProcess,
+  CreateProjectError,
+} from '../src/server/runners/createProjectInProcess.js';
 
 interface Args {
   projectName: string;
@@ -89,7 +84,9 @@ function parseArgs(): Args {
         break;
       case '--type':
         if (next !== 'idea' && next !== 'story') {
-          console.error(`--type must be 'idea' or 'story', got: ${next ?? '(missing)'}`);
+          console.error(
+            `--type must be 'idea' or 'story', got: ${next ?? '(missing)'}`,
+          );
           printUsageAndExit();
         }
         inputType = next;
@@ -117,7 +114,9 @@ async function readStdin(): Promise<string> {
 }
 
 function printUsageAndExit(code: number = 1): never {
-  console.error('Usage: pnpm new <project-name> --style <style> --duration <sec> [input-source] [options]');
+  console.error(
+    'Usage: pnpm new <project-name> --style <style> --duration <sec> [input-source] [options]',
+  );
   console.error('');
   console.error('Required:');
   console.error('  --style, -s <style>   live  (= cinematic_realism, photorealistic / live-action)');
@@ -132,7 +131,7 @@ function printUsageAndExit(code: number = 1): never {
   console.error('Optional:');
   console.error('  --template, -t <id>   template id (default: narrative)');
   console.error('  --type <idea|story>   force input type (skip auto-detection).');
-  console.error('                        \'story\' skips plot generation — use when input is a full story.');
+  console.error("                        'story' skips plot generation — use when input is a full story.");
   console.error('');
   console.error('Examples:');
   console.error('  pnpm new noir_60s --style live --duration 60 --text "A noir detective..."');
@@ -140,51 +139,20 @@ function printUsageAndExit(code: number = 1): never {
   process.exit(code);
 }
 
-// resolveStyle lives in ./styleAlias so unit tests can import it without
-// triggering this script's CLI entry point (main() runs at import time).
-import { resolveStyle } from './styleAlias.js';
-export { resolveStyle };
+// resolveStyle is also re-exported by createProjectInProcess so callers
+// can validate before invoking. Keep this `export` for legacy import paths.
+export { resolveStyle } from '../src/server/runners/createProjectInProcess.js';
 
 async function main() {
   const args = parseArgs();
 
-  // Populate the TemplateRegistry before createProject runs — without this
-  // the registry is empty, `TemplateRegistry.get('narrative')` returns
-  // undefined, the inputType classifier in ProjectManager.createProject
-  // never runs, and every project created via `pnpm new` silently
-  // defaults to inputType: 'idea' (which makes the LLM regenerate plot
-  // and story instead of using the source content as the script).
-  initializeTemplates();
-
-  // Required: style + duration. No silent defaults.
-  if (!args.style) {
-    console.error('Error: --style is required. Pick one of: live, anime');
-    console.error('  live  → cinematic_realism (photorealistic, live-action look)');
-    console.error('  anime → animation (stylized 2D)');
-    printUsageAndExit();
-  }
-  if (args.duration === undefined) {
-    console.error('Error: --duration is required (target video length in seconds, e.g. 60).');
-    printUsageAndExit();
-  }
-  if (!Number.isFinite(args.duration!) || args.duration! <= 0) {
-    console.error(`Error: --duration must be a positive number (got: ${args.duration}).`);
-    printUsageAndExit();
-  }
-  const canonicalStyle = resolveStyle(args.style!);
-  if (!canonicalStyle) {
-    console.error(`Error: unknown style "${args.style}". Pick one of: live, anime`);
-    printUsageAndExit();
-  }
-
   // Resolve input content from one of: --input file, --text inline, or stdin.
-  // Exactly one must be set (or stdin must be piped).
-  let inputContent: string;
-  let inputSource: string;
   if (args.inputFile && args.inputText !== undefined) {
     console.error('Error: pass only one of --input or --text, not both.');
     printUsageAndExit();
   }
+  let inputContent: string;
+  let inputSource: string;
   if (args.inputFile) {
     const inputPath = resolve(args.inputFile);
     if (!existsSync(inputPath)) {
@@ -209,84 +177,65 @@ async function main() {
     inputSource = '(stdin)';
   }
 
-  const projectDirName = `${args.projectName}.kshana`;
-  const basePath = process.cwd();
-  const projectDir = join(basePath, projectDirName);
-
-  if (existsSync(projectDir)) {
-    console.error(`Project directory already exists: ${projectDir}`);
-    console.error('Pick a different name, or remove the existing directory first.');
-    process.exit(1);
+  // Validate the rest at the CLI level so we can produce nicer
+  // messages than the library's CreateProjectError. createProjectInProcess
+  // also validates these, but the messages there are shorter.
+  if (!args.style) {
+    console.error('Error: --style is required. Pick one of: live, anime');
+    console.error('  live  → cinematic_realism (photorealistic, live-action look)');
+    console.error('  anime → animation (stylized 2D)');
+    printUsageAndExit();
+  }
+  if (args.duration === undefined) {
+    console.error('Error: --duration is required (target video length in seconds, e.g. 60).');
+    printUsageAndExit();
   }
 
-  // Set the active project dir BEFORE calling createProject so it doesn't
-  // infer a name from the input content. createProject reads getActiveProjectDir()
-  // first; we need it to point at our chosen path.
-  setActiveProjectDir(projectDir);
-
-  // Create the directory and write the input to its canonical path.
-  mkdirSync(projectDir, { recursive: true });
-  const canonicalInputPath = join(projectDir, 'original_input.md');
-  writeFileSync(canonicalInputPath, inputContent);
-
-  console.log(`Creating project: ${projectDirName}`);
+  console.log(`Creating project: ${args.projectName}.kshana`);
   console.log(`  Source:     ${inputSource} (${inputContent.length} bytes)`);
-  console.log(`  Style:      ${canonicalStyle} (from --style ${args.style})`);
-  console.log(`  Duration:   ${args.duration}s`);
+  console.log(`  Style:      ${args.style!}`);
+  console.log(`  Duration:   ${args.duration!}s`);
   console.log(`  Template:   ${args.templateId ?? 'narrative'}`);
   console.log('');
 
-  let project = createProject(
-    inputContent,
-    canonicalStyle!,
-    basePath,
-    args.duration!,
-    args.templateId,
-  );
+  try {
+    const result = createProjectInProcess({
+      name: args.projectName,
+      input: inputContent,
+      style: args.style!,
+      duration: args.duration!,
+      basePath: process.cwd(),
+      ...(args.templateId ? { templateId: args.templateId } : {}),
+      ...(args.inputType ? { inputType: args.inputType } : {}),
+    });
 
-  // Force the input type when the user passed --type. This fast-forwards
-  // phases the chosen type skips (story-typed input bypasses plot phase).
-  if (args.inputType && args.inputType !== project.inputType) {
-    const { setProjectInputType } = await import('../src/tasks/video/workflow/ProjectManager.js');
-    const updated = setProjectInputType(args.inputType, basePath);
-    if (updated) project = updated;
-  }
-
-  // createProject infers a project dir from content if the active dir
-  // wasn't absolute. Make sure project.json lives at the right place —
-  // copy if it landed elsewhere.
-  const expectedProjectJson = join(projectDir, 'project.json');
-  if (!existsSync(expectedProjectJson)) {
-    // Fallback: locate the project.json that createProject wrote and move it.
-    console.error('Warning: project.json was not written to the expected location. ' +
-      'You may need to move it manually.');
-  } else {
-    // Override the title so it matches the requested project name (createProject
-    // generates a title from input content; that's nice for the UI but here
-    // the user picked an explicit folder name).
-    try {
-      const raw = readFileSync(expectedProjectJson, 'utf-8');
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      parsed['title'] = args.projectName;
-      writeFileSync(expectedProjectJson, JSON.stringify(parsed, null, 2));
-    } catch {
-      // If we can't update title, the project still works.
+    console.log('Created.');
+    console.log('');
+    console.log(`  resolved style:     ${result.resolvedStyle}`);
+    console.log(`  detected inputType: ${result.project.inputType}`);
+    console.log(`  initial phase:      ${result.project.currentPhase}`);
+    console.log('');
+    console.log('Next steps:');
+    console.log(`  pnpm run-to ${args.projectName}                # run to final video`);
+    console.log(`  pnpm run-to ${args.projectName} scene          # stop after scene prose`);
+    console.log(`  pnpm run-to ${args.projectName} scene_video_prompt   # stop after shot planning`);
+    console.log(`  pnpm reset ${args.projectName} <stage> [--clean]    # roll back to a stage`);
+  } catch (err) {
+    if (err instanceof CreateProjectError) {
+      console.error(`Error: ${err.message}`);
+      process.exit(1);
     }
+    throw err;
   }
-
-  console.log('Created.');
-  console.log('');
-  console.log(`  detected inputType: ${project.inputType}`);
-  console.log(`  initial phase:      ${project.currentPhase}`);
-  console.log('');
-  console.log('Next steps:');
-  console.log(`  pnpm run-to ${args.projectName}                # run to final video`);
-  console.log(`  pnpm run-to ${args.projectName} scene          # stop after scene prose`);
-  console.log(`  pnpm run-to ${args.projectName} scene_video_prompt   # stop after shot planning`);
-  console.log(`  pnpm reset ${args.projectName} <stage> [--clean]    # roll back to a stage`);
 }
 
-main().catch(err => {
-  console.error('Failed to create project:', err);
-  process.exit(1);
-});
+// Only run when executed directly (not when imported). Mirrors the
+// guard in scripts/reset-project.ts so the resolveStyle re-export
+// above can be imported safely if anyone wants to.
+const isDirectExecution = process.argv[1]?.endsWith('new-project.ts');
+if (isDirectExecution) {
+  main().catch((err) => {
+    console.error('Failed to create project:', err);
+    process.exit(1);
+  });
+}
