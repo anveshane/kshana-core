@@ -425,13 +425,19 @@ export function setProjectInputType(
 
   // If it's a full story, skip plot and story phases
   if (inputType === 'story') {
-    // Mark skipped phases
-    for (const skipPhase of inputTypeConfig.skipPhases) {
-      const phaseInfo = project.phases[skipPhase];
-      if (phaseInfo) {
-        phaseInfo.status = 'skipped';
-        phaseInfo.completedAt = now;
-        phaseInfo.plannerStage = PlannerStage.COMPLETE;
+    // Mark skipped phases. `project.phases` and `project.content` are
+    // legacy v2.0 parallel-state structures; loadProject strips them on
+    // migration to v3.0, so guard each access. Without these guards the
+    // function crashes ("Cannot read properties of undefined (reading
+    // 'plot')") for any project that's been through the migration.
+    if (project.phases) {
+      for (const skipPhase of inputTypeConfig.skipPhases) {
+        const phaseInfo = project.phases[skipPhase];
+        if (phaseInfo) {
+          phaseInfo.status = 'skipped';
+          phaseInfo.completedAt = now;
+          phaseInfo.plannerStage = PlannerStage.COMPLETE;
+        }
       }
     }
 
@@ -446,8 +452,10 @@ export function setProjectInputType(
     if (originalInput) {
       writeProjectText('plans/story.md', `# Story\n\n${originalInput}`, basePath);
 
-      // Update content registry
-      project.content.story.status = 'available';
+      // Update content registry (also stripped on v3.0 migration).
+      if (project.content?.story) {
+        project.content.story.status = 'available';
+      }
     }
   }
 
