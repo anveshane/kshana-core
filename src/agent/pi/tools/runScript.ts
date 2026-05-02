@@ -10,6 +10,11 @@ import { createAssetParser, feedChunk, type AssetEvent } from "./parseAssetLines
  * no scripts/ directory — every tool that uses runScript needs an
  * in-process ExecutorAgent equivalent before kshana ships as an app.
  * Tracked in todos/wrap-executor-with-pi-agent.md (the ~3-day slice).
+ *
+ * Status: as of the in-process ports of `runTo`/`regen` (a58c848),
+ * `newProject` (669ac5b), and `reset` (4c32d32), the only remaining
+ * pi-agent consumer is `auditFidelity`. Once that's ported in-process,
+ * runScript + parseAssetLines can be deleted entirely.
  */
 
 export interface RunScriptOptions {
