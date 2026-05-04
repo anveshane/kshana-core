@@ -30,10 +30,25 @@ import type {
   VideoGenerationInput,
   ProviderProgressCallback,
 } from '../types.js';
+import { findKshanaCoreRoot } from '../../../agent/pi/paths.js';
 
-const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+// Anchor on kshana-core's own root so embedded hosts (kshana-desktop)
+// don't lose log entries when their cwd has no `logs/` dir.
+const DEBUG_LOG_DIR = (() => {
+  try {
+    return path.join(findKshanaCoreRoot(import.meta.url), 'logs');
+  } catch {
+    return path.join(process.cwd(), 'logs');
+  }
+})();
+const DEBUG_LOG_PATH = path.join(DEBUG_LOG_DIR, 'debug.log');
+let debugDirEnsured = false;
 function debugLog(message: string): void {
   try {
+    if (!debugDirEnsured) {
+      try { fs.mkdirSync(DEBUG_LOG_DIR, { recursive: true }); } catch { /* ignore */ }
+      debugDirEnsured = true;
+    }
     const timestamp = new Date().toISOString();
     fs.appendFileSync(DEBUG_LOG_PATH, `[${timestamp}] [ComfyUIProvider] ${message}\n`);
   } catch {
@@ -666,7 +681,8 @@ export class ComfyUIProvider implements GenerationProvider {
     });
 
     if (result.status !== 'completed' && result.status !== 'completed_with_timeout') {
-      throw new Error(`ComfyUI job did not complete (status: ${result.status})`);
+      const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
+      throw new Error(`ComfyUI job did not complete (status: ${result.status})${detail}`);
     }
 
     return { promptId, clientId, outputs: wsOutputs };

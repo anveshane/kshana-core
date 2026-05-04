@@ -153,6 +153,25 @@ describe('BackgroundTaskRunner — cancel', () => {
     const payload = (await cancelled) as { task: { status: string } };
     expect(payload.task.status).toBe('cancelled');
   });
+
+  it('emits "cancelled" when the executor returns { cancelled: true } without an abort', async () => {
+    // Bug 2026-05-04: ExecutorAgent stops via `.executor.stop` sentinel
+    // — the AbortController is never tripped, so the runner used to
+    // classify the task as 'completed' and the chat session never saw
+    // the cancellation. The executor now returns an explicit cancel
+    // sentinel for this path; the runner must respect it.
+    const runner = new BackgroundTaskRunner(async () => {
+      return { cancelled: true };
+    });
+    const cancelled = once(runner, 'cancelled');
+    let completedFired = false;
+    runner.on('completed' as never, (() => (completedFired = true)) as never);
+    runner.dispatch(makeSpec());
+    const payload = (await cancelled) as { task: { status: string } };
+    expect(payload.task.status).toBe('cancelled');
+    expect(completedFired).toBe(false);
+    expect(runner.isBusy()).toBe(false);
+  });
 });
 
 describe('BackgroundTaskRunner — execution hook events', () => {
@@ -199,6 +218,37 @@ describe('BackgroundTaskRunner — execution hook events', () => {
     const asset = events[3]?.payload as { kind: string; filePath: string };
     expect(asset.kind).toBe('image');
     expect(asset.filePath).toBe('assets/images/s1shot1.png');
+  });
+
+  it('forwards tool error messages through the result event so the chat session can surface them', async () => {
+    // Bug 2026-05-04: ComfyUI error messages were being dropped at the
+    // runner boundary — the chat just saw "→ error" with no cause.
+    // The hooks/event must carry `error` end-to-end.
+    const events: Array<{ toolName: string; status?: string; error?: string }> = [];
+    const executor: TaskExecutor = async ({ hooks }) => {
+      hooks.onResult({
+        toolName: 'generate_shot_image',
+        status: 'error',
+        error: 'ServiceError — lora_name not in list',
+      });
+    };
+    const runner = new BackgroundTaskRunner(executor);
+    runner.on('result' as never, ((p: { toolName: string; status?: string; error?: string }) => events.push({
+      toolName: p.toolName,
+      ...(p.status !== undefined ? { status: p.status } : {}),
+      ...(p.error !== undefined ? { error: p.error } : {}),
+    })) as never);
+    const completed = once(runner, 'completed');
+    runner.dispatch(makeSpec());
+    await completed;
+
+    expect(events).toEqual([
+      {
+        toolName: 'generate_shot_image',
+        status: 'error',
+        error: 'ServiceError — lora_name not in list',
+      },
+    ]);
   });
 
   it('every event payload includes the originating task record so subscribers can route by sessionId', async () => {

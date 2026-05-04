@@ -17,6 +17,7 @@
 
 import {
   BackgroundTaskRunner,
+  type ExecutorCancelled,
   type TaskExecutionContext,
 } from './BackgroundTaskRunner.js';
 import { runExecutor } from './runExecutor.js';
@@ -27,8 +28,9 @@ import { join } from 'node:path';
 import { classifyRunTarget } from './classifyRunTarget.js';
 import { resolveNodeId, type ExecutorState } from '../../core/project/projectTypes.js';
 import type { GenericProjectFile } from '../../core/templates/types.js';
+import { clearStaleStopFile } from './preflightStopFile.js';
 
-async function executeRunTo(ctx: TaskExecutionContext): Promise<void> {
+async function executeRunTo(ctx: TaskExecutionContext): Promise<void | ExecutorCancelled> {
   const params = ctx.spec.params as {
     projectDir?: string;
     stage?: string;
@@ -40,6 +42,18 @@ async function executeRunTo(ctx: TaskExecutionContext): Promise<void> {
     basePath: getProjectsDir(),
     ...(params.projectDir ? { projectDir: params.projectDir } : {}),
   });
+
+  // A stale `.executor.stop` from a prior incarnation (process killed
+  // mid-cancel, host crashed, etc.) would otherwise kill this dispatch
+  // in milliseconds. Clear it before starting. Fresh sentinels (mtime
+  // within the last minute) are preserved so a concurrent cancel still
+  // wins.
+  if (clearStaleStopFile(projectDir)) {
+    ctx.hooks.onNotification({
+      level: 'info',
+      message: 'Cleared stale .executor.stop sentinel from a previous run.',
+    });
+  }
 
   const projectJsonPath = join(projectDir, 'project.json');
   if (!existsSync(projectJsonPath)) {
@@ -98,7 +112,18 @@ async function executeRunTo(ctx: TaskExecutionContext): Promise<void> {
   if (result.status === 'failed') {
     throw new Error(result.error ?? 'run_to failed');
   }
-  // Cancelled is signaled via abort, runner classifies it.
+  // Cancellation can come from two paths:
+  //   - AbortController.abort() (set by `runner.cancel()` from the host)
+  //     — the runner sees `signal.aborted` and emits 'cancelled'
+  //   - `.executor.stop` sentinel consumed by ExecutorAgent — runExecutor
+  //     returns `status: 'cancelled'` but the AbortController was never
+  //     tripped. Without the explicit return below, runActive() would
+  //     classify the task as 'completed' and the chat session would
+  //     never see the cancellation, even though no work happened.
+  if (result.status === 'cancelled') {
+    return { cancelled: true };
+  }
+  return;
 }
 
 // IMPORTANT: this singleton must be process-wide. tsup builds

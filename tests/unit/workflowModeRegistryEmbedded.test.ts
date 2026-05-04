@@ -101,6 +101,53 @@ describe('WorkflowModeRegistry — embedded host integration', () => {
     expect(reg.getMode('flux2_klein_edit_cloud')).toBeUndefined();
   });
 
+  it('scans BOTH workflows/built-in and workflows/cloud regardless of COMFY_MODE — survives env flips after construction (Fix 3a 2026-05-04)', () => {
+    // Build a fake kshana-core layout with manifests in BOTH directories.
+    // Built-in declares mode='local', cloud manifest leaves it unset
+    // (registry must infer 'cloud' from the directory).
+    const builtInDir = join(tmpRoot, 'workflows', 'built-in');
+    mkdirSync(builtInDir, { recursive: true });
+    writeFileSync(
+      join(builtInDir, 'flux2_klein_edit_local.manifest.json'),
+      JSON.stringify({
+        ...STUB_MANIFEST,
+        id: 'flux2_klein_edit_local',
+        displayName: 'FLUX 2 Klein Edit (Local)',
+        mode: 'local',
+        workflowFile: 'flux2_klein_edit_local.json',
+      }),
+    );
+    writeFileSync(join(builtInDir, 'flux2_klein_edit_local.json'), '{}');
+
+    // Construct registry while env is unset, flip to cloud later, then
+    // refresh — same load order as the embedded desktop. The cloud
+    // manifest must come back from `getMode`.
+    delete process.env['COMFY_MODE'];
+    const reg = new WorkflowModeRegistry(tmpRoot);
+    reg.refresh();
+    // Local mode: built-in is visible, cloud is filtered by mode.
+    expect(reg.getMode('flux2_klein_edit_local')).toBeDefined();
+    expect(reg.getMode('flux2_klein_edit_cloud')).toBeUndefined();
+
+    process.env['COMFY_MODE'] = 'cloud';
+    reg.refresh();
+    // Cloud mode: cloud is visible, built-in's explicit mode='local' filters it.
+    expect(reg.getMode('flux2_klein_edit_cloud')).toBeDefined();
+    expect(reg.getMode('flux2_klein_edit_local')).toBeUndefined();
+  });
+
+  it('a fresh registry (no prior refresh) constructed in cloud mode finds cloud workflows on the first refresh()', () => {
+    // The bug: even with COMFY_MODE=cloud at construction time, if
+    // workflowDirs() were the OLD implementation that branched on env
+    // at scan time, ANY ordering glitch would miss cloud manifests.
+    // With Fix 3a both dirs are always scanned; this test just pins
+    // the contract.
+    process.env['COMFY_MODE'] = 'cloud';
+    const reg = new WorkflowModeRegistry(tmpRoot);
+    reg.refresh();
+    expect(reg.getMode('flux2_klein_edit_cloud')).toBeDefined();
+  });
+
   it('default constructor (no projectRoot arg) lands on the kshana-core package, not process.cwd()', () => {
     // Switch cwd to /tmp — anywhere that has NO `workflows/` directory.
     // The default-construct should still find the real kshana-core

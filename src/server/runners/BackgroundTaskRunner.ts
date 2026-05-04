@@ -92,6 +92,10 @@ export interface TaskExecutionHooks {
     toolName: string;
     filePath?: string;
     status?: string;
+    /** Error message when status==='error'. Surfaces ComfyUI / LLM
+     *  rejection reasons up to the chat session so the agent and the
+     *  UI see WHY a tool errored, not just THAT it did. */
+    error?: string;
   }) => void;
   onNotification: (info: { level: string; message: string }) => void;
   onAsset?: (info: {
@@ -109,21 +113,35 @@ export interface TaskExecutionContext {
 }
 
 /**
+ * Sentinel an executor can return to signal "the underlying job
+ * cancelled itself" — used when cancellation came from a path the
+ * AbortController never saw (e.g. `.executor.stop` sentinel,
+ * cooperative shutdown on timeout). The runner classifies the task
+ * as `cancelled` rather than `completed` in that case, so the chat
+ * session sees the right terminal event.
+ */
+export interface ExecutorCancelled {
+  cancelled: true;
+}
+
+/**
  * Executor: actually runs the task. Production wires this to
  * `runExecutor` (for run_to) / `redoNode` (for regen) / etc.;
  * tests inject a stub.
  *
  * Must:
  *   - Honor `signal` (return promptly when aborted)
- *   - Resolve when the task completes successfully
+ *   - Resolve `void` on success
+ *   - Resolve `{ cancelled: true }` when the underlying job
+ *     cancelled itself out-of-band (stop file, soft shutdown)
  *   - Reject (or throw) on error — the runner records it
  */
-export type TaskExecutor = (ctx: TaskExecutionContext) => Promise<void>;
+export type TaskExecutor = (ctx: TaskExecutionContext) => Promise<void | ExecutorCancelled>;
 
 export interface BackgroundTaskRunnerEvents {
   started: { task: TaskRecord };
   tool: { task: TaskRecord; toolName: string; nodeId?: string };
-  result: { task: TaskRecord; toolName: string; filePath?: string; status?: string };
+  result: { task: TaskRecord; toolName: string; filePath?: string; status?: string; error?: string };
   notification: { task: TaskRecord; level: string; message: string };
   asset: {
     task: TaskRecord;
@@ -256,6 +274,7 @@ export class BackgroundTaskRunner {
           toolName: info.toolName,
           ...(info.filePath !== undefined ? { filePath: info.filePath } : {}),
           ...(info.status !== undefined ? { status: info.status } : {}),
+          ...(info.error !== undefined ? { error: info.error } : {}),
         }),
       onNotification: (info) =>
         this.emit('notification', {
@@ -274,8 +293,9 @@ export class BackgroundTaskRunner {
     };
 
     try {
-      await this.executor({ spec: record.spec, signal: controller.signal, hooks });
-      if (controller.signal.aborted) {
+      const outcome = await this.executor({ spec: record.spec, signal: controller.signal, hooks });
+      const cancelledByOutcome = outcome !== undefined && outcome.cancelled === true;
+      if (controller.signal.aborted || cancelledByOutcome) {
         record.status = 'cancelled';
         record.completedAt = Date.now();
         this.emit('cancelled', { task: { ...record } });

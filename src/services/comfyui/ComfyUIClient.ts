@@ -13,11 +13,29 @@ import * as path from 'path';
 import { nanoid } from 'nanoid';
 import WebSocket from 'ws';
 import { decideWsAction, type ComfyWsMessage } from './wsAction.js';
+import { findKshanaCoreRoot } from '../../agent/pi/paths.js';
 
-// Debug logging to file instead of console to avoid polluting Ink UI
-const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+// Debug logging to file instead of console to avoid polluting Ink UI.
+//
+// Anchor on kshana-core's own root, NOT process.cwd(). When kshana-core
+// runs embedded in the desktop (cwd = kshana-desktop) the cwd-based path
+// pointed at a non-existent `logs/` and every debugLog call silently
+// failed — so post-mortem ComfyUI errors had no breadcrumbs.
+const DEBUG_LOG_DIR = (() => {
+  try {
+    return path.join(findKshanaCoreRoot(import.meta.url), 'logs');
+  } catch {
+    return path.join(process.cwd(), 'logs');
+  }
+})();
+const DEBUG_LOG_PATH = path.join(DEBUG_LOG_DIR, 'debug.log');
+let debugDirEnsured = false;
 function debugLog(message: string): void {
   try {
+    if (!debugDirEnsured) {
+      try { fs.mkdirSync(DEBUG_LOG_DIR, { recursive: true }); } catch { /* ignore */ }
+      debugDirEnsured = true;
+    }
     const timestamp = new Date().toISOString();
     fs.appendFileSync(DEBUG_LOG_PATH, `[${timestamp}] ${message}\n`);
   } catch {
@@ -83,6 +101,13 @@ export interface WSProgressInfo {
 export interface CompletionResult {
   status: 'completed' | 'completed_with_timeout' | 'error';
   prompt_id: string;
+  /**
+   * Cloud's exception_message (or other error detail) when status is
+   * 'error'. Without this, the upstream "ComfyUI job did not complete
+   * (status: error)" hides the actual cause — missing model, foreign
+   * lora_name, malformed input, etc.
+   */
+  errorMessage?: string;
 }
 
 const COMFY_CLOUD_HOST = 'cloud.comfy.org';
@@ -556,10 +581,23 @@ export class ComfyUIClient {
           case 'finish_completed':
             finish({ status: 'completed', prompt_id: promptId });
             return;
-          case 'finish_error':
-            debugLog(`[queueAndWaitWS] Execution error: ${JSON.stringify(action.payload)}`);
-            finish({ status: 'error', prompt_id: promptId });
+          case 'finish_error': {
+            const payloadStr = JSON.stringify(action.payload);
+            debugLog(`[queueAndWaitWS] Execution error: ${payloadStr}`);
+            // Pull out the most actionable bits the cloud sends back.
+            // exception_message is the python-side error string ("Value
+            // not in list: lora_name: ..."); exception_type narrows it
+            // ("ServiceError"); node_id pins which workflow node blew up.
+            const p = action.payload ?? {};
+            const parts: string[] = [];
+            if (typeof p['exception_type'] === 'string') parts.push(p['exception_type'] as string);
+            if (typeof p['exception_message'] === 'string') parts.push(p['exception_message'] as string);
+            const nodeId = p['node_id'] ?? p['node'];
+            if (nodeId !== undefined && nodeId !== null) parts.push(`node=${String(nodeId)}`);
+            const errorMessage = parts.length ? parts.join(' — ') : payloadStr;
+            finish({ status: 'error', prompt_id: promptId, errorMessage });
             return;
+          }
           case 'ignore_foreign_output':
             debugLog(`[queueAndWaitWS] Ignoring output from foreign prompt ${action.eventPromptId} (ours=${promptId})`);
             return;

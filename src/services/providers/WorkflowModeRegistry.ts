@@ -16,22 +16,50 @@ import type { WorkflowManifest, WorkflowManifestFile, WorkflowPipeline } from '.
 
 /** Directories to scan for manifest files.
  *
- * Cloud mode: uses workflows/cloud instead of workflows/built-in
- * Local mode: uses workflows/built-in (default)
+ * We always scan BOTH `workflows/built-in/` and `workflows/cloud/`,
+ * regardless of `process.env.COMFY_MODE`. Per-manifest filtering by
+ * mode happens in `refresh()` using the manifest's `mode` field
+ * (inferred from directory when unset).
  *
- * Computed fresh on every refresh() — NOT at module load. The embedded
- * desktop path requires `kshanaCoreManager.start()` to set
- * `process.env['COMFY_MODE']` before the registry is consulted, but
- * that happens AFTER kshana-core is required. A module-load constant
- * would freeze `isCloudMode=false` and miss `workflows/cloud/` entirely.
+ * Why "always both" rather than mode-gating the scan:
+ *   The desktop sets `COMFY_MODE=cloud` AFTER kshana-core is imported.
+ *   The registry singleton is constructed lazily on first lookup;
+ *   between the two events, calls into the registry would see only
+ *   `workflows/built-in/` and never find cloud workflows. Even with
+ *   explicit `refresh()` calls scattered through the providers,
+ *   timing bugs around env-var flips kept resurfacing. Scanning both
+ *   directories every time and selecting via the existing
+ *   per-manifest `mode` filter eliminates the directory/env race
+ *   entirely.
+ *
+ * Computed fresh on every refresh() — NOT at module load. Built-in
+ * manifests in `workflows/built-in/` ship with `"mode": "local"` (or
+ * unset → inferred local). Cloud manifests in `workflows/cloud/`
+ * default to `mode: 'cloud'` when their JSON doesn't set the field.
  */
 function workflowDirs(): string[] {
-  const isCloudMode = process.env['COMFY_MODE'] === 'cloud';
   return [
-    ...(isCloudMode ? ['workflows/cloud'] : ['workflows/built-in']),
+    'workflows/built-in',
+    'workflows/cloud',
     'workflows/user',
     'workflows',
   ];
+}
+
+/**
+ * Infer the mode a manifest applies to when its `mode` field is unset.
+ * Built-in directory → 'local'; cloud directory → 'cloud'; everywhere
+ * else (user uploads, root) → 'both' so user workflows light up in
+ * any environment.
+ */
+function inferManifestMode(absDir: string): 'local' | 'cloud' | 'both' {
+  if (absDir.endsWith('/workflows/cloud') || absDir.endsWith('\\workflows\\cloud')) {
+    return 'cloud';
+  }
+  if (absDir.endsWith('/workflows/built-in') || absDir.endsWith('\\workflows\\built-in')) {
+    return 'local';
+  }
+  return 'both';
 }
 
 /** Valid pipeline values for manifest validation */
@@ -195,8 +223,11 @@ export class WorkflowModeRegistry {
               // Tag built-in vs user
               manifest.builtIn = dir.includes('built-in') || dir.includes('cloud');
               manifest.active = manifest.active !== false; // default active
-              // Filter by mode: "local", "cloud", or "both" (default)
-              const manifestMode = manifest.mode || 'both';
+              // Filter by mode: "local", "cloud", or "both" (default).
+              // When the manifest doesn't declare a mode, infer it from
+              // the source directory: cloud manifests default to 'cloud',
+              // built-in to 'local', user uploads to 'both'.
+              const manifestMode = manifest.mode || inferManifestMode(absDir);
               const currentMode = isCloudMode ? 'cloud' : 'local';
               if (manifestMode !== 'both' && manifestMode !== currentMode) {
                 continue; // Skip manifests that don't match current mode

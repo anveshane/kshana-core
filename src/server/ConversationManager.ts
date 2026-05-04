@@ -233,15 +233,21 @@ export class ConversationManager {
         toolName,
       );
     });
-    runner.on('result', ({ task, toolName, filePath, status }: BackgroundTaskRunnerEvents['result']) => {
+    runner.on('result', ({ task, toolName, filePath, status, error }: BackgroundTaskRunnerEvents['result']) => {
       const session = this.sessions.get(task.spec.sessionId);
       const events = sinkFor(session);
       if (!session || !events) return;
+      // Surface the error reason inline so both the agent (when it
+      // reads the chat transcript on its next turn) and the user see
+      // WHY a tool errored — not just "→ error". Without this the
+      // ComfyUI rejection text was being dropped at the runner layer.
       const line = filePath
         ? `    → ${filePath}`
-        : status
-          ? `    → ${status}`
-          : '';
+        : status === 'error' && error
+          ? `    → error: ${error}`
+          : status
+            ? `    → ${status}`
+            : '';
       if (!line) return;
       events.onToolStreaming?.(
         task.spec.sessionId,
@@ -1064,6 +1070,19 @@ export class ConversationManager {
 
   /**
    * Cancel a running task.
+   *
+   * Two execution paths can be live for one chat:
+   *   1. The pi-agent's own loop (`session.agent`) — stopped via
+   *      `agent.stop()` + `abortController.abort()`.
+   *   2. A `BackgroundTaskRunner` task the pi-agent dispatched
+   *      (`kshana_dispatch_run_to`) — runs OUT of the chat's call
+   *      stack with its own AbortController.
+   *
+   * Stop must terminate BOTH. Pre-2026-05-04 only (1) was cancelled,
+   * so the desktop's Stop button left the runner ploughing through
+   * shots while the chat's "Stopping..." spinner span forever. Only
+   * the runner task matching THIS session's id is touched — other
+   * chat windows' work is independent.
    */
   cancelTask(sessionId: string): boolean {
     const session = this.sessions.get(sessionId);
@@ -1080,9 +1099,20 @@ export class ConversationManager {
       session.abortController.abort();
     }
 
+    let backgroundCancelled = false;
+    try {
+      const runner = getBackgroundTaskRunner();
+      const active = runner.getActive();
+      if (active && active.spec.sessionId === sessionId) {
+        backgroundCancelled = runner.cancel(active.id);
+      }
+    } catch {
+      // Runner uninitialized in this process — nothing to cancel.
+    }
+
     session.state.status = 'idle';
     session.state.lastActivity = Date.now();
-    return !!(session.agent || session.abortController);
+    return !!(session.agent || session.abortController || backgroundCancelled);
   }
 
   /**

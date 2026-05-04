@@ -28,6 +28,8 @@ import type {
   UserGoal,
 } from './types.js';
 import { DependencyGraphExecutor } from './DependencyGraphExecutor.js';
+import { addShotImageNodes } from './addShotImageNodes.js';
+import { bridgeLastFrameFromShotImage } from './bridgeLastFrameNode.js';
 import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
 import { resolveInputs, writeOutput } from './contentResolver.js';
@@ -1378,31 +1380,32 @@ export class ExecutorAgent extends TypedEventEmitter {
       const shotImageId = `shot_image:${shot.itemId}`;
       const shotVideoId = `shot_video:${shot.itemId}`;
 
-      if (!this.executor.getNode(shotImageId)) {
-        const shotImageDeps = [shotPromptId, ...allCharImages, ...allSettingImages];
-        if (prevShotImageId) shotImageDeps.push(prevShotImageId);
-        this.executor.addNode({
-          id: shotImageId,
-          typeId: 'shot_image',
-          itemId: shot.itemId,
-          status: 'pending',
-          displayName: `Shot Images: ${shot.name}`,
-          isExpensive: true,
-          isCollection: false,
-          dependencies: shotImageDeps,
-          dependents: [shotVideoId],
-        });
-        for (const depId of shotImageDeps) {
-          const depNode = this.executor.getNode(depId);
-          if (depNode && !depNode.dependents.includes(shotImageId)) {
-            depNode.dependents.push(shotImageId);
-          }
-        }
+      // Pattern B: emit BOTH shot_image (first_frame only) and
+      // shot_image_last_frame (depends on shot_image). See
+      // addShotImageNodes.ts for the rationale.
+      addShotImageNodes({
+        executor: this.executor,
+        shot,
+        allCharImageIds: allCharImages,
+        allSettingImageIds: allSettingImages,
+        prevShotImageId,
+      });
+      // Wire shot_video's dependency from the new last_frame node so
+      // video gen waits for the actual last frame, not just the first.
+      const lastFrameForVideo = `shot_image_last_frame:${shot.itemId}`;
+      const lastFrameNode = this.executor.getNode(lastFrameForVideo);
+      if (lastFrameNode && !lastFrameNode.dependents.includes(shotVideoId)) {
+        lastFrameNode.dependents.push(shotVideoId);
       }
 
       if (!this.executor.getNode(shotVideoId)) {
+        // Pattern B: shot_video waits on the last-frame node (which
+        // transitively waits on first-frame). Passing
+        // shotImageLastFrameId as the canonical "image dep" keeps the
+        // sanitizeShotVideoDeps stripping logic correct — bare
+        // `shot_image:` deps from legacy projects will be filtered out.
         const shotVideoDeps = canonicalShotVideoDeps({
-          shotImageId, motionId, prevShotVideoId,
+          shotImageId: `shot_image_last_frame:${shot.itemId}`, motionId, prevShotVideoId,
         });
         this.executor.addNode({
           id: shotVideoId,
@@ -1436,7 +1439,8 @@ export class ExecutorAgent extends TypedEventEmitter {
         const before = existing.dependencies.slice();
         existing.dependencies = sanitizeShotVideoDeps({
           existingDeps: before,
-          shotImageId,
+          // Pattern B: shot_video's image dep is the last-frame node.
+          shotImageId: `shot_image_last_frame:${shot.itemId}`,
           motionId,
           prevShotVideoId,
         });
@@ -2081,6 +2085,12 @@ export class ExecutorAgent extends TypedEventEmitter {
         // Within content, compositions finish before motion directives.
         if (!this.config.parallelMediaGeneration) {
           const isMediaNode = (n: ExecutionNode) => {
+            // Pattern B: shot_image_last_frame is a media node (it
+            // produces a frame image), but it isn't registered in
+            // template.artifactTypes — without this explicit case it
+            // would be miscategorized as content and trigger the
+            // serial-mode deadlock detector.
+            if (n.typeId === 'shot_image_last_frame') return true;
             const typeDef = this.config.template.artifactTypes[n.typeId];
             const cat = typeDef?.category;
             return cat === 'visual_ref' || cat === 'clip' || cat === 'final';
@@ -2273,6 +2283,24 @@ export class ExecutorAgent extends TypedEventEmitter {
               // Test mode: skip shot image generation
               this.log(`  Skipping shot_image (skipMediaGeneration=true)`);
               this.executor.markCompleted(node.id, 'skipped-test-mode');
+              this.persistState();
+              this.emitTodoUpdate();
+              return;
+            } else if (node.typeId === 'shot_image_last_frame') {
+              // Phase 1 (Pattern B): last_frame logic still lives
+              // inside executeShotImage and writes to the upstream
+              // shot_image:X.outputPaths.last_frame. The bridge mirrors
+              // that artifact onto this node so downstream shot_video
+              // can read from the canonical source. Phase 2 will move
+              // the actual edit_first_frame call here so a cloud
+              // failure on last_frame no longer fails the first_frame
+              // node. See addShotImageNodes.ts + bridgeLastFrameNode.ts.
+              const bridge = bridgeLastFrameFromShotImage(this.executor as unknown as { getNode: (id: string) => ExecutionNode | undefined }, node);
+              if (bridge.action === 'fail') {
+                this.executor.markFailed(node.id, bridge.error);
+              } else {
+                this.executor.markCompleted(node.id, node.outputPath ?? '');
+              }
               this.persistState();
               this.emitTodoUpdate();
               return;
@@ -3759,24 +3787,22 @@ Examples of common failure modes to avoid:
                     let prevShotVideoId2: string | null = null;
                     for (const shot of shotItems) {
                       const shotImageId = `shot_image:${shot.itemId}`;
+                      const shotImageLastFrameId = `shot_image_last_frame:${shot.itemId}`;
                       const shotVideoId = `shot_video:${shot.itemId}`;
                       const motionId = `shot_motion_directive:${shot.itemId}`;
-                      const promptId = `shot_image_prompt:${shot.itemId}`;
-                      if (!this.executor.getNode(shotImageId)) {
-                        const deps = [promptId, ...allCharImages, ...allSettingImages];
-                        if (prevShotImageId) deps.push(prevShotImageId);
-                        this.executor.addNode({
-                          id: shotImageId, typeId: 'shot_image', itemId: shot.itemId,
-                          status: 'pending', displayName: `Shot Images: ${shot.name}`,
-                          isExpensive: true, isCollection: false, dependencies: deps, dependents: [shotVideoId],
-                        });
-                        for (const depId of deps) {
-                          const depNode = this.executor.getNode(depId);
-                          if (depNode && !depNode.dependents.includes(shotImageId)) depNode.dependents.push(shotImageId);
-                        }
-                      }
+                      // Pattern B: split shot_image into first-frame +
+                      // last-frame nodes so cloud failures on the
+                      // last_frame edit step don't poison the
+                      // already-generated first frame.
+                      addShotImageNodes({
+                        executor: this.executor,
+                        shot,
+                        allCharImageIds: allCharImages,
+                        allSettingImageIds: allSettingImages,
+                        prevShotImageId,
+                      });
                       if (!this.executor.getNode(shotVideoId)) {
-                        const videoDeps = [shotImageId, motionId];
+                        const videoDeps = [shotImageLastFrameId, motionId];
                         if (prevShotVideoId2) videoDeps.push(prevShotVideoId2);
                         this.executor.addNode({
                           id: shotVideoId, typeId: 'shot_video', itemId: shot.itemId,
@@ -3960,29 +3986,24 @@ Examples of common failure modes to avoid:
                     let prevShotVideoId2: string | null = null;
                     for (const shot of shotItems) {
                       const shotImageId = `shot_image:${shot.itemId}`;
+                      const shotImageLastFrameId = `shot_image_last_frame:${shot.itemId}`;
                       const shotVideoId = `shot_video:${shot.itemId}`;
                       const motionId = `shot_motion_directive:${shot.itemId}`;
-                      const promptId = `shot_image_prompt:${shot.itemId}`;
-                      if (!this.executor.getNode(shotImageId)) {
-                        const deps = [promptId, ...allCharImages, ...allSettingImages];
-                        if (prevShotImageId) deps.push(prevShotImageId);
-                        this.executor.addNode({
-                          id: shotImageId, typeId: 'shot_image', itemId: shot.itemId,
-                          status: 'pending', displayName: `Shot Images: ${shot.name}`,
-                          isExpensive: true, isCollection: false, dependencies: deps, dependents: [shotVideoId],
-                        });
-                        for (const depId of deps) {
-                          const depNode = this.executor.getNode(depId);
-                          if (depNode && !depNode.dependents.includes(shotImageId)) depNode.dependents.push(shotImageId);
-                        }
-                      }
+                      // Pattern B: split first/last frame nodes.
+                      addShotImageNodes({
+                        executor: this.executor,
+                        shot,
+                        allCharImageIds: allCharImages,
+                        allSettingImageIds: allSettingImages,
+                        prevShotImageId,
+                      });
                       if (!this.executor.getNode(shotVideoId)) {
                         this.executor.addNode({
                           id: shotVideoId, typeId: 'shot_video', itemId: shot.itemId,
                           status: 'pending', displayName: `Shot Videos: ${shot.name}`,
-                          isExpensive: true, isCollection: false, dependencies: [shotImageId, motionId], dependents: [],
+                          isExpensive: true, isCollection: false, dependencies: [shotImageLastFrameId, motionId], dependents: [],
                         });
-                        const imgNode = this.executor.getNode(shotImageId);
+                        const imgNode = this.executor.getNode(shotImageLastFrameId);
                         if (imgNode && !imgNode.dependents.includes(shotVideoId)) imgNode.dependents.push(shotVideoId);
                         const motNode = this.executor.getNode(motionId);
                         if (motNode && !motNode.dependents.includes(shotVideoId)) motNode.dependents.push(shotVideoId);

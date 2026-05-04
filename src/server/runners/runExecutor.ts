@@ -76,7 +76,7 @@ export interface RunExecutorOpts {
   /** Called for every tool_call event. Lightweight progress (one line). */
   onTool?: ((info: { toolName: string; nodeId?: string | undefined }) => void) | undefined;
   /** Called for every tool_result event with a usable file_path. */
-  onResult?: ((info: { toolName: string; filePath?: string; status?: string }) => void) | undefined;
+  onResult?: ((info: { toolName: string; filePath?: string; status?: string; error?: string }) => void) | undefined;
   /** Called for notifications (info / warning / error). */
   onNotification?: ((info: { level: string; message: string }) => void) | undefined;
   /** Called when a generated asset (image / video) is observed. */
@@ -174,13 +174,14 @@ export async function runExecutor(opts: RunExecutorOpts): Promise<RunExecutorRes
   }
 
   agent.on('tool_result', (event) => {
-    const r = (event as { result?: { file_path?: string; status?: string } }).result;
+    const r = (event as { result?: { file_path?: string; status?: string; error?: string } }).result;
     const toolName = (event as { toolName: string }).toolName;
     if (opts.onResult) {
       opts.onResult({
         toolName,
         ...(r?.file_path ? { filePath: r.file_path } : {}),
         ...(r?.status ? { status: r.status } : {}),
+        ...(r?.error ? { error: r.error } : {}),
       });
     }
     if (opts.onAsset) {
