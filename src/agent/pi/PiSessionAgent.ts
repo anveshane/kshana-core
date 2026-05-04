@@ -19,6 +19,7 @@ import { createShowShotTool } from "./tools/showShot.js";
 import { createRegenTool } from "./tools/regen.js";
 import { loadOrchestratorPrompt } from "./prompt.js";
 import { ensureDir, getKshanaConfigDir, getProjectsDir, REPO_ROOT } from "./paths.js";
+import { ensureOpenRouterApiKeyFromEnv } from "./ensureOpenRouterKey.js";
 
 const REPO_ROOT_PROMPTS = join(REPO_ROOT, "prompts");
 import { translatePiEvent, type TranslationContext } from "./translateEvent.js";
@@ -75,7 +76,7 @@ export class PiSessionAgent extends TypedEventEmitter {
   async initialize(): Promise<void> {
     if (this.session) return;
 
-    pipeOpenRouterKey();
+    ensureOpenRouterApiKeyFromEnv();
 
     const provider = (process.env["LLM_TIER_HEAVY_PROVIDER"] ?? "openrouter") as "openrouter";
     const modelId = (process.env["LLM_TIER_HEAVY_MODEL"] ?? "deepseek/deepseek-v4-flash") as never;
@@ -182,13 +183,5 @@ export class PiSessionAgent extends TypedEventEmitter {
     this.streaming = false;
     this.currentResolve = undefined;
     this.currentReject = undefined;
-  }
-}
-
-function pipeOpenRouterKey(): void {
-  const provider = process.env["LLM_TIER_HEAVY_PROVIDER"];
-  const key = process.env["LLM_TIER_HEAVY_API_KEY"];
-  if (provider === "openrouter" && key && !process.env["OPENROUTER_API_KEY"]) {
-    process.env["OPENROUTER_API_KEY"] = key;
   }
 }

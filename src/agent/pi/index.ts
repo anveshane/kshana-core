@@ -4,6 +4,7 @@ import type { ExtensionFactory } from "@mariozechner/pi-coding-agent";
 import { kshanaTools } from "./tools/index.js";
 import { loadOrchestratorPrompt } from "./prompt.js";
 import { ensureDir, getKshanaConfigDir, getProjectsDir } from "./paths.js";
+import { ensureOpenRouterApiKeyFromEnv } from "./ensureOpenRouterKey.js";
 
 export const kshanaExtension: ExtensionFactory = (pi) => {
   for (const tool of kshanaTools) {
@@ -14,11 +15,7 @@ export const kshanaExtension: ExtensionFactory = (pi) => {
 function applyHeavyTierDefaults(argv: string[]): string[] {
   const tierProvider = process.env["LLM_TIER_HEAVY_PROVIDER"];
   const tierModel = process.env["LLM_TIER_HEAVY_MODEL"];
-  const tierKey = process.env["LLM_TIER_HEAVY_API_KEY"];
-
-  if (tierProvider === "openrouter" && tierKey && !process.env["OPENROUTER_API_KEY"]) {
-    process.env["OPENROUTER_API_KEY"] = tierKey;
-  }
+  ensureOpenRouterApiKeyFromEnv();
 
   const userPickedProvider = argv.some((a) => a === "--provider");
   const userPickedModel = argv.some((a) => a === "--model" || a.startsWith("--model="));

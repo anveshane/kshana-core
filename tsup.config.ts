@@ -34,6 +34,15 @@ export default defineConfig([
       'server/index': 'src/server/index.ts',
     },
     format: ['cjs'],
+    // ESM-only `@mariozechner/pi-*` packages omit `exports.require`. If esbuild
+    // leaves them as externals, `node dist/server/cli.cjs` throws
+    // ERR_PACKAGE_PATH_NOT_EXPORTED. Force them into the CJS bundle.
+    noExternal: [
+      '@mariozechner/pi-coding-agent',
+      '@mariozechner/pi-ai',
+      '@mariozechner/pi-agent-core',
+      '@mariozechner/pi-tui',
+    ],
     // Maps import.meta.url to a __filename-based URL in CJS output (avoids empty-import-meta warnings and broken paths).
     shims: true,
     clean: false,
