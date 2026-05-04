@@ -6,6 +6,8 @@ import { kshanaRunTo } from "./runTo.js";
 import { kshanaReset } from "./reset.js";
 import { kshanaReadArtifact } from "./readArtifact.js";
 import { kshanaRenderSceneBundle } from "./renderSceneBundle.js";
+import { kshanaTaskStatus } from "./taskStatus.js";
+import { kshanaTaskCancel } from "./taskCancel.js";
 import {
   kshanaShowFirstFrame,
   kshanaShowLastFrame,
@@ -22,6 +24,8 @@ export const kshanaTools = [
   kshanaReset,
   kshanaReadArtifact,
   kshanaRenderSceneBundle,
+  kshanaTaskStatus,
+  kshanaTaskCancel,
   kshanaShowFirstFrame,
   kshanaShowLastFrame,
   kshanaShowShotVideo,
@@ -37,6 +41,8 @@ export {
   kshanaReset,
   kshanaReadArtifact,
   kshanaRenderSceneBundle,
+  kshanaTaskStatus,
+  kshanaTaskCancel,
   kshanaShowFirstFrame,
   kshanaShowLastFrame,
   kshanaShowShotVideo,

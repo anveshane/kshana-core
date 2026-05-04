@@ -59,7 +59,7 @@
   },
   "110": {
     "inputs": {
-      "lora_name": "Flux2-Klein-9B-consistency-V2.safetensors",
+      "lora_name": "Klein-9b-consistency.safetensors",
       "strength_model": 0.5,
       "model": [
         "92:70",

@@ -113,7 +113,7 @@
     "inputs": {
       "cfg": 1,
       "model": [
-        "474",
+        "628",
         0
       ],
       "positive": [
@@ -296,7 +296,7 @@
     "inputs": {
       "cfg": 1,
       "model": [
-        "474",
+        "628",
         0
       ],
       "positive": [
@@ -866,7 +866,7 @@
     "inputs": {
       "shift": 13,
       "model": [
-        "474",
+        "628",
         0
       ]
     },
@@ -1222,6 +1222,20 @@
     "class_type": "TextGenerateLTX2Prompt",
     "_meta": {
       "title": "TextGenerateLTX2Prompt"
+    }
+  },
+  "628": {
+    "inputs": {
+      "lora_name": "LiconStudio__Ltx23-VBVR-lora-I2V__Ltx2.3-Licon-VBVR-I2V-96000-R32.safetensors",
+      "strength_model": 1.0,
+      "model": [
+        "474",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA (LTX I2V)"
     }
   }
 }

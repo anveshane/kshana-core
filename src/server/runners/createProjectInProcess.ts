@@ -64,6 +64,18 @@ export interface CreateProjectInProcessOpts {
   templateId?: string | undefined;
   /** Force input type, skipping content auto-detection. */
   inputType?: InputType | undefined;
+  /**
+   * Initialize into an existing project folder instead of creating one.
+   *
+   * The kshana-desktop new-project dialog pre-creates `<workspace>/<name>/`
+   * with a stub `project.json`/asset manifest before the chat-embedded
+   * wizard runs. With this flag, we treat the existing folder as the
+   * target — the stub project.json is overwritten with kshana-core's
+   * properly templated v2.0 file, and `original_input.md` is written
+   * fresh. The folder name is used verbatim; no `.kshana` suffix is
+   * appended.
+   */
+  existingDir?: string | undefined;
 }
 
 export interface CreateProjectInProcessResult {
@@ -110,10 +122,15 @@ export function createProjectInProcess(
     );
   }
 
-  const projectDir = join(opts.basePath, `${opts.name}.kshana`);
-  if (existsSync(projectDir)) {
+  const projectDir = opts.existingDir ?? join(opts.basePath, `${opts.name}.kshana`);
+  if (!opts.existingDir && existsSync(projectDir)) {
     throw new CreateProjectError(
       `Project directory already exists: ${projectDir}`,
+    );
+  }
+  if (opts.existingDir && !existsSync(projectDir)) {
+    throw new CreateProjectError(
+      `existingDir was passed but the folder does not exist: ${projectDir}`,
     );
   }
 

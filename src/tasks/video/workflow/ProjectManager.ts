@@ -771,6 +771,16 @@ export function saveProject(project: ProjectFile, basePath: string = defaultBase
     ...('primaryNarration' in project
       ? { primaryNarration: project.primaryNarration }
       : {}),
+    // CRITICAL: executorState is the dependency-graph snapshot — every
+    // completed node's status, outputs, and topology mutations live
+    // here. Omitting it from the on-disk write silently wipes the
+    // executor's memory of all prior progress, so the next run
+    // restarts from "Expand Characters" even if the user already
+    // generated 27 nodes worth of work. Regression-pinned in
+    // tests/workflow/ProjectManager.test.ts → "preserves executor state".
+    ...('executorState' in project
+      ? { executorState: project.executorState }
+      : {}),
   };
   writeProjectText(PROJECT_FILE, JSON.stringify(orderedProject, null, 2), basePath);
 }

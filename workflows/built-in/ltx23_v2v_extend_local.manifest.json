@@ -36,6 +36,13 @@
       "type": "text",
       "source": "system",
       "required": false
+    },
+    {
+      "id": "lora_strength",
+      "type": "number",
+      "source": "system",
+      "description": "Strength of the LTX I2V LoRA (LiconStudio Ltx2.3-VBVR-iora-I2V).",
+      "required": false
     }
   ],
   "workflowFile": "ltx23_v2v_extend_local.json",
@@ -70,9 +77,17 @@
       "input": "seed",
       "nodeId": "243",
       "field": "noise_seed"
+    },
+    {
+      "input": "lora_strength",
+      "nodeId": "628",
+      "field": "strength_model"
     }
   ],
   "builtIn": true,
   "active": true,
-  "mode": "local"
+  "mode": "local",
+  "defaultValues": {
+    "lora_strength": 1.0
+  }
 }

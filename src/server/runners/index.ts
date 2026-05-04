@@ -21,3 +21,17 @@ export { mapExecutorStatus } from './mapExecutorStatus.js';
 export { classifyRunTarget } from './classifyRunTarget.js';
 export type { ClassifiedRunTarget } from './classifyRunTarget.js';
 export { linkAbortSignalToAgent } from './linkAbortSignalToAgent.js';
+export {
+  BackgroundTaskRunner,
+} from './BackgroundTaskRunner.js';
+export type {
+  BackgroundTaskRunnerEvents,
+  TaskKind,
+  TaskRecord,
+  TaskSpec,
+  TaskStatus,
+  TaskExecutor,
+  TaskExecutionContext,
+  DispatchResult,
+} from './BackgroundTaskRunner.js';
+export { getBackgroundTaskRunner } from './backgroundTaskRunnerSingleton.js';

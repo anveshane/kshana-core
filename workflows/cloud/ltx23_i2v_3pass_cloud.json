@@ -562,7 +562,7 @@
       "chunks": 2,
       "dim_threshold": 4096,
       "model": [
-        "82",
+        "2001",
         0
       ]
     },
@@ -891,6 +891,20 @@
     "class_type": "LTX2_NAG",
     "_meta": {
       "title": "LTX2 NAG"
+    }
+  },
+  "2001": {
+    "inputs": {
+      "lora_name": "LiconStudio__Ltx23-VBVR-lora-I2V__Ltx2.3-Licon-VBVR-I2V-96000-R32.safetensors",
+      "strength_model": 1.0,
+      "model": [
+        "82",
+        0
+      ]
+    },
+    "class_type": "LoraLoaderModelOnly",
+    "_meta": {
+      "title": "Load LoRA (LTX I2V)"
     }
   }
 }
