@@ -111,22 +111,23 @@ export class ComfyUIClient {
   private timeout: number;
   private apiKey?: string;
   private isCloud: boolean;
+  private useBearerAuth: boolean;
   private cloudApiKey?: string;
   private cloudOutputs = new Map<string, Record<string, unknown>>();
 
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
     const merged = { ...DEFAULT_CONFIG, ...config };
-    // Normalize baseUrl: strip trailing slash AND a trailing `/api` segment
-    // so `getPath` (which prepends `/api` in cloud mode) doesn't produce
-    // a double `/api/api/...` path. Users routinely set
-    // `COMFY_CLOUD_URL=https://cloud.comfy.org/api` thinking that's the
-    // canonical base — and the `/upload/image` endpoint then 401s.
-    this.baseUrl = merged.baseUrl.replace(/\/$/, '').replace(/\/api$/, '');
+    const normalizedBaseUrl = merged.baseUrl.replace(/\/$/, '');
+    this.isCloud = isComfyCloudUrl(normalizedBaseUrl);
+    this.apiKey = merged.apiKey?.trim() || undefined;
+    this.useBearerAuth = !this.isCloud && !!this.apiKey;
+    // Direct Comfy Cloud uses `/api` under the host and `getPath` adds it.
+    this.baseUrl = this.isCloud
+      ? normalizedBaseUrl.replace(/\/api$/, '')
+      : normalizedBaseUrl;
     this.outputDir = merged.outputDir;
     this.timeout = merged.timeout;
-    this.apiKey = merged.apiKey;
-    this.isCloud = isComfyCloudUrl(this.baseUrl);
-    this.cloudApiKey = merged.apiKey;
+    this.cloudApiKey = this.apiKey;
 
     if (this.isCloud && !this.cloudApiKey) {
       throw new Error(
@@ -156,7 +157,9 @@ export class ComfyUIClient {
    */
   private buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
     const headers: Record<string, string> = { ...extra };
-    if (this.apiKey) {
+    if (this.useBearerAuth && this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    } else if (this.apiKey) {
       headers['X-API-Key'] = this.apiKey;
     }
     return headers;
@@ -184,10 +187,19 @@ export class ComfyUIClient {
     // Strip /api suffix for WebSocket (cloud WS is at /ws, not /api/ws)
     const wsBase = this.baseUrl.replace(/\/api\/?$/, '').replace(/^http/, 'ws');
     let url = `${wsBase}/ws?clientId=${clientId}`;
-    if (this.apiKey) {
+    if (this.apiKey && !this.useBearerAuth) {
       url += `&token=${this.apiKey}`;
     }
     return url;
+  }
+
+  private buildWsOptions(): WebSocket.ClientOptions | undefined {
+    if (!this.useBearerAuth || !this.apiKey) return undefined;
+    return {
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+    };
   }
 
   /**
@@ -239,8 +251,18 @@ export class ComfyUIClient {
    * Queue a workflow for execution via HTTP POST to /prompt.
    */
   async queueWorkflow(workflowJson: Record<string, unknown>, clientId?: string): Promise<string>;
-  async queueWorkflow(workflowJson: Record<string, unknown>, clientId: string | undefined, returnMeta: true): Promise<{ promptId: string; clientId: string }>;
-  async queueWorkflow(workflowJson: Record<string, unknown>, clientId?: string, returnMeta?: boolean): Promise<string | { promptId: string; clientId: string }> {
+  async queueWorkflow(
+    workflowJson: Record<string, unknown>,
+    clientId: string | undefined,
+    returnMeta: true,
+    extraData?: Record<string, unknown>,
+  ): Promise<{ promptId: string; clientId: string }>;
+  async queueWorkflow(
+    workflowJson: Record<string, unknown>,
+    clientId?: string,
+    returnMeta?: boolean,
+    extraData?: Record<string, unknown>,
+  ): Promise<string | { promptId: string; clientId: string }> {
     clientId = clientId || nanoid();
 
     // Convert LiteGraph format to API format if needed
@@ -259,8 +281,12 @@ export class ComfyUIClient {
     // it, vendor-backed jobs submit cleanly but never execute — silent
     // timeout, no execution_error. Non-vendor nodes (Klein, LTX) ignore
     // the field, so it's safe to always include it on cloud runs.
+    const mergedExtraData = { ...(extraData ?? {}) };
     if (this.apiKey) {
-      payload['extra_data'] = { api_key_comfy_org: this.apiKey };
+      mergedExtraData['api_key_comfy_org'] = this.apiKey;
+    }
+    if (Object.keys(mergedExtraData).length > 0) {
+      payload['extra_data'] = mergedExtraData;
     }
 
     const response = await fetch(this.buildUrl('/prompt'), {
@@ -402,6 +428,7 @@ export class ComfyUIClient {
   async queueAndWaitWS(
     workflowJson: Record<string, unknown>,
     progressCallback?: (info: WSProgressInfo) => void,
+    extraData?: Record<string, unknown>,
   ): Promise<{ result: CompletionResult; promptId: string; clientId: string; outputs: ImageInfo[] }> {
     const clientId = nanoid();
     const wsUrl = this.buildWsUrl(clientId);
@@ -452,11 +479,11 @@ export class ComfyUIClient {
       };
 
       try {
-        ws = new WebSocket(wsUrl);
+        ws = new WebSocket(wsUrl, this.buildWsOptions());
       } catch (err) {
         debugLog(`[queueAndWaitWS] WS failed: ${err}`);
         // Fall back: submit then poll
-        this.queueWorkflow(workflowJson, clientId, true)
+        this.queueWorkflow(workflowJson, clientId, true, extraData)
           .then(meta => {
             promptId = meta.promptId;
             return this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined);
@@ -469,7 +496,7 @@ export class ComfyUIClient {
       ws.on('open', async () => {
         debugLog(`[queueAndWaitWS] WS connected — now submitting prompt`);
         try {
-          const meta = await this.queueWorkflow(workflowJson, clientId, true);
+          const meta = await this.queueWorkflow(workflowJson, clientId, true, extraData);
           promptId = meta.promptId;
           debugLog(`[queueAndWaitWS] Prompt submitted: ${promptId}`);
         } catch (err) {
@@ -625,7 +652,7 @@ export class ComfyUIClient {
       };
 
       try {
-        ws = new WebSocket(wsUrl);
+        ws = new WebSocket(wsUrl, this.buildWsOptions());
       } catch (err) {
         debugLog(`[waitForCompletionWS] Failed to create WebSocket: ${err}. Falling back to HTTP polling.`);
         return this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined);
