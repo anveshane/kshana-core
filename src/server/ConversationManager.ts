@@ -7,10 +7,16 @@ import * as nodeFs from 'node:fs';
 import * as nodePath from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { defaultBasePath } from '../tasks/video/workflow/projectFileIO.js';
+import {
+  resolveProjectDir,
+  ProjectDirNotFoundError,
+} from '../agent/pi/tools/resolveProjectDir.js';
 import type { GenericAgentResult } from '../core/agent/index.js';
 import type { LLMClientConfig } from '../core/llm/index.js';
 import type { TypedEventEmitter } from '../events/EventEmitter.js';
 import { PiSessionAgent } from '../agent/pi/PiSessionAgent.js';
+import { getBackgroundTaskRunner } from './runners/backgroundTaskRunnerSingleton.js';
+import type { BackgroundTaskRunnerEvents } from './runners/BackgroundTaskRunner.js';
 import { applyProjectAnnouncement } from './projectAnnouncement.js';
 import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
@@ -103,6 +109,16 @@ interface SessionAgent extends TypedEventEmitter {
   injectInput?(input: string): void;
 }
 
+/**
+ * Session role. `'interactive'` (default) is the user's chat
+ * session — long-running pipeline tools are stripped so a chat
+ * message can't block on a multi-hour run. `'background'` is the
+ * dedicated long-run session (created by the desktop when the user
+ * clicks Resume); it gets the full toolkit. See
+ * `src/agent/pi/selectToolsForRole.ts`.
+ */
+export type ConversationSessionRole = 'interactive' | 'background';
+
 interface ActiveSession {
   state: SessionState;
   agent?: SessionAgent;
@@ -112,6 +128,8 @@ interface ActiveSession {
   sessionContext?: SessionContext;
   /** The mode this session operates in */
   mode: 'local' | 'remote';
+  /** Long-run policy. See ConversationSessionRole. Default 'interactive'. */
+  role: ConversationSessionRole;
   /** Remote client filesystem (set in remote mode) */
   remoteFs?: IFileSystem;
   /** Capabilities reported by the connected desktop client */
@@ -120,6 +138,16 @@ interface ActiveSession {
   timerCheckpointInterval?: ReturnType<typeof setInterval>;
   /** Events callbacks for the currently-running task (cleared after runTask). */
   activeEvents?: ConversationEvents;
+  /**
+   * Events callbacks pinned for the lifetime of an in-flight background
+   * task on this session. Captured from `activeEvents` when the runner
+   * emits 'started' and cleared on 'completed' / 'failed' / 'cancelled'.
+   * Lives independently of `activeEvents` because the agent's turn
+   * (and `activeEvents`) ends as soon as the dispatch tool returns,
+   * while the background task keeps emitting progress events for
+   * minutes-to-hours afterward.
+   */
+  backgroundEvents?: ConversationEvents;
   /** Currently-focused project name (no .kshana suffix), set by kshana_focus_project. */
   focusedProject?: string;
   /** Last focused project we announced to the agent (for change detection in runTask). */
@@ -147,12 +175,162 @@ export class ConversationManager {
 
     // Start cleanup interval
     this.cleanupInterval = setInterval(() => this.cleanupStaleSessions(), 60 * 1000);
+
+    // Forward background-task-runner events back to the originating
+    // session's chat. The runner emits events tagged with the
+    // sessionId that dispatched the task; we read each session's
+    // activeEvents and route the runner's payload through the
+    // same channels the agent's own tool calls use, so the chat
+    // panel sees background progress as if it were inline tool output.
+    this.subscribeToBackgroundTaskRunner();
+  }
+
+  private subscribeToBackgroundTaskRunner(): void {
+    const runner = getBackgroundTaskRunner();
+    const fakeToolCallIdForTask = (taskId: string): string =>
+      `task:${taskId}`;
+    // Pick the events sink that's still alive. Prefer the background
+    // pin (set on 'started' and held for the task's lifetime) and
+    // fall back to activeEvents for the rare case where the agent's
+    // turn is still running when an event fires.
+    const sinkFor = (session: ActiveSession | undefined): ConversationEvents | undefined =>
+      session?.backgroundEvents ?? session?.activeEvents;
+
+    runner.on('started', ({ task }: BackgroundTaskRunnerEvents['started']) => {
+      const session = this.sessions.get(task.spec.sessionId);
+      if (!session) return;
+      // Pin the events sink for the task's lifetime — the agent's
+      // tool call returns immediately after dispatch, which clears
+      // activeEvents, but the runner keeps emitting progress events
+      // long after that. Without this pin, every tool/result/asset
+      // event would be dropped.
+      if (session.activeEvents) {
+        session.backgroundEvents = session.activeEvents;
+      }
+      const events = sinkFor(session);
+      if (!events) return;
+      // Synthesize a tool_call event so the chat shows a tool card
+      // for the task.
+      events.onToolCall?.(
+        task.spec.sessionId,
+        fakeToolCallIdForTask(task.id),
+        `kshana_${task.spec.kind}`,
+        task.spec.params,
+        this.getWorkflowName(session),
+      );
+    });
+    runner.on('tool', ({ task, toolName, nodeId }: BackgroundTaskRunnerEvents['tool']) => {
+      const session = this.sessions.get(task.spec.sessionId);
+      const events = sinkFor(session);
+      if (!session || !events) return;
+      const line = nodeId ? `  [${toolName}] ${nodeId}` : `  [${toolName}]`;
+      events.onToolStreaming?.(
+        task.spec.sessionId,
+        fakeToolCallIdForTask(task.id),
+        line + '\n',
+        false,
+        this.getWorkflowName(session),
+        toolName,
+      );
+    });
+    runner.on('result', ({ task, toolName, filePath, status }: BackgroundTaskRunnerEvents['result']) => {
+      const session = this.sessions.get(task.spec.sessionId);
+      const events = sinkFor(session);
+      if (!session || !events) return;
+      const line = filePath
+        ? `    → ${filePath}`
+        : status
+          ? `    → ${status}`
+          : '';
+      if (!line) return;
+      events.onToolStreaming?.(
+        task.spec.sessionId,
+        fakeToolCallIdForTask(task.id),
+        line + '\n',
+        false,
+        this.getWorkflowName(session),
+        toolName,
+      );
+    });
+    runner.on('notification', ({ task, level, message }: BackgroundTaskRunnerEvents['notification']) => {
+      const session = this.sessions.get(task.spec.sessionId);
+      const events = sinkFor(session);
+      if (!session || !events) return;
+      events.onToolStreaming?.(
+        task.spec.sessionId,
+        fakeToolCallIdForTask(task.id),
+        `  [${level}] ${message}\n`,
+        false,
+        this.getWorkflowName(session),
+        'kshana_run_to',
+      );
+    });
+    runner.on('asset', ({ task, kind, filePath }: BackgroundTaskRunnerEvents['asset']) => {
+      const session = this.sessions.get(task.spec.sessionId);
+      const events = sinkFor(session);
+      if (!session || !events) return;
+      events.onMediaGenerated?.(task.spec.sessionId, {
+        kind,
+        path: filePath,
+        project: task.spec.projectName,
+        source: 'kshana_run_to',
+      });
+    });
+    runner.on('completed', ({ task }: BackgroundTaskRunnerEvents['completed']) => {
+      const session = this.sessions.get(task.spec.sessionId);
+      const events = sinkFor(session);
+      if (session && events) {
+        events.onToolResult?.(
+          task.spec.sessionId,
+          fakeToolCallIdForTask(task.id),
+          `kshana_${task.spec.kind}`,
+          { status: 'completed' },
+          false,
+          this.getWorkflowName(session),
+        );
+      }
+      if (session) session.backgroundEvents = undefined;
+    });
+    runner.on('failed', ({ task, error }: BackgroundTaskRunnerEvents['failed']) => {
+      const session = this.sessions.get(task.spec.sessionId);
+      const events = sinkFor(session);
+      if (session && events) {
+        events.onToolResult?.(
+          task.spec.sessionId,
+          fakeToolCallIdForTask(task.id),
+          `kshana_${task.spec.kind}`,
+          { error },
+          true,
+          this.getWorkflowName(session),
+        );
+      }
+      if (session) session.backgroundEvents = undefined;
+    });
+    runner.on('cancelled', ({ task }: BackgroundTaskRunnerEvents['cancelled']) => {
+      const session = this.sessions.get(task.spec.sessionId);
+      const events = sinkFor(session);
+      if (session && events) {
+        events.onToolResult?.(
+          task.spec.sessionId,
+          fakeToolCallIdForTask(task.id),
+          `kshana_${task.spec.kind}`,
+          { status: 'cancelled' },
+          false,
+          this.getWorkflowName(session),
+        );
+      }
+      if (session) session.backgroundEvents = undefined;
+    });
   }
 
   /**
    * Create a new conversation session (bare — no agent until project is configured).
    */
-  createSession(mode: 'local' | 'remote' = 'local', remoteFs?: IFileSystem): SessionState {
+  createSession(
+    mode: 'local' | 'remote' = 'local',
+    remoteFs?: IFileSystem,
+    role: ConversationSessionRole = 'interactive',
+  ): SessionState {
     const sessionId = uuidv4();
     const now = Date.now();
 
@@ -164,7 +342,7 @@ export class ConversationManager {
       taskHistory: [],
     };
 
-    this.sessions.set(sessionId, { state, mode, remoteFs });
+    this.sessions.set(sessionId, { state, mode, role, remoteFs });
     captureSessionStarted(sessionId, new Date(now).toISOString());
 
     return state;
@@ -219,6 +397,8 @@ export class ConversationManager {
     runInSession(session.sessionContext, () => {
       if (!session.agent) {
         session.agent = new PiSessionAgent({
+          role: session.role,
+          sessionId,
           focusProject: (name) => this.focusSessionProject(sessionId, name),
           onMedia: (event) => {
             const s = this.sessions.get(sessionId);
@@ -256,6 +436,8 @@ export class ConversationManager {
     if (!session.agent) {
       runInSession(session.sessionContext, () => {
         session.agent = new PiSessionAgent({
+          role: session.role,
+          sessionId,
           focusProject: (name) => this.focusSessionProject(sessionId, name),
           onMedia: (event) => {
             const s = this.sessions.get(sessionId);
@@ -610,17 +792,27 @@ export class ConversationManager {
       throw new Error(`Session not found: ${sessionId}`);
     }
 
-    const projectDirName = `${projectName}.kshana`;
-    // Read project.json directly via the shared `defaultBasePath()`
-    // anchor (KSHANA_PROJECTS_DIR / cwd) instead of the brittle
-    // loadProject(basePath) path. The previous code passed
-    // `projectDirName` as basePath and relied on the standalone CLI's
-    // cwd + an already-set SessionContext to coincidentally line up.
-    // Embedded hosts have neither, so the call ENOENT'd.
+    // Resolve the on-disk folder via the shared resolver so both
+    // naming conventions work — `<name>.kshana` (canonical) and
+    // `<name>` (kshana-desktop's NewProjectDialog default). Earlier
+    // this hardcoded `<name>.kshana` and ENOENT'd on desktop projects.
+    let projectDirAbs: string;
+    try {
+      projectDirAbs = resolveProjectDir({
+        name: projectName,
+        basePath: defaultBasePath(),
+      });
+    } catch (err) {
+      const detail =
+        err instanceof ProjectDirNotFoundError ? err.message : String(err);
+      throw new Error(
+        `Project '${projectName}' not found or unreadable. ${detail}`,
+      );
+    }
+    const projectDirName = nodePath.basename(projectDirAbs);
     let project: NonNullable<ReturnType<typeof loadProject>>;
     try {
-      const projectsDir = defaultBasePath();
-      const projectJsonPath = nodePath.join(projectsDir, projectDirName, 'project.json');
+      const projectJsonPath = nodePath.join(projectDirAbs, 'project.json');
       if (!nodeFs.existsSync(projectJsonPath)) {
         throw new Error(`project.json not found at ${projectJsonPath}`);
       }

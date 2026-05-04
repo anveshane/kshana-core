@@ -21,6 +21,12 @@ const Params = Type.Object({
   template: Type.Optional(
     Type.String({ description: "Template id, e.g. narrative, infographic" }),
   ),
+  existingDir: Type.Optional(
+    Type.String({
+      description:
+        "Absolute path to a pre-created project folder. Use this when the host (e.g. kshana-desktop) has already created the workspace folder and you want to initialize it in place instead of creating a new <name>.kshana sibling. The folder must exist; original_input.md and project.json are written into it.",
+    }),
+  ),
 });
 
 export interface NewProjectDetails {
@@ -73,6 +79,7 @@ export const kshanaNew = defineTool({
         duration: params.duration,
         basePath: getProjectsDir(),
         ...(params.template ? { templateId: params.template } : {}),
+        ...(params.existingDir ? { existingDir: params.existingDir } : {}),
       });
 
       const lines = [

@@ -6,7 +6,14 @@
  * returns the right object.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  readFileSync,
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -251,6 +258,148 @@ describe('createProjectInProcess', () => {
       }),
     ).toThrow();
     expect(existsSync(join(basePath, 'p.kshana'))).toBe(false);
+  });
+
+  // ── existingDir path (kshana-desktop integration) ──────────────────
+  // The desktop's NewProjectDialog pre-creates the project folder and
+  // writes a stub project.json + assets/manifest.json before the chat-
+  // embedded wizard runs. With `existingDir` set, createProjectInProcess
+  // initializes that folder in place rather than creating a new
+  // <name>.kshana sibling.
+
+  describe('with existingDir', () => {
+    it('uses existingDir verbatim as the projectDir (no .kshana suffix)', () => {
+      const customDir = join(basePath, 'my_workspace_folder');
+      mkdirSync(customDir, { recursive: true });
+
+      const result = createProjectInProcess({
+        name: 'whatever',
+        input: 'A story.',
+        style: 'live',
+        duration: 30,
+        basePath,
+        existingDir: customDir,
+      });
+
+      expect(result.projectDir).toBe(customDir);
+      // No sibling <name>.kshana folder was created.
+      expect(existsSync(join(basePath, 'whatever.kshana'))).toBe(false);
+    });
+
+    it('overwrites a stub project.json with the v2.0 templated schema', () => {
+      const customDir = join(basePath, 'desktop_proj');
+      mkdirSync(customDir, { recursive: true });
+      writeFileSync(
+        join(customDir, 'project.json'),
+        JSON.stringify({
+          id: 'desktop-stub',
+          title: 'desktop_proj',
+          version: '2.0',
+        }),
+      );
+
+      createProjectInProcess({
+        name: 'desktop_proj',
+        input: 'A story.',
+        style: 'live',
+        duration: 90,
+        basePath,
+        existingDir: customDir,
+      });
+
+      const project = JSON.parse(
+        readFileSync(join(customDir, 'project.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      // Stub had only id/title/version; now has the full v2.0 schema.
+      expect(project['style']).toBe('cinematic_realism');
+      expect(project['targetDuration']).toBe(90);
+      expect(project['currentPhase']).toBeDefined();
+      expect(project['phases']).toBeDefined();
+      // Title was rewritten to the requested name (overrides stub).
+      expect(project['title']).toBe('desktop_proj');
+    });
+
+    it('writes original_input.md into existingDir (overwrites if present)', () => {
+      const customDir = join(basePath, 'with_input');
+      mkdirSync(customDir, { recursive: true });
+      writeFileSync(
+        join(customDir, 'original_input.md'),
+        'Old placeholder content',
+      );
+
+      createProjectInProcess({
+        name: 'with_input',
+        input: 'The new seed story.',
+        style: 'live',
+        duration: 30,
+        basePath,
+        existingDir: customDir,
+      });
+
+      const onDisk = readFileSync(
+        join(customDir, 'original_input.md'),
+        'utf8',
+      );
+      expect(onDisk).toBe('The new seed story.');
+    });
+
+    it('preserves a pre-existing assets/manifest.json (desktop sidecar)', () => {
+      // The desktop pre-writes assets/manifest.json with its own asset
+      // tracking schema. createProjectInProcess must not clobber it.
+      const customDir = join(basePath, 'preserve_manifest');
+      mkdirSync(join(customDir, 'assets'), { recursive: true });
+      const sidecarMarker = {
+        schema_version: '1',
+        assets: [{ id: 'desktop-marker-001', kind: 'placeholder' }],
+      };
+      writeFileSync(
+        join(customDir, 'assets/manifest.json'),
+        JSON.stringify(sidecarMarker),
+      );
+
+      createProjectInProcess({
+        name: 'preserve_manifest',
+        input: 'A story.',
+        style: 'live',
+        duration: 30,
+        basePath,
+        existingDir: customDir,
+      });
+
+      const manifest = JSON.parse(
+        readFileSync(join(customDir, 'assets/manifest.json'), 'utf8'),
+      ) as { assets: Array<{ id: string }> };
+      expect(manifest.assets[0]?.id).toBe('desktop-marker-001');
+    });
+
+    it('throws CreateProjectError when existingDir does not exist', () => {
+      const missingDir = join(basePath, 'never_created');
+      expect(() =>
+        createProjectInProcess({
+          name: 'p',
+          input: 'idea',
+          style: 'live',
+          duration: 30,
+          basePath,
+          existingDir: missingDir,
+        }),
+      ).toThrow(/existingDir was passed but the folder does not exist/);
+    });
+
+    it('still validates name/input/duration/style with existingDir set', () => {
+      const customDir = join(basePath, 'with_input_dir');
+      mkdirSync(customDir, { recursive: true });
+      expect(() =>
+        createProjectInProcess({
+          name: 'p',
+          input: '',
+          style: 'live',
+          duration: 30,
+          basePath,
+          existingDir: customDir,
+        }),
+      ).toThrow(/Input content is required/);
+    });
   });
 
   // ── inputType override (regression pin for the v2.0→v3.0 migration crash) ──

@@ -17,7 +17,9 @@ import { createFocusProjectTool, type FocusProjectCallback } from "./tools/focus
 import { createRunToTool, type MediaCallback } from "./tools/runTo.js";
 import { createShowShotTool } from "./tools/showShot.js";
 import { createRegenTool } from "./tools/regen.js";
+import { createDispatchRunToTool } from "./tools/dispatchRunTo.js";
 import { loadOrchestratorPrompt } from "./prompt.js";
+import { selectToolsForRole, type SessionRole } from "./selectToolsForRole.js";
 import { ensureDir, getKshanaConfigDir, getProjectsDir, REPO_ROOT } from "./paths.js";
 
 const REPO_ROOT_PROMPTS = join(REPO_ROOT, "prompts");
@@ -44,18 +46,37 @@ export class PiSessionAgent extends TypedEventEmitter {
   constructor(opts?: {
     tools?: ToolDefinition[];
     systemPrompt?: string;
+    /**
+     * Session role. `'interactive'` strips long-running pipeline tools
+     * (kshana_run_to, kshana_render_scene_bundle, kshana_audit_fidelity)
+     * so a chat session can't be hijacked by a 1–4h blocking task.
+     * `'background'` is the dedicated long-run session; it sees the
+     * full toolkit. Defaults to `'interactive'` — the safer choice
+     * for any caller that hasn't thought about it.
+     */
+    role?: SessionRole;
     /** Callback that lets the agent focus a project as the session's active project. */
     focusProject?: FocusProjectCallback;
     /** Called whenever a long-running tool surfaces a newly-generated asset. */
     onMedia?: MediaCallback;
+    /**
+     * Session id to embed in `kshana_dispatch_*` tools so the
+     * background task runner tags emitted events with this id, and
+     * the host can route them back to the right chat.
+     */
+    sessionId?: string;
   }) {
     super();
+    const role: SessionRole = opts?.role ?? 'interactive';
     let baseTools = opts?.tools ?? kshanaTools;
     // Tools that need to surface inline media in chat are factory-built when
     // an onMedia callback is wired. Without onMedia, kshana_show_shot still
     // returns a text summary but won't render image/video cards in the UI.
     if (opts?.onMedia) {
-      const mediaRunTo = createRunToTool({ onMedia: opts.onMedia });
+      const mediaRunTo = createRunToTool({
+        onMedia: opts.onMedia,
+        ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
+      });
       const mediaShowShot = createShowShotTool({ onMedia: opts.onMedia });
       const mediaRegen = createRegenTool({ onMedia: opts.onMedia });
       baseTools = baseTools.map((t) => {
@@ -63,9 +84,28 @@ export class PiSessionAgent extends TypedEventEmitter {
         return t;
       });
       baseTools = [...baseTools, mediaShowShot, mediaRegen];
+    } else if (opts?.sessionId) {
+      // No onMedia callback (rare in production) but we still want
+      // to dispatch instead of block when we have a session id.
+      const sessionRunTo = createRunToTool({ sessionId: opts.sessionId });
+      baseTools = baseTools.map((t) => (t.name === "kshana_run_to" ? sessionRunTo : t));
+      baseTools = [...baseTools, createShowShotTool({}), createRegenTool()];
     } else {
       baseTools = [...baseTools, createShowShotTool({}), createRegenTool()];
     }
+    // Currently a no-op pass-through (see selectToolsForRole notes).
+    // Reserved for future dispatch-based tool gating.
+    baseTools = selectToolsForRole(baseTools, role);
+
+    // Add the per-session dispatch tools when we have a sessionId.
+    // Without sessionId (legacy callers), they're omitted — the
+    // legacy synchronous kshana_run_to remains in the tool list as
+    // a fallback, so behavior degrades gracefully.
+    if (opts?.sessionId) {
+      const dispatchRunTo = createDispatchRunToTool({ sessionId: opts.sessionId });
+      baseTools = [...baseTools, dispatchRunTo];
+    }
+
     this.tools = opts?.focusProject
       ? [...baseTools, createFocusProjectTool(opts.focusProject)]
       : baseTools;

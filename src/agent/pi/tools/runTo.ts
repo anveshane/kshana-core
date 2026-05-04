@@ -1,11 +1,15 @@
 import { Type, type Static } from "typebox";
 import { defineTool, type ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { runExecutor } from "../../../server/runners/runExecutor.js";
 import { classifyRunTarget } from "../../../server/runners/classifyRunTarget.js";
 import { resolveNodeId, type ExecutorState } from "../../../core/project/projectTypes.js";
 import { getProjectsDir } from "../paths.js";
+import {
+  resolveProjectDir,
+  ProjectDirNotFoundError,
+} from "./resolveProjectDir.js";
 import type { GenericProjectFile } from "../../../core/templates/types.js";
 import type { AssetEvent } from "./parseAssetLines.js";
 
@@ -20,6 +24,12 @@ export type MediaCallback = (event: MediaEvent) => void;
 
 const Params = Type.Object({
   project: Type.String({ description: "Project name" }),
+  projectDir: Type.Optional(
+    Type.String({
+      description:
+        "Absolute path to the project folder. Pass this when the host (e.g. kshana-desktop) created the project at a workspace path that doesn't follow the default `<name>.kshana` convention. When omitted, the tool probes <projectsDir>/<name>.kshana and then <projectsDir>/<name>.",
+    }),
+  ),
   stage: Type.Optional(
     Type.String({
       description:
@@ -44,17 +54,75 @@ function failure(message: string): { content: { type: "text"; text: string }[]; 
   };
 }
 
-export function createRunToTool(opts?: { onMedia?: MediaCallback }): ToolDefinition {
+export function createRunToTool(opts?: {
+  onMedia?: MediaCallback;
+  /**
+   * Session id used to route runner events back to the originating
+   * chat. When set, `kshana_run_to` dispatches to the background
+   * task runner and returns immediately — keeping the chat
+   * responsive while the run executes detached. When unset (legacy
+   * CLI / test paths), the tool runs inline, blocking until done.
+   */
+  sessionId?: string;
+}): ToolDefinition {
   return defineTool({
     name: "kshana_run_to",
     label: "kshana run-to",
     description:
-      "Drive the kshana pipeline on a project up to a stage (or to completion). Long-running. Streams progress as each node completes; generated images and videos are surfaced as standalone events in chat as they appear.",
+      "Drive the kshana pipeline on a project up to a stage (or to completion). Returns immediately when run from a desktop chat session — the run executes off the agent's tool-call loop on the background task runner so chat stays responsive. Progress streams in as discrete events.",
     parameters: Params,
     executionMode: "sequential",
     async execute(_id, params: Static<typeof Params>, signal, onUpdate) {
-      const projectDir = resolve(getProjectsDir(), `${params.project}.kshana`);
-      if (!existsSync(projectDir)) return failure(`Project not found: ${projectDir}`);
+      // Desktop / chat path: dispatch to the runner and return fast.
+      // The runner emits events back through ConversationManager →
+      // the originating session's IPC stream → the chat.
+      if (opts?.sessionId) {
+        const { getBackgroundTaskRunner } = await import(
+          "../../../server/runners/backgroundTaskRunnerSingleton.js"
+        );
+        const runner = getBackgroundTaskRunner();
+        const result = runner.dispatch({
+          kind: "run_to",
+          projectName: params.project,
+          sessionId: opts.sessionId,
+          params: {
+            ...(params.projectDir ? { projectDir: params.projectDir } : {}),
+            ...(params.stage ? { stage: params.stage } : {}),
+            ...(params.skip_media ? { skip_media: params.skip_media } : {}),
+          },
+        });
+        if (result.status === "started") {
+          const text = `Started run_to task ${result.taskId}${params.stage ? ` (stage='${params.stage}')` : ""}. Progress will stream below.`;
+          return {
+            content: [{ type: "text", text }],
+            details: { status: "running", stopReason: null, log: text },
+          };
+        }
+        const text = `Cannot start: task ${result.activeTaskId} (${result.activeTaskKind}) is already running on '${result.activeProjectName}'. Use kshana_task_cancel to abort it, or wait.`;
+        return {
+          content: [{ type: "text", text }],
+          details: { status: "rejected", stopReason: null, log: text },
+        };
+      }
+
+      // Legacy inline path (no sessionId, e.g. CLI smoke tests).
+      let projectDir: string;
+      try {
+        projectDir = resolveProjectDir({
+          name: params.project,
+          basePath: getProjectsDir(),
+          ...(params.projectDir ? { projectDir: params.projectDir } : {}),
+        });
+      } catch (err) {
+        if (err instanceof ProjectDirNotFoundError) {
+          // Surface the attempted paths so the LLM doesn't try to
+          // "fix" by renaming/mv'ing the folder.
+          return failure(
+            `${err.message}. Pass projectDir as an absolute path if the project lives outside the default projects directory; do NOT rename the folder.`,
+          );
+        }
+        return failure((err as Error).message);
+      }
       const projectJsonPath = join(projectDir, "project.json");
       if (!existsSync(projectJsonPath)) return failure(`project.json not found in ${projectDir}`);
       const project = JSON.parse(readFileSync(projectJsonPath, "utf-8")) as GenericProjectFile;

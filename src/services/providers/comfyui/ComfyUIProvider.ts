@@ -245,10 +245,12 @@ export class ComfyUIProvider implements GenerationProvider {
     const registry = getRegistry();
 
     // Determine workflow: explicit user override (mode registry) wins,
-    // otherwise default to qwen_snofs_edit. Klein is no longer the
-    // auto-default — refs beyond the 3-slot encoder are silently
-    // dropped per project policy (2026-05-02).
-    let workflowName = 'klein_snofs_edit';
+    // otherwise default to the built-in FLUX 2 Klein edit workflow
+    // shipped with kshana-core. The exact ID resolves via
+    // chooseImageEditWorkflow (mode-aware: local vs cloud).
+    let workflowName = process.env['COMFY_MODE'] === 'cloud'
+      ? 'flux2_klein_edit_cloud'
+      : 'flux2_klein_edit_local';
     let modeManifest: any = null;
     let modeOverrideActive = false;
     try {

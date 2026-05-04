@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { nanoid } from 'nanoid';
 import WebSocket from 'ws';
+import { decideWsAction, type ComfyWsMessage } from './wsAction.js';
 
 // Debug logging to file instead of console to avoid polluting Ink UI
 const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
@@ -84,7 +85,6 @@ export interface CompletionResult {
   prompt_id: string;
 }
 
-const envConfig = getComfyConfig();
 const COMFY_CLOUD_HOST = 'cloud.comfy.org';
 
 export function isComfyCloudUrl(value: string): boolean {
@@ -95,12 +95,29 @@ export function isComfyCloudUrl(value: string): boolean {
   }
 }
 
-const DEFAULT_CONFIG: ComfyUIClientConfig = {
-  baseUrl: envConfig.baseUrl || 'http://localhost:8188',
-  outputDir: './outputs',
-  timeout: envConfig.timeout || 300,
-  apiKey: envConfig.apiKey,
-};
+/**
+ * Build the default config FRESH for each client instance.
+ *
+ * Why this isn't a top-level constant: the embedded desktop path loads
+ * kshana-core via `require()` BEFORE setting `process.env['COMFY_MODE']`
+ * etc. (the desktop sets those in `kshanaCoreManager.start()`, which
+ * runs after the module graph is loaded). If we cached `getComfyConfig()`
+ * at module load, every embedded ComfyUIClient would silently fall
+ * back to `http://localhost:8188` and try to talk to a non-existent
+ * local server — the `Failed to poll history: fetch failed` symptom.
+ *
+ * Reading env at construction guarantees the client honors whatever
+ * the host has set up by the time it actually instantiates one.
+ */
+function buildDefaultConfig(): ComfyUIClientConfig {
+  const envConfig = getComfyConfig();
+  return {
+    baseUrl: envConfig.baseUrl || 'http://localhost:8188',
+    outputDir: './outputs',
+    timeout: envConfig.timeout || 300,
+    apiKey: envConfig.apiKey,
+  };
+}
 
 /**
  * Async HTTP client for ComfyUI API.
@@ -115,7 +132,7 @@ export class ComfyUIClient {
   private cloudOutputs = new Map<string, Record<string, unknown>>();
 
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
-    const merged = { ...DEFAULT_CONFIG, ...config };
+    const merged = { ...buildDefaultConfig(), ...config };
     // Normalize baseUrl: strip trailing slash AND a trailing `/api` segment
     // so `getPath` (which prepends `/api` in cloud mode) doesn't produce
     // a double `/api/api/...` path. Users routinely set
@@ -501,62 +518,60 @@ export class ComfyUIClient {
           lastActivityTime = Date.now();
           return;
         }
+        let msg: ComfyWsMessage;
         try {
-          const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
-          lastActivityTime = Date.now();
-          const msgType: string = data.type;
-
-          debugLog(`[queueAndWaitWS] WS msg: ${msgType} prompt=${data.data?.prompt_id || 'n/a'}`);
-
-          if (msgType === 'progress' && data.data) {
-            const d = data.data as { value: number; max: number };
-            const pct = d.max > 0 ? Math.round((d.value / d.max) * 100) : 0;
-            progressCallback?.({ percentage: pct, message: `Step ${d.value}/${d.max}`, step: d.value, maxSteps: d.max });
-          } else if (msgType === 'executing' && data.data?.node) {
-            progressCallback?.({ percentage: 0, message: `Node: ${data.data.node}`, currentNode: data.data.node });
-          } else if (msgType === 'executed' && data.data?.output) {
-            // Capture output filenames from executed events (needed for cloud where /history is blocked).
-            // Guard: only capture events for OUR prompt_id. Without this, cached
-            // results broadcast by ComfyUI Cloud from OTHER concurrent jobs can
-            // leak into our outputs list — we'd download a stranger's video.
-            // (Noir S1.1 "potter" bug, 2026-04-22: our submit was 3748c3b5 but
-            // execution_success arrived for 869d0484, and we captured its
-            // outputs because no prompt_id check existed.)
-            const eventPromptId: string | undefined = data.data.prompt_id;
-            if (promptId && eventPromptId && eventPromptId !== promptId) {
-              debugLog(`[queueAndWaitWS] Ignoring output from foreign prompt ${eventPromptId} (ours=${promptId})`);
-            } else {
-              const output = data.data.output;
-              const nodeId = data.data.node;
-              for (const key of ['images', 'gifs', 'videos']) {
-                const items = output[key];
-                if (Array.isArray(items)) {
-                  for (const item of items) {
-                    if (item.filename) {
-                      collectedOutputs.push({ filename: item.filename, subfolder: item.subfolder || '', type: item.type || 'output', node_id: nodeId });
-                      debugLog(`[queueAndWaitWS] Captured output: ${item.filename} from node ${nodeId}`);
-                    }
-                  }
-                }
-              }
+          msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
+        } catch {
+          return; /* non-JSON */
+        }
+        lastActivityTime = Date.now();
+        debugLog(`[queueAndWaitWS] WS msg: ${msg.type} prompt=${msg.data?.prompt_id || 'n/a'}`);
+        const action = decideWsAction(msg, promptId);
+        switch (action.kind) {
+          case 'progress':
+            progressCallback?.({
+              percentage: action.percentage,
+              message: action.message,
+              ...(action.step !== undefined ? { step: action.step } : {}),
+              ...(action.maxSteps !== undefined ? { maxSteps: action.maxSteps } : {}),
+            });
+            return;
+          case 'executing':
+            progressCallback?.({ percentage: 0, message: `Node: ${action.node}`, currentNode: String(action.node) });
+            return;
+          case 'queued':
+            progressCallback?.({ percentage: 0, message: `Queued (${action.remaining} ahead)` });
+            return;
+          case 'capture_output':
+            for (const item of action.items) {
+              collectedOutputs.push({
+                filename: item.filename,
+                subfolder: item.subfolder,
+                type: item.type,
+                ...(item.node_id !== undefined ? { node_id: String(item.node_id) } : {}),
+              });
+              debugLog(`[queueAndWaitWS] Captured output: ${item.filename} from node ${item.node_id}`);
             }
-          } else if (msgType === 'execution_success') {
-            const eventPromptId: string | undefined = data.data?.prompt_id;
-            if (promptId && eventPromptId && eventPromptId !== promptId) {
-              debugLog(`[queueAndWaitWS] Ignoring execution_success from foreign prompt ${eventPromptId} (ours=${promptId})`);
-            } else {
-              finish({ status: 'completed', prompt_id: promptId });
-            }
-          } else if (msgType === 'execution_error') {
-            debugLog(`[queueAndWaitWS] Execution error: ${JSON.stringify(data.data)}`);
+            return;
+          case 'finish_completed':
+            finish({ status: 'completed', prompt_id: promptId });
+            return;
+          case 'finish_error':
+            debugLog(`[queueAndWaitWS] Execution error: ${JSON.stringify(action.payload)}`);
             finish({ status: 'error', prompt_id: promptId });
-          } else if (msgType === 'status') {
-            const qr = data.data?.status?.exec_info?.queue_remaining;
-            if (qr !== undefined && qr > 0) {
-              progressCallback?.({ percentage: 0, message: `Queued (${qr} ahead)` });
-            }
-          }
-        } catch { /* non-JSON or binary */ }
+            return;
+          case 'ignore_foreign_output':
+            debugLog(`[queueAndWaitWS] Ignoring output from foreign prompt ${action.eventPromptId} (ours=${promptId})`);
+            return;
+          case 'ignore_foreign_success':
+            debugLog(`[queueAndWaitWS] Ignoring execution_success from foreign prompt ${action.eventPromptId} (ours=${promptId})`);
+            return;
+          case 'ignore_foreign_error':
+            debugLog(`[queueAndWaitWS] Ignoring execution_error from foreign prompt ${action.eventPromptId} (ours=${promptId})`);
+            return;
+          case 'ignore':
+            return;
+        }
       });
     });
   }

@@ -11,18 +11,28 @@
 
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
+import { findKshanaCoreRoot } from '../../agent/pi/paths.js';
 import type { WorkflowManifest, WorkflowManifestFile, WorkflowPipeline } from './types.js';
 
 /** Directories to scan for manifest files.
+ *
  * Cloud mode: uses workflows/cloud instead of workflows/built-in
  * Local mode: uses workflows/built-in (default)
+ *
+ * Computed fresh on every refresh() — NOT at module load. The embedded
+ * desktop path requires `kshanaCoreManager.start()` to set
+ * `process.env['COMFY_MODE']` before the registry is consulted, but
+ * that happens AFTER kshana-core is required. A module-load constant
+ * would freeze `isCloudMode=false` and miss `workflows/cloud/` entirely.
  */
-const isCloudMode = process.env['COMFY_MODE'] === 'cloud';
-const WORKFLOW_DIRS = [
-  ...(isCloudMode ? ['workflows/cloud'] : ['workflows/built-in']),
-  'workflows/user',
-  'workflows',
-];
+function workflowDirs(): string[] {
+  const isCloudMode = process.env['COMFY_MODE'] === 'cloud';
+  return [
+    ...(isCloudMode ? ['workflows/cloud'] : ['workflows/built-in']),
+    'workflows/user',
+    'workflows',
+  ];
+}
 
 /** Valid pipeline values for manifest validation */
 const VALID_PIPELINES: Set<string> = new Set([
@@ -124,7 +134,21 @@ export class WorkflowModeRegistry {
   private projectRoot: string;
 
   constructor(projectRoot?: string) {
-    this.projectRoot = projectRoot || process.cwd();
+    // process.cwd() is wrong in the embedded desktop path (cwd is the
+    // desktop's repo, which has no `workflows/` directory). Resolve
+    // the kshana-core package root explicitly so the workflow scan
+    // finds the manifests that ship with kshana-core regardless of
+    // who's hosting it. Fall back to cwd if the package root can't
+    // be found (shouldn't happen — but better than throwing here).
+    if (projectRoot) {
+      this.projectRoot = projectRoot;
+    } else {
+      try {
+        this.projectRoot = findKshanaCoreRoot(import.meta.url);
+      } catch {
+        this.projectRoot = process.cwd();
+      }
+    }
   }
 
   /**
@@ -135,8 +159,10 @@ export class WorkflowModeRegistry {
     this.modes.clear();
     manifestDirMap.clear();
 
+    const isCloudMode = process.env['COMFY_MODE'] === 'cloud';
+
     // Scan filesystem for ComfyUI workflow manifests
-    for (const dir of WORKFLOW_DIRS) {
+    for (const dir of workflowDirs()) {
       const absDir = join(this.projectRoot, dir);
       if (!existsSync(absDir)) continue;
       try {
@@ -395,7 +421,7 @@ export class WorkflowModeRegistry {
       if (existsSync(absPath)) return absPath;
     }
     // Fallback: scan all directories
-    for (const d of WORKFLOW_DIRS) {
+    for (const d of workflowDirs()) {
       const absPath = join(this.projectRoot, d, mode.workflowFile);
       if (existsSync(absPath)) return absPath;
     }

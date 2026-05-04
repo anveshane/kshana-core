@@ -8,6 +8,7 @@ import {
   projectExists,
   createProject,
   loadProject,
+  saveProject,
   deleteProject,
   writeProjectFile,
   readProjectFile,
@@ -163,6 +164,86 @@ describe('ProjectManager', () => {
       writeProjectFile('plans/plot.md', 'Test content', TEST_BASE_PATH);
 
       expect(readProjectFile('plans/plot.md', TEST_BASE_PATH)).toBe('Test content');
+    });
+  });
+
+  // Regression pin for the 2026-05-03 "every restart re-runs Expand
+  // Characters" bug: saveProject's hand-rolled `orderedProject`
+  // omitted `executorState`, so any caller that round-tripped a
+  // project through loadProject → saveProject silently wiped the
+  // dependency-graph state. Configure_project (called every time the
+  // user opened a project from the desktop) was one such caller, and
+  // it nuked all completed nodes on every open.
+  describe('saveProject preserves executor state', () => {
+    it('round-trips executorState through saveProject + loadProject', () => {
+      createProject('Test story', TEST_BASE_PATH);
+      const project = loadProject(TEST_BASE_PATH);
+      expect(project).not.toBeNull();
+      // Stub a representative executorState shape — the contract is
+      // "whatever was on the project, comes back". We don't depend
+      // on the executor's real shape here.
+      const stubExecutorState = {
+        nodes: {
+          'plot:plot': {
+            id: 'plot:plot',
+            typeId: 'plot',
+            status: 'completed',
+            outputPath: 'chapters/chapter_1/plans/plot.md',
+          },
+          'story:story': {
+            id: 'story:story',
+            typeId: 'story',
+            status: 'completed',
+            outputPath: 'chapters/chapter_1/plans/story.md',
+          },
+        },
+        completedCount: 2,
+      };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (project as any).executorState = stubExecutorState;
+      saveProject(project!, TEST_BASE_PATH);
+
+      const reloaded = loadProject(TEST_BASE_PATH);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((reloaded as any)?.executorState).toEqual(stubExecutorState);
+    });
+
+    it('preserves executorState across multiple round-trips (idempotent)', () => {
+      createProject('Test story', TEST_BASE_PATH);
+      let project = loadProject(TEST_BASE_PATH);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (project as any).executorState = { nodes: { 'a': { id: 'a', status: 'completed' } } };
+
+      // 5 sequential save/load cycles — simulates the user opening,
+      // configure_project firing, and the executor running again.
+      for (let i = 0; i < 5; i++) {
+        saveProject(project!, TEST_BASE_PATH);
+        project = loadProject(TEST_BASE_PATH);
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect((project as any)?.executorState?.nodes?.['a']?.status).toBe(
+        'completed',
+      );
+    });
+
+    it('writes executorState directly to project.json on disk (not just in memory)', () => {
+      createProject('Test story', TEST_BASE_PATH);
+      const project = loadProject(TEST_BASE_PATH);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (project as any).executorState = {
+        nodes: { 'extract_collections:extract_collections': { status: 'completed' } },
+      };
+      saveProject(project!, TEST_BASE_PATH);
+
+      const onDisk = JSON.parse(
+        readFileSync(join(getProjectDir(TEST_BASE_PATH), 'project.json'), 'utf8'),
+      );
+      expect(onDisk.executorState).toBeDefined();
+      expect(
+        onDisk.executorState.nodes['extract_collections:extract_collections']
+          .status,
+      ).toBe('completed');
     });
   });
 });

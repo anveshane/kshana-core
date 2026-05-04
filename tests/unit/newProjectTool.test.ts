@@ -9,7 +9,14 @@
  * tool surface itself.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  readFileSync,
+  mkdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { kshanaNew } from '../../src/agent/pi/tools/newProject.js';
@@ -208,6 +215,144 @@ describe('pi-agent kshanaNew tool', () => {
     expect(text).toMatch(/Style:\s+cinematic_realism/);
     expect(text).toMatch(/Duration:\s+45s/);
     expect(text).toMatch(/Initial phase/);
+  });
+
+  // ── existingDir param (kshana-desktop wizard handoff) ───────────
+  // The desktop's chat-embedded wizard pre-creates a project folder
+  // (NewProjectDialog) before pi-agent gets the kickoff message. The
+  // tool must accept `existingDir` and forward it to the in-process
+  // creator so the existing folder is initialized in place.
+
+  describe('with existingDir', () => {
+    it('initializes the pre-created folder and returns it as projectDir', async () => {
+      const desktopDir = join(projectsDir, 'desktop_pre_created');
+      mkdirSync(desktopDir, { recursive: true });
+      writeFileSync(
+        join(desktopDir, 'project.json'),
+        JSON.stringify({ id: 'stub', title: 'desktop_pre_created' }),
+      );
+
+      const r = await executeNew({
+        name: 'desktop_pre_created',
+        input: 'A wizard-collected story.',
+        style: 'live',
+        duration: 60,
+        existingDir: desktopDir,
+      });
+
+      const d = r.details as { status: string; projectDir?: string };
+      expect(d.status).toBe('completed');
+      expect(d.projectDir).toBe(desktopDir);
+      // Did NOT create the default <name>.kshana sibling under projectsDir.
+      expect(
+        existsSync(join(projectsDir, 'desktop_pre_created.kshana')),
+      ).toBe(false);
+    });
+
+    it('writes original_input.md into the existingDir', async () => {
+      const desktopDir = join(projectsDir, 'check_input');
+      mkdirSync(desktopDir, { recursive: true });
+
+      const story = 'Two friends meet on a rooftop at midnight.';
+      await executeNew({
+        name: 'check_input',
+        input: story,
+        style: 'live',
+        duration: 30,
+        existingDir: desktopDir,
+      });
+
+      const onDisk = readFileSync(
+        join(desktopDir, 'original_input.md'),
+        'utf8',
+      );
+      expect(onDisk).toBe(story);
+    });
+
+    it('overwrites the desktop-stub project.json with v2.0 schema', async () => {
+      const desktopDir = join(projectsDir, 'overwrite_stub');
+      mkdirSync(desktopDir, { recursive: true });
+      // Desktop's createDefaultBackendProject writes a stub like this.
+      writeFileSync(
+        join(desktopDir, 'project.json'),
+        JSON.stringify({
+          id: 'desktop-stub',
+          title: 'overwrite_stub',
+          version: '2.0',
+        }),
+      );
+
+      await executeNew({
+        name: 'overwrite_stub',
+        input: 'idea',
+        style: 'anime',
+        duration: 45,
+        template: 'narrative',
+        existingDir: desktopDir,
+      });
+
+      const project = JSON.parse(
+        readFileSync(join(desktopDir, 'project.json'), 'utf8'),
+      ) as {
+        style: string;
+        targetDuration: number;
+        templateId?: string;
+        currentPhase?: string;
+        phases?: unknown;
+        title: string;
+      };
+      expect(project.style).toBe('anime');
+      expect(project.targetDuration).toBe(45);
+      expect(project.templateId).toBe('narrative');
+      expect(project.currentPhase).toBeDefined();
+      expect(project.phases).toBeDefined();
+      expect(project.title).toBe('overwrite_stub');
+    });
+
+    it('returns a structured failure when existingDir does not exist', async () => {
+      const r = await executeNew({
+        name: 'p',
+        input: 'idea',
+        style: 'live',
+        duration: 30,
+        existingDir: join(projectsDir, 'never_created'),
+      });
+      expect((r.details as { status: string }).status).toBe('failed');
+      expect((r.content as Array<{ text: string }>)[0].text).toMatch(
+        /existingDir was passed but the folder does not exist/,
+      );
+    });
+
+    it('still requires style/duration/input even with existingDir set', async () => {
+      const dir = join(projectsDir, 'still_validates');
+      mkdirSync(dir, { recursive: true });
+
+      const noStyle = await executeNew({
+        name: 'p',
+        input: 'idea',
+        duration: 30,
+        existingDir: dir,
+      });
+      expect((noStyle.details as { status: string }).status).toBe('failed');
+
+      const noDuration = await executeNew({
+        name: 'p',
+        input: 'idea',
+        style: 'live',
+        existingDir: dir,
+      });
+      expect((noDuration.details as { status: string }).status).toBe(
+        'failed',
+      );
+
+      const noInput = await executeNew({
+        name: 'p',
+        style: 'live',
+        duration: 30,
+        existingDir: dir,
+      });
+      expect((noInput.details as { status: string }).status).toBe('failed');
+    });
   });
 
   // ── No more shell-out ────────────────────────────────────────────
