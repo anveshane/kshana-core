@@ -77,6 +77,30 @@ export interface DurationFirstResult {
   totalEstimatedDuration: number;
 }
 
+const WARNING_DEDUPE_MS = 30_000;
+const recentWarnings = new Map<string, number>();
+
+function getLlmLabel(llm: LLMClient): string {
+  const info = (llm as LLMClient & {
+    getConnectionInfo?: () => { baseUrl: string; model: string };
+  }).getConnectionInfo?.();
+  if (!info) return 'llm=unknown';
+  return `model=${info.model}, baseUrl=${info.baseUrl}`;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function warnOnce(key: string, message: string): void {
+  const now = Date.now();
+  const last = recentWarnings.get(key) ?? 0;
+  if (now - last < WARNING_DEDUPE_MS) return;
+  recentWarnings.set(key, now);
+  // eslint-disable-next-line no-console
+  console.warn(message);
+}
+
 // ── Stage B: compute durations (pure, no LLM) ─────────────────────────────────
 
 /**
@@ -482,10 +506,11 @@ export async function runDurationFirstExtraction(
     const { runHierarchicalExtraction } = await import('./hierarchicalSceneExtractor.js');
     return await runHierarchicalExtraction(storyContent, targetDuration, llm, { essence });
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[duration-first] hierarchical path failed (${(err as Error).message}) — ` +
-      `falling back to legacy single-call cluster flow`,
+    const message = errorMessage(err);
+    warnOnce(
+      `hierarchical:${getLlmLabel(llm)}:${message}`,
+      `[duration-first] hierarchical extractor failed; trying legacy duration-first ` +
+      `(${getLlmLabel(llm)}, error=${message})`,
     );
     return runLegacyDurationFirst(storyContent, targetDuration, llm);
   }

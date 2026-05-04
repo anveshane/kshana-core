@@ -20,6 +20,7 @@
  * executor's stop sentinel + per-tick check pick it up.
  */
 import { LLMClient } from '../../core/llm/index.js';
+import { getLLMConfig } from '../../core/llm/config.js';
 import { ExecutorAgent } from '../../core/planner/ExecutorAgent.js';
 import { getVideoTemplate } from '../../tasks/video/index.js';
 import { setActiveProjectDir } from '../../tasks/video/workflow/activeProject.js';
@@ -118,11 +119,7 @@ export async function runExecutor(opts: RunExecutorOpts): Promise<RunExecutorRes
 
   const project = opts.project;
   const template = getVideoTemplate(project.templateId || 'narrative');
-  const llm = new LLMClient({
-    baseUrl: process.env['LLM_BASE_URL'],
-    apiKey: process.env['LLM_API_KEY'],
-    model: process.env['LLM_MODEL'],
-  });
+  const llm = new LLMClient(getLLMConfig());
 
   const stopAtStage = opts.target.stage;
   const stopAfterNode = opts.target.nodeId;
