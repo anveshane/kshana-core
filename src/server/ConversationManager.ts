@@ -845,9 +845,18 @@ export class ConversationManager {
     }
 
     session.focusedProject = projectName;
-    // Agent invoked this directly via the kshana_focus_project tool, so it
-    // already sees the focus in its tool result — skip the runTask prepend.
-    session.announcedProject = projectName;
+    // Do NOT pre-mark this project as announced. Both the agent's own
+    // kshana_focus_project tool AND the desktop's IPC focusProject
+    // bridge land here, but only the agent path already sees the
+    // focus inside its tool result; the desktop path opens a project
+    // BEFORE any agent turn has run. Pre-setting `announcedProject`
+    // caused `applyProjectAnnouncement` to silently skip the prefix
+    // on the very first user message, leaving pi-agent to guess the
+    // active project from `kshana_list_projects` (the BurgerEating-vs-
+    // The-Village miss from the field). A redundant announcement when
+    // the agent itself just focused is cheap; a missed announcement
+    // when the desktop just focused is a wrong-project answer.
+    session.announcedProject = undefined;
 
     // Persist the configuration so a reconnect resumes on this project.
     try {
