@@ -35,6 +35,8 @@ import {
   stopTimer,
   checkpointTimer,
   updateProjectAutonomousMode,
+  updateProjectPiOversight,
+  updateProjectVLMJudge,
   updateProjectConfiguration,
   getElapsedMs,
   loadProject,
@@ -586,6 +588,44 @@ export class ConversationManager {
     if (session.sessionContext) {
       runInSession(session.sessionContext, () => {
         updateProjectAutonomousMode(enabled);
+      });
+    }
+  }
+
+  /**
+   * Pi-agent oversight toggle. When true, pi-agent is auto-engaged on
+   * runner events (failed / completed / per-asset-when-vlmJudge-also-on).
+   * Persists to project.json so the choice survives reload.
+   *
+   * Mirrors setAutonomousMode's shape: mutate session state, persist,
+   * no-op when the session isn't found (desktop's optimistic flips
+   * shouldn't crash on a stale id).
+   */
+  setPiOversight(sessionId: string, enabled: boolean): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.state.piOversight = enabled;
+    if (session.sessionContext) {
+      runInSession(session.sessionContext, () => {
+        updateProjectPiOversight(enabled);
+      });
+    }
+  }
+
+  /**
+   * VLM master switch. Gates BOTH the new oversight describeImageWithVLM
+   * AND the executor-internal reviewImageWithVLM retry-once gate. The
+   * runtime effective value is `piOversight && vlmJudge` — VLM
+   * standalone has no consumer; gating is enforced at the read site
+   * (executor + supervisor handlers), not on writes.
+   */
+  setVLMJudge(sessionId: string, enabled: boolean): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.state.vlmJudge = enabled;
+    if (session.sessionContext) {
+      runInSession(session.sessionContext, () => {
+        updateProjectVLMJudge(enabled);
       });
     }
   }

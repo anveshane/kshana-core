@@ -417,6 +417,24 @@ export interface SessionState {
   taskHistory: string[];
   /** When true, skip all confirmations and run without iteration limit */
   autonomousMode?: boolean;
+  /**
+   * Pi-agent oversight: when true, pi-agent is auto-engaged on
+   * runner events (`failed`, `completed`, and per-asset events when
+   * vlmJudge is also on). Pi-agent is the judge that reads
+   * `[SYSTEM EVENT]` messages in the running session and decides
+   * whether to redo a node, escalate, or ack.
+   * Defaults to true when not explicitly set.
+   */
+  piOversight?: boolean;
+  /**
+   * VLM call enabled: master switch over all vision-LLM calls
+   * (the new `describeImageWithVLM` for oversight AND the
+   * executor-internal `reviewImageWithVLM` retry-once gate). The
+   * runtime effective value is `piOversight && vlmJudge` — VLM
+   * standalone has no consumer; gating it on supervisor keeps the
+   * mental model coherent. Defaults to true when not explicitly set.
+   */
+  vlmJudge?: boolean;
 }
 
 /**

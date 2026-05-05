@@ -148,6 +148,18 @@ export interface ExecutorAgentConfig {
    * Used for testing — validates prompt structure without calling image/video providers.
    */
   skipMediaGeneration?: boolean;
+  /**
+   * Master switch for vision-LLM calls (the in-executor
+   * `reviewImageWithVLM` retry-once gate AND any sibling oversight
+   * describe-call). When `true` (or undefined → defaults to !DISABLE_VLM
+   * env), VLM is allowed. When `false`, VLM is skipped end-to-end —
+   * the runtime gate enforced by ConversationManager
+   * (`piOversight && vlmJudge`).
+   *
+   * Live-toggleable via `setVLMEnabled()` so flipping the UI mid-run
+   * affects subsequent shots immediately.
+   */
+  vlmEnabled?: boolean;
 }
 
 interface ParsedSceneBreakdownShot {
@@ -266,7 +278,14 @@ export class ExecutorAgent extends TypedEventEmitter {
    * so the UI can show the right banner.
    */
   private stopReason: 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null = null;
-  private vlmDisabled = process.env['DISABLE_VLM'] === 'true'; // Env flag or auto-disabled after first 404
+  /**
+   * Inverted config field — internal code already says
+   * "if vlmDisabled skip" all over executeShotImage. Source of truth
+   * order: explicit constructor `config.vlmEnabled` → env DISABLE_VLM →
+   * default enabled. Mutated at runtime by `setVLMEnabled` and by the
+   * 404 self-shutoff in the retry loop.
+   */
+  private vlmDisabled: boolean = process.env['DISABLE_VLM'] === 'true';
   /**
    * Loaded from prompts/story_essence.json after the story_essence node
    * completes (or at startup if the file already exists). Threaded into
@@ -352,6 +371,12 @@ export class ExecutorAgent extends TypedEventEmitter {
     }
     if (config.stopAfterNode) {
       this.stopAfterNodeId = config.stopAfterNode;
+    }
+    // Resolve initial vlmDisabled. Explicit config wins over env so
+    // ConversationManager's runtime gate (`piOversight && vlmJudge`)
+    // can authoritatively force-off without depending on env state.
+    if (typeof config.vlmEnabled === 'boolean') {
+      this.vlmDisabled = !config.vlmEnabled;
     }
     // Build per-call router. When LLM_ROUTING_ENABLED=false (default), every
     // purpose resolves to the default client so behavior is unchanged.
@@ -871,6 +896,21 @@ export class ExecutorAgent extends TypedEventEmitter {
    */
   setRedoOnlyNodes(ids: string[] | null): void {
     this.redoOnlyNodes = ids === null ? null : new Set(ids);
+  }
+
+  /**
+   * Live-toggle vision-LLM calls. The next `executeShotImage` shot
+   * picks up the new value at the `if (this.vlmDisabled)` gate.
+   * Used by ConversationManager when the user flips the VLM header
+   * toggle mid-run — switching off mid-run skips review for any
+   * subsequent shot but doesn't interrupt the in-flight one.
+   *
+   * Notes on layering: the runtime constraint
+   * `piOversight && vlmJudge` is computed by ConversationManager;
+   * this setter only sees the resolved boolean.
+   */
+  setVLMEnabled(enabled: boolean): void {
+    this.vlmDisabled = !enabled;
   }
 
   /**

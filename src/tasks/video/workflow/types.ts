@@ -610,6 +610,21 @@ export interface ProjectFile {
   /** Whether autonomous mode was selected in project setup */
   autonomousMode?: boolean;
 
+  /**
+   * Pi-agent oversight: pi-agent is auto-engaged on runner events
+   * (failed/completed/per-asset-with-VLM). Defaults to true when
+   * the field is absent on disk.
+   */
+  piOversight?: boolean;
+
+  /**
+   * VLM master switch: gates all vision-LLM calls (oversight's
+   * describeImageWithVLM AND the executor-internal reviewImageWithVLM
+   * retry-once gate). Effective only when piOversight is also true.
+   * Defaults to true when the field is absent on disk.
+   */
+  vlmJudge?: boolean;
+
   /** Persisted todo list for resuming work */
   todos?: PersistedTodo[];
 
