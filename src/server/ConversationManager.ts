@@ -18,6 +18,10 @@ import { PiSessionAgent } from '../agent/pi/PiSessionAgent.js';
 import { getBackgroundTaskRunner } from './runners/backgroundTaskRunnerSingleton.js';
 import type { BackgroundTaskRunnerEvents } from './runners/BackgroundTaskRunner.js';
 import { applyProjectAnnouncement } from './projectAnnouncement.js';
+import {
+  setPiOversight as setGlobalPiOversight,
+  setVLMJudge as setGlobalVLMJudge,
+} from './oversightState.js';
 import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -35,8 +39,6 @@ import {
   stopTimer,
   checkpointTimer,
   updateProjectAutonomousMode,
-  updateProjectPiOversight,
-  updateProjectVLMJudge,
   updateProjectConfiguration,
   getElapsedMs,
   loadProject,
@@ -593,41 +595,30 @@ export class ConversationManager {
   }
 
   /**
-   * Pi-agent oversight toggle. When true, pi-agent is auto-engaged on
-   * runner events (failed / completed / per-asset-when-vlmJudge-also-on).
-   * Persists to project.json so the choice survives reload.
+   * Pi-agent oversight runtime toggle (global). Mutates the
+   * process-wide `oversightState` global. The desktop's
+   * `kshanaCoreManager` invokes this on Settings-panel changes AND on
+   * chat-header toggle clicks; both surfaces share the same state.
    *
-   * Mirrors setAutonomousMode's shape: mutate session state, persist,
-   * no-op when the session isn't found (desktop's optimistic flips
-   * shouldn't crash on a stale id).
+   * Note on session id: the parameter is preserved for IPC-shape
+   * symmetry with `setAutonomousMode`, but oversight is global —
+   * the value applies to ALL sessions, not just the caller's.
+   * Future-friendly: when we want per-session overrides, this
+   * becomes the place to layer them.
    */
-  setPiOversight(sessionId: string, enabled: boolean): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-    session.state.piOversight = enabled;
-    if (session.sessionContext) {
-      runInSession(session.sessionContext, () => {
-        updateProjectPiOversight(enabled);
-      });
-    }
+  setPiOversight(_sessionId: string, enabled: boolean): void {
+    setGlobalPiOversight(enabled);
   }
 
   /**
-   * VLM master switch. Gates BOTH the new oversight describeImageWithVLM
-   * AND the executor-internal reviewImageWithVLM retry-once gate. The
-   * runtime effective value is `piOversight && vlmJudge` — VLM
-   * standalone has no consumer; gating is enforced at the read site
-   * (executor + supervisor handlers), not on writes.
+   * VLM master switch (global). Same global-state semantics as
+   * setPiOversight. The runtime effective value is
+   * `piOversight && vlmJudge` — VLM standalone has no consumer;
+   * gating is enforced at the runner-singleton's read site, not
+   * on writes.
    */
-  setVLMJudge(sessionId: string, enabled: boolean): void {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-    session.state.vlmJudge = enabled;
-    if (session.sessionContext) {
-      runInSession(session.sessionContext, () => {
-        updateProjectVLMJudge(enabled);
-      });
-    }
+  setVLMJudge(_sessionId: string, enabled: boolean): void {
+    setGlobalVLMJudge(enabled);
   }
 
   /**

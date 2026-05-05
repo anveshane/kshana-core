@@ -280,12 +280,15 @@ export class ExecutorAgent extends TypedEventEmitter {
   private stopReason: 'complete' | 'paused_at_stage' | 'cancelled' | 'failed' | null = null;
   /**
    * Inverted config field — internal code already says
-   * "if vlmDisabled skip" all over executeShotImage. Source of truth
-   * order: explicit constructor `config.vlmEnabled` → env DISABLE_VLM →
-   * default enabled. Mutated at runtime by `setVLMEnabled` and by the
-   * 404 self-shutoff in the retry loop.
+   * "if vlmDisabled skip" all over executeShotImage. Source of
+   * truth: constructor `config.vlmEnabled` (the master switch
+   * resolved from the process-wide `oversightState` global by the
+   * runner singleton). Mutated at runtime by `setVLMEnabled` and by
+   * the 404 self-shutoff in the retry loop. The legacy `DISABLE_VLM`
+   * env shortcut is no longer honored — toggle VLM via the desktop
+   * Settings panel or chat-header toggle.
    */
-  private vlmDisabled: boolean = process.env['DISABLE_VLM'] === 'true';
+  private vlmDisabled: boolean = false;
   /**
    * Loaded from prompts/story_essence.json after the story_essence node
    * completes (or at startup if the file already exists). Threaded into

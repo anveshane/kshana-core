@@ -743,12 +743,6 @@ export function saveProject(project: ProjectFile, basePath: string = defaultBase
     ...(typeof project.autonomousMode === 'boolean'
       ? { autonomousMode: project.autonomousMode }
       : {}),
-    ...(typeof project.piOversight === 'boolean'
-      ? { piOversight: project.piOversight }
-      : {}),
-    ...(typeof project.vlmJudge === 'boolean'
-      ? { vlmJudge: project.vlmJudge }
-      : {}),
     phases: project.phases,
     content: project.content,
     characters: project.characters,
@@ -839,32 +833,6 @@ export function updateProjectAutonomousMode(
   }
 
   project.autonomousMode = autonomousMode;
-  saveProject(project, basePath);
-  return true;
-}
-
-export function updateProjectPiOversight(
-  piOversight: boolean,
-  basePath: string = defaultBasePath(),
-): boolean {
-  const project = loadProject(basePath);
-  if (!project) {
-    return false;
-  }
-  project.piOversight = piOversight;
-  saveProject(project, basePath);
-  return true;
-}
-
-export function updateProjectVLMJudge(
-  vlmJudge: boolean,
-  basePath: string = defaultBasePath(),
-): boolean {
-  const project = loadProject(basePath);
-  if (!project) {
-    return false;
-  }
-  project.vlmJudge = vlmJudge;
   saveProject(project, basePath);
   return true;
 }

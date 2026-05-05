@@ -30,6 +30,7 @@ import { resolveNodeId, type ExecutorState } from '../../core/project/projectTyp
 import type { GenericProjectFile } from '../../core/templates/types.js';
 import { clearStaleStopFile } from './preflightStopFile.js';
 import { effectiveVlmEnabled } from './effectiveVlmEnabled.js';
+import { getOversight } from '../oversightState.js';
 
 async function executeRunTo(ctx: TaskExecutionContext): Promise<void | ExecutorCancelled> {
   const params = ctx.spec.params as {
@@ -114,24 +115,19 @@ async function executeRunTo(ctx: TaskExecutionContext): Promise<void | ExecutorC
   }
 
   // Resolve the VLM master switch at run start. Source of truth is
-  // project.json (persisted by ConversationManager.setPiOversight /
-  // setVLMJudge). The runtime constraint is `piOversight && vlmJudge`
-  // — VLM standalone has no consumer. Both fields default to true
-  // when absent on disk, matching the "default ON" rule for new
-  // projects.
+  // the process-wide `oversightState` (mutated by
+  // ConversationManager.setPiOversight / setVLMJudge, in turn driven
+  // by the desktop's AppSettings + chat-header toggles). Both
+  // toggles default to true. Runtime constraint is
+  // `piOversight && vlmJudge` — VLM standalone has no consumer.
   //
   // Snapshot semantics: the value is captured at task dispatch and
   // doesn't propagate mid-run. Flipping the toggle while a run is
-  // active changes the NEXT run, not this one. Live mid-run
-  // propagation is a follow-up — see todos/migrate-ui-redo-to-
-  // invalidate.md sibling thread on stashing the live executor.
-  const projectToggles = project as unknown as {
-    piOversight?: boolean;
-    vlmJudge?: boolean;
-  };
+  // active changes the NEXT run, not this one.
+  const oversight = getOversight();
   const vlmEnabledForRun = effectiveVlmEnabled({
-    piOversight: projectToggles.piOversight,
-    vlmJudge: projectToggles.vlmJudge,
+    piOversight: oversight.piOversight,
+    vlmJudge: oversight.vlmJudge,
   });
 
   const result = await runExecutor({
