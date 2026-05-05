@@ -19,9 +19,20 @@ import { getBackgroundTaskRunner } from './runners/backgroundTaskRunnerSingleton
 import type { BackgroundTaskRunnerEvents } from './runners/BackgroundTaskRunner.js';
 import { applyProjectAnnouncement } from './projectAnnouncement.js';
 import {
+  getOversight,
   setPiOversight as setGlobalPiOversight,
   setVLMJudge as setGlobalVLMJudge,
 } from './oversightState.js';
+import {
+  buildSupervisorTask,
+  emptySupervisorState,
+  recordSupervisorInvocation,
+  shouldFireSupervisor,
+  type SupervisorEvent,
+  type SupervisorEventInfo,
+  type SupervisorState,
+} from './conversation/supervisor.js';
+import { describeImageWithVLM } from '../core/llm/describeImageWithVLM.js';
 import { getProviderRegistry } from '../services/providers/index.js';
 import type { SessionState } from './types.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
@@ -156,6 +167,13 @@ interface ActiveSession {
   focusedProject?: string;
   /** Last focused project we announced to the agent (for change detection in runTask). */
   announcedProject?: string;
+  /**
+   * Per-task supervisor counters (circuit breaker for the runtime
+   * oversight loop). When a fresh task.id is seen the counters
+   * reset; within a task the failed/completed and asset caps
+   * keep `[SYSTEM EVENT]` invocations bounded.
+   */
+  supervisorState?: SupervisorState;
 }
 
 export class ConversationManager {
@@ -331,6 +349,149 @@ export class ConversationManager {
       }
       if (session) session.backgroundEvents = undefined;
     });
+
+    // ── Supervisor (oversight) re-engagement ─────────────────────
+    // Layered ON TOP of the chat-streaming handlers above. When
+    // oversight is on, these auto-invoke pi-agent via runTask with a
+    // [SYSTEM EVENT] message so it can judge the runner outcome.
+    //
+    // The handlers MUST defer (setImmediate) before calling runTask:
+    // - Runner events fire synchronously from inside the executor's
+    //   call stack, which sits inside an active runTask. Calling
+    //   runTask synchronously would hit the "session already
+    //   running" guard.
+    // - After deferral, the original turn's finally block has run;
+    //   session.state.status is in a terminal state and runTask
+    //   accepts.
+    // - Re-check oversight + status inside the deferred callback so
+    //   we honor a toggle flip that landed during the defer window
+    //   and don't talk over a user message that arrived first.
+    runner.on('failed', ({ task, error }: BackgroundTaskRunnerEvents['failed']) => {
+      this.scheduleSupervisorInvocation('failed', task, { reason: error });
+    });
+    runner.on('completed', ({ task }: BackgroundTaskRunnerEvents['completed']) => {
+      this.scheduleSupervisorInvocation('completed', task, {});
+    });
+    runner.on('asset', (payload: BackgroundTaskRunnerEvents['asset']) => {
+      this.scheduleSupervisorInvocation('asset', payload.task, {
+        kind: payload.kind,
+        filePath: payload.filePath,
+      });
+    });
+  }
+
+  /**
+   * Build a SupervisorEventInfo and fire pi-agent on the next tick
+   * if the circuit-breaker, oversight gate, and (for asset events)
+   * VLM gate all permit. Defers via setImmediate to escape the
+   * synchronous event-emit stack and re-check state with the
+   * original turn's finally block already run.
+   */
+  private scheduleSupervisorInvocation(
+    event: SupervisorEvent,
+    task: BackgroundTaskRunnerEvents['failed']['task'],
+    extra: { reason?: string; kind?: 'image' | 'video'; filePath?: string },
+  ): void {
+    setImmediate(() => {
+      void this.runSupervisorInvocation(event, task, extra);
+    });
+  }
+
+  private async runSupervisorInvocation(
+    event: SupervisorEvent,
+    task: BackgroundTaskRunnerEvents['failed']['task'],
+    extra: { reason?: string; kind?: 'image' | 'video'; filePath?: string },
+  ): Promise<void> {
+    const sessionId = task.spec.sessionId;
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    // Gate 1: oversight off → never fire.
+    const oversight = getOversight();
+    if (!oversight.piOversight) return;
+
+    // Gate 2: per-asset events also require VLM on.
+    if (event === 'asset' && !oversight.vlmJudge) return;
+
+    // Gate 3: per-asset events only meaningful for images. Videos
+    // don't go through the describer (out of scope for v1).
+    if (event === 'asset' && extra.kind !== 'image') return;
+
+    // Gate 4: circuit breaker.
+    const supState = session.supervisorState ?? emptySupervisorState();
+    if (!shouldFireSupervisor(supState, event, task.id)) return;
+
+    // Gate 5: don't talk over an active user turn. session.state.status
+    // is set to 'running' for the duration of runTask. If a user
+    // message arrived during the defer window, skip — they win.
+    if (session.state.status === 'running') return;
+
+    // For asset events: ask the VLM to describe the image. Returns
+    // null when VLM_* env config is missing (one-time warning is
+    // logged from inside describeImageWithVLM); we still fire the
+    // supervisor turn but with no description so pi-agent decides
+    // text-only.
+    let vlmDescription: string | undefined;
+    if (event === 'asset' && extra.filePath) {
+      // Resolve to absolute. The runner reports paths relative to
+      // projectDir; describeImageWithVLM (and the underlying
+      // chatWithImage) need an on-disk path it can read.
+      // Best-effort: if path is already absolute, use as-is;
+      // otherwise prepend the resolved project dir.
+      const absPath = extra.filePath;
+      const desc = await describeImageWithVLM(
+        absPath,
+        // The asset's originating prompt isn't on the runner event —
+        // for now we send a generic framing. Future: thread the
+        // shot's imagePrompt through onAsset.
+        'asset generated by the kshana pipeline',
+      );
+      if (desc) vlmDescription = desc;
+    }
+
+    const info: SupervisorEventInfo = (() => {
+      if (event === 'failed') {
+        return {
+          event: 'failed',
+          taskId: task.id,
+          taskKind: task.spec.kind,
+          projectName: task.spec.projectName,
+          reason: extra.reason ?? 'unknown',
+        };
+      }
+      if (event === 'completed') {
+        return {
+          event: 'completed',
+          taskId: task.id,
+          taskKind: task.spec.kind,
+          projectName: task.spec.projectName,
+        };
+      }
+      return {
+        event: 'asset',
+        taskId: task.id,
+        taskKind: task.spec.kind,
+        projectName: task.spec.projectName,
+        assetPath: extra.filePath ?? '(unknown)',
+        assetPrompt: 'asset generated by the kshana pipeline',
+        ...(vlmDescription ? { vlmDescription } : {}),
+      };
+    })();
+    const taskMessage = buildSupervisorTask(info);
+
+    // Record the invocation BEFORE awaiting runTask so re-entrant
+    // events that fire during the supervisor turn see the bumped
+    // counter.
+    session.supervisorState = recordSupervisorInvocation(supState, event, task.id);
+
+    try {
+      await this.runTask(sessionId, taskMessage);
+    } catch {
+      // Supervisor failures shouldn't crash the runner subscription.
+      // The user will see whatever pi-agent's reply ended up as
+      // (or, on a thrown runTask, no reply); the runner keeps
+      // emitting events for the rest of the run.
+    }
   }
 
   /**
