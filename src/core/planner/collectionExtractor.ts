@@ -14,6 +14,30 @@ import type { CollectionItems, ExecutionNode } from './types.js';
 import { runDurationFirstExtraction, checkDurationBand } from './durationFirstExtractor.js';
 import type { StoryEssence } from './storyEssenceExtractor.js';
 
+const WARNING_DEDUPE_MS = 30_000;
+const recentWarnings = new Map<string, number>();
+
+function getLlmLabel(llm: LLMClient): string {
+  const info = (llm as LLMClient & {
+    getConnectionInfo?: () => { baseUrl: string; model: string };
+  }).getConnectionInfo?.();
+  if (!info) return 'llm=unknown';
+  return `model=${info.model}, baseUrl=${info.baseUrl}`;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function warnOnce(key: string, message: string): void {
+  const now = Date.now();
+  const last = recentWarnings.get(key) ?? 0;
+  if (now - last < WARNING_DEDUPE_MS) return;
+  recentWarnings.set(key, now);
+  // eslint-disable-next-line no-console
+  console.warn(message);
+}
+
 /**
  * Extract collection items from generated content based on the node type.
  *
@@ -89,11 +113,18 @@ async function extractFromStory(
       };
     }
     // Fall through to legacy path.
-    // eslint-disable-next-line no-console
-    console.warn('[duration-first] empty beats or scenes — falling back to legacy extractor');
+    warnOnce(
+      `duration-first-empty:${getLlmLabel(llm)}`,
+      `[duration-first] empty beats or scenes; using structural extractor ` +
+      `(${getLlmLabel(llm)})`,
+    );
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn(`[duration-first] failed (${(err as Error).message}) — falling back to legacy extractor`);
+    const message = errorMessage(err);
+    warnOnce(
+      `duration-first:${getLlmLabel(llm)}:${message}`,
+      `[duration-first] cascade failed; using structural extractor ` +
+      `(${getLlmLabel(llm)}, error=${message})`,
+    );
   }
 
   // Legacy fallback: structural extractor + P0 coverage gate.

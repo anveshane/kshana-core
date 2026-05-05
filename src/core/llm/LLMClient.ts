@@ -94,6 +94,22 @@ export class LLMClient {
       config.hasImplicitThinking ?? process.env['LLM_IMPLICIT_THINKING']?.toLowerCase() === 'true';
   }
 
+  getConnectionInfo(): { baseUrl: string; model: string } {
+    return {
+      baseUrl: this.baseUrl,
+      model: this.model,
+    };
+  }
+
+  private formatOperationError(operation: string, error: unknown): Error {
+    const message = error instanceof Error ? error.message : String(error);
+    const wrapped = new Error(
+      `${operation} failed (model=${this.model}, baseUrl=${this.baseUrl}): ${message}`,
+    );
+    (wrapped as Error & { cause?: unknown }).cause = error;
+    return wrapped;
+  }
+
   /**
    * Parse default headers from environment variable.
    * Format: LLM_DEFAULT_HEADERS="Header1:Value1,Header2:Value2"
@@ -251,7 +267,12 @@ export class LLMClient {
       request.response_format = responseFormat;
     }
 
-    const response = await this.client.chat.completions.create(request);
+    let response: OpenAI.ChatCompletion;
+    try {
+      response = await this.client.chat.completions.create(request);
+    } catch (error) {
+      throw this.formatOperationError('LLM generate', error);
+    }
     const result = this.parseResponse(response);
 
     // Log response
