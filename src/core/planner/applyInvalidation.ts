@@ -41,6 +41,7 @@ export function applyInvalidation(
       | (ExecutorState["nodes"][string] & {
           promptPath?: string;
           artifactId?: string;
+          outputPaths?: Record<string, string>;
         })
       | undefined;
     if (!node) {
@@ -58,6 +59,14 @@ export function applyInvalidation(
     // short-circuiting on a stale path.
     delete node.promptPath;
     delete node.artifactId;
+    // Per-frame outputs dict (first_frame / last_frame / mid_frame paths).
+    // Critical: if we leave this populated, ExecutorAgent's incremental-
+    // retry check (ExecutorAgent.ts:5537 + 5579) will reuse the stale
+    // frames whenever the on-disk files still exist — invalidation
+    // looks like it worked but the next run silently reuses old
+    // images. The graph-aware `executor.invalidateNode` does the same
+    // clear; this disk-mutating sibling has to match.
+    delete node.outputPaths;
     invalidated.push(id);
   }
 

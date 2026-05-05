@@ -131,4 +131,36 @@ describe("applyInvalidation", () => {
     );
     expect(result.notFound).toEqual(["nonexistent:node"]);
   });
+
+  /**
+   * Regression: ExecutorAgent's per-frame "incremental retry" check
+   * (ExecutorAgent.ts:5537 + 5579) reuses on-disk first_frame /
+   * last_frame / mid_frame images when `node.outputPaths[frame]` is
+   * still set AND the file exists. If we only clear `outputPath`
+   * (the legacy single path) but leave `outputPaths` (the per-frame
+   * dict) intact, invalidation looks like it worked but the next
+   * run silently reuses the stale frames — exactly what the user
+   * saw when only the video regenerated and the upstream image
+   * stayed put.
+   */
+  it("clears the per-frame outputPaths dict so the executor's incremental-retry path can't reuse stale frames", () => {
+    const node = project.executorState.nodes[
+      "shot_image:scene_1_shot_1"
+    ] as typeof project.executorState.nodes[string] & {
+      outputPaths?: Record<string, string>;
+    };
+    node.outputPaths = {
+      first_frame: "assets/images/s1shot1_first_frame_klein_xxx.png",
+      last_frame: "assets/images/s1shot1_last_frame_klein_yyy.png",
+    };
+
+    applyInvalidation(project, ["shot_image:scene_1_shot_1"]);
+
+    const cleared = project.executorState.nodes[
+      "shot_image:scene_1_shot_1"
+    ] as typeof project.executorState.nodes[string] & {
+      outputPaths?: Record<string, string>;
+    };
+    expect(cleared.outputPaths).toBeUndefined();
+  });
 });
