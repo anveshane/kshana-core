@@ -24,25 +24,10 @@ vi.mock('../../src/server/runners/runExecutor.js', () => {
     runExecutor: vi.fn(),
   };
 });
-// regen also touches agentOps — mock just the parts it uses so we
-// don't depend on the executor-state graph implementation here.
-vi.mock('../../src/server/agentOps.js', async (orig) => {
-  const real = (await orig()) as Record<string, unknown>;
-  return {
-    ...real,
-    regenNodes: vi.fn(),
-    persistProject: vi.fn(),
-  };
-});
-
 import { runExecutor } from '../../src/server/runners/runExecutor.js';
-import { regenNodes, persistProject } from '../../src/server/agentOps.js';
 import { createRunToTool } from '../../src/agent/pi/tools/runTo.js';
-import { createRegenTool } from '../../src/agent/pi/tools/regen.js';
 
 const mockedRunExecutor = vi.mocked(runExecutor);
-const mockedRegenNodes = vi.mocked(regenNodes);
-const mockedPersistProject = vi.mocked(persistProject);
 
 // ── Temp project fixtures ────────────────────────────────────────────
 
@@ -62,8 +47,6 @@ beforeEach(() => {
   projectsDir = mkdtempSync(join(tmpdir(), 'kshana-pi-bridge-'));
   process.env['KSHANA_PROJECTS_DIR'] = projectsDir;
   mockedRunExecutor.mockReset();
-  mockedRegenNodes.mockReset();
-  mockedPersistProject.mockReset();
 });
 
 afterEach(() => {
@@ -303,168 +286,9 @@ describe('pi-agent runTo tool — bridge to runExecutor', () => {
   });
 });
 
-// ── regen tool ───────────────────────────────────────────────────────
-
-describe('pi-agent regen tool — bridge to runExecutor', () => {
-  it('returns failure on missing project', async () => {
-    const tool = createRegenTool();
-    const result = await executeTool(tool, {
-      project: 'nope',
-      node: 'shot_image:scene_1_shot_1',
-    });
-    expect((result.details as { status: string }).status).toBe('failed');
-    expect(mockedRunExecutor).not.toHaveBeenCalled();
-  });
-
-  it('returns failure when no nodes resolve from regenNodes', async () => {
-    makeProject('p', { templateId: 'narrative' });
-    mockedRegenNodes.mockReturnValue({
-      changed: [],
-      notFound: ['shot_image:bogus'],
-    });
-    const tool = createRegenTool();
-    const result = await executeTool(tool, {
-      project: 'p',
-      node: 'shot_image:bogus',
-    });
-    expect((result.details as { status: string }).status).toBe('failed');
-    expect((result.content as Array<{ text: string }>)[0].text).toMatch(
-      /Could not resolve node: shot_image:bogus/,
-    );
-    expect(mockedRunExecutor).not.toHaveBeenCalled();
-    expect(mockedPersistProject).not.toHaveBeenCalled();
-  });
-
-  it('persists invalidation result and invokes runExecutor when nodes resolve', async () => {
-    makeProject('p', { templateId: 'narrative' });
-    mockedRegenNodes.mockReturnValue({
-      changed: ['shot_image:scene_1_shot_1'],
-      notFound: [],
-    });
-    mockedRunExecutor.mockResolvedValue({
-      status: 'completed',
-      stopReason: null,
-      rawResultStatus: 'completed',
-    });
-
-    const tool = createRegenTool();
-    const result = await executeTool(tool, {
-      project: 'p',
-      node: 'shot_image:scene_1_shot_1',
-    });
-
-    expect(mockedRegenNodes).toHaveBeenCalledTimes(1);
-    expect(mockedPersistProject).toHaveBeenCalledTimes(1);
-    expect(mockedRunExecutor).toHaveBeenCalledTimes(1);
-    expect(mockedRunExecutor.mock.calls[0][0].name).toBe('pi-agent-regen');
-    expect(mockedRunExecutor.mock.calls[0][0].target).toEqual({});
-
-    const details = result.details as {
-      status: string;
-      changed: string[];
-    };
-    expect(details.status).toBe('completed');
-    expect(details.changed).toEqual(['shot_image:scene_1_shot_1']);
-  });
-
-  it('passes cascade option through to regenNodes', async () => {
-    makeProject('p', { templateId: 'narrative' });
-    mockedRegenNodes.mockReturnValue({
-      changed: ['shot_image:scene_1_shot_1'],
-      notFound: [],
-    });
-    mockedRunExecutor.mockResolvedValue({
-      status: 'completed',
-      stopReason: null,
-      rawResultStatus: 'completed',
-    });
-    const tool = createRegenTool();
-    await executeTool(tool, {
-      project: 'p',
-      node: 'shot_image:scene_1_shot_1',
-      cascade: true,
-    });
-    const regenCallOpts = mockedRegenNodes.mock.calls[0][2];
-    expect(regenCallOpts).toMatchObject({ cascade: true });
-  });
-
-  it('no_run=true skips runExecutor and returns immediately after invalidation', async () => {
-    makeProject('p', { templateId: 'narrative' });
-    mockedRegenNodes.mockReturnValue({
-      changed: ['shot_image:scene_1_shot_1'],
-      notFound: [],
-    });
-    const tool = createRegenTool();
-    const result = await executeTool(tool, {
-      project: 'p',
-      node: 'shot_image:scene_1_shot_1',
-      no_run: true,
-    });
-
-    expect(mockedPersistProject).toHaveBeenCalledTimes(1);
-    expect(mockedRunExecutor).not.toHaveBeenCalled();
-    const details = result.details as { status: string; log: string };
-    expect(details.status).toBe('completed');
-    expect(details.log).toMatch(/Invalidated 1 node/);
-  });
-
-  it('translates onAsset → onMedia with project + source="kshana_regen"', async () => {
-    makeProject('proj-x', { templateId: 'narrative' });
-    mockedRegenNodes.mockReturnValue({
-      changed: ['shot_image:scene_1_shot_1'],
-      notFound: [],
-    });
-    mockedRunExecutor.mockImplementation(async (opts) => {
-      opts.onAsset?.({
-        kind: 'video',
-        filePath: '/abs/v.mp4',
-        toolName: 'image_to_video',
-        nodeId: 'shot_video:scene_1_shot_1',
-      });
-      return {
-        status: 'completed',
-        stopReason: null,
-        rawResultStatus: 'completed',
-      };
-    });
-
-    const onMedia = vi.fn();
-    const tool = createRegenTool({ onMedia });
-    await executeTool(tool, {
-      project: 'proj-x',
-      node: 'shot_image:scene_1_shot_1',
-    });
-
-    expect(onMedia).toHaveBeenCalledWith({
-      kind: 'video',
-      path: '/abs/v.mp4',
-      project: 'proj-x',
-      source: 'kshana_regen',
-    });
-  });
-
-  it('reports notFound IDs in the response details even when others resolved', async () => {
-    makeProject('p', { templateId: 'narrative' });
-    mockedRegenNodes.mockReturnValue({
-      changed: ['shot_image:scene_1_shot_1'],
-      notFound: ['shot_video:bogus'],
-    });
-    mockedRunExecutor.mockResolvedValue({
-      status: 'completed',
-      stopReason: null,
-      rawResultStatus: 'completed',
-    });
-    const tool = createRegenTool();
-    const result = await executeTool(tool, {
-      project: 'p',
-      node: 'shot_image:scene_1_shot_1',
-    });
-    const details = result.details as {
-      changed: string[];
-      notFound: string[];
-      log: string;
-    };
-    expect(details.notFound).toEqual(['shot_video:bogus']);
-    expect(details.log).toMatch(/not found: shot_video:bogus/);
-  });
-});
+// regen tool removed — the LLM-facing kshana_regen / kshana_reset
+// tools were collapsed into the unified kshana_invalidate +
+// kshana_run_to scope='last_invalidated'. The HTTP /regen endpoint
+// (server/agentRoutes.ts) and pnpm regen / pnpm reset CLIs continue
+// to use regenNodes / resetProjectStage directly; their tests live
+// alongside those modules.
