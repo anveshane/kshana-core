@@ -6,8 +6,12 @@ vi.mock('ws', () => {
   class MockWebSocket {
     static instances: MockWebSocket[] = [];
     handlers: Record<string, ((arg?: any) => void) | undefined> = {};
+    url: string;
+    options: unknown;
 
-    constructor(_url: string) {
+    constructor(url: string, options?: unknown) {
+      this.url = url;
+      this.options = options;
       MockWebSocket.instances.push(this);
       queueMicrotask(() => this.handlers.open?.());
     }
@@ -112,6 +116,29 @@ describe('ComfyUIClient request behavior', () => {
     expect(url).toBe('https://cloud.comfy.org/api/prompt');
   });
 
+  it('keeps /comfy/api and uses bearer auth for authenticated Comfy endpoints', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ prompt_id: 'p' }),
+    });
+    global.fetch = fetchMock as typeof fetch;
+
+    const client = new ComfyUIClient({
+      baseUrl: 'https://example.com/comfy/api',
+      outputDir: '/tmp',
+      timeout: 300,
+      apiKey: 'bearer-token',
+    });
+
+    await client.queueWorkflow({ '1': { class_type: 'Test', inputs: {} } });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const headers = new Headers(init.headers);
+    expect(url).toBe('https://example.com/comfy/api/prompt');
+    expect(headers.get('Authorization')).toBe('Bearer bearer-token');
+    expect(headers.get('X-API-Key')).toBeNull();
+  });
+
   it('requires COMFY_CLOUD_API_KEY for Comfy Cloud urls', () => {
     expect(
       () =>
@@ -179,6 +206,34 @@ describe('ComfyUIClient request behavior', () => {
 
     const waitPromise = client.waitForCompletionWS('prompt-1', 'client-1');
     const wsInstance = (WebSocket as unknown as { instances: Array<{ emit: (event: string, payload?: any) => void }> }).instances[0]!;
+
+    wsInstance.emit('message', JSON.stringify({ type: 'execution_success', data: { prompt_id: 'prompt-1' } }));
+
+    await expect(waitPromise).resolves.toEqual({
+      status: 'completed',
+      prompt_id: 'prompt-1',
+    });
+  });
+
+  it('uses /comfy/ws and bearer auth for authenticated Comfy websockets', async () => {
+    const client = new ComfyUIClient({
+      baseUrl: 'https://example.com/comfy/api',
+      outputDir: '/tmp',
+      timeout: 300,
+      apiKey: 'bearer-token',
+    });
+
+    const waitPromise = client.waitForCompletionWS('prompt-1', 'client-1');
+    const wsInstance = (WebSocket as unknown as {
+      instances: Array<{
+        url: string;
+        options?: { headers?: Record<string, string> };
+        emit: (event: string, payload?: any) => void;
+      }>;
+    }).instances.at(-1)!;
+
+    expect(wsInstance.url).toBe('wss://example.com/comfy/ws?clientId=client-1');
+    expect(wsInstance.options?.headers?.Authorization).toBe('Bearer bearer-token');
 
     wsInstance.emit('message', JSON.stringify({ type: 'execution_success', data: { prompt_id: 'prompt-1' } }));
 
