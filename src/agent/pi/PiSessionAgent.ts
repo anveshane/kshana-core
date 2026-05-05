@@ -16,7 +16,6 @@ import { kshanaTools } from "./tools/index.js";
 import { createFocusProjectTool, type FocusProjectCallback } from "./tools/focusProject.js";
 import { createRunToTool, type MediaCallback } from "./tools/runTo.js";
 import { createShowShotTool } from "./tools/showShot.js";
-import { createRegenTool } from "./tools/regen.js";
 import { createDispatchRunToTool } from "./tools/dispatchRunTo.js";
 import { loadOrchestratorPrompt } from "./prompt.js";
 import { selectToolsForRole, type SessionRole } from "./selectToolsForRole.js";
@@ -79,20 +78,19 @@ export class PiSessionAgent extends TypedEventEmitter {
         ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
       });
       const mediaShowShot = createShowShotTool({ onMedia: opts.onMedia });
-      const mediaRegen = createRegenTool({ onMedia: opts.onMedia });
       baseTools = baseTools.map((t) => {
         if (t.name === "kshana_run_to") return mediaRunTo;
         return t;
       });
-      baseTools = [...baseTools, mediaShowShot, mediaRegen];
+      baseTools = [...baseTools, mediaShowShot];
     } else if (opts?.sessionId) {
       // No onMedia callback (rare in production) but we still want
       // to dispatch instead of block when we have a session id.
       const sessionRunTo = createRunToTool({ sessionId: opts.sessionId });
       baseTools = baseTools.map((t) => (t.name === "kshana_run_to" ? sessionRunTo : t));
-      baseTools = [...baseTools, createShowShotTool({}), createRegenTool()];
+      baseTools = [...baseTools, createShowShotTool({})];
     } else {
-      baseTools = [...baseTools, createShowShotTool({}), createRegenTool()];
+      baseTools = [...baseTools, createShowShotTool({})];
     }
     // Currently a no-op pass-through (see selectToolsForRole notes).
     // Reserved for future dispatch-based tool gating.

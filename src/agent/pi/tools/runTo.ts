@@ -39,6 +39,12 @@ const Params = Type.Object({
   skip_media: Type.Optional(
     Type.Boolean({ description: "Skip ComfyUI image/video generation; only run LLM prompt stages." }),
   ),
+  scope: Type.Optional(
+    Type.Union([Type.Literal('all'), Type.Literal('last_invalidated')], {
+      description:
+        "Run scope. 'all' (default) drains every pending node in the graph (continue-from-here). 'last_invalidated' runs ONLY the nodes set by the most-recent kshana_invalidate call — leaves all other pending work alone. Use this after kshana_invalidate when the user wants a single targeted regeneration without auto-cascading into other unfinished work.",
+    }),
+  ),
 });
 
 interface RunToDetails {
@@ -89,6 +95,7 @@ export function createRunToTool(opts?: {
             ...(params.projectDir ? { projectDir: params.projectDir } : {}),
             ...(params.stage ? { stage: params.stage } : {}),
             ...(params.skip_media ? { skip_media: params.skip_media } : {}),
+            ...(params.scope ? { scope: params.scope } : {}),
           },
         });
         if (result.status === "started") {
@@ -166,10 +173,24 @@ export function createRunToTool(opts?: {
         });
       };
 
+      // Inline path: same last-invalidated whitelist semantics as the
+      // dispatch path so CLI / smoke-test invocations honor scope too.
+      let inlineRunOnly: string[] | undefined;
+      if (params.scope === 'last_invalidated') {
+        const state = (project as unknown as {
+          executorState?: { lastInvalidatedIds?: string[] };
+        }).executorState;
+        inlineRunOnly = state?.lastInvalidatedIds ?? [];
+      }
+
       const result = await runExecutor({
         project,
         projectDir,
-        target: { ...resolvedTarget, ...(params.skip_media ? { skipMedia: true } : {}) },
+        target: {
+          ...resolvedTarget,
+          ...(params.skip_media ? { skipMedia: true } : {}),
+          ...(inlineRunOnly ? { runOnly: inlineRunOnly } : {}),
+        },
         ...(signal ? { signal } : {}),
         name: "pi-agent-run-to",
         onTool: (info) => {

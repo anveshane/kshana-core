@@ -35,6 +35,14 @@ async function executeRunTo(ctx: TaskExecutionContext): Promise<void | ExecutorC
     projectDir?: string;
     stage?: string;
     skip_media?: boolean;
+    /**
+     * 'all' (default) → drain everything pending in the graph
+     * 'last_invalidated' → run ONLY the ids stored on
+     *   `executorState.lastInvalidatedIds` by the most-recent
+     *   `kshana_invalidate` call. Honors the user's "redo this and
+     *   stop, don't auto-cascade" rule.
+     */
+    scope?: 'all' | 'last_invalidated';
   };
 
   const projectDir = resolveProjectDir({
@@ -83,12 +91,34 @@ async function executeRunTo(ctx: TaskExecutionContext): Promise<void | ExecutorC
     };
   }
 
+  // Last-invalidated whitelist: read on dispatch (not lazy) so a
+  // concurrent invalidate can't slip a stale list in mid-run. Empty
+  // list when scope='last_invalidated' but nothing was previously
+  // invalidated — the executor will exit immediately rather than
+  // silently fall through to "run everything", which would surprise
+  // the user.
+  let runOnly: string[] | undefined;
+  if (params.scope === 'last_invalidated') {
+    const state = (project as unknown as {
+      executorState?: { lastInvalidatedIds?: string[] };
+    }).executorState;
+    runOnly = state?.lastInvalidatedIds ?? [];
+    ctx.hooks.onNotification({
+      level: 'info',
+      message:
+        runOnly.length === 0
+          ? 'scope=last_invalidated, but no nodes were previously invalidated — nothing to run.'
+          : `scope=last_invalidated — running ONLY the ${runOnly.length} previously-invalidated node(s).`,
+    });
+  }
+
   const result = await runExecutor({
     project,
     projectDir,
     target: {
       ...resolvedTarget,
       ...(params.skip_media ? { skipMedia: true } : {}),
+      ...(runOnly ? { runOnly } : {}),
     },
     signal: ctx.signal,
     name: 'task-runner-run-to',

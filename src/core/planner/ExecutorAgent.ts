@@ -857,6 +857,23 @@ export class ExecutorAgent extends TypedEventEmitter {
   }
 
   /**
+   * Pin the isolated-redo whitelist to the supplied ids.
+   *
+   * Used by `kshana_run_to scope='last_invalidated'` (and the UI's
+   * "Run only this" affordance) so the next run() executes ONLY
+   * those nodes and exits when they're done — no cascade into
+   * unrelated pending work in the graph.
+   *
+   * Pass `null` to clear the pin so a later run drains everything
+   * pending. Caller responsibility: only set this when the targeted
+   * nodes are already in `pending` status (the loop won't transition
+   * a `completed` node back to runnable just because it's whitelisted).
+   */
+  setRedoOnlyNodes(ids: string[] | null): void {
+    this.redoOnlyNodes = ids === null ? null : new Set(ids);
+  }
+
+  /**
    * Set or clear the `/run-to <stage>` gate at runtime. Pass a stage name
    * (e.g. `'character_image'`) to arm the gate; pass `null` to clear it.
    *

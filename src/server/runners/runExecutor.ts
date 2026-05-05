@@ -56,6 +56,14 @@ export interface RunExecutorTarget {
   nodeId?: string;
   /** Skip ComfyUI image/video generation; only run LLM prompt stages. */
   skipMedia?: boolean;
+  /**
+   * Whitelist for isolated-redo mode. When supplied, the executor's
+   * loop runs ONLY these node ids (filtered against `getNextReady`)
+   * and exits when all are terminal. Other pending work in the graph
+   * is left alone — the explicit "run only what was just invalidated"
+   * mode used by `kshana_run_to scope='last_invalidated'`.
+   */
+  runOnly?: string[];
 }
 
 export interface RunExecutorAssetEvent {
@@ -148,6 +156,18 @@ export async function runExecutor(opts: RunExecutorOpts): Promise<RunExecutorRes
     ...(stopAfterNode ? { stopAfterNode } : {}),
     ...(skipMedia ? { skipMediaGeneration: true } : {}),
   });
+
+  // Pin the isolated-redo whitelist BEFORE run() so the loop's
+  // first tick already filters readyNodes against it. Falsy / empty
+  // arrays don't pin (full graph drain semantics — the
+  // "continue from here" mode).
+  const runOnly = opts.target.runOnly;
+  if (runOnly && runOnly.length > 0) {
+    const ag = agent as unknown as {
+      setRedoOnlyNodes?: (ids: string[] | null) => void;
+    };
+    ag.setRedoOnlyNodes?.(runOnly);
+  }
 
   // Track the latest node-id we saw in a tool_call so onAsset events
   // can be tagged with what they belong to. Not perfect (interleaved
