@@ -152,5 +152,17 @@ export function buildSupervisorTask(info: SupervisorEventInfo): string {
   const visionLine = info.vlmDescription
     ? `vlm_description: ${info.vlmDescription}`
     : `vlm_description: (none — VLM off, no vision feedback)`;
-  return `${head}\nstatus=asset_generated\npath: ${info.assetPath}\nprompt: ${info.assetPrompt}\n${visionLine}\n\nJudge whether the asset matches the prompt. If it's clearly off, call kshana_invalidate. Otherwise a one-line ack is fine.`;
+  return [
+    head,
+    `status=asset_generated`,
+    `path: ${info.assetPath}`,
+    `prompt: ${info.assetPrompt}`,
+    visionLine,
+    ``,
+    `Judge two things:`,
+    `1. Does the description match the prompt? (subject, setting, action, mood)`,
+    `2. Are there significant generation artifacts? (anatomical errors, doubled subjects, broken composition, severe texture issues)`,
+    ``,
+    `If EITHER fails clearly, call kshana_invalidate node=<id> for this asset. Otherwise a one-line ack is fine.`,
+  ].join('\n');
 }
