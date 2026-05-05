@@ -1,4 +1,4 @@
-# Kshana-Ink Feature List
+# Kshana-Core Feature List
 
 ## Smart Video Creation Engine
 
@@ -22,6 +22,8 @@
 - **Scene State Tracking** — The system tracks where every character is positioned, what they're doing, and what they're holding — across shots. No teleportation or continuity errors. _Per-character state (position, pose, expression, hands, legs, facing) extracted by LLM after each shot, injected before the next._
 - **Graph-Based Reference Resolution** — All completed character, setting, and object images are automatically gathered from the execution graph and presented to the shot composition LLM — no manual reference mapping needed. _buildAvailableReferences scans executor graph for completed ref nodes._
 - **Self-Improving Prompts** — The prompt templates that guide the AI were optimized using an automated evaluate-and-improve loop, reaching 94-97% quality scores. _Autoresearch optimization loop with binary rubric evaluation._
+- **Hierarchical Scene Extraction** — Long stories are broken down using a Stage A summary call (scene boundaries + 80-150 word summaries, no beats) followed by N parallel Stage B calls (each gets the full story plus one scene's summary, returns just that scene's beats). Each call has a 90s timeout and one retry. Replaces the single giant cluster call that hung silently on long stories. Falls back to the legacy single-call flow if the hierarchical path throws. _hierarchicalSceneExtractor.ts; chunked output, full-story input — no context loss._
+- **Story Essence (Editorial Intent)** — Before scene breakdown, the system runs a focused `story_essence` LLM call that extracts genre, throughline, tonal notes, and dramatic emphasis. This editorial intent is persisted to `prompts/story_essence.json` and threaded into the scene extractor and per-scene prose generation, so an emotional drama gets quiet, lingering scenes while an action thriller gets punchy, kinetic ones — same pipeline, completely different feel. Stop at the stage to inspect/edit before scene generation: `pnpm run-to <project> story_essence`. _storyEssenceExtractor.ts + storyEssenceContextBlock.ts; per-scene Stage A and Stage B include editorial license to invent atmosphere/reaction beats the source under-serves if doing so strengthens the throughline._
 
 ## Video Generation
 

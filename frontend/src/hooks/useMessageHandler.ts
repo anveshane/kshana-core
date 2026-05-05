@@ -268,6 +268,29 @@ export function useMessageHandler(dispatch: React.Dispatch<AppAction>) {
         break
       }
 
+      case 'media_generated': {
+        // Long-running tool surfaced a newly-generated asset. Render as a
+        // standalone media chat message — separate from the (collapsed)
+        // tool card, so the user sees progress as it happens.
+        const project = data.project as string | undefined
+        const path = data.path as string | undefined
+        const kind = data.kind as 'image' | 'video' | undefined
+        const source = data.source as string | undefined
+        if (project && path && kind) {
+          dispatch({
+            type: 'ADD_CHAT_MESSAGE',
+            message: {
+              id: `media_${Date.now()}_${path}`,
+              type: 'media',
+              content: path,
+              timestamp: Date.now(),
+              media: { kind, path, project, ...(source ? { source } : {}) },
+            },
+          })
+        }
+        break
+      }
+
       case 'assets_refresh': {
         // Server sent a fresh asset list — typically after a reset clears
         // some outputs. Replace the in-memory list entirely so stale

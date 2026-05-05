@@ -19,9 +19,17 @@ A short motion prompt using this proven template:
 
 **`[Subject in position], [action or motion], [camera movement], [atmosphere], cinematic tone, emphasis on [key visual detail]`**
 
-**If the shot has dialogue**, append it naturally: `[Subject] says "[dialogue line]"` — the video model generates synchronized audio from the text.
+**Dialogue handling — MANDATORY when a `<shot_audio>` block is in your context:**
 
-**Where to find dialogue**: Look at the `audio` field of the shot in the scene breakdown JSON. Dialogue is prefixed with the character name in CAPS (e.g., `"ELENA: Don't follow me. Rain on pavement"`). Extract the quoted line and format as: `Elena says "Don't follow me."`
+The `<shot_audio>` block surfaces this shot's dialogue and ambient sounds extracted from the scene breakdown. When it contains a `DIALOGUE: "..."` line, you MUST emit that dialogue verbatim as a `says` clause attached to the speaker. You MUST NOT use speech-action verbs ("speaking", "talks", "calls out", "whispers", "says quickly") as a substitute for the actual quoted words — the video model produces phoneme-shaped gibberish when it sees a speech verb without text to lock onto.
+
+Format: `[speaker tag] says "<exact dialogue verbatim>."`
+
+The AMBIENT line is for your understanding only — translate it into visible motion per the Sound-to-Visual rule below; do NOT name ambient sounds in the motion directive text.
+
+**Narration**: if a `<narration>` block is also in your context, you MAY append a narrator line per the format it specifies. Keep narrator and character dialogue both when both fit; do not replace one with the other.
+
+**Fallback** (only when `<shot_audio>` is absent — legacy projects): look at the shot's `audio` field in the scene breakdown JSON. Dialogue is prefixed with the character name in CAPS (e.g., `"ELENA: Don't follow me. Rain on pavement"`). Extract the quoted line and format as: `Elena says "Don't follow me."`
 
 Target **30–60 words** (excluding dialogue). The system automatically prepends "Make this image come alive with cinematic motion, smooth animation." — do NOT include this yourself.
 

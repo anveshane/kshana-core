@@ -1,12 +1,15 @@
 import { useRef, useEffect } from 'react'
 import { useAppState, useAppDispatch } from '../lib/store'
 import { ToolCallCard } from './ToolCallCard'
+import { MediaWithOverlay } from './MediaWithOverlay'
 
 interface ChatTimelineProps {
   onSendWs?: (msg: Record<string, unknown>) => void
+  onEditPrompt?: (nodeId: string, frame: string | null) => void
+  onRedoNode?: (nodeId: string) => void
 }
 
-export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
+export function ChatTimeline({ onSendWs, onEditPrompt, onRedoNode }: ChatTimelineProps) {
   const { chatMessages, toolCalls, streamingText, agentStatus, selectedProject } = useAppState()
   const dispatch = useAppDispatch()
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -81,6 +84,29 @@ export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
             return <span key={msg.id} />
           }
 
+          if (msg.type === 'media' && msg.media) {
+            const { kind, path, project, source } = msg.media
+            return (
+              <div key={msg.id} className="flex justify-start">
+                <div className="max-w-[80%] rounded-lg border border-violet-500/20 bg-graphite-400/40 overflow-hidden">
+                  <div className="px-3 py-1.5 border-b border-line-soft flex items-center justify-between">
+                    <span className="font-mono text-[10px] text-violet-300 uppercase tracking-wider">
+                      {source ? `${source} · ` : ''}new {kind}
+                    </span>
+                    <span className="font-mono text-[10px] text-graphite-200 truncate ml-2">{path}</span>
+                  </div>
+                  <MediaWithOverlay
+                    path={path}
+                    project={project}
+                    kind={kind}
+                    onEditPrompt={onEditPrompt}
+                    onRedoNode={onRedoNode}
+                  />
+                </div>
+              </div>
+            )
+          }
+
           return (
             <div key={msg.id} className={`flex ${msg.type === 'user' ? 'justify-end' : 'justify-start'}`}>
               <div
@@ -102,7 +128,14 @@ export function ChatTimeline({ onSendWs }: ChatTimelineProps) {
             </div>
           )
         } else {
-          return <ToolCallCard key={item.data.id} toolCall={item.data} />
+          return (
+            <ToolCallCard
+              key={item.data.id}
+              toolCall={item.data}
+              onEditPrompt={onEditPrompt}
+              onRedoNode={onRedoNode}
+            />
+          )
         }
       })}
 

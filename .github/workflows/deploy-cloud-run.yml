@@ -98,13 +98,13 @@ jobs:
             exit 1
           fi
 
-          TARGET_SERVICE="kshana-ink-prod"
+          TARGET_SERVICE="kshana-core-prod"
           TARGET_ENV_FILE=".env.prod"
           HEALTHCHECK_URL="http://${GCE_HOST}/api/v1/health"
           DEPLOY_ENVIRONMENT="production"
           if [ "${GITHUB_REF_NAME}" = "dev" ]; then
             DEV_PORT=81
-            TARGET_SERVICE="kshana-ink-dev"
+            TARGET_SERVICE="kshana-core-dev"
             TARGET_ENV_FILE=".env.dev"
             HEALTHCHECK_URL="http://${GCE_HOST}:${DEV_PORT}/api/v1/health"
             DEPLOY_ENVIRONMENT="staging"
@@ -118,7 +118,7 @@ jobs:
 
       - name: Build and push image
         run: |
-          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/kshana-ink:${GITHUB_SHA}"
+          IMAGE_URI="${REGION}-docker.pkg.dev/${PROJECT_ID}/${ARTIFACT_REGISTRY_REPO}/kshana-core:${GITHUB_SHA}"
           docker build -t "${IMAGE_URI}" .
           docker push "${IMAGE_URI}"
           echo "IMAGE_URI=${IMAGE_URI}" >> "${GITHUB_ENV}"
@@ -130,7 +130,7 @@ jobs:
           username: ${{ env.GCE_USER }}
           key: ${{ secrets.GCE_SSH_PRIVATE_KEY }}
           source: "deploy/*"
-          target: "~/kshana-ink"
+          target: "~/kshana-core"
           strip_components: 1
 
       - name: Deploy selected branch service on VM
@@ -170,8 +170,8 @@ jobs:
           envs: IMAGE_URI,TARGET_SERVICE,TARGET_ENV_FILE,REGISTRY_HOST,GCP_SA_KEY,LLM_PROVIDER,LLM_CONTEXT_TOKENS,OPENAI_API_KEY,OPENAI_BASE_URL,OPENAI_MODEL,COMFYUI_BASE_URL,COMFYUI_TIMEOUT,COMFY_CLOUD_API_KEY,POSTHOG_API_KEY,POSTHOG_HOST,ANALYTICS_SALT,DEV_LLM_PROVIDER,DEV_LLM_CONTEXT_TOKENS,DEV_OPENAI_API_KEY,DEV_OPENAI_BASE_URL,DEV_OPENAI_MODEL,DEV_COMFYUI_BASE_URL,DEV_COMFYUI_TIMEOUT,DEV_COMFY_CLOUD_API_KEY,DEV_POSTHOG_API_KEY,DEV_POSTHOG_HOST,DEV_ANALYTICS_SALT
           script: |
             set -euo pipefail
-            mkdir -p ~/kshana-ink
-            cd ~/kshana-ink
+            mkdir -p ~/kshana-core
+            cd ~/kshana-core
 
             write_env() {
               local target_file="$1"

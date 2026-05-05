@@ -18,6 +18,7 @@ import type {
   ExecutorProgress,
 } from './types.js';
 import { ArtifactGraph } from '../artifacts/ArtifactGraph.js';
+import { filterMismatchedPerItemDeps } from './filterMismatchedPerItemDeps.js';
 
 /**
  * Dependency Graph Executor
@@ -504,6 +505,18 @@ export class DependencyGraphExecutor {
     const depTypeDef = this.template.artifactTypes[dependent.typeId];
     if (!depTypeDef) return;
 
+    // Index of dep types declared as matching-scope on this dependent's
+    // template definition. Used to filter out per-item refs of matching
+    // types whose itemId doesn't match the item being created — those
+    // are sibling refs accumulated from prior expansions and would
+    // otherwise leak into every clone (the shot_video bug: each per-shot
+    // clone would inherit ALL of the scene's per-shot motion directives
+    // instead of just its own).
+    const matchingScopeTypes = new Set<string>();
+    for (const dep of depTypeDef.dependencies) {
+      if (dep.scope === 'matching') matchingScopeTypes.add(dep.artifactTypeId);
+    }
+
     // Create per-item nodes for the dependent.
     // For each matching-scope dep on the template, rewire to the per-item
     // parent — not just the source-of-cascade dep. This ensures a per-item
@@ -517,7 +530,16 @@ export class DependencyGraphExecutor {
       // Start from the template deps filtered to what's in the plan (the
       // dependent node's current dependencies), then rewire. Drop the old
       // source type-level ref so it doesn't resurface as dangling.
-      const preRewire = dependent.dependencies.filter(d => d !== dependent.typeId);
+      // ALSO drop sibling per-item refs of matching-scope types whose
+      // itemId != THIS item — those came from earlier expansions and
+      // belong to a different per-item clone, not this one.
+      const baselineDeps = dependent.dependencies.filter(d => d !== dependent.typeId);
+      const noSiblings = filterMismatchedPerItemDeps(
+        baselineDeps,
+        item.itemId,
+        matchingScopeTypes,
+      );
+      const preRewire: string[] = [...noSiblings];
       // Ensure the source per-item dep is in the list (even if the template
       // dep wasn't previously populated — e.g. plan without the parent type).
       const sourceItemId = `${sourceTypeId}:${item.itemId}`;

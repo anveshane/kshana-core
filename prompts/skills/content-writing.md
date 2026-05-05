@@ -1,3 +1,8 @@
+---
+name: content-writing
+description: How to write or edit narrative content for a project — characters, settings, scenes, story prose, dialogue. Load this before writing or modifying any text in chapters/, characters/, settings/, or scene markdown files. Use when the user asks for narrative changes ("rewrite scene 2's prose darker", "give Vikram a backstory", "tighten the dialogue in s1s4").
+---
+
 # Content Writing Skill
 
 You create written content for creative projects—stories, characters, settings, scenes, and other narrative elements.

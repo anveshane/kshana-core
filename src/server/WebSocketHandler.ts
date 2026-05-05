@@ -970,6 +970,28 @@ export class WebSocketHandler {
       onNotification: (sid, data) => {
         this.sendMessage(socket, createServerMessage<NotificationData>('notification', sid, data));
       },
+
+      onProjectFocused: (sid, data) => {
+        // Mirror the post-configure_project status message so the frontend
+        // treats agent-driven focus the same as a manual dropdown selection.
+        this.sendMessage(socket, createServerMessage<StatusData>('status', sid, {
+          status: 'ready',
+          message: `Focused project: ${data.projectName}`,
+          tools: data.tools,
+          projectName: data.projectName,
+        }));
+      },
+
+      onMediaGenerated: (sid, data) => {
+        // Standalone event for newly-generated assets — frontend renders an
+        // image/video card inline in chat as it arrives, separate from the
+        // long-running tool's collapsed card.
+        this.sendMessage(socket, {
+          type: 'media_generated',
+          sessionId: sid,
+          data,
+        } as never);
+      },
     };
   }
 

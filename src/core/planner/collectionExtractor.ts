@@ -12,21 +12,29 @@
 import type { LLMClient } from '../llm/index.js';
 import type { CollectionItems, ExecutionNode } from './types.js';
 import { runDurationFirstExtraction, checkDurationBand } from './durationFirstExtractor.js';
+import type { StoryEssence } from './storyEssenceExtractor.js';
 
 /**
  * Extract collection items from generated content based on the node type.
  *
  * Returns null if this node type doesn't produce collection items.
+ *
+ * `essence` (optional) is the editorial intent loaded from
+ * `prompts/story_essence.json` — when provided, the duration-first
+ * cascade threads it into the hierarchical extractor so Stage A and
+ * Stage B both tune their output to the story's genre / throughline.
+ * Caller is responsible for loading it; absence is harmless.
  */
 export async function extractCollectionItems(
   node: ExecutionNode,
   content: string,
   llm: LLMClient,
   durationSeconds?: number,
+  essence?: StoryEssence,
 ): Promise<CollectionItems | null> {
   switch (node.typeId) {
     case 'story':
-      return extractFromStory(content, llm, durationSeconds);
+      return extractFromStory(content, llm, durationSeconds, essence);
     case 'outline':
       return extractFromOutline(content, llm);
     case 'scene_video_prompt':
@@ -52,12 +60,13 @@ async function extractFromStory(
   storyContent: string,
   llm: LLMClient,
   durationSeconds?: number,
+  essence?: StoryEssence,
 ): Promise<CollectionItems> {
   const dur = durationSeconds || 60;
 
   // Duration-first path.
   try {
-    const result = await runDurationFirstExtraction(storyContent, dur, llm);
+    const result = await runDurationFirstExtraction(storyContent, dur, llm, essence);
     if (result.beats.length > 0 && result.scenes.length > 0) {
       const band = checkDurationBand(result.totalEstimatedDuration, dur);
       // Log the band status — telemetry only, we don't block on it since

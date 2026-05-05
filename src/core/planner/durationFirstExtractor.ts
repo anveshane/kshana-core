@@ -62,7 +62,13 @@ export interface DurationFirstResult {
     sceneNumber: number;
     title: string;
     summary: string;
+    /** Beats that get their own shot — sum of their durations = scene runtime. */
     beatIds: string[];
+    /** Beats compressed into the scene summary as subtext — referenced
+     * by name in the prose summary but produce NO separate shot and
+     * contribute ZERO seconds. Set by the post-stitch compression pass
+     * when total runtime exceeds `target + 20s`. */
+    embeddedBeatIds?: string[];
     estimatedDuration: number;
   }>;
   characters: string[];
@@ -450,18 +456,55 @@ function isValidSceneAssignment(s: unknown): s is SceneAssignment {
 /**
  * End-to-end duration-first scene extraction.
  *
- * Flow:
- *   A. extractBeats — LLM lists every beat
- *   B. computeAllBeatDurations — pure code, dialogue from word count, others from typed bands
- *   C. clusterBeatsIntoScenes — LLM groups beats; scene count emerges from story
- *   D. validateBeatCoverage — pure code; if any beat unassigned/duplicated, ONE repair pass
- *      checkDurationBand — pure code; if outside [0.7×, 1.5×] target, ONE adjustment pass
+ * Two-tier cascade:
+ *   1. Try the **hierarchical extractor** (`runHierarchicalExtraction`).
+ *      One small Stage A call produces scene summaries; N parallel
+ *      Stage B calls each produce one scene's beats with the full story
+ *      as context. Each call has a per-call timeout, so a single hung
+ *      response can't stall the executor the way today's giant cluster
+ *      call does.
+ *   2. If hierarchical throws (timeout, parse failure, retry exhausted),
+ *      fall back to the **legacy single-call flow** (extractBeats →
+ *      clusterBeatsIntoScenes → coverage/sprawling repair). Same shape
+ *      out, so callers don't notice the cascade.
  *
- * Returns a structured result with scenes + per-scene estimatedDuration
- * + total estimated. Caller (collectionExtractor) maps this onto the
- * existing CollectionItems shape for downstream compatibility.
+ * If even legacy fails, the error propagates to `extractFromStory`
+ * (`collectionExtractor.ts`), which has its own fallback to a third-tier
+ * legacy structural extractor.
  */
 export async function runDurationFirstExtraction(
+  storyContent: string,
+  targetDuration: number,
+  llm: LLMClient,
+  essence?: import('./storyEssenceExtractor.js').StoryEssence,
+): Promise<DurationFirstResult> {
+  try {
+    const { runHierarchicalExtraction } = await import('./hierarchicalSceneExtractor.js');
+    return await runHierarchicalExtraction(storyContent, targetDuration, llm, { essence });
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[duration-first] hierarchical path failed (${(err as Error).message}) — ` +
+      `falling back to legacy single-call cluster flow`,
+    );
+    return runLegacyDurationFirst(storyContent, targetDuration, llm);
+  }
+}
+
+/**
+ * Legacy duration-first flow:
+ *   A. extractBeats — single LLM call lists every beat (can produce
+ *      90+ beats / 12k tokens for long stories)
+ *   B. computeAllBeatDurations — pure code
+ *   C. clusterBeatsIntoScenes — single LLM call groups beats; this is
+ *      the call that hangs on long stories with the heavy-tier model
+ *   D. validateBeatCoverage / sprawling repair — up to two more cluster
+ *      calls if coverage / runtime is off
+ *
+ * Kept as the second-tier fallback. Callers should normally hit the
+ * hierarchical path in `runDurationFirstExtraction`.
+ */
+export async function runLegacyDurationFirst(
   storyContent: string,
   targetDuration: number,
   llm: LLMClient,

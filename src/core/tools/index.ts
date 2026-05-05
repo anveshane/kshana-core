@@ -47,6 +47,11 @@ import {
 /**
  * Create a registry with the default built-in tools.
  * All agents get these tools — they are fundamental capabilities.
+ *
+ * @deprecated DELETE — zero callers in src/. This was the registry consumed by the
+ * deleted `GenericAgent`. `ExecutorAgent` builds its own tool surface via the workflow
+ * tool getters; it does not call into this factory. Tracked in
+ * `todos/cleanup-deprecated-agent-architecture.md`.
  */
 export function createDefaultToolRegistry(): ToolRegistry {
   const registry = new ToolRegistry();

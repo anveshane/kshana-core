@@ -109,7 +109,7 @@
     "negativeAppend": "static, blurry, low quality, distorted"
   },
   "builtIn": false,
-  "active": true,
-  "isOverride": true,
+  "active": false,
+  "isOverride": false,
   "mode": "local"
 }

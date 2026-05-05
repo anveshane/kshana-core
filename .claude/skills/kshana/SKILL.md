@@ -2,7 +2,7 @@
 name: kshana
 version: 1.0.0
 description: |
-  Drive the kshana-ink video pipeline from the shell. Use when the user asks to
+  Drive the kshana-core video pipeline from the shell. Use when the user asks to
   create a video from a story/idea, generate scenes/shots/images/videos for a
   kshana project, regenerate one piece of a project (a shot prompt, a scene's
   prose), override LLM-generated content with their own, or check the status
@@ -15,10 +15,10 @@ allowed-tools:
   - Write
 ---
 
-# kshana-ink CLI
+# kshana-core CLI
 
-A short reference for driving the kshana-ink video pipeline. **Always run
-commands from the kshana-ink repo root** (where `package.json` lives). All
+A short reference for driving the kshana-core video pipeline. **Always run
+commands from the kshana-core repo root** (where `package.json` lives). All
 commands are `pnpm <verb> <project> ...`.
 
 ## When to use this skill

@@ -4,6 +4,19 @@ import * as path from 'path';
 import { getCurrentSession, getSessionFs } from '../../../core/fs/index.js';
 import { getActiveProjectDir } from './activeProject.js';
 
+/**
+ * Default basePath for project filesystem helpers. Reads
+ * `KSHANA_PROJECTS_DIR` first so embedded hosts (kshana-desktop's
+ * Electron main process) can point kshana-core at the right dir
+ * without chdir-ing process-globally — that breaks unrelated
+ * `process.cwd()` callers in the host. Falls back to process.cwd()
+ * for the standalone CLI (where cwd IS the projects dir).
+ */
+export function defaultBasePath(): string {
+  const override = process.env['KSHANA_PROJECTS_DIR'];
+  return override && override.length > 0 ? override : process.cwd();
+}
+
 interface RemoteProjectCacheLike {
   getFile(path: string): string | undefined;
   setFile(path: string, content: string): void;
@@ -50,7 +63,7 @@ function getRemoteProjectCache(): RemoteProjectCacheLike | null {
 
 function tryNormalizeProjectRelativePath(
   targetPath: string,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): string | null {
   try {
     return normalizeProjectRelativePath(targetPath, basePath);
@@ -61,7 +74,7 @@ function tryNormalizeProjectRelativePath(
 
 function normalizeProjectRelativePath(
   targetPath: string,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): string {
   const trimmed = targetPath.trim();
   if (!trimmed) {
@@ -132,14 +145,14 @@ function sendRemoteProjectCommand(type: string, data: Record<string, unknown>): 
   socket.send(JSON.stringify({ type, data }));
 }
 
-function ensureProjectParent(relativePath: string, basePath: string = process.cwd()): void {
+function ensureProjectParent(relativePath: string, basePath: string = defaultBasePath()): void {
   const parentDir = path.posix.dirname(relativePath);
   if (parentDir && parentDir !== '.') {
     ensureProjectDir(parentDir, basePath);
   }
 }
 
-export function getProjectRoot(basePath: string = process.cwd()): string {
+export function getProjectRoot(basePath: string = defaultBasePath()): string {
   const activeProjectDir = getActiveProjectDir();
   if (looksAbsolute(activeProjectDir)) {
     return activeProjectDir;
@@ -149,7 +162,7 @@ export function getProjectRoot(basePath: string = process.cwd()): string {
 
 export function projectPath(
   relativePath: string,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): string {
   const normalizedRelative = normalizeProjectRelativePath(relativePath, basePath);
   return normalizedRelative
@@ -159,14 +172,14 @@ export function projectPath(
 
 export function projectRelativePath(
   targetPath: string,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): string {
   return normalizeProjectRelativePath(targetPath, basePath);
 }
 
 export function isWithinProjectRoot(
   targetPath: string,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): boolean {
   try {
     normalizeProjectRelativePath(targetPath, basePath);
@@ -178,7 +191,7 @@ export function isWithinProjectRoot(
 
 export function ensureProjectDir(
   relativeDir: string,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): void {
   const normalizedRelative = normalizeProjectRelativePath(relativeDir, basePath);
   const remoteFs = getRemoteProjectFs();
@@ -201,7 +214,7 @@ export function ensureProjectDir(
 
 export function projectDirExists(
   relativeDir: string = '',
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): boolean {
   const normalizedRelative = tryNormalizeProjectRelativePath(relativeDir, basePath);
   if (normalizedRelative === null) {
@@ -238,7 +251,7 @@ export function projectDirExists(
 
 export function listProjectEntries(
   relativeDir: string = '',
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): ProjectTreeEntry[] {
   const normalizedRelative = tryNormalizeProjectRelativePath(relativeDir, basePath);
   if (normalizedRelative === null) {
@@ -307,7 +320,7 @@ export function listProjectTree(
     maxDepth?: number;
     excludeDirectories?: string[];
   } = {},
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): ProjectTreeEntry[] {
   const relativeDir = options.relativeDir ?? '';
   const maxDepth = options.maxDepth ?? Number.POSITIVE_INFINITY;
@@ -340,7 +353,7 @@ export function listProjectTree(
   return results.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-export function getKnownProjectPaths(basePath: string = process.cwd()): string[] {
+export function getKnownProjectPaths(basePath: string = defaultBasePath()): string[] {
   const remoteFs = getRemoteProjectFs();
   if (!remoteFs) {
     return listProjectTree({ maxDepth: Number.POSITIVE_INFINITY }, basePath)
@@ -361,7 +374,7 @@ export function getKnownProjectPaths(basePath: string = process.cwd()): string[]
 export function writeProjectText(
   relativePath: string,
   content: string,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): void {
   const normalizedRelative = normalizeProjectRelativePath(relativePath, basePath);
   if (!normalizedRelative) {
@@ -385,7 +398,7 @@ export function writeProjectText(
 
 export function readProjectText(
   relativePath: string,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): string | null {
   const normalizedRelative = normalizeProjectRelativePath(relativePath, basePath);
   if (!normalizedRelative) {
@@ -407,7 +420,7 @@ export function readProjectText(
 export function writeProjectBuffer(
   relativePath: string,
   data: Buffer,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): void {
   const normalizedRelative = normalizeProjectRelativePath(relativePath, basePath);
   if (!normalizedRelative) {
@@ -430,7 +443,7 @@ export function writeProjectBuffer(
 
 export function ensureProjectPathDir(
   targetDir: string,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): boolean {
   if (!isWithinProjectRoot(targetDir, basePath)) {
     return false;
@@ -443,7 +456,7 @@ export function ensureProjectPathDir(
 export function writeProjectBufferAtPath(
   targetPath: string,
   data: Buffer,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): boolean {
   if (!isWithinProjectRoot(targetPath, basePath)) {
     return false;
@@ -455,7 +468,7 @@ export function writeProjectBufferAtPath(
 
 export function projectExists(
   relativePath: string,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): boolean {
   const normalizedRelative = normalizeProjectRelativePath(relativePath, basePath);
   if (!normalizedRelative) {

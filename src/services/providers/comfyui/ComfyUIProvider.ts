@@ -30,10 +30,25 @@ import type {
   VideoGenerationInput,
   ProviderProgressCallback,
 } from '../types.js';
+import { findKshanaCoreRoot } from '../../../agent/pi/paths.js';
 
-const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+// Anchor on kshana-core's own root so embedded hosts (kshana-desktop)
+// don't lose log entries when their cwd has no `logs/` dir.
+const DEBUG_LOG_DIR = (() => {
+  try {
+    return path.join(findKshanaCoreRoot(import.meta.url), 'logs');
+  } catch {
+    return path.join(process.cwd(), 'logs');
+  }
+})();
+const DEBUG_LOG_PATH = path.join(DEBUG_LOG_DIR, 'debug.log');
+let debugDirEnsured = false;
 function debugLog(message: string): void {
   try {
+    if (!debugDirEnsured) {
+      try { fs.mkdirSync(DEBUG_LOG_DIR, { recursive: true }); } catch { /* ignore */ }
+      debugDirEnsured = true;
+    }
     const timestamp = new Date().toISOString();
     fs.appendFileSync(DEBUG_LOG_PATH, `[${timestamp}] [ComfyUIProvider] ${message}\n`);
   } catch {
@@ -96,7 +111,10 @@ export class ComfyUIProvider implements GenerationProvider {
       // drop). Klein is the composition workhorse. Fall back to Klein
       // for first-frame gen; keep Grok only for `editImage` (deltas).
       if (pipeline === 'image_editing' && activeMode?.id === 'grok_image_edit') {
-        const kleinMode = modeRegistry.getMode('flux2_klein_edit_cloud');
+        // Composition workhorse for first-frame gen is the consistency-LoRA
+        // Klein variant — it's the default for image_editing now (the base
+        // flux2_klein_edit_cloud is kept around but inactive).
+        const kleinMode = modeRegistry.getMode('flux2_klein_edit_consistency_cloud');
         if (kleinMode?.active) {
           activeMode = kleinMode;
           debugLog('generateImage: Grok active for edits, but routing composition to Klein (grok_image_edit reserved for editImage deltas)');
@@ -242,23 +260,61 @@ export class ComfyUIProvider implements GenerationProvider {
 
     const registry = getRegistry();
 
-    // Check for active image_editing workflow (FLUX Klein is the default)
-    let workflowName = 'flux2_klein_edit';
+    // Determine workflow: explicit user override (mode registry) wins,
+    // otherwise default to the built-in FLUX 2 Klein edit workflow
+    // shipped with kshana-core. The exact ID resolves via
+    // chooseImageEditWorkflow (mode-aware: local vs cloud).
+    let workflowName = process.env['COMFY_MODE'] === 'cloud'
+      ? 'flux2_klein_edit_cloud'
+      : 'flux2_klein_edit_local';
     let modeManifest: any = null;
+    let modeOverrideActive = false;
     try {
       const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
       const modeRegistry = getWorkflowModeRegistry();
-      modeRegistry.refresh(); // Ensure manifests are loaded
+      modeRegistry.refresh();
       const activeMode = modeRegistry.getActiveForPipeline('image_editing', 'comfyui');
-      if (activeMode) {
+      if (activeMode?.isOverride) {
+        // User explicitly pinned a workflow — respect that.
         modeManifest = activeMode;
         workflowName = activeMode.id;
-        debugLog(`Using image_editing workflow: ${activeMode.displayName} (${activeMode.id})${activeMode.isOverride ? ' [user override]' : ''}`);
-      } else {
-        debugLog(`No active image_editing workflow found — using default: ${workflowName}`);
+        modeOverrideActive = true;
+        debugLog(`Using image_editing workflow (user override): ${activeMode.displayName} (${activeMode.id})`);
+      } else if (activeMode) {
+        modeManifest = activeMode;
+        workflowName = activeMode.id;
+        debugLog(`Default image_editing workflow from registry: ${activeMode.displayName} (${activeMode.id})`);
       }
     } catch (err) {
-      debugLog(`WorkflowModeRegistry error: ${(err as Error).message} — using default: ${workflowName}`);
+      debugLog(`WorkflowModeRegistry error: ${(err as Error).message}`);
+    }
+
+    if (!modeOverrideActive) {
+      // Default: qwen_snofs_edit for every image edit (no Klein
+      // fallback). chooseImageEditWorkflow encapsulates the policy.
+      const { chooseImageEditWorkflow } = await import('../../comfyui/chooseImageEditWorkflow.js');
+      const chosen = chooseImageEditWorkflow({
+        totalImages: 1 + referenceImages.length,
+        modeOverride: null,
+      });
+      if (chosen !== workflowName) {
+        debugLog(`Routing image_editing → ${chosen}`);
+        workflowName = chosen;
+        // Re-look up the manifest for the chosen workflow so the
+        // manifest-driven parameterizeGeneric path picks it up.
+        try {
+          const { getWorkflowModeRegistry } = await import('../WorkflowModeRegistry.js');
+          const modeRegistry = getWorkflowModeRegistry();
+          const chosenManifest = modeRegistry.getMode(chosen);
+          modeManifest = chosenManifest ?? null;
+          if (!chosenManifest) {
+            debugLog(`Chosen workflow '${chosen}' has no manifest registered — will fall back to built-in registry path`);
+          }
+        } catch (err) {
+          debugLog(`Manifest lookup for '${chosen}' failed: ${(err as Error).message}`);
+          modeManifest = null;
+        }
+      }
     }
 
     const hasManifestWorkflow = modeManifest && modeManifest.workflowFile && modeManifest.parameterMappings?.length > 0;
@@ -629,7 +685,8 @@ export class ComfyUIProvider implements GenerationProvider {
     }, workflowId ? { kshana_workflow_id: workflowId, kshana: { workflowId } } : undefined);
 
     if (result.status !== 'completed' && result.status !== 'completed_with_timeout') {
-      throw new Error(`ComfyUI job did not complete (status: ${result.status})`);
+      const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
+      throw new Error(`ComfyUI job did not complete (status: ${result.status})${detail}`);
     }
 
     return { promptId, clientId, outputs: wsOutputs };

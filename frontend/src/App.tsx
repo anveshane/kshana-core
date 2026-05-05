@@ -14,6 +14,7 @@ import { ProjectSelector } from './components/ProjectSelector'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { NewProjectInline, type NewProjectState } from './components/NewProjectInline'
 import { tryExecuteCommand } from './lib/commands'
+import { PromptEditModal } from './components/PromptEditModal'
 
 export function App() {
   const [state, dispatch] = useReducer(appReducer, initialState)
@@ -27,6 +28,10 @@ export function App() {
   // store the config and wait for user to type description in chat input
   const [pendingProject, setPendingProject] = useState<NewProjectState | null>(null)
   const [pendingAutoTask, setPendingAutoTask] = useState<string | null>(null)
+  // Chat-level edit-prompt modal (opened from MediaWithOverlay on any chat
+  // image/video). Mirrors the Storyboard's prompt-edit flow.
+  const [chatEditNodeId, setChatEditNodeId] = useState<string | null>(null)
+  const [chatEditFrame, setChatEditFrame] = useState<string | null>(null)
 
   // Stable refs for WebSocket callbacks
   const dispatchRef = useRef(dispatch)
@@ -175,29 +180,8 @@ export function App() {
                 }
               />
 
-              {/* CENTER: Storyboard (per scene → per shot → first+last frame) */}
-              <section className="flex-1 flex flex-col overflow-hidden border-r border-line-soft">
-                <div className="flex border-b border-line-soft flex-shrink-0 px-3 py-2">
-                  <h2 className="font-mono text-[11px] uppercase tracking-widest text-graphite-100">
-                    Storyboard
-                  </h2>
-                </div>
-                <Storyboard
-                  onRedoNode={(nodeId: string, frame?: string) =>
-                    send({ type: 'redo_node', data: frame ? { nodeId, frame } : { nodeId } })
-                  }
-                  onRedoPrompt={(nodeId: string) =>
-                    send({ type: 'redo_node', data: { nodeId, scope: 'prompt' } })
-                  }
-                  onRedoNodeWithPrompt={(nodeId: string, editedPrompt: Record<string, unknown>) =>
-                    send({ type: 'redo_node', data: { nodeId, editedPrompt } })
-                  }
-                />
-              </section>
-
-              {/* RIGHT: Chat + tab bar + task input */}
-              <main className="w-[420px] flex-shrink-0 flex flex-col overflow-hidden">
-                {/* Tab bar */}
+              {/* CENTER: Tabs (Chat default, Storyboard, Timeline) + content + task input */}
+              <main className="flex-1 flex flex-col overflow-hidden">
                 <div className="flex border-b border-line-soft flex-shrink-0">
                   <button
                     onClick={() => dispatch({ type: 'SET_ACTIVE_VIEW', view: 'chat' })}
@@ -208,6 +192,16 @@ export function App() {
                     }`}
                   >
                     Chat
+                  </button>
+                  <button
+                    onClick={() => dispatch({ type: 'SET_ACTIVE_VIEW', view: 'storyboard' })}
+                    className={`px-4 py-2 text-xs font-medium transition-colors ${
+                      state.activeView === 'storyboard'
+                        ? 'text-cyan border-b-2 border-cyan'
+                        : 'text-graphite-100 hover:text-foreground'
+                    }`}
+                  >
+                    Storyboard
                   </button>
                   <button
                     onClick={() => dispatch({ type: 'SET_ACTIVE_VIEW', view: 'timeline' })}
@@ -225,7 +219,30 @@ export function App() {
                     )}
                   </button>
                 </div>
-                {state.activeView === 'chat' ? <ChatTimeline onSendWs={send} /> : <TimelineView />}
+                {state.activeView === 'chat' && (
+                  <ChatTimeline
+                    onSendWs={send}
+                    onEditPrompt={(nodeId, frame) => {
+                      setChatEditNodeId(nodeId)
+                      setChatEditFrame(frame)
+                    }}
+                    onRedoNode={(nodeId) => send({ type: 'redo_node', data: { nodeId } })}
+                  />
+                )}
+                {state.activeView === 'storyboard' && (
+                  <Storyboard
+                    onRedoNode={(nodeId: string, frame?: string) =>
+                      send({ type: 'redo_node', data: frame ? { nodeId, frame } : { nodeId } })
+                    }
+                    onRedoPrompt={(nodeId: string) =>
+                      send({ type: 'redo_node', data: { nodeId, scope: 'prompt' } })
+                    }
+                    onRedoNodeWithPrompt={(nodeId: string, editedPrompt: Record<string, unknown>) =>
+                      send({ type: 'redo_node', data: { nodeId, editedPrompt } })
+                    }
+                  />
+                )}
+                {state.activeView === 'timeline' && <TimelineView />}
                 {showNewProject && (
                   <NewProjectInline
                     onReady={(config) => {
@@ -265,6 +282,22 @@ export function App() {
 
             <WorkflowManager open={showWorkflows} onClose={() => setShowWorkflows(false)} />
             <ProviderSettings open={showProviders} onClose={() => setShowProviders(false)} />
+            {chatEditNodeId && state.selectedProject && (
+              <PromptEditModal
+                nodeId={chatEditNodeId}
+                frame={chatEditFrame ?? undefined}
+                projectName={state.selectedProject}
+                onSubmit={(nid, edited) => {
+                  send({ type: 'redo_node', data: { nodeId: nid, editedPrompt: edited } })
+                  setChatEditNodeId(null)
+                  setChatEditFrame(null)
+                }}
+                onCancel={() => {
+                  setChatEditNodeId(null)
+                  setChatEditFrame(null)
+                }}
+              />
+            )}
           </div>
         </ErrorBoundary>
       </AppDispatchContext.Provider>

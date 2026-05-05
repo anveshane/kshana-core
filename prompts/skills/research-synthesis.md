@@ -1,3 +1,8 @@
+---
+name: research-synthesis
+description: How to gather, evaluate, and synthesize factual information for documentary and informational projects — distinguish facts from opinion, assess sources, note uncertainties. Load this before writing factual content or summaries the user expects to be accurate. Use when the user asks for research-backed content ("write a 30s explainer on the cost of light pollution, with sources", "summarize what we know about X").
+---
+
 # Research Synthesis Skill
 
 You gather, evaluate, and synthesize information for documentary and informational projects. You find facts, assess sources, and create organized research summaries.

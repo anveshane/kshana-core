@@ -49,9 +49,26 @@ export function PromptEditModal({ nodeId, frame, projectName, onSubmit, onCancel
 
   useEffect(() => {
     fetch(`/api/v1/projects/${projectName}/node-prompt/${encodeURIComponent(nodeId)}`)
-      .then(res => res.json())
+      .then(async (res) => {
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: string }
+          // Pi-era projects synthesize their node graph from manifests on the
+          // fly — the per-node prompt files this route reads don't exist yet,
+          // so the Edit modal can't recover the prompt JSON. Surface a clear
+          // message instead of crashing on `prompt.frames`.
+          throw new Error(
+            body.error ??
+              `Edit isn't supported for this node (HTTP ${res.status}). Project may not have stored prompt files for individual shots yet.`,
+          )
+        }
+        return res.json() as Promise<PromptData>
+      })
       .then((d: PromptData) => {
         setData(d)
+
+        if (!d.prompt || typeof d.prompt !== 'object') {
+          throw new Error("Server returned no prompt data for this node.")
+        }
 
         if (d.nodeType === 'shot_video') {
           setMotionDirective(d.prompt.motionDirective || '')

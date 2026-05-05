@@ -98,10 +98,10 @@ describe('ExecutorPipeline — Node ordering', () => {
     // but getNextReady skips unexpanded type-level collections (isCollection && !itemId).
     // So none of these should appear as ready until expanded.
     // Only non-collection nodes whose deps are met should be ready.
-    // At this point no non-collection dependents of story have their deps met either
-    // (world_style also depends on scene + setting which are pending).
-    // So ready should be empty — the ExecutorAgent would call expandPendingCollections.
-    expect(typeIds).toEqual([]);
+    // story_essence is a non-collection node that depends on story alone,
+    // so it becomes ready first; character/setting/scene wait on it as
+    // an additional dep before expansion.
+    expect(typeIds).toEqual(['story_essence']);
   });
 
   it('respects transitive dependency ordering (world_style depends on story + scene + setting)', () => {
@@ -187,11 +187,14 @@ describe('ExecutorPipeline — Collection expansion', () => {
       { itemId: 'kai', name: 'Kai' },
     ]);
 
-    // Complete prerequisites
+    // Complete prerequisites — character now also depends on story_essence
+    // (added 2026 for the editorial-intent injection). Both must complete
+    // before character:kai is ready.
     completeNode(executor, 'plot');
     completeNode(executor, 'story');
+    completeNode(executor, 'story_essence');
 
-    // character:kai is ready now (depends on story)
+    // character:kai is ready now (depends on story + story_essence)
     let ready = executor.getNextReady();
     expect(ready.map(n => n.id)).toContain('character:kai');
 
@@ -460,6 +463,10 @@ describe('ExecutorPipeline — Failed node handling', () => {
 
     // Re-complete story
     completeNode(executor, 'story');
+    // story_essence depends on story; complete it so character's deps
+    // are fully satisfied. (story_essence was added as a context dep on
+    // character/setting/scene to thread editorial intent downstream.)
+    completeNode(executor, 'story_essence');
 
     // Now downstream collections can be expanded
     // (they are type-level collections so won't show in getNextReady,

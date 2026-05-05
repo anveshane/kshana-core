@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 /**
- * Print a high-level status summary for a kshana-ink project.
+ * Print a high-level status summary for a kshana-core project.
  *
  * Usage:
  *   pnpm status <project-name>

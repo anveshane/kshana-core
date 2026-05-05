@@ -57,6 +57,28 @@ const storyArtifact: ArtifactTypeDefinition = {
   ],
 };
 
+const storyEssenceArtifact: ArtifactTypeDefinition = {
+  id: 'story_essence',
+  displayName: 'Story Essence',
+  category: 'concept',
+  description: 'Editorial intent — genre, throughline, tonal notes, dramatic emphasis. Tunes every downstream prompt to the kind of story being told.',
+  scope: 'project',
+  isCollection: false,
+  outputFormat: 'json',
+  filePattern: 'prompts/story_essence.json',
+  agentType: 'content',
+  promptFile: 'narrative/story_essence.md',
+  isExpensive: false,
+  requiresPerItemApproval: false,
+  dependencies: [
+    {
+      artifactTypeId: 'story',
+      required: true,
+      usage: 'context',
+    },
+  ],
+};
+
 const characterArtifact: ArtifactTypeDefinition = {
   id: 'character',
   displayName: 'Characters',
@@ -75,6 +97,11 @@ const characterArtifact: ArtifactTypeDefinition = {
   dependencies: [
     {
       artifactTypeId: 'story',
+      required: true,
+      usage: 'context',
+    },
+    {
+      artifactTypeId: 'story_essence',
       required: true,
       usage: 'context',
     },
@@ -104,6 +131,11 @@ const settingArtifact: ArtifactTypeDefinition = {
   dependencies: [
     {
       artifactTypeId: 'story',
+      required: true,
+      usage: 'context',
+    },
+    {
+      artifactTypeId: 'story_essence',
       required: true,
       usage: 'context',
     },
@@ -191,6 +223,11 @@ const sceneArtifact: ArtifactTypeDefinition = {
   dependencies: [
     {
       artifactTypeId: 'story',
+      required: true,
+      usage: 'context',
+    },
+    {
+      artifactTypeId: 'story_essence',
       required: true,
       usage: 'context',
     },
@@ -578,9 +615,9 @@ const phases: PhaseDefinition[] = [
   {
     id: 'breakdown',
     displayName: 'Story Breakdown',
-    description: 'Break down the story into characters, settings, and scenes',
+    description: 'Identify the editorial intent then break the story into characters, settings, and scenes',
     order: 3,
-    artifactTypes: ['character', 'setting', 'object', 'scene'],
+    artifactTypes: ['story_essence', 'character', 'setting', 'object', 'scene'],
     requiresConfirmation: false,
     promptFile: 'narrative/phases/breakdown.md',
   },
@@ -766,6 +803,7 @@ export const narrativeTemplate: VideoTemplate = {
   artifactTypes: {
     plot: plotArtifact,
     story: storyArtifact,
+    story_essence: storyEssenceArtifact,
     character: characterArtifact,
     setting: settingArtifact,
     object: objectArtifact,

@@ -1,3 +1,8 @@
+---
+name: narration-scripting
+description: How to write or edit voice-over scripts for spoken delivery — rhythm, breathing, emphasis, pacing. Load this before writing or modifying narration text or any audio script the user wants spoken aloud. Use when the user asks for narration changes ("rewrite the voice-over for scene 1 with more urgency", "shorten the narration for s2 to fit 6 seconds").
+---
+
 # Narration Scripting Skill
 
 You create voice-over scripts optimized for spoken delivery. Your scripts are designed to be heard, not read—with attention to rhythm, clarity, and emotional pacing.

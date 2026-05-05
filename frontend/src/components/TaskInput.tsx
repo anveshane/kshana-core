@@ -8,16 +8,21 @@ interface TaskInputProps {
 
 const COMMANDS = [
   { name: '/help', description: 'Show available commands' },
+  { name: '/project', description: 'Pick a project from a list' },
   { name: '/new', description: 'Create a new project' },
   { name: '/workflows', description: 'Open workflow manager' },
   { name: '/providers', description: 'Open provider settings' },
   { name: '/reset', description: 'Reset project to a stage' },
   { name: '/run-to', description: 'Run pipeline up to a stage, then pause' },
-  { name: '/select', description: 'Select a project' },
   { name: '/auto', description: 'Enable autonomous mode' },
   { name: '/parallel', description: 'Enable parallel media gen' },
   { name: '/serial', description: 'Switch to serial media gen' },
 ]
+
+interface ProjectPickerEntry {
+  name: string
+  description: string
+}
 
 const RESET_STAGES = [
   { name: 'plot', description: 'Reset everything, start from scratch' },
@@ -49,31 +54,61 @@ export function TaskInput({ onSend, placeholder: customPlaceholder }: TaskInputP
   // their autocomplete from the same RESET_STAGES list.
   const resetMatch = value.match(/^\/reset\s+(\S*)$/i)
   const runToMatch = value.match(/^\/run-to\s+(\S*)$/i)
+  const projectMatch = value.match(/^\/project(?:\s+(.*))?$/i) ||
+    value.match(/^\/select(?:\s+(.*))?$/i)
   const isStagePickerMode = !!resetMatch || !!runToMatch
+  const isProjectPickerMode = !!projectMatch && value.includes(' ')
   const stagePickerCommand: '/reset' | '/run-to' | null = resetMatch
     ? '/reset'
     : runToMatch
       ? '/run-to'
       : null
+  const projectPickerCommand: '/project' | '/select' | null = isProjectPickerMode
+    ? (value.startsWith('/project') ? '/project' : '/select')
+    : null
   const stageFilter = (resetMatch?.[1] ?? runToMatch?.[1] ?? '').toLowerCase()
+  const projectFilter = (projectMatch?.[1] ?? '').toLowerCase()
+
+  // Lazy-fetch project list when entering /project picker mode.
+  const [projects, setProjects] = useState<ProjectPickerEntry[]>([])
+  useEffect(() => {
+    if (!isProjectPickerMode || projects.length > 0) return
+    let cancelled = false
+    void fetch('/api/v1/projects')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (cancelled || !data?.projects) return
+        type ApiProject = { dirName: string; title?: string; currentPhase?: string }
+        setProjects(
+          (data.projects as ApiProject[]).map((p) => ({
+            name: p.dirName.replace(/\.kshana$/, ''),
+            description: [p.title, p.currentPhase].filter(Boolean).join(' · '),
+          })),
+        )
+      })
+      .catch(() => { /* ignore */ })
+    return () => { cancelled = true }
+  }, [isProjectPickerMode, projects.length])
 
   const suggestions = isStagePickerMode
     ? RESET_STAGES
         .filter(s => s.name.startsWith(stageFilter))
         .map(s => ({ name: s.name, description: s.description }))
-    : value.startsWith('/')
-      ? COMMANDS.filter(c => c.name.startsWith(value.toLowerCase()))
-      : []
+    : isProjectPickerMode
+      ? projects.filter(p => p.name.toLowerCase().includes(projectFilter))
+      : value.startsWith('/')
+        ? COMMANDS.filter(c => c.name.startsWith(value.toLowerCase()))
+        : []
 
   // Show/hide suggestions
   useEffect(() => {
-    if (isStagePickerMode) {
+    if (isStagePickerMode || isProjectPickerMode) {
       setShowSuggestions(suggestions.length > 0)
     } else {
       setShowSuggestions(value.startsWith('/') && suggestions.length > 0 && value !== suggestions[0]?.name)
     }
     setSelectedIndex(0)
-  }, [value, suggestions.length, isStagePickerMode])
+  }, [value, suggestions.length, isStagePickerMode, isProjectPickerMode])
 
   const handleSubmit = useCallback(() => {
     if (!value.trim() || isDisabled) return
@@ -85,17 +120,22 @@ export function TaskInput({ onSend, placeholder: customPlaceholder }: TaskInputP
 
   const applySuggestion = useCallback((cmd: string) => {
     if (isStagePickerMode && stagePickerCommand) {
-      // Replace the stage part: "/<cmd> <partial>" → "/<cmd> <stage>"
       setValue(`${stagePickerCommand} ${cmd}`)
       setShowSuggestions(false)
-      // Auto-submit since the command is complete
       setTimeout(() => inputRef.current?.focus(), 0)
+    } else if (isProjectPickerMode && projectPickerCommand) {
+      // Auto-submit on project pick: send the command immediately.
+      const filled = `${projectPickerCommand} ${cmd}`
+      setShowSuggestions(false)
+      onSend(filled)
+      setValue('')
+      inputRef.current?.focus()
     } else {
       setValue(cmd + ' ')
       setShowSuggestions(false)
       inputRef.current?.focus()
     }
-  }, [isStagePickerMode, stagePickerCommand])
+  }, [isStagePickerMode, stagePickerCommand, isProjectPickerMode, projectPickerCommand, onSend])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (showSuggestions) {

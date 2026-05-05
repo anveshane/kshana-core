@@ -42,6 +42,7 @@ import {
   createDefaultSettingData,
   createDefaultSceneRef,
 } from './types.js';
+import { setShotFrame, setShotVideo, setFinalVideo } from '../../../core/project/projectSchema.js';
 import { generateProjectTitle, contextStore } from '../../../core/context/index.js';
 // Legacy `initializeArtifactsFromFiles` / `createArtifactFromFile`
 // removed with the artifact tools layer. Project state is now the
@@ -50,6 +51,7 @@ import { TemplateRegistry } from '../../../core/templates/TemplateRegistry.js';
 import type { PhaseDefinition } from '../../../core/templates/types.js';
 import { getActiveProjectDir, setActiveProjectDir } from './activeProject.js';
 import {
+  defaultBasePath,
   ensureProjectDir,
   listProjectEntries,
   projectExists as projectFileExists,
@@ -60,7 +62,7 @@ import {
 /**
  * Get the project directory path for the current working directory.
  */
-export function getProjectDir(basePath: string = process.cwd()): string {
+export function getProjectDir(basePath: string = defaultBasePath()): string {
   const activeProjectDir = getActiveProjectDir();
   if (isAbsolute(activeProjectDir)) {
     return activeProjectDir;
@@ -88,7 +90,7 @@ export interface ProjectInfo {
  * Scan for all *.kshana project directories under basePath.
  * Returns an array of project summaries sorted by most recently updated.
  */
-export function scanProjects(basePath: string = process.cwd()): ProjectInfo[] {
+export function scanProjects(basePath: string = defaultBasePath()): ProjectInfo[] {
   if (!existsSync(basePath)) return [];
 
   const entries = readdirSync(basePath, { withFileTypes: true });
@@ -125,7 +127,7 @@ export function scanProjects(basePath: string = process.cwd()): ProjectInfo[] {
  * Uses generateProjectTitle() to create a slug, appends ".kshana",
  * and handles collisions by appending a number suffix.
  */
-export function inferProjectDirName(content: string, basePath: string = process.cwd()): string {
+export function inferProjectDirName(content: string, basePath: string = defaultBasePath()): string {
   const slug = generateProjectTitle(content);
   const base = `${slug}.kshana`;
 
@@ -144,14 +146,14 @@ export function inferProjectDirName(content: string, basePath: string = process.
 /**
  * Get the project file path.
  */
-export function getProjectFilePath(basePath: string = process.cwd()): string {
+export function getProjectFilePath(basePath: string = defaultBasePath()): string {
   return join(getProjectDir(basePath), PROJECT_FILE);
 }
 
 /**
  * Check if a project exists in the current directory.
  */
-export function projectExists(basePath: string = process.cwd()): boolean {
+export function projectExists(basePath: string = defaultBasePath()): boolean {
   return projectFileExists(PROJECT_FILE, basePath);
 }
 
@@ -160,7 +162,7 @@ export function projectExists(basePath: string = process.cwd()): boolean {
  * Use with caution - this permanently removes all project data.
  * Also clears the context store to ensure a clean slate.
  */
-export function deleteProject(basePath: string = process.cwd()): boolean {
+export function deleteProject(basePath: string = defaultBasePath()): boolean {
   const projectDir = getProjectDir(basePath);
 
   // Always clear the context store to remove old context variables
@@ -182,7 +184,7 @@ export function deleteProject(basePath: string = process.cwd()): boolean {
  * Create the initial project directory structure.
  * Only creates directories - plan files are created on first write.
  */
-export function createProjectStructure(basePath: string = process.cwd()): void {
+export function createProjectStructure(basePath: string = defaultBasePath()): void {
   const projectDir = getProjectDir(basePath);
 
   // Create main directories only - no empty files
@@ -410,7 +412,7 @@ export function createProject(
  */
 export function setProjectInputType(
   inputType: InputType,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): ProjectFile | null {
   const project = loadProject(basePath);
   if (!project) return null;
@@ -423,13 +425,19 @@ export function setProjectInputType(
 
   // If it's a full story, skip plot and story phases
   if (inputType === 'story') {
-    // Mark skipped phases
-    for (const skipPhase of inputTypeConfig.skipPhases) {
-      const phaseInfo = project.phases[skipPhase];
-      if (phaseInfo) {
-        phaseInfo.status = 'skipped';
-        phaseInfo.completedAt = now;
-        phaseInfo.plannerStage = PlannerStage.COMPLETE;
+    // Mark skipped phases. `project.phases` and `project.content` are
+    // legacy v2.0 parallel-state structures; loadProject strips them on
+    // migration to v3.0, so guard each access. Without these guards the
+    // function crashes ("Cannot read properties of undefined (reading
+    // 'plot')") for any project that's been through the migration.
+    if (project.phases) {
+      for (const skipPhase of inputTypeConfig.skipPhases) {
+        const phaseInfo = project.phases[skipPhase];
+        if (phaseInfo) {
+          phaseInfo.status = 'skipped';
+          phaseInfo.completedAt = now;
+          phaseInfo.plannerStage = PlannerStage.COMPLETE;
+        }
       }
     }
 
@@ -444,8 +452,10 @@ export function setProjectInputType(
     if (originalInput) {
       writeProjectText('plans/story.md', `# Story\n\n${originalInput}`, basePath);
 
-      // Update content registry
-      project.content.story.status = 'available';
+      // Update content registry (also stripped on v3.0 migration).
+      if (project.content?.story) {
+        project.content.story.status = 'available';
+      }
     }
   }
 
@@ -508,7 +518,7 @@ function migrateContentItemName(
 
 function discoverProfileFiles(
   directoryName: 'characters' | 'settings',
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): Map<string, string> {
   const discovered = new Map<string, string>();
   const files = listProjectEntries(directoryName, basePath)
@@ -544,7 +554,7 @@ function discoverProfileFiles(
 }
 
 function discoverSceneFiles(
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): Map<number, { path: string; title?: string; description?: string; valid: boolean }> {
   const discovered = new Map<number, { path: string; title?: string; description?: string; valid: boolean }>();
   const sceneDirectories = [
@@ -623,7 +633,7 @@ function syncGoalPreferencesIntoProject(project: ProjectFile): boolean {
  * Load an existing project file.
  * Returns null if project doesn't exist or is incompatible (old version).
  */
-export function loadProject(basePath: string = process.cwd()): ProjectFile | null {
+export function loadProject(basePath: string = defaultBasePath()): ProjectFile | null {
   if (!projectFileExists(PROJECT_FILE, basePath)) {
     return null;
   }
@@ -672,7 +682,7 @@ export function loadProject(basePath: string = process.cwd()): ProjectFile | nul
 /**
  * Check if an existing project is compatible with the current workflow.
  */
-export function isProjectCompatible(basePath: string = process.cwd()): {
+export function isProjectCompatible(basePath: string = defaultBasePath()): {
   compatible: boolean;
   version?: string;
   reason?: string;
@@ -713,7 +723,7 @@ export function isProjectCompatible(basePath: string = process.cwd()): {
 /**
  * Save the project file.
  */
-export function saveProject(project: ProjectFile, basePath: string = process.cwd()): void {
+export function saveProject(project: ProjectFile, basePath: string = defaultBasePath()): void {
   project.updatedAt = Date.now();
   const orderedProject = {
     version: project.version,
@@ -761,6 +771,16 @@ export function saveProject(project: ProjectFile, basePath: string = process.cwd
     ...('primaryNarration' in project
       ? { primaryNarration: project.primaryNarration }
       : {}),
+    // CRITICAL: executorState is the dependency-graph snapshot — every
+    // completed node's status, outputs, and topology mutations live
+    // here. Omitting it from the on-disk write silently wipes the
+    // executor's memory of all prior progress, so the next run
+    // restarts from "Expand Characters" even if the user already
+    // generated 27 nodes worth of work. Regression-pinned in
+    // tests/workflow/ProjectManager.test.ts → "preserves executor state".
+    ...('executorState' in project
+      ? { executorState: project.executorState }
+      : {}),
   };
   writeProjectText(PROJECT_FILE, JSON.stringify(orderedProject, null, 2), basePath);
 }
@@ -772,7 +792,7 @@ export function updateProjectConfiguration(
     duration: number;
     autonomousMode?: boolean;
   },
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): boolean {
   const project = loadProject(basePath);
   if (!project) {
@@ -805,7 +825,7 @@ export function updateProjectConfiguration(
 
 export function updateProjectAutonomousMode(
   autonomousMode: boolean,
-  basePath: string = process.cwd(),
+  basePath: string = defaultBasePath(),
 ): boolean {
   const project = loadProject(basePath);
   if (!project) {
@@ -825,7 +845,7 @@ export function updateProjectAutonomousMode(
  * Start the active timer. Called when agent begins running.
  * Sets timerLastStartedAt so elapsed time can be computed on stop.
  */
-export function startTimer(basePath: string = process.cwd()): void {
+export function startTimer(basePath: string = defaultBasePath()): void {
   const project = loadProject(basePath);
   if (!project) return;
   project.timerLastStartedAt = Date.now();
@@ -837,7 +857,7 @@ export function startTimer(basePath: string = process.cwd()): void {
  * Adds the delta since timerLastStartedAt to elapsedMs and clears timerLastStartedAt.
  * Returns the total elapsedMs.
  */
-export function stopTimer(basePath: string = process.cwd()): number {
+export function stopTimer(basePath: string = defaultBasePath()): number {
   const project = loadProject(basePath);
   if (!project) return 0;
   const lastStart = project.timerLastStartedAt;
@@ -854,7 +874,7 @@ export function stopTimer(basePath: string = process.cwd()): number {
  * the server crashed mid-run — add the delta and clear the marker.
  * Returns the total elapsedMs.
  */
-export function recoverTimer(basePath: string = process.cwd()): number {
+export function recoverTimer(basePath: string = defaultBasePath()): number {
   const project = loadProject(basePath);
   if (!project) return 0;
 
@@ -877,7 +897,7 @@ export function recoverTimer(basePath: string = process.cwd()): number {
  * and resets timerLastStartedAt to now. Called periodically (~60s) to
  * limit data loss if the server crashes mid-run.
  */
-export function checkpointTimer(basePath: string = process.cwd()): void {
+export function checkpointTimer(basePath: string = defaultBasePath()): void {
   const project = loadProject(basePath);
   if (!project) return;
   const lastStart = project.timerLastStartedAt;
@@ -891,7 +911,7 @@ export function checkpointTimer(basePath: string = process.cwd()): void {
 /**
  * Get the current accumulated elapsed time without modifying state.
  */
-export function getElapsedMs(basePath: string = process.cwd()): number {
+export function getElapsedMs(basePath: string = defaultBasePath()): number {
   const project = loadProject(basePath);
   if (!project) return 0;
   return project.elapsedMs || 0;
@@ -946,7 +966,7 @@ export function generateFileSummary(content: string, fileType: string): string {
 /**
  * Read the original user input from its file.
  */
-export function getOriginalInput(project: ProjectFile, basePath: string = process.cwd()): string {
+export function getOriginalInput(project: ProjectFile, basePath: string = defaultBasePath()): string {
   return readProjectText(project.originalInputFile, basePath) ?? '';
 }
 
@@ -956,7 +976,7 @@ export function getOriginalInput(project: ProjectFile, basePath: string = proces
 export function getOrCreateProject(
   originalInput: string,
   style: ProjectStyle = 'cinematic_realism',
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): ProjectFile {
   const existing = loadProject(basePath);
   if (existing) {
@@ -975,7 +995,7 @@ export function getCurrentPhase(project: ProjectFile): WorkflowPhase | string {
 /**
  * Get the project style.
  */
-export function getProjectStyle(basePath: string = process.cwd()): ProjectStyle {
+export function getProjectStyle(basePath: string = defaultBasePath()): ProjectStyle {
   const project = loadProject(basePath);
   return project?.style ?? 'cinematic_realism';
 }
@@ -983,7 +1003,7 @@ export function getProjectStyle(basePath: string = process.cwd()): ProjectStyle 
 /**
  * Get the style configuration for the current project.
  */
-export function getProjectStyleConfig(basePath: string = process.cwd()): StyleConfig {
+export function getProjectStyleConfig(basePath: string = defaultBasePath()): StyleConfig {
   const style = getProjectStyle(basePath);
   return STYLE_CONFIGS[style as keyof typeof STYLE_CONFIGS] ?? STYLE_CONFIGS['cinematic_realism'];
 }
@@ -995,7 +1015,7 @@ export function getProjectStyleConfig(basePath: string = process.cwd()): StyleCo
 /**
  * Check if a plan file has content.
  */
-export function planFileHasContent(planFile: string, basePath: string = process.cwd()): boolean {
+export function planFileHasContent(planFile: string, basePath: string = defaultBasePath()): boolean {
   const content = readProjectText(planFile, basePath);
   if (content === null) {
     return false;
@@ -1008,7 +1028,7 @@ export function planFileHasContent(planFile: string, basePath: string = process.
  */
 export function readProjectFile(
   relativePath: string,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): string | null {
   return readProjectText(relativePath, basePath);
 }
@@ -1019,7 +1039,7 @@ export function readProjectFile(
 export function writeProjectFile(
   relativePath: string,
   content: string,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): void {
   writeProjectText(relativePath, content, basePath);
 }
@@ -1030,7 +1050,7 @@ export function writeProjectFile(
  */
 export function loadCharacterMarkdown(
   name: string,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): string | null {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   return readProjectFile(`characters/${safeName}.md`, basePath);
@@ -1040,7 +1060,7 @@ export function loadCharacterMarkdown(
  * Load setting markdown from settings/[name].md.
  * Returns the raw markdown content.
  */
-export function loadSettingMarkdown(name: string, basePath: string = process.cwd()): string | null {
+export function loadSettingMarkdown(name: string, basePath: string = defaultBasePath()): string | null {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   return readProjectFile(`settings/${safeName}.md`, basePath);
 }
@@ -1056,9 +1076,14 @@ export const MAX_SCENES = 12;
  * Update a scene's approval status for a specific phase.
  */
 /**
- * Add an asset to the manifest.
+ * Add an asset to the manifest AND mirror it into project.json's
+ * scenes/shots/frames tree (the new single-source-of-truth surface
+ * defined in src/core/project/projectSchema.ts).
+ *
+ * The manifest stays as the append-only ledger; project.json is the
+ * shape the Storyboard / kshana_show_* / reset paths read from.
  */
-export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): void {
+export function addAsset(asset: AssetInfo, basePath: string = defaultBasePath()): void {
   let manifest: { assets: AssetInfo[] } = { assets: [] };
   const manifestContent = readProjectText('assets/manifest.json', basePath);
   if (manifestContent) {
@@ -1079,23 +1104,104 @@ export function addAsset(asset: AssetInfo, basePath: string = process.cwd()): vo
 
   writeProjectText('assets/manifest.json', JSON.stringify(manifest, null, 2), basePath);
 
-  // Update project file's asset list
+  // Update project file's asset list and scenes/shots tree.
   const project = loadProject(basePath);
-  if (project && !project.assets.includes(asset.id)) {
-    project.assets.push(asset.id);
+  if (project) {
+    let dirty = false;
+    if (!project.assets.includes(asset.id)) {
+      project.assets.push(asset.id);
+      dirty = true;
+    }
+    dirty = applyAssetToProjectSchema(project as unknown as Record<string, unknown>, asset) || dirty;
+    if (dirty) saveProject(project, basePath);
+  }
+}
 
-    // Legacy `addContentItem(project, 'images'/'videos', asset.id, ...)`
-    // call removed — the executor's per-item nodes already track
-    // outputPath, and the assets/manifest.json (written above) is the
-    // canonical asset registry.
-    saveProject(project, basePath);
+/**
+ * Mirror an asset entry into project.scenes[].shots[].* using the
+ * helpers in src/core/project/projectSchema.ts. Returns true if anything
+ * changed so the caller can decide whether to flush project.json.
+ */
+function applyAssetToProjectSchema(
+  project: Record<string, unknown>,
+  asset: AssetInfo,
+): boolean {
+  const baseRef = {
+    path: asset.path,
+    createdAt: asset.createdAt,
+    ...(asset.metadata ? { metadata: asset.metadata } : {}),
+  };
+
+  switch (asset.type) {
+    case 'scene_image': {
+      const m = asset.nodeId?.match(/^shot_image:scene_(\d+)_shot_(\d+)$/);
+      if (!m) return false;
+      const sceneNum = parseInt(m[1]!, 10);
+      const shotNum = parseInt(m[2]!, 10);
+      const frame = asset.frame;
+      if (!frame) return false;
+      const frameKey = (
+        { first_frame: 'firstFrame', last_frame: 'lastFrame', mid_frame: 'midFrame' } as const
+      )[frame];
+      setShotFrame(project, sceneNum, shotNum, frameKey, baseRef);
+      return true;
+    }
+    case 'scene_video': {
+      const m = asset.nodeId?.match(/^shot_video:scene_(\d+)_shot_(\d+)$/);
+      if (!m) return false;
+      const sceneNum = parseInt(m[1]!, 10);
+      const shotNum = parseInt(m[2]!, 10);
+      setShotVideo(project, sceneNum, shotNum, baseRef);
+      return true;
+    }
+    case 'final_video': {
+      setFinalVideo(project, baseRef);
+      return true;
+    }
+    case 'character_ref': {
+      // character_image:<id> → upsert project.characters[].referenceImage
+      const m = asset.nodeId?.match(/^character_image:(.+)$/);
+      if (!m) return false;
+      const characterId = m[1]!;
+      const characters = (project['characters'] ??= []) as Array<{
+        id: string;
+        name?: string;
+        referenceImage?: typeof baseRef;
+      }>;
+      let entry = characters.find((c) => c.id === characterId);
+      if (!entry) {
+        entry = { id: characterId, name: characterId };
+        characters.push(entry);
+      }
+      entry.referenceImage = baseRef;
+      return true;
+    }
+    case 'setting_ref': {
+      const m = asset.nodeId?.match(/^setting_image:(.+)$/);
+      if (!m) return false;
+      const settingId = m[1]!;
+      const settings = (project['settings'] ??= []) as Array<{
+        id: string;
+        name?: string;
+        referenceImage?: typeof baseRef;
+      }>;
+      let entry = settings.find((s) => s.id === settingId);
+      if (!entry) {
+        entry = { id: settingId, name: settingId };
+        settings.push(entry);
+      }
+      entry.referenceImage = baseRef;
+      return true;
+    }
+    default:
+      return false;
   }
 }
 
 /**
  * Get all assets from the manifest.
  */
-export function getAssets(basePath: string = process.cwd()): AssetInfo[] {
+export function getAssets(basePath: string = defaultBasePath()): AssetInfo[] {
   const manifestContent = readProjectText('assets/manifest.json', basePath);
   if (!manifestContent) {
     return [];
@@ -1112,7 +1218,7 @@ export function getAssets(basePath: string = process.cwd()): AssetInfo[] {
 /**
  * Get the project summary for the main agent.
  */
-export function getProjectSummary(basePath: string = process.cwd()): string {
+export function getProjectSummary(basePath: string = defaultBasePath()): string {
   const project = loadProject(basePath);
 
   if (!project) {
@@ -1205,7 +1311,7 @@ export function updateContentStatus(
   contentType: ContentTypeName,
   status: ContentStatus,
   filePath?: string,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): ProjectFile {
   // Ensure content registry exists (for backwards compatibility)
   if (!project.content) {
@@ -1347,7 +1453,7 @@ export function hasRequiredContent(
 export function markContentAvailable(
   project: ProjectFile,
   contentType: ContentTypeName,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): ProjectFile {
   // Ensure content registry exists
   if (!project.content) {
@@ -1404,7 +1510,7 @@ export function saveImagePrompt(
   type: PromptType,
   name: string,
   content: string,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): string {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   let relativePath: string;
@@ -1465,7 +1571,7 @@ export function saveImagePrompt(
 export function loadImagePrompt(
   type: PromptType,
   name: string,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): string | null {
   const safeName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   let relativePath: string;
@@ -1495,7 +1601,7 @@ export function loadImagePrompt(
 export function saveVideoPrompt(
   sceneNumber: number,
   content: string,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): string {
   const relativePath = `prompts/videos/scenes/scene-${sceneNumber}.motion.json`;
   writeProjectFile(relativePath, content, basePath);
@@ -1521,7 +1627,7 @@ export function saveVideoPrompt(
  */
 export function loadVideoPrompt(
   sceneNumber: number,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): string | null {
   const canonicalPath = `prompts/videos/scenes/scene-${sceneNumber}.motion.json`;
   const canonical = readProjectFile(canonicalPath, basePath);
@@ -1546,7 +1652,7 @@ import type { PersistedTodo } from './types.js';
  * Save todos to the project file for resumption.
  * Called after TodoWrite operations to persist the current state.
  */
-export function saveTodos(todos: PersistedTodo[], basePath: string = process.cwd()): boolean {
+export function saveTodos(todos: PersistedTodo[], basePath: string = defaultBasePath()): boolean {
   const project = loadProject(basePath);
   if (!project) {
     return false;
@@ -1561,7 +1667,7 @@ export function saveTodos(todos: PersistedTodo[], basePath: string = process.cwd
  * Load persisted todos from the project file.
  * Returns empty array if no todos are stored.
  */
-export function loadTodos(basePath: string = process.cwd()): PersistedTodo[] {
+export function loadTodos(basePath: string = defaultBasePath()): PersistedTodo[] {
   const project = loadProject(basePath);
   if (!project || !project.todos) {
     return [];
@@ -1573,7 +1679,7 @@ export function loadTodos(basePath: string = process.cwd()): PersistedTodo[] {
  * Clear persisted todos from the project file.
  * Useful when starting a new phase or resetting.
  */
-export function clearPersistedTodos(basePath: string = process.cwd()): boolean {
+export function clearPersistedTodos(basePath: string = defaultBasePath()): boolean {
   const project = loadProject(basePath);
   if (!project) {
     return false;
@@ -1598,7 +1704,7 @@ import type { ProjectInput, InputPurpose, PrimaryNarrationConfig } from './types
  */
 export function addProjectInput(
   input: Omit<ProjectInput, 'id'>,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): ProjectInput {
   const project = loadProject(basePath);
   if (!project) {
@@ -1643,7 +1749,7 @@ export function addProjectInput(
 export function updateProjectInput(
   inputId: string,
   updates: Partial<ProjectInput>,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): ProjectInput | null {
   const project = loadProject(basePath);
   if (!project || !project.inputs) {
@@ -1681,7 +1787,7 @@ export function updateProjectInput(
  * @param basePath - Base path for the project
  * @returns Whether the deletion was successful
  */
-export function deleteProjectInput(inputId: string, basePath: string = process.cwd()): boolean {
+export function deleteProjectInput(inputId: string, basePath: string = defaultBasePath()): boolean {
   const project = loadProject(basePath);
   if (!project || !project.inputs) {
     return false;
@@ -1711,7 +1817,7 @@ export function deleteProjectInput(inputId: string, basePath: string = process.c
  */
 export function getProjectInput(
   inputId: string,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): ProjectInput | null {
   const project = loadProject(basePath);
   if (!project || !project.inputs) {
@@ -1730,7 +1836,7 @@ export function getProjectInput(
 export function setPrimaryNarration(
   inputId: string,
   preserveAudio: boolean,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): void {
   const project = loadProject(basePath);
   if (!project) {
@@ -1771,7 +1877,7 @@ export function setPrimaryNarration(
  */
 export function getInputsByPurpose(
   purpose: InputPurpose,
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): ProjectInput[] {
   const project = loadProject(basePath);
   if (!project || !project.inputs) {
@@ -1788,7 +1894,7 @@ export function getInputsByPurpose(
  * @param basePath - Base path for the project
  * @returns Narration content or null if no primary narration set
  */
-export function getNarrationContent(basePath: string = process.cwd()): {
+export function getNarrationContent(basePath: string = defaultBasePath()): {
   content: string;
   audioPath?: string;
   timingMarkers?: Array<{ start: number; end: number; text: string }>;
@@ -1846,7 +1952,7 @@ export function getNarrationContent(basePath: string = process.cwd()): {
  * @param basePath - Base path for the project
  * @returns Array of all inputs
  */
-export function getAllInputs(basePath: string = process.cwd()): ProjectInput[] {
+export function getAllInputs(basePath: string = defaultBasePath()): ProjectInput[] {
   const project = loadProject(basePath);
   if (!project || !project.inputs) {
     return [];
@@ -1859,7 +1965,7 @@ export function getAllInputs(basePath: string = process.cwd()): ProjectInput[] {
  * @param basePath - Base path for the project
  * @returns Whether the project has any inputs
  */
-export function hasInputs(basePath: string = process.cwd()): boolean {
+export function hasInputs(basePath: string = defaultBasePath()): boolean {
   const project = loadProject(basePath);
   return !!(project?.inputs && project.inputs.length > 0);
 }
@@ -1872,7 +1978,7 @@ export function hasInputs(basePath: string = process.cwd()): boolean {
  */
 export function getInputsByStatus(
   status: 'pending' | 'processing' | 'completed' | 'failed',
-  basePath: string = process.cwd()
+  basePath: string = defaultBasePath()
 ): ProjectInput[] {
   const project = loadProject(basePath);
   if (!project || !project.inputs) {

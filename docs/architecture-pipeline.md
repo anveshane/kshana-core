@@ -1,4 +1,4 @@
-# Kshana-Ink Pipeline Architecture: Plot → Final Video
+# Kshana-Core Pipeline Architecture: Plot → Final Video
 
 ## Overview
 

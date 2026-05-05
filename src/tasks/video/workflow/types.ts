@@ -298,12 +298,16 @@ export interface PhaseInfo {
 }
 
 /**
- * Approval status for an individual item (character, setting, scene, etc.).
+ * @deprecated DELETE — approval-fatigue artifact from the pre-graph-executor world.
+ * The dependency-graph executor does not gate per-item user approvals; it generates,
+ * cascades regenerations, and surfaces results. No code reads or writes this status.
+ * Tracked in `todos/cleanup-deprecated-agent-architecture.md`.
  */
 export type ItemApprovalStatus = 'pending' | 'in_review' | 'approved' | 'rejected' | 'regenerating';
 
 /**
- * Individual item tracking for per-item approval phases.
+ * @deprecated DELETE — see `ItemApprovalStatus`. Approval-fatigue artifact; no live readers/writers.
+ * Tracked in `todos/cleanup-deprecated-agent-architecture.md`.
  */
 export interface ItemApprovalEntry {
   /** Unique identifier for this item */
@@ -460,6 +464,12 @@ export interface AssetInfo {
   metadata?: Record<string, unknown>;
   /** Executor node ID for redo support (e.g., "character_image:kai") */
   nodeId?: string;
+  /**
+   * For scene_image entries: which frame this asset represents. Phase-2
+   * dual-write into project.json relies on this to populate
+   * scenes[].shots[].firstFrame / lastFrame / midFrame.
+   */
+  frame?: 'first_frame' | 'last_frame' | 'mid_frame';
 }
 
 /**

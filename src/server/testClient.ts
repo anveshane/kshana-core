@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Simple WebSocket test client for kshana-ink server.
+ * Simple WebSocket test client for kshana-core server.
  * Run with: npx tsx src/server/testClient.ts
  */
 import WebSocket from 'ws';
@@ -186,7 +186,7 @@ Commands:
 }
 
 // Main
-console.log('kshana-ink WebSocket Test Client');
+console.log('kshana-core WebSocket Test Client');
 console.log('================================');
 
 const client = new TestClient();

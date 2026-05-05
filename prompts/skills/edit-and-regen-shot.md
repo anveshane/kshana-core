@@ -1,0 +1,78 @@
+---
+name: edit-and-regen-shot
+description: Apply a creative change to a single shot or frame by editing its prompt file in-place and regenerating just that node. Triggers when the user asks for a tweak to one specific shot/frame ("make s1 shot 3's last frame have her hands tied", "change the lighting on s2 shot 5 to dawn", "redo s1 shot 1 with a wider angle"). Avoids running the whole pipeline.
+---
+
+# Edit and regenerate one shot
+
+Use this when the user asks for a creative change to **one specific
+shot or frame** — not for project-wide stylistic changes (those need
+`scene_video_prompt` resets) and not for fresh starts (those use
+`kshana_run_to`).
+
+## Steps
+
+1. **Load the right craft skill BEFORE you write.** A bad prompt is
+   the leading cause of bad regens. Pull in:
+   - **image-prompting** — for any change to `imagePrompt` (rules
+     for composition, "from image N" reference markers, style cues,
+     what the generator needs).
+   - **video-direction** — for any change to `motionDirective`
+     (camera vs subject motion, timing, transition vocabulary).
+
+   These hold the same craft instructions the original generation
+   pipeline used. Without them you'll lose character continuity,
+   break reference markers, or produce prompts the generator
+   misinterprets.
+
+2. **Read the prompt file.** Use the `read` tool on:
+   - `prompts/images/shots/scene-<N>-shot-<M>.json` — for image
+     prompt changes (first/last/mid frames).
+   - `prompts/motion/scene_<N>_shot_<M>.json` — for motion-directive
+     changes that affect the rendered video.
+
+   Note the path conventions differ:
+   - **image prompts**: hyphens, in a `shots/` subfolder
+   - **motion prompts**: underscores, no `shots/` subfolder
+
+3. **Modify the right field.** For image prompts, the structure is
+   ```
+   { frames: { first_frame: { imagePrompt, references, ... },
+               last_frame:  { imagePrompt, references, ... } } }
+   ```
+   Edit only `frames.<frame>.imagePrompt`. Keep `references`,
+   `generationMode`, and other fields exactly as they are — they
+   pin the visual identity. Apply the rules from `image-prompting`:
+   if the existing prompt names a character via "from image 1",
+   the edited prompt MUST keep the same reference and the same
+   image number.
+
+   For motion prompts, the file is `{ motionDirective: "..." }`.
+   Replace the string per `video-direction` guidance.
+
+4. **Write the file back** with `write` (or `edit` if it's a small
+   targeted change). The new JSON must remain valid.
+
+5. **Trigger the regen** with `kshana_regen`:
+   - `node=shot_image:scene_<N>_shot_<M>` — regenerates the image
+     (uses the new prompt; produces fresh first+last frames).
+   - `node=shot_video:scene_<N>_shot_<M>` — regenerates the video
+     (uses the new motion directive over the existing frames).
+
+   The regenerated asset surfaces as a media card in the chat as it
+   lands on disk — you don't need to call `kshana_show_*` after.
+
+## What NOT to do
+
+- Don't rewrite the entire prompt file from scratch — preserve the
+  scaffolding (references, generationMode, schema fields).
+- Don't run `kshana_run_to <stage>` for a single-shot change — that
+  re-executes every shot.
+- Don't reset (`kshana_reset`) — that's destructive and clears
+  history.
+
+## Confirming the result
+
+After `kshana_regen` finishes, ask the user "does this look right?".
+If they want another iteration, repeat steps 1–4 with their next
+change.

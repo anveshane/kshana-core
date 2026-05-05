@@ -12,11 +12,30 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { nanoid } from 'nanoid';
 import WebSocket from 'ws';
+import { decideWsAction, type ComfyWsMessage } from './wsAction.js';
+import { findKshanaCoreRoot } from '../../agent/pi/paths.js';
 
-// Debug logging to file instead of console to avoid polluting Ink UI
-const DEBUG_LOG_PATH = path.join(process.cwd(), 'logs', 'debug.log');
+// Debug logging to file instead of console to avoid polluting Ink UI.
+//
+// Anchor on kshana-core's own root, NOT process.cwd(). When kshana-core
+// runs embedded in the desktop (cwd = kshana-desktop) the cwd-based path
+// pointed at a non-existent `logs/` and every debugLog call silently
+// failed — so post-mortem ComfyUI errors had no breadcrumbs.
+const DEBUG_LOG_DIR = (() => {
+  try {
+    return path.join(findKshanaCoreRoot(import.meta.url), 'logs');
+  } catch {
+    return path.join(process.cwd(), 'logs');
+  }
+})();
+const DEBUG_LOG_PATH = path.join(DEBUG_LOG_DIR, 'debug.log');
+let debugDirEnsured = false;
 function debugLog(message: string): void {
   try {
+    if (!debugDirEnsured) {
+      try { fs.mkdirSync(DEBUG_LOG_DIR, { recursive: true }); } catch { /* ignore */ }
+      debugDirEnsured = true;
+    }
     const timestamp = new Date().toISOString();
     fs.appendFileSync(DEBUG_LOG_PATH, `[${timestamp}] ${message}\n`);
   } catch {
@@ -82,9 +101,15 @@ export interface WSProgressInfo {
 export interface CompletionResult {
   status: 'completed' | 'completed_with_timeout' | 'error';
   prompt_id: string;
+  /**
+   * Cloud's exception_message (or other error detail) when status is
+   * 'error'. Without this, the upstream "ComfyUI job did not complete
+   * (status: error)" hides the actual cause — missing model, foreign
+   * lora_name, malformed input, etc.
+   */
+  errorMessage?: string;
 }
 
-const envConfig = getComfyConfig();
 const COMFY_CLOUD_HOST = 'cloud.comfy.org';
 
 export function isComfyCloudUrl(value: string): boolean {
@@ -95,12 +120,29 @@ export function isComfyCloudUrl(value: string): boolean {
   }
 }
 
-const DEFAULT_CONFIG: ComfyUIClientConfig = {
-  baseUrl: envConfig.baseUrl || 'http://localhost:8188',
-  outputDir: './outputs',
-  timeout: envConfig.timeout || 300,
-  apiKey: envConfig.apiKey,
-};
+/**
+ * Build the default config FRESH for each client instance.
+ *
+ * Why this isn't a top-level constant: the embedded desktop path loads
+ * kshana-core via `require()` BEFORE setting `process.env['COMFY_MODE']`
+ * etc. (the desktop sets those in `kshanaCoreManager.start()`, which
+ * runs after the module graph is loaded). If we cached `getComfyConfig()`
+ * at module load, every embedded ComfyUIClient would silently fall
+ * back to `http://localhost:8188` and try to talk to a non-existent
+ * local server — the `Failed to poll history: fetch failed` symptom.
+ *
+ * Reading env at construction guarantees the client honors whatever
+ * the host has set up by the time it actually instantiates one.
+ */
+function buildDefaultConfig(): ComfyUIClientConfig {
+  const envConfig = getComfyConfig();
+  return {
+    baseUrl: envConfig.baseUrl || 'http://localhost:8188',
+    outputDir: './outputs',
+    timeout: envConfig.timeout || 300,
+    apiKey: envConfig.apiKey,
+  };
+}
 
 /**
  * Async HTTP client for ComfyUI API.
@@ -528,62 +570,73 @@ export class ComfyUIClient {
           lastActivityTime = Date.now();
           return;
         }
+        let msg: ComfyWsMessage;
         try {
-          const data = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
-          lastActivityTime = Date.now();
-          const msgType: string = data.type;
-
-          debugLog(`[queueAndWaitWS] WS msg: ${msgType} prompt=${data.data?.prompt_id || 'n/a'}`);
-
-          if (msgType === 'progress' && data.data) {
-            const d = data.data as { value: number; max: number };
-            const pct = d.max > 0 ? Math.round((d.value / d.max) * 100) : 0;
-            progressCallback?.({ percentage: pct, message: `Step ${d.value}/${d.max}`, step: d.value, maxSteps: d.max });
-          } else if (msgType === 'executing' && data.data?.node) {
-            progressCallback?.({ percentage: 0, message: `Node: ${data.data.node}`, currentNode: data.data.node });
-          } else if (msgType === 'executed' && data.data?.output) {
-            // Capture output filenames from executed events (needed for cloud where /history is blocked).
-            // Guard: only capture events for OUR prompt_id. Without this, cached
-            // results broadcast by ComfyUI Cloud from OTHER concurrent jobs can
-            // leak into our outputs list — we'd download a stranger's video.
-            // (Noir S1.1 "potter" bug, 2026-04-22: our submit was 3748c3b5 but
-            // execution_success arrived for 869d0484, and we captured its
-            // outputs because no prompt_id check existed.)
-            const eventPromptId: string | undefined = data.data.prompt_id;
-            if (promptId && eventPromptId && eventPromptId !== promptId) {
-              debugLog(`[queueAndWaitWS] Ignoring output from foreign prompt ${eventPromptId} (ours=${promptId})`);
-            } else {
-              const output = data.data.output;
-              const nodeId = data.data.node;
-              for (const key of ['images', 'gifs', 'videos']) {
-                const items = output[key];
-                if (Array.isArray(items)) {
-                  for (const item of items) {
-                    if (item.filename) {
-                      collectedOutputs.push({ filename: item.filename, subfolder: item.subfolder || '', type: item.type || 'output', node_id: nodeId });
-                      debugLog(`[queueAndWaitWS] Captured output: ${item.filename} from node ${nodeId}`);
-                    }
-                  }
-                }
-              }
+          msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString());
+        } catch {
+          return; /* non-JSON */
+        }
+        lastActivityTime = Date.now();
+        debugLog(`[queueAndWaitWS] WS msg: ${msg.type} prompt=${msg.data?.prompt_id || 'n/a'}`);
+        const action = decideWsAction(msg, promptId);
+        switch (action.kind) {
+          case 'progress':
+            progressCallback?.({
+              percentage: action.percentage,
+              message: action.message,
+              ...(action.step !== undefined ? { step: action.step } : {}),
+              ...(action.maxSteps !== undefined ? { maxSteps: action.maxSteps } : {}),
+            });
+            return;
+          case 'executing':
+            progressCallback?.({ percentage: 0, message: `Node: ${action.node}`, currentNode: String(action.node) });
+            return;
+          case 'queued':
+            progressCallback?.({ percentage: 0, message: `Queued (${action.remaining} ahead)` });
+            return;
+          case 'capture_output':
+            for (const item of action.items) {
+              collectedOutputs.push({
+                filename: item.filename,
+                subfolder: item.subfolder,
+                type: item.type,
+                ...(item.node_id !== undefined ? { node_id: String(item.node_id) } : {}),
+              });
+              debugLog(`[queueAndWaitWS] Captured output: ${item.filename} from node ${item.node_id}`);
             }
-          } else if (msgType === 'execution_success') {
-            const eventPromptId: string | undefined = data.data?.prompt_id;
-            if (promptId && eventPromptId && eventPromptId !== promptId) {
-              debugLog(`[queueAndWaitWS] Ignoring execution_success from foreign prompt ${eventPromptId} (ours=${promptId})`);
-            } else {
-              finish({ status: 'completed', prompt_id: promptId });
-            }
-          } else if (msgType === 'execution_error') {
-            debugLog(`[queueAndWaitWS] Execution error: ${JSON.stringify(data.data)}`);
-            finish({ status: 'error', prompt_id: promptId });
-          } else if (msgType === 'status') {
-            const qr = data.data?.status?.exec_info?.queue_remaining;
-            if (qr !== undefined && qr > 0) {
-              progressCallback?.({ percentage: 0, message: `Queued (${qr} ahead)` });
-            }
+            return;
+          case 'finish_completed':
+            finish({ status: 'completed', prompt_id: promptId });
+            return;
+          case 'finish_error': {
+            const payloadStr = JSON.stringify(action.payload);
+            debugLog(`[queueAndWaitWS] Execution error: ${payloadStr}`);
+            // Pull out the most actionable bits the cloud sends back.
+            // exception_message is the python-side error string ("Value
+            // not in list: lora_name: ..."); exception_type narrows it
+            // ("ServiceError"); node_id pins which workflow node blew up.
+            const p = action.payload ?? {};
+            const parts: string[] = [];
+            if (typeof p['exception_type'] === 'string') parts.push(p['exception_type'] as string);
+            if (typeof p['exception_message'] === 'string') parts.push(p['exception_message'] as string);
+            const nodeId = p['node_id'] ?? p['node'];
+            if (nodeId !== undefined && nodeId !== null) parts.push(`node=${String(nodeId)}`);
+            const errorMessage = parts.length ? parts.join(' — ') : payloadStr;
+            finish({ status: 'error', prompt_id: promptId, errorMessage });
+            return;
           }
-        } catch { /* non-JSON or binary */ }
+          case 'ignore_foreign_output':
+            debugLog(`[queueAndWaitWS] Ignoring output from foreign prompt ${action.eventPromptId} (ours=${promptId})`);
+            return;
+          case 'ignore_foreign_success':
+            debugLog(`[queueAndWaitWS] Ignoring execution_success from foreign prompt ${action.eventPromptId} (ours=${promptId})`);
+            return;
+          case 'ignore_foreign_error':
+            debugLog(`[queueAndWaitWS] Ignoring execution_error from foreign prompt ${action.eventPromptId} (ours=${promptId})`);
+            return;
+          case 'ignore':
+            return;
+        }
       });
     });
   }

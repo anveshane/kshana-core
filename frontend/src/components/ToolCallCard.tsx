@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { MediaWithOverlay } from './MediaWithOverlay'
 import ReactMarkdown from 'react-markdown'
 import type { ToolCall } from '../lib/store'
 import { useAppState } from '../lib/store'
@@ -7,6 +8,8 @@ import { ShotCompositionCard, SceneStateCard } from './ShotCompositionCard'
 
 interface ToolCallCardProps {
   toolCall: ToolCall
+  onEditPrompt?: (nodeId: string, frame: string | null) => void
+  onRedoNode?: (nodeId: string) => void
 }
 
 const TOOL_NAMES: Record<string, string> = {
@@ -560,7 +563,7 @@ function DefaultBody({ args, selectedProject }: { args: Record<string, string>; 
   )
 }
 
-export function ToolCallCard({ toolCall }: ToolCallCardProps) {
+export function ToolCallCard({ toolCall, onEditPrompt, onRedoNode }: ToolCallCardProps) {
   const { selectedProject } = useAppState()
   const { toolName, status, streamingContent, result, args, startTime } = toolCall
   const displayName = TOOL_NAMES[toolName] || toolName.replace(/_/g, ' ')
@@ -571,6 +574,12 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
     const interval = setInterval(() => setTick(t => t + 1), 1000)
     return () => clearInterval(interval)
   }, [status])
+
+  // kshana_* tools collapse by default — the agent narrates results in chat,
+  // so the JSON dump is duplication. Click the header to expand for details.
+  // Other tools keep their legacy behavior (always expanded).
+  const isKshanaTool = toolName.startsWith('kshana_')
+  const [expanded, setExpanded] = useState<boolean>(!isKshanaTool)
 
   const elapsed = status === 'executing' ? Math.round((Date.now() - startTime) / 1000) : undefined
   const duration = toolCall.duration ? Math.round((toolCall.duration - startTime) / 1000) : undefined
@@ -639,11 +648,35 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
   // For content gen and assembly, streaming is handled in the body
   const showSeparateStreaming = !isContentGen && toolName !== 'assemble_final_video' && toolName !== 'extract_collections' && toolName !== 'scene_state'
 
+  // Header controls — when collapsed (kshana_* default), the whole header
+  // is a button that expands the body. Always render the header + media so
+  // image/video previews remain visible without clicking through.
+  const isCollapsible = isKshanaTool
+  const headerClass = `flex items-center justify-between px-3 py-2 ${expanded ? 'border-b border-line-soft' : ''} ${isCollapsible ? 'cursor-pointer select-none hover:bg-graphite-300/40' : ''}`
+
   return (
     <div className={`rounded-lg border ${borderColor} bg-graphite-400/50 overflow-hidden`}>
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-line-soft">
+      <div
+        className={headerClass}
+        onClick={isCollapsible ? () => setExpanded(e => !e) : undefined}
+        role={isCollapsible ? 'button' : undefined}
+        tabIndex={isCollapsible ? 0 : undefined}
+        onKeyDown={isCollapsible ? (e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            setExpanded(v => !v)
+          }
+        } : undefined}
+      >
         <div className="flex items-center gap-2 min-w-0">
+          {isCollapsible && (
+            <span
+              className="text-graphite-100 text-[8px] transition-transform"
+              style={{ transform: expanded ? 'rotate(90deg)' : 'none' }}
+              aria-hidden="true"
+            >▸</span>
+          )}
           <span className={`text-sm ${statusColor}`}>
             {status === 'executing' ? '◉' : status === 'completed' ? '✓' : '✗'}
           </span>
@@ -655,58 +688,59 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps) {
         </span>
       </div>
 
-      {/* Thinking block — collapsible, shown when LLM has <think> output */}
-      {thinkingText && <ThinkingBlock text={thinkingText} isActive={status === 'executing' && !meaningfulContent} />}
+      {expanded && (
+        <>
+          {/* Thinking block — collapsible, shown when LLM has <think> output */}
+          {thinkingText && <ThinkingBlock text={thinkingText} isActive={status === 'executing' && !meaningfulContent} />}
 
-      {/* Per-type body */}
-      {renderBody()}
+          {/* Per-type body */}
+          {renderBody()}
 
-      {/* Progress bar */}
-      {status === 'executing' && hasProgress && (
-        <ProgressBar text={lastLine} />
-      )}
-
-      {/* Streaming content (only for types not handled in body) */}
-      {showSeparateStreaming && meaningfulContent && status !== 'completed' && (
-        <div className="px-3 py-2 text-xs text-graphite-050 whitespace-pre-wrap max-h-32 overflow-y-auto">
-          {meaningfulContent}
-        </div>
-      )}
-
-      {/* Result */}
-      {result && status !== 'executing' && (
-        <div className="px-3 py-1.5 text-xs">
-          {typeof result === 'string' ? (
-            <div className="text-graphite-050 whitespace-pre-wrap">{result}</div>
-          ) : resultObj?.['status'] === 'completed' && filePath ? (
-            <div className="text-green/70 text-[10px] font-mono">{filePath}</div>
-          ) : resultObj?.['status'] === 'completed' ? (
-            <div className="text-green text-[11px]">Completed</div>
-          ) : resultObj?.['error'] ? (
-            <div className="text-error">{String(resultObj['error'])}</div>
-          ) : toolName === 'extract_collections' || toolName === 'scene_state' ? null : (
-            <div className="text-graphite-100">{JSON.stringify(result, null, 2)}</div>
+          {/* Progress bar */}
+          {status === 'executing' && hasProgress && (
+            <ProgressBar text={lastLine} />
           )}
-        </div>
+
+          {/* Streaming content (only for types not handled in body) */}
+          {showSeparateStreaming && meaningfulContent && status !== 'completed' && (
+            <div className="px-3 py-2 text-xs text-graphite-050 whitespace-pre-wrap max-h-32 overflow-y-auto">
+              {meaningfulContent}
+            </div>
+          )}
+
+          {/* Result */}
+          {result && status !== 'executing' && (
+            <div className="px-3 py-1.5 text-xs">
+              {typeof result === 'string' ? (
+                <div className="text-graphite-050 whitespace-pre-wrap">{result}</div>
+              ) : resultObj?.['status'] === 'completed' && filePath ? (
+                <div className="text-green/70 text-[10px] font-mono">{filePath}</div>
+              ) : resultObj?.['status'] === 'completed' ? (
+                <div className="text-green text-[11px]">Completed</div>
+              ) : resultObj?.['error'] ? (
+                <div className="text-error">{String(resultObj['error'])}</div>
+              ) : toolName === 'extract_collections' || toolName === 'scene_state' ? null : (
+                <div className="text-graphite-100 max-h-48 overflow-y-auto">
+                  <pre className="text-[10px] whitespace-pre-wrap">{JSON.stringify(result, null, 2)}</pre>
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
 
-      {/* Media preview */}
-      {filePath && selectedProject && status === 'completed' && (
-        <div className="px-3 py-2 border-t border-line-soft">
-          {isVideo ? (
-            <video
-              src={`/api/v1/assets/${selectedProject}/${filePath}`}
-              controls autoPlay loop muted
-              className="w-full max-h-64 rounded-md"
-            />
-          ) : isImage ? (
-            <img
-              src={`/api/v1/assets/${selectedProject}/${filePath}`}
-              alt="Generated"
-              className="w-full max-h-64 rounded-md object-contain"
-              onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-            />
-          ) : null}
+      {/* Media preview — always visible, even when collapsed, so show-* tools
+          deliver value at a glance without clicking through to expand. */}
+      {filePath && selectedProject && status === 'completed' && (isVideo || isImage) && (
+        <div className={`px-3 py-2 ${expanded ? 'border-t border-line-soft' : ''}`}>
+          <MediaWithOverlay
+            path={filePath}
+            project={selectedProject}
+            kind={isVideo ? 'video' : 'image'}
+            maxHeight="max-h-64"
+            onEditPrompt={onEditPrompt}
+            onRedoNode={onRedoNode}
+          />
         </div>
       )}
     </div>
