@@ -6,6 +6,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { getProjectsDir } from "../paths.js";
 import { findShot } from "../../../core/project/projectSchema.js";
 import type { MediaCallback } from "./runTo.js";
+import { resolveProjectDir } from "./resolveProjectDir.js";
 
 const Params = Type.Object({
   project: Type.String({ description: "Project name" }),
@@ -20,8 +21,11 @@ interface ShownDetails {
 
 async function loadProject(projectName: string): Promise<Record<string, unknown> | null> {
   try {
-    const path = join(getProjectsDir(), `${projectName}.kshana`, "project.json");
-    const raw = await readFile(path, "utf8");
+    const projectDir = resolveProjectDir({
+      name: projectName,
+      basePath: getProjectsDir(),
+    });
+    const raw = await readFile(join(projectDir, "project.json"), "utf8");
     return JSON.parse(raw) as Record<string, unknown>;
   } catch {
     return null;
