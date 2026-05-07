@@ -332,3 +332,161 @@ describe('shouldRerollShot — auto-reroll decision for drifting shots', () => {
     expect(decision.hint).toMatch(/not.*teleport|teleport/i);
   });
 });
+
+// ── One-setting-per-scene validator ──────────────────────────────────────────
+//
+// Defects motivating this validator:
+//
+//   - The Village shot 2.3: imagePrompt referenced TWO settings
+//     ("forest from image 2" AND "forest edge from image 1") in a single
+//     shot. With Flux Klein's 4-slot cap and slot 1 reserved for the base,
+//     two settings competing for the canvas mangles the framing.
+//
+// Rule: a scene's shots may reference at most ONE setting refId via
+// focus.primary / focus.background. If multiple settings appear, the
+// scene needs a continuityRole='bridge' shot to mark the transition; without
+// it, this is the LLM listing redundant aliases for one location.
+
+describe('validateOneSettingPerScene', () => {
+  it('passes when every shot uses the same setting', async () => {
+    const { validateOneSettingPerScene } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateOneSettingPerScene({
+      shots: [
+        { shotNumber: 1, focus: { primary: 'protagonist', background: ['forest'] } },
+        { shotNumber: 2, focus: { primary: 'forest', background: ['protagonist'] } },
+        { shotNumber: 3, focus: { primary: 'protagonist', background: ['forest'] } },
+      ],
+      knownSettingRefIds: ['forest', 'forest_edge', 'underground_tunnel'],
+    });
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('warns when shots reference multiple settings without a bridge', async () => {
+    const { validateOneSettingPerScene } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateOneSettingPerScene({
+      shots: [
+        { shotNumber: 1, focus: { primary: 'protagonist', background: ['forest'] } },
+        { shotNumber: 2, focus: { primary: 'forest', background: ['protagonist'] } },
+        { shotNumber: 3, focus: { primary: 'officer', background: ['forest_edge', 'forest'] } },
+      ],
+      knownSettingRefIds: ['forest', 'forest_edge'],
+    });
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings[0]?.scope).toBe('sequence');
+    expect(warnings[0]?.message).toMatch(/setting/i);
+  });
+
+  it('does not warn when multi-setting use is justified by a bridge shot', async () => {
+    const { validateOneSettingPerScene } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateOneSettingPerScene({
+      shots: [
+        { shotNumber: 1, continuityRole: 'none', focus: { primary: 'protagonist', background: ['forest'] } },
+        { shotNumber: 2, continuityRole: 'bridge', focus: { primary: 'forest_edge', background: ['protagonist'] } },
+        { shotNumber: 3, continuityRole: 'entry', focus: { primary: 'protagonist', background: ['forest_edge'] } },
+      ],
+      knownSettingRefIds: ['forest', 'forest_edge'],
+    });
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('only counts setting refIds — character refIds in focus do not trigger the warning', async () => {
+    const { validateOneSettingPerScene } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateOneSettingPerScene({
+      shots: [
+        { shotNumber: 1, focus: { primary: 'protagonist', background: ['officer', 'sister'] } },
+        { shotNumber: 2, focus: { primary: 'officer', background: ['protagonist'] } },
+      ],
+      knownSettingRefIds: ['forest'], // none used
+    });
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('handles missing focus / shots without focus blocks gracefully', async () => {
+    const { validateOneSettingPerScene } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateOneSettingPerScene({
+      shots: [
+        { shotNumber: 1 },
+        { shotNumber: 2, focus: { primary: 'protagonist' } },
+      ],
+      knownSettingRefIds: ['forest'],
+    });
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('points the warning at the first shot that introduced the second setting', async () => {
+    const { validateOneSettingPerScene } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateOneSettingPerScene({
+      shots: [
+        { shotNumber: 1, focus: { primary: 'protagonist', background: ['forest'] } },
+        { shotNumber: 2, focus: { primary: 'protagonist', background: ['forest'] } },
+        { shotNumber: 3, focus: { primary: 'protagonist', background: ['forest_edge'] } },
+        { shotNumber: 4, focus: { primary: 'protagonist', background: ['forest_edge'] } },
+      ],
+      knownSettingRefIds: ['forest', 'forest_edge'],
+    });
+    expect(warnings.length).toBeGreaterThan(0);
+    expect(warnings[0]?.shotNumber).toBe(3);
+  });
+});
+
+describe('validateNewScenesNewLocations (Layer C3)', () => {
+  it('passes when consecutive scenes use different settings', async () => {
+    const { validateNewScenesNewLocations } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateNewScenesNewLocations({
+      scenes: [
+        { sceneNumber: 1, primarySetting: 'underground_tunnel' },
+        { sceneNumber: 2, primarySetting: 'forest' },
+        { sceneNumber: 3, primarySetting: 'forest_edge' },
+      ],
+    });
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('warns when consecutive scenes share a setting', async () => {
+    const { validateNewScenesNewLocations } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateNewScenesNewLocations({
+      scenes: [
+        { sceneNumber: 1, primarySetting: 'diner' },
+        { sceneNumber: 2, primarySetting: 'diner' },
+      ],
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toMatch(/diner/);
+  });
+
+  it('does not warn when the transition is marked as a time skip', async () => {
+    const { validateNewScenesNewLocations } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateNewScenesNewLocations({
+      scenes: [
+        { sceneNumber: 1, primarySetting: 'apartment' },
+        { sceneNumber: 2, primarySetting: 'apartment', timeSkip: true },
+      ],
+    });
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('handles missing primarySetting gracefully (skips that pair)', async () => {
+    const { validateNewScenesNewLocations } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateNewScenesNewLocations({
+      scenes: [
+        { sceneNumber: 1, primarySetting: 'forest' },
+        { sceneNumber: 2 },
+        { sceneNumber: 3, primarySetting: 'forest' },
+      ],
+    });
+    // Scene 2 has no primarySetting, so we can't compare 1→2 or 2→3 strictly.
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('flags every consecutive pair that violates the rule', async () => {
+    const { validateNewScenesNewLocations } = await import('../../src/core/planner/continuityValidator.js');
+    const warnings = validateNewScenesNewLocations({
+      scenes: [
+        { sceneNumber: 1, primarySetting: 'cafe' },
+        { sceneNumber: 2, primarySetting: 'cafe' },
+        { sceneNumber: 3, primarySetting: 'cafe' },
+      ],
+    });
+    expect(warnings).toHaveLength(2);
+  });
+});

@@ -2,6 +2,17 @@
 
 You are editing the previous shot's last frame. The base image ALREADY CONTAINS the setting, lighting, atmosphere, and all existing characters.
 
+### Reference slot contract (Flux Klein 4-slot model)
+
+- **image 1** = the base image (the previous shot's last frame, which itself
+  is anchored on the setting). Refer to the location as "the setting from image 1"
+  when you must mention it.
+- **images 2..4** = characters layered on top. Use the canonical numbers from
+  the references list — never invent slot 5+.
+- Total references ≤ 4. At most one setting reference. If a returning
+  character is on screen, they are listed in the references array — write
+  "<name> from image N" for them too, using the N from the list.
+
 **ALWAYS USE "from image N" for every character visible in the shot** — even characters already in the base image. This is required for character consistency. Include all referenced images in the `references` array.
 
 **WRITE ONLY what is NEW or CHANGED:**

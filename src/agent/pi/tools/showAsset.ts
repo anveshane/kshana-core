@@ -1,10 +1,12 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type, type Static } from "typebox";
-import { defineTool } from "@mariozechner/pi-coding-agent";
+import { defineTool, type ToolDefinition } from "@mariozechner/pi-coding-agent";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { getProjectsDir } from "../paths.js";
 import { findShot } from "../../../core/project/projectSchema.js";
+import { resolveProjectDir } from "./resolveProjectDir.js";
+import type { MediaCallback } from "./runTo.js";
 
 interface ManifestEntry {
   id: string;
@@ -27,8 +29,11 @@ export interface ShowDetails {
 
 async function loadProject(projectName: string): Promise<Record<string, unknown> | null> {
   try {
-    const path = join(getProjectsDir(), `${projectName}.kshana`, "project.json");
-    const raw = await readFile(path, "utf8");
+    const projectDir = resolveProjectDir({
+      name: projectName,
+      basePath: getProjectsDir(),
+    });
+    const raw = await readFile(join(projectDir, "project.json"), "utf8");
     return JSON.parse(raw) as Record<string, unknown>;
   } catch {
     return null;
@@ -37,8 +42,11 @@ async function loadProject(projectName: string): Promise<Record<string, unknown>
 
 async function loadManifest(projectName: string): Promise<ManifestEntry[]> {
   try {
-    const path = join(getProjectsDir(), `${projectName}.kshana`, "assets", "manifest.json");
-    const raw = await readFile(path, "utf8");
+    const projectDir = resolveProjectDir({
+      name: projectName,
+      basePath: getProjectsDir(),
+    });
+    const raw = await readFile(join(projectDir, "assets", "manifest.json"), "utf8");
     const parsed = JSON.parse(raw) as { assets?: ManifestEntry[] };
     return parsed.assets ?? [];
   } catch {
@@ -92,116 +100,207 @@ const ShotFrameParams = Type.Object({
   shot: Type.Number({ description: "Shot number within the scene, e.g. 2" }),
 });
 
-export const kshanaShowFirstFrame = defineTool({
-  name: "kshana_show_first_frame",
-  label: "kshana show first-frame",
-  description:
-    "Show the latest generated first-frame image for a specific shot. Reads from project.json's scenes tree first, falls back to the manifest for legacy projects.",
-  parameters: ShotFrameParams,
-  async execute(_id, params: Static<typeof ShotFrameParams>) {
-    const project = await loadProject(params.project);
-    const shot = project ? findShot(project, params.scene, params.shot) : undefined;
-    if (shot?.firstFrame) {
-      return frameResult(shot.firstFrame, "");
-    }
-    // Fallback to manifest filename heuristic.
-    const entries = await loadManifest(params.project);
-    const prefix = shotFilenamePrefix(params.scene, params.shot);
-    const matches = entries.filter(
-      (e) => e.type === "scene_image" && e.path.includes(`${prefix}first_frame`),
-    );
-    return manifestResult(
-      pickLatest(matches),
-      `No first-frame image found for scene ${params.scene} shot ${params.shot} in '${params.project}'.`,
-    );
-  },
-});
+/**
+ * Factory functions return a fresh tool wired to an optional onMedia
+ * callback. When supplied (PiSessionAgent's chat path always
+ * supplies it), every successful resolution fires onMedia so the
+ * chat panel renders an inline image/video bubble. Without it (CLI
+ * smoke tests, legacy callers), the tool still returns the path in
+ * `details` — just no chat-side rendering.
+ *
+ * The named exports below (`kshanaShowFirstFrame` etc.) preserve the
+ * pre-factory shape for any caller that imports them directly. They
+ * are equivalent to `createShow*Tool({})` (no media emission).
+ */
+export interface ShowAssetOpts {
+  onMedia?: MediaCallback;
+}
 
-export const kshanaShowLastFrame = defineTool({
-  name: "kshana_show_last_frame",
-  label: "kshana show last-frame",
-  description:
-    "Show the latest generated last-frame image for a specific shot. Reads from project.json's scenes tree first, falls back to the manifest.",
-  parameters: ShotFrameParams,
-  async execute(_id, params: Static<typeof ShotFrameParams>) {
-    const project = await loadProject(params.project);
-    const shot = project ? findShot(project, params.scene, params.shot) : undefined;
-    if (shot?.lastFrame) {
-      return frameResult(shot.lastFrame, "");
-    }
-    const entries = await loadManifest(params.project);
-    const prefix = shotFilenamePrefix(params.scene, params.shot);
-    const matches = entries.filter(
-      (e) => e.type === "scene_image" && e.path.includes(`${prefix}last_frame`),
-    );
-    return manifestResult(
-      pickLatest(matches),
-      `No last-frame image found for scene ${params.scene} shot ${params.shot} in '${params.project}'.`,
-    );
-  },
-});
+export function createShowFirstFrameTool(opts: ShowAssetOpts = {}): ToolDefinition {
+  return defineTool({
+    name: "kshana_show_first_frame",
+    label: "kshana show first-frame",
+    description:
+      "Show the latest generated first-frame image for a specific shot. Reads from project.json's scenes tree first, falls back to the manifest for legacy projects. Renders the image inline in chat when used from a desktop session.",
+    parameters: ShotFrameParams,
+    async execute(_id, params: Static<typeof ShotFrameParams>) {
+      const project = await loadProject(params.project);
+      const shot = project ? findShot(project, params.scene, params.shot) : undefined;
+      if (shot?.firstFrame) {
+        opts.onMedia?.({
+          kind: "image",
+          project: params.project,
+          path: shot.firstFrame.path,
+          source: "kshana_show_first_frame",
+        });
+        return frameResult(shot.firstFrame, "");
+      }
+      const entries = await loadManifest(params.project);
+      const prefix = shotFilenamePrefix(params.scene, params.shot);
+      const matches = entries.filter(
+        (e) => e.type === "scene_image" && e.path.includes(`${prefix}first_frame`),
+      );
+      const latest = pickLatest(matches);
+      if (latest) {
+        opts.onMedia?.({
+          kind: "image",
+          project: params.project,
+          path: latest.path,
+          source: "kshana_show_first_frame",
+        });
+      }
+      return manifestResult(
+        latest,
+        `No first-frame image found for scene ${params.scene} shot ${params.shot} in '${params.project}'.`,
+      );
+    },
+  });
+}
 
-export const kshanaShowShotVideo = defineTool({
-  name: "kshana_show_shot_video",
-  label: "kshana show shot-video",
-  description:
-    "Show the latest rendered shot video clip. Reads from project.json's scenes tree first, falls back to the manifest.",
-  parameters: ShotFrameParams,
-  async execute(_id, params: Static<typeof ShotFrameParams>) {
-    const project = await loadProject(params.project);
-    const shot = project ? findShot(project, params.scene, params.shot) : undefined;
-    if (shot?.video) {
-      return {
-        content: [{ type: "text", text: `${shot.video.path} (created ${new Date(shot.video.createdAt).toISOString()})` }],
-        details: {
-          file_path: shot.video.path,
-          asset_id: shot.video.path,
-          asset_type: "scene_video",
-          created_at: shot.video.createdAt,
-        },
-      };
-    }
-    const entries = await loadManifest(params.project);
-    const prefix = shotFilenamePrefix(params.scene, params.shot);
-    const matches = entries.filter(
-      (e) => e.type === "scene_video" && e.path.includes(prefix),
-    );
-    return manifestResult(
-      pickLatest(matches),
-      `No video clip found for scene ${params.scene} shot ${params.shot} in '${params.project}'.`,
-    );
-  },
-});
+export function createShowLastFrameTool(opts: ShowAssetOpts = {}): ToolDefinition {
+  return defineTool({
+    name: "kshana_show_last_frame",
+    label: "kshana show last-frame",
+    description:
+      "Show the latest generated last-frame image for a specific shot. Reads from project.json's scenes tree first, falls back to the manifest. Renders inline.",
+    parameters: ShotFrameParams,
+    async execute(_id, params: Static<typeof ShotFrameParams>) {
+      const project = await loadProject(params.project);
+      const shot = project ? findShot(project, params.scene, params.shot) : undefined;
+      if (shot?.lastFrame) {
+        opts.onMedia?.({
+          kind: "image",
+          project: params.project,
+          path: shot.lastFrame.path,
+          source: "kshana_show_last_frame",
+        });
+        return frameResult(shot.lastFrame, "");
+      }
+      const entries = await loadManifest(params.project);
+      const prefix = shotFilenamePrefix(params.scene, params.shot);
+      const matches = entries.filter(
+        (e) => e.type === "scene_image" && e.path.includes(`${prefix}last_frame`),
+      );
+      const latest = pickLatest(matches);
+      if (latest) {
+        opts.onMedia?.({
+          kind: "image",
+          project: params.project,
+          path: latest.path,
+          source: "kshana_show_last_frame",
+        });
+      }
+      return manifestResult(
+        latest,
+        `No last-frame image found for scene ${params.scene} shot ${params.shot} in '${params.project}'.`,
+      );
+    },
+  });
+}
+
+export function createShowShotVideoTool(opts: ShowAssetOpts = {}): ToolDefinition {
+  return defineTool({
+    name: "kshana_show_shot_video",
+    label: "kshana show shot-video",
+    description:
+      "Show the latest rendered shot video clip. Reads from project.json's scenes tree first, falls back to the manifest. Renders inline.",
+    parameters: ShotFrameParams,
+    async execute(_id, params: Static<typeof ShotFrameParams>) {
+      const project = await loadProject(params.project);
+      const shot = project ? findShot(project, params.scene, params.shot) : undefined;
+      if (shot?.video) {
+        opts.onMedia?.({
+          kind: "video",
+          project: params.project,
+          path: shot.video.path,
+          source: "kshana_show_shot_video",
+        });
+        return {
+          content: [{ type: "text", text: `${shot.video.path} (created ${new Date(shot.video.createdAt).toISOString()})` }],
+          details: {
+            file_path: shot.video.path,
+            asset_id: shot.video.path,
+            asset_type: "scene_video",
+            created_at: shot.video.createdAt,
+          },
+        };
+      }
+      const entries = await loadManifest(params.project);
+      const prefix = shotFilenamePrefix(params.scene, params.shot);
+      const matches = entries.filter(
+        (e) => e.type === "scene_video" && e.path.includes(prefix),
+      );
+      const latest = pickLatest(matches);
+      if (latest) {
+        opts.onMedia?.({
+          kind: "video",
+          project: params.project,
+          path: latest.path,
+          source: "kshana_show_shot_video",
+        });
+      }
+      return manifestResult(
+        latest,
+        `No video clip found for scene ${params.scene} shot ${params.shot} in '${params.project}'.`,
+      );
+    },
+  });
+}
 
 const FinalVideoParams = Type.Object({
   project: Type.String({ description: "Project name" }),
 });
 
-export const kshanaShowFinalVideo = defineTool({
-  name: "kshana_show_final_video",
-  label: "kshana show final-video",
-  description:
-    "Show the assembled final video for a project. Reads project.finalVideo first, falls back to manifest.",
-  parameters: FinalVideoParams,
-  async execute(_id, params: Static<typeof FinalVideoParams>) {
-    const project = await loadProject(params.project);
-    const finalVideo = project?.["finalVideo"] as { path: string; createdAt: number } | undefined;
-    if (finalVideo) {
-      return {
-        content: [{ type: "text", text: `${finalVideo.path} (created ${new Date(finalVideo.createdAt).toISOString()})` }],
-        details: {
-          file_path: finalVideo.path,
-          asset_id: finalVideo.path,
-          asset_type: "final_video",
-          created_at: finalVideo.createdAt,
-        },
-      };
-    }
-    const entries = await loadManifest(params.project);
-    const matches = entries.filter((e) => e.type === "final_video");
-    return manifestResult(
-      pickLatest(matches),
-      `No final video found for '${params.project}'.`,
-    );
-  },
-});
+export function createShowFinalVideoTool(opts: ShowAssetOpts = {}): ToolDefinition {
+  return defineTool({
+    name: "kshana_show_final_video",
+    label: "kshana show final-video",
+    description:
+      "Show the assembled final video for a project. Reads project.finalVideo first, falls back to manifest. Renders inline.",
+    parameters: FinalVideoParams,
+    async execute(_id, params: Static<typeof FinalVideoParams>) {
+      const project = await loadProject(params.project);
+      const finalVideo = project?.["finalVideo"] as { path: string; createdAt: number } | undefined;
+      if (finalVideo) {
+        opts.onMedia?.({
+          kind: "video",
+          project: params.project,
+          path: finalVideo.path,
+          source: "kshana_show_final_video",
+        });
+        return {
+          content: [{ type: "text", text: `${finalVideo.path} (created ${new Date(finalVideo.createdAt).toISOString()})` }],
+          details: {
+            file_path: finalVideo.path,
+            asset_id: finalVideo.path,
+            asset_type: "final_video",
+            created_at: finalVideo.createdAt,
+          },
+        };
+      }
+      const entries = await loadManifest(params.project);
+      const matches = entries.filter((e) => e.type === "final_video");
+      const latest = pickLatest(matches);
+      if (latest) {
+        opts.onMedia?.({
+          kind: "video",
+          project: params.project,
+          path: latest.path,
+          source: "kshana_show_final_video",
+        });
+      }
+      return manifestResult(
+        latest,
+        `No final video found for '${params.project}'.`,
+      );
+    },
+  });
+}
+
+// ── Backwards-compat named exports ──────────────────────────────────
+// Equivalent to `createShow*Tool({})` (no onMedia). Kept so existing
+// imports from tools/index.ts and tests don't have to change.
+export const kshanaShowFirstFrame = createShowFirstFrameTool();
+export const kshanaShowLastFrame = createShowLastFrameTool();
+export const kshanaShowShotVideo = createShowShotVideoTool();
+export const kshanaShowFinalVideo = createShowFinalVideoTool();

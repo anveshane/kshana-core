@@ -499,15 +499,25 @@ export class ComfyUIClient {
           if (!resolved) {
             resolved = true;
             try { ws?.close(); } catch { /* */ }
-            if (isCloud) {
-              debugLog(`[queueAndWaitWS] Timeout after ${inactiveSec}s on cloud`);
-              resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId, outputs: collectedOutputs });
-            } else {
-              debugLog(`[queueAndWaitWS] Timeout — falling back to HTTP polling`);
-              this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
-                .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
-                .catch(reject);
-            }
+            // Both local AND cloud fall back to HTTP polling. The
+            // common cold-start case on cloud (GPU allocating, no
+            // WS messages for several minutes) used to hard-fail
+            // here; polling lets it land when the cold-start
+            // finishes. The cloud's HTTP /history endpoint and the
+            // status-poll path inside `waitForCompletion` know how
+            // to detect a real cloud-side error and bail promptly.
+            const fallbackMsg = isCloud
+              ? `Cloud WS silent for ${inactiveSec}s — falling back to HTTP polling (likely a GPU cold-start)`
+              : `WS silent for ${inactiveSec}s — falling back to HTTP polling`;
+            debugLog(`[queueAndWaitWS] ${fallbackMsg}`);
+            // Surface the fallback to the chat so the user understands
+            // the long pause instead of staring at a frozen progress
+            // bar. Best-effort — if no callback, the debug log still
+            // captures it.
+            try { progressCallback?.({ percentage: 0, message: fallbackMsg }); } catch { /* */ }
+            this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+              .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
+              .catch(reject);
           }
         }
       }, 10_000);
@@ -550,13 +560,19 @@ export class ComfyUIClient {
       ws.on('close', () => {
         if (!resolved) {
           resolved = true;
-          if (isCloud) {
-            resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId, outputs: collectedOutputs });
-          } else {
-            this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
-              .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
-              .catch(reject);
-          }
+          // Symmetric with the inactivity-timeout branch: cloud and
+          // local both fall back to polling. WS drops on cloud
+          // happen mid-allocation (idle proxy, transient network);
+          // polling the /history endpoint reliably catches the
+          // eventual completion or surfaces a real error.
+          const fallbackMsg = isCloud
+            ? 'Cloud WS closed unexpectedly — falling back to HTTP polling'
+            : 'WS closed — falling back to HTTP polling';
+          debugLog(`[queueAndWaitWS] ${fallbackMsg}`);
+          try { progressCallback?.({ percentage: 0, message: fallbackMsg }); } catch { /* */ }
+          this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+            .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
+            .catch(reject);
         }
       });
 

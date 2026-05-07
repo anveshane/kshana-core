@@ -16,7 +16,12 @@ import { kshanaTools } from "./tools/index.js";
 import { createFocusProjectTool, type FocusProjectCallback } from "./tools/focusProject.js";
 import { createRunToTool, type MediaCallback } from "./tools/runTo.js";
 import { createShowShotTool } from "./tools/showShot.js";
-import { createRegenTool } from "./tools/regen.js";
+import {
+  createShowFirstFrameTool,
+  createShowLastFrameTool,
+  createShowShotVideoTool,
+  createShowFinalVideoTool,
+} from "./tools/showAsset.js";
 import { createDispatchRunToTool } from "./tools/dispatchRunTo.js";
 import { loadOrchestratorPrompt } from "./prompt.js";
 import { selectToolsForRole, type SessionRole } from "./selectToolsForRole.js";
@@ -78,21 +83,33 @@ export class PiSessionAgent extends TypedEventEmitter {
         onMedia: opts.onMedia,
         ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}),
       });
-      const mediaShowShot = createShowShotTool({ onMedia: opts.onMedia });
-      const mediaRegen = createRegenTool({ onMedia: opts.onMedia });
+      // The four per-asset show tools (firstFrame, lastFrame,
+      // shotVideo, finalVideo) used to be plain exports without
+      // any onMedia plumbing — pi-agent calls succeeded but no
+      // image/video bubble rendered in chat. Replacing them here
+      // with media-wired factory variants closes that gap.
+      const showShot = createShowShotTool({ onMedia: opts.onMedia });
+      const showFirstFrame = createShowFirstFrameTool({ onMedia: opts.onMedia });
+      const showLastFrame = createShowLastFrameTool({ onMedia: opts.onMedia });
+      const showShotVideo = createShowShotVideoTool({ onMedia: opts.onMedia });
+      const showFinalVideo = createShowFinalVideoTool({ onMedia: opts.onMedia });
       baseTools = baseTools.map((t) => {
         if (t.name === "kshana_run_to") return mediaRunTo;
+        if (t.name === "kshana_show_first_frame") return showFirstFrame;
+        if (t.name === "kshana_show_last_frame") return showLastFrame;
+        if (t.name === "kshana_show_shot_video") return showShotVideo;
+        if (t.name === "kshana_show_final_video") return showFinalVideo;
         return t;
       });
-      baseTools = [...baseTools, mediaShowShot, mediaRegen];
+      baseTools = [...baseTools, showShot];
     } else if (opts?.sessionId) {
       // No onMedia callback (rare in production) but we still want
       // to dispatch instead of block when we have a session id.
       const sessionRunTo = createRunToTool({ sessionId: opts.sessionId });
       baseTools = baseTools.map((t) => (t.name === "kshana_run_to" ? sessionRunTo : t));
-      baseTools = [...baseTools, createShowShotTool({}), createRegenTool()];
+      baseTools = [...baseTools, createShowShotTool({})];
     } else {
-      baseTools = [...baseTools, createShowShotTool({}), createRegenTool()];
+      baseTools = [...baseTools, createShowShotTool({})];
     }
     // Currently a no-op pass-through (see selectToolsForRole notes).
     // Reserved for future dispatch-based tool gating.

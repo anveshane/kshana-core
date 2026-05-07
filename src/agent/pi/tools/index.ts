@@ -3,7 +3,7 @@ import { kshanaListItems } from "./listItems.js";
 import { kshanaListProjects } from "./listProjects.js";
 import { kshanaNew } from "./newProject.js";
 import { kshanaRunTo } from "./runTo.js";
-import { kshanaReset } from "./reset.js";
+import { kshanaInvalidate } from "./invalidate.js";
 import { kshanaReadArtifact } from "./readArtifact.js";
 import { kshanaRenderSceneBundle } from "./renderSceneBundle.js";
 import { kshanaTaskStatus } from "./taskStatus.js";
@@ -21,7 +21,7 @@ export const kshanaTools = [
   kshanaListItems,
   kshanaNew,
   kshanaRunTo,
-  kshanaReset,
+  kshanaInvalidate,
   kshanaReadArtifact,
   kshanaRenderSceneBundle,
   kshanaTaskStatus,
@@ -38,7 +38,7 @@ export {
   kshanaListProjects,
   kshanaNew,
   kshanaRunTo,
-  kshanaReset,
+  kshanaInvalidate,
   kshanaReadArtifact,
   kshanaRenderSceneBundle,
   kshanaTaskStatus,

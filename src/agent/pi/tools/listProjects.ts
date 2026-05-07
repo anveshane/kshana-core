@@ -24,14 +24,35 @@ export interface ListProjectsDetails {
 export const kshanaListProjects = defineTool({
   name: "kshana_list_projects",
   label: "kshana list-projects",
-  description: "List all kshana projects in the repo (folders matching *.kshana). Returns each project's name, current phase, style, and title where available.",
+  description: "List all kshana projects in the repo. Includes both `*.kshana` directories (canonical) and bare-name folders that contain a `project.json` (kshana-desktop's NewProjectDialog convention). Returns each project's name, current phase, style, and title where available.",
   parameters: Params,
   async execute(_id, _params: Static<typeof Params>): Promise<AgentToolResult<ListProjectsDetails>> {
     const entries = await readdir(getProjectsDir(), { withFileTypes: true });
-    const projectDirs = entries
-      .filter((e) => e.isDirectory() && e.name.endsWith(".kshana"))
-      .map((e) => e.name)
-      .sort();
+    // Two conventions are accepted:
+    //   1. `<name>.kshana/` (canonical, every kshana-core CLI project)
+    //   2. `<name>/` containing `project.json` (kshana-desktop's
+    //      NewProjectDialog default)
+    // Pre-fix this filtered to (1) only, hiding desktop-created
+    // projects entirely — pi-agent then guessed the active project
+    // from whatever .kshana sibling happened to exist.
+    const candidates: string[] = [];
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      if (e.name.endsWith(".kshana")) {
+        candidates.push(e.name);
+        continue;
+      }
+      // Bare-name folder qualifies only when it actually carries a
+      // project.json — otherwise random sibling folders in the
+      // workspace would pollute the listing.
+      try {
+        await stat(join(getProjectsDir(), e.name, "project.json"));
+        candidates.push(e.name);
+      } catch {
+        // No project.json — not a kshana project.
+      }
+    }
+    const projectDirs = candidates.sort();
 
     const summaries: ProjectSummary[] = [];
     for (const dirname of projectDirs) {

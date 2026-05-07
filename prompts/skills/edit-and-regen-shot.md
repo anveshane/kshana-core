@@ -53,10 +53,12 @@ shot or frame** — not for project-wide stylistic changes (those need
 4. **Write the file back** with `write` (or `edit` if it's a small
    targeted change). The new JSON must remain valid.
 
-5. **Trigger the regen** with `kshana_regen`:
-   - `node=shot_image:scene_<N>_shot_<M>` — regenerates the image
-     (uses the new prompt; produces fresh first+last frames).
-   - `node=shot_video:scene_<N>_shot_<M>` — regenerates the video
+5. **Trigger the regen** with `kshana_invalidate` + `kshana_run_to`:
+   - `kshana_invalidate node=shot_image:scene_<N>_shot_<M>` then
+     `kshana_run_to scope='last_invalidated'` — regenerates just that
+     image (uses the new prompt; produces fresh first+last frames).
+   - `kshana_invalidate node=shot_video:scene_<N>_shot_<M>` then
+     `kshana_run_to scope='last_invalidated'` — regenerates the video
      (uses the new motion directive over the existing frames).
 
    The regenerated asset surfaces as a media card in the chat as it
@@ -68,11 +70,15 @@ shot or frame** — not for project-wide stylistic changes (those need
   scaffolding (references, generationMode, schema fields).
 - Don't run `kshana_run_to <stage>` for a single-shot change — that
   re-executes every shot.
-- Don't reset (`kshana_reset`) — that's destructive and clears
-  history.
+- Don't call `kshana_invalidate stage=<upstream>` (plot, story,
+  characters, setting, scene, world_style, scene_video_prompt) — that
+  wipes wide swaths of generated content. Always invalidate the
+  smallest scope that gets the job done; for a single shot edit that
+  scope is one `node=`.
 
 ## Confirming the result
 
-After `kshana_regen` finishes, ask the user "does this look right?".
+After `kshana_run_to scope='last_invalidated'` finishes, ask the user
+"does this look right?".
 If they want another iteration, repeat steps 1–4 with their next
 change.
