@@ -6,10 +6,9 @@
  */
 
 import Database from 'better-sqlite3';
-import * as fs from 'fs';
 import * as path from 'path';
+import { getLogsDir } from './logsPath.js';
 
-const DB_DIR = 'logs';
 const DB_FILE = 'tool-analytics.db';
 const SCHEMA_VERSION = 1;
 
@@ -82,11 +81,8 @@ export class ToolAnalytics {
   static instance(): ToolAnalytics | null {
     if (ToolAnalytics._instance === undefined) {
       try {
-        const dbDir = path.resolve(DB_DIR);
-        if (!fs.existsSync(dbDir)) {
-          fs.mkdirSync(dbDir, { recursive: true });
-        }
-        const dbPath = path.join(dbDir, DB_FILE);
+        // getLogsDir() already creates the directory.
+        const dbPath = path.join(getLogsDir(), DB_FILE);
         ToolAnalytics._instance = new ToolAnalytics(dbPath);
       } catch {
         ToolAnalytics._instance = null;
