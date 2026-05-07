@@ -162,6 +162,7 @@ export class ComfyUIClient {
   private timeout: number;
   private apiKey?: string;
   private isCloud: boolean;
+  private useBearerAuth: boolean;
   private cloudApiKey?: string;
   private cloudOutputs = new Map<string, Record<string, unknown>>();
 
@@ -210,7 +211,9 @@ export class ComfyUIClient {
    */
   private buildHeaders(extra: Record<string, string> = {}): Record<string, string> {
     const headers: Record<string, string> = { ...extra };
-    if (this.apiKey) {
+    if (this.useBearerAuth && this.apiKey) {
+      headers['Authorization'] = `Bearer ${this.apiKey}`;
+    } else if (this.apiKey) {
       headers['X-API-Key'] = this.apiKey;
     }
     return headers;
@@ -238,7 +241,7 @@ export class ComfyUIClient {
     // Strip /api suffix for WebSocket (cloud WS is at /ws, not /api/ws)
     const wsBase = this.baseUrl.replace(/\/api\/?$/, '').replace(/^http/, 'ws');
     let url = `${wsBase}/ws?clientId=${clientId}`;
-    if (this.apiKey) {
+    if (this.apiKey && !this.useBearerAuth) {
       url += `&token=${this.apiKey}`;
     }
     return url;
@@ -330,8 +333,12 @@ export class ComfyUIClient {
     // it, vendor-backed jobs submit cleanly but never execute — silent
     // timeout, no execution_error. Non-vendor nodes (Klein, LTX) ignore
     // the field, so it's safe to always include it on cloud runs.
+    const mergedExtraData = { ...(extraData ?? {}) };
     if (this.apiKey) {
-      payload['extra_data'] = { api_key_comfy_org: this.apiKey };
+      mergedExtraData['api_key_comfy_org'] = this.apiKey;
+    }
+    if (Object.keys(mergedExtraData).length > 0) {
+      payload['extra_data'] = mergedExtraData;
     }
 
     const response = await fetch(this.buildUrl('/prompt'), {
@@ -559,7 +566,7 @@ export class ComfyUIClient {
       } catch (err) {
         debugLog(`[queueAndWaitWS] WS failed: ${err}`);
         // Fall back: submit then poll
-        this.queueWorkflow(workflowJson, clientId, true)
+        this.queueWorkflow(workflowJson, clientId, true, extraData)
           .then(meta => {
             promptId = meta.promptId;
             return this.waitForCompletion(
@@ -577,7 +584,7 @@ export class ComfyUIClient {
       ws.on('open', async () => {
         debugLog(`[queueAndWaitWS] WS connected — now submitting prompt`);
         try {
-          const meta = await this.queueWorkflow(workflowJson, clientId, true);
+          const meta = await this.queueWorkflow(workflowJson, clientId, true, extraData);
           promptId = meta.promptId;
           debugLog(`[queueAndWaitWS] Prompt submitted: ${promptId}`);
         } catch (err) {

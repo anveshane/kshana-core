@@ -235,10 +235,11 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Queue and wait (WS connects first, then submits — prevents missing cloud events)
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
+    const workflowId = modeManifest?.id ?? workflowName;
+    const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress, workflowId);
 
     // Download result (use WS-collected outputs for cloud, /history for local)
-    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', wsOutputs, filenamePrefix, modeManifest?.id ?? workflowName);
+    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', wsOutputs, filenamePrefix, workflowId);
   }
 
   async editImage(
@@ -429,9 +430,10 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
+    const workflowId = modeManifest?.id ?? workflowName;
+    const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress, workflowId);
 
-    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', wsOutputs, filenamePrefix, modeManifest?.id ?? workflowName);
+    return this.downloadFirstOutput(client, promptId, outputDir, 'image/png', wsOutputs, filenamePrefix, workflowId);
   }
 
   async generateVideo(
@@ -642,9 +644,10 @@ export class ComfyUIProvider implements GenerationProvider {
 
     // Queue and wait
     onProgress?.({ percentage: 0, message: 'Queueing prompt...', done: false });
-    const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress);
+    const workflowId = modeManifest?.id ?? workflowName;
+    const { promptId, outputs: wsOutputs } = await this.queueAndWait(client, workflow as Record<string, unknown>, onProgress, workflowId);
 
-    const result = await this.downloadFirstOutput(client, promptId, outputDir, 'video/mp4', wsOutputs, filenamePrefix, modeManifest?.id ?? workflowName);
+    const result = await this.downloadFirstOutput(client, promptId, outputDir, 'video/mp4', wsOutputs, filenamePrefix, workflowId);
     // Inject workflow name into metadata for upstream logging
     const workflowDisplayName = modeManifest?.displayName ?? 'LTX-2.3 (built-in)';
     result.metadata = { ...result.metadata, workflowName: workflowDisplayName, workflowId: modeManifest?.id ?? 'ltx23' };
@@ -657,6 +660,7 @@ export class ComfyUIProvider implements GenerationProvider {
     client: ComfyUIClient,
     workflow: Record<string, unknown>,
     onProgress?: ProviderProgressCallback,
+    workflowId?: string,
   ): Promise<{ promptId: string; clientId: string; outputs: ImageInfo[] }> {
     const progressHandler = (info: { percentage: number; message: string; step?: number; maxSteps?: number; currentNode?: string }) => {
       onProgress?.({
@@ -678,7 +682,7 @@ export class ComfyUIProvider implements GenerationProvider {
         maxSteps: info.maxSteps,
         currentNode: info.currentNode,
       });
-    });
+    }, workflowId ? { kshana_workflow_id: workflowId, kshana: { workflowId } } : undefined);
 
     if (result.status !== 'completed' && result.status !== 'completed_with_timeout') {
       const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
@@ -728,7 +732,7 @@ export class ComfyUIProvider implements GenerationProvider {
     return {
       filePath: savedPath,
       mimeType,
-      metadata: { promptId, comfyuiFilename: first.filename },
+      metadata: { provider: 'comfy', promptId, comfyuiFilename: first.filename, workflowId },
     };
   }
 
