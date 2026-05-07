@@ -231,4 +231,32 @@ describe("addAsset dual-write to project.json", () => {
     const p = readProject() as { scenes?: SceneOut[] };
     expect(p.scenes ?? []).toEqual([]);
   });
+
+  /**
+   * Regression: scene_image assets MUST carry a `frame` field for the
+   * dual-write to land. ExecutorAgent.executeShotImage was emitting
+   * frame outputs without `frame` (only nodeId), so applyAssetToProjectSchema
+   * silently bailed and project.scenes stayed empty even after 60+
+   * frames were generated. The Village's symptom: "the side-by-side
+   * Prompts tab shows nothing" because scenes[] never populated.
+   *
+   * This pins the contract: nodeId-but-no-frame is a writer bug. The
+   * companion fix is at ExecutorAgent.ts where the addAsset call now
+   * passes `frame: frameId` alongside nodeId.
+   */
+  it("scene_image with nodeId but NO frame → scenes stays empty (the executor's previous bug shape)", () => {
+    addAsset(
+      {
+        id: "missing-frame",
+        type: "scene_image",
+        path: "assets/images/s1shot1_first_frame_xxx.png",
+        nodeId: "shot_image:scene_1_shot_1",
+        // frame intentionally omitted — the bug shape
+        createdAt: 100,
+      },
+      basePath,
+    );
+    const p = readProject() as { scenes?: SceneOut[] };
+    expect(p.scenes ?? []).toEqual([]);
+  });
 });

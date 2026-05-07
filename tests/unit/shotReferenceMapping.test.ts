@@ -191,13 +191,16 @@ describe('Shot reference mapping: shot context hints (image-anchored chain polic
     }
   });
 
-  it('FRESH_PURPOSES (set_the_world, show_change, meet_character, set_the_mood) reset to fresh generation', async () => {
+  it('mid-scene shots chain on the prior last_frame for ALL purposes (no FRESH carve-out)', async () => {
+    // Per the locked scope decision: every mid-scene shot anchors on the
+    // prior last_frame, even meet_character / set_the_world / set_the_mood /
+    // show_change. The user's rule: within a scene, only camera angle and
+    // following the character is allowed — never a fresh location image.
     const { buildShotContextHint } = await import('../../src/core/planner/shotReferenceMapping.js');
     for (const purpose of ['set_the_world', 'show_change', 'meet_character', 'set_the_mood']) {
       const hint = buildShotContextHint('scene_1_shot_3', true, { purpose });
-      expect(hint, `purpose=${purpose}`).not.toContain('DIRECTIVE');
-      expect(hint).toContain('image_text_to_image');
-      expect(hint).toContain('composition reset');
+      expect(hint, `purpose=${purpose}`).toContain('DIRECTIVE');
+      expect(hint, `purpose=${purpose}`).toContain('edit_previous_shot');
     }
   });
 

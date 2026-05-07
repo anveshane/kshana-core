@@ -29,10 +29,12 @@ import type {
 } from './types.js';
 import { DependencyGraphExecutor } from './DependencyGraphExecutor.js';
 import { addShotImageNodes } from './addShotImageNodes.js';
-import { bridgeLastFrameFromShotImage } from './bridgeLastFrameNode.js';
+import { executeShotImageLastFrame } from './executeShotImageLastFrame.js';
 import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
 import { resolveInputs, writeOutput } from './contentResolver.js';
+import { readShotContextFromSvp, buildShotAwareReferences, shouldForceEditPrevious } from './shotReferenceMapping.js';
+import { getPreviousShotIdAcrossScenes } from './crossShotChaining.js';
 import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
 import {
   normalizeShotImagePrompt as normalizeShotImagePromptFrame,
@@ -76,6 +78,11 @@ import {
   validateTimeline,
 } from '../timeline/TimelineManager.js';
 import { assembleVideos, resolveSegmentFilePaths } from '../timeline/FFmpegAssembler.js';
+import {
+  buildSnapshot as buildFinalVideoSnapshot,
+  diffSnapshots as diffFinalVideoSnapshots,
+  type FinalVideoSnapshot,
+} from '../timeline/finalVideoSnapshot.js';
 import type { Timeline, SegmentDescriptor, TimelineLayerEntry } from '../timeline/types.js';
 import type { TodoNodeInfo } from '../../events/events.js';
 import { fitShotDurations } from './shotDurationFit.js';
@@ -2346,21 +2353,109 @@ export class ExecutorAgent extends TypedEventEmitter {
               this.persistState();
               this.emitTodoUpdate();
               return;
-            } else if (node.typeId === 'shot_image_last_frame') {
-              // Phase 1 (Pattern B): last_frame logic still lives
-              // inside executeShotImage and writes to the upstream
-              // shot_image:X.outputPaths.last_frame. The bridge mirrors
-              // that artifact onto this node so downstream shot_video
-              // can read from the canonical source. Phase 2 will move
-              // the actual edit_first_frame call here so a cloud
-              // failure on last_frame no longer fails the first_frame
-              // node. See addShotImageNodes.ts + bridgeLastFrameNode.ts.
-              const bridge = bridgeLastFrameFromShotImage(this.executor as unknown as { getNode: (id: string) => ExecutionNode | undefined }, node);
-              if (bridge.action === 'fail') {
-                this.executor.markFailed(node.id, bridge.error);
-              } else {
-                this.executor.markCompleted(node.id, node.outputPath ?? '');
+            } else if (node.typeId === 'shot_image_last_frame' && !this.config.skipMediaGeneration) {
+              // Phase 2 (Pattern B): the bridge node owns its own
+              // artifact. It runs edit_first_frame against the
+              // upstream shot_image:X's first_frame and writes the
+              // result to its own outputPath. Replaces the Phase 1
+              // mirror that could go stale when the upstream was
+              // invalidated without cascading. See
+              // executeShotImageLastFrame.ts.
+              const lfCallId = `frame_${node.itemId}_last_frame_${Date.now()}`;
+              const lfToolName = 'generate_frame_image';
+              this.emit({
+                type: 'tool_call',
+                toolCallId: lfCallId,
+                toolName: lfToolName,
+                arguments: {
+                  item: `${node.displayName} — last frame`,
+                  mode: 'edit_first_frame',
+                },
+                agentName,
+              });
+              this.emit({
+                type: 'tool_streaming',
+                toolCallId: lfCallId,
+                chunk: `Generating last_frame (edit_first_frame)...`,
+                done: false,
+                agentName,
+                toolName: lfToolName,
+              });
+
+              const lfResult = await executeShotImageLastFrame(node, {
+                executor: { getNode: (id) => this.executor.getNode(id) },
+                projectDir: this.config.projectDir,
+                fs: { existsSync, readFileSync, mkdirSync },
+                editImageLayered: ({ prompt, sourceImagePath, refPaths, outputDir, filenamePrefix }) =>
+                  this.editImageLayered(prompt, sourceImagePath, refPaths, outputDir, filenamePrefix),
+                resolveRefIds: (refs) => this.resolveRefIds(refs),
+                isPromptRelayMode: () => isPromptRelayMode(),
+                log: (m) => this.log(`  ${m}`),
+              });
+
+              if (lfResult.action === 'fail') {
+                this.emit({
+                  type: 'tool_result',
+                  toolCallId: lfCallId,
+                  toolName: lfToolName,
+                  result: { status: 'failed', frame: 'last_frame', error: lfResult.error },
+                  agentName,
+                });
+                this.executor.markFailed(node.id, lfResult.error);
+                this.persistState();
+                this.emitTodoUpdate();
+                return;
               }
+
+              const newPath = lfResult.outputPath;
+              if (newPath) {
+                this.emit({
+                  type: 'tool_streaming',
+                  toolCallId: lfCallId,
+                  chunk: `last_frame saved: ${newPath}`,
+                  done: true,
+                  agentName,
+                  toolName: lfToolName,
+                });
+                this.emit({
+                  type: 'tool_result',
+                  toolCallId: lfCallId,
+                  toolName: lfToolName,
+                  result: { status: 'completed', file_path: newPath, frame: 'last_frame' },
+                  agentName,
+                });
+                // Asset registry: nodeId is the bridge node now (Phase 2),
+                // and `frame: 'last_frame'` keeps the scenes-tree mirror
+                // populating via applyAssetToProjectSchema. See
+                // tests/unit/addAssetDualWrite.test.ts.
+                try {
+                  addAsset({
+                    id: `frame_${node.itemId}_last_frame_${Date.now()}`,
+                    type: 'scene_image',
+                    path: newPath,
+                    createdAt: Date.now(),
+                    nodeId: node.id,
+                    frame: 'last_frame',
+                  });
+                } catch { /* non-fatal */ }
+              } else {
+                // No-op complete (prompt_relay or single-frame shot).
+                this.emit({
+                  type: 'tool_result',
+                  toolCallId: lfCallId,
+                  toolName: lfToolName,
+                  result: { status: 'completed', frame: 'last_frame', skipped: true },
+                  agentName,
+                });
+              }
+
+              this.executor.markCompleted(node.id, newPath ?? '');
+              this.persistState();
+              this.emitTodoUpdate();
+              return;
+            } else if (node.typeId === 'shot_image_last_frame' && this.config.skipMediaGeneration) {
+              this.log(`  Skipping shot_image_last_frame (skipMediaGeneration=true)`);
+              this.executor.markCompleted(node.id, 'skipped-test-mode');
               this.persistState();
               this.emitTodoUpdate();
               return;
@@ -3057,7 +3152,7 @@ Examples of common failure modes to avoid:
     let perspectiveContext = '';
     let focusContext = '';
     if (node.typeId === 'shot_image_prompt' && node.itemId) {
-      const { buildAvailableReferences, formatReferencesForPrompt, filterRefsByPurpose, buildShotContextHint } = await import('./shotReferenceMapping.js');
+      const { buildAvailableReferences, formatReferencesForPrompt, buildShotAwareReferences, buildShotContextHint } = await import('./shotReferenceMapping.js');
       const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
       const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
 
@@ -3065,9 +3160,13 @@ Examples of common failure modes to avoid:
       let shotPurpose = '';
       let shotDescription = '';
       let sceneMainSubject = ''; // hoisted so the later position-continuity check can read it
+      let sceneSecondarySubject = '';
       let shotContinuityRole = 'none';
       let shotPerspective = '';
       let prevShotPerspective = '';
+      let shotFocusPrimary = '';
+      let shotFocusBackground: string[] = [];
+      let shotFocusLurking: string | null = null;
       if (sceneId) {
         const svpNode = this.executor.getNode(`scene_video_prompt:${sceneId}`);
         if (svpNode?.outputPath) {
@@ -3096,6 +3195,7 @@ Examples of common failure modes to avoid:
             const mainSubject: string = svpJson.mainSubject || '';
             sceneMainSubject = mainSubject;
             const secondarySubject: string = svpJson.secondarySubject || '';
+            sceneSecondarySubject = secondarySubject;
             const perspective: string = shot?.perspective || '';
             const perspectiveOf: string = shot?.perspectiveOf || (perspective === 'main_subject' ? mainSubject : perspective === 'secondary_subject' ? secondarySubject : '');
             if (perspective) {
@@ -3109,9 +3209,12 @@ Examples of common failure modes to avoid:
             // Focus block — what's sharp vs blurred
             const focus = shot?.focus;
             if (focus?.primary) {
+              shotFocusPrimary = focus.primary;
+              shotFocusBackground = Array.isArray(focus.background) ? focus.background : [];
+              shotFocusLurking = focus.lurking ?? null;
               const parts = [`primary (sharp): ${focus.primary}`];
-              if (Array.isArray(focus.background) && focus.background.length > 0) {
-                parts.push(`background (blurred): ${focus.background.join(', ')}`);
+              if (shotFocusBackground.length > 0) {
+                parts.push(`background (blurred): ${shotFocusBackground.join(', ')}`);
               }
               if (focus.lurking) {
                 parts.push(`lurking (defocused, planted for later): ${focus.lurking}`);
@@ -3122,20 +3225,31 @@ Examples of common failure modes to avoid:
         }
       }
 
-      // Gather all refs, then filter by purpose
+      // Gather all refs, then narrow to THIS shot's references using
+      // mainSubject + focus from the scene_video_prompt JSON. This pins the
+      // Flux 4-slot contract: at most 4 refs, slot 1 = setting, no global
+      // imageNumbers leaking in (which used to produce "from image 8" prose).
       const { refs: allRefs } = buildAvailableReferences(this.executor);
-      if (shotPurpose) {
-        const filtered = filterRefsByPurpose(allRefs, shotPurpose);
-        referenceImageContext = formatReferencesForPrompt(filtered.refs);
-        this.log(`  Refs filtered by purpose="${shotPurpose}": ${allRefs.length} → ${filtered.refs.length} (mode: ${filtered.generationMode})`);
-      } else {
-        referenceImageContext = formatReferencesForPrompt(allRefs);
-      }
+      const shotRefs = buildShotAwareReferences(allRefs, {
+        mainSubject: sceneMainSubject,
+        secondarySubject: sceneSecondarySubject,
+        focusPrimary: shotFocusPrimary,
+        focusBackground: shotFocusBackground,
+        focusLurking: shotFocusLurking,
+        purpose: shotPurpose,
+      });
+      referenceImageContext = formatReferencesForPrompt(shotRefs);
+      this.log(`  Refs (shot-aware) for ${node.itemId}: ${allRefs.length} global → ${shotRefs.length} in-shot (purpose=${shotPurpose || 'unknown'})`);
 
-      // Shot context hint
-      const prevShotId = node.itemId.replace(/shot_(\d+)/, (_: string, n: string) => `shot_${parseInt(n, 10) - 1}`);
-      const prevNode = shotNum > 1
-        ? this.executor.getNode(`shot_image:${prevShotId}`)
+      // Shot context hint. Layer C2: cross-scene chain — when this is shot 1
+      // of scene N>1, look at scene N-1's last completed shot so the LLM
+      // knows it has a base to chain on.
+      const { getPreviousShotIdAcrossScenes } = await import('./crossShotChaining.js');
+      const priorShotItemId = node.itemId
+        ? getPreviousShotIdAcrossScenes(node.itemId, this.executor)
+        : null;
+      const prevNode = priorShotItemId
+        ? this.executor.getNode(`shot_image:${priorShotItemId}`)
         : null;
       const previousAvailable = prevNode?.status === 'completed';
       shotContextHint = buildShotContextHint(node.itemId, previousAvailable, {
@@ -3144,6 +3258,20 @@ Examples of common failure modes to avoid:
         continuityRole: shotContinuityRole,
         purpose: shotPurpose,
       });
+
+      // Layer B2: feed the prior shot's last_frame TEXT into the LLM
+      // context. The editor already sees the prior last_frame *image*; the
+      // text anchor stops the writer from drifting into a fresh
+      // composition that contradicts the base. Mirrors the per-shot
+      // edit_previous_shot directive — the writer should produce a delta,
+      // not a new scene.
+      if (sceneId && shotNum > 1) {
+        const { readPriorLastFrameText } = await import('./shotReferenceMapping.js');
+        const priorLF = readPriorLastFrameText(this.config.projectDir, sceneId, shotNum);
+        if (priorLF) {
+          shotContextHint += `\n\n<prior_last_frame>\nThe previous shot's last frame is the base canvas for THIS shot's first frame. Its prose was:\n\n"${priorLF}"\n\nWrite this shot's first_frame as a DELTA from that exact composition — same setting, same character positions unless explicitly changing — only the camera angle/framing or character motion you describe in the shot description should differ. Do NOT re-describe the setting from scratch.\n</prior_last_frame>`;
+        }
+      }
 
       // Compute target state BEFORE generating image prompt
       if (sceneId) {
@@ -4552,6 +4680,7 @@ Examples of common failure modes to avoid:
       if (node.typeId === 'scene_video_prompt') {
         normalizeSceneVideoPrompt(parsed);
         this.runContinuitySequenceCheck(parsed, node.id);
+        this.runOneSettingPerSceneCheck(parsed, node.id);
         // Dialogue-fit pass: bump any shot whose declared `duration` is
         // shorter than the dialogue in its `audio` field. Without this
         // the video model generates the exact requested duration and
@@ -4680,6 +4809,25 @@ Examples of common failure modes to avoid:
     }
   }
 
+  private runOneSettingPerSceneCheck(svp: unknown, nodeId: string): void {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { validateOneSettingPerScene } = require('./continuityValidator.js') as typeof import('./continuityValidator.js');
+      const settingNodes = this.executor.getAllNodes().filter((n: any) =>
+        n.typeId === 'setting_image' && n.itemId,
+      );
+      const knownSettingRefIds = settingNodes.map((n: any) => n.itemId as string);
+      const shots = (svp as any)?.shots;
+      if (!Array.isArray(shots)) return;
+      const warnings = validateOneSettingPerScene({ shots, knownSettingRefIds });
+      if (warnings.length > 0) {
+        this.log(`  [One-setting-per-scene] ${warnings.length} warning(s) for ${nodeId}:\n${formatContinuityWarnings(warnings)}`);
+      }
+    } catch (err) {
+      this.log(`  [One-setting-per-scene] skipped: ${(err as Error).message}`);
+    }
+  }
+
   /**
    * Execute media generation with retry. Retries up to maxRetries times
    * with a delay between attempts for transient ComfyUI failures.
@@ -4801,12 +4949,32 @@ Examples of common failure modes to avoid:
     const nodes = this.executor.getAllNodes().filter((n: any) =>
       REF_TYPE_IDS.has(n.typeId) && n.itemId,
     );
-    return nodes.map((n: any, i: number) => ({
+    const allRefs = nodes.map((n: any, i: number) => ({
       imageNumber: i + 1,
       type: typeIdToRefType(n.typeId),
       refId: n.id,
       label: n.itemId ?? n.id.split(':')[1] ?? n.id,
     }));
+
+    // Use the same shot-aware narrowing the prompt-build path uses, so the
+    // post-LLM normalizer rewrites references against the same canonical
+    // (refId → imageNumber) mapping the LLM saw. Without this, the LLM was
+    // given e.g. "image 1 = forest" and the normalizer would try to "fix"
+    // it back to the global numbering (forest = image 8), corrupting the
+    // prompt JSON. Static import because this is a sync code path on ESM.
+    const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
+    const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+    if (sceneId && shotNum > 0) {
+      const ctx = readShotContextFromSvp(this.config.projectDir, sceneId, shotNum);
+      if (ctx) {
+        return buildShotAwareReferences(allRefs as any, ctx) as AvailableRefMinimal[];
+      }
+    }
+    // Fallback to capped global ordering when the scene JSON isn't available
+    // — at most 4 refs, settings preferred for slot 1.
+    const settings = allRefs.filter(r => r.type === 'setting').slice(0, 1);
+    const others = allRefs.filter(r => r.type !== 'setting').slice(0, 4 - settings.length);
+    return [...settings, ...others].map((r, i) => ({ ...r, imageNumber: i + 1 }));
   }
 
   /**
@@ -5497,14 +5665,62 @@ Examples of common failure modes to avoid:
       }
 
       let firstFramePath: string | null = null;
-      const firstFrameMode = firstFrameData.generationMode || 'image_text_to_image';
+      let firstFrameMode = firstFrameData.generationMode || 'image_text_to_image';
+
+      // Continuity policy override (Layer B/C2 enforcement). The LLM
+      // frequently picks `image_text_to_image` even when policy says we
+      // should chain on the prior shot. Trust the deterministic policy
+      // instead — the user's rule is "within a scene only camera-angle
+      // changes" and "scene N+1 picks up from scene N's last frame when
+      // an `entry` is declared." See shouldForceEditPrevious.
+      if (node.itemId && firstFrameMode !== 'edit_previous_shot') {
+        const peekPrevItemId = getPreviousShotIdAcrossScenes(node.itemId, this.executor);
+        const peekPrevNode = peekPrevItemId ? this.executor.getNode(`shot_image:${peekPrevItemId}`) : null;
+        const previousShotAvailable = peekPrevNode?.status === 'completed';
+        const sceneId = node.itemId.match(/(scene_\d+)/)?.[1];
+        const shotNum = parseInt(node.itemId.match(/shot_(\d+)/)?.[1] ?? '0', 10);
+        const ctx = sceneId && shotNum > 0
+          ? readShotContextFromSvp(this.config.projectDir, sceneId, shotNum)
+          : null;
+        if (shouldForceEditPrevious({
+          itemId: node.itemId,
+          previousShotAvailable,
+          continuityRole: ctx?.continuityRole,
+          purpose: ctx?.purpose,
+          sceneEntry: ctx?.sceneEntry,
+        })) {
+          this.log(`  Continuity policy: forcing edit_previous_shot for ${node.itemId} (LLM had picked "${firstFrameMode}")`);
+          firstFrameMode = 'edit_previous_shot';
+          // Mirror the override into the on-disk JSON so downstream
+          // (e.g. last_frame, motion directive) sees the corrected mode.
+          firstFrameData.generationMode = 'edit_previous_shot';
+        }
+      }
 
       if (firstFrameMode === 'edit_previous_shot') {
-        // Cross-shot chaining: edit the previous shot's last frame
-        const { getPreviousShotId, getLastFramePath } = await import('./crossShotChaining.js');
-        const prevShotItemId = node.itemId ? getPreviousShotId(node.itemId) : null;
-        const prevShotNode = prevShotItemId ? this.executor.getNode(`shot_image:${prevShotItemId}`) : null;
-        const prevLastFrame = prevShotNode ? getLastFramePath(prevShotNode) : null;
+        // Cross-shot chaining: edit the previous shot's last frame.
+        // Pattern B Phase 2: last_frame lives on the dedicated
+        // shot_image_last_frame:X node. Fall back to the upstream
+        // shot_image:X.outputPaths.last_frame for legacy projects
+        // whose bridge node never ran (Phase 1 mirror).
+        //
+        // Layer C2: when this is shot 1 of scene N>1 we look across the
+        // scene boundary at the prior scene's last completed shot. This
+        // is what implements the "exits door A in scene N → enters door B
+        // in scene N+1" continuity rule.
+        const { getPreviousShotIdAcrossScenes, getLastFramePath } = await import('./crossShotChaining.js');
+        const prevShotItemId = node.itemId ? getPreviousShotIdAcrossScenes(node.itemId, this.executor) : null;
+        const prevBridgeNode = prevShotItemId
+          ? this.executor.getNode(`shot_image_last_frame:${prevShotItemId}`)
+          : null;
+        const prevShotNode = prevShotItemId
+          ? this.executor.getNode(`shot_image:${prevShotItemId}`)
+          : null;
+        const prevLastFrame =
+          (prevBridgeNode?.status === 'completed' && prevBridgeNode.outputPath
+            ? prevBridgeNode.outputPath
+            : null)
+          ?? (prevShotNode ? getLastFramePath(prevShotNode) : null);
 
         if (prevLastFrame) {
           const prevLastFrameAbs = join(this.config.projectDir, prevLastFrame);
@@ -5559,8 +5775,13 @@ Examples of common failure modes to avoid:
       // last/mid frames are skipped — the relay renders the whole scene
       // as one mp4 driven only by per-segment first_frames, so any
       // extra frames burn image-gen budget for nothing.
+      //
+      // Pattern B Phase 2: `last_frame` is excluded here — it lives on
+      // the dedicated `shot_image_last_frame:X` node now (see
+      // executeShotImageLastFrame.ts). `executeShotImage` only
+      // produces `first_frame` (and `mid_frame` when present).
       const additionalFrames = Object.keys(parsedJson.frames)
-        .filter(k => k !== 'first_frame')
+        .filter(k => k !== 'first_frame' && k !== 'last_frame')
         .filter(k => shouldGenerateExtraFrame(k));
       if (isPromptRelayMode() && additionalFrames.length === 0) {
         const skipped = Object.keys(parsedJson.frames).filter(k => k !== 'first_frame');
@@ -5683,7 +5904,20 @@ Examples of common failure modes to avoid:
               result: { status: 'completed', file_path: frameRelPath, frame: frameId },
               agentName,
             });
-            // Register as asset so it shows in sidebar
+            // Register as asset so it shows in sidebar AND lands
+            // in project.scenes[].shots[].{firstFrame|lastFrame|midFrame}.
+            // Critically: pass `frame: frameId` — without it,
+            // applyAssetToProjectSchema bails and the scenes-tree
+            // mirror never populates. Pinned by
+            // tests/unit/addAssetDualWrite.test.ts under
+            // "scene_image with nodeId but NO frame → scenes stays empty".
+            // The narrow cast is safe: additionalFrames is filtered
+            // through `shouldGenerateExtraFrame` which only admits the
+            // three known frame keys.
+            const narrowFrame =
+              frameId === 'first_frame' || frameId === 'last_frame' || frameId === 'mid_frame'
+                ? frameId
+                : undefined;
             try {
               addAsset({
                 id: `frame_${node.itemId}_${frameId}_${Date.now()}`,
@@ -5691,6 +5925,7 @@ Examples of common failure modes to avoid:
                 path: frameRelPath,
                 createdAt: Date.now(),
                 nodeId: node.id,
+                ...(narrowFrame ? { frame: narrowFrame } : {}),
               });
             } catch { /* non-fatal */ }
           } else {
@@ -6589,13 +6824,28 @@ Examples of common failure modes to avoid:
       const videoWidth = this.config.project.resolutionWidth ?? 848;
       const videoHeight = this.config.project.resolutionHeight ?? 480;
 
-      // Collect additional frame images from the shot_image node's outputPaths
+      // Collect additional frame images.
+      // Pattern B Phase 2: last_frame lives on shot_image_last_frame:X
+      // (the bridge node owns it). mid_frame still on shot_image:X
+      // since Phase 2 only moved last_frame. Legacy projects may have
+      // last_frame on shot_image:X.outputPaths.last_frame — that path
+      // is the fallback below.
       const frameImages: Record<string, string> = {};
+      const lastFrameBridge = node.itemId
+        ? this.executor.getNode(`shot_image_last_frame:${node.itemId}`)
+        : null;
+      const lastFrameRel =
+        (lastFrameBridge?.status === 'completed' && lastFrameBridge.outputPath
+          ? lastFrameBridge.outputPath
+          : null)
+        ?? matchingImageNode?.outputPaths?.['last_frame'];
+      if (lastFrameRel) {
+        frameImages['last_frame'] = join(this.config.projectDir, lastFrameRel);
+      }
       if (matchingImageNode?.outputPaths) {
         for (const [frameId, framePath] of Object.entries(matchingImageNode.outputPaths)) {
-          if (frameId !== 'first_frame') {
-            frameImages[frameId] = join(this.config.projectDir, framePath);
-          }
+          if (frameId === 'first_frame' || frameId === 'last_frame') continue;
+          frameImages[frameId] = join(this.config.projectDir, framePath);
         }
       }
 
@@ -7298,14 +7548,75 @@ Examples of common failure modes to avoid:
         const relPath = relative(projectDir, result.outputPath);
         this.log(`  Final video assembled: ${relPath} (${result.duration}s, ${result.fileSize} bytes)`);
 
+        // Snapshot the inputs that fed this cut + diff against the
+        // most recent prior final_video. Stamping both onto the asset
+        // metadata is what powers Watch's V1/V2/V3 changelog cards.
+        // Snapshot paths are stored RELATIVE to projectDir so they
+        // stay valid if the project is moved between machines.
+        let currentSnapshot: FinalVideoSnapshot | null = null;
+        let diffMeta:
+          | { added: string[]; removed: string[]; modified: string[]; reorderedCount: number; fromVersion: number }
+          | null = null;
+        let versionNumber = 1;
+        try {
+          currentSnapshot = buildFinalVideoSnapshot(
+            resolvedSegments.map((s) => ({
+              ...s,
+              filePath: relative(projectDir, s.filePath),
+            })),
+            (relP) => {
+              try {
+                return statSync(join(projectDir, relP)).mtimeMs;
+              } catch {
+                return 0;
+              }
+            },
+            Date.now(),
+          );
+          const manifestPath = join(projectDir, 'assets', 'manifest.json');
+          let priorAssets: Array<{
+            type?: string;
+            createdAt?: number;
+            created_at?: number;
+            metadata?: { snapshot?: FinalVideoSnapshot; versionNumber?: number };
+          }> = [];
+          if (existsSync(manifestPath)) {
+            try {
+              priorAssets = JSON.parse(readFileSync(manifestPath, 'utf-8')).assets ?? [];
+            } catch {
+              priorAssets = [];
+            }
+          }
+          const priorFinals = priorAssets
+            .filter((a) => a.type === 'final_video')
+            .sort((a, b) => (a.createdAt ?? a.created_at ?? 0) - (b.createdAt ?? b.created_at ?? 0));
+          versionNumber = priorFinals.length + 1;
+          const previous = priorFinals[priorFinals.length - 1];
+          const previousSnapshot = previous?.metadata?.snapshot ?? null;
+          if (previousSnapshot) {
+            const previousVersionNumber = previous?.metadata?.versionNumber ?? priorFinals.length;
+            const rawDiff = diffFinalVideoSnapshots(previousSnapshot, currentSnapshot);
+            diffMeta = { ...rawDiff, fromVersion: previousVersionNumber };
+          }
+        } catch (err) {
+          this.log(`  Snapshot/diff capture failed (non-fatal): ${String(err)}`);
+        }
+
         // Register asset
         try {
+          const baseMeta: Record<string, unknown> = {
+            duration: result.duration,
+            fileSize: result.fileSize,
+            versionNumber,
+          };
+          if (currentSnapshot) baseMeta['snapshot'] = currentSnapshot;
+          if (diffMeta) baseMeta['diff'] = diffMeta;
           addAsset({
             id: `final-video-${Date.now()}`,
             type: 'final_video',
             path: relPath,
             createdAt: Date.now(),
-            metadata: { duration: result.duration, fileSize: result.fileSize },
+            metadata: baseMeta,
             nodeId: node.id,
           });
         } catch { /* non-fatal */ }

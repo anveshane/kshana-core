@@ -28,26 +28,31 @@ describe('V2V Extend: strategy selection', () => {
     expect(getVideoStrategy('scene_2_shot_4', 'show_action')).toBe('v2v_extend');
   });
 
-  it('set_the_world purpose gets flfv mid-scene', async () => {
+  // Layer B1 (locked): no FRESH_PURPOSES carve-out. Mid-scene shots always
+  // chain via v2v_extend regardless of purpose — the user's rule is that
+  // within a scene only camera angle / character following are allowed,
+  // never a fresh location image. Scene boundaries are the only flfv reset.
+
+  it('set_the_world purpose chains via v2v_extend mid-scene (Layer B1)', async () => {
     const { getVideoStrategy } = await import('../../src/core/planner/crossShotChaining.js');
-    expect(getVideoStrategy('scene_2_shot_3', 'set_the_world')).toBe('flfv');
+    expect(getVideoStrategy('scene_2_shot_3', 'set_the_world')).toBe('v2v_extend');
   });
 
-  it('show_change purpose gets flfv mid-scene', async () => {
+  it('show_change purpose chains via v2v_extend mid-scene (Layer B1)', async () => {
     const { getVideoStrategy } = await import('../../src/core/planner/crossShotChaining.js');
-    expect(getVideoStrategy('scene_3_shot_2', 'show_change')).toBe('flfv');
+    expect(getVideoStrategy('scene_3_shot_2', 'show_change')).toBe('v2v_extend');
   });
 
-  it('meet_character gets flfv — new subject needs fresh framing', async () => {
+  it('meet_character chains via v2v_extend mid-scene (Layer B1)', async () => {
     const { getVideoStrategy } = await import('../../src/core/planner/crossShotChaining.js');
-    expect(getVideoStrategy('scene_1_shot_3', 'meet_character')).toBe('flfv');
-    expect(getVideoStrategy('scene_2_shot_4', 'meet_character')).toBe('flfv');
+    expect(getVideoStrategy('scene_1_shot_3', 'meet_character')).toBe('v2v_extend');
+    expect(getVideoStrategy('scene_2_shot_4', 'meet_character')).toBe('v2v_extend');
   });
 
-  it('set_the_mood gets flfv — mood shift warrants a clean slate', async () => {
+  it('set_the_mood chains via v2v_extend mid-scene (Layer B1)', async () => {
     const { getVideoStrategy } = await import('../../src/core/planner/crossShotChaining.js');
-    expect(getVideoStrategy('scene_1_shot_2', 'set_the_mood')).toBe('flfv');
-    expect(getVideoStrategy('scene_4_shot_3', 'set_the_mood')).toBe('flfv');
+    expect(getVideoStrategy('scene_1_shot_2', 'set_the_mood')).toBe('v2v_extend');
+    expect(getVideoStrategy('scene_4_shot_3', 'set_the_mood')).toBe('v2v_extend');
   });
 
   it('show_clue uses v2v_extend — visual element can extend from prior context', async () => {

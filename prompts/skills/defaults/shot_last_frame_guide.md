@@ -6,6 +6,11 @@ You write a last frame description that shows the END STATE of a shot — what c
 
 1b. **ALWAYS use "from image N" for every character visible** — even characters already in the first frame. This ensures character consistency. Include all used references in the `references` array. Example: "Vikram from image 1 now turned to face the door" not just "Vikram now turned to face the door".
 
+**Slot contract:** the references list is capped at 4 entries (Flux Klein has
+4 input slots). Image 1 is the first frame's base (setting / canvas), images
+2..4 are characters. Use the same N each character had in the first frame —
+do not re-roll numbering. Never invent "from image 5" or higher.
+
 1c. **You MAY introduce a NEW character in the last frame** — if the shot beat requires someone entering, walking into frame, or appearing from off-screen. When you do this:
    - Include the new character's refId in the `references` array with a NEW `imageNumber` (e.g., image 2 for Laila if image 1 was Vikram in first_frame)
    - Reference them in the prose as "from image N" just like any other character

@@ -90,6 +90,130 @@ export function validateContinuitySequence(
   return warnings;
 }
 
+// ── One-setting-per-scene validator ──────────────────────────────────────────
+//
+// Why this exists: in the failed projects (The Village shot 2.3 in particular),
+// a single shot referenced two settings simultaneously ("forest from image 2"
+// AND "forest edge from image 1"). Flux Klein's 4-slot input layout reserves
+// slot 1 for the base canvas; two settings competing for it produces mangled
+// framing. The deeper rule: a scene = one location. A multi-setting scene is
+// either redundant aliasing of the same location OR a missing scene boundary.
+// Either way, the LLM should be re-rolled with a tighter brief.
+//
+// We allow multi-setting use ONLY when the scene has explicit
+// continuityRole='bridge' / 'entry' / 'exit' shots — that's the LLM declaring
+// "yes, the main subject is moving between locations and here are the bridge
+// shots." Without those markers, multiple settings = drift.
+
+export interface OneSettingPerSceneShotInput {
+  shotNumber: number;
+  continuityRole?: string;
+  focus?: {
+    primary?: string;
+    background?: string[];
+    lurking?: string | null;
+  };
+}
+
+export interface OneSettingPerSceneInput {
+  shots: OneSettingPerSceneShotInput[];
+  /** Setting refIds known to the project. Lets us distinguish setting refs from
+   *  character refs in the focus block (focus.primary may be either). */
+  knownSettingRefIds: string[];
+}
+
+export function validateOneSettingPerScene(
+  input: OneSettingPerSceneInput,
+): ContinuityWarning[] {
+  const settingSet = new Set(input.knownSettingRefIds);
+  const sceneHasBridge = input.shots.some(s => {
+    const r = s.continuityRole ?? 'none';
+    return r === 'bridge' || r === 'entry' || r === 'exit';
+  });
+
+  // Walk shots in order; record the first setting and flag the first shot that
+  // introduces a different one (when no bridge marker exists in the scene).
+  let firstSetting: string | null = null;
+  const warnings: ContinuityWarning[] = [];
+
+  for (const shot of input.shots) {
+    const used = new Set<string>();
+    const focus = shot.focus ?? {};
+    if (focus.primary && settingSet.has(focus.primary)) used.add(focus.primary);
+    for (const b of focus.background ?? []) {
+      if (settingSet.has(b)) used.add(b);
+    }
+    if (focus.lurking && settingSet.has(focus.lurking)) used.add(focus.lurking);
+
+    for (const s of used) {
+      if (firstSetting === null) {
+        firstSetting = s;
+      } else if (s !== firstSetting && !sceneHasBridge) {
+        warnings.push({
+          scope: 'sequence',
+          shotNumber: shot.shotNumber,
+          message:
+            `Shot ${shot.shotNumber} introduces a second setting "${s}" — ` +
+            `scene already uses setting "${firstSetting}". ` +
+            `A scene should reference one location.`,
+          suggestion:
+            `Reuse "${firstSetting}" for this shot, OR mark a transition shot ` +
+            `with continuityRole='bridge'/'entry'/'exit', OR split the scene.`,
+        });
+        return warnings; // First offence is enough — the LLM will fix the rest after re-roll.
+      }
+    }
+  }
+
+  return warnings;
+}
+
+// ── Layer C3: consecutive scenes must use different locations ───────────────
+//
+// User's law: "A completely different location is a completely different
+// scene." The corollary: two consecutive scenes that share a primary setting
+// refId are either accidentally split (and should be merged) or have a
+// genuine non-location reason (time skip, perspective change). This validator
+// flags the violation; the breakdown LLM can then re-roll the scene plan.
+
+export interface ConsecutiveScenesInput {
+  /** Each scene with its dominant setting refId — usually computed by taking
+   *  the most common setting refId across the scene's shots, or the first
+   *  one referenced. */
+  scenes: Array<{
+    sceneNumber: number;
+    primarySetting?: string | null;
+    /** Optional flag for legitimate non-location reasons (time skip etc.).
+     *  When set, the validator skips this transition. */
+    timeSkip?: boolean;
+  }>;
+}
+
+export function validateNewScenesNewLocations(
+  input: ConsecutiveScenesInput,
+): ContinuityWarning[] {
+  const warnings: ContinuityWarning[] = [];
+  for (let i = 1; i < input.scenes.length; i++) {
+    const prev = input.scenes[i - 1]!;
+    const curr = input.scenes[i]!;
+    if (curr.timeSkip) continue;
+    if (!prev.primarySetting || !curr.primarySetting) continue;
+    if (prev.primarySetting === curr.primarySetting) {
+      warnings.push({
+        scope: 'sequence',
+        shotNumber: curr.sceneNumber,
+        message:
+          `Scene ${curr.sceneNumber} reuses scene ${prev.sceneNumber}'s setting ` +
+          `"${prev.primarySetting}" — a new scene should be a new location.`,
+        suggestion:
+          `Either merge scene ${curr.sceneNumber} into scene ${prev.sceneNumber}, ` +
+          `OR mark this transition as a deliberate time skip / perspective shift.`,
+      });
+    }
+  }
+  return warnings;
+}
+
 // ── Option 2: LLM-based position continuity check ───────────────────────────
 
 const TELEPORT_CHECK_SYSTEM = `You check video shot continuity. Your job is to detect TELEPORTS — where a character appears in a completely different physical location between consecutive shots without any bridge shot showing movement.

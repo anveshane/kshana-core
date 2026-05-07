@@ -8,6 +8,9 @@
  * decides which to reference based on the shot description.
  */
 
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
+
 export interface AvailableRef {
   imageNumber: number;
   type: 'character' | 'setting' | 'object';
@@ -73,31 +76,149 @@ export function formatReferencesForPrompt(refs: AvailableRef[]): string {
 }
 
 /**
- * Purposes that require a FRESH composition (no prior-shot chaining).
- * Kept in sync with `crossShotChaining.FRESH_PURPOSES`. Duplicated locally to
- * avoid pulling in cross-shot chain logic as a dependency of ref mapping.
+ * Read the prior shot's last_frame imagePrompt text out of disk.
+ *
+ * Why: the first-frame LLM call already gets the prior shot's last_frame
+ * *image* as the edit base (via FLUX Klein's edit workflow), but it
+ * doesn't see the prior last_frame *text*. Without the text, the LLM
+ * tends to write a fresh composition prompt that contradicts the base
+ * image (e.g., shot 2.1's last frame had Lena at the wall, but shot 2.2's
+ * first frame described "Lena mid-stride wide tracking in forest" — the
+ * editor then has to invent the forest from a wall, and the result drifts).
+ * Showing the LLM the prior text anchors the delta.
+ *
+ * Convention: prompt files live at
+ *   prompts/images/shots/scene-<N>-shot-<M>.json
+ * Returns null for shot 1 (no prior in scene), missing files, or JSON
+ * parse errors. Falls back to first_frame.imagePrompt when last_frame is
+ * absent (single-frame shots).
  */
-const FRESH_PURPOSES = new Set([
-  'set_the_world',
-  'show_change',
-  'meet_character',
-  'set_the_mood',
-]);
+export function readPriorLastFrameText(
+  projectDir: string,
+  sceneId: string,
+  currentShotNumber: number,
+): string | null {
+  if (currentShotNumber <= 1) return null;
+
+  const sceneNum = sceneId.replace(/^scene_/, '');
+  const prevShotNum = currentShotNumber - 1;
+  const path = join(
+    projectDir,
+    'prompts/images/shots',
+    `scene-${sceneNum}-shot-${prevShotNum}.json`,
+  );
+  if (!existsSync(path)) return null;
+
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+  if (raw.startsWith('```')) {
+    raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  const last = parsed?.frames?.last_frame?.imagePrompt;
+  if (typeof last === 'string' && last.trim().length > 0) return last;
+
+  const first = parsed?.frames?.first_frame?.imagePrompt;
+  if (typeof first === 'string' && first.trim().length > 0) return first;
+
+  return null;
+}
+
+/**
+ * Policy: should the executor override the LLM's chosen generationMode and
+ * force `edit_previous_shot` for this shot's first frame?
+ *
+ * Background: in real runs the LLM frequently picks `image_text_to_image`
+ * even when a prior shot exists and the user's continuity rule says we
+ * should chain (we observed this on every mid-scene shot of The Village
+ * after the regen). The shot_context DIRECTIVE is advisory; the LLM
+ * sometimes ignores it. This helper encodes the deterministic policy so
+ * the executor can stop trusting the LLM and just do the right thing
+ * before calling FLUX Klein.
+ *
+ * Force chain when:
+ *   - prior shot is available (within scene OR via cross-scene chain)
+ *   - shot is NOT scene_1_shot_1 (no prior at project start)
+ *   - continuityRole is NOT in {entry, exit, bridge}
+ *     (those are explicit transitions — fresh framing wanted)
+ *   - purpose is NOT show_clue
+ *     (fresh detail insert — chaining produces face-shaped clock artifacts)
+ *   - if it's shot 1 of scene N>1, the scene must declare an `entry`
+ *     transition (otherwise it's a true cut, not a continuation)
+ *
+ * The same-setting check from the policy table is implicit: per the
+ * one-setting-per-scene validator (Layer A5), a scene that respects the
+ * rule has the same setting in every shot. If the breakdown violates
+ * that rule we already warn upstream — chaining still works because the
+ * base canvas comes from the prior frame, not from a setting refId.
+ */
+export interface ShouldForceEditPreviousOpts {
+  itemId: string;
+  previousShotAvailable: boolean;
+  continuityRole?: string;
+  purpose?: string;
+  /** Scene-level `entry` field — populated for shot 1 of scene N>1 to signal a
+   *  declared visual handoff from scene N-1's last frame. */
+  sceneEntry?: string | null;
+}
+
+const FORCE_FRESH_PURPOSES = new Set(['show_clue']);
+const TRANSITION_ROLES = new Set(['entry', 'exit', 'bridge']);
+
+export function shouldForceEditPrevious(opts: ShouldForceEditPreviousOpts): boolean {
+  if (!opts.previousShotAvailable) return false;
+
+  if (opts.continuityRole && TRANSITION_ROLES.has(opts.continuityRole)) return false;
+
+  if (opts.purpose && FORCE_FRESH_PURPOSES.has(opts.purpose)) return false;
+
+  const m = opts.itemId.match(/^scene_(\d+)_shot_(\d+)$/);
+  if (!m) return false;
+  const sceneNum = parseInt(m[1]!, 10);
+  const shotNum = parseInt(m[2]!, 10);
+
+  // Scene 1 shot 1 — no prior anywhere.
+  if (sceneNum === 1 && shotNum === 1) return false;
+
+  // Mid-scene shot (shot 2+ within any scene) → always chain.
+  if (shotNum > 1) return true;
+
+  // Shot 1 of scene N>1 — chain only when scene declares an `entry` field.
+  // A blank/whitespace string counts as not declared.
+  const entry = (opts.sceneEntry ?? '').trim();
+  return entry.length > 0;
+}
 
 /**
  * Build a shot context hint block with generation mode directives for the
  * image-anchored shot chain strategy.
  *
- * Policy:
+ * Policy (locked: no FRESH purpose carve-out — see plan
+ * /Users/ganaraj/.claude/plans/i-am-not-really-virtual-wren.md, Layer B1):
+ *
  * - Shot 1 of any scene → fresh (no base image to chain from).
  * - Mid-scene shot with continuityRole entry/exit/bridge → fresh (explicit
- *   location transition; force a new composition).
- * - Mid-scene shot whose purpose is a composition reset (set_the_world,
- *   show_change, meet_character, set_the_mood) → fresh.
- * - All other mid-scene shots → HARD directive to use edit_previous_shot.
- *   This is what maintains visual continuity + character consistency: the
- *   base is the previous shot's last_frame, and character refs are layered
- *   on top by FLUX Klein.
+ *   location transition; force a new composition). These are rare —
+ *   the one-setting-per-scene validator pushes location changes to a
+ *   new scene boundary.
+ * - **All other mid-scene shots → HARD directive to use edit_previous_shot.**
+ *   This includes set_the_world, show_change, meet_character, set_the_mood
+ *   purposes that previously reset to fresh. The user's rule: within a
+ *   scene only camera angle and character-following are permitted; a
+ *   fresh location image mid-scene breaks continuity.
+ *   The base is the previous shot's last_frame, and character refs are
+ *   layered on top by FLUX Klein.
  */
 export function buildShotContextHint(
   itemId: string,
@@ -119,7 +240,7 @@ export function buildShotContextHint(
   const lines: string[] = [];
   lines.push(`Shot ${shotNum} of this scene.`);
 
-  if (shotNum === 1) {
+  if (shotNum === 1 && !previousShotAvailable) {
     lines.push('This is the first shot in the scene. Use "image_text_to_image" or "text_to_image" — there is no previous shot to chain from.');
     lines.push('last_frame should use generationMode "edit_first_frame".');
   } else if (previousShotAvailable) {
@@ -127,17 +248,11 @@ export function buildShotContextHint(
       opts.continuityRole === 'entry' ||
       opts.continuityRole === 'exit' ||
       opts.continuityRole === 'bridge';
-    const isFreshPurpose = opts.purpose ? FRESH_PURPOSES.has(opts.purpose) : false;
 
     if (isBridge) {
       lines.push(
         `continuityRole="${opts.continuityRole}" — location transition shot. ` +
         `Use "image_text_to_image" with fresh generation for first_frame.`,
-      );
-    } else if (isFreshPurpose) {
-      lines.push(
-        `purpose="${opts.purpose}" — this is a composition reset. ` +
-        `Use "image_text_to_image" for first_frame (fresh framing), not edit_previous_shot.`,
       );
     } else {
       // HARD DIRECTIVE — enforce image-anchored shot chain for continuity + consistency.
@@ -201,6 +316,164 @@ export function validateNoDanglingDeps(
     }
   }
   return orphans;
+}
+
+/**
+ * Pick the per-shot reference list to send to the prompt LLM.
+ *
+ * Why this exists: Flux Klein has 4 input slots, and "from image N" in our
+ * prose maps directly onto slot N. Slot 1 is always the base canvas
+ * (setting in fresh mode, prior last_frame in edit_previous_shot mode).
+ * The earlier global-numbering approach produced prompts like "forest from
+ * image 8" — meaningless to a 4-slot model — and let two settings compete
+ * for slot 1. This helper pins the contract:
+ *
+ *   - At most 4 refs.
+ *   - At most 1 setting; it always lands in slot 1.
+ *   - mainSubject is always preserved (drops happen on lower-priority chars).
+ *   - imageNumbers are renumbered 1..N for THIS shot only — not global.
+ *
+ * Pure: takes the global ref pool + a shot-context bag and returns the
+ * shot-local list. The caller (ExecutorAgent) reads scene_video_prompt
+ * to fill the bag.
+ */
+export interface ShotContext {
+  mainSubject?: string;
+  secondarySubject?: string;
+  focusPrimary?: string;
+  focusBackground?: string[];
+  focusLurking?: string | null;
+  purpose?: string;
+  /** Shot's `continuityRole` field: 'none' | 'entry' | 'exit' | 'bridge'. */
+  continuityRole?: string;
+  /** Scene-level `entry` string — declared on the scene_video_prompt to
+   *  signal a visual handoff from the previous scene's last frame. */
+  sceneEntry?: string | null;
+}
+
+/**
+ * Read a shot's context out of `prompts/videos/scenes/<sceneId>.json`.
+ *
+ * Both the prompt-build path (async, in ExecutorAgent.buildContextBlock)
+ * and the post-LLM normalizer (sync, in ExecutorAgent.validateAndNormalize)
+ * need the same shot context to produce identical shot-aware ref lists. We
+ * read the JSON once here so both paths agree on which character lives in
+ * which slot.
+ *
+ * Returns null when the file is missing or unparseable — callers fall back
+ * to the global ref pool in that case.
+ */
+export function readShotContextFromSvp(
+  projectDir: string,
+  sceneId: string,
+  shotNumber: number,
+): ShotContext | null {
+  const path = join(projectDir, 'prompts/videos/scenes', `${sceneId}.json`);
+  if (!existsSync(path)) return null;
+
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+
+  if (raw.startsWith('```')) {
+    raw = raw.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+
+  const shots = Array.isArray(parsed?.shots) ? parsed.shots : Array.isArray(parsed) ? parsed : [];
+  const shot = shots.find((s: any) => s?.shotNumber === shotNumber);
+  if (!shot) return null;
+
+  const focus = shot.focus ?? {};
+  return {
+    mainSubject: parsed?.mainSubject ?? '',
+    secondarySubject: parsed?.secondarySubject ?? '',
+    focusPrimary: focus.primary ?? '',
+    focusBackground: Array.isArray(focus.background) ? focus.background : [],
+    focusLurking: focus.lurking ?? null,
+    purpose: shot.purpose ?? '',
+    continuityRole: shot.continuityRole ?? 'none',
+    sceneEntry: typeof parsed?.entry === 'string' ? parsed.entry : null,
+  };
+}
+
+export function buildShotAwareReferences(
+  allRefs: AvailableRef[],
+  shot: ShotContext,
+): AvailableRef[] {
+  // Purpose-based short-circuit: pure mood/sensory shots don't reference
+  // anything — they're text-only. Matches filterRefsByPurpose semantics.
+  if (shot.purpose === 'set_the_mood') return [];
+
+  const byLabel = new Map<string, AvailableRef>();
+  for (const r of allRefs) byLabel.set(r.label, r);
+
+  const focusBg = shot.focusBackground ?? [];
+
+  // 1. Pick the setting (slot 1 if any).
+  let chosenSetting: AvailableRef | null = null;
+  if (shot.focusPrimary) {
+    const r = byLabel.get(shot.focusPrimary);
+    if (r?.type === 'setting') chosenSetting = r;
+  }
+  if (!chosenSetting) {
+    for (const name of focusBg) {
+      const r = byLabel.get(name);
+      if (r?.type === 'setting') {
+        chosenSetting = r;
+        break;
+      }
+    }
+  }
+
+  // 2. Pick characters (and objects) in priority order — drop duplicates and
+  //    settings (settings are slot 1 only). mainSubject > secondarySubject >
+  //    focusPrimary (if char) > focusBackground entries (in order) >
+  //    focusLurking. Stop when we hit the cap.
+  const charSlots = chosenSetting ? 3 : 4;
+  const picked: AvailableRef[] = [];
+  const seen = new Set<string>();
+  const pushIfChar = (name?: string | null) => {
+    if (!name || picked.length >= charSlots) return;
+    const r = byLabel.get(name);
+    if (!r || r.type === 'setting') return;
+    if (seen.has(r.refId)) return;
+    seen.add(r.refId);
+    picked.push(r);
+  };
+
+  pushIfChar(shot.mainSubject);
+  pushIfChar(shot.secondarySubject);
+  pushIfChar(shot.focusPrimary);
+  for (const name of focusBg) pushIfChar(name);
+  pushIfChar(shot.focusLurking ?? undefined);
+
+  // 3. Fallback when shot context yielded nothing — return the first 4 refs
+  //    capped, with at most 1 setting. Preserves prior loose behaviour for
+  //    cases where the scene_video_prompt couldn't be parsed.
+  const hasShotContext =
+    !!shot.mainSubject || !!shot.secondarySubject || !!shot.focusPrimary ||
+    focusBg.length > 0 || !!shot.focusLurking;
+  if (!hasShotContext) {
+    const settings = allRefs.filter(r => r.type === 'setting').slice(0, 1);
+    const others = allRefs.filter(r => r.type !== 'setting').slice(0, 4 - settings.length);
+    return [...settings, ...others].map((r, i) => ({ ...r, imageNumber: i + 1 }));
+  }
+
+  // 4. Assemble final list and renumber locally.
+  const ordered: AvailableRef[] = [];
+  if (chosenSetting) ordered.push(chosenSetting);
+  ordered.push(...picked);
+  return ordered.slice(0, 4).map((r, i) => ({ ...r, imageNumber: i + 1 }));
 }
 
 /**

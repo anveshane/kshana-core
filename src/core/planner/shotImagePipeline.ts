@@ -16,19 +16,12 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
 /**
- * Purposes that need fresh generation (cannot chain from previous shot).
- * Kept in sync with crossShotChaining.FRESH_PURPOSES — duplicated here to
- * avoid a circular import between shotImagePipeline and crossShotChaining.
- *
- * Mid-scene shots with these purposes are composition resets, so they don't
- * benefit from edit_previous_shot chaining.
+ * Layer B1 (locked): no FRESH purposes carve-out. Every mid-scene shot
+ * chains on the prior last_frame. Only scene-boundary shots are fresh.
+ * Kept as an empty set for backward compat with the canForceEditPrevious
+ * check below — every mid-scene shot now passes the gate.
  */
-const FRESH_PURPOSES = new Set([
-  'set_the_world',
-  'show_change',
-  'meet_character',
-  'set_the_mood',
-]);
+const FRESH_PURPOSES = new Set<string>();
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
