@@ -221,4 +221,66 @@ describe('ConversationManager.invalidateNodes', () => {
       (cm as unknown as CMWithInvalidate).invalidateNodes(sessionId, ['x']),
     ).rejects.toThrow(/executorState/);
   });
+
+  // Production sets sessionContext.projectDir to the project's *basename*
+  // (see ConversationManager.focusSessionProject — it stores
+  // `nodePath.basename(projectDirAbs)`, not the absolute path). The cases
+  // above pass an absolute path to keep the assertions terse, but that
+  // accidentally hid a bug where invalidateNodes joined the basename
+  // straight into nodePath.join, producing a relative `<name>/project.json`
+  // that ENOENT'd against CWD.
+  it('resolves the project from a basename-style sessionContext (.kshana suffix)', async () => {
+    const { projectJsonPath } = setupProject();
+    const cm = newCM();
+    // Mirror production: sessionContext.projectDir = "demo.kshana", not the abs path
+    const sessionId = attachConfiguredSession(cm, 'demo.kshana');
+
+    const result = await (cm as unknown as CMWithInvalidate).invalidateNodes(
+      sessionId,
+      ['shot_image:scene_1_shot_2'],
+    );
+    expect(result.invalidated).toEqual(['shot_image:scene_1_shot_2']);
+
+    const persisted = JSON.parse(readFileSync(projectJsonPath, 'utf-8'));
+    expect(
+      persisted.executorState.nodes['shot_image:scene_1_shot_2'].status,
+    ).toBe('pending');
+  });
+
+  it('resolves the project from a basename-style sessionContext (bare name, desktop convention)', async () => {
+    // kshana-desktop's NewProjectDialog creates `<name>` (no suffix);
+    // resolveProjectDir's probe order falls through to that.
+    const projectDir = join(tmpRoot, 'Baker and the Bee');
+    mkdirSync(join(projectDir, 'assets'), { recursive: true });
+    const projectJsonPath = join(projectDir, 'project.json');
+    writeFileSync(
+      projectJsonPath,
+      JSON.stringify({
+        version: '3.0',
+        id: 'baker',
+        title: 'Baker and the Bee',
+        executorState: {
+          nodes: {
+            'shot_video:scene_1_shot_1': {
+              status: 'completed',
+              outputPath: 'assets/videos/s1-shot-1.mp4',
+              completedAt: 1,
+            },
+          },
+        },
+      }),
+    );
+    const cm = newCM();
+    const sessionId = attachConfiguredSession(cm, 'Baker and the Bee');
+
+    const result = await (cm as unknown as CMWithInvalidate).invalidateNodes(
+      sessionId,
+      ['shot_video:scene_1_shot_1'],
+    );
+    expect(result.invalidated).toEqual(['shot_video:scene_1_shot_1']);
+    const persisted = JSON.parse(readFileSync(projectJsonPath, 'utf-8'));
+    expect(
+      persisted.executorState.nodes['shot_video:scene_1_shot_1'].status,
+    ).toBe('pending');
+  });
 });

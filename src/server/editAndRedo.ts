@@ -89,6 +89,11 @@ export function stripMarkdownFences(content: string): string {
  *
  * Reads project.json to find executor state, resolves the prompt file path,
  * and writes the edited content.
+ *
+ * `projectDir` MUST be an absolute path. Callers holding a session-style
+ * basename (e.g. ConversationManager.sessionContext.projectDir) need to
+ * resolve via resolveProjectDir / resolveSessionProjectDirAbs first; passing
+ * a basename here writes against CWD and silently lands in the wrong place.
  */
 export async function saveEditedPrompt(
   projectDir: string,
