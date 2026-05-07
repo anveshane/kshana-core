@@ -139,12 +139,16 @@ describe('Change 5: Image quality gate', () => {
   });
 
   it('vision review is configurable via environment variable', () => {
-    // LLM_SUPPORTS_VISION should be a recognized config option
-    // The image validator should check this flag
+    // Vision review used to be gated by `LLM_SUPPORTS_VISION` on the
+    // primary LLM. The pipeline now routes vision through a dedicated
+    // VLM provider (so a non-vision primary LLM can still drive
+    // pi-agent oversight). The configurable surface is `VLM_PROVIDER`
+    // / `VLM_MODEL`; assert .env.example documents it.
     const envPath = join(process.cwd(), '.env.example');
     if (existsSync(envPath)) {
       const env = readFileSync(envPath, 'utf-8');
-      expect(env).toContain('LLM_SUPPORTS_VISION');
+      expect(env).toContain('VLM_PROVIDER');
+      expect(env).toContain('VLM_MODEL');
     }
   });
 });

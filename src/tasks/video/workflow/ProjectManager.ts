@@ -370,7 +370,7 @@ export function createProject(
   } catch { /* detection failed — default to idea */ }
 
   const project: ProjectFile = {
-    version: '2.0',
+    version: PROJECT_VERSION,
     id: projectId,
     title: generateProjectTitle(cleanInput),
     originalInputFile: inputFilePath,

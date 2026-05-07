@@ -8,7 +8,6 @@ import {
   getProjectDir,
   loadProject,
 } from '../../src/tasks/video/workflow/ProjectManager.js';
-import { updateProjectTool } from '../../src/tasks/video/workflow/FileTools.js';
 import { setActiveProjectDir } from '../../src/tasks/video/workflow/activeProject.js';
 
 describe('Project root stability', () => {
@@ -37,22 +36,10 @@ describe('Project root stability', () => {
     expect(fs.existsSync(join(projectRoot, 'original_input.md'))).toBe(true);
   });
 
-  it('does not recreate or switch roots when update_project(create) is called again', async () => {
-    const project = createProject('Initial desktop project');
-
-    const result = await updateProjectTool.handler?.({
-      action: 'create',
-      data: { original_input: 'A boy playing football' },
-    });
-
-    expect(result).toMatchObject({
-      status: 'success',
-      message: 'Project already exists',
-      project_id: project.id,
-      current_phase: project.currentPhase,
-      already_exists: true,
-    });
-    expect(getProjectDir()).toBe(projectRoot);
-    expect(loadProject()?.id).toBe(project.id);
-  });
+  // The previous "called via updateProjectTool" idempotency case lived
+  // in a tool that was removed when pi-agent took over project setup
+  // (see `kshana_new`). The "already_exists" decision is now made by
+  // pi at a different layer; the in-process `createProject` itself
+  // doesn't no-op on a populated root and shouldn't be tested as if
+  // it does. Coverage for the new flow lives next to `kshana_new`.
 });

@@ -540,8 +540,8 @@ export interface FinalOutputInfo {
  * This replaces the hardcoded narrative-specific structure.
  */
 export interface GenericProjectFile {
-  /** Schema version */
-  version: '2.0';
+  /** Schema version. Source of truth: workflow/types.ts PROJECT_VERSION. */
+  version: '3.0';
 
   /** Unique project identifier */
   id: string;
