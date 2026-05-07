@@ -32,11 +32,12 @@ describe('canonicalShotVideoDeps', () => {
     ]);
   });
 
-  it('appends prevShotVideoId when set, for serialization across shots', () => {
+  it('appends prevShotVideoId when V2V is on, for serialization across shots', () => {
     const deps = canonicalShotVideoDeps({
       shotImageId: 'shot_image:scene_1_shot_2',
       motionId: 'shot_motion_directive:scene_1_shot_2',
       prevShotVideoId: 'shot_video:scene_1_shot_1',
+      useV2V: true,
     });
     expect(deps).toEqual([
       'shot_image:scene_1_shot_2',
@@ -109,7 +110,7 @@ describe('sanitizeShotVideoDeps', () => {
     expect(cleaned).toContain('shot_image:scene_1_shot_1');
   });
 
-  it('preserves prevShotVideoId for serialization edge', () => {
+  it('preserves prevShotVideoId for serialization edge when V2V is on', () => {
     const cleaned = sanitizeShotVideoDeps({
       existingDeps: [
         'shot_motion_directive:scene_1_shot_2',  // missing shot_image, wrong otherwise
@@ -117,6 +118,7 @@ describe('sanitizeShotVideoDeps', () => {
       shotImageId: 'shot_image:scene_1_shot_2',
       motionId: 'shot_motion_directive:scene_1_shot_2',
       prevShotVideoId: 'shot_video:scene_1_shot_1',
+      useV2V: true,
     });
     expect(cleaned).toContain('shot_video:scene_1_shot_1');
   });
@@ -159,5 +161,110 @@ describe('sanitizeShotVideoDeps', () => {
     });
     expect(cleaned).toContain('character_image:parvati');
     expect(cleaned).toContain('world_style');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// V2V-aware behavior. The previous-shot edge models the V2V chain (each
+// shot's video continues from the previous shot's video). When V2V is
+// disabled (the default — flfv mode generates each shot independently
+// from its own first/last frame images), the edge is a phantom: it has
+// no data semantics but DependencyGraphExecutor.invalidateNode walks it
+// as a real dep, so invalidating one shot cascades to every following
+// shot AND final_video. Symptom in production: user redoes shot 1, all
+// nine shots regenerate. Final video correctness still holds because
+// final_video → shot_video edges live in the template (stages.ts), not
+// here — invalidation reaches final_video through those.
+// ─────────────────────────────────────────────────────────────────────
+
+describe('canonicalShotVideoDeps with useV2V flag', () => {
+  it('omits prevShotVideoId when useV2V=false even if a prev shot exists', () => {
+    const deps = canonicalShotVideoDeps({
+      shotImageId: 'shot_image:scene_1_shot_2',
+      motionId: 'shot_motion_directive:scene_1_shot_2',
+      prevShotVideoId: 'shot_video:scene_1_shot_1',
+      useV2V: false,
+    });
+    expect(deps).toEqual([
+      'shot_image:scene_1_shot_2',
+      'shot_motion_directive:scene_1_shot_2',
+    ]);
+  });
+
+  it('still includes prevShotVideoId when useV2V=true', () => {
+    const deps = canonicalShotVideoDeps({
+      shotImageId: 'shot_image:scene_1_shot_2',
+      motionId: 'shot_motion_directive:scene_1_shot_2',
+      prevShotVideoId: 'shot_video:scene_1_shot_1',
+      useV2V: true,
+    });
+    expect(deps).toContain('shot_video:scene_1_shot_1');
+  });
+
+  it('treats undefined useV2V as false (current default in project.json)', () => {
+    // project.useV2V is opt-in; legacy/un-flagged projects should get
+    // the safer no-cascade behavior.
+    const deps = canonicalShotVideoDeps({
+      shotImageId: 'shot_image:scene_1_shot_2',
+      motionId: 'shot_motion_directive:scene_1_shot_2',
+      prevShotVideoId: 'shot_video:scene_1_shot_1',
+    });
+    expect(deps).not.toContain('shot_video:scene_1_shot_1');
+  });
+});
+
+describe('sanitizeShotVideoDeps with useV2V flag', () => {
+  it('strips a stale shot_video previous-shot dep when useV2V=false', () => {
+    // Existing project on disk has the V2V chain dep persisted from a
+    // pre-fix run. With V2V off, sanitize must strip it so the cascade
+    // doesn't propagate through the phantom edge.
+    const cleaned = sanitizeShotVideoDeps({
+      existingDeps: [
+        'shot_image:scene_1_shot_2',
+        'shot_motion_directive:scene_1_shot_2',
+        'shot_video:scene_1_shot_1',
+      ],
+      shotImageId: 'shot_image:scene_1_shot_2',
+      motionId: 'shot_motion_directive:scene_1_shot_2',
+      prevShotVideoId: 'shot_video:scene_1_shot_1',
+      useV2V: false,
+    });
+    expect(cleaned).not.toContain('shot_video:scene_1_shot_1');
+    expect(cleaned).toContain('shot_image:scene_1_shot_2');
+    expect(cleaned).toContain('shot_motion_directive:scene_1_shot_2');
+  });
+
+  it('preserves the previous-shot dep when useV2V=true', () => {
+    const cleaned = sanitizeShotVideoDeps({
+      existingDeps: [
+        'shot_image:scene_1_shot_2',
+        'shot_motion_directive:scene_1_shot_2',
+      ],
+      shotImageId: 'shot_image:scene_1_shot_2',
+      motionId: 'shot_motion_directive:scene_1_shot_2',
+      prevShotVideoId: 'shot_video:scene_1_shot_1',
+      useV2V: true,
+    });
+    expect(cleaned).toContain('shot_video:scene_1_shot_1');
+  });
+
+  it('only strips the matching previous-shot dep, not unrelated shot_video refs', () => {
+    // Defensive: if some other shot_video appears as a dep for a non-V2V
+    // reason we don't know about, leave it alone. Strip only the exact
+    // prevShotVideoId we were told to drop.
+    const cleaned = sanitizeShotVideoDeps({
+      existingDeps: [
+        'shot_image:scene_1_shot_2',
+        'shot_motion_directive:scene_1_shot_2',
+        'shot_video:scene_1_shot_1',  // the V2V chain dep we drop
+        'shot_video:scene_2_shot_3',  // unrelated, keep
+      ],
+      shotImageId: 'shot_image:scene_1_shot_2',
+      motionId: 'shot_motion_directive:scene_1_shot_2',
+      prevShotVideoId: 'shot_video:scene_1_shot_1',
+      useV2V: false,
+    });
+    expect(cleaned).not.toContain('shot_video:scene_1_shot_1');
+    expect(cleaned).toContain('shot_video:scene_2_shot_3');
   });
 });
