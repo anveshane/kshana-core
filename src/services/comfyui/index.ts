@@ -16,6 +16,7 @@ export {
 
 export {
   loadWorkflowTemplate,
+  parameterizeGeneric,
   parameterizeWorkflowByName,
   parameterizeZImageWorkflow,
   parameterizeChromaRadianceWorkflow,

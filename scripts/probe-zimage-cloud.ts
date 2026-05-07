@@ -24,7 +24,7 @@ const SEED = process.argv[3] ? parseInt(process.argv[3], 10) : 7;
 const outDir = resolve(process.cwd(), 'logs/probe-zimage-cloud');
 mkdirSync(outDir, { recursive: true });
 
-const baseUrl = process.env['COMFY_CLOUD_URL'] ?? 'https://cloud.comfy.org/api';
+const baseUrl = process.env['COMFYUI_BASE_URL'] ?? 'https://cloud.comfy.org/api';
 const apiKey = process.env['COMFY_CLOUD_API_KEY'];
 if (!apiKey) {
   console.error('COMFY_CLOUD_API_KEY is not set in env. Aborting.');

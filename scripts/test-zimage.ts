@@ -6,11 +6,14 @@
  */
 
 import 'dotenv/config';
+import { readFileSync } from 'fs';
 import * as path from 'path';
 import {
   ComfyUIClient,
   loadWorkflowTemplate,
+  parameterizeGeneric,
   parameterizeWorkflowByName,
+  aspectRatioToDimensions,
 } from '../src/services/comfyui/index.js';
 import { getRegistry } from '../src/services/comfyui/WorkflowRegistry.js';
 
@@ -92,6 +95,7 @@ async function main() {
   const baseUrl = args.url || process.env['COMFYUI_BASE_URL'] || 'http://localhost:8188';
   const outputDir = args.output || './outputs';
   const aspectRatio = (args.aspect || '16:9') as '16:9' | '9:16' | '1:1' | '4:3' | '3:4';
+  const isCloudMode = process.env['COMFY_MODE'] === 'cloud';
 
   console.log('============================================================');
   console.log('ComfyUI Z-Image Text-to-Image Test');
@@ -104,27 +108,46 @@ async function main() {
   console.log(`Output:   ${path.resolve(outputDir)}`);
   console.log('============================================================\n');
 
-  const registry = getRegistry();
-  const meta = registry.get('zimage');
-  if (!meta) {
-    throw new Error('Z-Image workflow metadata not found');
+  let workflowId = 'zimage';
+  let workflow: Record<string, unknown>;
+  if (isCloudMode) {
+    workflowId = 'zimage_cloud';
+    const [width, height] = aspectRatioToDimensions(aspectRatio);
+    const workflowPath = path.resolve(process.cwd(), 'workflows/cloud/zimage_standard_cloud.json');
+    const manifestPath = path.resolve(process.cwd(), 'workflows/cloud/zimage_standard_cloud.manifest.json');
+    const template = JSON.parse(readFileSync(workflowPath, 'utf-8'));
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    workflow = parameterizeGeneric(template, manifest, {
+      prompt: args.prompt,
+      negative_prompt: args.negative,
+      seed: args.seed,
+      width,
+      height,
+      filenamePrefix: 'ZImageTest',
+    }) as Record<string, unknown>;
+  } else {
+    const registry = getRegistry();
+    const meta = registry.get('zimage');
+    if (!meta) {
+      throw new Error('Z-Image workflow metadata not found');
+    }
+
+    const template = loadWorkflowTemplate(meta.filename);
+
+    workflow = parameterizeWorkflowByName('zimage', template, {
+      sceneNumber: 1,
+      prompt: args.prompt,
+      negativePrompt: args.negative,
+      seed: args.seed,
+      aspectRatio,
+      filenamePrefix: 'ZImageTest',
+    }) as Record<string, unknown>;
   }
-
-  const template = loadWorkflowTemplate(meta.filename);
-
-  const workflow = parameterizeWorkflowByName('zimage', template, {
-    sceneNumber: 1,
-    prompt: args.prompt,
-    negativePrompt: args.negative,
-    seed: args.seed,
-    aspectRatio,
-    filenamePrefix: 'ZImageTest',
-  });
 
   const client = new ComfyUIClient({ baseUrl, outputDir, timeout: 600 });
 
   try {
-    const savedPath = await client.generateAndDownload(workflow as Record<string, unknown>);
+    const savedPath = await client.generateAndDownload(workflow, undefined, undefined, 10, { workflowId });
     console.log(`\n✅ Image generated and saved to: ${savedPath}`);
   } catch (err) {
     console.error('\n❌ Generation failed:', err);

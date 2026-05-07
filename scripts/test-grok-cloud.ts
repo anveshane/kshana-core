@@ -12,7 +12,7 @@ import { basename } from 'path';
 import WebSocket from 'ws';
 
 const API_KEY = process.env['COMFY_CLOUD_API_KEY'];
-const CLOUD_URL = (process.env['COMFY_CLOUD_URL'] || 'https://cloud.comfy.org/api').replace(/\/$/, '');
+const CLOUD_URL = (process.env['COMFYUI_BASE_URL'] || 'https://cloud.comfy.org/api').replace(/\/$/, '');
 const BASE = CLOUD_URL.replace(/\/api$/, '');
 
 if (!API_KEY) {

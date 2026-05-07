@@ -1,4 +1,4 @@
-import { TypedEventEmitter } from "../../events/EventEmitter.js";
+import { TypedEventEmitter } from '../../events/EventEmitter.js';
 import {
   AuthStorage,
   DefaultResourceLoader,
@@ -9,41 +9,110 @@ import {
   type AgentSession,
   type AgentSessionEvent,
   type ToolDefinition,
-} from "@mariozechner/pi-coding-agent";
-import { getModel } from "@mariozechner/pi-ai";
-import type { GenericAgentResult } from "../../core/agent/AgentResult.js";
-import { kshanaTools } from "./tools/index.js";
-import { createFocusProjectTool, type FocusProjectCallback } from "./tools/focusProject.js";
-import { createRunToTool, type MediaCallback } from "./tools/runTo.js";
-import { createShowShotTool } from "./tools/showShot.js";
+} from '@mariozechner/pi-coding-agent';
+import { getModel } from '@mariozechner/pi-ai';
+import type { Model } from '@mariozechner/pi-ai';
+import type { GenericAgentResult } from '../../core/agent/AgentResult.js';
+import { kshanaTools } from './tools/index.js';
+import { createFocusProjectTool, type FocusProjectCallback } from './tools/focusProject.js';
+import { createRunToTool, type MediaCallback } from './tools/runTo.js';
+import { createShowShotTool } from './tools/showShot.js';
 import {
   createShowFirstFrameTool,
   createShowLastFrameTool,
   createShowShotVideoTool,
   createShowFinalVideoTool,
-} from "./tools/showAsset.js";
-import { createDispatchRunToTool } from "./tools/dispatchRunTo.js";
-import { loadOrchestratorPrompt } from "./prompt.js";
-import { selectToolsForRole, type SessionRole } from "./selectToolsForRole.js";
-import { ensureDir, getKshanaConfigDir, getProjectsDir, REPO_ROOT } from "./paths.js";
-import { ensureOpenRouterApiKeyFromEnv } from "./ensureOpenRouterKey.js";
+} from './tools/showAsset.js';
+import { createDispatchRunToTool } from './tools/dispatchRunTo.js';
+import { loadOrchestratorPrompt } from './prompt.js';
+import { selectToolsForRole, type SessionRole } from './selectToolsForRole.js';
+import { ensureDir, getKshanaConfigDir, getProjectsDir, REPO_ROOT } from './paths.js';
+import { ensureOpenRouterApiKeyFromEnv } from './ensureOpenRouterKey.js';
 
-const REPO_ROOT_PROMPTS = join(REPO_ROOT, "prompts");
-import { translatePiEvent, type TranslationContext } from "./translateEvent.js";
-import { join } from "node:path";
+const REPO_ROOT_PROMPTS = join(REPO_ROOT, 'prompts');
+import { translatePiEvent, type TranslationContext } from './translateEvent.js';
+import { join } from 'node:path';
+
+function envTrim(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value || undefined;
+}
+
+function envNumber(name: string, fallback: number): number {
+  const value = Number(envTrim(name));
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function openAiCompatibleProxyModel(): Model<'openai-completions'> | undefined {
+  const baseUrl = envTrim('OPENAI_BASE_URL');
+  const apiKey = envTrim('OPENAI_API_KEY');
+  if (!baseUrl || !apiKey) return undefined;
+
+  const modelId = envTrim('OPENAI_MODEL') ?? 'deepseek/deepseek-v4-flash';
+  const lowerModel = modelId.toLowerCase();
+  const reasoning =
+    lowerModel.includes('deepseek') ||
+    lowerModel.includes('qwen') ||
+    lowerModel.includes('gpt-5') ||
+    lowerModel.includes('reason');
+
+  return {
+    id: modelId,
+    name: modelId,
+    api: 'openai-completions',
+    provider: 'openai',
+    baseUrl,
+    reasoning,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: envNumber('LLM_CONTEXT_TOKENS', 160000),
+    maxTokens: envNumber('LLM_MAX_TOKENS', 64000),
+  };
+}
+
+export function resolvePiSessionModel(): Model<string> {
+  ensureOpenRouterApiKeyFromEnv();
+
+  const tierProvider = envTrim('LLM_TIER_HEAVY_PROVIDER');
+  const tierModel = envTrim('LLM_TIER_HEAVY_MODEL');
+  if (tierProvider) {
+    return getModel(
+      tierProvider as Parameters<typeof getModel>[0],
+      (tierModel ?? 'deepseek/deepseek-v4-flash') as never
+    ) as Model<string>;
+  }
+
+  const llmProvider = envTrim('LLM_PROVIDER')?.toLowerCase();
+  if (llmProvider === 'openai') {
+    const proxyModel = openAiCompatibleProxyModel();
+    if (proxyModel) return proxyModel;
+    return getModel('openai', (envTrim('OPENAI_MODEL') ?? 'gpt-4o') as never) as Model<string>;
+  }
+  if (llmProvider === 'openrouter') {
+    return getModel(
+      'openrouter',
+      (envTrim('OPENROUTER_MODEL') ?? 'deepseek/deepseek-v4-flash') as never
+    ) as Model<string>;
+  }
+
+  return getModel('openrouter', 'deepseek/deepseek-v4-flash') as Model<string>;
+}
 
 /**
  * PiSessionAgent — wraps pi-coding-agent's AgentSession to satisfy the
  * SessionAgent contract that ConversationManager expects.
  */
 export class PiSessionAgent extends TypedEventEmitter {
-  public readonly name = "kshana-pi";
+  public readonly name = 'kshana-pi';
 
   private session?: AgentSession;
   private streaming = false;
   private currentResolve?: (result: GenericAgentResult) => void;
   private currentReject?: (err: Error) => void;
-  private translationContext: TranslationContext = { agentName: "kshana-pi", finalAssistantText: "" };
+  private translationContext: TranslationContext = {
+    agentName: 'kshana-pi',
+    finalAssistantText: '',
+  };
   private unsubscribe?: () => void;
 
   private readonly tools: ToolDefinition[];
@@ -93,12 +162,12 @@ export class PiSessionAgent extends TypedEventEmitter {
       const showLastFrame = createShowLastFrameTool({ onMedia: opts.onMedia });
       const showShotVideo = createShowShotVideoTool({ onMedia: opts.onMedia });
       const showFinalVideo = createShowFinalVideoTool({ onMedia: opts.onMedia });
-      baseTools = baseTools.map((t) => {
-        if (t.name === "kshana_run_to") return mediaRunTo;
-        if (t.name === "kshana_show_first_frame") return showFirstFrame;
-        if (t.name === "kshana_show_last_frame") return showLastFrame;
-        if (t.name === "kshana_show_shot_video") return showShotVideo;
-        if (t.name === "kshana_show_final_video") return showFinalVideo;
+      baseTools = baseTools.map(t => {
+        if (t.name === 'kshana_run_to') return mediaRunTo;
+        if (t.name === 'kshana_show_first_frame') return showFirstFrame;
+        if (t.name === 'kshana_show_last_frame') return showLastFrame;
+        if (t.name === 'kshana_show_shot_video') return showShotVideo;
+        if (t.name === 'kshana_show_final_video') return showFinalVideo;
         return t;
       });
       baseTools = [...baseTools, showShot];
@@ -106,7 +175,7 @@ export class PiSessionAgent extends TypedEventEmitter {
       // No onMedia callback (rare in production) but we still want
       // to dispatch instead of block when we have a session id.
       const sessionRunTo = createRunToTool({ sessionId: opts.sessionId });
-      baseTools = baseTools.map((t) => (t.name === "kshana_run_to" ? sessionRunTo : t));
+      baseTools = baseTools.map(t => (t.name === 'kshana_run_to' ? sessionRunTo : t));
       baseTools = [...baseTools, createShowShotTool({})];
     } else {
       baseTools = [...baseTools, createShowShotTool({})];
@@ -133,19 +202,15 @@ export class PiSessionAgent extends TypedEventEmitter {
   async initialize(): Promise<void> {
     if (this.session) return;
 
-    ensureOpenRouterApiKeyFromEnv();
-
-    const provider = (process.env["LLM_TIER_HEAVY_PROVIDER"] ?? "openrouter") as "openrouter";
-    const modelId = (process.env["LLM_TIER_HEAVY_MODEL"] ?? "deepseek/deepseek-v4-flash") as never;
-    const model = getModel(provider, modelId);
+    const model = resolvePiSessionModel();
 
     const cwd = ensureDir(getProjectsDir());
-    const agentDir = ensureDir(join(getKshanaConfigDir(), "pi-agent"));
+    const agentDir = ensureDir(join(getKshanaConfigDir(), 'pi-agent'));
 
-    const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
-    const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, "models.json"));
+    const authStorage = AuthStorage.create(join(agentDir, 'auth.json'));
+    const modelRegistry = ModelRegistry.create(authStorage, join(agentDir, 'models.json'));
     const settingsManager = SettingsManager.create(cwd, agentDir);
-    const skillsDir = join(REPO_ROOT_PROMPTS, "skills");
+    const skillsDir = join(REPO_ROOT_PROMPTS, 'skills');
     const resourceLoader = new DefaultResourceLoader({
       cwd,
       agentDir,
@@ -167,20 +232,20 @@ export class PiSessionAgent extends TypedEventEmitter {
       settingsManager,
     });
     this.session = result.session;
-    this.unsubscribe = this.session.subscribe((event) => this.handleEvent(event));
+    this.unsubscribe = this.session.subscribe(event => this.handleEvent(event));
   }
 
   async run(task: string, userResponse?: string): Promise<GenericAgentResult> {
     if (!this.session) {
-      throw new Error("PiSessionAgent.run() called before initialize()");
+      throw new Error('PiSessionAgent.run() called before initialize()');
     }
     const text = userResponse ? `${task}\n\n${userResponse}`.trim() : task;
     if (!text) {
-      return { status: "completed", output: "", todos: [] };
+      return { status: 'completed', output: '', todos: [] };
     }
 
     this.streaming = true;
-    this.translationContext = { agentName: this.name, finalAssistantText: "" };
+    this.translationContext = { agentName: this.name, finalAssistantText: '' };
 
     return await new Promise<GenericAgentResult>((resolve, reject) => {
       this.currentResolve = resolve;
@@ -207,7 +272,7 @@ export class PiSessionAgent extends TypedEventEmitter {
   }
 
   getToolNames(): string[] {
-    return this.tools.map((t) => t.name);
+    return this.tools.map(t => t.name);
   }
 
   setAutonomousMode(_enabled: boolean): void {
@@ -232,7 +297,7 @@ export class PiSessionAgent extends TypedEventEmitter {
       this.streaming = false;
       const resolve = this.currentResolve;
       this.cleanupRun();
-      resolve?.({ status: "completed", output: r.agentEndOutput, todos: [] });
+      resolve?.({ status: 'completed', output: r.agentEndOutput, todos: [] });
     }
   }
 
