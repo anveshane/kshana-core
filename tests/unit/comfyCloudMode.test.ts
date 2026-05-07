@@ -26,7 +26,7 @@ describe('ComfyUI Cloud: configuration', () => {
     const config = getComfyConfig({
       COMFY_MODE: 'cloud',
       COMFY_CLOUD_API_KEY: 'my-cloud-key',
-      COMFY_CLOUD_URL: 'https://cloud.comfy.org/api',
+      COMFYUI_BASE_URL: 'https://cloud.comfy.org/api',
     });
     expect(config.baseUrl).toBe('https://cloud.comfy.org/api');
     expect(config.apiKey).toBe('my-cloud-key');
@@ -58,6 +58,7 @@ describe('ComfyUI Cloud: auth headers', () => {
     const client = new ComfyUIClient({
       baseUrl: 'http://localhost:8188',
       apiKey: undefined,
+      isCloud: false,
     });
     const headers = (client as any).buildHeaders();
     expect(headers['X-API-Key']).toBeUndefined();
@@ -80,6 +81,7 @@ describe('ComfyUI Cloud: auth headers', () => {
     const client = new ComfyUIClient({
       baseUrl: 'http://localhost:8188',
       apiKey: undefined,
+      isCloud: false,
     });
     const wsUrl = (client as any).buildWsUrl('my-client-id');
     expect(wsUrl).toContain('ws://localhost:8188/ws');

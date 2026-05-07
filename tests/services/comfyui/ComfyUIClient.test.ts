@@ -5,6 +5,7 @@ import WebSocket from 'ws';
 vi.mock('ws', () => {
   class MockWebSocket {
     static instances: MockWebSocket[] = [];
+    static calls: Array<{ url: string; options: unknown }> = [];
     handlers: Record<string, ((arg?: any) => void) | undefined> = {};
     url: string;
     options: unknown;
@@ -12,6 +13,7 @@ vi.mock('ws', () => {
     constructor(url: string, options?: unknown) {
       this.url = url;
       this.options = options;
+      MockWebSocket.calls.push({ url, options });
       MockWebSocket.instances.push(this);
       queueMicrotask(() => this.handlers.open?.());
     }
@@ -45,6 +47,8 @@ describe('ComfyUIClient request behavior', () => {
   afterEach(() => {
     global.fetch = originalFetch;
     delete process.env['COMFY_CLOUD_API_KEY'];
+    (WebSocket as unknown as { instances: unknown[]; calls: unknown[] }).instances.length = 0;
+    (WebSocket as unknown as { instances: unknown[]; calls: unknown[] }).calls.length = 0;
   });
 
   it('adds X-API-Key and /api prefix for Comfy Cloud queue requests', async () => {
@@ -82,6 +86,7 @@ describe('ComfyUIClient request behavior', () => {
       outputDir: '/tmp',
       timeout: 300,
       apiKey: undefined,
+      isCloud: false,
     });
 
     await client.queueWorkflow({ '1': { class_type: 'Test', inputs: {} } });
@@ -91,7 +96,7 @@ describe('ComfyUIClient request behavior', () => {
     expect(new Headers(init.headers).get('X-API-Key')).toBeNull();
   });
 
-  it('hits /api/prompt when COMFY_CLOUD_URL has trailing /api (regression)', async () => {
+  it('hits /api/prompt when COMFYUI_BASE_URL has trailing /api (regression)', async () => {
     // Regression: stripping `/api` from baseUrl in the constructor (commit ad042ef)
     // accidentally broke queueWorkflow, which built `${baseUrl}/prompt` directly
     // without going through getPath(). Result: every cloud submit hit
@@ -241,6 +246,75 @@ describe('ComfyUIClient request behavior', () => {
       status: 'completed',
       prompt_id: 'prompt-1',
     });
+  });
+
+  it('uses token query without bearer websocket headers for direct Comfy Cloud', async () => {
+    process.env['COMFY_CLOUD_API_KEY'] = 'cloud-key';
+    const client = new ComfyUIClient({
+      baseUrl: 'https://cloud.comfy.org',
+      outputDir: '/tmp',
+      timeout: 300,
+      apiKey: 'cloud-key',
+    });
+
+    const waitPromise = client.waitForCompletionWS('prompt-1', 'client-1');
+    const wsInstance = (WebSocket as unknown as { instances: Array<{ emit: (event: string, payload?: any) => void }> }).instances[0]!;
+    wsInstance.emit('message', JSON.stringify({ type: 'execution_success', data: { prompt_id: 'prompt-1' } }));
+    await waitPromise;
+
+    const call = (WebSocket as unknown as { calls: Array<{ url: string; options: unknown }> }).calls[0]!;
+    expect(call.url).toBe('wss://cloud.comfy.org/ws?clientId=client-1&token=cloud-key');
+    expect(call.options).toBeUndefined();
+  });
+
+  it('falls back to HTTP polling when cloud queue websocket closes before completion', async () => {
+    process.env['COMFY_CLOUD_API_KEY'] = 'cloud-key';
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ prompt_id: 'prompt-1' }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          'prompt-1': {
+            status: { completed: true, status_str: 'success' },
+            outputs: {
+              '9': {
+                images: [{ filename: 'cloud.png', subfolder: '', type: 'output' }],
+              },
+            },
+          },
+        }),
+      });
+    global.fetch = fetchMock as typeof fetch;
+
+    const client = new ComfyUIClient({
+      baseUrl: 'https://cloud.comfy.org',
+      outputDir: '/tmp',
+      timeout: 300,
+      apiKey: 'cloud-key',
+    });
+
+    const waitPromise = client.queueAndWaitWS({ '1': { class_type: 'Test', inputs: {} } });
+    await Promise.resolve();
+    await Promise.resolve();
+    const wsInstance = (WebSocket as unknown as { instances: Array<{ emit: (event: string, payload?: any) => void }> }).instances[0]!;
+    wsInstance.emit('close');
+
+    await expect(waitPromise).resolves.toMatchObject({
+      result: { status: 'completed', prompt_id: 'prompt-1' },
+      promptId: 'prompt-1',
+      outputs: [],
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://cloud.comfy.org/api/history_v2/prompt-1',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-API-Key': 'cloud-key' }),
+      }),
+    );
   });
 
   it('uses cached cloud outputs from executed websocket messages', async () => {

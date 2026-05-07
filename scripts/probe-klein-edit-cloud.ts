@@ -47,7 +47,7 @@ console.log(`  base:    ${basePath}`);
 console.log(`  ref_1:   ${arthurPath}`);
 console.log(`  ref_2:   ${mayaPath}`);
 
-const baseUrl = process.env['COMFY_CLOUD_URL'] ?? 'https://cloud.comfy.org/api';
+const baseUrl = process.env['COMFYUI_BASE_URL'] ?? 'https://cloud.comfy.org/api';
 const apiKey = process.env['COMFY_CLOUD_API_KEY'];
 if (!apiKey) {
   console.error('COMFY_CLOUD_API_KEY is not set in env. Aborting.');

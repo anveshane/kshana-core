@@ -682,7 +682,7 @@ export class ComfyUIProvider implements GenerationProvider {
         maxSteps: info.maxSteps,
         currentNode: info.currentNode,
       });
-    }, workflowId ? { kshana_workflow_id: workflowId, kshana: { workflowId } } : undefined);
+    }, { workflowId });
 
     if (result.status !== 'completed' && result.status !== 'completed_with_timeout') {
       const detail = result.errorMessage ? `: ${result.errorMessage}` : '';
