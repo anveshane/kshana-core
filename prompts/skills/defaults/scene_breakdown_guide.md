@@ -19,6 +19,68 @@ If the scene needs an entity that isn't in `<available_refs>`, describe it by pr
 
 ---
 
+## Scene Transitions — REQUIRED FIELDS (entry / exit)
+
+Every scene declares two strings at the top level:
+
+- **`entry`**: 1–2 sentences describing how this scene visually picks up
+  from the prior scene's last frame. The first shot of this scene must
+  begin from that exact composition (same character pose, same threshold)
+  with only the new scene's setting starting to come into view.
+- **`exit`**: 1–2 sentences describing how this scene sets up the next
+  scene's opener. The last shot's last_frame must show the main subject
+  at a threshold (door, edge, gate) that the next scene will pick up.
+
+The user's rule (treat as law): **end of scene N flows into start of
+scene N+1**. The character exits door A in scene N's last shot; in
+scene N+1's first shot, they enter through the same door on the other
+side. No teleporting, no "and now we're somewhere else."
+
+For the first scene of the project: `entry` describes how the project
+opens (e.g., "Fade-in from black on the protagonist already in place at
+the village wall"). For the last scene: `exit` describes the closing
+(e.g., "Hold on the protagonist's silhouette at the dawn road").
+
+```json
+{
+  "entry": "Lena steps off the trap-door threshold from scene 1's exit, foot landing on damp moss.",
+  "exit": "Lena halts at the forest edge, the dawn road and patrol car visible through the trees ahead.",
+  "shots": [...]
+}
+```
+
+These transitions are not narrative-only — the image pipeline reads them
+to chain `scene_N_shot_1.first_frame` on `scene_(N-1).last_shot.last_frame`.
+Vague exits like "she walks away" produce vague handoffs.
+
+## One Setting Per Scene — HARD RULE
+
+A scene = one location. Every shot in a scene must reference the **same**
+`setting` refId via `focus.primary` or `focus.background[]`. If your scene
+needs more than one setting, that's a sign you should **split it into two
+scenes** — the second scene starts where the first ended (e.g. character
+exits door A, scene 2 opens with them entering location B).
+
+The only exception: when the main subject is physically traversing between
+two locations within the same continuous beat (running through a forest,
+crossing a marketplace), you may reference 2 settings ONLY if you also
+include a shot with `continuityRole: 'bridge'` (or `entry`/`exit`) marking
+the transition.
+
+The image generator has 4 reference slots total. Slot 1 is reserved for the
+setting (the base canvas). Two settings competing for slot 1 produces
+mangled framing — see the "Out of this world" diner shots and "The Village"
+shot 2.3 for cautionary examples.
+
+## Reference cap per shot — 4 maximum
+
+Across the union of `mainSubject`, `secondarySubject`, `focus.primary`,
+`focus.background[]`, and `focus.lurking`, a single shot must reference at
+most 4 distinct entities. Drop priority when over: extra settings first
+(keep one), then non-mainSubject characters, then the secondary subject.
+Never put a character in `focus.background[]` purely as decoration — it
+costs a slot.
+
 ## Scene Main Subject — REQUIRED
 
 Every scene MUST declare `mainSubject` at the scene_video_prompt level — **copied verbatim from the character refIds in `<available_refs>`**. Example: if the available refs list includes `vikram`, write `"mainSubject": "vikram"` — never `"Vikram"`, `"vikram_reddy"`, or `"protagonist"`.

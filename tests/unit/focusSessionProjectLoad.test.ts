@@ -71,4 +71,43 @@ describe("ConversationManager.focusSessionProject reads project.json from KSHANA
       /not found|unreadable/i,
     );
   });
+
+  /**
+   * GIVEN the desktop opens project "demo" — kshanaCoreManager calls
+   *       `manager.focusSessionProject(sessionId, "demo")` BEFORE the
+   *       user types any task.
+   *
+   *  WHEN the user then sends the very first task on that session.
+   *
+   *  THEN `applyProjectAnnouncement` must still inject the
+   *       "(Active project: demo. …)" prefix so pi-agent reads the
+   *       active project in its prompt — otherwise pi falls back to
+   *       `kshana_list_projects`, only sees `.kshana`-suffixed dirs,
+   *       and confidently picks the wrong one (the BurgerEating-vs-
+   *       The-Village bug from the field).
+   *
+   *  This regression check looks at the post-focus session state: if
+   *  `announcedProject` was pre-set to the focus target, the very
+   *  next `applyProjectAnnouncement` call will short-circuit and the
+   *  agent will never see the announcement.
+   */
+  it("does NOT pre-mark the project as announced — the first runTask must still emit the announcement", async () => {
+    const cm = new ConversationManager({
+      llmConfig: { baseUrl: "x", apiKey: "x", model: "x" } as never,
+    });
+    const session = cm.createSession();
+
+    await cm.focusSessionProject(session.id, "demo");
+
+    // Reach into the private session map — we test the contract that
+    // a fresh focus leaves announcedProject unset.
+    const sessions = (
+      cm as unknown as {
+        sessions: Map<string, { focusedProject?: string; announcedProject?: string }>;
+      }
+    ).sessions;
+    const internal = sessions.get(session.id)!;
+    expect(internal.focusedProject).toBe("demo");
+    expect(internal.announcedProject).toBeUndefined();
+  });
 });

@@ -23,6 +23,46 @@ export function getPreviousShotId(itemId: string): string | null {
 }
 
 /**
+ * Like `getPreviousShotId`, but crosses scene boundaries (Layer C2).
+ *
+ * For shot 1 of scene N (N>1), returns the highest-numbered completed
+ * shot_image itemId in scene N-1 — so the first shot of a new scene can
+ * chain its first_frame on the previous scene's last completed shot's
+ * last_frame. Pre-Layer-C2 behaviour was to start fresh at every scene
+ * boundary, which broke the user's "exits door A → enters door B" rule.
+ *
+ * Returns null for scene 1 shot 1, or when the prior scene has no
+ * completed shot_image nodes.
+ */
+export function getPreviousShotIdAcrossScenes(
+  itemId: string,
+  executor: { getAllNodes: () => ExecutionNode[] },
+): string | null {
+  // Same-scene predecessor first (preserve existing behaviour for shot 2+).
+  const sameScene = getPreviousShotId(itemId);
+  if (sameScene) return sameScene;
+
+  const sceneMatch = itemId.match(/^scene_(\d+)_shot_1$/);
+  if (!sceneMatch) return null;
+  const sceneNum = parseInt(sceneMatch[1]!, 10);
+  if (sceneNum <= 1) return null;
+
+  const prevSceneId = `scene_${sceneNum - 1}`;
+  const candidates = executor.getAllNodes()
+    .filter(n => n.typeId === 'shot_image'
+      && n.status === 'completed'
+      && typeof n.itemId === 'string'
+      && n.itemId.startsWith(`${prevSceneId}_shot_`))
+    .map(n => ({
+      itemId: n.itemId as string,
+      shotNum: parseInt((n.itemId as string).match(/shot_(\d+)$/)?.[1] ?? '0', 10),
+    }))
+    .sort((a, b) => b.shotNum - a.shotNum);
+
+  return candidates[0]?.itemId ?? null;
+}
+
+/**
  * Get the last frame image path from a completed shot_image node.
  * Prefers outputPaths.last_frame, falls back to outputPath (single frame).
  * Returns null if the node isn't completed or has no output.
@@ -69,41 +109,20 @@ export function filterSubsumedShots<T extends { segmentId: string; strategy?: st
 }
 
 /**
- * Purposes that need completely fresh generation (no source video to extend from).
- *
- * In practice, extending too aggressively produces visual drift and clumsy
- * transitions when a shot introduces a brand-new subject or mood. These
- * purposes signal that the composition is meant to be distinct from what
- * came before, so we start fresh:
- *
- * - set_the_world: establishing shot of a new location
- * - show_change:   dramatic visual transformation (time skip, flashback)
- * - meet_character: introduces a character — the composition is built around
- *                   the new subject, not the prior shot's tail frame
- * - set_the_mood:  mood-setting compositions benefit from a clean slate
- *                  rather than extending from the previous action
- */
-const FRESH_PURPOSES = new Set([
-  'set_the_world',
-  'show_change',
-  'meet_character',
-  'set_the_mood',
-]);
-
-/**
  * Determine video generation strategy for a shot.
  *
+ * Per locked scope (Layer B1, /Users/ganaraj/.claude/plans/...): no
+ * FRESH_PURPOSES carve-out. Mid-scene shots always extend from the prior
+ * shot regardless of purpose — within a scene we only allow camera-angle
+ * changes and following the character, never a fresh location image.
+ *
  * - Shot 1 of ANY scene → 'flfv' (scene boundary — fresh framing)
- * - FRESH_PURPOSES      → 'flfv'
  * - Everything else     → 'v2v_extend' (continue from previous shot's video)
  */
-export function getVideoStrategy(itemId: string, purpose: string): 'flfv' | 'v2v_extend' {
+export function getVideoStrategy(itemId: string, _purpose: string): 'flfv' | 'v2v_extend' {
   // First shot of any scene → scene boundary, start fresh
   const shotMatch = itemId.match(/^scene_(\d+)_shot_(\d+)$/);
   if (shotMatch && shotMatch[2] === '1') return 'flfv';
-
-  // Purposes that require fresh generation
-  if (FRESH_PURPOSES.has(purpose)) return 'flfv';
 
   // Everything else: extend from previous video
   return 'v2v_extend';

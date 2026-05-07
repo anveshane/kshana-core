@@ -101,6 +101,10 @@ export function loadProject(name: string, basePath: string = defaultBasePath()):
 const FRIENDLY_SUFFIX_TO_TYPE: Record<string, string> = {
   '.prompt': 'shot_image_prompt',
   '.shot_image_prompt': 'shot_image_prompt',
+  // Order matters: longest suffix first so '.image_last_frame' wins
+  // over '.image' before the latter would partial-match.
+  '.image_last_frame': 'shot_image_last_frame',
+  '.shot_image_last_frame': 'shot_image_last_frame',
   '.image': 'shot_image',
   '.shot_image': 'shot_image',
   '.video': 'shot_video',

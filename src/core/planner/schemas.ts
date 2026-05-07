@@ -106,6 +106,12 @@ export const sceneVideoPromptSchema = z.object({
   mainSubject: z.string().optional(),
   // Optional second pivotal character (for dialogue/reaction reversals)
   secondarySubject: z.string().nullable().optional(),
+  // Scene transitions (Layer C1). Each scene declares how it visually
+  // picks up from the prior scene (`entry`) and how it sets up the next
+  // (`exit`). The image pipeline uses these to chain scene_N_shot_1's
+  // first_frame on scene_(N-1)'s last shot's last_frame.
+  entry: z.string().optional(),
+  exit: z.string().optional(),
   shots: z.array(shotSchema).min(1, 'shots array must not be empty'),
 }).refine(
   (svp) => {

@@ -145,6 +145,70 @@ describe('Cross-shot chaining: prompt guide', () => {
 // Module: crossShotChaining.ts exists
 // ──────────────────────────────────────────────────────────────────────────────
 
+describe('Cross-shot chaining: cross-scene (Layer C2)', () => {
+  // Build a minimal mock executor with a configurable node graph.
+  function mockExec(nodes: Array<{ id: string; itemId?: string; typeId: string; status: string; outputPath?: string }>) {
+    return {
+      getAllNodes: () => nodes,
+      getNode: (id: string) => nodes.find(n => n.id === id),
+    };
+  }
+
+  it('getPreviousShotIdAcrossScenes returns same-scene predecessor when one exists', async () => {
+    const { getPreviousShotIdAcrossScenes } = await import('../../src/core/planner/crossShotChaining.js');
+    const exec = mockExec([
+      { id: 'shot_image:scene_2_shot_1', itemId: 'scene_2_shot_1', typeId: 'shot_image', status: 'completed' },
+      { id: 'shot_image:scene_2_shot_2', itemId: 'scene_2_shot_2', typeId: 'shot_image', status: 'completed' },
+    ]);
+    expect(getPreviousShotIdAcrossScenes('scene_2_shot_3', exec as any)).toBe('scene_2_shot_2');
+  });
+
+  it('getPreviousShotIdAcrossScenes returns prior scene\'s last shot for shot 1 of scene N>1', async () => {
+    const { getPreviousShotIdAcrossScenes } = await import('../../src/core/planner/crossShotChaining.js');
+    const exec = mockExec([
+      { id: 'shot_image:scene_1_shot_1', itemId: 'scene_1_shot_1', typeId: 'shot_image', status: 'completed' },
+      { id: 'shot_image:scene_1_shot_2', itemId: 'scene_1_shot_2', typeId: 'shot_image', status: 'completed' },
+      { id: 'shot_image:scene_1_shot_3', itemId: 'scene_1_shot_3', typeId: 'shot_image', status: 'completed' },
+    ]);
+    expect(getPreviousShotIdAcrossScenes('scene_2_shot_1', exec as any)).toBe('scene_1_shot_3');
+  });
+
+  it('getPreviousShotIdAcrossScenes returns null for scene 1 shot 1 (project start)', async () => {
+    const { getPreviousShotIdAcrossScenes } = await import('../../src/core/planner/crossShotChaining.js');
+    const exec = mockExec([
+      { id: 'shot_image:scene_1_shot_1', itemId: 'scene_1_shot_1', typeId: 'shot_image', status: 'completed' },
+    ]);
+    expect(getPreviousShotIdAcrossScenes('scene_1_shot_1', exec as any)).toBeNull();
+  });
+
+  it('getPreviousShotIdAcrossScenes ignores prior-scene shots that did not complete', async () => {
+    const { getPreviousShotIdAcrossScenes } = await import('../../src/core/planner/crossShotChaining.js');
+    const exec = mockExec([
+      { id: 'shot_image:scene_1_shot_1', itemId: 'scene_1_shot_1', typeId: 'shot_image', status: 'completed' },
+      { id: 'shot_image:scene_1_shot_2', itemId: 'scene_1_shot_2', typeId: 'shot_image', status: 'pending' },
+    ]);
+    expect(getPreviousShotIdAcrossScenes('scene_2_shot_1', exec as any)).toBe('scene_1_shot_1');
+  });
+
+  it('getPreviousShotIdAcrossScenes returns null when prior scene has no completed shots', async () => {
+    const { getPreviousShotIdAcrossScenes } = await import('../../src/core/planner/crossShotChaining.js');
+    const exec = mockExec([
+      { id: 'shot_image:scene_1_shot_1', itemId: 'scene_1_shot_1', typeId: 'shot_image', status: 'pending' },
+    ]);
+    expect(getPreviousShotIdAcrossScenes('scene_2_shot_1', exec as any)).toBeNull();
+  });
+
+  it('getPreviousShotIdAcrossScenes picks the highest shot number in the prior scene', async () => {
+    const { getPreviousShotIdAcrossScenes } = await import('../../src/core/planner/crossShotChaining.js');
+    const exec = mockExec([
+      { id: 'shot_image:scene_1_shot_1', itemId: 'scene_1_shot_1', typeId: 'shot_image', status: 'completed' },
+      { id: 'shot_image:scene_1_shot_5', itemId: 'scene_1_shot_5', typeId: 'shot_image', status: 'completed' },
+      { id: 'shot_image:scene_1_shot_3', itemId: 'scene_1_shot_3', typeId: 'shot_image', status: 'completed' },
+    ]);
+    expect(getPreviousShotIdAcrossScenes('scene_2_shot_1', exec as any)).toBe('scene_1_shot_5');
+  });
+});
+
 describe('Cross-shot chaining: module exists', () => {
   it('crossShotChaining module exports required functions', async () => {
     const mod = await import('../../src/core/planner/crossShotChaining.js');

@@ -532,12 +532,17 @@ export class ComfyUIClient {
           clearInterval(inactivityCheck);
           if (!resolved) {
             resolved = true;
-            try {
-              ws?.close();
-            } catch {
-              /* */
-            }
-            debugLog(`[queueAndWaitWS] Timeout after ${inactiveSec}s — falling back to HTTP polling`);
+            try { ws?.close(); } catch { /* */ }
+            // Both local AND cloud fall back to HTTP polling. The
+            // common cold-start case on cloud (GPU allocating, no
+            // WS messages for several minutes) used to hard-fail
+            // here; polling lets it land when the cold-start
+            // finishes.
+            const fallbackMsg = this.isCloud
+              ? `Cloud WS silent for ${inactiveSec}s — falling back to HTTP polling (likely a GPU cold-start)`
+              : `WS silent for ${inactiveSec}s — falling back to HTTP polling`;
+            debugLog(`[queueAndWaitWS] ${fallbackMsg}`);
+            try { progressCallback?.({ percentage: 0, message: fallbackMsg }); } catch { /* */ }
             fallbackToHttpPolling();
           }
         }
@@ -615,7 +620,15 @@ export class ComfyUIClient {
       ws.on('close', () => {
         if (!resolved) {
           resolved = true;
-          debugLog(`[queueAndWaitWS] WS closed — falling back to HTTP polling`);
+          // WS drops on cloud happen mid-allocation (idle proxy,
+          // transient network); polling the /history endpoint
+          // reliably catches the eventual completion or surfaces a
+          // real error.
+          const fallbackMsg = this.isCloud
+            ? 'Cloud WS closed unexpectedly — falling back to HTTP polling'
+            : 'WS closed — falling back to HTTP polling';
+          debugLog(`[queueAndWaitWS] ${fallbackMsg}`);
+          try { progressCallback?.({ percentage: 0, message: fallbackMsg }); } catch { /* */ }
           fallbackToHttpPolling();
         }
       });

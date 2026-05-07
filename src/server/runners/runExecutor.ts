@@ -56,6 +56,14 @@ export interface RunExecutorTarget {
   nodeId?: string;
   /** Skip ComfyUI image/video generation; only run LLM prompt stages. */
   skipMedia?: boolean;
+  /**
+   * Whitelist for isolated-redo mode. When supplied, the executor's
+   * loop runs ONLY these node ids (filtered against `getNextReady`)
+   * and exits when all are terminal. Other pending work in the graph
+   * is left alone — the explicit "run only what was just invalidated"
+   * mode used by `kshana_run_to scope='last_invalidated'`.
+   */
+  runOnly?: string[];
 }
 
 export interface RunExecutorAssetEvent {
@@ -85,6 +93,18 @@ export interface RunExecutorOpts {
 
   /** Custom name shown in executor logs. Default: 'in-process'. */
   name?: string | undefined;
+
+  /**
+   * Vision-LLM master switch. When false, ExecutorAgent skips ALL
+   * VLM calls (the in-executor reviewImageWithVLM retry-once gate +
+   * any sibling oversight describe-call). When true (or undefined),
+   * the executor falls back to its env-driven default (DISABLE_VLM).
+   *
+   * The runtime constraint `piOversight && vlmJudge` is computed by
+   * the caller (typically `executeRunTo` in the runner singleton);
+   * this option just delivers the resolved boolean to the executor.
+   */
+  vlmEnabled?: boolean | undefined;
 
   /**
    * Override agent construction. Production callers should leave this
@@ -147,7 +167,22 @@ export async function runExecutor(opts: RunExecutorOpts): Promise<RunExecutorRes
     ...(stopAtStage ? { stopAtStage } : {}),
     ...(stopAfterNode ? { stopAfterNode } : {}),
     ...(skipMedia ? { skipMediaGeneration: true } : {}),
+    ...(typeof opts.vlmEnabled === 'boolean'
+      ? { vlmEnabled: opts.vlmEnabled }
+      : {}),
   });
+
+  // Pin the isolated-redo whitelist BEFORE run() so the loop's
+  // first tick already filters readyNodes against it. Falsy / empty
+  // arrays don't pin (full graph drain semantics — the
+  // "continue from here" mode).
+  const runOnly = opts.target.runOnly;
+  if (runOnly && runOnly.length > 0) {
+    const ag = agent as unknown as {
+      setRedoOnlyNodes?: (ids: string[] | null) => void;
+    };
+    ag.setRedoOnlyNodes?.(runOnly);
+  }
 
   // Track the latest node-id we saw in a tool_call so onAsset events
   // can be tagged with what they belong to. Not perfect (interleaved

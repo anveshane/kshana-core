@@ -1,9 +1,10 @@
 import { Type, type Static } from "typebox";
 import { defineTool } from "@mariozechner/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { computeStatus, type ProjectFile, type StatusSummary } from "../../../server/agentOps.js";
 import { getProjectsDir } from "../paths.js";
+import { resolveProjectDir, ProjectDirNotFoundError } from "./resolveProjectDir.js";
 
 const Params = Type.Object({
   project: Type.String({ description: "Project name (folder is <project>.kshana)" }),
@@ -49,8 +50,16 @@ export const kshanaStatus = defineTool({
     "Quick snapshot of a kshana project: which stages are done, in progress, or failed. Use this when the user asks 'where is project X at?' — do NOT run the pipeline.",
   parameters: Params,
   async execute(_id, params: Static<typeof Params>) {
-    const projectDir = resolve(getProjectsDir(), `${params.project}.kshana`);
-    if (!existsSync(projectDir)) return failure(`Project not found: ${projectDir}`);
+    let projectDir: string;
+    try {
+      projectDir = resolveProjectDir({
+        name: params.project,
+        basePath: getProjectsDir(),
+      });
+    } catch (err) {
+      if (err instanceof ProjectDirNotFoundError) return failure(err.message);
+      throw err;
+    }
     const projectJsonPath = join(projectDir, "project.json");
     if (!existsSync(projectJsonPath)) return failure(`project.json not found in ${projectDir}`);
     const project = JSON.parse(readFileSync(projectJsonPath, "utf-8")) as ProjectFile;

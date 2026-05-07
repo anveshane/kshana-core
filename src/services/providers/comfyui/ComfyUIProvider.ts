@@ -111,10 +111,13 @@ export class ComfyUIProvider implements GenerationProvider {
       // drop). Klein is the composition workhorse. Fall back to Klein
       // for first-frame gen; keep Grok only for `editImage` (deltas).
       if (pipeline === 'image_editing' && activeMode?.id === 'grok_image_edit') {
-        // Composition workhorse for first-frame gen is the consistency-LoRA
-        // Klein variant — it's the default for image_editing now (the base
-        // flux2_klein_edit_cloud is kept around but inactive).
-        const kleinMode = modeRegistry.getMode('flux2_klein_edit_consistency_cloud');
+        // Composition workhorse for first-frame gen is the plain (no-LoRA)
+        // FLUX 2 Klein workflow — that's the default for image_editing now.
+        // The consistency-LoRA variant (flux2_klein_edit_consistency_cloud)
+        // and the detail-LoRA variant (flux2_klein_edit_detail_cloud) are
+        // kept in the registry but inactive; flip their `active` flags to
+        // route through them again for A/B comparisons.
+        const kleinMode = modeRegistry.getMode('flux2_klein_edit_cloud');
         if (kleinMode?.active) {
           activeMode = kleinMode;
           debugLog('generateImage: Grok active for edits, but routing composition to Klein (grok_image_edit reserved for editImage deltas)');

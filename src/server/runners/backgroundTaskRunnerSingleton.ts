@@ -29,12 +29,22 @@ import { classifyRunTarget } from './classifyRunTarget.js';
 import { resolveNodeId, type ExecutorState } from '../../core/project/projectTypes.js';
 import type { GenericProjectFile } from '../../core/templates/types.js';
 import { clearStaleStopFile } from './preflightStopFile.js';
+import { effectiveVlmEnabled } from './effectiveVlmEnabled.js';
+import { getOversight } from '../oversightState.js';
 
 async function executeRunTo(ctx: TaskExecutionContext): Promise<void | ExecutorCancelled> {
   const params = ctx.spec.params as {
     projectDir?: string;
     stage?: string;
     skip_media?: boolean;
+    /**
+     * 'all' (default) → drain everything pending in the graph
+     * 'last_invalidated' → run ONLY the ids stored on
+     *   `executorState.lastInvalidatedIds` by the most-recent
+     *   `kshana_invalidate` call. Honors the user's "redo this and
+     *   stop, don't auto-cascade" rule.
+     */
+    scope?: 'all' | 'last_invalidated';
   };
 
   const projectDir = resolveProjectDir({
@@ -83,15 +93,54 @@ async function executeRunTo(ctx: TaskExecutionContext): Promise<void | ExecutorC
     };
   }
 
+  // Last-invalidated whitelist: read on dispatch (not lazy) so a
+  // concurrent invalidate can't slip a stale list in mid-run. Empty
+  // list when scope='last_invalidated' but nothing was previously
+  // invalidated — the executor will exit immediately rather than
+  // silently fall through to "run everything", which would surprise
+  // the user.
+  let runOnly: string[] | undefined;
+  if (params.scope === 'last_invalidated') {
+    const state = (project as unknown as {
+      executorState?: { lastInvalidatedIds?: string[] };
+    }).executorState;
+    runOnly = state?.lastInvalidatedIds ?? [];
+    ctx.hooks.onNotification({
+      level: 'info',
+      message:
+        runOnly.length === 0
+          ? 'scope=last_invalidated, but no nodes were previously invalidated — nothing to run.'
+          : `scope=last_invalidated — running ONLY the ${runOnly.length} previously-invalidated node(s).`,
+    });
+  }
+
+  // Resolve the VLM master switch at run start. Source of truth is
+  // the process-wide `oversightState` (mutated by
+  // ConversationManager.setPiOversight / setVLMJudge, in turn driven
+  // by the desktop's AppSettings + chat-header toggles). Both
+  // toggles default to true. Runtime constraint is
+  // `piOversight && vlmJudge` — VLM standalone has no consumer.
+  //
+  // Snapshot semantics: the value is captured at task dispatch and
+  // doesn't propagate mid-run. Flipping the toggle while a run is
+  // active changes the NEXT run, not this one.
+  const oversight = getOversight();
+  const vlmEnabledForRun = effectiveVlmEnabled({
+    piOversight: oversight.piOversight,
+    vlmJudge: oversight.vlmJudge,
+  });
+
   const result = await runExecutor({
     project,
     projectDir,
     target: {
       ...resolvedTarget,
       ...(params.skip_media ? { skipMedia: true } : {}),
+      ...(runOnly ? { runOnly } : {}),
     },
     signal: ctx.signal,
     name: 'task-runner-run-to',
+    vlmEnabled: vlmEnabledForRun,
     onTool: (info) => ctx.hooks.onTool(info),
     onResult: (info) => ctx.hooks.onResult(info),
     onNotification: (info) => ctx.hooks.onNotification(info),
