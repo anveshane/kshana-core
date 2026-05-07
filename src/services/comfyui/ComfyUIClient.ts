@@ -33,7 +33,11 @@ let debugDirEnsured = false;
 function debugLog(message: string): void {
   try {
     if (!debugDirEnsured) {
-      try { fs.mkdirSync(DEBUG_LOG_DIR, { recursive: true }); } catch { /* ignore */ }
+      try {
+        fs.mkdirSync(DEBUG_LOG_DIR, { recursive: true });
+      } catch {
+        /* ignore */
+      }
       debugDirEnsured = true;
     }
     const timestamp = new Date().toISOString();
@@ -48,6 +52,7 @@ export interface ComfyUIClientConfig {
   outputDir: string;
   timeout: number; // seconds
   apiKey?: string; // ComfyUI Cloud API key (X-API-Key header)
+  isCloud?: boolean;
 }
 
 /**
@@ -57,13 +62,16 @@ export interface ComfyUIClientConfig {
  * Local: uses COMFYUI_BASE_URL (default localhost:8188)
  * Cloud: uses COMFY_CLOUD_URL + COMFY_CLOUD_API_KEY
  */
-export function getComfyConfig(env: Record<string, string | undefined> = process.env as any): Partial<ComfyUIClientConfig> {
+export function getComfyConfig(
+  env: Record<string, string | undefined> = process.env as any
+): Partial<ComfyUIClientConfig> {
   const mode = env['COMFY_MODE'] || 'local';
   if (mode === 'cloud') {
     return {
       baseUrl: env['COMFY_CLOUD_URL'] || 'https://cloud.comfy.org/api',
       apiKey: env['COMFY_CLOUD_API_KEY'],
       timeout: parseInt(env['COMFYUI_TIMEOUT'] || '300', 10),
+      isCloud: true,
     };
   }
   return {
@@ -141,6 +149,7 @@ function buildDefaultConfig(): ComfyUIClientConfig {
     outputDir: './outputs',
     timeout: envConfig.timeout || 300,
     apiKey: envConfig.apiKey,
+    isCloud: envConfig.isCloud,
   };
 }
 
@@ -158,6 +167,7 @@ export class ComfyUIClient {
 
   constructor(config: Partial<ComfyUIClientConfig> = {}) {
     const merged = { ...buildDefaultConfig(), ...config };
+    const hasExplicitBaseUrl = config.baseUrl !== undefined;
     // Normalize baseUrl: strip trailing slash AND a trailing `/api` segment
     // so `getPath` (which prepends `/api` in cloud mode) doesn't produce
     // a double `/api/api/...` path. Users routinely set
@@ -167,12 +177,14 @@ export class ComfyUIClient {
     this.outputDir = merged.outputDir;
     this.timeout = merged.timeout;
     this.apiKey = merged.apiKey;
-    this.isCloud = isComfyCloudUrl(this.baseUrl);
+    this.isCloud =
+      config.isCloud ??
+      ((!hasExplicitBaseUrl && Boolean(merged.isCloud)) || isComfyCloudUrl(this.baseUrl));
     this.cloudApiKey = merged.apiKey;
 
     if (this.isCloud && !this.cloudApiKey) {
       throw new Error(
-        'COMFY_CLOUD_API_KEY is required when COMFYUI_BASE_URL points to https://cloud.comfy.org',
+        'COMFY_CLOUD_API_KEY is required when COMFY_MODE=cloud or the Comfy URL points to https://cloud.comfy.org'
       );
     }
   }
@@ -211,7 +223,7 @@ export class ComfyUIClient {
   private async request(
     pathname: string,
     init: RequestInit = {},
-    searchParams?: URLSearchParams,
+    searchParams?: URLSearchParams
   ): Promise<Response> {
     return fetch(this.buildUrl(pathname, searchParams), {
       ...init,
@@ -230,6 +242,15 @@ export class ComfyUIClient {
       url += `&token=${this.apiKey}`;
     }
     return url;
+  }
+
+  private buildWsOptions(): WebSocket.ClientOptions | undefined {
+    if (!this.apiKey) return undefined;
+    return {
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+    };
   }
 
   /**
@@ -281,8 +302,16 @@ export class ComfyUIClient {
    * Queue a workflow for execution via HTTP POST to /prompt.
    */
   async queueWorkflow(workflowJson: Record<string, unknown>, clientId?: string): Promise<string>;
-  async queueWorkflow(workflowJson: Record<string, unknown>, clientId: string | undefined, returnMeta: true): Promise<{ promptId: string; clientId: string }>;
-  async queueWorkflow(workflowJson: Record<string, unknown>, clientId?: string, returnMeta?: boolean): Promise<string | { promptId: string; clientId: string }> {
+  async queueWorkflow(
+    workflowJson: Record<string, unknown>,
+    clientId: string | undefined,
+    returnMeta: true
+  ): Promise<{ promptId: string; clientId: string }>;
+  async queueWorkflow(
+    workflowJson: Record<string, unknown>,
+    clientId?: string,
+    returnMeta?: boolean
+  ): Promise<string | { promptId: string; clientId: string }> {
     clientId = clientId || nanoid();
 
     // Convert LiteGraph format to API format if needed
@@ -363,7 +392,9 @@ export class ComfyUIClient {
 
       // Log progress periodically (every ~60s)
       if (Math.floor(elapsed) % 60 === 0 && Math.floor(elapsed) > 0) {
-        debugLog(`[waitForCompletion] Still waiting for ${promptId}... (${Math.floor(elapsed)}s elapsed)`);
+        debugLog(
+          `[waitForCompletion] Still waiting for ${promptId}... (${Math.floor(elapsed)}s elapsed)`
+        );
       }
 
       try {
@@ -411,7 +442,9 @@ export class ComfyUIClient {
             const outputs = history.outputs || {};
 
             if (Object.keys(outputs).length > 0) {
-              debugLog(`[waitForCompletion] Completed via outputs. Node IDs: ${Object.keys(outputs).join(', ')}`);
+              debugLog(
+                `[waitForCompletion] Completed via outputs. Node IDs: ${Object.keys(outputs).join(', ')}`
+              );
               if (progressCallback) {
                 await this.callProgressCallback(progressCallback, 100, 'Complete!');
               }
@@ -420,7 +453,9 @@ export class ComfyUIClient {
 
             // Check status.completed or status_str === 'success'
             if (history.status?.completed || history.status?.status_str === 'success') {
-              debugLog(`[waitForCompletion] Completed via status flag (no outputs in history). completed=${history.status?.completed}, status_str=${history.status?.status_str}, messages=${JSON.stringify(history.status?.messages?.map(m => m[0]))}`);
+              debugLog(
+                `[waitForCompletion] Completed via status flag (no outputs in history). completed=${history.status?.completed}, status_str=${history.status?.status_str}, messages=${JSON.stringify(history.status?.messages?.map(m => m[0]))}`
+              );
               if (progressCallback) {
                 await this.callProgressCallback(progressCallback, 100, 'Complete!');
               }
@@ -443,8 +478,13 @@ export class ComfyUIClient {
    */
   async queueAndWaitWS(
     workflowJson: Record<string, unknown>,
-    progressCallback?: (info: WSProgressInfo) => void,
-  ): Promise<{ result: CompletionResult; promptId: string; clientId: string; outputs: ImageInfo[] }> {
+    progressCallback?: (info: WSProgressInfo) => void
+  ): Promise<{
+    result: CompletionResult;
+    promptId: string;
+    clientId: string;
+    outputs: ImageInfo[];
+  }> {
     const clientId = nanoid();
     const wsUrl = this.buildWsUrl(clientId);
     debugLog(`[queueAndWaitWS] Connecting WS first: ${wsUrl}`);
@@ -471,13 +511,27 @@ export class ComfyUIClient {
           clearInterval(inactivityCheck);
           if (!resolved) {
             resolved = true;
-            try { ws?.close(); } catch { /* */ }
+            try {
+              ws?.close();
+            } catch {
+              /* */
+            }
             if (isCloud) {
               debugLog(`[queueAndWaitWS] Timeout after ${inactiveSec}s on cloud`);
-              resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId, outputs: collectedOutputs });
+              resolve({
+                result: { status: 'error', prompt_id: promptId },
+                promptId,
+                clientId,
+                outputs: collectedOutputs,
+              });
             } else {
               debugLog(`[queueAndWaitWS] Timeout — falling back to HTTP polling`);
-              this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+              this.waitForCompletion(
+                promptId,
+                progressCallback
+                  ? (pct, msg) => progressCallback({ percentage: pct, message: msg })
+                  : undefined
+              )
                 .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
                 .catch(reject);
             }
@@ -485,7 +539,14 @@ export class ComfyUIClient {
         }
       }, 10_000);
 
-      const cleanup = () => { clearInterval(inactivityCheck); try { ws?.close(); } catch { /* */ } };
+      const cleanup = () => {
+        clearInterval(inactivityCheck);
+        try {
+          ws?.close();
+        } catch {
+          /* */
+        }
+      };
       const finish = (result: CompletionResult) => {
         if (resolved) return;
         resolved = true;
@@ -494,14 +555,19 @@ export class ComfyUIClient {
       };
 
       try {
-        ws = new WebSocket(wsUrl);
+        ws = new WebSocket(wsUrl, this.buildWsOptions());
       } catch (err) {
         debugLog(`[queueAndWaitWS] WS failed: ${err}`);
         // Fall back: submit then poll
         this.queueWorkflow(workflowJson, clientId, true)
           .then(meta => {
             promptId = meta.promptId;
-            return this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined);
+            return this.waitForCompletion(
+              promptId,
+              progressCallback
+                ? (pct, msg) => progressCallback({ percentage: pct, message: msg })
+                : undefined
+            );
           })
           .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
           .catch(reject);
@@ -524,16 +590,26 @@ export class ComfyUIClient {
         if (!resolved) {
           resolved = true;
           if (isCloud) {
-            resolve({ result: { status: 'error', prompt_id: promptId }, promptId, clientId, outputs: collectedOutputs });
+            resolve({
+              result: { status: 'error', prompt_id: promptId },
+              promptId,
+              clientId,
+              outputs: collectedOutputs,
+            });
           } else {
-            this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+            this.waitForCompletion(
+              promptId,
+              progressCallback
+                ? (pct, msg) => progressCallback({ percentage: pct, message: msg })
+                : undefined
+            )
               .then(result => resolve({ result, promptId, clientId, outputs: collectedOutputs }))
               .catch(reject);
           }
         }
       });
 
-      ws.on('error', (err) => {
+      ws.on('error', err => {
         debugLog(`[queueAndWaitWS] WS error: ${err}`);
       });
 
@@ -562,7 +638,11 @@ export class ComfyUIClient {
             });
             return;
           case 'executing':
-            progressCallback?.({ percentage: 0, message: `Node: ${action.node}`, currentNode: String(action.node) });
+            progressCallback?.({
+              percentage: 0,
+              message: `Node: ${action.node}`,
+              currentNode: String(action.node),
+            });
             return;
           case 'queued':
             progressCallback?.({ percentage: 0, message: `Queued (${action.remaining} ahead)` });
@@ -575,7 +655,9 @@ export class ComfyUIClient {
                 type: item.type,
                 ...(item.node_id !== undefined ? { node_id: String(item.node_id) } : {}),
               });
-              debugLog(`[queueAndWaitWS] Captured output: ${item.filename} from node ${item.node_id}`);
+              debugLog(
+                `[queueAndWaitWS] Captured output: ${item.filename} from node ${item.node_id}`
+              );
             }
             return;
           case 'finish_completed':
@@ -591,7 +673,8 @@ export class ComfyUIClient {
             const p = action.payload ?? {};
             const parts: string[] = [];
             if (typeof p['exception_type'] === 'string') parts.push(p['exception_type'] as string);
-            if (typeof p['exception_message'] === 'string') parts.push(p['exception_message'] as string);
+            if (typeof p['exception_message'] === 'string')
+              parts.push(p['exception_message'] as string);
             const nodeId = p['node_id'] ?? p['node'];
             if (nodeId !== undefined && nodeId !== null) parts.push(`node=${String(nodeId)}`);
             const errorMessage = parts.length ? parts.join(' — ') : payloadStr;
@@ -599,13 +682,19 @@ export class ComfyUIClient {
             return;
           }
           case 'ignore_foreign_output':
-            debugLog(`[queueAndWaitWS] Ignoring output from foreign prompt ${action.eventPromptId} (ours=${promptId})`);
+            debugLog(
+              `[queueAndWaitWS] Ignoring output from foreign prompt ${action.eventPromptId} (ours=${promptId})`
+            );
             return;
           case 'ignore_foreign_success':
-            debugLog(`[queueAndWaitWS] Ignoring execution_success from foreign prompt ${action.eventPromptId} (ours=${promptId})`);
+            debugLog(
+              `[queueAndWaitWS] Ignoring execution_success from foreign prompt ${action.eventPromptId} (ours=${promptId})`
+            );
             return;
           case 'ignore_foreign_error':
-            debugLog(`[queueAndWaitWS] Ignoring execution_error from foreign prompt ${action.eventPromptId} (ours=${promptId})`);
+            debugLog(
+              `[queueAndWaitWS] Ignoring execution_error from foreign prompt ${action.eventPromptId} (ours=${promptId})`
+            );
             return;
           case 'ignore':
             return;
@@ -621,7 +710,7 @@ export class ComfyUIClient {
   async waitForCompletionWS(
     promptId: string,
     clientId: string,
-    progressCallback?: (info: WSProgressInfo) => void,
+    progressCallback?: (info: WSProgressInfo) => void
   ): Promise<CompletionResult> {
     const wsUrl = this.buildWsUrl(clientId);
     debugLog(`[waitForCompletionWS] Connecting to ${wsUrl} for prompt=${promptId}`);
@@ -649,15 +738,28 @@ export class ComfyUIClient {
           clearInterval(inactivityCheck);
           if (!resolved) {
             resolved = true;
-            try { ws?.close(); } catch { /* ignore */ }
+            try {
+              ws?.close();
+            } catch {
+              /* ignore */
+            }
             if (isCloud) {
               // Cloud: /history doesn't work with API key — report timeout error
-              debugLog(`[waitForCompletionWS] No progress for ${inactiveSec}s on cloud — cannot fall back to HTTP polling`);
+              debugLog(
+                `[waitForCompletionWS] No progress for ${inactiveSec}s on cloud — cannot fall back to HTTP polling`
+              );
               resolve({ status: 'error', prompt_id: promptId });
             } else {
               // Local: fall back to HTTP polling
-              debugLog(`[waitForCompletionWS] No progress for ${inactiveSec}s — falling back to HTTP polling`);
-              this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+              debugLog(
+                `[waitForCompletionWS] No progress for ${inactiveSec}s — falling back to HTTP polling`
+              );
+              this.waitForCompletion(
+                promptId,
+                progressCallback
+                  ? (pct, msg) => progressCallback({ percentage: pct, message: msg })
+                  : undefined
+              )
                 .then(resolve)
                 .catch(reject);
             }
@@ -667,7 +769,11 @@ export class ComfyUIClient {
 
       const cleanup = () => {
         clearInterval(inactivityCheck);
-        try { ws?.close(); } catch { /* ignore */ }
+        try {
+          ws?.close();
+        } catch {
+          /* ignore */
+        }
       };
 
       const finish = (result: CompletionResult) => {
@@ -678,22 +784,34 @@ export class ComfyUIClient {
       };
 
       try {
-        ws = new WebSocket(wsUrl);
+        ws = new WebSocket(wsUrl, this.buildWsOptions());
       } catch (err) {
-        debugLog(`[waitForCompletionWS] Failed to create WebSocket: ${err}. Falling back to HTTP polling.`);
-        return this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined);
+        debugLog(
+          `[waitForCompletionWS] Failed to create WebSocket: ${err}. Falling back to HTTP polling.`
+        );
+        return this.waitForCompletion(
+          promptId,
+          progressCallback
+            ? (pct, msg) => progressCallback({ percentage: pct, message: msg })
+            : undefined
+        );
       }
 
       ws.on('open', () => {
         debugLog(`[waitForCompletionWS] WebSocket connected for prompt=${promptId}`);
       });
 
-      ws.on('error', (err) => {
+      ws.on('error', err => {
         debugLog(`[waitForCompletionWS] WebSocket error: ${err}. Falling back to HTTP polling.`);
         if (!resolved) {
           resolved = true;
           cleanup();
-          this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+          this.waitForCompletion(
+            promptId,
+            progressCallback
+              ? (pct, msg) => progressCallback({ percentage: pct, message: msg })
+              : undefined
+          )
             .then(resolve)
             .catch(reject);
         }
@@ -709,7 +827,12 @@ export class ComfyUIClient {
             resolve({ status: 'error', prompt_id: promptId });
           } else {
             // Local: fall back to HTTP polling
-            this.waitForCompletion(promptId, progressCallback ? (pct, msg) => progressCallback({ percentage: pct, message: msg }) : undefined)
+            this.waitForCompletion(
+              promptId,
+              progressCallback
+                ? (pct, msg) => progressCallback({ percentage: pct, message: msg })
+                : undefined
+            )
               .then(resolve)
               .catch(reject);
           }
@@ -732,7 +855,9 @@ export class ComfyUIClient {
 
           if (msgType === 'status' && data.data) {
             // Queue/server status updates
-            const statusData = data.data as { status?: { exec_info?: { queue_remaining?: number } } };
+            const statusData = data.data as {
+              status?: { exec_info?: { queue_remaining?: number } };
+            };
             const queueRemaining = statusData.status?.exec_info?.queue_remaining;
             if (queueRemaining !== undefined && queueRemaining > 0) {
               debugLog(`[waitForCompletionWS] status: queue_remaining=${queueRemaining}`);
@@ -797,11 +922,11 @@ export class ComfyUIClient {
               currentOutputs[nodeId] = output;
               this.cloudOutputs.set(promptId, currentOutputs);
               debugLog(
-                `[waitForCompletionWS] cached executed output for node=${nodeId} prompt=${promptId}`,
+                `[waitForCompletionWS] cached executed output for node=${nodeId} prompt=${promptId}`
               );
             }
             debugLog(
-              `[waitForCompletionWS] executed node=${nodeId ?? 'unknown'} prompt=${promptId}`,
+              `[waitForCompletionWS] executed node=${nodeId ?? 'unknown'} prompt=${promptId}`
             );
           } else if (msgType === 'execution_success' && data.data) {
             const execPromptId = data.data.prompt_id as string | undefined;
@@ -835,7 +960,7 @@ export class ComfyUIClient {
       const cachedImages = this.collectOutputFiles(cachedOutputs);
       if (cachedImages.length > 0) {
         debugLog(
-          `[getOutputImages] Using ${cachedImages.length} cached cloud output(s) for ${promptId}`,
+          `[getOutputImages] Using ${cachedImages.length} cached cloud output(s) for ${promptId}`
         );
         return cachedImages;
       }
@@ -850,7 +975,9 @@ export class ComfyUIClient {
     const outputs = history.outputs || {};
     const images = this.collectOutputFiles(outputs);
 
-    debugLog(`[getOutputImages] prompt=${promptId} outputNodeIds=${JSON.stringify(Object.keys(outputs))}`);
+    debugLog(
+      `[getOutputImages] prompt=${promptId} outputNodeIds=${JSON.stringify(Object.keys(outputs))}`
+    );
 
     // Fallback: if no outputs found via standard keys, check status messages.
     // SaveVideo nodes don't populate history.outputs but ComfyUI includes
@@ -863,7 +990,9 @@ export class ComfyUIClient {
           if (output) {
             // Check for videos/images/gifs in the executed node output
             for (const key of ['videos', 'images', 'gifs']) {
-              const items = output[key] as Array<{ filename: string; subfolder?: string; type?: string }> | undefined;
+              const items = output[key] as
+                | Array<{ filename: string; subfolder?: string; type?: string }>
+                | undefined;
               if (items) {
                 for (const item of items) {
                   images.push({
@@ -883,7 +1012,9 @@ export class ComfyUIClient {
       }
     }
 
-    debugLog(`[getOutputImages] Total outputs found: ${images.length}${images.length > 0 ? ` files: ${images.map(i => i.filename).join(', ')}` : ''}`);
+    debugLog(
+      `[getOutputImages] Total outputs found: ${images.length}${images.length > 0 ? ` files: ${images.map(i => i.filename).join(', ')}` : ''}`
+    );
     return images;
   }
 
@@ -966,14 +1097,10 @@ export class ComfyUIClient {
         promptId,
         queueResult.clientId,
         progressCallback
-          ? async (info) => {
-              await this.callProgressCallback(
-                progressCallback,
-                info.percentage,
-                info.message,
-              );
+          ? async info => {
+              await this.callProgressCallback(progressCallback, info.percentage, info.message);
             }
-          : undefined,
+          : undefined
       );
     } catch (e) {
       if (e instanceof Error && e.message.includes('did not complete')) {
@@ -1008,7 +1135,7 @@ export class ComfyUIClient {
 
   private async getHistory(promptId: string): Promise<HistoryEntry | null> {
     const response = await this.request(
-      this.isCloud ? `/history_v2/${promptId}` : `/history/${promptId}`,
+      this.isCloud ? `/history_v2/${promptId}` : `/history/${promptId}`
     );
     if (!response.ok) {
       return null;
@@ -1055,7 +1182,7 @@ export class ComfyUIClient {
 
       if (attempt < attempts) {
         debugLog(
-          `[resolveOutputImages] No outputs yet for ${promptId}; retry ${attempt}/${attempts - 1}`,
+          `[resolveOutputImages] No outputs yet for ${promptId}; retry ${attempt}/${attempts - 1}`
         );
         await this.sleep(1000);
       }
@@ -1070,7 +1197,7 @@ export class ComfyUIClient {
     for (const [nodeId, nodeOutput] of Object.entries(outputs)) {
       const output = nodeOutput as Record<string, unknown>;
       debugLog(
-        `[getOutputImages] Node ${nodeId} output keys: ${JSON.stringify(Object.keys(output))}`,
+        `[getOutputImages] Node ${nodeId} output keys: ${JSON.stringify(Object.keys(output))}`
       );
 
       for (const key of ['images', 'image', 'gifs', 'videos', 'video', 'audio']) {
