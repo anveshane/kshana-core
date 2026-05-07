@@ -1,0 +1,52 @@
+name: Tests
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+# Cancel in-progress runs for the same branch when a new commit lands —
+# we only need the latest result.
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: vitest
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # keyframeExtractor unit tests shell out to `ffprobe` against
+      # tiny generated MP4 fixtures. Without ffmpeg on the runner
+      # those 7 tests fail with `spawn ffprobe ENOENT`.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      # `version` is intentionally omitted — pnpm/action-setup
+      # reads `packageManager` from package.json so the CI pnpm
+      # matches local dev exactly. Specifying both errors out
+      # with ERR_PNPM_BAD_PM_VERSION.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The package.json `test` script intentionally restricts to
+      # tests/unit/ for fast local iteration. CI runs the full suite
+      # (workflow / integration / pipeline tests too) via vitest
+      # directly so a regression in any path blocks the merge.
+      - name: Run full test suite
+        run: pnpm exec vitest run

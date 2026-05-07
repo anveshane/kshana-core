@@ -25,10 +25,13 @@ describe('generate_video_from_image contract', () => {
   });
 
   it('keeps orchestration docs aligned with the current tool signature', () => {
+    // The legacy video-assembler subagent prompt has been folded into
+    // the orchestrator + remotion-agent split; only the orchestrator
+    // still references the per-shot params directly. Assert against
+    // the live prompts only.
     const orchestratorPrompt = readPromptFile('prompts/system/orchestrator.md');
-    const assemblerPrompt = readPromptFile('prompts/subagents/video-assembler.md');
 
-    for (const prompt of [orchestratorPrompt, assemblerPrompt]) {
+    for (const prompt of [orchestratorPrompt]) {
       expect(prompt).toContain('shot_image_artifact_id');
       expect(prompt).toContain('scene_number');
       expect(prompt).toContain('shot_number');

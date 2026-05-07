@@ -98,11 +98,14 @@ describe('Timeline Integration', () => {
       expect(split.segments[3]!.id).toBe('scene_2');
     });
 
-    it('shot durations are proportional and sum to scene duration', () => {
+    it('shots keep their exact durations (sum equals new totalDuration)', () => {
+      // splitSegmentIntoShots no longer scales shots to fit the
+      // original scene window; shots use their declared durations and
+      // the timeline reflows around them. So a 20s scene → 5+5 shots
+      // collapses to a 10s timeline rather than scaling each shot up.
       const timeline = createTimelineSkeleton(20, [
         { id: 'scene_1', label: 'Scene 1' },
       ]);
-      const sceneDuration = timeline.segments[0]!.duration;
 
       const split = splitSegmentIntoShots(timeline, 'scene_1', [
         { label: 'Shot 1', duration: 5 },
@@ -110,7 +113,9 @@ describe('Timeline Integration', () => {
       ]);
 
       const shotDurationSum = split.segments.reduce((sum, s) => sum + s.duration, 0);
-      expect(shotDurationSum).toBeCloseTo(sceneDuration, 1);
+      expect(shotDurationSum).toBeCloseTo(split.totalDuration, 1);
+      expect(split.segments[0]!.duration).toBeCloseTo(5, 2);
+      expect(split.segments[1]!.duration).toBeCloseTo(5, 2);
     });
 
     it('shot segments are contiguous', () => {
@@ -252,8 +257,11 @@ describe('Timeline Integration', () => {
         label: 'Late label rewrite',
       }));
       expect(seg.layers[0]!.metadata).toEqual(expect.objectContaining({ prompt: 'keep this prompt' }));
-      expect(updated.downgradePrevention?.preservedIndexes).toEqual([0]);
-      expect(seg.versionInfo).toEqual({ activeVersion: 1, totalVersions: 1 });
+      // Skeletal patch (label-only) is no longer flagged as a
+      // downgrade — it's a metadata patch. Refs are preserved, label
+      // updates, and the version is bumped + history snapshotted.
+      expect(updated.downgradePrevention).toBeUndefined();
+      expect(seg.versionInfo).toEqual({ activeVersion: 2, totalVersions: 2 });
     });
 
     it('preserves both refs when a later partial weaker update drops one field', () => {
@@ -278,13 +286,15 @@ describe('Timeline Integration', () => {
       const updated = updateSegmentLayers(timeline, 'scene_1_shot_1', [partialUpdate], 'filled');
 
       const seg = updated.segments.find(s => s.id === 'scene_1_shot_1')!;
+      // Same artifactId + missing filePath is a partial update, not
+      // a demotion. The merger fills the missing filePath from the
+      // existing layer rather than recording a downgrade. Old
+      // `missing_file_path` reason no longer fires.
       expect(seg.layers[0]).toEqual(expect.objectContaining({
         artifactId: 'vid_strong',
         filePath: 'assets/videos/scene-1-shot-1.mp4',
       }));
-      expect(updated.downgradePrevention?.reasons).toEqual(
-        expect.arrayContaining([{ index: 0, reason: 'missing_file_path' }])
-      );
+      expect(updated.downgradePrevention).toBeUndefined();
     });
 
     it('allows valid matching video replacement and versions it', () => {
@@ -494,9 +504,13 @@ describe('Timeline Integration', () => {
       }
 
       // 5. Validate
+      // Each split now reflows downstream rather than scaling shots
+      // to fit. So scene_1 (15s) → 5+5 shots collapses scene_1 to
+      // 10s; scene_2 likewise. Final timeline is 20s, not the
+      // skeleton's original 30s.
       const validation = validateTimeline(timeline);
       expect(validation.isComplete).toBe(true);
-      expect(validation.filledDuration).toBeCloseTo(30, 1);
+      expect(validation.filledDuration).toBeCloseTo(20, 1);
       expect(validation.warnings).toHaveLength(0);
 
       // Verify transitions persisted

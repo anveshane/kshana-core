@@ -493,14 +493,47 @@ The timeline is saved to timeline.json in the project directory and persists acr
             return { success: false, error: 'No timeline exists. Call create_skeleton first.' };
           }
 
-          const layers: TimelineLayerEntry[] = layersParam.map(l => ({
-            type: l.type as LayerType,
-            artifactId: l.artifact_id,
-            filePath: l.file_path,
-            label: l.label,
-            source: l.source as LayerAssetSource,
-            metadata: l.metadata,
-          }));
+          // Canonicalize file paths from the manifest BEFORE the
+          // update lands. When the agent passes an artifact_id whose
+          // manifest entry maps to a different path than what it sent
+          // for file_path, swap in the manifest's path and report the
+          // correction. Keeps incoming intent explicit while ensuring
+          // the persisted timeline points at the real file on disk.
+          const manifestPaths = loadManifestPathMap(context.getProjectDir());
+          const pathCorrections: Array<{
+            index: number;
+            artifactId: string;
+            previousFilePath?: string;
+            canonicalFilePath: string;
+          }> = [];
+
+          const layers: TimelineLayerEntry[] = layersParam.map((l, i) => {
+            const canonicalFromManifest = l.artifact_id
+              ? manifestPaths.get(l.artifact_id)
+              : undefined;
+            let filePath = l.file_path;
+            if (
+              canonicalFromManifest &&
+              filePath &&
+              filePath !== canonicalFromManifest
+            ) {
+              pathCorrections.push({
+                index: i,
+                artifactId: l.artifact_id!,
+                previousFilePath: filePath,
+                canonicalFilePath: canonicalFromManifest,
+              });
+              filePath = canonicalFromManifest;
+            }
+            return {
+              type: l.type as LayerType,
+              artifactId: l.artifact_id,
+              filePath,
+              label: l.label,
+              source: l.source as LayerAssetSource,
+              metadata: l.metadata,
+            };
+          });
 
           let updateResult;
           try {
@@ -513,6 +546,24 @@ The timeline is saved to timeline.json in the project directory and persists acr
           saveTimeline(context.getProjectDir(), timeline);
 
           const segment = timeline.segments.find(s => s.id === segmentId)!;
+          const messageParts = [
+            `Segment "${segment.label}" updated with ${layers.length} layer(s), status: ${segment.fillStatus}`,
+          ];
+          if (updateResult?.downgradePrevention) {
+            messageParts.push(
+              `(${updateResult.downgradePrevention.preservedIndexes.length} weaker layer update(s) ignored)`,
+            );
+          }
+          if (pathCorrections.length > 0) {
+            messageParts.push(
+              `(${pathCorrections.length} artifact path(s) canonicalized from manifest)`,
+            );
+          }
+          if (segment.versionInfo && segment.versionInfo.totalVersions > 1) {
+            messageParts.push(
+              `(version ${segment.versionInfo.activeVersion} of ${segment.versionInfo.totalVersions})`,
+            );
+          }
           return {
             success: true,
             segment: {
@@ -524,14 +575,13 @@ The timeline is saved to timeline.json in the project directory and persists acr
               hasAlternatives: (segment.versionInfo?.totalVersions ?? 1) > 1,
             },
             validation: timeline.validation,
-            downgrade_prevention: updateResult?.downgradePrevention,
-            message: `Segment "${segment.label}" updated with ${layers.length} layer(s), status: ${segment.fillStatus}` +
-              (updateResult?.downgradePrevention
-                ? ` (${updateResult.downgradePrevention.preservedIndexes.length} weak layer overwrite(s) ignored)`
-                : '') +
-              (segment.versionInfo && segment.versionInfo.totalVersions > 1
-                ? ` (version ${segment.versionInfo.activeVersion} of ${segment.versionInfo.totalVersions})`
-                : ''),
+            ...(updateResult?.downgradePrevention
+              ? { downgrade_prevention: updateResult.downgradePrevention }
+              : {}),
+            ...(pathCorrections.length > 0
+              ? { path_corrections: pathCorrections }
+              : {}),
+            message: messageParts.join(' '),
           };
         }
 

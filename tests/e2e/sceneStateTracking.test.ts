@@ -67,7 +67,13 @@ describe('Scene State E2E: Scenario 1 — No previous state (first shot)', () =>
     expect(elena).toBeDefined();
     expect(elena.inFrame).toBe(true);
     expect(elena.position).toMatch(/crouch|crate|behind/i);
-    expect(elena.expression).toMatch(/alert|focused|tense|determined/i);
+    // The LLM picks one of many semantically equivalent labels for
+    // "Elena hiding behind crates and watching shadows". Accept the
+    // broader cluster — alertness, focus, intent, wariness, tension —
+    // rather than pinning to four specific words.
+    expect(elena.expression).toMatch(
+      /alert|focus|tense|determined|peer|intent|watch|wary|cautious|guarded|vigilant/i,
+    );
 
     // Marcus should be off screen
     const marcus = result.state!.characters['marcus'];

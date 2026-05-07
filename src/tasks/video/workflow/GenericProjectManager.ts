@@ -31,6 +31,7 @@ import { TemplateRegistry } from '../../../core/templates/TemplateRegistry.js';
 import { ArtifactGraph } from '../../../core/artifacts/ArtifactGraph.js';
 import { getActiveProjectDir } from './activeProject.js';
 import { getSessionFs } from '../../../core/fs/index.js';
+import { PROJECT_VERSION } from './types.js';
 
 /**
  * Project file name
@@ -38,9 +39,13 @@ import { getSessionFs } from '../../../core/fs/index.js';
 export const PROJECT_FILE = 'project.json';
 
 /**
- * Project version for v3.0 format
+ * Re-export the canonical project version so existing GPM consumers
+ * (and the `GENERIC_PROJECT_VERSION` alias in workflow/index.ts) keep
+ * working. The single source of truth lives in `./types.ts` — this
+ * file used to declare its own '2.0' literal that drifted out of sync
+ * with the rest of the workflow code.
  */
-export const PROJECT_VERSION = '2.0';
+export { PROJECT_VERSION };
 
 /**
  * Options for creating a new project
@@ -129,7 +134,7 @@ export class GenericProjectManager {
     const now = Date.now();
 
     const project: GenericProjectFile = {
-      version: '2.0',
+      version: PROJECT_VERSION,
       id: projectId,
       title: options.title,
       templateId: options.templateId,
@@ -554,7 +559,7 @@ export class GenericProjectManager {
     const now = Date.now();
 
     const project: GenericProjectFile = {
-      version: '2.0',
+      version: PROJECT_VERSION,
       id: projectId,
       title: 'Planning Project',
       templateId,

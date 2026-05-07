@@ -538,8 +538,8 @@ export interface FinalVideoInfo {
  * Version 2.0 - 8-phase workflow with per-item approval.
  */
 export interface ProjectFile {
-  /** Project version - must be '2.0' for 8-phase workflow */
-  version: '2.0';
+  /** Project version. Source of truth: PROJECT_VERSION constant above. */
+  version: '3.0';
   /** Unique project identifier */
   id: string;
   /** Project title */

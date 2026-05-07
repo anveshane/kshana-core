@@ -5,8 +5,13 @@
  * No tool concerns — this module is the core logic layer.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { dirname, join } from 'path';
+import {
+  readProjectText,
+  writeProjectText,
+} from '../../tasks/video/workflow/projectFileIO.js';
+import { getCurrentSession } from '../fs/SessionContext.js';
 import type {
   Timeline,
   TimelineSegment,
@@ -48,25 +53,23 @@ export interface UpsertSceneShotsResult {
 
 function buildShotSegmentsFromContainer(
   sceneSegmentId: string,
-  container: Pick<TimelineSegment, 'startTime' | 'endTime' | 'duration' | 'compositingMode'>,
+  container: Pick<TimelineSegment, 'startTime' | 'compositingMode'>,
   shots: Array<{ label: string; duration: number; metadata?: Record<string, unknown> }>
 ): TimelineSegment[] {
   if (shots.length === 0) {
     throw new Error('shots array must not be empty');
   }
 
-  const totalShotDuration = shots.reduce((sum, s) => sum + s.duration, 0);
-  const scale = container.duration / totalShotDuration;
-
+  // Use each shot's EXACT duration. The previous behavior scaled shots
+  // to fit the original container's window, which silently distorted
+  // shot timings. Callers (splitSegmentIntoShots) are now responsible
+  // for reflowing downstream segments by the resulting delta.
   const shotSegments: TimelineSegment[] = [];
   let currentTime = container.startTime;
 
   for (let i = 0; i < shots.length; i++) {
     const shot = shots[i]!;
-    const isLast = i === shots.length - 1;
-    const shotDuration = isLast
-      ? Math.round((container.endTime - currentTime) * 100) / 100
-      : Math.round(shot.duration * scale * 100) / 100;
+    const shotDuration = Math.round(shot.duration * 100) / 100;
 
     shotSegments.push({
       id: `${sceneSegmentId}_shot_${i + 1}`,
@@ -157,6 +160,87 @@ function layersHaveEquivalentAssetIdentity(
     if ((left.filePath ?? '') !== (right.filePath ?? '')) return false;
   }
   return true;
+}
+
+/**
+ * Parse a "Scene N Shot M" identity from any free-form string —
+ * segment label, file path, artifact id. Used by both the segment-
+ * identity check and the layer-identity check below. Returns
+ * undefined fields when not matched.
+ */
+function parseSceneShotIdentity(
+  value: string | undefined,
+): { sceneNumber?: number; shotNumber?: number } {
+  if (!value) return {};
+  const match = value.match(
+    /scene[\s_-]*(\d+)[^\d]+shot[\s_-]*(\d+)|segment[_-](\d+)[_-]shot[_-](\d+)/i,
+  );
+  if (!match) return {};
+  const sceneRaw = match[1] ?? (match[3] !== undefined ? String(Number(match[3]) + 1) : undefined);
+  const shotRaw = match[2] ?? match[4];
+  return {
+    ...(sceneRaw !== undefined ? { sceneNumber: Number(sceneRaw) } : {}),
+    ...(shotRaw !== undefined ? { shotNumber: Number(shotRaw) } : {}),
+  };
+}
+
+/**
+ * Identity of a segment from its id / label / metadata. Returns
+ * undefined fields for non-shot segments (e.g. scene-level intros).
+ */
+function extractSegmentIdentity(
+  segment: TimelineSegment,
+): { sceneNumber?: number; shotNumber?: number } {
+  const idIdentity = parseSceneShotIdentity(segment.id);
+  if (idIdentity.sceneNumber !== undefined && idIdentity.shotNumber !== undefined) {
+    return idIdentity;
+  }
+  const labelIdentity = parseSceneShotIdentity(segment.label);
+  if (
+    labelIdentity.sceneNumber !== undefined &&
+    labelIdentity.shotNumber !== undefined
+  ) {
+    return labelIdentity;
+  }
+  return {
+    ...idIdentity,
+    ...labelIdentity,
+  };
+}
+
+/**
+ * Identity of an incoming visual-like layer, derived from filePath
+ * primarily (the path on disk is the authoritative source for "what
+ * is at this path"), then artifactId, then label.
+ */
+function extractLayerIdentity(
+  layer: TimelineLayerEntry,
+): { sceneNumber?: number; shotNumber?: number } {
+  for (const candidate of [layer.filePath, layer.artifactId, layer.label]) {
+    const id = parseSceneShotIdentity(candidate);
+    if (id.sceneNumber !== undefined && id.shotNumber !== undefined) {
+      return id;
+    }
+  }
+  return {};
+}
+
+function identitiesConflict(
+  segmentIdentity: { sceneNumber?: number; shotNumber?: number },
+  layerIdentity: { sceneNumber?: number; shotNumber?: number },
+): boolean {
+  if (
+    segmentIdentity.sceneNumber === undefined ||
+    segmentIdentity.shotNumber === undefined ||
+    layerIdentity.sceneNumber === undefined ||
+    layerIdentity.shotNumber === undefined
+  ) {
+    return false;
+  }
+  return (
+    segmentIdentity.sceneNumber !== layerIdentity.sceneNumber ||
+    segmentIdentity.shotNumber !== layerIdentity.shotNumber
+  );
 }
 
 function isCompatibleShotUpdate(
@@ -326,6 +410,18 @@ export function updateSegmentLayers(
     reasons: [],
   };
 
+  // Identity guard — if the segment's id/label say "Scene 1 Shot 1"
+  // and an incoming layer's filePath/artifactId says "Scene 2 Shot 1",
+  // reject the update outright. The agent has the wrong target.
+  const segmentIdentity = extractSegmentIdentity(existing);
+  for (const incoming of layers) {
+    if (!isVisualLikeLayer(incoming)) continue;
+    const layerIdentity = extractLayerIdentity(incoming);
+    if (identitiesConflict(segmentIdentity, layerIdentity)) {
+      throw new Error('Incoming visual layer does not match target segment identity');
+    }
+  }
+
   const newLayers = layers.map((incomingLayer, index) => {
     const existingLayer = existing.layers[index];
     if (!isVisualLikeLayer(existingLayer) || !isVisualLikeLayer(incomingLayer)) {
@@ -340,59 +436,56 @@ export function updateSegmentLayers(
     }
 
     const strongExistingLayer = existingLayer;
+    const mergedMetadata = mergeLayerMetadata(
+      strongExistingLayer.metadata,
+      incomingLayer.metadata,
+    );
 
-    const reasons: LayerDowngradeReason[] = [];
-
-    if (strongExistingLayer.artifactId && !incomingLayer.artifactId) {
-      reasons.push('missing_artifact_id');
+    // Skeletal patch — incoming declares no refs, only display fields.
+    // Merge label / source / metadata onto existing without recording
+    // a downgrade. The agent is not "demoting" anything; it just sent
+    // an incomplete patch.
+    const isSkeletalPatch =
+      !incomingLayer.artifactId && !incomingLayer.filePath;
+    if (isSkeletalPatch) {
+      return {
+        ...strongExistingLayer,
+        ...incomingLayer,
+        type: strongExistingLayer.type,
+        artifactId: strongExistingLayer.artifactId,
+        filePath: strongExistingLayer.filePath,
+        metadata:
+          index === 0 && prompt
+            ? { ...(mergedMetadata ?? {}), prompt }
+            : mergedMetadata,
+      };
     }
-    if (strongExistingLayer.filePath && !incomingLayer.filePath) {
-      reasons.push('missing_file_path');
-    }
 
+    // Demotion check — incoming has refs, but they describe a weaker
+    // medium than what's already on the layer (image where there was
+    // a video). Keep existing wholesale; record the rejection so the
+    // tool layer can surface it to the user.
     const existingMediaType = detectLayerMediaType(strongExistingLayer);
     const incomingMediaType = detectLayerMediaType(incomingLayer);
     if (existingMediaType === 'video' && incomingMediaType !== 'video') {
-      reasons.push('video_over_weaker_media');
+      downgradePrevention.preservedIndexes.push(index);
+      downgradePrevention.reasons.push({
+        index,
+        reason: 'video_over_weaker_media',
+      });
+      return strongExistingLayer;
     }
 
-    if (
-      hasUsefulMetadata(strongExistingLayer.metadata) &&
-      incomingLayer.metadata !== undefined &&
-      !hasUsefulMetadata(incomingLayer.metadata)
-    ) {
-      reasons.push('metadata_cleared');
-    }
-
-    const mergedMetadata = mergeLayerMetadata(strongExistingLayer.metadata, incomingLayer.metadata);
-
-    if (reasons.length === 0) {
-      return prompt
-        ? {
-            ...incomingLayer,
-            metadata: index === 0 ? { ...(mergedMetadata ?? {}), prompt } : mergedMetadata,
-          }
-        : {
-            ...incomingLayer,
-            metadata: mergedMetadata,
-          };
-    }
-
-    downgradePrevention.preservedIndexes.push(index);
-    for (const reason of reasons) {
-      downgradePrevention.reasons.push({ index, reason });
-    }
-
+    // Genuine update — same type or upgrade. Incoming wins on
+    // explicit fields; existing fills the gaps.
     return {
       ...incomingLayer,
-      type: existingMediaType === 'video' && incomingMediaType !== 'video'
-        ? strongExistingLayer.type
-        : incomingLayer.type,
       artifactId: incomingLayer.artifactId ?? strongExistingLayer.artifactId,
       filePath: incomingLayer.filePath ?? strongExistingLayer.filePath,
-      metadata: index === 0 && prompt
-        ? { ...(mergedMetadata ?? {}), ['prompt']: (mergedMetadata ?? {})['prompt'] ?? prompt }
-        : mergedMetadata,
+      metadata:
+        index === 0 && prompt
+          ? { ...(mergedMetadata ?? {}), prompt }
+          : mergedMetadata,
     };
   });
 
@@ -404,11 +497,15 @@ export function updateSegmentLayers(
   const existingHasVisual = existing.layers.some(
     l => l.type === 'visual' || l.type === 'narration_video'
   );
-  const assetIdentityChanged = !layersHaveEquivalentAssetIdentity(existing.layers, newLayers);
+  const layersChanged = !layersAreDeepEqual(existing.layers, newLayers);
+  // Bump version whenever a real change lands and we didn't reject
+  // the update via downgrade prevention. Skeletal patches do bump
+  // (they meaningfully change the layer); preserved-existing demotes
+  // do not.
   const isReplacement =
     existingHasVisual &&
     hasVisual &&
-    assetIdentityChanged &&
+    layersChanged &&
     downgradePrevention.preservedIndexes.length === 0;
 
   let layerHistory = existing.layerHistory ? [...existing.layerHistory] : [];
@@ -451,6 +548,17 @@ export function updateSegmentLayers(
   return downgradePrevention.preservedIndexes.length > 0
     ? { ...updated, downgradePrevention }
     : updated;
+}
+
+function layersAreDeepEqual(
+  a: TimelineLayerEntry[],
+  b: TimelineLayerEntry[],
+): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (JSON.stringify(a[i]) !== JSON.stringify(b[i])) return false;
+  }
+  return true;
 }
 
 /**
@@ -535,6 +643,10 @@ export function validateTimeline(timeline: Timeline): TimelineValidation {
   const warnings: string[] = [];
   const gaps: TimelineGap[] = [];
   let filledDuration = 0;
+  // Tracks "this segment claims filled but its active layer is
+  // unrenderable" — used to defeat isComplete even when the gap /
+  // status checks would otherwise mark the timeline ready.
+  let hasCorruptedFilledSegment = false;
 
   // Check each segment
   for (const segment of timeline.segments) {
@@ -553,6 +665,42 @@ export function validateTimeline(timeline: Timeline): TimelineValidation {
       warnings.push(
         `Segment "${segment.label}" (${segment.id}) is marked filled but has no visual layer`
       );
+    }
+
+    // Filled segment with a visual layer that has neither artifactId
+    // nor filePath — the layer is a stub. Surface explicitly so callers
+    // (validate tool, UI) can flag it for repair instead of silently
+    // pretending the segment is renderable.
+    if (segment.fillStatus === 'filled') {
+      const activeVisual = segment.layers.find(isVisualLikeLayer);
+      if (
+        activeVisual &&
+        !activeVisual.artifactId &&
+        !activeVisual.filePath
+      ) {
+        warnings.push(
+          `Segment "${segment.label}" (${segment.id}) is marked filled but its active visual layer has no filePath or artifactId`,
+        );
+        hasCorruptedFilledSegment = true;
+      }
+
+      // Image-active layer when a matching video exists in this
+      // segment's layerHistory — the agent demoted the visual without
+      // realizing the prior video was still on disk. Don't auto-repair
+      // (the user may have intentionally swapped); just warn.
+      if (
+        activeVisual &&
+        detectLayerMediaType(activeVisual) === 'image' &&
+        segment.layerHistory?.some(snapshot =>
+          snapshot.layers.some(
+            l => isVisualLikeLayer(l) && detectLayerMediaType(l) === 'video',
+          ),
+        )
+      ) {
+        warnings.push(
+          `Segment "${segment.label}" (${segment.id}) has an image active layer even though a matching video exists in history`,
+        );
+      }
     }
   }
 
@@ -602,7 +750,11 @@ export function validateTimeline(timeline: Timeline): TimelineValidation {
   }
 
   const allFilled = timeline.segments.every(s => s.fillStatus === 'filled');
-  const isComplete = allFilled && gaps.length === 0 && timeline.segments.length > 0;
+  const isComplete =
+    allFilled &&
+    gaps.length === 0 &&
+    timeline.segments.length > 0 &&
+    !hasCorruptedFilledSegment;
 
   return {
     isComplete,
@@ -629,23 +781,93 @@ export function splitSegmentIntoShots(
   sceneSegmentId: string,
   shots: Array<{ label: string; duration: number; metadata?: Record<string, unknown> }>
 ): Timeline {
-  const segmentIndex = timeline.segments.findIndex(s => s.id === sceneSegmentId);
-  if (segmentIndex === -1) {
-    throw new Error(`Segment not found: ${sceneSegmentId}`);
-  }
-  const sceneSegment = timeline.segments[segmentIndex]!;
-  const shotSegments = buildShotSegmentsFromContainer(sceneSegmentId, sceneSegment, shots);
+  // Two paths:
+  //   1. Direct: `sceneSegmentId` is still present as a single scene
+  //      segment. Replace it with the new shot segments.
+  //   2. Re-split: a previous call already replaced it with
+  //      `${sceneSegmentId}_shot_*` segments. Treat that contiguous
+  //      run as the container so callers can re-issue a split with a
+  //      different shot list without first un-splitting by hand.
+  const directIndex = timeline.segments.findIndex(s => s.id === sceneSegmentId);
+  const shotPattern = new RegExp(`^${sceneSegmentId}_shot_\\d+$`);
 
-  // Replace the scene segment with the shot segments
-  const updatedSegments = [
-    ...timeline.segments.slice(0, segmentIndex),
-    ...shotSegments,
-    ...timeline.segments.slice(segmentIndex + 1),
-  ];
+  let firstIndex: number;
+  let lastIndex: number;
+  let containerStartTime: number;
+  let containerEndTime: number;
+  let containerCompositingMode: TimelineSegment['compositingMode'];
+  let containerCompositingMetadata: TimelineSegment['compositingMetadata'];
+  let containerTransition: TimelineSegment['transition'];
+
+  if (directIndex !== -1) {
+    const seg = timeline.segments[directIndex]!;
+    firstIndex = directIndex;
+    lastIndex = directIndex;
+    containerStartTime = seg.startTime;
+    containerEndTime = seg.endTime;
+    containerCompositingMode = seg.compositingMode;
+    containerCompositingMetadata = seg.compositingMetadata;
+    containerTransition = seg.transition;
+  } else {
+    // Re-split path: gather the existing shot segments for this scene.
+    const matched = timeline.segments
+      .map((segment, index) => ({ segment, index }))
+      .filter(({ segment }) => shotPattern.test(segment.id));
+    if (matched.length === 0) {
+      throw new Error(`Segment not found: ${sceneSegmentId}`);
+    }
+    matched.sort((a, b) => a.segment.startTime - b.segment.startTime);
+    firstIndex = matched[0]!.index;
+    lastIndex = matched[matched.length - 1]!.index;
+    const first = matched[0]!.segment;
+    const last = matched[matched.length - 1]!.segment;
+    containerStartTime = first.startTime;
+    containerEndTime = last.endTime;
+    containerCompositingMode = first.compositingMode;
+    containerCompositingMetadata = first.compositingMetadata;
+    containerTransition = first.transition;
+  }
+
+  const shotSegments = buildShotSegmentsFromContainer(
+    sceneSegmentId,
+    {
+      startTime: containerStartTime,
+      compositingMode: containerCompositingMode,
+    },
+    shots,
+  );
+
+  // Carry over the original scene's transition + compositingMetadata to
+  // the FIRST shot — those properties belong to the scene boundary, so
+  // they should follow the leading shot rather than be lost.
+  if (containerTransition || containerCompositingMetadata) {
+    shotSegments[0] = {
+      ...shotSegments[0]!,
+      ...(containerTransition ? { transition: containerTransition } : {}),
+      ...(containerCompositingMetadata
+        ? { compositingMetadata: containerCompositingMetadata }
+        : {}),
+    };
+  }
+
+  // Reflow downstream segments by the delta between the new shots'
+  // total span and the original container's span. Negative delta
+  // shrinks the timeline; positive grows it.
+  const newEndTime =
+    shotSegments[shotSegments.length - 1]!.endTime;
+  const delta = Math.round((newEndTime - containerEndTime) * 100) / 100;
+
+  const before = timeline.segments.slice(0, firstIndex);
+  const after = timeline.segments.slice(lastIndex + 1).map(segment => ({
+    ...segment,
+    startTime: Math.round((segment.startTime + delta) * 100) / 100,
+    endTime: Math.round((segment.endTime + delta) * 100) / 100,
+  }));
 
   const updated: Timeline = {
     ...timeline,
-    segments: updatedSegments,
+    segments: [...before, ...shotSegments, ...after],
+    totalDuration: Math.round((timeline.totalDuration + delta) * 100) / 100,
   };
   updated.validation = validateTimeline(updated);
   return updated;
@@ -707,8 +929,6 @@ export function upsertSceneShots(
       sceneSegmentId,
       {
         startTime: sortedExisting[0]!.startTime,
-        endTime: sortedExisting[sortedExisting.length - 1]!.endTime,
-        duration: Math.round((sortedExisting[sortedExisting.length - 1]!.endTime - sortedExisting[0]!.startTime) * 100) / 100,
         compositingMode: sortedExisting[0]!.compositingMode,
       },
       shots,
@@ -744,17 +964,29 @@ export function upsertSceneShots(
 }
 
 /**
- * Load a timeline from disk.
- * Returns null if the file doesn't exist.
+ * Load a timeline from disk. For remote-fs sessions (desktop's
+ * websocket-attached projects) this hits the projectFileIO cache; for
+ * local-fs callers it reads the file directly so callers can pass a
+ * concrete project dir without juggling the session-global active
+ * project. Returns null if the file is missing or malformed.
  */
 export function loadTimeline(projectDir: string): Timeline | null {
-  const filePath = join(projectDir, TIMELINE_FILENAME);
-  if (!existsSync(filePath)) {
-    return null;
+  let raw: string | null = null;
+  const session = getCurrentSession();
+  if (session?.mode === 'remote') {
+    // Remote-fs session: read from the projectFileIO cache (the
+    // websocket transport keeps it warm). Falls back to null if the
+    // file isn't in the cache yet.
+    raw = readProjectText(TIMELINE_FILENAME, projectDir);
+  } else {
+    try {
+      raw = readFileSync(join(projectDir, TIMELINE_FILENAME), 'utf-8');
+    } catch {
+      return null;
+    }
   }
-
+  if (raw === null) return null;
   try {
-    const raw = readFileSync(filePath, 'utf-8');
     return JSON.parse(raw) as Timeline;
   } catch {
     return null;
@@ -762,20 +994,93 @@ export function loadTimeline(projectDir: string): Timeline | null {
 }
 
 /**
- * Save a timeline to disk.
- * Creates the project directory if it doesn't exist.
+ * Canonicalize all `filePath` strings in the timeline (active layers
+ * + layerHistory snapshots + globalLayers) to project-relative form.
+ * Absolute paths under `projectDir` are rewritten by stripping the
+ * prefix; paths already relative are left alone. Pure — returns a new
+ * Timeline.
+ */
+function canonicalizeTimelineFilePaths(
+  projectDir: string,
+  timeline: Timeline,
+): { timeline: Timeline; changed: boolean } {
+  let changed = false;
+  const prefix = projectDir.endsWith('/') ? projectDir : projectDir + '/';
+
+  const rewritePath = (p: string | undefined): string | undefined => {
+    if (!p) return p;
+    if (p.startsWith(prefix)) {
+      changed = true;
+      return p.slice(prefix.length);
+    }
+    return p;
+  };
+
+  const rewriteLayer = <T extends TimelineLayerEntry>(layer: T): T => {
+    if (layer.filePath === undefined) return layer;
+    const rewritten = rewritePath(layer.filePath);
+    return rewritten === layer.filePath ? layer : { ...layer, filePath: rewritten };
+  };
+
+  const segments = timeline.segments.map(segment => {
+    const layers = segment.layers.map(rewriteLayer);
+    const history = segment.layerHistory?.map(snapshot => ({
+      ...snapshot,
+      layers: snapshot.layers.map(rewriteLayer),
+    }));
+    return {
+      ...segment,
+      layers,
+      ...(history ? { layerHistory: history } : {}),
+    };
+  });
+
+  const globalLayers = timeline.globalLayers.map(rewriteLayer);
+
+  return {
+    timeline: { ...timeline, segments, globalLayers },
+    changed,
+  };
+}
+
+/**
+ * Save a timeline to disk. Routes through projectFileIO so the write
+ * lands wherever the active session points (local fs or a remote
+ * websocket peer for desktop-attached projects). On the way through,
+ * absolute filePath strings rooted under the project dir are
+ * rewritten to project-relative form so timeline.json stays portable
+ * across machines.
  */
 export function saveTimeline(projectDir: string, timeline: Timeline): void {
+  const { timeline: canonical } = canonicalizeTimelineFilePaths(
+    projectDir,
+    timeline,
+  );
+  // Revalidate before saving
+  canonical.validation = validateTimeline(canonical);
+  const content = JSON.stringify(canonical, null, 2);
+
+  // Remote-fs path: dispatch through projectFileIO so the desktop's
+  // websocket peer hears about the write (and the in-process cache
+  // stays in sync). projectFileIO joins the active project root for
+  // us, so we pass the bare relative filename.
+  const session = getCurrentSession();
+  if (session?.mode === 'remote') {
+    writeProjectText(TIMELINE_FILENAME, content, projectDir);
+    return;
+  }
+
+  // Local-fs path: write directly to the supplied project dir. We
+  // intentionally avoid writeProjectText here — it composes its target
+  // path from `getActiveProjectDir()`, which is a session-global that
+  // doesn't match a `projectDir` argument the caller passed in by
+  // hand (CLI tests, executor unit tests, etc).
   const filePath = join(projectDir, TIMELINE_FILENAME);
   const dir = dirname(filePath);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-
-  // Revalidate before saving
-  timeline.validation = validateTimeline(timeline);
-
-  writeFileSync(filePath, JSON.stringify(timeline, null, 2), 'utf-8');
+  writeFileSync(filePath, content, 'utf-8');
 }
 
 /**
@@ -882,5 +1187,8 @@ export function inspectTimeline(
 } | null {
   const timeline = loadTimeline(projectDir);
   if (!timeline) return null;
-  return { timeline, wouldChangeOnSave: false, pathCorrections: [] };
+  // wouldChangeOnSave = true when a save would rewrite at least one
+  // absolute filePath to project-relative. Pure — does not touch disk.
+  const { changed } = canonicalizeTimelineFilePaths(projectDir, timeline);
+  return { timeline, wouldChangeOnSave: changed, pathCorrections: [] };
 }
