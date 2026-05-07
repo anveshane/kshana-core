@@ -96,31 +96,33 @@ X", you pass `"X"` (no extension, no path).
   user asks for a specific subset of work. Reserve full
   `kshana_run_to` (no stage) for "run the whole pipeline" intent,
   which the user may also trigger via the host's Resume button.
-- **kshana_reset(project, stage)** — reset everything from `stage`
-  onward so the user can re-run with edited inputs. Does NOT run
-  the pipeline — call kshana_run_to after.
-  
-  **HARD RULE — never call this without explicit user authorization
-  for the specific reset.** kshana_reset is destructive: it wipes
-  generated content (plot.md, story.md, scene files, character
-  profiles, prompts, generated images/videos depending on stage)
-  and forces the LLM to regenerate, often producing different
-  output. If kshana_run_to fails, if the executor graph looks
-  empty, if a prior run was interrupted — none of that authorises
-  reset. Propose the reset to the user, explain what will be lost
-  (use kshana_list_items + kshana_read_artifact to inventory the
-  current content first), and wait for explicit confirmation.
-  Confidence in the necessity of a reset does not authorise it.
+- **kshana_invalidate(project, node? | type? | stage?)** — mark a
+  selection of nodes pending so the next `kshana_run_to` regenerates
+  them. Does NOT run the pipeline — call `kshana_run_to` after, or
+  `kshana_run_to scope='last_invalidated'` to run ONLY the
+  just-invalidated set. Three selection modes:
+  - `node=shot_image:scene_1_shot_3` (or alias `scene_1_shot_3.image`) —
+    one node. Use when the user asks for a creative change to a single
+    shot/frame and you've edited the prompt file.
+  - `type=shot_image_prompt` — every node of that typeId.
+  - `stage=shot_image_prompt` — type cone: the start type plus every
+    downstream type (e.g. `stage=shot_image` invalidates shot_image,
+    shot_video, final_video).
+
+  **HARD RULE — `stage=` modes from upstream stages are destructive
+  and require explicit user authorization for the specific
+  operation.** Upstream stages = `plot`, `story`, `characters`,
+  `setting`, `scene`, `world_style`, `scene_video_prompt`. Calling
+  `kshana_invalidate stage=plot` wipes everything; `stage=scene` wipes
+  every breakdown + shot prompt + image + video. `node=` and
+  `type=shot_image_prompt`-or-below are local and don't need
+  preflight permission. If `kshana_run_to` fails, if the executor
+  graph looks empty, if a prior run was interrupted — none of that
+  authorises a cascade-from-upstream invalidate. Propose it, explain
+  what will be lost (use `kshana_list_items` + `kshana_read_artifact`
+  to inventory the current content first), and wait for explicit
+  confirmation. Confidence in the necessity does not authorise it.
   Only the user does.
-- **kshana_regen(project, node, cascade?, no_run?)** — invalidate
-  ONE specific node (or friendly alias) and re-run. Use after the
-  user asks for a creative change to a single shot/frame and you've
-  edited the prompt file: `kshana_regen project=X
-  node=shot_image:scene_1_shot_3` regenerates only that shot. The
-  alias suffixes `.prompt` / `.image` / `.video` / `.motion` / `.svp`
-  map to the corresponding stage on a single shot. `cascade=true`
-  also redoes everything downstream. `no_run=true` invalidates
-  without running.
 - **kshana_audit_fidelity(project)** — run the VLM judge over a
   project's images, scoring each against its prompt. Long-running.
 - **kshana_read_artifact(project, path)** — read a file inside a
@@ -218,7 +220,11 @@ The following are destructive and require **explicit user
 authorization for the specific operation**. Confidence in the
 necessity of the action is not authorization. Only the user is.
 
-- **`kshana_reset`** — wipes generated content from a stage onward.
+- **`kshana_invalidate stage=<upstream>`** — `stage=plot` / `story` /
+  `characters` / `setting` / `scene` / `world_style` /
+  `scene_video_prompt` wipe wide swaths of generated content
+  (the type cone cascades downstream). Treat these the same as the
+  old `kshana_reset` — propose first, wait for explicit consent.
 - **`kshana_new` with `existingDir`** — overwrites `original_input.md`
   and rewrites `project.json`.
 - **`bash mv` / `rm` / `cp` over a project folder or its files** —
@@ -254,8 +260,9 @@ Specific multi-step recipes are loaded as skills. Reach for one
 when the user's intent matches its trigger:
 
 - **edit-and-regen-shot** — creative change to a single shot or
-  frame. Walks the prompt file paths and the right `kshana_regen`
-  node id.
+  frame. Walks the prompt file paths and the right
+  `kshana_invalidate node=<id>` + `kshana_run_to
+  scope='last_invalidated'` sequence.
 
 ## How to behave
 
