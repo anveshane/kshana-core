@@ -6,6 +6,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { getLogsDir } from '../../utils/logsPath.js';
 import type { Message, ToolDefinition, LLMResponse } from './types.js';
 
 export interface LLMLoggerConfig {
@@ -26,7 +27,7 @@ export class LLMLogger {
   private streamBuffer: string = '';
 
   constructor(config: LLMLoggerConfig = {}) {
-    this.logPath = config.logPath ?? './logs/llm-calls.log';
+    this.logPath = config.logPath ?? path.join(getLogsDir(), 'llm-calls.log');
     this.truncatedLogPath = this.logPath.replace('.log', '-truncated.log');
     this.enabled = config.enabled ?? true;
     this.truncateLength = config.truncateLength ?? 200;

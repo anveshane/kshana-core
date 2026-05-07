@@ -13,35 +13,21 @@ import * as path from 'path';
 import { nanoid } from 'nanoid';
 import WebSocket from 'ws';
 import { decideWsAction, type ComfyWsMessage } from './wsAction.js';
-import { findKshanaCoreRoot } from '../../agent/pi/paths.js';
+import { getLogsDir } from '../../utils/logsPath.js';
 
 // Debug logging to file instead of console to avoid polluting Ink UI.
 //
-// Anchor on kshana-core's own root, NOT process.cwd(). When kshana-core
-// runs embedded in the desktop (cwd = kshana-desktop) the cwd-based path
-// pointed at a non-existent `logs/` and every debugLog call silently
-// failed — so post-mortem ComfyUI errors had no breadcrumbs.
-const DEBUG_LOG_DIR = (() => {
-  try {
-    return path.join(findKshanaCoreRoot(import.meta.url), 'logs');
-  } catch {
-    return path.join(process.cwd(), 'logs');
-  }
-})();
-const DEBUG_LOG_PATH = path.join(DEBUG_LOG_DIR, 'debug.log');
-let debugDirEnsured = false;
+// Path is resolved per-call via getLogsDir() so a host that calls
+// setLogsDir after import (e.g. kshana-desktop in a packaged build,
+// pointing at app.getPath('userData')/logs) still wins. The previous
+// implementation anchored on findKshanaCoreRoot at module load — fine
+// for dev, broken in an asar bundle where the kshana-core package.json
+// lives in a read-only path.
 function debugLog(message: string): void {
   try {
-    if (!debugDirEnsured) {
-      try {
-        fs.mkdirSync(DEBUG_LOG_DIR, { recursive: true });
-      } catch {
-        /* ignore */
-      }
-      debugDirEnsured = true;
-    }
+    const logPath = path.join(getLogsDir(), 'debug.log');
     const timestamp = new Date().toISOString();
-    fs.appendFileSync(DEBUG_LOG_PATH, `[${timestamp}] ${message}\n`);
+    fs.appendFileSync(logPath, `[${timestamp}] ${message}\n`);
   } catch {
     // Ignore logging errors
   }

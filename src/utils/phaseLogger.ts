@@ -9,6 +9,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { getLogsDir } from './logsPath.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -60,7 +61,7 @@ class PhaseLogger {
   private operationTimers: Map<string, number> = new Map();
 
   constructor(config: PhaseLoggerConfig = {}) {
-    this.logPath = config.logPath ?? './logs/phase.log';
+    this.logPath = config.logPath ?? path.join(getLogsDir(), 'phase.log');
     this.jsonLogPath = this.logPath.replace('.log', '.jsonl');
     this.enabled = config.enabled ?? true;
     this.minLevel = config.minLevel ?? 'debug';

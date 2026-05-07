@@ -4,17 +4,13 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { getLogsDir } from './logsPath.js';
 
-const LOG_DIR = path.join(process.cwd(), 'logs');
-const UI_LOG_PATH = path.join(LOG_DIR, 'ui-output.log');
-
-// Ensure logs directory exists
-try {
-  if (!fs.existsSync(LOG_DIR)) {
-    fs.mkdirSync(LOG_DIR, { recursive: true });
-  }
-} catch {
-  // Ignore directory creation errors
+// Resolve lazily so a host that calls setLogsDir after import (e.g.
+// kshana-desktop pointing at app.getPath('userData')/logs in a packaged
+// build) still wins. getLogsDir() also ensures the directory exists.
+function uiLogPath(): string {
+  return path.join(getLogsDir(), 'ui-output.log');
 }
 
 /**
@@ -22,7 +18,7 @@ try {
  */
 function writeLog(line: string): void {
   try {
-    fs.appendFileSync(UI_LOG_PATH, line + '\n');
+    fs.appendFileSync(uiLogPath(), line + '\n');
   } catch {
     // Ignore write errors
   }
@@ -37,7 +33,7 @@ export function initUILog(): void {
  KSHANA SESSION LOG
 ════════════════════════════════════════════════════════════════════════════════
 `;
-    fs.writeFileSync(UI_LOG_PATH, header);
+    fs.writeFileSync(uiLogPath(), header);
   } catch {
     // Ignore initialization errors
   }
@@ -227,7 +223,7 @@ export function logSessionEnd(): void {
  * Get the log file path.
  */
 export function getUILogPath(): string {
-  return UI_LOG_PATH;
+  return uiLogPath();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
