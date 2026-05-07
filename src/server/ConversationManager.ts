@@ -54,6 +54,7 @@ import {
   getElapsedMs,
   loadProject,
 } from '../tasks/video/workflow/ProjectManager.js';
+import { applyInvalidation } from '../core/planner/applyInvalidation.js';
 import {
   captureSessionEnded,
   captureSessionStarted,
@@ -1314,6 +1315,64 @@ export class ConversationManager {
     session.state.status = 'idle';
     session.state.lastActivity = Date.now();
     return !!(session.agent || session.abortController || backgroundCancelled);
+  }
+
+  /**
+   * Mark a set of executor nodes `pending` on disk without resuming
+   * execution. Used by the desktop's Prompts-tab edit flow: after the
+   * user saves a per-shot prompt change, the dependent image / video
+   * node needs to be invalidated so the next pipeline run regenerates
+   * from there. The user (not this method) is responsible for kicking
+   * off that next run.
+   *
+   * Loads project.json under the session's projectDir, applies the
+   * pure `applyInvalidation` op, and writes back. Mirrors what the
+   * agent's `kshana_invalidate` tool does, minus the agent surface.
+   */
+  async invalidateNodes(
+    sessionId: string,
+    nodeIds: string[],
+  ): Promise<{ invalidated: string[]; notFound: string[] }> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+    if (!session.sessionContext) {
+      throw new Error(
+        'Session project not configured. Call configureProject / focusProject first.',
+      );
+    }
+    if (session.state.status === 'running') {
+      throw new Error(
+        'Session has a running task — cannot invalidate while executing',
+      );
+    }
+
+    const projectDir = session.sessionContext.projectDir;
+    const projectJsonPath = nodePath.join(projectDir, 'project.json');
+    if (!nodeFs.existsSync(projectJsonPath)) {
+      throw new Error(`project.json not found at ${projectJsonPath}`);
+    }
+    const raw = nodeFs.readFileSync(projectJsonPath, 'utf-8');
+    const project = JSON.parse(raw) as {
+      executorState?: { nodes?: Record<string, unknown> };
+    };
+    if (!project.executorState || !project.executorState.nodes) {
+      throw new Error(
+        'Cannot invalidate — project has no executorState (run a stage first).',
+      );
+    }
+
+    const result = applyInvalidation(
+      project as Parameters<typeof applyInvalidation>[0],
+      nodeIds,
+    );
+    nodeFs.writeFileSync(
+      projectJsonPath,
+      JSON.stringify(project, null, 2),
+      'utf-8',
+    );
+    return result;
   }
 
   /**
