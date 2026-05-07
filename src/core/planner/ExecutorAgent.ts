@@ -1472,7 +1472,10 @@ export class ExecutorAgent extends TypedEventEmitter {
         // sanitizeShotVideoDeps stripping logic correct — bare
         // `shot_image:` deps from legacy projects will be filtered out.
         const shotVideoDeps = canonicalShotVideoDeps({
-          shotImageId: `shot_image_last_frame:${shot.itemId}`, motionId, prevShotVideoId,
+          shotImageId: `shot_image_last_frame:${shot.itemId}`,
+          motionId,
+          prevShotVideoId,
+          useV2V: this.config.project.useV2V === true,
         });
         this.executor.addNode({
           id: shotVideoId,
@@ -1510,6 +1513,7 @@ export class ExecutorAgent extends TypedEventEmitter {
           shotImageId: `shot_image_last_frame:${shot.itemId}`,
           motionId,
           prevShotVideoId,
+          useV2V: this.config.project.useV2V === true,
         });
         // Wire reverse edges on any newly-added canonical deps.
         for (const depId of existing.dependencies) {
@@ -1517,6 +1521,18 @@ export class ExecutorAgent extends TypedEventEmitter {
           if (depNode && !depNode.dependents.includes(shotVideoId)) {
             depNode.dependents.push(shotVideoId);
           }
+        }
+        // Drop reverse edges that the sanitize just removed. Without
+        // this, the previous-shot's `dependents` still lists this
+        // shot_video — and DependencyGraphExecutor.invalidateNode walks
+        // dependents during cascade. Stripping the dep alone is half
+        // the fix.
+        const after = new Set(existing.dependencies);
+        for (const depId of before) {
+          if (after.has(depId)) continue;
+          const depNode = this.executor.getNode(depId);
+          if (!depNode) continue;
+          depNode.dependents = depNode.dependents.filter((d) => d !== shotVideoId);
         }
         if (JSON.stringify(before) !== JSON.stringify(existing.dependencies)) {
           this.log(`  Sanitized ${shotVideoId} deps: [${before.join(',')}] → [${existing.dependencies.join(',')}]`);
@@ -3991,7 +4007,12 @@ Examples of common failure modes to avoid:
                       });
                       if (!this.executor.getNode(shotVideoId)) {
                         const videoDeps = [shotImageLastFrameId, motionId];
-                        if (prevShotVideoId2) videoDeps.push(prevShotVideoId2);
+                        // Only chain prev-shot when V2V is on; otherwise the
+                        // edge becomes a phantom that cascade-invalidates
+                        // every following shot when the user redoes one.
+                        if (prevShotVideoId2 && this.config.project.useV2V === true) {
+                          videoDeps.push(prevShotVideoId2);
+                        }
                         this.executor.addNode({
                           id: shotVideoId, typeId: 'shot_video', itemId: shot.itemId,
                           status: 'pending', displayName: `Shot Videos: ${shot.name}`,
