@@ -1318,6 +1318,33 @@ export class ConversationManager {
   }
 
   /**
+   * Turn the session's basename-style projectDir into an absolute path.
+   * `focusSessionProject` stores `nodePath.basename(projectDirAbs)` in
+   * sessionContext, so any disk-touching code on the session must
+   * re-resolve through the project resolver (which knows both the
+   * `<name>.kshana` and bare `<name>` conventions).
+   */
+  private resolveSessionProjectDirAbs(session: { sessionContext?: { projectDir: string } }): string {
+    if (!session.sessionContext) {
+      throw new Error(
+        'Session project not configured. Call configureProject / focusProject first.',
+      );
+    }
+    const name = session.sessionContext.projectDir;
+    // If the host stored an absolute path (older code paths), trust it.
+    if (nodePath.isAbsolute(name) && nodeFs.existsSync(name)) {
+      return name;
+    }
+    try {
+      return resolveProjectDir({ name, basePath: defaultBasePath() });
+    } catch (err) {
+      const detail =
+        err instanceof ProjectDirNotFoundError ? err.message : String(err);
+      throw new Error(`Project '${name}' not found or unreadable. ${detail}`);
+    }
+  }
+
+  /**
    * Mark a set of executor nodes `pending` on disk without resuming
    * execution. Used by the desktop's Prompts-tab edit flow: after the
    * user saves a per-shot prompt change, the dependent image / video
@@ -1348,8 +1375,12 @@ export class ConversationManager {
       );
     }
 
-    const projectDir = session.sessionContext.projectDir;
-    const projectJsonPath = nodePath.join(projectDir, 'project.json');
+    // sessionContext.projectDir is a basename (e.g. "Baker and the Bee" or
+    // "demo.kshana") — see focusSessionProject. Resolve to absolute before
+    // touching disk; otherwise nodePath.join produces a CWD-relative path
+    // and ENOENTs.
+    const projectDirAbs = this.resolveSessionProjectDirAbs(session);
+    const projectJsonPath = nodePath.join(projectDirAbs, 'project.json');
     if (!nodeFs.existsSync(projectJsonPath)) {
       throw new Error(`project.json not found at ${projectJsonPath}`);
     }
@@ -1400,12 +1431,14 @@ export class ConversationManager {
       throw new Error('Session context not initialized. Configure project first.');
     }
 
-    // If user edited the prompt, save it to disk BEFORE invalidation
+    // If user edited the prompt, save it to disk BEFORE invalidation.
+    // saveEditedPrompt requires an absolute project dir — sessionContext
+    // stores only a basename (see resolveSessionProjectDirAbs).
     const hasEdits = !!(editedPrompt && Object.keys(editedPrompt).length > 0);
     if (hasEdits) {
       const { saveEditedPrompt } = await import('./editAndRedo.js');
-      const projectDir = session.sessionContext.projectDir;
-      await saveEditedPrompt(projectDir, nodeId, editedPrompt);
+      const projectDirAbs = this.resolveSessionProjectDirAbs(session);
+      await saveEditedPrompt(projectDirAbs, nodeId, editedPrompt);
     }
 
     // Edit-prompt special case: if user edited a shot_image_prompt, we MUST
