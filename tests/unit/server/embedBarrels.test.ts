@@ -25,6 +25,23 @@ describe('manager barrel', () => {
     expect(typeof mod.ConversationManager).toBe('function');
   });
 
+  it('exports the custom-workflow integration surface for hosts', async () => {
+    const mod = await import('../../../src/server/manager.js');
+    // setUserWorkflowsDir lets the desktop pin user uploads at a
+    // host-controlled directory before the registry singleton boots.
+    expect(typeof mod.setUserWorkflowsDir).toBe('function');
+    expect(typeof mod.getUserWorkflowsDir).toBe('function');
+    // CRUD helpers — same ones the pi-agent tools wrap.
+    expect(typeof mod.validateWorkflowFile).toBe('function');
+    expect(typeof mod.analyzeWorkflowFile).toBe('function');
+    expect(typeof mod.saveWorkflow).toBe('function');
+    expect(typeof mod.listWorkflows).toBe('function');
+    expect(typeof mod.getWorkflow).toBe('function');
+    expect(typeof mod.updateWorkflow).toBe('function');
+    expect(typeof mod.deleteWorkflow).toBe('function');
+    expect(mod.WorkflowIntegrationError).toBeDefined();
+  });
+
   it('barrel source itself does not import fastify', () => {
     const src = readFileSync(
       join(__dirname, '../../../src/server/manager.ts'),
