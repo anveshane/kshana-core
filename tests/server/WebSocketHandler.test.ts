@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../../src/server/posthog.js', () => ({
   captureSessionEnded: vi.fn(),
   captureSessionStarted: vi.fn(),
+  captureToolCallCompleted: vi.fn(),
+  captureToolCallStarted: vi.fn(),
   captureWorkflowCompleted: vi.fn(),
   captureWorkflowFailed: vi.fn(),
   captureWorkflowStarted: vi.fn(),

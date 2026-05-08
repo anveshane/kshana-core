@@ -24,3 +24,26 @@ export type {
 } from './types.js';
 export { loadDevEnv } from './loadDevEnv.js';
 export type { LoadDevEnvResult } from './loadDevEnv.js';
+export {
+  captureAnalyticsEvent,
+  captureDesktopAppFirstStarted,
+  captureDesktopAppStarted,
+  captureDesktopHeartbeat,
+  captureDesktopAppQuit,
+  captureDesktopAuthStarted,
+  configureAnalytics,
+  getAnalyticsDistinctId,
+  identifyAnalyticsUser,
+  isPostHogEnabled,
+  registerPostHogShutdownHandlers,
+  resetAnalyticsForTests,
+  sanitizeAnalyticsProperties,
+  setAnalyticsIdentity,
+  setCommonProperties,
+  shutdownPostHog,
+} from './posthog.js';
+export type {
+  AnalyticsCaptureOptions,
+  AnalyticsEventName,
+  AnalyticsIdentity,
+} from './posthog.js';

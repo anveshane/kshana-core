@@ -58,6 +58,8 @@ import { applyInvalidation } from '../core/planner/applyInvalidation.js';
 import {
   captureSessionEnded,
   captureSessionStarted,
+  captureToolCallCompleted,
+  captureToolCallStarted,
   captureWorkflowCompleted,
   captureWorkflowFailed,
   captureWorkflowStarted,
@@ -221,6 +223,22 @@ export class ConversationManager {
 
     runner.on('started', ({ task }: BackgroundTaskRunnerEvents['started']) => {
       const session = this.sessions.get(task.spec.sessionId);
+      captureToolCallStarted({
+        sessionId: task.spec.sessionId,
+        toolCallId: fakeToolCallIdForTask(task.id),
+        toolName: `kshana_${task.spec.kind}`,
+        agentName: session ? this.getWorkflowName(session) : 'background-task',
+        args: task.spec.params,
+        startedAt: new Date(task.startedAt).toISOString(),
+        projectDir: task.spec.projectName,
+        workflowName: 'background_task',
+      });
+      captureWorkflowStarted({
+        sessionId: task.spec.sessionId,
+        workflowName: 'background_task',
+        taskKind: task.spec.kind,
+        taskId: task.id,
+      });
       if (!session) return;
       // Pin the events sink for the task's lifetime — the agent's
       // tool call returns immediately after dispatch, which clears
@@ -308,6 +326,27 @@ export class ConversationManager {
     runner.on('completed', ({ task }: BackgroundTaskRunnerEvents['completed']) => {
       const session = this.sessions.get(task.spec.sessionId);
       const events = sinkFor(session);
+      const completedAt = new Date(task.completedAt ?? Date.now()).toISOString();
+      const durationMs = Math.max(0, (task.completedAt ?? Date.now()) - task.startedAt);
+      captureToolCallCompleted({
+        sessionId: task.spec.sessionId,
+        toolCallId: fakeToolCallIdForTask(task.id),
+        toolName: `kshana_${task.spec.kind}`,
+        agentName: session ? this.getWorkflowName(session) : 'background-task',
+        isError: false,
+        durationMs,
+        startedAt: new Date(task.startedAt).toISOString(),
+        completedAt,
+        projectDir: task.spec.projectName,
+        workflowName: 'background_task',
+      });
+      captureWorkflowCompleted({
+        sessionId: task.spec.sessionId,
+        workflowName: 'background_task',
+        taskKind: task.spec.kind,
+        taskId: task.id,
+        durationMs,
+      });
       if (session && events) {
         events.onToolResult?.(
           task.spec.sessionId,
@@ -323,6 +362,29 @@ export class ConversationManager {
     runner.on('failed', ({ task, error }: BackgroundTaskRunnerEvents['failed']) => {
       const session = this.sessions.get(task.spec.sessionId);
       const events = sinkFor(session);
+      const completedAt = new Date(task.completedAt ?? Date.now()).toISOString();
+      const durationMs = Math.max(0, (task.completedAt ?? Date.now()) - task.startedAt);
+      captureToolCallCompleted({
+        sessionId: task.spec.sessionId,
+        toolCallId: fakeToolCallIdForTask(task.id),
+        toolName: `kshana_${task.spec.kind}`,
+        agentName: session ? this.getWorkflowName(session) : 'background-task',
+        isError: true,
+        durationMs,
+        errorMessage: error,
+        startedAt: new Date(task.startedAt).toISOString(),
+        completedAt,
+        projectDir: task.spec.projectName,
+        workflowName: 'background_task',
+      });
+      captureWorkflowFailed({
+        sessionId: task.spec.sessionId,
+        workflowName: 'background_task',
+        taskKind: task.spec.kind,
+        taskId: task.id,
+        errorType: 'background_task_failed',
+        durationMs,
+      });
       if (session && events) {
         events.onToolResult?.(
           task.spec.sessionId,
@@ -338,6 +400,20 @@ export class ConversationManager {
     runner.on('cancelled', ({ task }: BackgroundTaskRunnerEvents['cancelled']) => {
       const session = this.sessions.get(task.spec.sessionId);
       const events = sinkFor(session);
+      const completedAt = new Date(task.completedAt ?? Date.now()).toISOString();
+      const durationMs = Math.max(0, (task.completedAt ?? Date.now()) - task.startedAt);
+      captureToolCallCompleted({
+        sessionId: task.spec.sessionId,
+        toolCallId: fakeToolCallIdForTask(task.id),
+        toolName: `kshana_${task.spec.kind}`,
+        agentName: session ? this.getWorkflowName(session) : 'background-task',
+        isError: false,
+        durationMs,
+        startedAt: new Date(task.startedAt).toISOString(),
+        completedAt,
+        projectDir: task.spec.projectName,
+        workflowName: 'background_task',
+      });
       if (session && events) {
         events.onToolResult?.(
           task.spec.sessionId,
@@ -1176,6 +1252,10 @@ export class ConversationManager {
     agent: SessionAgent,
     events?: ConversationEvents
   ): void {
+    const session = this.sessions.get(sessionId);
+    const projectDir = session?.sessionContext?.projectDir;
+    const workflowName = session ? this.getWorkflowName(session) : 'unknown';
+
     if (!events) return;
 
     if (events.onProgress) {
@@ -1186,6 +1266,15 @@ export class ConversationManager {
 
     if (events.onToolCall) {
       agent.on('tool_call', (data) => {
+        captureToolCallStarted({
+          sessionId,
+          toolCallId: data.toolCallId,
+          toolName: data.toolName,
+          agentName: data.agentName ?? workflowName,
+          args: data.arguments,
+          projectDir,
+          workflowName,
+        });
         events.onToolCall!(
           sessionId,
           data.toolCallId,
@@ -1198,6 +1287,27 @@ export class ConversationManager {
 
     if (events.onToolResult) {
       agent.on('tool_result', (data) => {
+        const errorMessage =
+          typeof data.result === 'string'
+            ? data.result
+            : (
+              typeof data.result === 'object' &&
+              data.result !== null &&
+              'error' in data.result &&
+              typeof (data.result as { error?: unknown }).error === 'string'
+            )
+              ? (data.result as { error: string }).error
+              : undefined;
+        captureToolCallCompleted({
+          sessionId,
+          toolCallId: data.toolCallId,
+          toolName: data.toolName,
+          agentName: data.agentName ?? workflowName,
+          isError: data.isError === true,
+          errorMessage,
+          projectDir,
+          workflowName,
+        });
         events.onToolResult!(
           sessionId,
           data.toolCallId,
