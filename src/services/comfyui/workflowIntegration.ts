@@ -73,6 +73,25 @@ function safeId(input: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Refresh
+// ---------------------------------------------------------------------------
+
+/**
+ * Force the workflow registry to re-scan its directories and rebuild
+ * its mode-filtered map. Call this after any process-wide change
+ * that affects manifest visibility — most notably a `COMFY_MODE`
+ * env-var flip when the host (kshana-desktop) toggles between local
+ * and cloud.
+ *
+ * Without this, `getAllModes()` keeps returning the previous
+ * mode-filtered set even though `COMFY_MODE` says otherwise — the
+ * filter is applied at refresh time, not at lookup.
+ */
+export function refreshWorkflowRegistry(): void {
+  getWorkflowModeRegistry().refresh();
+}
+
+// ---------------------------------------------------------------------------
 // Validate
 // ---------------------------------------------------------------------------
 
@@ -302,14 +321,65 @@ export interface WorkflowSummary {
 }
 
 /**
+ * Scan the user workflows directory directly for manifests, bypassing
+ * the registry's mode filter. Used so the Settings UI can always
+ * show what the user has installed even when they're in cloud mode
+ * (where local-only user manifests are hidden from the routing
+ * registry — but the user still wants to see them with an
+ * "inactive" indicator).
+ */
+function listUserWorkflowsRaw(): WorkflowSummary[] {
+  const userDir = getUserWorkflowsDirForWrite();
+  if (!existsSync(userDir)) return [];
+  const out: WorkflowSummary[] = [];
+  let entries: string[];
+  try {
+    entries = readdirSync(userDir);
+  } catch {
+    return [];
+  }
+  for (const file of entries) {
+    if (!file.endsWith('.manifest.json')) continue;
+    try {
+      const content = readFileSync(join(userDir, file), 'utf-8');
+      const parsed = JSON.parse(content);
+      const manifests = Array.isArray(parsed) ? parsed : [parsed];
+      for (const m of manifests) {
+        if (!m?.id) continue;
+        out.push({
+          id: m.id,
+          displayName: m.displayName ?? m.id,
+          pipeline: m.pipeline ?? 'unknown',
+          builtIn: false,
+          isOverride: m.isOverride === true,
+          // True for now — overridden below if the registry doesn't
+          // have this id (i.e. mode-filter hid it).
+          active: m.active !== false,
+        });
+      }
+    } catch {
+      // Skip unparseable / partial manifest files; the registry's
+      // refresh() will warn separately.
+    }
+  }
+  return out;
+}
+
+/**
  * List all workflows known to the registry (built-ins + user uploads).
  * Optionally filter to user uploads only.
+ *
+ * User uploads are merged from a direct disk scan so they show up
+ * even when the registry's COMFY_MODE filter would hide them. Hidden
+ * uploads are marked `active: false` so the UI can show an
+ * "inactive — current mode doesn't use this" badge.
  */
 export function listWorkflows(opts?: { userOnly?: boolean }): WorkflowSummary[] {
   const registry = getWorkflowModeRegistry();
-  const all = registry.getAllModes();
-  const filtered = opts?.userOnly ? all.filter(m => !m.builtIn) : all;
-  return filtered.map(m => ({
+  const fromRegistry = registry.getAllModes();
+  const fromRegistryById = new Map(fromRegistry.map(m => [m.id, m] as const));
+
+  const summaries: WorkflowSummary[] = fromRegistry.map(m => ({
     id: m.id,
     displayName: m.displayName,
     pipeline: m.pipeline,
@@ -317,6 +387,14 @@ export function listWorkflows(opts?: { userOnly?: boolean }): WorkflowSummary[] 
     isOverride: m.isOverride === true,
     active: m.active !== false,
   }));
+
+  // Surface user-uploaded manifests the registry filtered out.
+  for (const userSum of listUserWorkflowsRaw()) {
+    if (fromRegistryById.has(userSum.id)) continue;
+    summaries.push({ ...userSum, active: false });
+  }
+
+  return opts?.userOnly ? summaries.filter(s => !s.builtIn) : summaries;
 }
 
 /** Get the full manifest for a single workflow, or undefined. */

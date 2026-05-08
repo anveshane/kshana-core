@@ -24,9 +24,17 @@ let userWorkflowsDir: string | undefined;
 let registryInitialized = false;
 
 export function setUserWorkflowsDir(path: string): void {
+  // Idempotent on the same path — hosts that restart on settings
+  // changes (kshana-desktop calls KshanaCoreManager.restart() →
+  // start() → setUserWorkflowsDir() again) must not crash on the
+  // second call with the same value. Only throw if the host tries
+  // to point us at a *different* directory after init, which is a
+  // real init-order bug.
   if (registryInitialized) {
+    if (path === userWorkflowsDir) return;
     throw new Error(
-      `setUserWorkflowsDir() called after the WorkflowModeRegistry singleton was already created. ` +
+      `setUserWorkflowsDir() called with a different path after the WorkflowModeRegistry was already created. ` +
+        `previous=${userWorkflowsDir} requested=${path}. ` +
         `Call this from your host's bootstrap, before any code that imports workflows.`,
     );
   }

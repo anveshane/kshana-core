@@ -58,6 +58,7 @@ export {
   setUserWorkflowsDir,
   getUserWorkflowsDir,
 } from '../services/providers/workflowsRoot.js';
+export { refreshWorkflowRegistry } from '../services/comfyui/workflowIntegration.js';
 export {
   validateWorkflowFile,
   analyzeWorkflowFile,
