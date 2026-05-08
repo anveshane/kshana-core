@@ -56,6 +56,30 @@ function debugLog(message: string): void {
   }
 }
 
+export function replaceUnresolvedLoadImages(
+  workflow: Record<string, unknown>,
+  uploadedNames: Set<string>,
+  fallbackImage: string | undefined,
+  log: (message: string) => void = debugLog,
+): void {
+  for (const [nid, n] of Object.entries(workflow)) {
+    const node = n as { class_type?: string; inputs?: Record<string, unknown> };
+    if (node.class_type === 'LoadImage' && typeof node.inputs?.['image'] === 'string') {
+      const img = node.inputs['image'] as string;
+      const isKnownUpload = uploadedNames.has(img);
+      log(`[video workflow] LoadImage node ${nid}: image=${img}  known_upload=${isKnownUpload}`);
+      if (!isKnownUpload) {
+        if (fallbackImage) {
+          node.inputs['image'] = fallbackImage;
+          log(`[video workflow] Replaced unresolved LoadImage node ${nid}: ${img} → ${fallbackImage}`);
+        } else {
+          log(`[video workflow] WARNING: LoadImage node ${nid} still references ${img} — likely a stale template placeholder. ComfyUI Cloud may reject the submission.`);
+        }
+      }
+    }
+  }
+}
+
 export class ComfyUIProvider implements GenerationProvider {
   readonly id = 'comfyui';
   readonly displayName = 'ComfyUI (Local)';
@@ -615,17 +639,11 @@ export class ComfyUIProvider implements GenerationProvider {
         uploadResult?.name,
         ...Object.values(uploadedFrames),
       ].filter((v): v is string => typeof v === 'string'));
-      for (const [nid, n] of Object.entries(workflow)) {
-        const node = n as { class_type?: string; inputs?: Record<string, unknown> };
-        if (node.class_type === 'LoadImage' && typeof node.inputs?.['image'] === 'string') {
-          const img = node.inputs['image'] as string;
-          const isKnownUpload = uploadedNames.has(img);
-          debugLog(`[video workflow] LoadImage node ${nid}: image=${img}  known_upload=${isKnownUpload}`);
-          if (!isKnownUpload) {
-            debugLog(`[video workflow] WARNING: LoadImage node ${nid} still references ${img} — likely a stale template placeholder. ComfyUI Cloud may return cached output from a prior submission.`);
-          }
-        }
-      }
+      replaceUnresolvedLoadImages(
+        workflow,
+        uploadedNames,
+        uploadResult?.name ?? Object.values(uploadedFrames)[0],
+      );
     } else {
       // Built-in workflow: use the old registry + named parameterizer
       const workflowMetadata = registry.get(workflowName);
