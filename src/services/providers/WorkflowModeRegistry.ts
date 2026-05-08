@@ -12,6 +12,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { findKshanaCoreRoot } from '../../agent/pi/paths.js';
+import { getUserWorkflowsDir, markRegistryInitialized } from './workflowsRoot.js';
 import type { WorkflowManifest, WorkflowManifestFile, WorkflowPipeline } from './types.js';
 
 /** Directories to scan for manifest files.
@@ -189,9 +190,24 @@ export class WorkflowModeRegistry {
 
     const isCloudMode = process.env['COMFY_MODE'] === 'cloud';
 
+    // Build the scan list: kshana-core's built-in/cloud subdirs (always),
+    // plus user uploads. When a host (kshana-desktop) has set a user
+    // workflows directory via setUserWorkflowsDir(), we use *that*
+    // for user workflows and skip kshana-core's `workflows/user/` —
+    // otherwise dev-machine workflows under the kshana-core checkout
+    // would leak into a packaged-app user's view. CLI / dev runs
+    // fall back to the kshana-core-relative paths.
+    const hostUserDir = getUserWorkflowsDir();
+    const scanDirs: string[] = [];
+    for (const d of workflowDirs()) {
+      // Skip the kshana-core-relative user dir if the host has set its own.
+      if (hostUserDir && (d === 'workflows/user' || d === 'workflows')) continue;
+      scanDirs.push(join(this.projectRoot, d));
+    }
+    if (hostUserDir) scanDirs.push(hostUserDir);
+
     // Scan filesystem for ComfyUI workflow manifests
-    for (const dir of workflowDirs()) {
-      const absDir = join(this.projectRoot, dir);
+    for (const absDir of scanDirs) {
       if (!existsSync(absDir)) continue;
       try {
         const files = readdirSync(absDir);
@@ -220,8 +236,11 @@ export class WorkflowModeRegistry {
               }
               // Store the directory for later workflow path resolution
               manifestDirMap.set(manifest.id, absDir);
-              // Tag built-in vs user
-              manifest.builtIn = dir.includes('built-in') || dir.includes('cloud');
+              // Tag built-in vs user — only manifests living under the
+              // built-in / cloud subdirs of projectRoot count as built-in.
+              // Host-supplied user dirs always yield user manifests.
+              manifest.builtIn =
+                absDir.includes('built-in') || absDir.includes('cloud');
               manifest.active = manifest.active !== false; // default active
               // Filter by mode: "local", "cloud", or "both" (default).
               // When the manifest doesn't declare a mode, infer it from
@@ -273,6 +292,15 @@ export class WorkflowModeRegistry {
    */
   getMode(modeId: string): WorkflowManifest | undefined {
     return this.modes.get(modeId);
+  }
+
+  /**
+   * Return every loaded mode (built-in + user + cloud + API providers)
+   * as a flat array. Used by the workflow management UI which lists
+   * everything regardless of pipeline.
+   */
+  getAllModes(): WorkflowManifest[] {
+    return Array.from(this.modes.values()).sort((a, b) => a.priority - b.priority);
   }
 
   /**
@@ -579,6 +607,17 @@ export function getWorkflowModeRegistry(): WorkflowModeRegistry {
   if (!_registry) {
     _registry = new WorkflowModeRegistry();
     _registry.refresh();
+    markRegistryInitialized();
   }
   return _registry;
+}
+
+/**
+ * Test-only: clear the singleton so the next call constructs a fresh
+ * registry against the current `workflowsRoot.ts` state. Production
+ * code must not call this — the singleton's identity is load-bearing
+ * for cache-coherence assumptions elsewhere.
+ */
+export function resetWorkflowModeRegistryForTesting(): void {
+  _registry = undefined;
 }

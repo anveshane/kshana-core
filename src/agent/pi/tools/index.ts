@@ -14,6 +14,14 @@ import {
   kshanaShowShotVideo,
   kshanaShowFinalVideo,
 } from "./showAsset.js";
+import {
+  kshanaValidateComfyWorkflow,
+  kshanaAnalyzeComfyWorkflow,
+  kshanaSaveComfyWorkflow,
+  kshanaListComfyWorkflows,
+  kshanaUpdateComfyWorkflow,
+  kshanaDeleteComfyWorkflow,
+} from "./comfyui/index.js";
 
 export const kshanaTools = [
   kshanaListProjects,
@@ -30,6 +38,12 @@ export const kshanaTools = [
   kshanaShowLastFrame,
   kshanaShowShotVideo,
   kshanaShowFinalVideo,
+  kshanaValidateComfyWorkflow,
+  kshanaAnalyzeComfyWorkflow,
+  kshanaSaveComfyWorkflow,
+  kshanaListComfyWorkflows,
+  kshanaUpdateComfyWorkflow,
+  kshanaDeleteComfyWorkflow,
 ];
 
 export {
@@ -47,4 +61,10 @@ export {
   kshanaShowLastFrame,
   kshanaShowShotVideo,
   kshanaShowFinalVideo,
+  kshanaValidateComfyWorkflow,
+  kshanaAnalyzeComfyWorkflow,
+  kshanaSaveComfyWorkflow,
+  kshanaListComfyWorkflows,
+  kshanaUpdateComfyWorkflow,
+  kshanaDeleteComfyWorkflow,
 };
