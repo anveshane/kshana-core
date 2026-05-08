@@ -8,8 +8,9 @@
 
 import { existsSync, readFileSync, statSync, mkdirSync } from 'fs';
 import { join, extname, basename } from 'path';
-import { spawn, execSync } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import type { Timeline } from './types.js';
+import { getFfmpegPath, getFfprobePath } from './ffmpegBinaries.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -556,8 +557,9 @@ export async function assembleVideos(
   // Probe each input for audio streams
   const hasAudio: boolean[] = segments.map(seg => {
     try {
-      const probe = execSync(
-        `ffprobe -v error -select_streams a -show_entries stream=codec_type -of csv=p=0 "${seg.filePath}"`,
+      const probe = execFileSync(
+        getFfprobePath(),
+        ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=codec_type', '-of', 'csv=p=0', seg.filePath],
         { encoding: 'utf-8', timeout: 5000 }
       );
       return probe.trim().includes('audio');
@@ -574,8 +576,9 @@ export async function assembleVideos(
   // pair length-matched.
   const videoDurations: number[] = segments.map(seg => {
     try {
-      const probe = execSync(
-        `ffprobe -v error -select_streams v:0 -show_entries stream=duration -of default=nw=1:nk=1 "${seg.filePath}"`,
+      const probe = execFileSync(
+        getFfprobePath(),
+        ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=duration', '-of', 'default=nw=1:nk=1', seg.filePath],
         { encoding: 'utf-8', timeout: 5000 }
       );
       const dur = parseFloat(probe.trim());
@@ -764,7 +767,8 @@ export function runFFmpeg(
   timeoutMs: number = DEFAULT_TIMEOUT_MS
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const ffmpegPath = getFfmpegPath();
+    const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     let stderr = '';
     let stdout = '';
