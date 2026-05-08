@@ -53,6 +53,7 @@ import {
   type TimelineAssemblyResult,
   type TimelineAssemblyTextOverlayCue,
 } from '../remote/DesktopAssemblyBroker.js';
+import { captureFinalVideoCreated } from '../../server/posthog.js';
 
 interface ManifestAsset {
   id: string;
@@ -928,6 +929,14 @@ The timeline must be fully validated (all segments filled) before assembly.`,
           duration: verified.duration,
           artifactId: verified.artifactId,
         });
+        captureFinalVideoCreated({
+          sessionId,
+          durationSeconds: verified.duration,
+          segmentCount: resolution.resolved.length,
+          style: projectStyle,
+          projectDir,
+          assemblyPathType: 'timeline_desktop',
+        });
 
         return {
           success: true,
@@ -958,6 +967,15 @@ The timeline must be fully validated (all segments filled) before assembly.`,
       if (context.markAssemblyComplete) {
         context.markAssemblyComplete(result.outputPath, result.duration, result.fileSize);
       }
+      captureFinalVideoCreated({
+        sessionId,
+        durationSeconds: result.duration,
+        fileSizeBytes: result.fileSize,
+        segmentCount: resolution.resolved.length,
+        style: projectStyle,
+        projectDir,
+        assemblyPathType: 'timeline_backend',
+      });
 
       return {
         success: true,

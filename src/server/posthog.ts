@@ -6,18 +6,52 @@ import { PostHog } from 'posthog-node';
 
 const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 const MAX_ERROR_MESSAGE_LENGTH = 500;
+const MAX_PROPERTY_STRING_LENGTH = 1000;
+const MAX_ARRAY_ITEMS = 25;
+const MAX_OBJECT_DEPTH = 4;
 const DEVICE_ID_DIR = '.kshana';
 const DEVICE_ID_FILE = 'device-id';
+const SENSITIVE_PROPERTY_PATTERN =
+  /(api[_-]?key|token|secret|password|authorization|credential|bearer)/i;
 
 let posthogClient: PostHog | null | undefined;
 let shutdownHandlersRegistered = false;
 let cachedDeviceId: string | undefined;
 const posthogSessionIds = new Map<string, string>();
 
+export type AnalyticsEventName =
+  | 'desktop_app_first_started'
+  | 'desktop_app_started'
+  | 'desktop_heartbeat'
+  | 'desktop_app_quit'
+  | 'website_download_clicked'
+  | 'desktop_auth_started'
+  | 'desktop_token_issued'
+  | 'core_session_started'
+  | 'core_tool_call_started'
+  | 'core_tool_call_completed'
+  | 'core_task_started'
+  | 'core_task_completed'
+  | 'core_task_failed'
+  | 'final_video_created'
+  | (string & {});
+
 interface CommonProperties {
   app_version: string;
-  platform: 'desktop' | 'server';
+  platform: 'desktop' | 'server' | 'website';
   os: 'macos' | 'linux' | 'win32' | 'unknown';
+}
+
+export interface AnalyticsIdentity {
+  distinctId?: string;
+  installId?: string;
+  userId?: string;
+}
+
+export interface AnalyticsCaptureOptions {
+  timestamp?: string | Date;
+  identity?: AnalyticsIdentity;
+  component?: string;
 }
 
 let commonProperties: CommonProperties = {
@@ -25,6 +59,9 @@ let commonProperties: CommonProperties = {
   platform: 'server',
   os: normalizeOs(os.platform()),
 };
+
+let analyticsIdentity: AnalyticsIdentity = {};
+let extraCommonProperties: Record<string, unknown> = {};
 
 export interface ToolCallStartedPayload {
   sessionId: string;
@@ -58,6 +95,8 @@ export interface WorkflowEventPayload {
   workflowName: string;
   durationMs?: number;
   templateId?: string;
+  taskKind?: string;
+  taskId?: string;
 }
 
 export interface WorkflowFailedPayload extends WorkflowEventPayload {
@@ -70,6 +109,18 @@ export interface ErrorOccurredPayload {
   toolName?: string;
   workflowName?: string;
   messageHash?: string;
+}
+
+export interface FinalVideoCreatedPayload {
+  sessionId?: string;
+  durationSeconds?: number;
+  fileSizeBytes?: number;
+  versionNumber?: number;
+  templateId?: string;
+  style?: string;
+  segmentCount?: number;
+  projectDir?: string;
+  assemblyPathType: 'executor_final_assembly' | 'timeline_backend' | 'timeline_desktop';
 }
 
 interface ArgSummary {
@@ -143,6 +194,23 @@ function getOrCreateDeviceId(): string {
   }
 }
 
+function resolveIdentity(input?: AnalyticsIdentity): Required<Pick<AnalyticsIdentity, 'distinctId'>> & AnalyticsIdentity {
+  const identity = {
+    ...analyticsIdentity,
+    ...(input ?? {}),
+  };
+  const distinctId =
+    identity.distinctId ??
+    (identity.userId ? `user:${identity.userId}` : undefined) ??
+    (identity.installId ? `install:${identity.installId}` : undefined) ??
+    `install:${getOrCreateDeviceId()}`;
+
+  return {
+    ...identity,
+    distinctId,
+  };
+}
+
 function summarizeArgs(args: Record<string, unknown>): ArgSummary {
   const argKeys = Object.keys(args).slice(0, 20);
   let argsJsonLength = 0;
@@ -179,9 +247,69 @@ function sanitizeErrorMessage(message?: string): string | undefined {
   return normalized.slice(0, MAX_ERROR_MESSAGE_LENGTH);
 }
 
-function toDate(input?: string): Date | undefined {
+function sanitizeAnalyticsValue(value: unknown, depth: number): unknown {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (value instanceof Date) return value.toISOString();
+
+  if (typeof value === 'string') {
+    return value.length > MAX_PROPERTY_STRING_LENGTH
+      ? value.slice(0, MAX_PROPERTY_STRING_LENGTH)
+      : value;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return value;
+  }
+
+  if (Array.isArray(value)) {
+    if (depth >= MAX_OBJECT_DEPTH) return undefined;
+    return value
+      .slice(0, MAX_ARRAY_ITEMS)
+      .map((item) => sanitizeAnalyticsValue(item, depth + 1))
+      .filter((item) => item !== undefined);
+  }
+
+  if (typeof value === 'object') {
+    if (depth >= MAX_OBJECT_DEPTH) return undefined;
+    const result: Record<string, unknown> = {};
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      if (SENSITIVE_PROPERTY_PATTERN.test(key)) {
+        continue;
+      }
+      const sanitized = sanitizeAnalyticsValue(nested, depth + 1);
+      if (sanitized !== undefined) {
+        result[key] = sanitized;
+      }
+    }
+    return result;
+  }
+
+  return undefined;
+}
+
+export function sanitizeAnalyticsProperties(
+  properties: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(properties)) {
+    if (SENSITIVE_PROPERTY_PATTERN.test(key)) {
+      continue;
+    }
+    const sanitized = sanitizeAnalyticsValue(value, 0);
+    if (sanitized !== undefined) {
+      result[key] = sanitized;
+    }
+  }
+  return result;
+}
+
+function toDate(input?: string | Date): Date | undefined {
   if (!input) {
     return undefined;
+  }
+  if (input instanceof Date) {
+    return Number.isNaN(input.getTime()) ? undefined : input;
   }
   const parsed = new Date(input);
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
@@ -207,7 +335,6 @@ function createUuidV7(nowMs: number): string {
   const r8 = random[8] ?? 0;
   const r9 = random[9] ?? 0;
 
-  // 48-bit Unix timestamp in milliseconds (big-endian)
   bytes[0] = Number((timestamp >> 40n) & 0xffn);
   bytes[1] = Number((timestamp >> 32n) & 0xffn);
   bytes[2] = Number((timestamp >> 24n) & 0xffn);
@@ -215,11 +342,8 @@ function createUuidV7(nowMs: number): string {
   bytes[4] = Number((timestamp >> 8n) & 0xffn);
   bytes[5] = Number(timestamp & 0xffn);
 
-  // Version 7 + random bits
   bytes[6] = 0x70 | (r0 & 0x0f);
   bytes[7] = r1;
-
-  // RFC 4122 variant (10xx) + random bits
   bytes[8] = 0x80 | (r2 & 0x3f);
   bytes[9] = r3;
   bytes[10] = r4;
@@ -243,16 +367,83 @@ function getOrCreatePostHogSessionId(sessionId: string): string {
   return created;
 }
 
-function captureEvent(
-  event: string,
-  properties: Record<string, unknown>,
-  timestamp?: string
+export function configureAnalytics(input: {
+  platform?: CommonProperties['platform'];
+  appVersion?: string;
+  identity?: AnalyticsIdentity;
+  properties?: Record<string, unknown>;
+}): void {
+  if (input.platform || input.appVersion) {
+    setCommonProperties(
+      input.platform ?? commonProperties.platform,
+      input.appVersion ?? commonProperties.app_version,
+    );
+  }
+  if (input.identity) {
+    setAnalyticsIdentity(input.identity);
+  }
+  if (input.properties) {
+    extraCommonProperties = sanitizeAnalyticsProperties(input.properties);
+  }
+}
+
+export function setCommonProperties(
+  platform: CommonProperties['platform'],
+  appVersion: string,
+): void {
+  commonProperties = {
+    app_version: appVersion,
+    platform,
+    os: normalizeOs(os.platform()),
+  };
+}
+
+export function setAnalyticsIdentity(identity: AnalyticsIdentity): void {
+  analyticsIdentity = { ...identity };
+}
+
+export function getAnalyticsDistinctId(identity?: AnalyticsIdentity): string {
+  return resolveIdentity(identity).distinctId;
+}
+
+export function identifyAnalyticsUser(
+  identity: Required<Pick<AnalyticsIdentity, 'userId'>> & AnalyticsIdentity,
+  properties: Record<string, unknown> = {},
+): void {
+  const client = getPostHogClient();
+  const resolved = resolveIdentity(identity);
+  setAnalyticsIdentity(identity);
+
+  if (!client) {
+    return;
+  }
+
+  try {
+    client.identify({
+      distinctId: `user:${identity.userId}`,
+      properties: sanitizeAnalyticsProperties({
+        user_id: identity.userId,
+        install_id: resolved.installId,
+        $anon_distinct_id: resolved.installId ? `install:${resolved.installId}` : undefined,
+        ...properties,
+      }),
+    });
+  } catch {
+    // Analytics must never affect runtime behavior.
+  }
+}
+
+export function captureAnalyticsEvent(
+  event: AnalyticsEventName,
+  properties: Record<string, unknown> = {},
+  options: AnalyticsCaptureOptions = {},
 ): void {
   const client = getPostHogClient();
   if (!client) {
     return;
   }
 
+  const identity = resolveIdentity(options.identity);
   const rawSessionId = properties['session_id'];
   const posthogSessionId = typeof rawSessionId === 'string' && rawSessionId.length > 0
     ? getOrCreatePostHogSessionId(rawSessionId)
@@ -260,30 +451,22 @@ function captureEvent(
 
   try {
     client.capture({
-      distinctId: getOrCreateDeviceId(),
+      distinctId: identity.distinctId,
       event,
-      timestamp: toDate(timestamp),
-      properties: {
+      timestamp: toDate(options.timestamp),
+      properties: sanitizeAnalyticsProperties({
         ...commonProperties,
-        app_component: 'kshana-core',
+        ...extraCommonProperties,
+        app_component: options.component ?? 'kshana-core',
+        install_id: identity.installId,
+        user_id: identity.userId,
         ...(posthogSessionId ? { '$session_id': posthogSessionId } : {}),
         ...properties,
-      },
+      }),
     });
   } catch {
     // Analytics must never affect runtime behavior.
   }
-}
-
-export function setCommonProperties(
-  platform: CommonProperties['platform'],
-  appVersion: string
-): void {
-  commonProperties = {
-    app_version: appVersion,
-    platform,
-    os: normalizeOs(os.platform()),
-  };
 }
 
 export function isPostHogEnabled(): boolean {
@@ -299,26 +482,49 @@ export function hashAnalyticsMessage(message?: string): string | undefined {
 }
 
 export function captureAppStarted(platform: CommonProperties['platform']): void {
-  captureEvent('app_started', {
+  captureAnalyticsEvent('app_started', {
     platform,
+  }, {
+    component: platform === 'desktop' ? 'kshana-desktop' : 'kshana-core',
   });
+}
+
+export function captureDesktopAppFirstStarted(): void {
+  captureAnalyticsEvent('desktop_app_first_started', {}, { component: 'kshana-desktop' });
+}
+
+export function captureDesktopAppStarted(properties: Record<string, unknown> = {}): void {
+  captureAnalyticsEvent('desktop_app_started', properties, { component: 'kshana-desktop' });
+}
+
+export function captureDesktopHeartbeat(properties: Record<string, unknown> = {}): void {
+  captureAnalyticsEvent('desktop_heartbeat', properties, { component: 'kshana-desktop' });
+}
+
+export function captureDesktopAppQuit(properties: Record<string, unknown> = {}): void {
+  captureAnalyticsEvent('desktop_app_quit', properties, { component: 'kshana-desktop' });
+}
+
+export function captureDesktopAuthStarted(properties: Record<string, unknown> = {}): void {
+  captureAnalyticsEvent('desktop_auth_started', properties, { component: 'kshana-desktop' });
 }
 
 export function captureSessionStarted(sessionId: string, startedAt?: string): void {
   const startIso = startedAt ?? new Date().toISOString();
-  captureEvent('session_started', {
+  captureAnalyticsEvent('core_session_started', {
     session_id: sessionId,
-    // Extra hints for session-oriented analysis on server-side events.
     '$start_timestamp': startIso,
     session_started_at: startIso,
-  }, startIso);
+  }, {
+    timestamp: startIso,
+  });
 }
 
 export function captureSessionEnded(
   sessionId: string,
   durationMs?: number,
   startedAt?: string,
-  interactionCount?: number
+  interactionCount?: number,
 ): void {
   const endIso = new Date().toISOString();
   const sessionDurationSeconds = typeof durationMs === 'number'
@@ -326,7 +532,7 @@ export function captureSessionEnded(
     : undefined;
   const bounce = typeof interactionCount === 'number' ? interactionCount <= 1 : undefined;
 
-  captureEvent('session_ended', {
+  captureAnalyticsEvent('core_session_ended', {
     session_id: sessionId,
     duration_ms: durationMs,
     '$end_timestamp': endIso,
@@ -335,30 +541,40 @@ export function captureSessionEnded(
     session_started_at: startedAt,
     session_ended_at: endIso,
     session_interaction_count: interactionCount,
-  }, endIso);
+  }, {
+    timestamp: endIso,
+  });
 }
 
 export function captureWorkflowStarted(payload: WorkflowEventPayload): void {
-  captureEvent('workflow_started', {
+  captureAnalyticsEvent('core_task_started', {
     session_id: payload.sessionId,
     workflow_name: payload.workflowName,
     template_id: payload.templateId,
+    task_kind: payload.taskKind,
+    task_id: payload.taskId,
   });
 }
 
 export function captureWorkflowCompleted(payload: WorkflowEventPayload): void {
-  captureEvent('workflow_completed', {
+  captureAnalyticsEvent('core_task_completed', {
     session_id: payload.sessionId,
     workflow_name: payload.workflowName,
+    template_id: payload.templateId,
+    task_kind: payload.taskKind,
+    task_id: payload.taskId,
     duration_ms: payload.durationMs,
     success: true,
   });
 }
 
 export function captureWorkflowFailed(payload: WorkflowFailedPayload): void {
-  captureEvent('workflow_failed', {
+  captureAnalyticsEvent('core_task_failed', {
     session_id: payload.sessionId,
     workflow_name: payload.workflowName,
+    template_id: payload.templateId,
+    task_kind: payload.taskKind,
+    task_id: payload.taskId,
     error_type: payload.errorType,
     duration_ms: payload.durationMs,
     success: false,
@@ -366,7 +582,7 @@ export function captureWorkflowFailed(payload: WorkflowFailedPayload): void {
 }
 
 export function captureErrorOccurred(payload: ErrorOccurredPayload): void {
-  captureEvent('error_occurred', {
+  captureAnalyticsEvent('error_occurred', {
     session_id: payload.sessionId,
     error_type: payload.errorType,
     tool_name: payload.toolName,
@@ -378,8 +594,8 @@ export function captureErrorOccurred(payload: ErrorOccurredPayload): void {
 export function captureToolCallStarted(payload: ToolCallStartedPayload): void {
   const argSummary = summarizeArgs(payload.args);
 
-  captureEvent(
-    'tool_call_started',
+  captureAnalyticsEvent(
+    'core_tool_call_started',
     {
       session_id: payload.sessionId,
       tool_call_id: payload.toolCallId,
@@ -390,13 +606,13 @@ export function captureToolCallStarted(payload: ToolCallStartedPayload): void {
       source: 'live',
       ...argSummary,
     },
-    payload.startedAt
+    { timestamp: payload.startedAt },
   );
 }
 
 export function captureToolCallCompleted(payload: ToolCallCompletedPayload): void {
-  captureEvent(
-    'tool_call_completed',
+  captureAnalyticsEvent(
+    'core_tool_call_completed',
     {
       session_id: payload.sessionId,
       tool_call_id: payload.toolCallId,
@@ -414,8 +630,22 @@ export function captureToolCallCompleted(payload: ToolCallCompletedPayload): voi
       project_dir_hash: hashProjectDir(payload.projectDir),
       source: payload.source ?? 'live',
     },
-    payload.completedAt ?? payload.startedAt
+    { timestamp: payload.completedAt ?? payload.startedAt },
   );
+}
+
+export function captureFinalVideoCreated(payload: FinalVideoCreatedPayload): void {
+  captureAnalyticsEvent('final_video_created', {
+    session_id: payload.sessionId,
+    duration_seconds: payload.durationSeconds,
+    file_size_bytes: payload.fileSizeBytes,
+    version_number: payload.versionNumber,
+    template_id: payload.templateId,
+    style: payload.style,
+    segment_count: payload.segmentCount,
+    project_dir_hash: hashProjectDir(payload.projectDir),
+    assembly_path_type: payload.assemblyPathType,
+  });
 }
 
 export async function shutdownPostHog(): Promise<void> {
@@ -448,4 +678,17 @@ export function registerPostHogShutdownHandlers(): void {
 
   handleSignal('SIGINT');
   handleSignal('SIGTERM');
+}
+
+export function resetAnalyticsForTests(): void {
+  posthogClient = undefined;
+  cachedDeviceId = undefined;
+  posthogSessionIds.clear();
+  analyticsIdentity = {};
+  extraCommonProperties = {};
+  commonProperties = {
+    app_version: '0.0.0',
+    platform: 'server',
+    os: normalizeOs(os.platform()),
+  };
 }

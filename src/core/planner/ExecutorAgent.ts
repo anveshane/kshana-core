@@ -102,6 +102,7 @@ import type { CharacterId } from '../../services/providers/promptRelayGlobalProm
 import { SceneBundleLockMap } from './sceneBundleLockMap.js';
 import { checkSceneBundleEligibility } from './sceneBundleEligibility.js';
 import { addAsset } from '../../tasks/video/workflow/index.js';
+import { captureFinalVideoCreated } from '../../server/posthog.js';
 
 /**
  * Configuration for creating an ExecutorAgent.
@@ -7620,6 +7621,17 @@ Examples of common failure modes to avoid:
             nodeId: node.id,
           });
         } catch { /* non-fatal */ }
+
+        captureFinalVideoCreated({
+          durationSeconds: result.duration,
+          fileSizeBytes: result.fileSize,
+          versionNumber,
+          templateId: this.config.project.templateId,
+          style: this.config.project.style,
+          segmentCount: resolvedSegments.length,
+          projectDir,
+          assemblyPathType: 'executor_final_assembly',
+        });
 
         this.emit({
           type: 'tool_streaming',
