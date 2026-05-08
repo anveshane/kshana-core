@@ -47,3 +47,39 @@ export type {
   AnalyticsEventName,
   AnalyticsIdentity,
 } from './posthog.js';
+
+// Custom ComfyUI workflow integration — exposed for hosts (e.g.
+// kshana-desktop) that drive workflow CRUD via in-process IPC
+// instead of HTTP. The host calls `setUserWorkflowsDir()` at
+// startup, then routes its renderer's CRUD requests to these
+// helpers. Pi-agent tools call the same helpers, so the chat path
+// and the IPC path stay perfectly in sync.
+export {
+  setUserWorkflowsDir,
+  getUserWorkflowsDir,
+} from '../services/providers/workflowsRoot.js';
+export {
+  validateWorkflowFile,
+  analyzeWorkflowFile,
+  saveWorkflow,
+  listWorkflows,
+  getWorkflow,
+  updateWorkflow,
+  deleteWorkflow,
+  WorkflowIntegrationError,
+} from '../services/comfyui/workflowIntegration.js';
+export type {
+  ValidateResult,
+  ValidateError,
+  AnalyzeResult,
+  SaveWorkflowOptions,
+  SaveWorkflowResult,
+  WorkflowSummary,
+  WorkflowUpdate,
+} from '../services/comfyui/workflowIntegration.js';
+export type {
+  WorkflowManifest,
+  WorkflowPipeline,
+  InputRequirement,
+  ParameterMapping,
+} from '../services/providers/types.js';

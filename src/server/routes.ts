@@ -228,6 +228,20 @@ export async function registerRoutes(
   });
 
   // ── Workflow management endpoints ──────────────────────────────────────────
+  //
+  // NOTE: these endpoints serve the legacy kshana-core frontend
+  // (`frontend/src/components/WorkflowManager.tsx`). The same
+  // operations are also available as pi-agent tools and as direct
+  // function calls via `kshana-core/manager` — see
+  // `src/services/comfyui/workflowIntegration.ts` for the canonical
+  // helpers. New consumers (kshana-desktop) call those helpers
+  // directly. When this file gets refactored, replace the inline
+  // file IO + LLM-router logic below with calls to:
+  //   - validateWorkflowFile / analyzeWorkflowFile (upload)
+  //   - saveWorkflow (configure)
+  //   - listWorkflows / getWorkflow (list / get)
+  //   - updateWorkflow (override / deactivate / defaults)
+  //   - deleteWorkflow (delete)
 
   // List all workflows grouped by pipeline
   app.get(`${apiPrefix}/workflows`, async (_request: FastifyRequest, reply: FastifyReply) => {
