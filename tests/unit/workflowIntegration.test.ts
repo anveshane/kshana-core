@@ -274,6 +274,55 @@ describe('saveWorkflow', () => {
       }),
     ).toThrow(/Source workflow file not found/);
   });
+
+  // ── User uploads are local-only ─────────────────────────────────
+  // User-supplied workflows reference custom nodes / model files
+  // that exist on the user's local ComfyUI install. Cloud ComfyUI
+  // is a managed service with a fixed set of nodes — running a
+  // user workflow there would fail at submission. Lock the
+  // persisted `mode` to 'local' regardless of what the caller asks
+  // for.
+
+  it('forces mode=local when persisting a user manifest', () => {
+    const sourcePath = join(sourceDir, 'src.json');
+    writeFileSync(sourcePath, VALID_API_WORKFLOW);
+    saveWorkflow({
+      sourcePath,
+      manifest: { ...makeManifest('local_lock'), mode: 'both' },
+    });
+    const persisted = JSON.parse(
+      readFileSync(join(userDir, 'local_lock.manifest.json'), 'utf-8'),
+    );
+    expect(persisted.mode).toBe('local');
+  });
+
+  it('forces mode=local even when the caller explicitly asks for mode=cloud', () => {
+    const sourcePath = join(sourceDir, 'src.json');
+    writeFileSync(sourcePath, VALID_API_WORKFLOW);
+    saveWorkflow({
+      sourcePath,
+      manifest: { ...makeManifest('no_cloud_for_you'), mode: 'cloud' },
+    });
+    const persisted = JSON.parse(
+      readFileSync(join(userDir, 'no_cloud_for_you.manifest.json'), 'utf-8'),
+    );
+    expect(persisted.mode).toBe('local');
+  });
+
+  it('updateWorkflow refuses to flip mode away from local', () => {
+    const sourcePath = join(sourceDir, 'src.json');
+    writeFileSync(sourcePath, VALID_API_WORKFLOW);
+    saveWorkflow({ sourcePath, manifest: makeManifest('still_local') });
+
+    // The narrow WorkflowUpdate type doesn't include `mode` — but the
+    // implementation should also defend at runtime if a caller goes
+    // around the type via `as`.
+    const result = updateWorkflow('still_local', {
+      displayName: 'Renamed',
+      ...({ mode: 'cloud' } as unknown as object),
+    });
+    expect(result.mode).toBe('local');
+  });
 });
 
 // ---------------------------------------------------------------------------

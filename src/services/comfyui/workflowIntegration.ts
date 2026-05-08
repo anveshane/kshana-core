@@ -256,12 +256,20 @@ export function saveWorkflow(opts: SaveWorkflowOptions): SaveWorkflowResult {
     // 'overwrite' falls through and replaces
   }
 
-  // Normalize the manifest before persisting
+  // Normalize the manifest before persisting.
+  //
+  // `mode` is forced to 'local' on every save: user-uploaded
+  // workflows reference custom nodes / model files that exist on
+  // the user's own ComfyUI install. Cloud ComfyUI is a managed
+  // service with a fixed node set — submitting an arbitrary user
+  // workflow there would fail. The registry's mode-filter then
+  // hides these from the cloud view entirely.
   const normalized: WorkflowManifest = {
     ...manifest,
     id: finalId,
     workflowFile: `${finalId}.json`,
     builtIn: false,
+    mode: 'local',
   };
 
   // Copy the workflow JSON in, then write the manifest. Order
@@ -356,7 +364,16 @@ export function updateWorkflow(id: string, patch: WorkflowUpdate): WorkflowManif
     );
   }
 
-  const merged: WorkflowManifest = { ...existing, ...patch, id, builtIn: false };
+  // Same mode-lock as saveWorkflow: even if a caller goes around
+  // the WorkflowUpdate type via `as`, the persisted record stays
+  // mode=local so cloud ComfyUI never sees a user-uploaded workflow.
+  const merged: WorkflowManifest = {
+    ...existing,
+    ...patch,
+    id,
+    builtIn: false,
+    mode: 'local',
+  };
   writeFileSync(manifestPath, JSON.stringify(merged, null, 2));
   registry.refresh();
   return merged;

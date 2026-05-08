@@ -41,7 +41,6 @@ const Params = Type.Object({
       negativeAppend: Type.Optional(Type.String()),
     })),
     strategies: Type.Optional(Type.Array(Type.String())),
-    mode: Type.Optional(Type.String({ description: "'local', 'cloud', or 'both' (default)." })),
   }),
   on_conflict: Type.Optional(Type.String({
     description: "What to do if a workflow with the same id already exists: 'fail' (default), 'overwrite', or 'rename' (appends timestamp).",

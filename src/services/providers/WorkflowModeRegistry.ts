@@ -60,7 +60,13 @@ function inferManifestMode(absDir: string): 'local' | 'cloud' | 'both' {
   if (absDir.endsWith('/workflows/built-in') || absDir.endsWith('\\workflows\\built-in')) {
     return 'local';
   }
-  return 'both';
+  // User uploads (workflows/user/, kshana-desktop's userData/...) and
+  // anything else: default to 'local'. Reason: user manifests reference
+  // custom nodes / model files only present on the user's own ComfyUI
+  // install — they can't run on cloud ComfyUI. saveWorkflow() forces
+  // mode=local explicitly; this is the second line of defense for any
+  // legacy manifest persisted before that lock was in place.
+  return 'local';
 }
 
 /** Valid pipeline values for manifest validation */
