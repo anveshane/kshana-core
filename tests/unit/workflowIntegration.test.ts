@@ -24,6 +24,7 @@ import {
   setUserWorkflowsDir,
   resetUserWorkflowsDirForTesting,
 } from '../../src/services/providers/workflowsRoot.js';
+import { getWorkflowModeRegistry } from '../../src/services/providers/WorkflowModeRegistry.js';
 import type { WorkflowManifest } from '../../src/services/providers/types.js';
 import type { LLMClient } from '../../src/core/llm/index.js';
 
@@ -424,6 +425,30 @@ describe('listWorkflows / getWorkflow', () => {
 
   it('getWorkflow returns undefined for unknown ids', () => {
     expect(getWorkflow('does_not_exist')).toBeUndefined();
+  });
+
+  it('getWorkflow falls back to disk for mode-filtered user manifests', () => {
+    const savedComfyMode = process.env['COMFY_MODE'];
+    try {
+      const sourcePath = join(sourceDir, 'src.json');
+      writeFileSync(sourcePath, VALID_API_WORKFLOW);
+      saveWorkflow({ sourcePath, manifest: makeManifest('hidden_in_cloud') });
+
+      // Flip to cloud — registry no longer sees the local-only manifest.
+      process.env['COMFY_MODE'] = 'cloud';
+      refreshWorkflowRegistry();
+      const fromRegistry = getWorkflowModeRegistry().getMode('hidden_in_cloud');
+      expect(fromRegistry).toBeUndefined();
+
+      // getWorkflow should still resolve via disk read.
+      const fetched = getWorkflow('hidden_in_cloud');
+      expect(fetched).toBeDefined();
+      expect(fetched?.id).toBe('hidden_in_cloud');
+      expect(fetched?.parameterMappings).toHaveLength(1);
+    } finally {
+      if (savedComfyMode === undefined) delete process.env['COMFY_MODE'];
+      else process.env['COMFY_MODE'] = savedComfyMode;
+    }
   });
 });
 

@@ -397,9 +397,33 @@ export function listWorkflows(opts?: { userOnly?: boolean }): WorkflowSummary[] 
   return opts?.userOnly ? summaries.filter(s => !s.builtIn) : summaries;
 }
 
-/** Get the full manifest for a single workflow, or undefined. */
+/**
+ * Get the full manifest for a single workflow, or undefined.
+ *
+ * Tries the registry first (active manifests), then falls back to a
+ * direct disk read of the user dir so workflows hidden by the
+ * current COMFY_MODE filter still resolve. Without this fallback,
+ * the Settings UI's edit dialog would say "not found" for any
+ * inactive user workflow even though listWorkflows just rendered it.
+ */
 export function getWorkflow(id: string): WorkflowManifest | undefined {
-  return getWorkflowModeRegistry().getMode(id);
+  const fromRegistry = getWorkflowModeRegistry().getMode(id);
+  if (fromRegistry) return fromRegistry;
+
+  // Fallback: read from disk. Only the user dir — built-ins live
+  // inside kshana-core's checkout and the registry is the canonical
+  // path for those.
+  const userDir = getUserWorkflowsDirForWrite();
+  const manifestPath = join(userDir, `${id}.manifest.json`);
+  if (!existsSync(manifestPath)) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+    const candidate: WorkflowManifest = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (candidate?.id !== id) return undefined;
+    return candidate;
+  } catch {
+    return undefined;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -421,8 +445,11 @@ export type WorkflowUpdate = Partial<
  * change is visible immediately.
  */
 export function updateWorkflow(id: string, patch: WorkflowUpdate): WorkflowManifest {
-  const registry = getWorkflowModeRegistry();
-  const existing = registry.getMode(id);
+  // Use getWorkflow() (which falls back to disk for mode-filtered
+  // user manifests) instead of registry.getMode() directly —
+  // otherwise editing a workflow's defaults would fail with
+  // NOT_FOUND any time the user is in a mode that hides it.
+  const existing = getWorkflow(id);
   if (!existing) {
     throw new WorkflowIntegrationError(`No workflow with id '${id}'`, 'NOT_FOUND');
   }
@@ -453,7 +480,7 @@ export function updateWorkflow(id: string, patch: WorkflowUpdate): WorkflowManif
     mode: 'local',
   };
   writeFileSync(manifestPath, JSON.stringify(merged, null, 2));
-  registry.refresh();
+  getWorkflowModeRegistry().refresh();
   return merged;
 }
 
@@ -462,8 +489,11 @@ export function updateWorkflow(id: string, patch: WorkflowUpdate): WorkflowManif
 // ---------------------------------------------------------------------------
 
 export function deleteWorkflow(id: string): void {
-  const registry = getWorkflowModeRegistry();
-  const existing = registry.getMode(id);
+  // Use getWorkflow() (disk fallback) so users can delete workflows
+  // that are currently inactive in the registry's mode filter —
+  // otherwise switching to cloud and trying to clean up local
+  // workflows would fail with NOT_FOUND.
+  const existing = getWorkflow(id);
   if (!existing) {
     throw new WorkflowIntegrationError(`No workflow with id '${id}'`, 'NOT_FOUND');
   }
@@ -485,7 +515,7 @@ export function deleteWorkflow(id: string): void {
   if (existsSync(manifestPath)) rmSync(manifestPath);
   if (existsSync(workflowPath)) rmSync(workflowPath);
 
-  registry.refresh();
+  getWorkflowModeRegistry().refresh();
 }
 
 // ---------------------------------------------------------------------------
