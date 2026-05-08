@@ -29,6 +29,7 @@ import {
   type StartTaskData,
   type UserResponseData,
   type RedoNodeData,
+  type HistoryData,
   createServerMessage,
   isStartTaskMessage,
   isUserResponseMessage,
@@ -41,10 +42,13 @@ import {
   isResetProjectMessage,
   isTimelineAssemblyProgressMessage,
   isTimelineAssemblyResultMessage,
+  isClearChatHistoryMessage,
   type ConfigureProjectData,
   type CreateProjectData,
   type ResetProjectData,
 } from './types.js';
+import { buildHistoryFromFile } from './historyReplay.js';
+import { findSession as findStoredSession, purgeSessionHistory } from '../agent/pi/sessionStore.js';
 import {
   getDisconnectionCategory,
   getConnectionStatusMessage,
@@ -143,9 +147,16 @@ export class WebSocketHandler {
       remoteFs = new RemoteClientFileSystem(socket, projectCache);
     }
 
-    // Try to resume an existing session (e.g. after browser reconnect)
+    // Try to resume an existing session (e.g. after browser reconnect or
+    // a desktop-app restart). Three cases:
+    //   (a) live in-memory session — reuse as-is.
+    //   (b) sessionId known to the on-disk sessionStore but not in memory
+    //       (process restart) — reconstruct ActiveSession and reopen the
+    //       pi-coding-agent JSONL on the next agent build.
+    //   (c) unknown id or no id — start fresh.
     let sessionId: string;
     let resumedSession = false;
+    let reconstructedFromDisk = false;
     if (resumeSessionId && this.conversationManager.getSession(resumeSessionId)) {
       sessionId = resumeSessionId;
       resumedSession = true;
@@ -156,6 +167,23 @@ export class WebSocketHandler {
         console.info(`[WebSocketHandler] Replacing stale socket for resumed session ${sessionId}`);
         try { oldConn.socket.close(1000, 'session_resumed_elsewhere'); } catch { /* ignore */ }
         this.connections.delete(sessionId);
+      }
+    } else if (resumeSessionId) {
+      // Cold-resume: in-memory state is gone but the JSONL transcript may
+      // still exist on disk. Reconstruct via createSession's resume path.
+      const session = this.conversationManager.createSession(
+        connectionMode,
+        remoteFs,
+        undefined,
+        resumeSessionId,
+      );
+      sessionId = session.id;
+      reconstructedFromDisk = sessionId === resumeSessionId;
+      resumedSession = reconstructedFromDisk;
+      if (!reconstructedFromDisk) {
+        console.info(
+          `[WebSocketHandler] resumeSessionId=${resumeSessionId} unknown to sessionStore; started fresh ${sessionId}`,
+        );
       }
     } else {
       // Create new session
@@ -192,6 +220,14 @@ export class WebSocketHandler {
       status: 'connected',
       message: getConnectionStatusMessage(connectionMode, resumedSession),
     }));
+
+    // If we just rebuilt the session from disk, replay the persisted chat
+    // transcript so the freshly-mounted frontend sees the conversation.
+    // Skipped for live in-memory resumes — the frontend never tore down
+    // its state in that case.
+    if (reconstructedFromDisk) {
+      this.sendHistorySnapshot(socket, sessionId);
+    }
 
     // Set up message handler
     socket.on('message', async (data) => {
@@ -289,6 +325,11 @@ export class WebSocketHandler {
 
     if (isResetProjectMessage(message)) {
       await this.handleResetProject(sessionId, socket, message.data);
+      return;
+    }
+
+    if (isClearChatHistoryMessage(message)) {
+      await this.handleClearChatHistory(sessionId, socket);
       return;
     }
 
@@ -1012,6 +1053,69 @@ export class WebSocketHandler {
         }));
       });
     } catch { /* ignore */ }
+  }
+
+  /**
+   * Wipe the persisted chat for this session and mint a fresh session
+   * for the same WebSocket connection. The frontend treats the
+   * `history_cleared` reply as authoritative — it overwrites the cached
+   * sessionId in localStorage so future reconnects don't pull the
+   * (now-purged) transcript back.
+   */
+  private async handleClearChatHistory(sessionId: string, socket: WebSocket): Promise<void> {
+    const oldId = sessionId;
+    // Remove the in-memory ActiveSession (cancels in-flight tasks, etc.).
+    this.conversationManager.deleteSession(oldId);
+    // Hard-delete the JSONL transcript and the index entry.
+    try {
+      purgeSessionHistory(oldId);
+    } catch (err) {
+      console.warn(`[WebSocketHandler] purgeSessionHistory failed for ${oldId}:`, err);
+    }
+
+    const oldConn = this.connections.get(oldId);
+    const mode = oldConn?.mode ?? 'local';
+    const remoteFs = oldConn?.remoteFs;
+    this.connections.delete(oldId);
+
+    // Mint a fresh session and re-attach the connection state to it.
+    const fresh = this.conversationManager.createSession(mode, remoteFs);
+    const newId = fresh.id;
+    this.connections.set(newId, {
+      socket,
+      sessionId: newId,
+      isAlive: true,
+      mode,
+      ...(oldConn?.clientId ? { clientId: oldConn.clientId } : {}),
+      ...(remoteFs ? { remoteFs } : {}),
+      ...(oldConn?.projectCache ? { projectCache: oldConn.projectCache } : {}),
+    });
+
+    this.sendMessage(socket, createServerMessage<{ oldSessionId: string; newSessionId: string }>(
+      'history_cleared',
+      newId,
+      { oldSessionId: oldId, newSessionId: newId },
+    ));
+    // Also send a status update so the existing frontend handler that
+    // captures sessionId from `status` events picks up the new id.
+    this.sendMessage(socket, createServerMessage<StatusData>('status', newId, {
+      status: 'connected',
+      message: 'Chat history cleared. New session started.',
+    }));
+  }
+
+  /**
+   * Read the persisted pi-coding-agent transcript for this session and
+   * push a one-shot history snapshot to the frontend. Best-effort: if
+   * the JSONL is missing or malformed, the snapshot is empty and the
+   * connect flow continues uninterrupted.
+   */
+  private sendHistorySnapshot(socket: WebSocket, sessionId: string): void {
+    const record = findStoredSession(sessionId);
+    if (!record) return;
+    const history = buildHistoryFromFile(record.sessionFile);
+    if (history.messages.length === 0 && history.toolCalls.length === 0) return;
+    this.sendMessage(socket, createServerMessage<HistoryData>('history', sessionId, history));
   }
 
   /**

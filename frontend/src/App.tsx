@@ -168,6 +168,7 @@ export function App() {
               onProviderSettings={() => setShowProviders(true)}
               onWorkflows={() => setShowWorkflows(true)}
               onStop={() => send({ type: 'cancel' })}
+              onClearChat={() => send({ type: 'clear_chat_history' })}
               projectSelector={<ProjectSelector onSendWs={send} onNewProject={handleNewProjectRequest} refreshToken={projectListRefreshToken} />}
             />
 
