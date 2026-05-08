@@ -15,6 +15,11 @@ import type { GenericAgentResult } from '../core/agent/index.js';
 import type { LLMClientConfig } from '../core/llm/index.js';
 import type { TypedEventEmitter } from '../events/EventEmitter.js';
 import { PiSessionAgent } from '../agent/pi/PiSessionAgent.js';
+import {
+  AMBIENT_PROJECT_SLUG,
+  findSession as findStoredSession,
+  setSessionProject,
+} from '../agent/pi/sessionStore.js';
 import { getBackgroundTaskRunner } from './runners/backgroundTaskRunnerSingleton.js';
 import type { BackgroundTaskRunnerEvents } from './runners/BackgroundTaskRunner.js';
 import { applyProjectAnnouncement } from './projectAnnouncement.js';
@@ -168,6 +173,15 @@ interface ActiveSession {
   backgroundEvents?: ConversationEvents;
   /** Currently-focused project name (no .kshana suffix), set by kshana_focus_project. */
   focusedProject?: string;
+  /**
+   * Path to a pi-coding-agent JSONL session to reopen on first agent
+   * construction. Set when the WebSocket layer reconstructs a stale
+   * sessionId from the kshana sessionStore. Cleared after the agent
+   * is built (one-shot).
+   */
+  resumeSessionFile?: string;
+  /** Whether this ActiveSession was reconstructed from disk. */
+  resumedFromDisk?: boolean;
   /** Last focused project we announced to the agent (for change detection in runTask). */
   announcedProject?: string;
   /**
@@ -573,25 +587,45 @@ export class ConversationManager {
 
   /**
    * Create a new conversation session (bare — no agent until project is configured).
+   *
+   * If `existingSessionId` is provided and the kshana sessionStore knows about
+   * it, the SessionState is reconstructed under that id and tagged
+   * `resumedFromDisk` so subsequent agent construction reopens the
+   * pi-coding-agent JSONL transcript instead of creating a fresh in-memory
+   * session.
    */
   createSession(
     mode: 'local' | 'remote' = 'local',
     remoteFs?: IFileSystem,
     role: ConversationSessionRole = 'interactive',
+    existingSessionId?: string,
   ): SessionState {
-    const sessionId = uuidv4();
+    const stored = existingSessionId ? findStoredSession(existingSessionId) : null;
+    const sessionId = stored?.sessionId ?? uuidv4();
     const now = Date.now();
 
     const state: SessionState = {
       id: sessionId,
-      createdAt: now,
+      createdAt: stored?.createdAt ?? now,
       lastActivity: now,
       status: 'idle',
       taskHistory: [],
     };
 
-    this.sessions.set(sessionId, { state, mode, role, remoteFs });
-    captureSessionStarted(sessionId, new Date(now).toISOString());
+    this.sessions.set(sessionId, {
+      state,
+      mode,
+      role,
+      remoteFs,
+      ...(stored
+        ? {
+            resumeSessionFile: stored.sessionFile,
+            resumedFromDisk: true,
+            ...(stored.projectSlug !== AMBIENT_PROJECT_SLUG ? { focusedProject: stored.projectSlug } : {}),
+          }
+        : {}),
+    });
+    captureSessionStarted(sessionId, new Date(state.createdAt).toISOString());
 
     return state;
   }
@@ -644,9 +678,14 @@ export class ConversationManager {
     // project via runTask's prepended "Active project" announcement.
     runInSession(session.sessionContext, () => {
       if (!session.agent) {
+        const slug = projectDirName
+          ? projectDirName.replace(/\.kshana$/, '')
+          : (session.focusedProject ?? AMBIENT_PROJECT_SLUG);
         session.agent = new PiSessionAgent({
           role: session.role,
           sessionId,
+          projectSlug: slug,
+          ...(session.resumeSessionFile ? { resumeSessionFile: session.resumeSessionFile } : {}),
           focusProject: (name) => this.focusSessionProject(sessionId, name),
           onMedia: (event) => {
             const s = this.sessions.get(sessionId);
@@ -654,11 +693,22 @@ export class ConversationManager {
           },
         });
         session.initialized = false;
+        // One-shot: clear so a later configure call (e.g. user switching
+        // projects mid-conversation) doesn't try to reopen the same file.
+        session.resumeSessionFile = undefined;
       }
     });
 
     if (projectDirName) {
       session.focusedProject = projectDirName.replace(/\.kshana$/, '');
+      // Keep the sessionStore record's projectSlug current so per-project
+      // resume queries see the latest focus. Best-effort — failure here
+      // shouldn't break the configure call.
+      try {
+        setSessionProject(sessionId, session.focusedProject);
+      } catch {
+        // ignore
+      }
     }
   }
 
@@ -683,9 +733,12 @@ export class ConversationManager {
 
     if (!session.agent) {
       runInSession(session.sessionContext, () => {
+        const slug = session.focusedProject ?? AMBIENT_PROJECT_SLUG;
         session.agent = new PiSessionAgent({
           role: session.role,
           sessionId,
+          projectSlug: slug,
+          ...(session.resumeSessionFile ? { resumeSessionFile: session.resumeSessionFile } : {}),
           focusProject: (name) => this.focusSessionProject(sessionId, name),
           onMedia: (event) => {
             const s = this.sessions.get(sessionId);
@@ -693,6 +746,7 @@ export class ConversationManager {
           },
         });
         session.initialized = false;
+        session.resumeSessionFile = undefined;
       });
     }
   }
@@ -1114,6 +1168,11 @@ export class ConversationManager {
     }
 
     session.focusedProject = projectName;
+    try {
+      setSessionProject(sessionId, projectName);
+    } catch {
+      // sessionStore not initialized yet (e.g. in-memory session) — ignore
+    }
     // Do NOT pre-mark this project as announced. Both the agent's own
     // kshana_focus_project tool AND the desktop's IPC focusProject
     // bridge land here, but only the agent path already sees the

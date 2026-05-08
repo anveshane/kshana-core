@@ -33,6 +33,35 @@ function debugLog(message: string): void {
   }
 }
 
+/**
+ * Translate Node's undici `TypeError: fetch failed` into a logged
+ * Error whose message names the URL, method, and the underlying cause
+ * chain (DNS / TLS / ECONNRESET / etc.). The original `cause` property
+ * is preserved for callers that want to inspect it.
+ *
+ * Also writes one debug.log line per failure so the silent-failure
+ * pattern (workflow strategy logged, then nothing) becomes traceable.
+ */
+function enrichFetchError(err: unknown, url: string, method: string): Error {
+  const cause = (err as { cause?: unknown })?.cause;
+  const causeCode = (cause as unknown as { code?: unknown } | null)?.code;
+  const causeMsg =
+    cause instanceof Error
+      ? `${cause.name}: ${cause.message}${typeof causeCode === 'string' ? ` [${causeCode}]` : ''}`
+      : cause !== undefined
+        ? String(cause)
+        : '';
+  const baseMsg = err instanceof Error ? err.message : String(err);
+  const enriched = `${method} ${url} failed: ${baseMsg}${causeMsg ? ` (cause: ${causeMsg})` : ''}`;
+  debugLog(`[ComfyUIClient][fetch-error] ${enriched}`);
+  const wrapped = new Error(enriched);
+  if (err instanceof Error && err.stack) wrapped.stack = err.stack;
+  if (cause !== undefined) {
+    (wrapped as { cause?: unknown }).cause = cause;
+  }
+  return wrapped;
+}
+
 export interface ComfyUIClientConfig {
   baseUrl: string;
   outputDir: string;
@@ -218,16 +247,28 @@ export class ComfyUIClient {
   /**
    * Cloud-aware request wrapper that prepends baseUrl, applies search
    * params, and attaches auth headers.
+   *
+   * Wraps fetch with a diagnostic catch: Node's undici throws a bare
+   * `TypeError: fetch failed` for any TCP/TLS-layer error, with the real
+   * reason buried on the unenumerable `cause` property. Re-throws an
+   * Error whose message names the URL, method, and cause chain so the
+   * executor's surfaced error and the debug log both pin the call site.
    */
   private async request(
     pathname: string,
     init: RequestInit = {},
     searchParams?: URLSearchParams
   ): Promise<Response> {
-    return fetch(this.buildUrl(pathname, searchParams), {
-      ...init,
-      headers: { ...this.buildHeaders(), ...(init.headers as Record<string, string> | undefined) },
-    });
+    const url = this.buildUrl(pathname, searchParams);
+    const method = (init.method as string | undefined) ?? 'GET';
+    try {
+      return await fetch(url, {
+        ...init,
+        headers: { ...this.buildHeaders(), ...(init.headers as Record<string, string> | undefined) },
+      });
+    } catch (err) {
+      throw enrichFetchError(err, url, method);
+    }
   }
 
   /**
@@ -341,11 +382,17 @@ export class ComfyUIClient {
       payload['extra_data'] = extraDataPayload;
     }
 
-    const response = await fetch(this.buildUrl('/prompt'), {
-      method: 'POST',
-      headers: this.buildHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify(payload),
-    });
+    const promptUrl = this.buildUrl('/prompt');
+    let response: Response;
+    try {
+      response = await fetch(promptUrl, {
+        method: 'POST',
+        headers: this.buildHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      throw enrichFetchError(err, promptUrl, 'POST');
+    }
 
     if (!response.ok) {
       const errorText = await response.text();

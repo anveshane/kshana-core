@@ -10,6 +10,8 @@ import {
   type AgentSessionEvent,
   type ToolDefinition,
 } from '@mariozechner/pi-coding-agent';
+import { existsSync } from 'node:fs';
+import { recordSession, sessionFilePathFor, touchSession } from './sessionStore.js';
 import { getModel } from '@mariozechner/pi-ai';
 import type { Model } from '@mariozechner/pi-ai';
 import type { GenericAgentResult } from '../../core/agent/AgentResult.js';
@@ -117,6 +119,9 @@ export class PiSessionAgent extends TypedEventEmitter {
 
   private readonly tools: ToolDefinition[];
   private readonly systemPrompt: string;
+  private readonly sessionId?: string;
+  private readonly projectSlug?: string;
+  private readonly resumeSessionFile?: string;
 
   constructor(opts?: {
     tools?: ToolDefinition[];
@@ -138,8 +143,24 @@ export class PiSessionAgent extends TypedEventEmitter {
      * Session id to embed in `kshana_dispatch_*` tools so the
      * background task runner tags emitted events with this id, and
      * the host can route them back to the right chat.
+     *
+     * Also used as the on-disk filename for the persisted pi-coding-agent
+     * session JSONL (`<projectSlug>/<sessionId>.jsonl`). Without it, the
+     * session falls back to in-memory only.
      */
     sessionId?: string;
+    /**
+     * Project slug (no `.kshana` suffix) the session is scoped to.
+     * Determines the directory the JSONL transcript is written into.
+     * Without it, the session falls back to in-memory only — pi-agent
+     * still works, but the chat is lost on restart.
+     */
+    projectSlug?: string;
+    /**
+     * Path to an existing pi-coding-agent JSONL session to resume from.
+     * When set, takes precedence over a fresh-create with `projectSlug`.
+     */
+    resumeSessionFile?: string;
   }) {
     super();
     const role: SessionRole = opts?.role ?? 'interactive';
@@ -197,6 +218,9 @@ export class PiSessionAgent extends TypedEventEmitter {
       ? [...baseTools, createFocusProjectTool(opts.focusProject)]
       : baseTools;
     this.systemPrompt = opts?.systemPrompt ?? loadOrchestratorPrompt();
+    this.sessionId = opts?.sessionId;
+    this.projectSlug = opts?.projectSlug;
+    this.resumeSessionFile = opts?.resumeSessionFile;
   }
 
   async initialize(): Promise<void> {
@@ -228,11 +252,65 @@ export class PiSessionAgent extends TypedEventEmitter {
       model,
       customTools: this.tools,
       resourceLoader,
-      sessionManager: SessionManager.inMemory(),
+      sessionManager: this.buildSessionManager(cwd),
       settingsManager,
     });
     this.session = result.session;
     this.unsubscribe = this.session.subscribe(event => this.handleEvent(event));
+  }
+
+  /**
+   * Pick the right SessionManager based on resume / persist / fallback rules.
+   *
+   * - resumeSessionFile present and the JSONL exists → reopen it.
+   * - sessionId + projectSlug → fresh persistent session at a deterministic
+   *   path so the kshana-side index can find it later.
+   * - Otherwise → in-memory only (legacy callers without an id).
+   *
+   * Also records / touches the kshana sessionStore so resumes can locate
+   * the file by sessionId without scanning the disk.
+   */
+  private buildSessionManager(cwd: string): SessionManager {
+    if (this.resumeSessionFile && existsSync(this.resumeSessionFile)) {
+      if (this.sessionId) touchSession(this.sessionId);
+      return SessionManager.open(this.resumeSessionFile);
+    }
+    if (this.sessionId && this.projectSlug) {
+      const sessionFile = sessionFilePathFor(this.sessionId, this.projectSlug);
+      const sessionDir = join(sessionFile, '..');
+      // SessionManager.create() writes a new JSONL using its own id format.
+      // To pin the file to <sessionId>.jsonl so the kshana index stays in
+      // sync, we create then redirect via setSessionFile.
+      const mgr = SessionManager.create(cwd, sessionDir);
+      mgr.setSessionFile(sessionFile);
+      recordSession(this.sessionId, this.projectSlug, sessionFile);
+      return mgr;
+    }
+    return SessionManager.inMemory();
+  }
+
+  /**
+   * Read every persisted session entry (messages, tool calls, compaction
+   * markers, etc.) for this session. Used by the WebSocket resume path
+   * to replay history into a fresh frontend on reconnect.
+   *
+   * Returns an empty array for in-memory sessions or before initialize().
+   */
+  getSessionEntries(): ReturnType<SessionManager['getEntries']> {
+    if (!this.session) return [];
+    const mgr = this.session.sessionManager;
+    if (!mgr.isPersisted()) return [];
+    return mgr.getEntries();
+  }
+
+  /** Whether this session is backed by a persistent JSONL file. */
+  isPersisted(): boolean {
+    return this.session?.sessionManager.isPersisted() ?? false;
+  }
+
+  /** Path to the JSONL transcript file, or undefined for in-memory sessions. */
+  getSessionFile(): string | undefined {
+    return this.session?.sessionManager.getSessionFile();
   }
 
   async run(task: string, userResponse?: string): Promise<GenericAgentResult> {

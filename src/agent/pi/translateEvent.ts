@@ -12,6 +12,7 @@ import type {
   ToolStreamingEvent,
   StreamingTextEvent,
   AgentTextEvent,
+  NotificationEvent,
 } from "../../events/events.js";
 
 export type TranslatedKshanaEvent =
@@ -19,7 +20,8 @@ export type TranslatedKshanaEvent =
   | ToolResultEvent
   | ToolStreamingEvent
   | StreamingTextEvent
-  | AgentTextEvent;
+  | AgentTextEvent
+  | NotificationEvent;
 
 export interface TranslationContext {
   /** agentName tag attached to tool_call / tool_result / tool_streaming events. */
@@ -124,6 +126,40 @@ export function translatePiEvent(
     case "agent_end": {
       const out = ctx.finalAssistantText || extractFinalText(event.messages);
       return { events: [], context: ctx, agentEndOutput: out };
+    }
+
+    case "compaction_start": {
+      // Surface to the user — a long pause is otherwise unexplained.
+      // Reason: 'manual' | 'threshold' | 'overflow'. We only flag the
+      // automatic ones; a manual /compact is initiated by the user
+      // and doesn't need an explainer toast.
+      if (event.reason === "manual") return { events: [], context: ctx };
+      return {
+        events: [
+          {
+            type: "notification",
+            level: "info",
+            message:
+              event.reason === "overflow"
+                ? "Context window is full — summarizing earlier messages…"
+                : "Approaching context limit — summarizing earlier messages…",
+          },
+        ],
+        context: ctx,
+      };
+    }
+
+    case "compaction_end": {
+      if (event.reason === "manual") return { events: [], context: ctx };
+      if (event.aborted) return { events: [], context: ctx };
+      const errLevel: "info" | "warning" | "error" = event.errorMessage ? "warning" : "info";
+      const errMsg = event.errorMessage
+        ? `Compaction failed: ${event.errorMessage}.${event.willRetry ? ' Retrying…' : ''}`
+        : "Earlier messages summarized — chat continues.";
+      return {
+        events: [{ type: "notification", level: errLevel, message: errMsg }],
+        context: ctx,
+      };
     }
 
     default:

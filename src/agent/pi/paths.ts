@@ -66,6 +66,23 @@ export function getKshanaConfigDir(): string {
   return resolve(homedir(), ".kshana");
 }
 
+/**
+ * Root directory for persisted pi-coding-agent chat sessions.
+ * Sessions are scoped by project slug so each kshana project has its
+ * own append-only JSONL transcript per chat session.
+ *
+ * Layout: <root>/<projectSlug>/<sessionId>.jsonl
+ *
+ * Override via KSHANA_PI_SESSIONS_DIR (mostly for tests).
+ */
+export function getPiSessionsDir(projectSlug?: string): string {
+  const override = process.env["KSHANA_PI_SESSIONS_DIR"];
+  const root = override
+    ? resolve(expandTilde(override))
+    : resolve(getKshanaConfigDir(), "pi-sessions");
+  return projectSlug ? resolve(root, projectSlug) : root;
+}
+
 export function ensureDir(path: string): string {
   if (!existsSync(path)) {
     mkdirSync(path, { recursive: true });

@@ -17,9 +17,35 @@ export interface UseWebSocketOptions {
   maxRetries?: number
 }
 
+const RESUME_SESSION_KEY = 'kshana.sessionId'
+
+function readStoredSessionId(): string | null {
+  try {
+    return window.localStorage.getItem(RESUME_SESSION_KEY)
+  } catch {
+    return null
+  }
+}
+
+function writeStoredSessionId(id: string | null): void {
+  try {
+    if (id) window.localStorage.setItem(RESUME_SESSION_KEY, id)
+    else window.localStorage.removeItem(RESUME_SESSION_KEY)
+  } catch {
+    // localStorage may be disabled — fail silently. Resume won't work but
+    // the chat itself still does.
+  }
+}
+
+/** Module-level handle so non-React code (e.g. a top-bar "New chat" button) can
+ *  drop the cached session id without going through the hook. */
+export function clearStoredSessionId(): void {
+  writeStoredSessionId(null)
+}
+
 export function useWebSocket(options: UseWebSocketOptions = {}) {
   const {
-    url = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/ws/chat`,
+    url: baseUrl = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/api/v1/ws/chat`,
     onMessage,
     onConnect,
     onDisconnect,
@@ -58,6 +84,13 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     if (wsRef.current?.readyState === WebSocket.CONNECTING) return
 
     setStatus('connecting')
+    // Pull cached id from localStorage. Server treats it as a hint —
+    // unknown ids fall back to a fresh session, so the cache going stale
+    // is harmless.
+    const stored = sessionIdRef.current ?? readStoredSessionId()
+    const url = stored
+      ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}sessionId=${encodeURIComponent(stored)}`
+      : baseUrl
     const ws = new WebSocket(url)
     wsRef.current = ws
 
@@ -71,11 +104,29 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
       try {
         const msg: ServerMessage = JSON.parse(event.data)
 
-        // Capture session ID from first status message
-        if (msg.type === 'status' && msg.sessionId && !sessionIdRef.current) {
+        // Capture session ID from first status message AND any subsequent
+        // status that announces a NEW id (e.g. after history_cleared).
+        // Persist to localStorage so the next mount can resume.
+        if (msg.type === 'status' && msg.sessionId) {
+          if (!sessionIdRef.current) {
+            sessionIdRef.current = msg.sessionId
+            setSessionId(msg.sessionId)
+            writeStoredSessionId(msg.sessionId)
+            onConnectRef.current?.(msg.sessionId)
+          } else if (msg.sessionId !== sessionIdRef.current) {
+            sessionIdRef.current = msg.sessionId
+            setSessionId(msg.sessionId)
+            writeStoredSessionId(msg.sessionId)
+          }
+        }
+
+        // history_cleared carries the authoritative new sessionId; refresh
+        // the cache eagerly so a reload picks it up even if the next
+        // status hasn't arrived yet.
+        if (msg.type === 'history_cleared' && msg.sessionId) {
           sessionIdRef.current = msg.sessionId
           setSessionId(msg.sessionId)
-          onConnectRef.current?.(msg.sessionId)
+          writeStoredSessionId(msg.sessionId)
         }
 
         onMessageRef.current?.(msg)
@@ -103,7 +154,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     ws.onerror = () => {
       // onclose will fire after onerror
     }
-  }, [url, reconnectDelay, maxRetries]) // Only depends on config, not callbacks
+  }, [baseUrl, reconnectDelay, maxRetries]) // Only depends on config, not callbacks
 
   const disconnect = useCallback(() => {
     if (reconnectTimerRef.current) {
