@@ -18,6 +18,7 @@ import * as http from 'http';
 import { spawn } from 'child_process';
 import type { InputMediaType, ProjectInput } from '../../tasks/video/workflow/types.js';
 import { inputDetector } from './InputDetector.js';
+import { getFfmpegPath, getFfprobePath } from '../timeline/ffmpegBinaries.js';
 
 /**
  * Result of downloading remote content.
@@ -112,14 +113,18 @@ export interface InputProcessorConfig {
 }
 
 /**
- * Default configuration.
+ * Default configuration. ffmpeg/ffprobe paths resolve at construction
+ * time so the desktop wrapper can set KSHANA_FFMPEG_PATH /
+ * KSHANA_FFPROBE_PATH after kshana-core has loaded.
  */
-const DEFAULT_CONFIG: InputProcessorConfig = {
-  inputsDir: 'inputs',
-  ytDlpPath: 'yt-dlp',
-  ffmpegPath: 'ffmpeg',
-  ffprobePath: 'ffprobe',
-};
+function buildDefaultConfig(): InputProcessorConfig {
+  return {
+    inputsDir: 'inputs',
+    ytDlpPath: 'yt-dlp',
+    ffmpegPath: getFfmpegPath(),
+    ffprobePath: getFfprobePath(),
+  };
+}
 
 /**
  * InputProcessor class for handling input processing operations.
@@ -128,7 +133,7 @@ export class InputProcessor {
   private config: InputProcessorConfig;
 
   constructor(config: Partial<InputProcessorConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.config = { ...buildDefaultConfig(), ...config };
   }
 
   /**

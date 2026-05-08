@@ -16,6 +16,7 @@
 import { existsSync, mkdirSync } from 'fs';
 import { spawn } from 'child_process';
 import { join } from 'path';
+import { getFfmpegPath, getFfprobePath } from './ffmpegBinaries.js';
 
 /**
  * Run ffprobe to count the frames in a video. Returns the total frame
@@ -23,7 +24,7 @@ import { join } from 'path';
  */
 async function countFrames(videoPath: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('ffprobe', [
+    const proc = spawn(getFfprobePath(), [
       '-v', 'error',
       '-select_streams', 'v:0',
       '-count_frames',
@@ -51,7 +52,7 @@ async function countFrames(videoPath: string): Promise<number> {
  */
 async function extractFrameAtIndex(videoPath: string, frameIndex: number, outPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('ffmpeg', [
+    const proc = spawn(getFfmpegPath(), [
       '-y',
       '-i', videoPath,
       '-vf', `select='eq(n,${frameIndex})'`,
