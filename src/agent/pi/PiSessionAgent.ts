@@ -45,12 +45,21 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function openAiCompatibleProxyModel(): Model<'openai-completions'> | undefined {
-  const baseUrl = envTrim('OPENAI_BASE_URL');
-  const apiKey = envTrim('OPENAI_API_KEY');
+/**
+ * Build an `openai-completions` Model with explicit baseUrl/apiKey/model from
+ * the given env-var prefix. Used for both the legacy `OPENAI_*` route and the
+ * new `LLM_TIER_HEAVY_*` route. Returns undefined when baseUrl is missing —
+ * pi-ai's `getModel()` cannot route to a custom URL on its own, so without
+ * baseUrl we have to fall back to the named-provider path.
+ */
+function openAiCompatibleProxyModelFromPrefix(
+  prefix: 'OPENAI' | 'LLM_TIER_HEAVY',
+): Model<'openai-completions'> | undefined {
+  const baseUrl = envTrim(`${prefix}_BASE_URL`);
+  const apiKey = envTrim(`${prefix}_API_KEY`);
   if (!baseUrl || !apiKey) return undefined;
 
-  const modelId = envTrim('OPENAI_MODEL') ?? 'deepseek/deepseek-v4-flash';
+  const modelId = envTrim(`${prefix}_MODEL`) ?? 'deepseek/deepseek-v4-flash';
   const lowerModel = modelId.toLowerCase();
   const reasoning =
     lowerModel.includes('deepseek') ||
@@ -73,11 +82,53 @@ function openAiCompatibleProxyModel(): Model<'openai-completions'> | undefined {
 }
 
 export function resolvePiSessionModel(): Model<string> {
+  const model = resolvePiSessionModelInner();
+  if (!model) {
+    // pi-ai's getModel(provider, modelId) returns undefined for unknown
+    // model ids — e.g. a custom proxy model like "Qwen3.6-35B-A3B" is
+    // NOT in pi-ai's static registry. The undefined silently propagates
+    // until pi-coding-agent reads `model.api` and dies with the
+    // unhelpful "Cannot read properties of undefined (reading 'api')".
+    // Fail fast with a message that points at the cause.
+    const llmProvider = envTrim('LLM_PROVIDER') ?? '(unset)';
+    const baseUrl = envTrim('OPENAI_BASE_URL') ?? '(unset)';
+    const modelId = envTrim('OPENAI_MODEL') ?? '(unset)';
+    const hasKey = !!envTrim('OPENAI_API_KEY');
+    throw new Error(
+      `resolvePiSessionModel returned no model. ` +
+        `LLM_PROVIDER=${llmProvider} OPENAI_BASE_URL=${baseUrl} ` +
+        `OPENAI_MODEL=${modelId} hasOpenAIKey=${hasKey}. ` +
+        `For openai-compatible proxies (LM Studio, custom hosts), set ` +
+        `OPENAI_BASE_URL + OPENAI_API_KEY (any non-empty key) so the ` +
+        `proxy-model path fires; pi-ai's static registry will not have ` +
+        `your custom model id.`,
+    );
+  }
+  // Pi-agent uses @mariozechner/pi-coding-agent's internal HTTP stack,
+  // which bypasses LLMLogger — without this log line there is NO
+  // observable signal of which baseUrl/model pi-agent is hitting.
+  // Print to stdout so it lands in the desktop's electron-log capture.
+  // eslint-disable-next-line no-console
+  console.log(
+    `[resolvePiSessionModel] api=${model.api} provider=${model.provider} ` +
+      `id=${model.id} baseUrl=${(model as { baseUrl?: string }).baseUrl ?? '(default)'}`,
+  );
+  return model;
+}
+
+function resolvePiSessionModelInner(): Model<string> {
   ensureOpenRouterApiKeyFromEnv();
 
   const tierProvider = envTrim('LLM_TIER_HEAVY_PROVIDER');
   const tierModel = envTrim('LLM_TIER_HEAVY_MODEL');
   if (tierProvider) {
+    // When the user has supplied an explicit base URL for the heavy
+    // tier (e.g. self-hosted proxy, LM Studio, Kshana Cloud), build an
+    // openai-completions Model so pi-ai routes to that URL. Without
+    // this, getModel() sends to the named provider's default endpoint
+    // and silently bypasses the user's proxy.
+    const tierProxy = openAiCompatibleProxyModelFromPrefix('LLM_TIER_HEAVY');
+    if (tierProxy) return tierProxy;
     return getModel(
       tierProvider as Parameters<typeof getModel>[0],
       (tierModel ?? 'deepseek/deepseek-v4-flash') as never
@@ -86,7 +137,7 @@ export function resolvePiSessionModel(): Model<string> {
 
   const llmProvider = envTrim('LLM_PROVIDER')?.toLowerCase();
   if (llmProvider === 'openai') {
-    const proxyModel = openAiCompatibleProxyModel();
+    const proxyModel = openAiCompatibleProxyModelFromPrefix('OPENAI');
     if (proxyModel) return proxyModel;
     return getModel('openai', (envTrim('OPENAI_MODEL') ?? 'gpt-4o') as never) as Model<string>;
   }
@@ -320,6 +371,28 @@ export class PiSessionAgent extends TypedEventEmitter {
     const text = userResponse ? `${task}\n\n${userResponse}`.trim() : task;
     if (!text) {
       return { status: 'completed', output: '', todos: [] };
+    }
+
+    // Mid-stream user message → steer. pi-coding-agent throws
+    // "Agent is already processing. Specify streamingBehavior" if
+    // prompt() is called while a previous turn is still streaming.
+    // For chat UX, treat the second message as an interrupt + redirect
+    // ('steer'): the in-flight turn picks up the new instruction and
+    // emits ONE agent_end that resolves the original run() promise.
+    // This run() resolves immediately so the renderer doesn't hang
+    // awaiting a separate result that will never come.
+    if (this.session.isStreaming) {
+      try {
+        await this.session.prompt(text, { streamingBehavior: 'steer' });
+        return { status: 'completed', output: '', todos: [] };
+      } catch (err) {
+        return {
+          status: 'error',
+          output: '',
+          todos: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
 
     this.streaming = true;

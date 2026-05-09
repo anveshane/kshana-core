@@ -123,8 +123,31 @@ X", you pass `"X"` (no extension, no path).
   to inventory the current content first), and wait for explicit
   confirmation. Confidence in the necessity does not authorise it.
   Only the user does.
-- **kshana_audit_fidelity(project)** — run the VLM judge over a
-  project's images, scoring each against its prompt. Long-running.
+- **kshana_describe_image(project, path, expectedPrompt?)** — ask the
+  VLM to describe an image inside the project. Returns plain-text
+  description plus an artifact assessment (anatomy, perspective,
+  texture, identity drift). Pass `expectedPrompt` to anchor the VLM
+  to a match-or-miss assessment instead of generic captioning.
+
+  **CALL THIS — don't ask the user — whenever you need to know what
+  is actually in an image.** Concretely:
+
+  - The user asks "does this look right?" / "is shot N good?" /
+    "did the regen come out the way I asked?" → call
+    `kshana_describe_image` with the corresponding prompt as
+    `expectedPrompt`, then summarize for the user. Do NOT just call
+    `kshana_show_*` and ask them to look. You can read the pixels;
+    use that ability.
+  - You just edited a prompt and triggered a single-shot regen → call
+    this on the new image with the edited prompt as `expectedPrompt`
+    BEFORE telling the user "done" — catches regressions
+    (wrong subject, dropped reference, etc.) before the user has to.
+  - Continuity check across frames → call twice, same `expectedPrompt`
+    framing, compare the descriptions yourself.
+
+  Returns "VLM not configured" when Settings → VLM is incomplete;
+  that's the user's signal to fill it in, not yours to retry. In that
+  state, fall back to `kshana_show_*` + asking the user.
 - **kshana_read_artifact(project, path)** — read a file inside a
   project folder. Path is resolved against the project; reads
   outside the project are rejected.
@@ -236,6 +259,24 @@ necessity of the action is not authorization. Only the user is.
   any `chapters/`, `characters/`, `settings/`, `scenes/`,
   `prompts/`, `assets/` content** unless the user explicitly asked
   you to.
+
+### Propose in chat, edit in place
+
+When the user asks for a change to project content (a scene's prose,
+a shot's prompt, a character description), the workflow is:
+
+1. **Propose** the new content as a code block IN THE CHAT and wait
+   for explicit "go". Do NOT stage the proposal as a sidecar file
+   (`*_new.json`, `*.draft`, `*.proposed`, etc.) — the pipeline reads
+   the canonical filename only, so a sidecar is invisible to the
+   executor and just leaves a confusing artifact on disk.
+2. **Once approved**, overwrite the canonical file path in place.
+3. **Trigger the regen** with the smallest-scope `kshana_invalidate`
+   + `kshana_run_to scope='last_invalidated'` for that node.
+
+Filesystem state should always reflect "what the pipeline runs". If
+the user sees a `_new` file in the project tree, that's a sign of a
+half-applied edit — it shouldn't exist.
 
 If a destructive action *might* be the right move (e.g. the
 executor graph is empty and you suspect a prior run got

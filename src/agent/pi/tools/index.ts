@@ -5,6 +5,7 @@ import { kshanaNew } from "./newProject.js";
 import { kshanaRunTo } from "./runTo.js";
 import { kshanaInvalidate } from "./invalidate.js";
 import { kshanaReadArtifact } from "./readArtifact.js";
+import { kshanaDescribeImage } from "./describeImage.js";
 import { kshanaRenderSceneBundle } from "./renderSceneBundle.js";
 import { kshanaTaskStatus } from "./taskStatus.js";
 import { kshanaTaskCancel } from "./taskCancel.js";
@@ -31,6 +32,7 @@ export const kshanaTools = [
   kshanaRunTo,
   kshanaInvalidate,
   kshanaReadArtifact,
+  kshanaDescribeImage,
   kshanaRenderSceneBundle,
   kshanaTaskStatus,
   kshanaTaskCancel,
@@ -54,6 +56,7 @@ export {
   kshanaRunTo,
   kshanaInvalidate,
   kshanaReadArtifact,
+  kshanaDescribeImage,
   kshanaRenderSceneBundle,
   kshanaTaskStatus,
   kshanaTaskCancel,
