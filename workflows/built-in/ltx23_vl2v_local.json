@@ -1249,7 +1249,7 @@
   },
   "703": {
     "inputs": {
-      "lora_name": "LiconStudio__Ltx23-VBVR-lora-I2V__Ltx2.3-Licon-VBVR-I2V-96000-R32.safetensors",
+      "lora_name": "Ltx2.3-Licon-VBVR-I2V-96000-R32.safetensors",
       "strength_model": 1.0,
       "model": [
         "474",
