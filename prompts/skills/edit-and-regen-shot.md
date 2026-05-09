@@ -66,6 +66,16 @@ shot or frame** — not for project-wide stylistic changes (those need
 
 ## What NOT to do
 
+- **Don't stage the new prompt in a sidecar / `_new` / `.draft` file.**
+  The pipeline reads the canonical filename only — anything you write
+  to `scene-<N>-shot-<M>_new.json` or similar is invisible to the
+  executor. If you want to propose a change before committing, paste
+  the proposed JSON into the chat as a code block and wait for the
+  user's "go" — do NOT touch the filesystem until then. Once approved,
+  overwrite the actual prompt file path (step 4) and run the regen
+  (step 5). Half-applied edits leave the project in a confusing state
+  where the preview shows the old prompt and there's a mystery file
+  on disk no one wired in.
 - Don't rewrite the entire prompt file from scratch — preserve the
   scaffolding (references, generationMode, schema fields).
 - Don't run `kshana_run_to <stage>` for a single-shot change — that

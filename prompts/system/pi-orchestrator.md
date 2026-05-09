@@ -237,6 +237,24 @@ necessity of the action is not authorization. Only the user is.
   `prompts/`, `assets/` content** unless the user explicitly asked
   you to.
 
+### Propose in chat, edit in place
+
+When the user asks for a change to project content (a scene's prose,
+a shot's prompt, a character description), the workflow is:
+
+1. **Propose** the new content as a code block IN THE CHAT and wait
+   for explicit "go". Do NOT stage the proposal as a sidecar file
+   (`*_new.json`, `*.draft`, `*.proposed`, etc.) — the pipeline reads
+   the canonical filename only, so a sidecar is invisible to the
+   executor and just leaves a confusing artifact on disk.
+2. **Once approved**, overwrite the canonical file path in place.
+3. **Trigger the regen** with the smallest-scope `kshana_invalidate`
+   + `kshana_run_to scope='last_invalidated'` for that node.
+
+Filesystem state should always reflect "what the pipeline runs". If
+the user sees a `_new` file in the project tree, that's a sign of a
+half-applied edit — it shouldn't exist.
+
 If a destructive action *might* be the right move (e.g. the
 executor graph is empty and you suspect a prior run got
 interrupted), the workflow is:
