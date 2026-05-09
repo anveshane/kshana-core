@@ -373,6 +373,28 @@ export class PiSessionAgent extends TypedEventEmitter {
       return { status: 'completed', output: '', todos: [] };
     }
 
+    // Mid-stream user message → steer. pi-coding-agent throws
+    // "Agent is already processing. Specify streamingBehavior" if
+    // prompt() is called while a previous turn is still streaming.
+    // For chat UX, treat the second message as an interrupt + redirect
+    // ('steer'): the in-flight turn picks up the new instruction and
+    // emits ONE agent_end that resolves the original run() promise.
+    // This run() resolves immediately so the renderer doesn't hang
+    // awaiting a separate result that will never come.
+    if (this.session.isStreaming) {
+      try {
+        await this.session.prompt(text, { streamingBehavior: 'steer' });
+        return { status: 'completed', output: '', todos: [] };
+      } catch (err) {
+        return {
+          status: 'error',
+          output: '',
+          todos: [],
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
+    }
+
     this.streaming = true;
     this.translationContext = { agentName: this.name, finalAssistantText: '' };
 
