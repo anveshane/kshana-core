@@ -127,12 +127,27 @@ X", you pass `"X"` (no extension, no path).
   VLM to describe an image inside the project. Returns plain-text
   description plus an artifact assessment (anatomy, perspective,
   texture, identity drift). Pass `expectedPrompt` to anchor the VLM
-  to a match-or-miss assessment instead of generic captioning. Use
-  to validate generated frames against intent, cross-check continuity
-  between frames, or answer "what's actually in this image?" without
-  re-running the whole pipeline. Returns "VLM not configured" when
-  Settings → VLM is incomplete; that's the user's signal to fill it
-  in, not yours to retry.
+  to a match-or-miss assessment instead of generic captioning.
+
+  **CALL THIS — don't ask the user — whenever you need to know what
+  is actually in an image.** Concretely:
+
+  - The user asks "does this look right?" / "is shot N good?" /
+    "did the regen come out the way I asked?" → call
+    `kshana_describe_image` with the corresponding prompt as
+    `expectedPrompt`, then summarize for the user. Do NOT just call
+    `kshana_show_*` and ask them to look. You can read the pixels;
+    use that ability.
+  - You just edited a prompt and triggered a single-shot regen → call
+    this on the new image with the edited prompt as `expectedPrompt`
+    BEFORE telling the user "done" — catches regressions
+    (wrong subject, dropped reference, etc.) before the user has to.
+  - Continuity check across frames → call twice, same `expectedPrompt`
+    framing, compare the descriptions yourself.
+
+  Returns "VLM not configured" when Settings → VLM is incomplete;
+  that's the user's signal to fill it in, not yours to retry. In that
+  state, fall back to `kshana_show_*` + asking the user.
 - **kshana_read_artifact(project, path)** — read a file inside a
   project folder. Path is resolved against the project; reads
   outside the project are rejected.

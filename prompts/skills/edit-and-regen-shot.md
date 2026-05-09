@@ -88,7 +88,19 @@ shot or frame** — not for project-wide stylistic changes (those need
 
 ## Confirming the result
 
-After `kshana_run_to scope='last_invalidated'` finishes, ask the user
-"does this look right?".
-If they want another iteration, repeat steps 1–4 with their next
-change.
+After `kshana_run_to scope='last_invalidated'` finishes:
+
+1. **Call `kshana_describe_image`** on the regenerated frame, passing
+   the prompt you just edited as `expectedPrompt`. The VLM tells you
+   whether the new image actually reflects the edit (or whether the
+   regen drifted, lost a reference, etc.).
+2. **Summarize for the user.** Either "✓ regen matches the new prompt
+   — <one-line description>" or "✗ regen still shows X — likely
+   cause Y, want me to retry?". Don't just say "done — does it look
+   right?" without having looked yourself.
+3. If the user wants another iteration, repeat steps 1–4 of this
+   skill with their next change.
+
+Skip step 1 only if `kshana_describe_image` returns "VLM not
+configured" — in that case fall back to `kshana_show_*` + asking
+the user.
