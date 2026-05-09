@@ -250,7 +250,7 @@ export class LLMClient {
     const logger = getLLMLogger();
 
     // Log request
-    logger.logRequest(messages, tools, { temperature });
+    logger.logRequest(messages, tools, { temperature, baseUrl: this.baseUrl, model: this.model });
 
     const request: OpenAI.ChatCompletionCreateParamsNonStreaming = {
       model: this.model,
@@ -450,7 +450,7 @@ PASS the image ONLY if it is clean, coherent, anatomically correct, and reasonab
     const logger = getLLMLogger();
 
     // Log request
-    logger.logRequest(messages, tools, { temperature });
+    logger.logRequest(messages, tools, { temperature, baseUrl: this.baseUrl, model: this.model });
 
     // OpenRouter-specific: `usage: { include: true }` on the request body
     // makes the final stream chunk's `usage` carry `cost`, `prompt_tokens_details.cached_tokens`,

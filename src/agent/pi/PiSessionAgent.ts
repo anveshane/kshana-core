@@ -45,12 +45,21 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function openAiCompatibleProxyModel(): Model<'openai-completions'> | undefined {
-  const baseUrl = envTrim('OPENAI_BASE_URL');
-  const apiKey = envTrim('OPENAI_API_KEY');
+/**
+ * Build an `openai-completions` Model with explicit baseUrl/apiKey/model from
+ * the given env-var prefix. Used for both the legacy `OPENAI_*` route and the
+ * new `LLM_TIER_HEAVY_*` route. Returns undefined when baseUrl is missing —
+ * pi-ai's `getModel()` cannot route to a custom URL on its own, so without
+ * baseUrl we have to fall back to the named-provider path.
+ */
+function openAiCompatibleProxyModelFromPrefix(
+  prefix: 'OPENAI' | 'LLM_TIER_HEAVY',
+): Model<'openai-completions'> | undefined {
+  const baseUrl = envTrim(`${prefix}_BASE_URL`);
+  const apiKey = envTrim(`${prefix}_API_KEY`);
   if (!baseUrl || !apiKey) return undefined;
 
-  const modelId = envTrim('OPENAI_MODEL') ?? 'deepseek/deepseek-v4-flash';
+  const modelId = envTrim(`${prefix}_MODEL`) ?? 'deepseek/deepseek-v4-flash';
   const lowerModel = modelId.toLowerCase();
   const reasoning =
     lowerModel.includes('deepseek') ||
@@ -78,6 +87,13 @@ export function resolvePiSessionModel(): Model<string> {
   const tierProvider = envTrim('LLM_TIER_HEAVY_PROVIDER');
   const tierModel = envTrim('LLM_TIER_HEAVY_MODEL');
   if (tierProvider) {
+    // When the user has supplied an explicit base URL for the heavy
+    // tier (e.g. self-hosted proxy, LM Studio, Kshana Cloud), build an
+    // openai-completions Model so pi-ai routes to that URL. Without
+    // this, getModel() sends to the named provider's default endpoint
+    // and silently bypasses the user's proxy.
+    const tierProxy = openAiCompatibleProxyModelFromPrefix('LLM_TIER_HEAVY');
+    if (tierProxy) return tierProxy;
     return getModel(
       tierProvider as Parameters<typeof getModel>[0],
       (tierModel ?? 'deepseek/deepseek-v4-flash') as never
@@ -86,7 +102,7 @@ export function resolvePiSessionModel(): Model<string> {
 
   const llmProvider = envTrim('LLM_PROVIDER')?.toLowerCase();
   if (llmProvider === 'openai') {
-    const proxyModel = openAiCompatibleProxyModel();
+    const proxyModel = openAiCompatibleProxyModelFromPrefix('OPENAI');
     if (proxyModel) return proxyModel;
     return getModel('openai', (envTrim('OPENAI_MODEL') ?? 'gpt-4o') as never) as Model<string>;
   }
