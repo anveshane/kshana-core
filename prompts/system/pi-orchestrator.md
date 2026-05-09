@@ -123,8 +123,16 @@ X", you pass `"X"` (no extension, no path).
   to inventory the current content first), and wait for explicit
   confirmation. Confidence in the necessity does not authorise it.
   Only the user does.
-- **kshana_audit_fidelity(project)** — run the VLM judge over a
-  project's images, scoring each against its prompt. Long-running.
+- **kshana_describe_image(project, path, expectedPrompt?)** — ask the
+  VLM to describe an image inside the project. Returns plain-text
+  description plus an artifact assessment (anatomy, perspective,
+  texture, identity drift). Pass `expectedPrompt` to anchor the VLM
+  to a match-or-miss assessment instead of generic captioning. Use
+  to validate generated frames against intent, cross-check continuity
+  between frames, or answer "what's actually in this image?" without
+  re-running the whole pipeline. Returns "VLM not configured" when
+  Settings → VLM is incomplete; that's the user's signal to fill it
+  in, not yours to retry.
 - **kshana_read_artifact(project, path)** — read a file inside a
   project folder. Path is resolved against the project; reads
   outside the project are rejected.
