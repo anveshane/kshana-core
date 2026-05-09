@@ -83,6 +83,27 @@ function openAiCompatibleProxyModelFromPrefix(
 
 export function resolvePiSessionModel(): Model<string> {
   const model = resolvePiSessionModelInner();
+  if (!model) {
+    // pi-ai's getModel(provider, modelId) returns undefined for unknown
+    // model ids — e.g. a custom proxy model like "Qwen3.6-35B-A3B" is
+    // NOT in pi-ai's static registry. The undefined silently propagates
+    // until pi-coding-agent reads `model.api` and dies with the
+    // unhelpful "Cannot read properties of undefined (reading 'api')".
+    // Fail fast with a message that points at the cause.
+    const llmProvider = envTrim('LLM_PROVIDER') ?? '(unset)';
+    const baseUrl = envTrim('OPENAI_BASE_URL') ?? '(unset)';
+    const modelId = envTrim('OPENAI_MODEL') ?? '(unset)';
+    const hasKey = !!envTrim('OPENAI_API_KEY');
+    throw new Error(
+      `resolvePiSessionModel returned no model. ` +
+        `LLM_PROVIDER=${llmProvider} OPENAI_BASE_URL=${baseUrl} ` +
+        `OPENAI_MODEL=${modelId} hasOpenAIKey=${hasKey}. ` +
+        `For openai-compatible proxies (LM Studio, custom hosts), set ` +
+        `OPENAI_BASE_URL + OPENAI_API_KEY (any non-empty key) so the ` +
+        `proxy-model path fires; pi-ai's static registry will not have ` +
+        `your custom model id.`,
+    );
+  }
   // Pi-agent uses @mariozechner/pi-coding-agent's internal HTTP stack,
   // which bypasses LLMLogger — without this log line there is NO
   // observable signal of which baseUrl/model pi-agent is hitting.
