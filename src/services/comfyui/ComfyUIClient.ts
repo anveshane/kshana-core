@@ -72,6 +72,44 @@ export interface ComfyUIClientConfig {
 
 export interface QueueWorkflowOptions {
   workflowId?: string;
+  /**
+   * Optional cancellation signal. When fired mid-`queueAndWaitWS`, the
+   * client closes the active WebSocket, clears timers, and rejects the
+   * pending promise with `Error('aborted')`. Without this, callers
+   * blocked on a long-running ComfyUI workflow had no way to bail —
+   * stop() was advisory and the WS only exited on a server-side
+   * terminal frame, which often never arrived (502s, hung upstream).
+   *
+   * Independent of `ExecutorAgent.stop()`'s `interrupt()` RPC: that
+   * tells the ComfyUI server to abort, this tells the client to stop
+   * waiting. Both fire in parallel during a cancel.
+   */
+  signal?: AbortSignal;
+}
+
+/**
+ * Module-level registry of active WebSocket workflows.
+ *
+ * `abortAllInFlightWorkflows()` lets a caller (typically
+ * `ExecutorAgent.stop()`) tear them down without having to thread
+ * AbortSignal through every workflow call site. Each `queueAndWaitWS`
+ * registers its WS on entry and unregisters in cleanup.
+ */
+const INFLIGHT_WS_REGISTRY = new Set<{
+  close: () => void;
+  abort: (reason: string) => void;
+}>();
+
+export function abortAllInFlightWorkflows(reason = 'aborted'): number {
+  const count = INFLIGHT_WS_REGISTRY.size;
+  for (const handle of [...INFLIGHT_WS_REGISTRY]) {
+    try {
+      handle.abort(reason);
+    } catch {
+      /* best-effort */
+    }
+  }
+  return count;
 }
 
 /**
@@ -557,6 +595,32 @@ export class ComfyUIClient {
       const INACTIVITY_TIMEOUT_MS =
         Math.max(30, parseInt(process.env['COMFYUI_WS_TIMEOUT'] || '60', 10)) * 1000;
       let ws: WebSocket;
+      // Cancellation hooks. Registered in INFLIGHT_WS_REGISTRY so an
+      // external stop() can fire them without threading AbortSignal
+      // through every call site. Also wired to options.signal when
+      // the caller passed one.
+      let aborted = false;
+      const abortHandler = (reason: string) => {
+        if (resolved) return;
+        aborted = true;
+        resolved = true;
+        clearInterval(inactivityCheck);
+        try { ws?.close(); } catch { /* */ }
+        debugLog(`[queueAndWaitWS] aborted: ${reason}`);
+        reject(new Error(`aborted: ${reason}`));
+      };
+      // Bail before doing any I/O if the signal fired pre-call.
+      if (options.signal?.aborted) {
+        reject(new Error('aborted: signal already aborted'));
+        return;
+      }
+      const handle = {
+        close: () => { try { ws?.close(); } catch { /* */ } },
+        abort: abortHandler,
+      };
+      INFLIGHT_WS_REGISTRY.add(handle);
+      const onSignalAbort = () => abortHandler('caller signal');
+      options.signal?.addEventListener('abort', onSignalAbort, { once: true });
 
       const inactivityCheck = setInterval(() => {
         if (resolved) return;
@@ -588,6 +652,8 @@ export class ComfyUIClient {
         } catch {
           /* */
         }
+        INFLIGHT_WS_REGISTRY.delete(handle);
+        options.signal?.removeEventListener('abort', onSignalAbort);
       };
       const finish = (result: CompletionResult) => {
         if (resolved) return;
@@ -651,6 +717,12 @@ export class ComfyUIClient {
       });
 
       ws.on('close', () => {
+        if (aborted) {
+          // Already handled by abortHandler — skip the polling fallback.
+          // Without this gate, an aborted close would re-enter the
+          // polling path and silently keep the call alive after stop().
+          return;
+        }
         if (!resolved) {
           resolved = true;
           // WS drops on cloud happen mid-allocation (idle proxy,
@@ -668,6 +740,7 @@ export class ComfyUIClient {
 
       ws.on('error', err => {
         debugLog(`[queueAndWaitWS] WS error: ${err}`);
+        if (aborted) return;
         if (!resolved) {
           resolved = true;
           cleanup();
@@ -676,6 +749,11 @@ export class ComfyUIClient {
       });
 
       ws.on('message', (raw: Buffer | string) => {
+        // Drop any straggling messages once aborted — `abortHandler`
+        // already rejected the outer promise and asked the WS to
+        // close, but messages already in the channel can still fire
+        // a callback or two before that lands.
+        if (aborted) return;
         // Skip binary messages (preview images)
         if (Buffer.isBuffer(raw) && raw.length > 0 && raw[0] !== 0x7b) {
           lastActivityTime = Date.now();

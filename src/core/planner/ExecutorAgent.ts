@@ -882,14 +882,58 @@ export class ExecutorAgent extends TypedEventEmitter {
 
   /**
    * Stop the agent mid-execution.
+   *
+   * Two cancellation channels fire in parallel:
+   *
+   * 1. **Server-side**: `ComfyUIClient.interrupt()` tells ComfyUI to
+   *    abort the active prompt. We don't await it indefinitely — when
+   *    the proxy is glitchy (typical 502 spike) the RPC can hang for
+   *    many seconds. A 5s race timeout keeps `stop()` snappy and
+   *    surfaces a debug log when the interrupt didn't land.
+   *
+   * 2. **Client-side**: `abortAllInFlightWorkflows()` closes any
+   *    `queueAndWaitWS` WebSockets opened by this process and rejects
+   *    their pending promises with `Error('aborted')`. Without this,
+   *    a ComfyUI client blocked on a WebSocket waiting for an
+   *    `execution_success` frame from a server that has already gone
+   *    silent (interrupted, 502'd, network blip) had no way out —
+   *    `stop()` returned but the run loop's `await` was still parked
+   *    upstream, and the BackgroundTaskRunner stayed in 'running'
+   *    state for a long time after the user clicked Stop.
    */
   stop(): void {
     this.stopped = true;
     this.stopReason = 'cancelled';
-    // Interrupt any in-progress ComfyUI generation immediately
-    import('../../services/comfyui/ComfyUIClient.js')
-      .then(({ ComfyUIClient }) => new ComfyUIClient({}).interrupt())
-      .catch(() => {});
+
+    // Channel 1 — server-side interrupt with a 5s timeout race so a
+    // hanging RPC doesn't keep the cancel pending indefinitely.
+    void import('../../services/comfyui/ComfyUIClient.js').then(
+      ({ ComfyUIClient, abortAllInFlightWorkflows }) => {
+        const interruptPromise = new ComfyUIClient({}).interrupt();
+        const timeout = new Promise<'timeout'>((resolve) =>
+          setTimeout(() => resolve('timeout'), 5000),
+        );
+        Promise.race([interruptPromise.then(() => 'ok' as const), timeout])
+          .then((outcome) => {
+            if (outcome === 'timeout') {
+              this.log(
+                `[stop] ComfyUI /interrupt RPC timed out after 5s — server may be unreachable`,
+              );
+            }
+          })
+          .catch((err) => {
+            this.log(`[stop] ComfyUI /interrupt failed: ${(err as Error).message}`);
+          });
+
+        // Channel 2 — close any in-flight WS so awaiters bail
+        // immediately. Synchronous; doesn't depend on the server
+        // responding to the interrupt.
+        const closed = abortAllInFlightWorkflows('agent.stop()');
+        if (closed > 0) {
+          this.log(`[stop] aborted ${closed} in-flight ComfyUI WebSocket(s)`);
+        }
+      },
+    ).catch(() => {});
   }
 
   /**
