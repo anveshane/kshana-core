@@ -125,7 +125,7 @@ function parseEssenceResponse(raw: string): StoryEssence {
   const obj = parsed as Record<string, unknown>;
   const stringFields: (keyof StoryEssence)[] = ['genre', 'throughline', 'tonalNotes', 'dramaticEmphasis'];
   for (const f of stringFields) {
-    if (typeof obj[f] !== 'string' || (obj[f] as string).trim().length === 0) {
+    if (typeof obj[f] !== 'string' || (obj[f]).trim().length === 0) {
       throw new Error(`story-essence response missing required field: ${f}`);
     }
   }

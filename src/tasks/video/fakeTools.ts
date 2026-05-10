@@ -573,21 +573,21 @@ export function getFakeVideoGenerationTools(): ToolDefinition[] {
   const fakeGenerateImage = createTool(
     generateImageTool.name,
     generateImageTool.description,
-    generateImageTool.parameters as ToolParameterSchema,
+    generateImageTool.parameters,
     fakeGenerateImageHandler,
   );
 
   const fakeGenerateVideo = createTool(
     generateVideoFromImageTool.name,
     generateVideoFromImageTool.description,
-    generateVideoFromImageTool.parameters as ToolParameterSchema,
+    generateVideoFromImageTool.parameters,
     fakeGenerateVideoHandler,
   );
 
   const fakeEditImage = createTool(
     editImageTool.name,
     editImageTool.description,
-    editImageTool.parameters as ToolParameterSchema,
+    editImageTool.parameters,
     fakeEditImageHandler,
   );
 

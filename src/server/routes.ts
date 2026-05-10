@@ -255,7 +255,7 @@ export async function registerRoutes(
     for (const mode of all) {
       const key = mode.pipeline;
       if (!grouped[key]) grouped[key] = [];
-      grouped[key]!.push(mode);
+      grouped[key].push(mode);
     }
 
     return reply.send({ workflows: grouped });
@@ -505,7 +505,7 @@ export async function registerRoutes(
       const workflow = parameterizeGeneric(template, mode, resolvedParams);
 
       // Queue workflow
-      const result = await client.queueWorkflow(workflow as Record<string, unknown>, undefined, true);
+      const result = await client.queueWorkflow(workflow, undefined, true);
       const promptId = result.promptId;
 
       // Track this test

@@ -44,7 +44,7 @@ function debugLog(message: string): void {
  */
 function enrichFetchError(err: unknown, url: string, method: string): Error {
   const cause = (err as { cause?: unknown })?.cause;
-  const causeCode = (cause as unknown as { code?: unknown } | null)?.code;
+  const causeCode = (cause as { code?: unknown } | null)?.code;
   const causeMsg =
     cause instanceof Error
       ? `${cause.name}: ${cause.message}${typeof causeCode === 'string' ? ` [${causeCode}]` : ''}`
@@ -260,7 +260,7 @@ export class ComfyUIClient {
     searchParams?: URLSearchParams
   ): Promise<Response> {
     const url = this.buildUrl(pathname, searchParams);
-    const method = (init.method as string | undefined) ?? 'GET';
+    const method = (init.method) ?? 'GET';
     try {
       return await fetch(url, {
         ...init,
@@ -485,7 +485,7 @@ export class ComfyUIClient {
             }
             // Cache any outputs found so getOutputImages can use them
             if (cloudHistory.outputs) {
-              this.cloudOutputs.set(promptId, cloudHistory.outputs as Record<string, unknown>);
+              this.cloudOutputs.set(promptId, cloudHistory.outputs);
             }
             return { status: 'completed', prompt_id: promptId };
           }
@@ -734,9 +734,9 @@ export class ComfyUIClient {
             // ("ServiceError"); node_id pins which workflow node blew up.
             const p = action.payload ?? {};
             const parts: string[] = [];
-            if (typeof p['exception_type'] === 'string') parts.push(p['exception_type'] as string);
+            if (typeof p['exception_type'] === 'string') parts.push(p['exception_type']);
             if (typeof p['exception_message'] === 'string')
-              parts.push(p['exception_message'] as string);
+              parts.push(p['exception_message']);
             const nodeId = p['node_id'] ?? p['node'];
             if (nodeId !== undefined && nodeId !== null) parts.push(`node=${String(nodeId)}`);
             const errorMessage = parts.length ? parts.join(' — ') : payloadStr;

@@ -95,7 +95,7 @@ function computeResetTypes(startType: string): string[] {
   for (const [type, deps] of Object.entries(TEMPLATE_DEPS)) {
     for (const dep of deps) {
       if (!dependents[dep]) dependents[dep] = [];
-      dependents[dep]!.push(type);
+      dependents[dep].push(type);
     }
   }
   const result = new Set<string>([startType]);
@@ -296,8 +296,8 @@ export function resetProjectStage(
         nodes[itemNodeId] = newNode;
 
         for (const depId of wireDeps) {
-          if (nodes[depId] && !nodes[depId]!.dependents.includes(itemNodeId)) {
-            nodes[depId]!.dependents.push(itemNodeId);
+          if (nodes[depId] && !nodes[depId].dependents.includes(itemNodeId)) {
+            nodes[depId].dependents.push(itemNodeId);
           }
         }
         resetCount++;

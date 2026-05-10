@@ -3,11 +3,13 @@
  */
 import type { WebSocket } from '@fastify/websocket';
 import { join } from 'path';
-import { ConversationManager, type ConversationEvents } from './ConversationManager.js';
+import type { ConversationManager} from './ConversationManager.js';
+import type { ConversationEvents } from './ConversationManager.js';
 import { LocalFileSystem } from '../core/fs/LocalFileSystem.js';
 import { RemoteClientFileSystem } from '../core/fs/RemoteClientFileSystem.js';
 import { ProjectStateCache, type ProjectSnapshot } from '../core/fs/ProjectStateCache.js';
-import { ApiKeyAuth, shouldSkipAuth } from './auth.js';
+import type { ApiKeyAuth} from './auth.js';
+import { shouldSkipAuth } from './auth.js';
 import type { ExpandableTodoItem } from '../core/todo/index.js';
 import type { AgentStatus } from '../core/agent/index.js';
 import {
@@ -959,7 +961,7 @@ export class WebSocketHandler {
           todos: todos.map((t) => ({
             id: t.id,
             task: t.content, // ExpandableTodoItem uses 'content' not 'task'
-            status: t.status === 'expanded' ? 'completed' : t.status as 'pending' | 'in_progress' | 'completed' | 'cancelled',
+            status: t.status === 'expanded' ? 'completed' : t.status,
             depth: t.depth,
             hasSubtasks: false, // Current implementation doesn't track subtasks as property
           })),

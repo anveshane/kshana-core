@@ -13,7 +13,7 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, unlinkSync, statSync, renameSync } from 'fs';
 import { join, dirname, relative } from 'path';
 import { TypedEventEmitter } from '../../events/EventEmitter.js';
-import { LLMClient } from '../llm/index.js';
+import type { LLMClient } from '../llm/index.js';
 import type { Message, GenerateOptions } from '../llm/types.js';
 import { buildRouterFromEnv, type LLMRouter, type LLMPurpose } from '../llm/index.js';
 import type { GenericAgentResult } from '../agent/AgentResult.js';
@@ -1149,7 +1149,7 @@ export class ExecutorAgent extends TypedEventEmitter {
 
     if (sceneNodes.length === 0) return;
 
-    const totalDuration = (this.config.goal.preferences.duration as number | undefined) ?? 30;
+    const totalDuration = (this.config.goal.preferences.duration) ?? 30;
     const descriptors: SegmentDescriptor[] = sceneNodes.map(n => ({
       id: n.itemId ?? n.id,
       label: n.displayName,
@@ -3004,8 +3004,8 @@ export class ExecutorAgent extends TypedEventEmitter {
     }
 
     // Inject duration/project constraints with per-scene and per-shot specifics
-    const duration = this.config.goal.preferences.duration as number | undefined;
-    const style = this.config.goal.preferences.style as string | undefined;
+    const duration = this.config.goal.preferences.duration;
+    const style = this.config.goal.preferences.style;
     const allNodes = this.executor.getAllNodes();
     const sceneCount = allNodes.filter(n => n.typeId === 'scene').length;
     // Prefer the duration-first extractor's per-scene estimate over the
@@ -3307,11 +3307,11 @@ Examples of common failure modes to avoid:
             const allCharacters = this.executor.getAllNodes()
               .filter((n: any) => n.typeId === 'character' && n.itemId);
             const sceneCharacters = sceneCharRefIds.length > 0
-              ? allCharacters.filter((n: any) => sceneCharRefIds.includes(n.itemId!))
+              ? allCharacters.filter((n: any) => sceneCharRefIds.includes(n.itemId))
               : allCharacters; // Fallback: if parse failed, use everyone (legacy behavior)
             const charInits = sceneCharacters.map((n: any) => ({
               refId: n.itemId!,
-              kind: this.inferCharacterKind(n.itemId!),
+              kind: this.inferCharacterKind(n.itemId),
             }));
             const settingNode = this.executor.getAllNodes()
               .find((n: any) => n.typeId === 'setting_image' && n.itemId);
@@ -3437,7 +3437,7 @@ Examples of common failure modes to avoid:
               // mid-shot, which still need tagging if first_frame has them.
               const frames = shotJson.frames ?? {};
               const charRefIds = new Set<string>();
-              for (const f of Object.values(frames) as any[]) {
+              for (const f of Object.values(frames) as Array<{ references?: Array<{ type?: string; refId?: string }> }>) {
                 for (const r of f?.references ?? []) {
                   if (r?.type === 'character' && typeof r.refId === 'string') {
                     const itemId = r.refId.replace(/^character_image:/, '');
@@ -4086,7 +4086,7 @@ Examples of common failure modes to avoid:
             if (existsSync(fullPath)) {
               try {
                 const content = readFileSync(fullPath, 'utf-8');
-                let itemList: Array<{ itemId: string; name: string }> = [];
+                const itemList: Array<{ itemId: string; name: string }> = [];
 
                 // Parse scene numbers from content patterns like "SCENE 1:", "## Scene 2", etc.
                 if (dep.artifactTypeId === 'scene' || dep.artifactTypeId === 'story') {
@@ -4193,7 +4193,7 @@ Examples of common failure modes to avoid:
                     const allSettingImages = this.executor.getAllNodes()
                       .filter(n => n.typeId === 'setting_image' && n.itemId).map(n => n.id);
                     let prevShotImageId: string | null = null;
-                    let prevShotVideoId2: string | null = null;
+                    const prevShotVideoId2: string | null = null;
                     for (const shot of shotItems) {
                       const shotImageId = `shot_image:${shot.itemId}`;
                       const shotImageLastFrameId = `shot_image_last_frame:${shot.itemId}`;
@@ -4248,7 +4248,7 @@ Examples of common failure modes to avoid:
         //      (last-resort fallback if neither of the above is found).
         if (!didExpand && typeDef.dependencies.some(d => d.artifactTypeId === 'story')) {
           let storyContent: string | null = null;
-          let storyContextNode = allNodes.find(n => n.typeId === 'story' && n.status === 'completed' && n.outputPath);
+          const storyContextNode = allNodes.find(n => n.typeId === 'story' && n.status === 'completed' && n.outputPath);
           if (storyContextNode?.outputPath) {
             const p = join(this.config.projectDir, storyContextNode.outputPath);
             if (existsSync(p)) {
@@ -4279,7 +4279,7 @@ Examples of common failure modes to avoid:
             try {
               const extracted = await extractCollectionItems(
                 ctxNode, storyContent, this.llmFor('structured.collection_extraction'),
-                this.config.goal.preferences.duration as number | undefined,
+                this.config.goal.preferences.duration,
                 this.storyEssence ?? undefined,
               );
                 let itemList: Array<{ itemId: string; name: string }> = [];
@@ -4388,7 +4388,7 @@ Examples of common failure modes to avoid:
           if (!existsSync(fullPath)) continue;
 
           const content = readFileSync(fullPath, 'utf-8');
-          const items = await extractCollectionItems(dep, content, this.llmFor('structured.collection_extraction'), this.config.goal.preferences.duration as number | undefined);
+          const items = await extractCollectionItems(dep, content, this.llmFor('structured.collection_extraction'), this.config.goal.preferences.duration);
           if (!items?.shots?.length) continue;
 
           const sceneId = dep.itemId;
@@ -5347,7 +5347,7 @@ Examples of common failure modes to avoid:
       toolName: 'extract_collections',
     });
 
-    const items = await extractCollectionItems(node, content, this.llmFor('structured.collection_extraction'), this.config.goal.preferences.duration as number | undefined);
+    const items = await extractCollectionItems(node, content, this.llmFor('structured.collection_extraction'), this.config.goal.preferences.duration);
 
     if (!items) {
       this.log(`  No collection items extracted from ${node.id}`);
@@ -6220,7 +6220,7 @@ Examples of common failure modes to avoid:
         reference_images: hasRefs ? resolvedRefs : undefined,
       });
 
-      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler);
 
       const job = mediaJobs.get(result.jobId);
       let filePath = job?.result?.path;
@@ -6416,7 +6416,7 @@ Examples of common failure modes to avoid:
         });
         return filePath;
       } else {
-        if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+        if (progressHandler) comfyProgressBus.offProgress(progressHandler);
         this.log(`  Shot image failed: ${result.error ?? job?.error}`);
         this.emit({
           type: 'tool_result',
@@ -6552,7 +6552,7 @@ Examples of common failure modes to avoid:
       });
 
       // Unsubscribe from progress
-      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler);
 
       // Get the result from the job store
       const job = mediaJobs.get(result.jobId);
@@ -6591,7 +6591,7 @@ Examples of common failure modes to avoid:
         return null;
       }
     } catch (error) {
-      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler);
       this.log(`  Image generation error: ${String(error)}`);
       this.emit({
         type: 'tool_result',
@@ -6835,7 +6835,7 @@ Examples of common failure modes to avoid:
       const provider = getProviderRegistry().getVideoGenerator();
       if (!provider?.generateVideo) {
         this.log(`  No video generation provider available`);
-        if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+        if (progressHandler) comfyProgressBus.offProgress(progressHandler);
         return null;
       }
 
@@ -6897,7 +6897,7 @@ Examples of common failure modes to avoid:
         },
       );
 
-      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler);
 
       const relPath = relative(this.config.projectDir, result.filePath);
       const workflowUsed = (result.metadata as Record<string, unknown>)?.['workflowName'] as string | undefined;
@@ -6931,7 +6931,7 @@ Examples of common failure modes to avoid:
       });
       return relPath;
     } catch (error) {
-      if (progressHandler) comfyProgressBus.offProgress(progressHandler!);
+      if (progressHandler) comfyProgressBus.offProgress(progressHandler);
       this.log(`  Shot video error: ${String(error)}`);
       this.emit({
         type: 'tool_result',
@@ -7258,7 +7258,7 @@ Examples of common failure modes to avoid:
 
     let essence: StoryEssence;
     try {
-      const targetDurationSec = this.config.goal.preferences.duration as number | undefined;
+      const targetDurationSec = this.config.goal.preferences.duration;
       essence = await extractStoryEssence(storyContent, this.llmFor('structured.story_essence'), {
         ...(typeof targetDurationSec === 'number' ? { targetDurationSec } : {}),
       });

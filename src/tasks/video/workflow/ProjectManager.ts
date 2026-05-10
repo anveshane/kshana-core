@@ -1005,7 +1005,7 @@ export function getProjectStyle(basePath: string = defaultBasePath()): ProjectSt
  */
 export function getProjectStyleConfig(basePath: string = defaultBasePath()): StyleConfig {
   const style = getProjectStyle(basePath);
-  return STYLE_CONFIGS[style as keyof typeof STYLE_CONFIGS] ?? STYLE_CONFIGS['cinematic_realism'];
+  return STYLE_CONFIGS[style] ?? STYLE_CONFIGS['cinematic_realism'];
 }
 
 /**
