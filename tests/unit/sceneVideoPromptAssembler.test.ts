@@ -143,4 +143,17 @@ describe("assembleSceneVideoPrompt", () => {
       transition: "fade",
     });
   });
+
+  it("computes per-shot firstFrameAnchor (visual continuity) and writes it on each shot", () => {
+    const out = assembleSceneVideoPrompt(planBase, [shot1, shot2, shot3]);
+    // Shot 1: first shot of scene → fresh.
+    expect(out.shots.find(s => s.shotNumber === 1)?.firstFrameAnchor)
+      .toEqual({ reason: 'fresh' });
+    // Shot 2: transition=cut (soft), chains on shot 1's last frame.
+    expect(out.shots.find(s => s.shotNumber === 2)?.firstFrameAnchor)
+      .toEqual({ reason: 'continuity', sourceShotNumber: 1 });
+    // Shot 3: also cut, chains on shot 2's last frame.
+    expect(out.shots.find(s => s.shotNumber === 3)?.firstFrameAnchor)
+      .toEqual({ reason: 'continuity', sourceShotNumber: 2 });
+  });
 });

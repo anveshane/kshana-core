@@ -19,6 +19,7 @@ import {
   singleShotSchema,
   sceneVideoPromptSchema,
 } from './schemas.js';
+import { computeAnchorsForScene } from './shotAnchorComputer.js';
 
 export type ShotPlan = z.infer<typeof shotPlanSchema>;
 export type SingleShot = z.infer<typeof singleShotSchema>;
@@ -62,6 +63,23 @@ export function assembleSceneVideoPrompt(
   // Sort by shotNumber so the assembled JSON has a stable order regardless
   // of the parallel Stage B completion order.
   const sortedShots = [...shots].sort((a, b) => a.shotNumber - b.shotNumber);
+
+  // Compute first-frame visual-continuity anchors. The assembler is the
+  // right place for this: it sees the full scene-level context (sorted
+  // shot list + main/secondary subjects) and is deterministic — no LLM
+  // call, just rules over the breakdown metadata. Each shot's anchor
+  // tells the shot_image generator downstream WHICH prior frame to
+  // edit (continuity / view_reuse) or whether to start fresh.
+  const anchors = computeAnchorsForScene(
+    sortedShots,
+    plan.mainSubject,
+    plan.secondarySubject ?? null,
+  );
+  const anchorByShot = new Map(anchors.map(a => [a.shotNumber, a.anchor]));
+  for (const shot of sortedShots) {
+    const a = anchorByShot.get(shot.shotNumber);
+    if (a) shot.firstFrameAnchor = a;
+  }
 
   const assembled: AssembledSceneVideoPrompt = {
     sceneNumber: plan.sceneNumber,

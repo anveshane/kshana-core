@@ -4144,6 +4144,11 @@ Examples of common failure modes to avoid:
                     return {
                       itemId: `${sceneId}_shot_${s.shotNumber}`,
                       name: `${sceneLabel} Shot ${s.shotNumber}: ${label}`,
+                      // Carry the first-frame anchor through to the
+                      // graph-wiring step below so shot_image deps
+                      // point at the right prior frame (or none for
+                      // a fresh start).
+                      firstFrameAnchor: s.firstFrameAnchor ?? null,
                     };
                   });
                   // BEFORE expanding shot_breakdown into per-shot children:
@@ -4223,6 +4228,8 @@ Examples of common failure modes to avoid:
                         allCharImageIds: allCharImages,
                         allSettingImageIds: allSettingImages,
                         prevShotImageId,
+                        firstFrameAnchor: (shot as { firstFrameAnchor?: any }).firstFrameAnchor ?? null,
+                        sceneId,
                       });
                       if (!this.executor.getNode(shotVideoId)) {
                         const videoDeps = [shotImageLastFrameId, motionId];
@@ -4400,6 +4407,9 @@ Examples of common failure modes to avoid:
                   const shotItems = shots.map((s: any) => ({
                     itemId: `${sceneId}_shot_${s.shotNumber}`,
                     name: `${sceneLabel} Shot ${s.shotNumber}: ${s.cameraWork?.split(',')[0] || 'shot'}`,
+                    // Carry anchor through (same as the
+                    // shot_breakdown-driven expansion above).
+                    firstFrameAnchor: s.firstFrameAnchor ?? null,
                   }));
                   this.log(`  Re-expanding ${node.id} → ${shotItems.length} per-shot nodes from scene_video_prompt`);
                   this.executor.expandCollection(node.id, shotItems);
@@ -4424,6 +4434,8 @@ Examples of common failure modes to avoid:
                         allCharImageIds: allCharImages,
                         allSettingImageIds: allSettingImages,
                         prevShotImageId,
+                        firstFrameAnchor: (shot as { firstFrameAnchor?: any }).firstFrameAnchor ?? null,
+                        sceneId,
                       });
                       if (!this.executor.getNode(shotVideoId)) {
                         this.executor.addNode({

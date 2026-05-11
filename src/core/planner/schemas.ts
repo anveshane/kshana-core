@@ -56,6 +56,28 @@ const focusSchema = z.object({
   lurking: z.string().nullable().optional(),              // planted defocused element for a later focus-pull
 });
 
+// Anchor for first-frame visual continuity. Populated DETERMINISTICALLY
+// by the scene_video_prompt assembler (Stage C) — not by the LLM. Tells
+// the shot_image generator which prior frame to chain on:
+//
+//   - `fresh`         — no chain. First shot of scene, or a deliberate
+//                       hard-cut transition (fade/dip_to_black/flash/etc.)
+//                       resets the visual context. Generate from setting
+//                       + character refs.
+//   - `continuity`    — edit the immediate prior shot's last frame
+//                       (sourceShotNumber = N-1). Default for smooth
+//                       within-scene flow.
+//   - `view_reuse`    — return to an EARLIER shot's view (same setting +
+//                       perspective + framing + characters). Re-uses
+//                       that shot's last frame as the input image,
+//                       avoiding fresh generation that would visibly
+//                       drift from the established look.
+export const firstFrameAnchorSchema = z.discriminatedUnion('reason', [
+  z.object({ reason: z.literal('fresh') }),
+  z.object({ reason: z.literal('continuity'), sourceShotNumber: z.number() }),
+  z.object({ reason: z.literal('view_reuse'), sourceShotNumber: z.number() }),
+]);
+
 const shotSchema = z.object({
   shotNumber: z.number(),
   purpose: purposeEnum.optional(),
@@ -84,6 +106,10 @@ const shotSchema = z.object({
   focus: focusSchema.optional(),
   // How this shot bridges locations for the main subject (prevents teleporting)
   continuityRole: continuityRoleEnum.optional().default('none'),
+  // First-frame visual-continuity anchor — see firstFrameAnchorSchema.
+  // Populated by the deterministic assembler, not the LLM. Nullable so
+  // legacy/pre-anchor breakdowns still parse.
+  firstFrameAnchor: firstFrameAnchorSchema.nullable().optional(),
 }).refine(
   (shot) => shot.firstFrame?.description || shot.description,
   { message: 'Shot must have either firstFrame.description or description' },
