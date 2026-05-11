@@ -610,8 +610,19 @@ export class DependencyGraphExecutor {
     this.rewireTypeLevelRefsToPerItem(dependent.typeId);
 
     // Recursive cascade: expand any downstream collection nodes that have
-    // matching scope on the type we just expanded
+    // matching scope on the type we just expanded.
+    //
+    // Re-entrancy guard: a downstream collection may appear here AFTER a
+    // sibling cascade already expanded it (e.g. when scene_video_prompt
+    // has matching-scope deps on BOTH scene_shot_plan AND shot_breakdown,
+    // expanding scene_shot_plan triggers a chain that recursively expands
+    // shot_breakdown — whose own cascade expands scene_video_prompt. The
+    // outer scene_shot_plan loop then tries to expand scene_video_prompt
+    // again from the stale `downstreamCollections` snapshot, overwriting
+    // the per-item nodes' freshly-populated dependents). Skip downstreams
+    // that no longer exist in the graph.
     for (const downstream of downstreamCollections) {
+      if (!this.nodes.has(downstream.id)) continue;
       const downstreamTypeDef = this.template.artifactTypes[downstream.typeId];
       if (!downstreamTypeDef) continue;
 
@@ -724,6 +735,39 @@ export class DependencyGraphExecutor {
     this.nodes.set(node.id, node);
     this.updatedAt = Date.now();
     this.onMutation?.();
+  }
+
+  /**
+   * Remove a node from the graph and clean up every other node's
+   * `dependencies` / `dependents` lists. Used by the template-migration
+   * pass to delete phantom nodes the old graph wiring produced
+   * (e.g. `scene_video_prompt:scene_N_shot_M` nodes that an earlier
+   * cascade bug created at shot-level granularity for a scene-level
+   * type).
+   *
+   * No-op for unknown ids. Returns whether the node existed.
+   */
+  removeNode(nodeId: string): boolean {
+    const node = this.nodes.get(nodeId);
+    if (!node) return false;
+    // Strip outbound edges (remove from each dep's dependents).
+    for (const depId of node.dependencies) {
+      const depNode = this.nodes.get(depId);
+      if (depNode) {
+        depNode.dependents = depNode.dependents.filter(d => d !== nodeId);
+      }
+    }
+    // Strip inbound edges (remove from each dependent's dependencies).
+    for (const dependentId of node.dependents) {
+      const dependent = this.nodes.get(dependentId);
+      if (dependent) {
+        dependent.dependencies = dependent.dependencies.filter(d => d !== nodeId);
+      }
+    }
+    this.nodes.delete(nodeId);
+    this.updatedAt = Date.now();
+    this.onMutation?.();
+    return true;
   }
 
   /**

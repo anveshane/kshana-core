@@ -98,6 +98,35 @@ const shotSchema = z.object({
   { message: 'show_action and meet_character shots must specify perspective' },
 );
 
+// Stage B output: a single fully-expanded shot. Same shape as the entries
+// in sceneVideoPromptSchema.shots; exported so the executor can validate
+// per-shot LLM output without going through the full scene wrapper.
+export const singleShotSchema = shotSchema;
+
+// Stage A output: the lightweight shot plan emitted by the scene_shot_plan
+// LLM call. One entry per shot — pacing/structure decisions only, no prose.
+// The collection-expansion step uses this to spawn one shot_breakdown node
+// per planned shot.
+export const shotPlanEntrySchema = z.object({
+  shotNumber: z.number(),
+  purpose: purposeEnum,
+  duration: z.number(),
+  oneLineSummary: z.string().min(1),
+  perspective: perspectiveEnum.optional(),
+  continuityRole: continuityRoleEnum.optional(),
+});
+
+export const shotPlanSchema = z.object({
+  sceneNumber: z.number(),
+  sceneTitle: z.string(),
+  totalDuration: z.number(),
+  mainSubject: z.string(),
+  secondarySubject: z.string().nullable().optional(),
+  entry: z.string().optional(),
+  exit: z.string().optional(),
+  shotPlan: z.array(shotPlanEntrySchema).min(1, 'shotPlan must not be empty'),
+});
+
 export const sceneVideoPromptSchema = z.object({
   sceneNumber: z.number().optional(),
   sceneTitle: z.string().optional(),
@@ -193,6 +222,8 @@ export const collectionExtractionSchema = z.object({
 
 export const JSON_SCHEMAS: Record<string, z.ZodSchema> = {
   scene_video_prompt: sceneVideoPromptSchema,
+  scene_shot_plan: shotPlanSchema,
+  shot_breakdown: singleShotSchema,
   shot_image_prompt: shotImagePromptSchema,
   character_image: imagePromptSchema,
   setting_image: imagePromptSchema,
@@ -270,6 +301,46 @@ export function getPromptSchema(nodeTypeId: string): string | null {
   "aspectRatio": "1:1"
 }
 </json_schema>`,
+    scene_shot_plan: `<json_schema>
+{
+  "sceneNumber": number,
+  "sceneTitle": "string",
+  "totalDuration": number,
+  "mainSubject": "string (refId of the character whose arc this scene follows — e.g., 'vikram')",
+  "secondarySubject": "string | null (optional refId of a second pivotal character — e.g., 'laila'; null/omit if none)",
+  "entry": "string (one-sentence description of how this scene visually picks up from the prior scene)",
+  "exit": "string (one-sentence description of how this scene sets up the next scene)",
+  "shotPlan": [
+    {
+      "shotNumber": number,
+      "purpose": "${purposeValues.join(' | ')}",
+      "duration": number,
+      "oneLineSummary": "string (one sentence: what happens in this shot)",
+      "perspective": "${perspectiveValues.join(' | ')} (optional at plan stage; required for show_action / meet_character)",
+      "continuityRole": "${continuityRoleValues.join(' | ')} (optional — entry/exit/bridge for location transitions of mainSubject; 'none' otherwise)"
+    }
+  ]
+}
+</json_schema>`,
+    shot_breakdown: `<json_schema>
+{
+  "shotNumber": number,
+  "purpose": "${purposeValues.join(' | ')}",
+  "duration": number,
+  "description": "string (1-2 sentence brief of what happens in this shot — expand the plan's oneLineSummary)",
+  "cameraWork": "string (start with framing: wide/medium/close-up/extreme close-up, then angle and movement)",
+  "perspective": "${perspectiveValues.join(' | ')} (REQUIRED for show_action and meet_character; whose POV we see the shot from)",
+  "perspectiveOf": "string (optional refId — who owns the POV/OTS; defaults to mainSubject for main_subject perspective)",
+  "focus": {
+    "primary": "string (refId or prose — what is razor-sharp in the frame)",
+    "background": ["string (visible but blurred elements)"],
+    "lurking": "string | null (defocused element planted for a later focus-pull — optional)"
+  },
+  "continuityRole": "${continuityRoleValues.join(' | ')} (entry/exit/bridge for location transitions of mainSubject; 'none' otherwise)",
+  "audio": "string (dialogue prefixed with CHARACTER NAME: + ambient sounds)",
+  "transition": "cut | crossfade | fade | dip_to_black | flash_to_white | circle_close | circle_open | wipe_left | wipe_right"
+}
+</json_schema>`,
   };
 
   return PROMPT_SCHEMAS[nodeTypeId] ?? null;
@@ -280,16 +351,24 @@ export function getPromptSchema(nodeTypeId: string): string | null {
 /**
  * maxTokens budget for JSON-output LLM calls.
  *
- * scene_video_prompt with 5–7 shots regularly exceeded 5000 tokens, producing
- * mid-stream truncation and "Unexpected end of JSON input" parse errors
- * (observed on scene_4 of the woman_medieval_village_betrothed run on
- * 2026-04-26). Bumped to 12000 specifically for that node type.
+ * Legacy: scene_video_prompt with 5–7 shots regularly exceeded 5000 tokens,
+ * producing mid-stream truncation and "Unexpected end of JSON input" parse
+ * errors. Bumped to 12000 specifically for that node type. (To be removed
+ * once the hierarchical path is the only path — scene_video_prompt becomes
+ * a deterministic assembler with no LLM call.)
+ *
+ * New (hierarchical):
+ *  - scene_shot_plan (Stage A): emits a small plan, ~500-1500 tokens. 3000 budget is generous.
+ *  - shot_breakdown (Stage B): one shot at a time, ~600-1000 tokens. 3000 budget is generous.
  *
  * Other JSON nodes (shot_image_prompt, character_image, setting_image) are
  * single-frame or tightly bounded and stay at 5000.
  */
 export function maxTokensForJsonNode(nodeTypeId: string): number {
-  return nodeTypeId === 'scene_video_prompt' ? 12000 : 5000;
+  if (nodeTypeId === 'scene_video_prompt') return 12000;
+  if (nodeTypeId === 'scene_shot_plan') return 3000;
+  if (nodeTypeId === 'shot_breakdown') return 3000;
+  return 5000;
 }
 
 // ── Validation helper ────────────────────────────────────────────────────────
