@@ -49,6 +49,31 @@ export interface MigrationReport {
    *  because the contract under them changed. Superset of `rewired` —
    *  includes downstream invalidations triggered by each rewire. */
   invalidated: string[];
+  /** Phantom nodes deleted — per-item ids whose itemId form doesn't
+   *  match the type's intended granularity (e.g. `scene_video_prompt:
+   *  scene_1_shot_3` is a phantom because scene_video_prompt is
+   *  per-scene, not per-shot). */
+  deleted: string[];
+}
+
+/**
+ * Types whose per-item itemId MUST be scene-level (`scene_N`) — never
+ * shot-level (`scene_N_shot_M`). An earlier wiring bug in
+ * expandPendingCollections allowed the cascade in
+ * `expandMatchingDependent` to promote these to per-shot when their
+ * upstream collection (shot_breakdown) was expanded, leaving phantom
+ * `scene_video_prompt:scene_N_shot_M` nodes that deadlock the
+ * pipeline. Migration deletes them and Phase 1 synthesis recreates
+ * the proper scene-level node.
+ */
+const SCENE_GRANULARITY_TYPES = new Set([
+  'scene_shot_plan',
+  'scene_video_prompt',
+]);
+
+/** True if an itemId looks like a shot-level id (`scene_N_shot_M`). */
+function isShotLevelItemId(itemId: string): boolean {
+  return /_shot_\d+$/.test(itemId);
 }
 
 /**
@@ -183,7 +208,28 @@ export function migrateGraphToTemplate(
     synthesized: [],
     rewired: [],
     invalidated: [],
+    deleted: [],
   };
+
+  // ── Phase 0: delete phantom per-shot nodes for scene-only types ───────
+  //
+  // An earlier cascade bug in expandPendingCollections allowed types like
+  // `scene_video_prompt` (per-scene by construction) to be promoted to
+  // per-shot granularity by the matching-scope cascade when their
+  // upstream `shot_breakdown` was expanded. Result: phantom
+  // `scene_video_prompt:scene_1_shot_3` nodes with no scene_shot_plan
+  // counterpart to assemble from, dead-locking the assembler.
+  //
+  // Delete them outright; Phase 1 synthesis will recreate the proper
+  // scene-level node (e.g. `scene_video_prompt:scene_1`) from the
+  // existing `scene_shot_plan:scene_1` per the current template.
+  for (const node of executor.getAllNodes()) {
+    if (!node.itemId) continue;
+    if (!SCENE_GRANULARITY_TYPES.has(node.typeId)) continue;
+    if (!isShotLevelItemId(node.itemId)) continue;
+    executor.removeNode(node.id);
+    report.deleted.push(node.id);
+  }
 
   // ── Phase 1: synthesize missing per-item nodes ────────────────────────
   //

@@ -738,6 +738,39 @@ export class DependencyGraphExecutor {
   }
 
   /**
+   * Remove a node from the graph and clean up every other node's
+   * `dependencies` / `dependents` lists. Used by the template-migration
+   * pass to delete phantom nodes the old graph wiring produced
+   * (e.g. `scene_video_prompt:scene_N_shot_M` nodes that an earlier
+   * cascade bug created at shot-level granularity for a scene-level
+   * type).
+   *
+   * No-op for unknown ids. Returns whether the node existed.
+   */
+  removeNode(nodeId: string): boolean {
+    const node = this.nodes.get(nodeId);
+    if (!node) return false;
+    // Strip outbound edges (remove from each dep's dependents).
+    for (const depId of node.dependencies) {
+      const depNode = this.nodes.get(depId);
+      if (depNode) {
+        depNode.dependents = depNode.dependents.filter(d => d !== nodeId);
+      }
+    }
+    // Strip inbound edges (remove from each dependent's dependencies).
+    for (const dependentId of node.dependents) {
+      const dependent = this.nodes.get(dependentId);
+      if (dependent) {
+        dependent.dependencies = dependent.dependencies.filter(d => d !== nodeId);
+      }
+    }
+    this.nodes.delete(nodeId);
+    this.updatedAt = Date.now();
+    this.onMutation?.();
+    return true;
+  }
+
+  /**
    * Get all nodes.
    */
   getAllNodes(): ExecutionNode[] {

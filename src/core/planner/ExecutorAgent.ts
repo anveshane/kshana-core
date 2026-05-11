@@ -472,12 +472,15 @@ export class ExecutorAgent extends TypedEventEmitter {
         if (
           report.synthesized.length > 0 ||
           report.rewired.length > 0 ||
-          report.invalidated.length > 0
+          report.invalidated.length > 0 ||
+          report.deleted.length > 0
         ) {
           this.log(
-            `Graph migration: synthesized=${report.synthesized.length} ` +
+            `Graph migration: deleted=${report.deleted.length} ` +
+            `synthesized=${report.synthesized.length} ` +
             `rewired=${report.rewired.length} invalidated=${report.invalidated.length}`,
           );
+          for (const d of report.deleted) this.log(`  − ${d}`);
           for (const s of report.synthesized) this.log(`  + ${s.id} (${s.reason})`);
           for (const r of report.rewired) this.log(`  ~ ${r.id}`);
           this.persistState();
@@ -4081,17 +4084,41 @@ Examples of common failure modes to avoid:
                       name: `${sceneLabel} Shot ${s.shotNumber}: ${label}`,
                     };
                   });
+                  // BEFORE expanding shot_breakdown into per-shot children:
+                  // lock scene_video_prompt:scene_N (the deterministic
+                  // assembler) from being further expanded by
+                  // expandCollection's matching-scope cascade. Without
+                  // this, the cascade sees scene_video_prompt:scene_N as
+                  // a per-item-with-isCollection=true (preserved from the
+                  // template via the earlier cascade from scene_shot_plan),
+                  // matching scope on shot_breakdown, and promotes it to
+                  // per-shot — creating phantom scene_video_prompt:
+                  // scene_N_shot_M nodes that have no scene_shot_plan to
+                  // assemble from and deadlock the pipeline.
+                  //
+                  // scene_video_prompt is per-scene by construction; it
+                  // doesn't need shot-level granularity. Setting
+                  // isCollection=false before the cascade makes
+                  // expandMatchingDependent's matching branch (which
+                  // requires dependent.isCollection) skip it. The manual
+                  // rewire below then wires its deps correctly.
+                  if (node.typeId === 'shot_breakdown') {
+                    const svpDeterministic = this.executor.getNode(`scene_video_prompt:${sceneId}`);
+                    if (svpDeterministic) {
+                      svpDeterministic.isCollection = false;
+                    }
+                  }
+
                   this.log(`  Re-expanding ${node.id} → ${shotItems.length} per-shot nodes (source: ${sourceNodeId})`);
                   this.executor.expandCollection(node.id, shotItems);
 
                   // shot_breakdown special-case: scene_video_prompt:scene_N
-                  // depends on shot_breakdown (scope=matching). Because
-                  // scene_video_prompt:scene_N is per-item (not a
-                  // collection), expandCollection's built-in dependent
-                  // rewiring doesn't pick this up — its 'matching' branch
-                  // only fires when the dependent is itself a collection.
-                  // Manually rewire so the assembler waits on every per-shot
-                  // child instead of the now-deleted parent collection.
+                  // depends on shot_breakdown (scope=matching). Because we
+                  // just locked it to isCollection=false above,
+                  // expandCollection's built-in dependent rewiring fell
+                  // through without touching it. Wire deps manually so
+                  // the assembler waits on every per-shot child instead
+                  // of the now-deleted parent collection.
                   if (node.typeId === 'shot_breakdown') {
                     const svpDeterministic = this.executor.getNode(`scene_video_prompt:${sceneId}`);
                     if (svpDeterministic) {

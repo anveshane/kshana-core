@@ -242,5 +242,73 @@ describe('migrateGraphToTemplate', () => {
     expect(report.synthesized).toEqual([]);
     expect(report.rewired).toEqual([]);
     expect(report.invalidated).toEqual([]);
+    expect(report.deleted).toEqual([]);
+  });
+
+  // Regression: an earlier cascade bug in expandPendingCollections allowed
+  // expandMatchingDependent to promote scene_video_prompt:scene_1 to
+  // per-shot granularity when shot_breakdown was expanded, leaving
+  // phantom `scene_video_prompt:scene_1_shot_M` nodes. Migration must
+  // detect and delete those, then Phase 1 synthesis recreates the
+  // proper scene-level node.
+  it('deletes phantom scene_video_prompt:scene_N_shot_M nodes and resynthesises the scene-level one', () => {
+    const fresh = buildFreshExecutor();
+    fresh.expandCollection('scene', [{ itemId: 'scene_1', name: 'Scene 1' }]);
+
+    // Inject the phantom shape directly to mimic the old bug. The real
+    // graph would have scene_video_prompt:scene_1 deleted and replaced
+    // by three phantom per-shot nodes pointing at scene_shot_plan:
+    // scene_1_shot_M (also nonexistent).
+    fresh.removeNode('scene_video_prompt:scene_1');
+    for (const m of [1, 2, 3]) {
+      fresh.addNode({
+        id: `scene_video_prompt:scene_1_shot_${m}`,
+        typeId: 'scene_video_prompt',
+        itemId: `scene_1_shot_${m}`,
+        status: 'pending',
+        displayName: `Scene Breakdown: shot ${m}`,
+        isExpensive: false,
+        isCollection: false,
+        dependencies: [`shot_breakdown:scene_1_shot_${m}`],
+        dependents: [],
+      });
+    }
+    expect(fresh.getNode('scene_video_prompt:scene_1')).toBeUndefined();
+    expect(fresh.getNode('scene_video_prompt:scene_1_shot_1')).toBeDefined();
+
+    const reloaded = reloadUnderTemplate(fresh, narrativeTemplate);
+    const report = migrateGraphToTemplate(reloaded, narrativeTemplate);
+
+    // All three phantoms gone.
+    expect(report.deleted).toEqual(
+      expect.arrayContaining([
+        'scene_video_prompt:scene_1_shot_1',
+        'scene_video_prompt:scene_1_shot_2',
+        'scene_video_prompt:scene_1_shot_3',
+      ]),
+    );
+    for (const m of [1, 2, 3]) {
+      expect(reloaded.getNode(`scene_video_prompt:scene_1_shot_${m}`)).toBeUndefined();
+    }
+    // Proper scene-level node resynthesised by Phase 1.
+    expect(reloaded.getNode('scene_video_prompt:scene_1')).toBeDefined();
+    expect(reloaded.getNode('scene_video_prompt:scene_1')!.dependencies).toContain(
+      'scene_shot_plan:scene_1',
+    );
+  });
+
+  it('does NOT delete legitimate scene-level scene_video_prompt:scene_N nodes', () => {
+    const fresh = buildFreshExecutor();
+    fresh.expandCollection('scene', [
+      { itemId: 'scene_1', name: 'Scene 1' },
+      { itemId: 'scene_2', name: 'Scene 2' },
+    ]);
+
+    const reloaded = reloadUnderTemplate(fresh, narrativeTemplate);
+    const report = migrateGraphToTemplate(reloaded, narrativeTemplate);
+
+    expect(report.deleted).toEqual([]);
+    expect(reloaded.getNode('scene_video_prompt:scene_1')).toBeDefined();
+    expect(reloaded.getNode('scene_video_prompt:scene_2')).toBeDefined();
   });
 });
