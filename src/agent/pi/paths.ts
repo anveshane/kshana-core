@@ -73,12 +73,10 @@ export function getdheeConfigDir(): string {
  *
  * Layout: <root>/<projectSlug>/<sessionId>.jsonl
  *
- * Override via DHEE_PI_SESSIONS_DIR (mostly for tests). Legacy:
- * KSHANA_PI_SESSIONS_DIR is still honored if set.
+ * Override via DHEE_PI_SESSIONS_DIR (mostly for tests).
  */
 export function getPiSessionsDir(projectSlug?: string): string {
-  const override =
-    process.env["DHEE_PI_SESSIONS_DIR"] ?? process.env["KSHANA_PI_SESSIONS_DIR"];
+  const override = process.env["DHEE_PI_SESSIONS_DIR"];
   const root = override
     ? resolve(expandTilde(override))
     : resolve(getdheeConfigDir(), "pi-sessions");
