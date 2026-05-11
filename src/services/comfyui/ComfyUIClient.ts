@@ -18,10 +18,10 @@ import { getLogsDir } from '../../utils/logsPath.js';
 // Debug logging to file instead of console to avoid polluting Ink UI.
 //
 // Path is resolved per-call via getLogsDir() so a host that calls
-// setLogsDir after import (e.g. kshana-desktop in a packaged build,
+// setLogsDir after import (e.g. dhee-desktop in a packaged build,
 // pointing at app.getPath('userData')/logs) still wins. The previous
-// implementation anchored on findKshanaCoreRoot at module load — fine
-// for dev, broken in an asar bundle where the kshana-core package.json
+// implementation anchored on finddheeCoreRoot at module load — fine
+// for dev, broken in an asar bundle where the dhee-core package.json
 // lives in a read-only path.
 function debugLog(message: string): void {
   try {
@@ -118,7 +118,7 @@ export function abortAllInFlightWorkflows(reason = 'aborted'): number {
  *
  * COMFYUI_BASE_URL is the canonical endpoint for both modes.
  * Local: COMFY_MODE=local/default, COMFYUI_BASE_URL defaults to localhost:8188.
- * Cloud: COMFY_MODE=cloud, COMFYUI_BASE_URL points at the Kshana Cloud route
+ * Cloud: COMFY_MODE=cloud, COMFYUI_BASE_URL points at the dhee Cloud route
  * or direct Comfy Cloud, and COMFY_CLOUD_API_KEY supplies auth.
  *
  */
@@ -192,8 +192,8 @@ export function isComfyCloudUrl(value: string): boolean {
  * Build the default config FRESH for each client instance.
  *
  * Why this isn't a top-level constant: the embedded desktop path loads
- * kshana-core via `require()` BEFORE setting `process.env['COMFY_MODE']`
- * etc. (the desktop sets those in `kshanaCoreManager.start()`, which
+ * dhee-core via `require()` BEFORE setting `process.env['COMFY_MODE']`
+ * etc. (the desktop sets those in `dheeCoreManager.start()`, which
  * runs after the module graph is loaded). If we cached `getComfyConfig()`
  * at module load, every embedded ComfyUIClient would silently fall
  * back to `http://localhost:8188` and try to talk to a non-existent
@@ -413,8 +413,9 @@ export class ComfyUIClient {
     if (this.apiKey) {
       const extraDataPayload: Record<string, unknown> = { api_key_comfy_org: this.apiKey };
       if (options.workflowId) {
-        // Back-compat: older/newer Kshana Cloud routes have accepted either field.
-        extraDataPayload['kshana_workflow_id'] = options.workflowId;
+        // Back-compat: routes accept legacy `dhee_*` and current `dhee_*` keys.
+        extraDataPayload['dhee_workflow_id'] = options.workflowId;
+        extraDataPayload['dhee_workflow_id'] = options.workflowId;
         extraDataPayload['workflowId'] = options.workflowId;
       }
       payload['extra_data'] = extraDataPayload;
@@ -589,7 +590,7 @@ export class ComfyUIClient {
       const collectedOutputs: ImageInfo[] = [];
       let submitPromise: Promise<{ promptId: string; clientId: string }> | null = null;
       // Inactivity timeout — seconds from env COMFYUI_WS_TIMEOUT (default 60).
-      // Direct Comfy Cloud supports WS, but the Kshana Cloud route currently
+      // Direct Comfy Cloud supports WS, but the dhee Cloud route currently
       // relies on HTTP polling. Keep WS as the fast path and fall back quickly
       // when the socket is silent or unavailable.
       const INACTIVITY_TIMEOUT_MS =
@@ -862,7 +863,7 @@ export class ComfyUIClient {
       let lastActivityTime = Date.now();
 
       // WS inactivity timeout before falling back to HTTP polling.
-      // When going through a Kshana proxy the WS isn't forwarded, so the
+      // When going through a dhee proxy the WS isn't forwarded, so the
       // socket goes silent immediately — use a short 30s timeout so we
       // kick to HTTP polling quickly.
       const WS_INACTIVITY_TIMEOUT_MS =

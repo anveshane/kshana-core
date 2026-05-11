@@ -84,10 +84,10 @@ function loadManifestPathMap(projectDir: string): Map<string, string> {
  * Context required for timeline tools.
  * Injected when creating the tool handlers.
  * Uses a getter function so the project directory is resolved at execution time,
- * not at tool creation time (avoids routing to the wrong .kshana project).
+ * not at tool creation time (avoids routing to the wrong .dhee project).
  */
 export interface TimelineToolContext {
-  /** Returns the path to the active .kshana project directory */
+  /** Returns the path to the active .dhee project directory */
   getProjectDir: () => string;
   /** Returns the project style (e.g., 'anime', 'cinematic_realism', 'documentary') */
   getProjectStyle?: () => string;

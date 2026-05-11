@@ -47,7 +47,7 @@ function usage(exitCode = 1): never {
   console.log(`
 Usage: pnpm run-to <project> [stage] [--skip-media]
 
-  <project>     project name (folder: <project>.kshana)
+  <project>     project name (folder: <project>.dhee)
   [stage]       optional — pause after this stage completes. Omit to run to final_video.
   --skip-media  skip ComfyUI calls (LLM prompts only). Useful for iterating on prompts.
 
@@ -111,7 +111,7 @@ async function main() {
   }
 
   const { projectName, target, skipMedia } = parsed;
-  const projectDir = resolve(`${projectName}.kshana`);
+  const projectDir = resolve(`${projectName}.dhee`);
   if (!existsSync(projectDir)) {
     console.error(`Project not found: ${projectDir}`);
     process.exit(1);
@@ -120,11 +120,11 @@ async function main() {
   // Point the shared SessionContext at this project so every helper that reads
   // `getProjectDir()` / `getAssetsDir()` (submitImageGeneration in
   // src/tasks/video/tools.ts, asset registry, etc.) writes into this project's
-  // folder. Without this, media downloads leak into `default.kshana` while the
+  // folder. Without this, media downloads leak into `default.dhee` while the
   // graph registers paths under the correct project — causing "Base image not
   // found" failures on the next step. The UI does this in App.tsx; the CLI
   // must do it explicitly.
-  setActiveProjectDir(`${projectName}.kshana`);
+  setActiveProjectDir(`${projectName}.dhee`);
 
   const project: GenericProjectFile = JSON.parse(
     readFileSync(join(projectDir, 'project.json'), 'utf-8'),

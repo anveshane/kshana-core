@@ -1,5 +1,5 @@
 /**
- * HTTP and WebSocket routes for kshana-core server.
+ * HTTP and WebSocket routes for dhee-core server.
  */
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { WebSocket } from '@fastify/websocket';
@@ -229,12 +229,12 @@ export async function registerRoutes(
 
   // ── Workflow management endpoints ──────────────────────────────────────────
   //
-  // NOTE: these endpoints serve the legacy kshana-core frontend
+  // NOTE: these endpoints serve the legacy dhee-core frontend
   // (`frontend/src/components/WorkflowManager.tsx`). The same
   // operations are also available as pi-agent tools and as direct
-  // function calls via `kshana-core/manager` — see
+  // function calls via `dhee-core/manager` — see
   // `src/services/comfyui/workflowIntegration.ts` for the canonical
-  // helpers. New consumers (kshana-desktop) call those helpers
+  // helpers. New consumers (dhee-desktop) call those helpers
   // directly. When this file gets refactored, replace the inline
   // file IO + LLM-router logic below with calls to:
   //   - validateWorkflowFile / analyzeWorkflowFile (upload)

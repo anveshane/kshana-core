@@ -18,9 +18,9 @@ export interface TaskStatusDetails {
   log: string;
 }
 
-export const kshanaTaskStatus = defineTool({
-  name: "kshana_task_status",
-  label: "kshana task status",
+export const dheeTaskStatus = defineTool({
+  name: "dhee_task_status",
+  label: "dhee task status",
   description:
     "Report what background task (if any) is currently running. **DO NOT call this in a loop while a run is in progress** — the runner streams progress events into the chat in real time, the user already sees them, and repeated polls only add noise. Use this when the user asks 'what's running?', when you finished an action and want to confirm a state transition, or after at least 60 seconds of silence — never on a tighter cadence.",
   parameters: Type.Object({}),

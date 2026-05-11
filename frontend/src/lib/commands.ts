@@ -236,7 +236,7 @@ const COMMANDS: Record<string, CommandDef> = {
           id: `cmd_${Date.now()}`,
           type: 'system',
           content: r.ok
-            ? `Project **${name.replace(/\.kshana$/, '')}** loaded.`
+            ? `Project **${name.replace(/\.dhee$/, '')}** loaded.`
             : (r.reason || 'Failed to select project'),
           timestamp: Date.now(),
         },
