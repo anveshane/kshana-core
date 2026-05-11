@@ -34,6 +34,7 @@ import { BackwardPlanner } from './BackwardPlanner.js';
 import { AssetScanner } from './AssetScanner.js';
 import { resolveInputs, writeOutput } from './contentResolver.js';
 import { assembleSceneVideoPrompt, type SingleShot } from './sceneVideoPromptAssembler.js';
+import { migrateGraphToTemplate } from './migrateGraphToTemplate.js';
 import { readShotContextFromSvp, buildShotAwareReferences, shouldForceEditPrevious } from './shotReferenceMapping.js';
 import { getPreviousShotIdAcrossScenes } from './crossShotChaining.js';
 import { shouldExpandSceneCollectionToShots } from './collectionExpansion.js';
@@ -455,6 +456,34 @@ export class ExecutorAgent extends TypedEventEmitter {
         }
       } catch (err) {
         this.log(`State heal skipped: ${(err as Error).message}`);
+      }
+
+      // Graph-template migration: a project persisted under an older
+      // template may be missing per-item nodes the current template now
+      // declares (e.g. scene_shot_plan, shot_breakdown added in the
+      // hierarchical-breakdown refactor), and may carry stale dep edges
+      // on nodes whose contract changed. The migration synthesizes the
+      // missing nodes, prunes deps that are no longer declared, and
+      // cascade-invalidates nodes whose contract drifted so they re-run
+      // under the new flow. Nodes whose contract is unchanged keep
+      // their status + outputPath — no rework of completed upstream.
+      try {
+        const report = migrateGraphToTemplate(this.executor, config.template);
+        if (
+          report.synthesized.length > 0 ||
+          report.rewired.length > 0 ||
+          report.invalidated.length > 0
+        ) {
+          this.log(
+            `Graph migration: synthesized=${report.synthesized.length} ` +
+            `rewired=${report.rewired.length} invalidated=${report.invalidated.length}`,
+          );
+          for (const s of report.synthesized) this.log(`  + ${s.id} (${s.reason})`);
+          for (const r of report.rewired) this.log(`  ~ ${r.id}`);
+          this.persistState();
+        }
+      } catch (err) {
+        this.log(`Graph migration skipped: ${(err as Error).message}`);
       }
     } else {
       const scanner = new AssetScanner(config.template);
