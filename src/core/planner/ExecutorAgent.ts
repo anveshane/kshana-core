@@ -4814,10 +4814,10 @@ Examples of common failure modes to avoid:
             this.log(`  [dialogue-fit] ${node.id}: adjusted ${adjustments.length} shot(s): ${adjustments.map(a => `shot${a.shotNumber} ${a.from}s→${a.to}s (dialogue=${a.dialogueSeconds}s)`).join(', ')}`);
           }
           // Soft-warn: flag any shot with 2+ speakers in its audio
-          // field. See scene_breakdown_guide.md "Step 2a: One speaker
-          // per shot" — video models mis-attribute dialogue when one
-          // shot tries to carry two speakers. Warning only; not a
-          // validation failure, to avoid blocking legacy projects.
+          // field. See scene_breakdown_plan_guide.md "Step 2a: One
+          // speaker per shot" — video models mis-attribute dialogue
+          // when one shot tries to carry two speakers. Warning only;
+          // not a validation failure, to avoid blocking legacy projects.
           const multiSpeaker = scanMultiSpeakerShots(parsed.shots as Array<Record<string, unknown>>);
           if (multiSpeaker.length > 0) {
             this.log(`  [multi-speaker] ${node.id}: ${multiSpeaker.length} shot(s) carry 2+ speakers — video model will likely mis-attribute: ${multiSpeaker.map(w => `shot${w.shotNumber}(${w.speakers.join('+')})`).join(', ')}`);
